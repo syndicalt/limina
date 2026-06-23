@@ -1,7 +1,7 @@
 # Limina
 
 <p align="center">
-  <img src="assets/limina-hero.jpg" alt="Limina - A liminal dreamscape where agents build and inhabit worlds" width="100%">
+  <img src="assets/limina-hero.png" alt="Limina - A liminal dreamscape where agents build and inhabit worlds" width="100%">
 </p>
 
 > A native runtime and agent-native engine for Three.js/WebGPU.  
