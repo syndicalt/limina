@@ -13,7 +13,6 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; don't cancel an in-progress production deploy.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -22,10 +21,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Project Pages: served at https://syndicalt.github.io/limina
-      # Custom domain? set BASE_PATH to '' and SITE_URL to your origin, add site/public/CNAME.
-      SITE_URL: https://syndicalt.github.io
-      BASE_PATH: /limina
+      # Custom domain (Cloudflare) → served at the root of www.liminaengine.com.
+      # For GitHub project-path hosting instead: SITE_URL=https://syndicalt.github.io, BASE_PATH=/limina.
+      SITE_URL: https://www.liminaengine.com
+      BASE_PATH: ''
     steps:
       - uses: actions/checkout@v4
       - name: Build with Astro

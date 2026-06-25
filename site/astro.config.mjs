@@ -22,13 +22,13 @@ function rehypeBasePath(base) {
 	return () => (tree) => walk(tree);
 }
 
-// Hosting: GitHub Pages *project* site → https://syndicalt.github.io/limina
-// Custom domain instead? Set BASE_PATH='' and SITE_URL to your origin, then add a
-// CNAME file in site/public/ (see site/README.md). base/site are env-overridable.
-const SITE_URL = process.env.SITE_URL || 'https://syndicalt.github.io';
+// Hosting: custom domain on Cloudflare → https://www.liminaengine.com (served at root).
+// Overridable per build via SITE_URL / BASE_PATH env (the deploy workflow sets them).
+// For GitHub project-path hosting instead, set BASE_PATH='/limina'.
+const SITE_URL = process.env.SITE_URL || 'https://www.liminaengine.com';
 // Normalize to a leading+trailing slash ('/limina/') so `${import.meta.env.BASE_URL}x`
 // joins cleanly; '' or '/' → '/' (root, for a custom domain).
-const RAW_BASE = process.env.BASE_PATH ?? '/limina';
+const RAW_BASE = process.env.BASE_PATH ?? '';
 const BASE_PATH = !RAW_BASE || RAW_BASE === '/' ? '/' : '/' + RAW_BASE.replace(/^\/+|\/+$/g, '') + '/';
 
 export default defineConfig({
