@@ -10,9 +10,9 @@ dist/
 # --- Secrets & machine-specific local config (never publish) ---
 .env
 .env.*
-.mcp.json
-zaxy-mcp.json
-AGENTS.md
+/.mcp.json
+/zaxy-mcp.json
+/AGENTS.md
 
 # --- Zaxy memory store + generated runtime traces ---
 .eventloom/
