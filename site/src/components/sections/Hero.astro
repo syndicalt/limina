@@ -53,9 +53,12 @@ const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
   .hero {
     position: relative;
     min-height: 100svh;
+    /* pull the hero up under the (transparent, sticky) nav so the cinematic is
+       full-bleed and the bar overlays it */
+    margin-top: -66px;
     display: grid;
     place-items: center;
-    padding-block: clamp(110px, 14vh, 180px) clamp(60px, 9vh, 110px);
+    padding-block: clamp(120px, 15vh, 190px) clamp(60px, 9vh, 110px);
     overflow: hidden;
   }
   .cine-canvas,

@@ -19,3 +19,8 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# Hero cinematic assets are committed so deploys don't need the fetch step.
+# Override a global ~/.gitignore_global "models/" rule that would drop them.
+!public/hero/models/
+!public/hero/models/**
