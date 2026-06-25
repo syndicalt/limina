@@ -26,7 +26,10 @@ function rehypeBasePath(base) {
 // Custom domain instead? Set BASE_PATH='' and SITE_URL to your origin, then add a
 // CNAME file in site/public/ (see site/README.md). base/site are env-overridable.
 const SITE_URL = process.env.SITE_URL || 'https://syndicalt.github.io';
-const BASE_PATH = process.env.BASE_PATH ?? '/limina';
+// Normalize to a leading+trailing slash ('/limina/') so `${import.meta.env.BASE_URL}x`
+// joins cleanly; '' or '/' → '/' (root, for a custom domain).
+const RAW_BASE = process.env.BASE_PATH ?? '/limina';
+const BASE_PATH = !RAW_BASE || RAW_BASE === '/' ? '/' : '/' + RAW_BASE.replace(/^\/+|\/+$/g, '') + '/';
 
 export default defineConfig({
 	site: SITE_URL,
