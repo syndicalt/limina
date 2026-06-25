@@ -55,11 +55,11 @@ export default defineConfig({
 						href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap',
 					},
 				},
-				{ tag: 'meta', attrs: { property: 'og:image', content: 'https://www.liminaengine.com/media/og.png' } },
+				{ tag: 'meta', attrs: { property: 'og:image', content: 'https://www.liminaengine.com/media/og.png?v=2' } },
 				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
 				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
 				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
-				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://www.liminaengine.com/media/og.png' } },
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://www.liminaengine.com/media/og.png?v=2' } },
 			],
 			sidebar: [
 				{ label: 'For agents ↗', link: '/agents', attrs: { class: 'sl-agents-link' } },
