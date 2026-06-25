@@ -1,0 +1,26 @@
+# --- Rust / native build artifacts ---
+target/
+**/*.rs.bk
+
+# --- Node / web build artifacts ---
+node_modules/
+dist/
+.astro/
+
+# --- Secrets & machine-specific local config (never publish) ---
+.env
+.env.*
+.mcp.json
+zaxy-mcp.json
+AGENTS.md
+
+# --- Zaxy memory store + generated runtime traces ---
+.eventloom/
+traces/
+
+# --- Editor / OS ---
+.claude/
+.vscode/
+.idea/
+.DS_Store
+*.swp

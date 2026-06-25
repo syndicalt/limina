@@ -1,0 +1,19 @@
+[package]
+name = "v8-candidate"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "v8_isolate_spike"
+path = "src/main.rs"
+
+[dependencies]
+iso-model = { path = "../model" }
+# Separate V8 isolate via deno_core. Pinned to the engine's versions so the
+# prebuilt v8 archive in ../../../target is reused (RUSTY_V8_ARCHIVE) rather than
+# rebuilt. Untrusted code runs in a fresh JsRuntime whose only registered op is a
+# narrow capability surface; the engine's privileged ops are NOT in this isolate.
+deno_core = "=0.404.0"
+deno_error = "=0.7.1"

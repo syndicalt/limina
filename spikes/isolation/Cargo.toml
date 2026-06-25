@@ -1,0 +1,10 @@
+# P4.0b isolation spike -- DETACHED workspace (this [workspace] table makes it a
+# separate root, so it never attaches to or edits the engine workspace). Throwaway
+# prototype: prove a malicious skill is contained in candidate sandboxes + measure
+# per-call overhead. NOT wired into engine core.
+#
+# Members are split so building the QuickJS candidate does NOT pull in the heavy
+# deno_core/v8 graph; only the v8 candidate pays that cost.
+[workspace]
+resolver = "2"
+members = ["model", "quickjs", "v8"]

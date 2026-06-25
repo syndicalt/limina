@@ -1,0 +1,17 @@
+{
+  "name": "limina-js",
+  "private": true,
+  "type": "module",
+  "description": "limina engine JS/TS layer (Phase 0)",
+  "dependencies": {
+    "bitecs": "0.4.0",
+    "three": "0.184.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  },
+  "scripts": {
+    "bundle:three": "esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs"
+  }
+}

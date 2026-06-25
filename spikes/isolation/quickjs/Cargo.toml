@@ -1,0 +1,16 @@
+[package]
+name = "quickjs-candidate"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "quickjs_spike"
+path = "src/main.rs"
+
+[dependencies]
+iso-model = { path = "../model" }
+# QuickJS: a fresh context exposes ONLY standard ECMAScript globals (no Deno,
+# no host ops, no fs/net). Bundles the quickjs-ng C source; builds offline.
+rquickjs = { version = "0.12", features = ["std"] }

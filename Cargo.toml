@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+
+# Pinned in lockstep — see plans/limina-phase-0-foundation/plan.md (Dependency surface).
+# deno_core <-> v8 are link-coupled; deno_webgpu/deno_canvas/wgpu/raw-window-handle are an ABI set.
+[workspace.dependencies]
+deno_core = "=0.404.0"
+deno_ast = { version = "=0.53.2", features = ["transpiling"] }
+deno_error = "=0.7.1"
+deno_webgpu = "=0.218.0"
+deno_web = "=0.282.0"
+deno_webidl = "=0.251.0"
+deno_image = "=0.27.0"
+winit = "0.30"
+raw-window-handle = "0.6"
+rapier3d = "0.33"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
+futures-util = "0.3"
+serde_json = "1"
+anyhow = "1"
+reqwest = { version = "0.13", default-features = false, features = ["charset", "http2"] }
+sha2 = "0.10"
+rodio = { version = "0.22", default-features = false, features = ["playback", "wav"] }
+limina-render = { path = "crates/limina-render" }
+limina-ops = { path = "crates/limina-ops" }
+limina-physics = { path = "crates/limina-physics" }
+limina-sandbox = { path = "crates/limina-sandbox" }
+limina-ecs = { path = "crates/limina-ecs" }
+limina-audio = { path = "crates/limina-audio" }

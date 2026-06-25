@@ -19,15 +19,14 @@ Limina sits at the intersection of modern 3D graphics and agentic systems. It pr
 
 ## Current Status
 
-**Early development / Pre-MVP**
+**0.1.0 — agent-native core shipped.** Limina is early-stage and evolving fast (the public API is not yet stable), but the foundational milestone is **complete and verified**: a single native binary — Rust → V8 (`deno_core`) → WebGPU (`deno_webgpu` + Three.js) → native Rapier physics → bitECS, on a fixed-timestep loop — with all four agent-native pillars:
 
-The project is currently in the foundational stage. The first major milestone focuses on:
+- **Skill / Hook registry** — typed, versioned, permissioned capabilities with hooks
+- **MCP interface** — `listTools` / `callTool` over in-process, stdio, and websocket
+- **Observability** — every action emitted as a typed, sha256-chained, replayable event
+- **Agent ecosystem** — builder + player agents (perceive → decide → act), LLM-agnostic
 
-- Native runtime layer (WebGPU + windowing)
-- Data-oriented ECS core
-- Skill/Hook system with MCP-style tool interface
-- Observability and tracing layer
-- Support for both Agent Builders and Agent Players
+…plus interactive physics, a durable world log, single-instance scale (200 agents @ p95 4 ms), shared-world sync, in-scene text/UI, and spatial audio. See the [roadmap](plans/ROADMAP.md).
 
 ## Key Concepts
 
@@ -41,7 +40,17 @@ The project is currently in the foundational stage. The first major milestone fo
 
 ## Getting Started
 
-> **Note:** Limina is not yet ready for general use. This section will be updated as development progresses.
+> **Note:** Limina is early-stage; the public API is not yet stable.
+
+**Docs & live demo → [liminaengine.com](https://www.liminaengine.com)** — overview, architecture, the full skills / SDK reference, and an agent-tailored section.
+
+```bash
+git clone https://github.com/syndicalt/limina.git
+cd limina
+cargo build --release
+# run a demo in a window (see the docs for prerequisites):
+./target/release/limina --window --frames 600 js/src/demos/billiards.ts
+```
 
 ## Architecture
 
@@ -64,7 +73,9 @@ Contributions are welcome once the project reaches a more stable state. Feel fre
 
 ## Roadmap
 
-See the project issues and discussions for the current development roadmap.
+- **Shipped (0.1.0):** [`plans/ROADMAP.md`](plans/ROADMAP.md) — Phases 0–5, with evidence.
+- **Next (post-MVP):** [`plans/post-mvp-roadmap.md`](plans/post-mvp-roadmap.md).
+- **Original MVP spec:** [`docs/mvp-spec.md`](docs/mvp-spec.md).
 
 ---
 

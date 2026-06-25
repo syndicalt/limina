@@ -1,0 +1,15 @@
+[package]
+name = "limina-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+deno_core.workspace = true
+deno_error.workspace = true
+serde_json.workspace = true
+# QuickJS isolation substrate (P4.0b decision). A fresh context exposes ONLY
+# standard ECMAScript globals -- no Deno, no host ops, no fs/net. Bundles the
+# quickjs-ng C source; builds offline from the cached crate.
+rquickjs = { version = "0.12", features = ["std"] }

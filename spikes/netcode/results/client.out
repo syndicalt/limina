@@ -1,0 +1,12 @@
+=== P4.0c netcode client -> 127.0.0.1:45415 ===
+connected: server tick=4, 8 entities, granted ["apply_impulse"]
+PING  (transport rtt, no sim)        : n=1000  p50=0.021ms  p95=0.049ms  p99=0.148ms  max=0.376ms  mean=0.030ms
+--- authority enforcement ---
+AUTHORITY (a) direct state_write -> REJECTED: "authority: clients cannot write authoritative state directly; submit an intent"
+            entity 0 pos before=[0.0, 0.0, 0.0] after=[0.0, 0.0, 0.0]  teleported=false  => OK: write had no effect
+AUTHORITY (b) ungranted intent skill=teleport -> REJECTED: "missing capability grant: teleport"  => OK: capability denied
+AUTHORITY (c) granted intent apply_impulse -> APPLIED on tick 7 and synced  => OK: legitimate path works
+--- latency: intent -> applied -> synced ---
+INTENT round-trip (>= 1000 rounds, 60Hz): n=1000  p50=16.551ms  p95=17.622ms  p99=17.706ms  max=18.833ms  mean=16.666ms
+interest/M5: only 1 of 8 entities was perturbed; the landing delta carried at most 1 changed entity per tick (O(relevant), not O(K)). The 7 quiescent entities never appeared in the stream.
+note: 60Hz tick => up to 16.67ms of the round-trip is fixed-step quantization (wait for next tick); p95=17.622ms vs the M4 target p95<=50ms localhost.

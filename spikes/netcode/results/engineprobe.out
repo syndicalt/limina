@@ -1,0 +1,8 @@
+=== P4.0c engine baseline: real `limina --mcp-ws` over a real WebSocket ===
+spawning: /home/cheapseatsecon/Projects/Personal/limina/target/debug/limina --mcp-ws --port 33701  (cwd /home/cheapseatsecon/Projects/Personal/limina)
+initialize -> profile bound: "builder.readWrite"
+created entity ent_0 via scene.createEntity (authoritative mutation)
+ENGINE intent round-trip (>= 1000 rounds, real WS+invoke): n=1000  p50=0.253ms  p95=0.479ms  p99=0.580ms  max=1.284ms  mean=0.245ms
+--- engine authority enforcement (real permission boundary) ---
+AUTHORITY read-only `ecs.updateComponent` (needs ecs.modify) -> REJECTED: code=-32001 message="missing permission: ecs.modify"
+AUTHORITY builder `ecs.updateComponent` (has ecs.modify) -> APPLIED (control: legitimate path works)

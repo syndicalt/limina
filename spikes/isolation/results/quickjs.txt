@@ -1,0 +1,42 @@
+================ P4.0b candidate: QuickJS (rquickjs 0.12) ================
+
+--- ESCAPE 1: reach host/engine globals (Deno.core.ops, process, require, ctor-walk) ---
+  malicious skill's own report of what it could reach:
+  {"Deno":"undefined","Deno_core":"undefined","Deno_core_ops":"undefined","process":"undefined","require":"undefined","global_node":"undefined","read_file":"undefined","fetch":"undefined","ctor_escape":"global-has-no-host","global_names":"AggregateError,Array,ArrayBuffer,AsyncDisposableStack,Atomics,BigInt,BigInt64Array,BigUint64Array,Boolean,DOMException,DataView,Date,DisposableStack,Error,EvalError,FinalizationRegistry,Float16Array,Float32Array,Float64Array,Function,Infinity,Int16Array,Int32Array,Int8Array,InternalError,Iterator,JSON,Map,Math,NaN,Number,Object,Promise,Proxy,RangeError,ReferenceError,Reflect,RegExp,Set,SharedArrayBuffer,String,SuppressedError,Symbol,SyntaxError,TypeError,URIError,Uint16Array,Uint32Array,Uint8Array,Uint8ClampedArray,WeakMap,WeakRef,WeakSet,atob,btoa,decodeURI,decodeURIComponent,encodeURI,encodeURIComponent,escape,eval,globalThis,host,isFinite,isNaN,parseFloat,parseInt,performance,queueMicrotask,undefined,unescape"}
+  => CONTAINED: true (no host handle was reachable)
+
+--- ESCAPE 2: call an UNGRANTED privileged capability (ops.rawExec 'rm -rf /') ---
+  host returned: {"denied":true,"reason":"missing capability grant: ops.rawExec"}
+  => BLOCKED at the registry boundary: true
+  side effects: impulses 0 -> 0 (none), denials=1
+
+--- ESCAPE 3: read ANOTHER agent's private state (agent.readOtherState) ---
+  host returned: {"denied":true,"reason":"missing capability grant: agent.readOtherState"}
+  => other agent's secret (-1.0, -2.0, -3.0) NOT leaked: true
+
+--- ESCAPE 4: CPU exhaustion (infinite loop) -- interrupt/deadline must halt it ---
+  halted after 150.164484ms -> Error: interrupted
+  host still alive after halt; getSelfPosition -> Ok("{\"x\":10,\"y\":20,\"z\":30}")
+
+--- ESCAPE 5: memory bomb (unbounded growth) on a 4 MB-capped runtime ---
+  aborted by memory cap -> Error: out of memory
+  host process survived the OOM; fresh eval 1+1 -> Ok("Int")
+
+--- ESCAPE 6: crash attempts (stack overflow + uncaught throw) are isolated ---
+  stack overflow contained -> Error: Maximum call stack size exceeded
+  uncaught throw contained -> Error: hostile skill detonates
+  host still alive after both crashes; getSelfPosition -> Ok("{\"x\":10,\"y\":20,\"z\":30}")
+
+--- GRANTED PATH: a permitted capability DOES cross the boundary ---
+  after a granted physics.applyImpulse: impulses=[(1.0, 0.0, 0.0)], invocations=3
+
+================ OVERHEAD: per-call capability round-trip ================
+  iterations:                 200000
+  total per granted call:     422.5 ns  (2.37 M calls/s)
+  in-sandbox JS-call baseline:55.2 ns  (interpreter dispatch + arg)
+  >>> host-boundary crossing: 367.4 ns/call  (QuickJS<->Rust round-trip)
+
+================ STARTUP + FOOTPRINT (per fresh sandbox) ================
+  fresh Runtime+Context create: 170.9 us each  (2000 reps)
+  per-context malloc footprint: ~108 KB (a minimal sandbox)
+  => a single thread can spin up >6k fresh sandboxes/s

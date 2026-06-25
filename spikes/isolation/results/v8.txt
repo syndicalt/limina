@@ -1,0 +1,68 @@
+============= P4.0b candidate: separate V8 isolate (deno_core 0.404) =============
+
+--- ESCAPE 1: reach a PRIVILEGED engine op (op_read_asset / op_http_post) ---
+  isolate op-table probe: {"op_read_asset":false,"op_http_post":false,"op_write_trace":false,"op_cap_invoke":true,"privileged_ops_visible":""}
+  => privileged engine ops absent from this isolate: true
+
+--- ESCAPE 2: call an UNGRANTED capability via the boundary op ---
+  host returned: {"denied":true,"reason":"missing capability grant: ops.rawExec"}
+  => BLOCKED at boundary: true
+  side effects: impulses 0 -> 0 (none), denials=1
+
+--- ESCAPE 3: read ANOTHER agent's private state ---
+  host returned: {"denied":true,"reason":"missing capability grant: agent.readOtherState"}
+  => other agent's secret (-1.0, -2.0, -3.0) NOT leaked: true
+
+--- ESCAPE 4: CPU exhaustion (infinite loop) -- needs a cross-thread watchdog ---
+  terminated by watchdog after 150.204125ms -> Uncaught Error: execution terminated
+  isolate still alive after terminate; getSelfPosition -> {"x":10,"y":20,"z":30}
+
+--- GRANTED PATH: a permitted capability mutates world state ---
+  impulses=[(1.0, 0.0, 0.0)], invocations=2
+
+================ OVERHEAD: per-call capability round-trip ================
+  iterations:                 200000
+  total per granted call:     306.2 ns  (3.27 M calls/s)
+  in-isolate JS-call baseline:5.4 ns  (JIT dispatch + arg)
+  >>> host-boundary crossing: 300.8 ns/call  (JS<->op round-trip)
+
+================ STARTUP + RSS (per fresh isolate) ================
+  fresh JsRuntime create:     5.72 ms each  (30 reps)
+  RSS delta over 30 isolates: 78108 KB  (~2603 KB/isolate held live)
+  => a thread can spin up ~175 fresh isolates/s
+
+--- ESCAPE 5: memory bomb -- heap cap enforced (24 MB), demonstrated via child ---
+  [child] 24 MB heap cap set; detonating memory bomb...
+
+<--- Last few GCs --->
+
+[3171746:0x55cc2b4ab000]       36 ms: Mark-Compact (reduce) 17.6 (18.3) -> 17.6 (18.3) MB, pooled: 0.0 MB, 1.90 / 0.00 ms (average mu = 0.016, current mu = 0.005) last resort; GC in old space requested
+[3171746:0x55cc2b4ab000]       37 ms: Mark-Compact (reduce) 17.6 (18.3) -> 17.6 (18.3) MB, pooled: 0.0 MB, 1.33 / 0.00 ms (average mu = 0.012, current mu = 0.007) last resort; GC in old space requested
+
+
+
+#
+# Fatal JavaScript out of memory: Reached heap limit
+#
+==== C stack trace ===============================
+
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x134eb9e) [0x55cbf0525b9e]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x134e17b) [0x55cbf052517b]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x134fd08) [0x55cbf0526d08]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x14172f4) [0x55cbf05ee2f4]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15eb1d7) [0x55cbf07c21d7]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15ea904) [0x55cbf07c1904]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15ea0cd) [0x55cbf07c10cd]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15dd23b) [0x55cbf07b423b]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15dcb5c) [0x55cbf07b3b5c]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15bb22c) [0x55cbf079222c]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x15adae4) [0x55cbf0784ae4]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x1813028) [0x55cbf09ea028]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x1812f16) [0x55cbf09e9f16]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x1810c6b) [0x55cbf09e7c6b]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x17cc5d9) [0x55cbf09a35d9]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x1a855bc) [0x55cbf0c5c5bc]
+    /home/cheapseatsecon/Projects/Personal/limina/spikes/isolation/target/release/v8_isolate_spike(+0x2c69fb6) [0x55cbf1e40fb6]
+  child killed by signal Some(5) -- V8 OOM-aborted the isolate's process (cap enforced)
+  => memory IS bounded, but an in-process V8 OOM is FATAL to the hosting process.
+     (QuickJS, by contrast, throws a catchable OOM and keeps serving -- see candidate 1.)

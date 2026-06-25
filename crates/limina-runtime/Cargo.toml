@@ -1,0 +1,31 @@
+[package]
+name = "limina-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "limina"
+path = "src/main.rs"
+
+[dependencies]
+deno_core.workspace = true
+limina-render = { workspace = true }
+limina-ops = { workspace = true }
+limina-physics = { workspace = true }
+limina-sandbox = { workspace = true }
+limina-ecs = { workspace = true }
+limina-audio = { workspace = true }
+deno_ast.workspace = true
+deno_error.workspace = true
+winit.workspace = true
+raw-window-handle.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+futures-util.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+serde_json.workspace = true

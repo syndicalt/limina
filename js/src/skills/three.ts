@@ -1,0 +1,326 @@
+// three.* skills — transform/material/lighting + glTF load over the live scene.
+
+import * as THREE from "../../build/three.bundle.mjs";
+import { z } from "../../build/zod.bundle.mjs";
+import { Position, Rotation, Scale, spawnRenderable } from "../ecs/world.ts";
+import type { LoadedResourceMetadata, SceneObject, SceneLike } from "../engine.ts";
+import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+
+const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+
+const setTransformInput = z.object({
+  entity: z.string(),
+  position: Vec3.optional(),
+  rotationEuler: Vec3.optional(), // radians (x,y,z)
+  scale: Vec3.optional(),
+});
+const setTransform: SkillDefinition<z.infer<typeof setTransformInput>, { ok: boolean }> = {
+  name: "three.setTransform",
+  version: "1.0.0",
+  description: "Set an entity's position, rotation (Euler radians), and/or scale.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: setTransformInput,
+  output: z.object({ ok: z.boolean() }),
+  handler: (input, ctx) => {
+    const eid = ctx.world.entities.resolve(input.entity)?.eid;
+    if (eid === undefined) return { ok: false };
+    if (input.position) {
+      Position.x[eid] = input.position[0]; Position.y[eid] = input.position[1]; Position.z[eid] = input.position[2];
+    }
+    if (input.rotationEuler) {
+      const q = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(input.rotationEuler[0], input.rotationEuler[1], input.rotationEuler[2]),
+      );
+      Rotation.x[eid] = q.x; Rotation.y[eid] = q.y; Rotation.z[eid] = q.z; Rotation.w[eid] = q.w;
+    }
+    if (input.scale) {
+      Scale.x[eid] = input.scale[0]; Scale.y[eid] = input.scale[1]; Scale.z[eid] = input.scale[2];
+    }
+    ctx.world.spatial?.invalidate();
+    ctx.emit("ecs.component.updated", { entity: input.entity, via: "three.setTransform" });
+    return { ok: true };
+  },
+};
+
+const setMaterialInput = z.object({
+  entity: z.string(),
+  color: z.number().int().min(0).max(0xffffff).optional(),
+  roughness: z.number().min(0).max(1).optional(),
+  metalness: z.number().min(0).max(1).optional(),
+  castShadow: z.boolean().optional(),
+  receiveShadow: z.boolean().optional(),
+});
+const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boolean }> = {
+  name: "three.setMaterial",
+  version: "1.0.0",
+  description: "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow). Applies across all meshes of a glTF entity.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: setMaterialInput,
+  output: z.object({ ok: z.boolean() }),
+  handler: (input, ctx) => {
+    const root = ctx.world.entities.resolve(input.entity)?.mesh;
+    if (root === undefined) return { ok: false };
+
+    const hasMaterialChange = input.color !== undefined || input.roughness !== undefined || input.metalness !== undefined;
+
+    const applyMaterialProps = (material: MaterialLike): void => {
+      if (input.color !== undefined) material.color.set(input.color);
+      if (input.roughness !== undefined) material.roughness = input.roughness;
+      if (input.metalness !== undefined) material.metalness = input.metalness;
+    };
+
+    const visit = (object: SceneObject): void => {
+      if (input.castShadow !== undefined) object.castShadow = input.castShadow;
+      if (input.receiveShadow !== undefined) object.receiveShadow = input.receiveShadow;
+      if (hasMaterialChange && object.material !== undefined) {
+        const material = object.material;
+        if (Array.isArray(material)) {
+          for (const sub of material) applyMaterialProps(sub);
+        } else {
+          applyMaterialProps(material);
+        }
+      }
+    };
+
+    if (typeof root.traverse === "function") root.traverse(visit);
+    else visit(root);
+
+    ctx.emit("three.material.updated", { entity: input.entity });
+    return { ok: true };
+  },
+};
+
+// Limina-managed lights per scene, so repeated setLighting calls replace them.
+const sceneLights = new Map<SceneLike, { ambient: unknown; directional: unknown }>();
+
+const setLightingInput = z.object({
+  ambientColor: z.number().int().min(0).max(0xffffff).default(0x404060),
+  ambientIntensity: z.number().min(0).max(10).default(1.2),
+  directionalColor: z.number().int().min(0).max(0xffffff).default(0xffffff),
+  directionalIntensity: z.number().min(0).max(10).default(3),
+  direction: Vec3.default([5, 9, 6]),
+  // Real shadow mapping: when castShadow is set the directional light renders a
+  // depth map each frame (renderer.shadowMap must be enabled, which engine.ts
+  // does). The shadow camera is an orthographic frustum sized to cover the floor.
+  castShadow: z.boolean().default(false),
+  shadowMapSize: z.number().int().min(256).max(4096).default(2048),
+  shadowCameraExtent: z.number().positive().max(500).default(20),
+  shadowCameraNear: z.number().positive().default(0.5),
+  shadowCameraFar: z.number().positive().default(120),
+  shadowBias: z.number().min(-0.01).max(0.01).default(-0.0008),
+});
+const setLighting: SkillDefinition<z.infer<typeof setLightingInput>, { ok: boolean }> = {
+  name: "three.setLighting",
+  version: "1.0.0",
+  description: "Set scene lighting: one ambient + one directional light, optionally casting real shadow maps.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: setLightingInput,
+  output: z.object({ ok: z.boolean() }),
+  handler: (input, ctx) => {
+    const scene = ctx.world.scene;
+    const prev = sceneLights.get(scene);
+    if (prev !== undefined) {
+      scene.remove(prev.ambient);
+      scene.remove(prev.directional);
+    }
+    const ambient = new THREE.AmbientLight(input.ambientColor, input.ambientIntensity);
+    const directional = new THREE.DirectionalLight(input.directionalColor, input.directionalIntensity);
+    directional.position.set(input.direction[0], input.direction[1], input.direction[2]);
+    if (input.castShadow) {
+      directional.castShadow = true;
+      directional.shadow.mapSize.width = input.shadowMapSize;
+      directional.shadow.mapSize.height = input.shadowMapSize;
+      const cam = directional.shadow.camera;
+      cam.left = -input.shadowCameraExtent;
+      cam.right = input.shadowCameraExtent;
+      cam.top = input.shadowCameraExtent;
+      cam.bottom = -input.shadowCameraExtent;
+      cam.near = input.shadowCameraNear;
+      cam.far = input.shadowCameraFar;
+      cam.updateProjectionMatrix();
+      directional.shadow.bias = input.shadowBias;
+    }
+    scene.add(ambient);
+    scene.add(directional);
+    sceneLights.set(scene, { ambient, directional });
+    ctx.emit("three.lighting.updated", { castShadow: input.castShadow });
+    return { ok: true };
+  },
+};
+
+const loadGltfInput = z.object({
+  assetId: z.string(),
+  position: Vec3.default([0, 0, 0]),
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isMaterialLike(value: unknown): value is { map?: { image?: unknown } } {
+  return isRecord(value);
+}
+
+/** Decoded-pixel bridge installed by crates/limina-render/js/00_bootstrap.js.
+ *  Returns the RGBA8 pixels of a decoded ImageBitmap, or null for non-bitmaps. */
+declare const __liminaImageBitmapToRGBA:
+  | ((image: unknown) => { width: number; height: number; data: Uint8Array } | null)
+  | undefined;
+
+// glTF baseColor + the other standard PBR texture slots GLTFLoader may populate.
+const GLTF_TEXTURE_SLOTS = [
+  "map", "emissiveMap", "roughnessMap", "metalnessMap", "normalMap",
+  "aoMap", "alphaMap", "bumpMap", "displacementMap", "specularMap",
+  "specularColorMap", "clearcoatMap", "sheenColorMap", "lightMap",
+] as const;
+
+interface DataTextureUpload {
+  image: { data: Uint8Array; width: number; height: number };
+  isDataTexture: boolean;
+  needsUpdate: boolean;
+}
+
+/** Re-home an ImageBitmap-backed texture onto three's CPU-data upload path.
+ *  deno_webgpu (0.218) has no GPUQueue.copyExternalImageToTexture, and three's
+ *  WebGPU backend swallows the resulting throw, so ImageBitmap textures upload as
+ *  black. Marking the texture isDataTexture + giving it raw RGBA pixels makes the
+ *  backend use queue.writeTexture, which works here. Idempotent: an already-data
+ *  image yields no pixels and is skipped. */
+function rehomeTextureToData(tex: unknown): boolean {
+  if (typeof __liminaImageBitmapToRGBA !== "function") return false;
+  if (!isRecord(tex) || !("image" in tex)) return false;
+  const rgba = __liminaImageBitmapToRGBA(tex.image);
+  if (rgba === null) return false;
+  // three.Texture upload-surface fields, outside our minimal scene typing. Safe:
+  // rgba is non-null only for a real decoded ImageBitmap-backed THREE.Texture.
+  const upload = tex as unknown as DataTextureUpload;
+  upload.image = rgba;
+  upload.isDataTexture = true;
+  upload.needsUpdate = true;
+  return true;
+}
+
+function rehomeMaterialTextures(material: unknown): void {
+  if (Array.isArray(material)) {
+    for (const m of material) rehomeMaterialTextures(m);
+    return;
+  }
+  if (!isRecord(material)) return;
+  for (const slot of GLTF_TEXTURE_SLOTS) {
+    if (slot in material) rehomeTextureToData(material[slot]);
+  }
+}
+
+/** Walk a loaded glTF scene and re-home every ImageBitmap texture so it samples
+ *  for real on the GPU (see rehomeTextureToData). */
+function prepareGltfTextures(root: SceneObject): void {
+  const visit = (object: SceneObject): void => {
+    if (object.material !== undefined) rehomeMaterialTextures(object.material);
+  };
+  if (typeof root.traverse === "function") root.traverse(visit);
+  else visit(root);
+}
+
+function collectGltfMetadata(assetId: string, bytes: Uint8Array, root: SceneObject): LoadedResourceMetadata {
+  let objectCount = 0;
+  let meshCount = 0;
+  const materials = new Set<unknown>();
+  const textures = new Set<unknown>();
+
+  const visit = (node: unknown): void => {
+    if (!isRecord(node)) return;
+    objectCount += 1;
+    if (node.isMesh === true) meshCount += 1;
+    const material = node.material;
+    if (Array.isArray(material)) {
+      for (const m of material) {
+        materials.add(m);
+        if (isMaterialLike(m) && m.map?.image !== undefined) textures.add(m.map);
+      }
+    } else if (material !== undefined) {
+      materials.add(material);
+      if (isMaterialLike(material) && material.map?.image !== undefined) textures.add(material.map);
+    }
+    const children = node.children;
+    if (Array.isArray(children)) {
+      for (const child of children) visit(child);
+    }
+  };
+  visit(root);
+
+  const name = isRecord(root) && typeof root.name === "string" && root.name.length > 0 ? root.name : undefined;
+  return {
+    kind: "gltf",
+    assetId,
+    source: `assets/${assetId}`,
+    bytes: bytes.byteLength,
+    rootName: name,
+    objectCount,
+    meshCount,
+    materialCount: materials.size,
+    textureCount: textures.size,
+  };
+}
+
+const loadGLTF: SkillDefinition<z.infer<typeof loadGltfInput>, { entity: string; resource: LoadedResourceMetadata }> = {
+  name: "three.loadGLTF",
+  version: "1.0.0",
+  description: "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: loadGltfInput,
+  output: z.object({
+    entity: z.string(),
+    resource: z.object({
+      kind: z.literal("gltf"),
+      assetId: z.string(),
+      source: z.string(),
+      bytes: z.number().int(),
+      rootName: z.string().optional(),
+      objectCount: z.number().int(),
+      meshCount: z.number().int(),
+      materialCount: z.number().int(),
+      textureCount: z.number().int(),
+    }),
+  }),
+  handler: async (input, ctx) => {
+    const bytes = ctx.world.ops.op_read_asset(input.assetId);
+    const manager = new THREE.LoadingManager();
+    const base = input.assetId.includes("/") ? input.assetId.slice(0, input.assetId.lastIndexOf("/") + 1) : "";
+    manager.setURLModifier((url: string) => {
+      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("limina-asset://")) return url;
+      return `limina-asset://${base}${url}`;
+    });
+    const loader = new THREE.GLTFLoader(manager);
+    const payload = input.assetId.endsWith(".gltf")
+      ? new TextDecoder().decode(bytes)
+      : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const gltf = await new Promise<{ scene: SceneObject }>((resolve, reject) => {
+      loader.parse(
+        payload,
+        `limina-asset://${base}`,
+        (g: { scene: SceneObject }) => resolve(g),
+        (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
+      );
+    });
+    const root = gltf.scene;
+    prepareGltfTextures(root);
+    const [x, y, z] = input.position;
+    ctx.world.scene.add(root);
+    const eid = spawnRenderable(ctx.world.ecs, root, x, y, z);
+    const resource = collectGltfMetadata(input.assetId, bytes, root);
+    const entity = ctx.world.entities.create({ eid, mesh: root, resource });
+    ctx.emit("three.gltf.loaded", { entity, ...resource });
+    return { entity, resource };
+  },
+};
+
+export function registerThreeSkills(registry: SkillRegistry): void {
+  registry.register(setTransform);
+  registry.register(setMaterial);
+  registry.register(setLighting);
+  registry.register(loadGLTF);
+}

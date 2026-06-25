@@ -1,0 +1,15 @@
+[package]
+name = "server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "netcode-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+common = { workspace = true }

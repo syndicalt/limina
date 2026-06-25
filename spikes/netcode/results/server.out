@@ -1,0 +1,4 @@
+netcode-server listening on 127.0.0.1:45415
+[server] client 127.0.0.1:41926 hello as spike-client; granted ["apply_impulse"]
+[server] REJECT state_write id=10001 from 127.0.0.1:41926: client attempted to set entity 0 pos=[999.0, 999.0, 999.0] directly -- authority denied
+[server] REJECT intent id=10002 from 127.0.0.1:41926: missing capability grant: teleport

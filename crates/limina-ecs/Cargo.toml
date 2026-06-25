@@ -1,0 +1,10 @@
+[package]
+name = "limina-ecs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+deno_core.workspace = true
+rayon = "1"

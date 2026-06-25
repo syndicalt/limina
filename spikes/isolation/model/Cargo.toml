@@ -1,0 +1,13 @@
+[package]
+name = "iso-model"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "iso_model"
+path = "src/lib.rs"
+
+# No dependencies: the shared capability-boundary model + malicious-skill probes
+# are pure std Rust, reused by every candidate sandbox.

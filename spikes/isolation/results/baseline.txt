@@ -1,0 +1,4 @@
+[js] === in-isolate baseline (engine main isolate, no sandbox, DEBUG build) ===
+[js] op_sum (numeric fast-API op, in-isolate): 5000000 calls in 231 ms => 46.2 ns/call
+[js]   (sink acc=19264)
+[js] in-isolate baseline done

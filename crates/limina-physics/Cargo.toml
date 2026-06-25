@@ -1,0 +1,13 @@
+[package]
+name = "limina-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+deno_core.workspace = true
+deno_error.workspace = true
+rapier3d = { workspace = true, features = ["serde-serialize"] }
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
