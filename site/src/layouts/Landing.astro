@@ -35,11 +35,15 @@ const ogUrl = site ? new URL(ogImage, site).href : ogImage;
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={ogUrl} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Limina engine — a contemporary sci-fi city, open fields and forest, and a fantasy city, with the features Agent-native, MCP-driven, Real-time WebGPU, and Typed & traced." />
     <meta property="og:url" content={canonical} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogUrl} />
+    <meta name="twitter:image:alt" content="Limina engine hero — sci-fi city to fantasy city, agent-native real-time 3D engine." />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
