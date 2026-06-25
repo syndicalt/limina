@@ -1,10 +1,18 @@
 ---
-import { Image } from 'astro:assets';
-import crowd from '../../assets/renders/agents-crowd.png';
 const base = import.meta.env.BASE_URL;
 const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
 ---
 <section class="hero">
+  <canvas id="cine-canvas" class="cine-canvas" aria-hidden="true"></canvas>
+  <img
+    class="cine-poster"
+    id="cine-poster"
+    src={`${base}media/hero-cinematic-poster.jpg`}
+    alt=""
+    aria-hidden="true"
+  />
+  <div class="cine-scrim" aria-hidden="true"></div>
+
   <div class="container hero-copy">
     <p class="eyebrow reveal">Agent-native real-time 3D engine</p>
     <h1 class="display reveal">
@@ -25,49 +33,64 @@ const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
     </ul>
   </div>
 
-  <div class="container">
-    <figure class="stage reveal">
-      <div class="stage-bar">
-        <span class="tl"></span><span class="tl"></span><span class="tl"></span>
-        <span class="stage-title mono">limina</span>
-      </div>
-      <div class="stage-body">
-        <Image
-          src={crowd}
-          alt="A crowd of low-poly agent-creatures perceiving and acting on a glowing grid, rendered by Limina."
-          class="stage-poster"
-          widths={[800, 1200, 1600]}
-          sizes="(max-width: 1180px) 100vw, 1120px"
-          loading="eager"
-        />
-        <canvas id="agent-canvas" class="agent-canvas" aria-hidden="true"></canvas>
+  <div class="cine-loader" id="cine-loader" aria-hidden="true"><div class="bar"></div></div>
 
-        <div class="hud hud-telemetry mono" aria-hidden="true">
-          <div class="hud-title">LIMINA · LIVE PREVIEW</div>
-          <div class="hud-row"><span>agents</span><b id="hud-agents">—</b></div>
-          <div class="hud-row"><span>perceive</span><b>native batch</b></div>
-          <div class="hud-row"><span>render</span><b>three.js · webgl</b></div>
-          <div class="hud-row"><span>fps</span><b id="hud-fps">—</b></div>
-        </div>
-
-        <div class="hud hud-ops mono" aria-hidden="true">
-          <div class="hud-title">AGENT OPS</div>
-          <ul id="hud-ops-feed"></ul>
-        </div>
-      </div>
-    </figure>
-    <figcaption class="stage-cap reveal">
-      A live <strong>Three.js</strong> preview of Limina's agent crowd. The native engine drives
-      this on a WebGPU surface at <strong>200 agents</strong> — see the numbers below.
-    </figcaption>
+  <div class="cine-brand" id="cine-brand" aria-hidden="true">
+    <svg viewBox="0 0 40 40" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="hero-lm" x1="6" y1="6" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#2fe6d6" /><stop offset="1" stop-color="#8b6bff" />
+        </linearGradient>
+      </defs>
+      <path d="M9 33V18a11 11 0 0 1 22 0v15" stroke="url(#hero-lm)" stroke-width="3.2" stroke-linecap="round" />
+      <circle cx="20" cy="24" r="3.2" fill="url(#hero-lm)" />
+    </svg>
+    <span>Powered by <b>Limina Engine</b></span>
   </div>
 </section>
 
 <style>
-  .hero { padding-top: clamp(48px, 7vw, 84px); padding-bottom: clamp(40px, 6vw, 70px); }
-  .hero-copy { text-align: center; display: flex; flex-direction: column; align-items: center; }
-  .hero .display { margin: 18px 0 0; max-width: 16ch; }
-  .hero .lede { margin: 22px auto 0; }
+  .hero {
+    position: relative;
+    min-height: 100svh;
+    display: grid;
+    place-items: center;
+    padding-block: clamp(110px, 14vh, 180px) clamp(60px, 9vh, 110px);
+    overflow: hidden;
+  }
+  .cine-canvas,
+  .cine-poster {
+    position: absolute;
+    inset: 0;
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover;
+    z-index: 0;
+    display: block;
+  }
+  .cine-poster { transition: opacity 0.6s ease; }
+  .cine-canvas.hidden { display: none; }
+  .cine-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background:
+      radial-gradient(115% 85% at 50% 40%, rgba(7, 9, 18, 0.28), rgba(7, 9, 18, 0.62) 55%, rgba(7, 9, 18, 0.9)),
+      linear-gradient(180deg, rgba(7, 9, 18, 0.5) 0%, rgba(7, 9, 18, 0.18) 36%, rgba(7, 9, 18, 0.72) 100%);
+  }
+
+  .hero-copy {
+    position: relative;
+    z-index: 2;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .hero .display { margin: 18px 0 0; max-width: 17ch; text-shadow: 0 2px 30px rgba(7, 9, 18, 0.55); }
+  .hero .eyebrow { text-shadow: 0 1px 12px rgba(7, 9, 18, 0.6); }
+  .hero .lede { margin: 22px auto 0; max-width: 62ch; color: #d8dfee; text-shadow: 0 1px 18px rgba(7, 9, 18, 0.85); }
   .hero .lede strong { color: var(--ink); font-weight: 600; }
   .hero-cta { display: flex; gap: 14px; margin-top: 30px; flex-wrap: wrap; justify-content: center; }
   .hero-pills {
@@ -79,102 +102,80 @@ const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
     flex-wrap: wrap;
     justify-content: center;
   }
-
-  .stage {
-    margin: clamp(34px, 5vw, 60px) auto 0;
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    overflow: hidden;
-    background: #0a0e1a;
-    box-shadow: 0 40px 120px -50px rgba(47, 230, 214, 0.45), 0 30px 80px -60px rgba(139, 107, 255, 0.5);
+  .hero .pill {
+    color: #d2dbec;
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(3px);
   }
-  .stage-bar {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 11px 16px;
-    background: linear-gradient(180deg, #121a2c, #0d1320);
-    border-bottom: 1px solid var(--line);
-  }
-  .stage-bar .tl { width: 11px; height: 11px; border-radius: 50%; background: #2a3550; }
-  .stage-bar .tl:nth-child(1) { background: #ff5f57; }
-  .stage-bar .tl:nth-child(2) { background: #febc2e; }
-  .stage-bar .tl:nth-child(3) { background: #28c840; }
-  .stage-title { margin-left: auto; margin-right: auto; transform: translateX(-18px); font-size: 0.8rem; color: var(--faint); }
+  .hero .eyebrow { color: var(--teal); }
 
-  .stage-body { position: relative; aspect-ratio: 3 / 2; background: #070912; }
-  .stage-poster,
-  .agent-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: cover; }
-  .stage-poster { z-index: 0; }
-  .agent-canvas { z-index: 1; display: block; }
-  .agent-canvas.hidden { display: none; }
-
-  .hud {
+  .cine-loader {
     position: absolute;
-    z-index: 2;
-    background: rgba(7, 10, 20, 0.72);
-    border: 1px solid rgba(47, 230, 214, 0.25);
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 0.72rem;
-    line-height: 1.5;
-    color: #b9c6dd;
-    backdrop-filter: blur(6px);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    height: 2px;
+    background: transparent;
+    transition: opacity 0.5s ease;
+  }
+  .cine-loader .bar { height: 100%; width: 0; background: var(--grad); transition: width 0.2s ease; }
+  .cine-loader.done { opacity: 0; }
+
+  .cine-brand {
+    position: absolute;
+    right: 22px;
+    bottom: 20px;
+    z-index: 3;
+    display: flex;
+    gap: 9px;
+    align-items: center;
+    opacity: 0;
+    color: #eef3ff;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6);
     pointer-events: none;
   }
-  .hud-title { color: var(--teal); letter-spacing: 0.12em; font-size: 0.66rem; margin-bottom: 6px; }
-  .hud-telemetry { top: 14px; left: 14px; min-width: 168px; }
-  .hud-row { display: flex; justify-content: space-between; gap: 16px; }
-  .hud-row b { color: #e9eef9; font-weight: 500; }
-  .hud-ops { bottom: 14px; right: 14px; min-width: 184px; }
-  .hud-ops ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-  .hud-ops li { color: #9fb0cc; white-space: nowrap; }
-  .hud-ops li .id { color: var(--amber); }
-
-  .stage-cap { text-align: center; color: var(--faint); font-size: 0.88rem; margin-top: 18px; }
-  .stage-cap strong { color: var(--muted); font-weight: 600; }
+  .cine-brand svg { width: 26px; height: 26px; filter: drop-shadow(0 0 10px rgba(47, 230, 214, 0.5)); }
+  .cine-brand b {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
 
   @media (max-width: 640px) {
-    .hud-ops { display: none; }
-    .hud-telemetry { transform: scale(0.86); transform-origin: top left; }
+    .cine-brand { right: 14px; bottom: 14px; font-size: 0.85rem; }
   }
 </style>
 
 <script>
-  import { initAgentDemo } from '../../scripts/agent-demo';
+  import { initHeroCinematic } from '../../scripts/hero-cinematic';
 
-  const canvas = document.getElementById('agent-canvas') as HTMLCanvasElement | null;
-  const fpsEl = document.getElementById('hud-fps');
-  const agentsEl = document.getElementById('hud-agents');
-  const feed = document.getElementById('hud-ops-feed');
+  const canvas = document.getElementById('cine-canvas') as HTMLCanvasElement | null;
+  const poster = document.getElementById('cine-poster');
+  const loader = document.getElementById('cine-loader');
+  const bar = loader?.querySelector('.bar') as HTMLElement | null;
+  const brand = document.getElementById('cine-brand');
 
   if (canvas) {
-    initAgentDemo({
+    initHeroCinematic({
       canvas,
-      count: 150,
-      onStats(fps, agents) {
-        if (fpsEl) fpsEl.textContent = String(fps);
-        if (agentsEl) agentsEl.textContent = String(agents);
+      overlay: { brand },
+      onProgress(frac) {
+        if (bar) bar.style.width = Math.round(frac * 100) + '%';
+      },
+      onReady() {
+        loader?.classList.add('done');
+        if (poster) poster.style.opacity = '0';
       },
       onError() {
         canvas.classList.add('hidden');
+        loader?.classList.add('done');
+        // poster stays visible as the static fallback
       },
     });
-  }
-
-  // Representative agent-ops ticker for the preview.
-  if (feed) {
-    const verbs = ['perceiving', 'approaching', 'deciding', 'chatting', 'wandering', 'idle'];
-    const push = () => {
-      const id = Math.floor(Math.random() * 200);
-      const v = verbs[Math.floor(Math.random() * verbs.length)];
-      const li = document.createElement('li');
-      li.innerHTML = `<span class="id">#${id}</span> ${v}…`;
-      feed.prepend(li);
-      while (feed.childElementCount > 9) feed.lastElementChild?.remove();
-    };
-    for (let i = 0; i < 9; i++) push();
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (!reduce) setInterval(push, 900);
   }
 </script>

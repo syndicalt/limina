@@ -1,0 +1,152 @@
+---
+import { Image } from 'astro:assets';
+import crowd from '../../assets/renders/agents-crowd.png';
+---
+<section class="section live-preview" id="live-preview">
+  <div class="container">
+    <div class="lp-head reveal">
+      <p class="eyebrow">Live in your browser</p>
+      <h2 class="lp-title">A real-time peek at an agent crowd</h2>
+    </div>
+
+    <figure class="stage reveal">
+      <div class="stage-bar">
+        <span class="tl"></span><span class="tl"></span><span class="tl"></span>
+        <span class="stage-title mono">limina</span>
+      </div>
+      <div class="stage-body">
+        <Image
+          src={crowd}
+          alt="A crowd of low-poly agent-creatures perceiving and acting on a glowing grid, rendered by Limina."
+          class="stage-poster"
+          widths={[800, 1200, 1600]}
+          sizes="(max-width: 1180px) 100vw, 1120px"
+          loading="lazy"
+        />
+        <canvas id="agent-canvas" class="agent-canvas" aria-hidden="true"></canvas>
+
+        <div class="hud hud-telemetry mono" aria-hidden="true">
+          <div class="hud-title">LIMINA · LIVE PREVIEW</div>
+          <div class="hud-row"><span>agents</span><b id="hud-agents">—</b></div>
+          <div class="hud-row"><span>perceive</span><b>native batch</b></div>
+          <div class="hud-row"><span>render</span><b>three.js · webgl</b></div>
+          <div class="hud-row"><span>fps</span><b id="hud-fps">—</b></div>
+        </div>
+
+        <div class="hud hud-ops mono" aria-hidden="true">
+          <div class="hud-title">AGENT OPS</div>
+          <ul id="hud-ops-feed"></ul>
+        </div>
+      </div>
+    </figure>
+    <figcaption class="stage-cap reveal">
+      A live <strong>Three.js</strong> preview of Limina's agent crowd — the native engine drives
+      this on a WebGPU surface at <strong>200 agents</strong>.
+    </figcaption>
+  </div>
+</section>
+
+<style>
+  .live-preview { padding-block: clamp(48px, 7vw, 96px); }
+  .lp-head { text-align: center; margin-bottom: clamp(24px, 4vw, 44px); }
+  .lp-title { margin: 10px 0 0; }
+
+  .stage {
+    margin: 0 auto;
+    max-width: 1120px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0a0e1a;
+    box-shadow: 0 40px 120px -50px rgba(47, 230, 214, 0.45), 0 30px 80px -60px rgba(139, 107, 255, 0.5);
+  }
+  .stage-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 11px 16px;
+    background: linear-gradient(180deg, #121a2c, #0d1320);
+    border-bottom: 1px solid var(--line);
+  }
+  .stage-bar .tl { width: 11px; height: 11px; border-radius: 50%; background: #2a3550; }
+  .stage-bar .tl:nth-child(1) { background: #ff5f57; }
+  .stage-bar .tl:nth-child(2) { background: #febc2e; }
+  .stage-bar .tl:nth-child(3) { background: #28c840; }
+  .stage-title { margin-left: auto; margin-right: auto; transform: translateX(-18px); font-size: 0.8rem; color: var(--faint); }
+
+  .stage-body { position: relative; aspect-ratio: 3 / 2; background: #070912; }
+  .stage-poster,
+  .agent-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: cover; }
+  .stage-poster { z-index: 0; }
+  .agent-canvas { z-index: 1; display: block; }
+  .agent-canvas.hidden { display: none; }
+
+  .hud {
+    position: absolute;
+    z-index: 2;
+    background: rgba(7, 10, 20, 0.72);
+    border: 1px solid rgba(47, 230, 214, 0.25);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: #b9c6dd;
+    backdrop-filter: blur(6px);
+    pointer-events: none;
+  }
+  .hud-title { color: var(--teal); letter-spacing: 0.12em; font-size: 0.66rem; margin-bottom: 6px; }
+  .hud-telemetry { top: 14px; left: 14px; min-width: 168px; }
+  .hud-row { display: flex; justify-content: space-between; gap: 16px; }
+  .hud-row b { color: #e9eef9; font-weight: 500; }
+  .hud-ops { bottom: 14px; right: 14px; min-width: 184px; }
+  .hud-ops ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+  .hud-ops li { color: #9fb0cc; white-space: nowrap; }
+  .hud-ops li .id { color: var(--amber); }
+
+  .stage-cap { text-align: center; color: var(--faint); font-size: 0.88rem; margin-top: 18px; }
+  .stage-cap strong { color: var(--muted); font-weight: 600; }
+
+  @media (max-width: 640px) {
+    .hud-ops { display: none; }
+    .hud-telemetry { transform: scale(0.86); transform-origin: top left; }
+  }
+</style>
+
+<script>
+  import { initAgentDemo } from '../../scripts/agent-demo';
+
+  const canvas = document.getElementById('agent-canvas') as HTMLCanvasElement | null;
+  const fpsEl = document.getElementById('hud-fps');
+  const agentsEl = document.getElementById('hud-agents');
+  const feed = document.getElementById('hud-ops-feed');
+
+  if (canvas) {
+    initAgentDemo({
+      canvas,
+      count: 150,
+      onStats(fps, agents) {
+        if (fpsEl) fpsEl.textContent = String(fps);
+        if (agentsEl) agentsEl.textContent = String(agents);
+      },
+      onError() {
+        canvas.classList.add('hidden');
+      },
+    });
+  }
+
+  // Representative agent-ops ticker for the preview.
+  if (feed) {
+    const verbs = ['perceiving', 'approaching', 'deciding', 'chatting', 'wandering', 'idle'];
+    const push = () => {
+      const id = Math.floor(Math.random() * 200);
+      const v = verbs[Math.floor(Math.random() * verbs.length)];
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="id">#${id}</span> ${v}…`;
+      feed.prepend(li);
+      while (feed.childElementCount > 9) feed.lastElementChild?.remove();
+    };
+    for (let i = 0; i < 9; i++) push();
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reduce) setInterval(push, 900);
+  }
+</script>
