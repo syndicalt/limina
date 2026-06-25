@@ -1,0 +1,291 @@
+/* ============================================================
+   Limina — design system
+   Palette + motifs pulled from the engine's own renders:
+   near-black navy, teal grid glow, violet/magenta/amber agents.
+   ============================================================ */
+
+:root {
+  /* surfaces */
+  --bg:        #070912;
+  --bg-2:      #0a0e1a;
+  --panel:     #0d1322;
+  --panel-2:   #111a2d;
+  --panel-3:   #16203a;
+
+  /* ink */
+  --ink:    #e9eef9;
+  --muted:  #9aa7c0;
+  --faint:  #67748f;
+
+  /* lines */
+  --line:   rgba(255, 255, 255, 0.09);
+  --line-2: rgba(255, 255, 255, 0.055);
+
+  /* engine accents */
+  --teal:    #2fe6d6;
+  --cyan:    #3bc9ff;
+  --violet:  #8b6bff;
+  --magenta: #ff5aa0;
+  --amber:   #ffb454;
+  --accent:  var(--teal);
+
+  --grad: linear-gradient(100deg, var(--teal), var(--cyan) 45%, var(--violet));
+  --grad-soft: linear-gradient(120deg, rgba(47,230,214,.16), rgba(139,107,255,.16));
+
+  --glow-teal:   0 0 48px rgba(47, 230, 214, 0.22);
+  --glow-violet: 0 0 48px rgba(139, 107, 255, 0.22);
+
+  --radius:    16px;
+  --radius-sm: 10px;
+  --maxw:      1180px;
+  --maxw-text: 720px;
+
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 90px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  position: relative;
+  min-height: 100vh;
+}
+
+/* Ambient backdrop: faint grid + horizon glow, fixed behind content */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(47,230,214,0.10), transparent 55%),
+    radial-gradient(90% 70% at 85% 110%, rgba(139,107,255,0.10), transparent 60%),
+    var(--bg);
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--line-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(130% 90% at 50% 0%, #000 35%, transparent 78%);
+  opacity: 0.55;
+}
+
+img, svg, canvas { display: block; max-width: 100%; }
+a { color: inherit; text-decoration: none; }
+
+::selection { background: rgba(47, 230, 214, 0.28); color: #fff; }
+
+/* ---- Typography ---------------------------------------------------- */
+
+h1, h2, h3, h4 { line-height: 1.08; letter-spacing: -0.03em; font-weight: 680; }
+
+.display {
+  font-size: clamp(2.6rem, 6.4vw, 5rem);
+  font-weight: 760;
+  letter-spacing: -0.04em;
+  line-height: 0.98;
+}
+.h2 { font-size: clamp(1.9rem, 3.6vw, 3rem); font-weight: 720; }
+.h3 { font-size: clamp(1.25rem, 2vw, 1.6rem); font-weight: 680; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--teal);
+  font-weight: 500;
+}
+
+.lede {
+  font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+  color: var(--muted);
+  line-height: 1.55;
+  max-width: var(--maxw-text);
+}
+
+.grad-text {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+
+/* ---- Layout -------------------------------------------------------- */
+
+.container {
+  width: 100%;
+  max-width: var(--maxw);
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.section { padding-block: clamp(64px, 9vw, 130px); position: relative; }
+.section-tight { padding-block: clamp(40px, 5vw, 72px); }
+
+.section-head { max-width: var(--maxw-text); margin-bottom: 52px; }
+.section-head .h2 { margin-top: 14px; }
+.section-head .lede { margin-top: 18px; }
+
+.divider { height: 1px; background: var(--line); border: 0; }
+
+.grid { display: grid; gap: 22px; }
+.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.cols-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 900px) {
+  .cols-3, .cols-4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .cols-2, .cols-3, .cols-4 { grid-template-columns: 1fr; }
+}
+
+/* ---- Buttons ------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 0.97rem;
+  padding: 13px 22px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease),
+              background 0.2s var(--ease), border-color 0.2s var(--ease);
+  white-space: nowrap;
+}
+.btn:hover { transform: translateY(-2px); }
+.btn-primary {
+  background: var(--grad);
+  color: #04121a;
+  box-shadow: var(--glow-teal);
+}
+.btn-primary:hover { box-shadow: 0 0 60px rgba(47, 230, 214, 0.4); }
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.btn-ghost:hover { border-color: rgba(47, 230, 214, 0.5); background: rgba(47, 230, 214, 0.06); }
+
+/* ---- Panels & cards ------------------------------------------------ */
+
+.panel {
+  background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  position: relative;
+}
+
+.card {
+  background: linear-gradient(180deg, var(--panel), var(--bg-2));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px;
+  transition: transform 0.25s var(--ease), border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+.card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(47, 230, 214, 0.35);
+  box-shadow: 0 20px 60px -30px rgba(47, 230, 214, 0.5);
+}
+.card .ic {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  background: var(--grad-soft);
+  border: 1px solid var(--line);
+  margin-bottom: 18px;
+  color: var(--teal);
+}
+.card h3 { margin-bottom: 8px; font-size: 1.18rem; }
+.card p { color: var(--muted); font-size: 0.98rem; }
+
+/* ---- Pills / badges ------------------------------------------------ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+}
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+
+.tag {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--teal);
+  border: 1px solid rgba(47, 230, 214, 0.3);
+  border-radius: 6px;
+  padding: 2px 8px;
+  background: rgba(47, 230, 214, 0.06);
+}
+
+/* ---- Mono / code ---------------------------------------------------- */
+
+.mono { font-family: var(--mono); }
+
+code, .code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.codeblock {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  line-height: 1.7;
+  background: #070b14;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 18px 20px;
+  overflow-x: auto;
+  color: #cdd7ec;
+}
+.codeblock .c-key { color: var(--violet); }
+.codeblock .c-str { color: var(--teal); }
+.codeblock .c-com { color: var(--faint); }
+.codeblock .c-fn  { color: var(--cyan); }
+
+/* ---- Reveal-on-scroll --------------------------------------------- */
+.reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s var(--ease), transform 0.7s var(--ease); }
+.reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+  html { scroll-behavior: auto; }
+}

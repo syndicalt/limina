@@ -1,0 +1,62 @@
+---
+const layers = [
+  { t: 'Agent & skill layer', s: 'Registry · MCP · perception · systems', tag: 'TypeScript' },
+  { t: 'Renderer', s: 'Three.js on a native WebGPU surface', tag: 'deno_webgpu · wgpu' },
+  { t: 'Simulation', s: 'bitECS components in SoA TypedArrays', tag: 'fixed-timestep loop' },
+  { t: 'Native hot paths', s: 'Rapier physics · rayon spatial · audio', tag: 'Rust #[op2]' },
+  { t: 'Host runtime', s: 'Rust embeds V8 and owns the loop, window & ops', tag: 'deno_core' },
+];
+const principles = [
+  { t: 'Native where it counts', d: 'Physics, spatial queries, and ECS hot loops run in Rust over zero-copy buffers. JS is the authoring and agent layer — never the inner loop.' },
+  { t: 'Off-loop cognition', d: 'Agent LLM calls resolve between frames through an action queue. The fixed timestep never blocks on a model, so the sim stays smooth.' },
+  { t: 'Data-oriented by default', d: 'Components live in SoA TypedArrays on ArrayBuffers; the very same bytes back the native systems with no serialization or copy.' },
+];
+---
+<section class="section arch" id="architecture">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="eyebrow">Architecture</p>
+      <h2 class="h2">One native binary. <span class="grad-text">Top to bottom.</span></h2>
+      <p class="lede">No browser, no Electron. A Rust host boots V8, drives a WebGPU surface and a deterministic loop, and pushes the heavy work into native code — all shipped as a single executable.</p>
+    </div>
+    <div class="arch-grid">
+      <ol class="stack reveal" aria-label="The Limina stack">
+        {layers.map((l) => (
+          <li class="layer">
+            <div class="layer-main"><span class="layer-t">{l.t}</span><span class="layer-s">{l.s}</span></div>
+            <span class="tag">{l.tag}</span>
+          </li>
+        ))}
+      </ol>
+      <ul class="principles reveal">
+        {principles.map((p) => (
+          <li>
+            <h3 class="h3">{p.t}</h3>
+            <p>{p.d}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .arch-grid { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: 52px; align-items: start; }
+  .stack { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .layer {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 17px 20px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: linear-gradient(180deg, var(--panel), var(--bg-2));
+    transition: border-color 0.2s var(--ease), transform 0.2s var(--ease);
+  }
+  .layer:hover { border-color: rgba(47, 230, 214, 0.4); transform: translateX(3px); }
+  .layer-main { display: flex; flex-direction: column; gap: 3px; }
+  .layer-t { font-weight: 620; }
+  .layer-s { color: var(--muted); font-size: 0.86rem; }
+  .principles { list-style: none; margin: 0; padding: 0; display: grid; gap: 26px; align-content: center; }
+  .principles h3 { margin-bottom: 7px; }
+  .principles p { color: var(--muted); }
+  @media (max-width: 900px) { .arch-grid { grid-template-columns: 1fr; gap: 38px; } }
+</style>

@@ -1,0 +1,48 @@
+---
+import { Image } from 'astro:assets';
+import crowd from '../../assets/renders/agents-crowd.png';
+import closeup from '../../assets/renders/agent-closeup.png';
+import arena from '../../assets/renders/agents-arena.png';
+import crowdAlt from '../../assets/renders/agents-crowd-alt.png';
+import billiards from '../../assets/renders/physics-billiards.png';
+
+const tiles = [
+  { src: crowd, alt: 'A dense crowd of agent-creatures with a live perception + agent-ops HUD.', cap: '200 agents · native perception · live HUD', wide: true },
+  { src: closeup, alt: 'Close-up of agents lit by colored point lights beside a physics sphere.', cap: 'Per-agent lighting & physics bodies' },
+  { src: arena, alt: 'Top-down arena with perception radii and dotted decision paths.', cap: 'Perception radii & decision paths' },
+  { src: crowdAlt, alt: 'Agent crowd from another angle with telemetry overlay.', cap: 'Batched perception at density' },
+  { src: billiards, alt: 'A rack of billiard balls coming to rest on a table, simulated by native Rapier physics.', cap: 'Native Rapier physics · billiards' },
+];
+---
+<section class="section" id="gallery">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="eyebrow">Gallery</p>
+      <h2 class="h2">Real frames from the engine.</h2>
+      <p class="lede">Captured from windowed demo runs — the same renderer, scenes, and agent systems described throughout these docs.</p>
+    </div>
+    <div class="gallery reveal">
+      {tiles.map((t) => (
+        <figure class={`tile${t.wide ? ' wide' : ''}`}>
+          <Image src={t.src} alt={t.alt} widths={[500, 800, 1200]} sizes="(max-width: 760px) 100vw, 50vw" />
+          <figcaption class="mono">{t.cap}</figcaption>
+        </figure>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .tile { position: relative; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #0a0e1a; }
+  .tile.wide { grid-column: 1 / -1; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.5s var(--ease); }
+  .tile:hover img { transform: scale(1.03); }
+  .tile figcaption {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 24px 16px 12px;
+    font-size: 0.74rem; color: #cfe; letter-spacing: 0.03em;
+    background: linear-gradient(180deg, transparent, rgba(4, 7, 14, 0.85));
+  }
+  @media (max-width: 760px) { .gallery { grid-template-columns: 1fr; } }
+</style>

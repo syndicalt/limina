@@ -1,0 +1,87 @@
+---
+const base = import.meta.env.BASE_URL;
+const loop = [
+  {
+    k: '01',
+    t: 'Perceive',
+    d: 'Each tick, an agent receives a typed view of nearby entities, transforms, and recent events — computed by a native, rayon-parallel spatial query, not a JS scan.',
+    icon: '<circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/>',
+  },
+  {
+    k: '02',
+    t: 'Decide',
+    d: 'A pluggable LLM provider — scripted, local Ollama, or a cloud gateway — selects the next skill call. Thinking runs off the frame loop, so a slow model never drops a frame.',
+    icon: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>',
+  },
+  {
+    k: '03',
+    t: 'Act',
+    d: 'The chosen call goes through the same permissioned skill surface as everyone else, mutates the ECS world, and emits a typed, sha256-chained event into the world log.',
+    icon: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"/>',
+  },
+];
+const kinds = [
+  {
+    t: 'Agent Builders',
+    tag: 'external · over MCP',
+    d: 'Any MCP client — Claude, a custom agent, your IDE — discovers Limina\u2019s typed tools via listTools and constructs a scene: create entities, set transforms and materials, load glTF, place lights. Permission-checked, every call traced.',
+    href: `${base}building-agents/builders`,
+    icon: '<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8ZM12 17v5"/>',
+  },
+  {
+    t: 'Agent Players',
+    tag: 'in-world · autonomous',
+    d: 'Spawn entities that are themselves agents. They perceive the world, decide with any LLM off the loop, and act through the same skills — chasing targets, conversing, navigating — alongside everything else in the simulation.',
+    href: `${base}building-agents/players`,
+    icon: '<circle cx="12" cy="5" r="3"/><path d="M12 8v7m0 0-4 6m4-6 4 6M7 11h10"/>',
+  },
+];
+---
+<section class="section" id="how">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="eyebrow">How agents work</p>
+      <h2 class="h2">Perceive. Decide. Act.</h2>
+      <p class="lede">Every in-world agent runs the same loop on the engine’s fixed timestep. The world stays deterministic; the thinking happens asynchronously, off the frame path.</p>
+    </div>
+
+    <ol class="loop grid cols-3 reveal">
+      {loop.map((s) => (
+        <li class="card loop-card">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={s.icon} /></span>
+          <span class="k mono">{s.k}</span>
+          <h3>{s.t}</h3>
+          <p>{s.d}</p>
+        </li>
+      ))}
+    </ol>
+
+    <div class="kinds-head reveal"><span class="line"></span><span class="mono">two kinds of agents</span><span class="line"></span></div>
+
+    <div class="grid cols-2 reveal">
+      {kinds.map((k) => (
+        <a class="card kind" href={k.href}>
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={k.icon} /></span>
+          <div class="kind-head"><h3>{k.t}</h3><span class="tag">{k.tag}</span></div>
+          <p>{k.d}</p>
+          <span class="more">Learn more →</span>
+        </a>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .loop { counter-reset: none; margin-bottom: 18px; }
+  .loop-card { position: relative; }
+  .loop-card .k { position: absolute; top: 22px; right: 24px; color: var(--faint); font-size: 0.8rem; }
+  .loop-card svg { width: 22px; height: 22px; }
+  .kinds-head { display: flex; align-items: center; gap: 18px; margin: 46px 0 24px; color: var(--faint); }
+  .kinds-head .mono { font-size: 0.74rem; letter-spacing: 0.18em; text-transform: uppercase; white-space: nowrap; }
+  .kinds-head .line { height: 1px; background: var(--line); flex: 1; }
+  .kind { display: flex; flex-direction: column; gap: 0; }
+  .kind svg { width: 22px; height: 22px; }
+  .kind-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .kind-head h3 { margin: 0; }
+  .kind .more { margin-top: 16px; color: var(--teal); font-size: 0.9rem; font-weight: 500; }
+</style>

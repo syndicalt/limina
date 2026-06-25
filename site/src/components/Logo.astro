@@ -1,0 +1,40 @@
+---
+interface Props { href?: string; }
+const { href = import.meta.env.BASE_URL } = Astro.props;
+---
+<a href={href} class="logo" aria-label="Limina — home">
+  <svg viewBox="0 0 40 40" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id="logo-lm" x1="6" y1="6" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#2fe6d6" />
+        <stop offset="1" stop-color="#8b6bff" />
+      </linearGradient>
+    </defs>
+    <path d="M9 33V18a11 11 0 0 1 22 0v15" stroke="url(#logo-lm)" stroke-width="3.2" stroke-linecap="round" />
+    <circle cx="20" cy="24" r="3.2" fill="url(#logo-lm)" />
+  </svg>
+  <span class="logo-text">limina</span>
+</a>
+
+<style>
+  .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-weight: 730;
+    letter-spacing: -0.04em;
+    font-size: 1.2rem;
+    color: var(--ink);
+  }
+  .logo svg {
+    width: 25px;
+    height: 25px;
+    filter: drop-shadow(0 0 10px rgba(47, 230, 214, 0.45));
+  }
+  .logo-text {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+</style>

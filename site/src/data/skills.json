@@ -1,0 +1,918 @@
+{
+  "engine": "limina",
+  "description": "Canonical machine-readable catalog of Limina built-in skills. Each skill maps 1:1 to an MCP tool whose name IS the skill name; the tool input is validated against a JSON Schema (draft-07) derived from the skill Zod schema. Source-grounded from js/src/skills/*.",
+  "docs": "https://limina.dev/skills",
+  "count": 45,
+  "transports": {
+    "in-process": "Mcp class (listTools/callTool)",
+    "stdio": "limina --mcp-stdio",
+    "websocket": "limina --mcp-ws --port <N>"
+  },
+  "mcp": {
+    "listTools": "returns [{ name, description, input_schema }] where input_schema is JSON Schema draft-07",
+    "callTool": "{ tool, input, context? } -> { success, result?, error?: { code, message }, metadata? }",
+    "errorCodes": [
+      "not_found",
+      "invalid_input",
+      "forbidden",
+      "handler_error",
+      "capacity_exceeded"
+    ]
+  },
+  "permissions": [
+    "scene.read",
+    "scene.write",
+    "ecs.read",
+    "ecs.modify",
+    "physics.read",
+    "physics.write",
+    "agent.read",
+    "agent.write",
+    "ui.write",
+    "audio.play",
+    "social.act"
+  ],
+  "permissionProfiles": {
+    "builder.readWrite": [
+      "scene.read",
+      "scene.write",
+      "ecs.read",
+      "ecs.modify",
+      "physics.read",
+      "physics.write",
+      "agent.read",
+      "agent.write",
+      "ui.write",
+      "audio.play"
+    ],
+    "player.limited": [
+      "scene.read",
+      "ecs.read",
+      "physics.read",
+      "physics.write",
+      "agent.read",
+      "agent.write"
+    ],
+    "social.actor": [
+      "scene.read",
+      "ecs.read",
+      "physics.read",
+      "agent.read",
+      "agent.write",
+      "social.act",
+      "audio.play"
+    ],
+    "system.readonly": [
+      "scene.read",
+      "ecs.read",
+      "physics.read",
+      "agent.read"
+    ]
+  },
+  "skills": [
+    {
+      "name": "scene.createEntity",
+      "version": "1.0.0",
+      "category": "scene",
+      "description": "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. Returns its entity id.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "shape": "enum(box|sphere)=box",
+        "collider": "enum(box|sphere|capsule)?",
+        "size": "number>0,<=50=1",
+        "color": "int(0..0xffffff)=0xffffff",
+        "position": "[number,number,number]=[0,0,0]",
+        "dynamic": "boolean=false",
+        "static": "boolean=false",
+        "friction": "number(0..10)=0.5",
+        "restitution": "number(0..2)=0"
+      },
+      "output": {
+        "entity": "string"
+      }
+    },
+    {
+      "name": "scene.destroyEntity",
+      "version": "1.0.0",
+      "category": "scene",
+      "description": "Destroy an entity and free its scene object and physics body.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string"
+      },
+      "output": {
+        "removed": "boolean"
+      }
+    },
+    {
+      "name": "scene.queryEntities",
+      "version": "1.0.0",
+      "category": "scene",
+      "description": "List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances.",
+      "permissions": [
+        "scene.read"
+      ],
+      "input": {
+        "near": "[number,number,number]?",
+        "radius": "number>0?",
+        "tag": "string?"
+      },
+      "output": {
+        "entities": "Array<{entity:string,position:[number,number,number],distance:number}>"
+      }
+    },
+    {
+      "name": "ecs.updateComponent",
+      "version": "1.0.0",
+      "category": "ecs",
+      "description": "Set an entity's position [x,y,z], rotation quaternion [x,y,z,w], or scale [x,y,z].",
+      "permissions": [
+        "ecs.modify"
+      ],
+      "input": {
+        "entity": "string",
+        "component": "enum(position|rotation|scale)",
+        "value": "number[](min3,max4)"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "ecs.addComponent",
+      "version": "1.0.0",
+      "category": "ecs",
+      "description": "Tag an entity with a named component (e.g. 'target', 'hostile').",
+      "permissions": [
+        "ecs.modify"
+      ],
+      "input": {
+        "entity": "string",
+        "component": "string(min1)"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "ecs.removeComponent",
+      "version": "1.0.0",
+      "category": "ecs",
+      "description": "Remove a named component tag from an entity.",
+      "permissions": [
+        "ecs.modify"
+      ],
+      "input": {
+        "entity": "string",
+        "component": "string(min1)"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "three.setTransform",
+      "version": "1.0.0",
+      "category": "three",
+      "description": "Set an entity's position, rotation (Euler radians), and/or scale.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string",
+        "position": "[number,number,number]?",
+        "rotationEuler": "[number,number,number]?(radians)",
+        "scale": "[number,number,number]?"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "three.setMaterial",
+      "version": "1.0.0",
+      "category": "three",
+      "description": "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow). Applies across all meshes of a glTF entity.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string",
+        "color": "int(0..0xffffff)?",
+        "roughness": "number(0..1)?",
+        "metalness": "number(0..1)?",
+        "castShadow": "boolean?",
+        "receiveShadow": "boolean?"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "three.setLighting",
+      "version": "1.0.0",
+      "category": "three",
+      "description": "Set scene lighting: one ambient + one directional light, optionally casting real shadow maps.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "ambientColor": "int=0x404060",
+        "ambientIntensity": "number(0..10)=1.2",
+        "directionalColor": "int=0xffffff",
+        "directionalIntensity": "number(0..10)=3",
+        "direction": "[number,number,number]=[5,9,6]",
+        "castShadow": "boolean=false",
+        "shadowMapSize": "int(256..4096)=2048",
+        "shadowCameraExtent": "number>0,<=500=20",
+        "shadowCameraNear": "number>0=0.5",
+        "shadowCameraFar": "number>0=120",
+        "shadowBias": "number(-0.01..0.01)=-0.0008"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "three.loadGLTF",
+      "version": "1.0.0",
+      "category": "three",
+      "description": "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "assetId": "string",
+        "position": "[number,number,number]=[0,0,0]"
+      },
+      "output": {
+        "entity": "string",
+        "resource": "{kind:'gltf',assetId:string,source:string,bytes:int,rootName?:string,objectCount:int,meshCount:int,materialCount:int,textureCount:int}"
+      }
+    },
+    {
+      "name": "physics.applyImpulse",
+      "version": "1.0.0",
+      "category": "physics",
+      "description": "Apply an impulse [x,y,z] to an entity's dynamic body (wakes it).",
+      "permissions": [
+        "physics.write"
+      ],
+      "input": {
+        "entity": "string",
+        "impulse": "[number,number,number]"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "physics.raycast",
+      "version": "1.0.0",
+      "category": "physics",
+      "description": "Cast a ray from origin along direction; returns the first hit (distance, point, entity).",
+      "permissions": [
+        "physics.read"
+      ],
+      "input": {
+        "origin": "[number,number,number]",
+        "direction": "[number,number,number]",
+        "maxDistance": "number>0=1000"
+      },
+      "output": {
+        "hit": "boolean",
+        "distance": "number?",
+        "point": "[number,number,number]?",
+        "entity": "string?"
+      }
+    },
+    {
+      "name": "physics.collisionEvents",
+      "version": "1.0.0",
+      "category": "physics",
+      "description": "Drain physics collision start/stop events, mapped to entity ids where available.",
+      "permissions": [
+        "physics.read"
+      ],
+      "input": {},
+      "output": {
+        "events": "Array<{started:boolean,bodyA:int,bodyB:int,entityA?:string,entityB?:string,point:[number,number,number]|null,normal:[number,number,number]|null}>"
+      }
+    },
+    {
+      "name": "agent.emitEvent",
+      "version": "1.0.0",
+      "category": "agent",
+      "description": "Emit a custom event into the observability trace (inter-agent or system signal). Emitted as agent.signal.<type>.",
+      "permissions": [
+        "agent.write"
+      ],
+      "input": {
+        "type": "string(min1)",
+        "payload": "Record<string,unknown>={}"
+      },
+      "output": {
+        "eventId": "string"
+      }
+    },
+    {
+      "name": "agent.getPerception",
+      "version": "1.0.0",
+      "category": "agent",
+      "description": "Get the calling agent's current perception (nearby entities + recent events).",
+      "permissions": [
+        "agent.read"
+      ],
+      "input": {},
+      "output": {
+        "perception": "unknown"
+      }
+    },
+    {
+      "name": "skills.list",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "List all available skills (names + descriptions).",
+      "permissions": [],
+      "input": {},
+      "output": {
+        "tools": "Array<{name:string,description:string}>"
+      }
+    },
+    {
+      "name": "skills.describe",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Describe a skill: version, category, and JSON-Schema input.",
+      "permissions": [],
+      "input": {
+        "name": "string"
+      },
+      "output": {
+        "name": "string",
+        "version": "string",
+        "category": "string",
+        "description": "string",
+        "input_schema": "unknown(JSONSchema)"
+      }
+    },
+    {
+      "name": "trace.tail",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Tail trace events with cursor pagination and optional actor/type filters.",
+      "permissions": [],
+      "input": {
+        "afterSeq": "int>=-1?",
+        "limit": "int(0..1000)?",
+        "actorId": "string?",
+        "type": "string?"
+      },
+      "output": {
+        "events": "EventSchema[]",
+        "nextAfterSeq": "int|null"
+      }
+    },
+    {
+      "name": "trace.explainEvent",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Explain a trace event with resolved causal parents and children.",
+      "permissions": [],
+      "input": {
+        "eventId": "string"
+      },
+      "output": {
+        "event": "EventSchema",
+        "parents": "EventSchema[]",
+        "children": "EventSchema[]"
+      }
+    },
+    {
+      "name": "trace.export",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Flush the durable trace history to a sandboxed trace JSONL file.",
+      "permissions": [],
+      "input": {
+        "name": "string(min1)"
+      },
+      "output": {
+        "name": "string",
+        "events": "int",
+        "bytes": "int"
+      }
+    },
+    {
+      "name": "inspector.snapshot",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Return a bounded, paginated snapshot of world, entities, agents, skills, permissions, resources, and trace metadata.",
+      "permissions": [
+        "scene.read",
+        "ecs.read",
+        "physics.read",
+        "agent.read"
+      ],
+      "input": {
+        "afterEntity": "string?",
+        "limit": "int(0..500)=100"
+      },
+      "output": {
+        "page": "{limit:int,totalEntities:int,nextAfterEntity:string|null}",
+        "world": "unknown",
+        "entities": "Array<{entity:string,eid:int,generation:int,transform:{position:Vec3,rotation:Quat,scale:Vec3},tags:string[],physics:{bodyId?:int},resource?:unknown}>",
+        "agents": "unknown[]",
+        "skills": "Array<{name:string,version:string,category:string,permissions:string[]}>",
+        "permissions": "{caller:string[],profiles:Record<string,string[]>}",
+        "resources": "{counts:Record<string,number>,loaded:unknown[]}",
+        "trace": "{threadId:string,eventCount:int,actors:string[],recent:EventSchema[]}"
+      }
+    },
+    {
+      "name": "dev.reload",
+      "version": "2.0.0",
+      "category": "system",
+      "description": "Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.",
+      "permissions": [
+        "scene.read"
+      ],
+      "input": {
+        "target": "enum(skill|scene|data)",
+        "name": "string(min1)?",
+        "reason": "string(max200)?"
+      },
+      "output": {
+        "ok": "boolean",
+        "target": "enum(skill|scene|data)",
+        "invalidated": "string[]",
+        "reason": "string?"
+      }
+    },
+    {
+      "name": "audit.explain",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Answer 'why was action X allowed/denied': the governing policy decision (rule + reason + context + quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain — all from the real recorded trace.",
+      "permissions": [],
+      "input": {
+        "eventId": "string"
+      },
+      "output": {
+        "eventId": "string",
+        "eventType": "string",
+        "found": "boolean",
+        "decision": "{eventId,allow,rule,reason,boundary,context:{agentId,sessionId,cap,profile|null,package|null,tick|null,requiredPermissions:string[]|null},quota:unknown|null,budget:unknown|null}|null",
+        "provenance": "{agentId:string,sessionId:string,profile:string|null,package:string|null}",
+        "causalTrace": "{parents:Array<{id,type,actorId,threadId}>,ancestry:Array<{id,type,actorId,threadId}>}"
+      }
+    },
+    {
+      "name": "audit.query",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Query recorded policy decisions: filter by allow/deny, cap, rule, agent, session, or package (package provenance). Returns matching decision events plus an allow/deny + by-rule + by-cap summary.",
+      "permissions": [],
+      "input": {
+        "decision": "enum(allow|deny|all)=all",
+        "cap": "string?",
+        "rule": "string?",
+        "agentId": "string?",
+        "sessionId": "string?",
+        "package": "string?",
+        "limit": "int(0..2000)=200"
+      },
+      "output": {
+        "summary": "{total:int,allowed:int,denied:int,byRule:Record<string,number>,byCap:Record<string,number>,packages:string[]}",
+        "decisions": "Array<{eventId,allow,rule,reason,boundary,cap,agentId,sessionId,profile|null,package|null,tick|null}>"
+      }
+    },
+    {
+      "name": "audit.usage",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Resource usage from recorded decisions: allowed/denied call counts per session+cap, plus the latest quota and budget snapshots seen for each session — derived from the real policy events.",
+      "permissions": [],
+      "input": {
+        "sessionId": "string?"
+      },
+      "output": {
+        "perSessionCap": "Array<{sessionId:string,cap:string,allowed:int,denied:int}>",
+        "quotas": "Array<{sessionId:string,quota:unknown}>",
+        "budgets": "Array<{sessionId:string,budget:unknown}>"
+      }
+    },
+    {
+      "name": "ui.panel",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Author a styled UI container (kind = label/textBox/speechBubble/thoughtBubble/callout/hudPanel) with a full Zod style object, world/screen anchor, optional tail/leader and lifecycle (fade/typewriter/ttl/queue/feed). Returns an opaque handle.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "kind": "enum(label|textBox|speechBubble|thoughtBubble|callout|hudPanel)",
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.label",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place a billboard label (minimal chrome) tracking an entity or world point.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.textBox",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place a titled text box (header bar + wrapped body) at a world or screen anchor.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.speechBubble",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place a speech bubble with a directional tail aimed at the speaker (entity/point).",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.thoughtBubble",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place a thought bubble with trailing puffs leading back to the thinker.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.callout",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place an annotation box with a leader line to a target point.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.hudPanel",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Place a screen-anchored HUD/overlay panel (corner-pinned, DPI-aware, over the scene).",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "anchor": "world|screen anchor object",
+        "style": "uiStyle?",
+        "text": "string?",
+        "title": "string?",
+        "lines": "string[]?",
+        "maxWidth": "number>0?",
+        "width": "number>0?",
+        "maxLines": "int>0?",
+        "pixelScale": "number>0?",
+        "tail": "object?",
+        "leader": "object?",
+        "lifecycle": "object?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "ui.update",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Update a live container by handle: change its text, title, body lines, and/or restyle it (re-composites). Returns whether the handle existed and re-composited.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "handle": "string",
+        "text": "string?",
+        "title": "string?",
+        "style": "uiStyle?",
+        "lines": "string[]?"
+      },
+      "output": {
+        "ok": "boolean",
+        "changed": "boolean"
+      }
+    },
+    {
+      "name": "ui.remove",
+      "version": "1.0.0",
+      "category": "ui",
+      "description": "Remove a live container by handle: detach its mesh from the scene and dispose its GPU resources.",
+      "permissions": [
+        "ui.write"
+      ],
+      "input": {
+        "handle": "string"
+      },
+      "output": {
+        "removed": "boolean"
+      }
+    },
+    {
+      "name": "audio.play",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Play a one-shot synthesized SFX blip (sine + envelope) on a bus (master/sfx/ambience/voice). Returns an opaque handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "freq": "number>0",
+        "secs": "number>0,<=10",
+        "bus": "enum(master|sfx|ambience|voice)?",
+        "volume": "number(0..1)?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "audio.ambient",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Start a looping synthesized ambience bed on a bus (default ambience). Returns an opaque handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "bus": "enum(master|sfx|ambience|voice)?",
+        "volume": "number(0..1)?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "audio.playAt",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Play a one-shot POSITIONAL synthesized SFX at a world position; 3D-panned + attenuated relative to the camera listener. Optional maxDistance cutoff. Returns an opaque handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "freq": "number>0",
+        "secs": "number>0,<=10",
+        "position": "[number,number,number]",
+        "bus": "enum(master|sfx|ambience|voice)?",
+        "volume": "number(0..1)?",
+        "maxDistance": "number>=0?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "audio.speak",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Speak a line of text aloud at a world position via a pluggable local TTS voice (voice bus, positional). FIRE-AND-FORGET: returns immediately; synthesis runs off-thread and never blocks the frame. Returns an opaque handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "text": "string(1..500)",
+        "position": "[number,number,number]",
+        "volume": "number(0..1)?"
+      },
+      "output": {
+        "handle": "string"
+      }
+    },
+    {
+      "name": "audio.stop",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Stop a playing sound by handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "handle": "string"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "audio.setVolume",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Set a playing sound's volume (0..1) by handle.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "handle": "string",
+        "volume": "number(0..1)"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "audio.setBusVolume",
+      "version": "1.0.0",
+      "category": "audio",
+      "description": "Set a mixer bus volume (master/sfx/ambience/voice), re-gaining all live sounds on it.",
+      "permissions": [
+        "audio.play"
+      ],
+      "input": {
+        "bus": "enum(master|sfx|ambience|voice)",
+        "volume": "number(0..1)"
+      },
+      "output": {
+        "ok": "boolean"
+      }
+    },
+    {
+      "name": "social.approach",
+      "version": "1.0.0",
+      "category": "social",
+      "description": "Walk the calling agent toward a target (an agent id, an entity id, or a world point). Sets the move target the locomotion system pursues; emits social.approached.",
+      "permissions": [
+        "social.act"
+      ],
+      "input": {
+        "target": "string(min1)|[number,number,number]",
+        "talkDistance": "number>0,<=50?"
+      },
+      "output": {
+        "approaching": "boolean",
+        "target": "string|[number,number,number]"
+      }
+    },
+    {
+      "name": "social.say",
+      "version": "1.0.0",
+      "category": "social",
+      "description": "Speak a line as the calling agent: emits social.said (actorId = the host-bound caller) and shows a real speech bubble anchored above the speaker's humanoid (per-speaker queue).",
+      "permissions": [
+        "social.act"
+      ],
+      "input": {
+        "text": "string(1..280)",
+        "actorId": "string?(IGNORED;speaker is host-bound to ctx.agentId)"
+      },
+      "output": {
+        "said": "boolean",
+        "speaker": "string",
+        "handle": "string"
+      }
+    },
+    {
+      "name": "package.list",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "List installed packages with their manifest provenance: ref (name@version), kind, declared capabilities, engine-compat range, content hash, and whether the package is attested.",
+      "permissions": [],
+      "input": {
+        "name": "string?"
+      },
+      "output": {
+        "packages": "Array<{ref:string,name:string,version:string,kind:string,declaredCapabilities:string[],engineCompat:string,contentHash:string,attested:boolean}>"
+      }
+    },
+    {
+      "name": "package.load",
+      "version": "1.0.0",
+      "category": "system",
+      "description": "Load an installed package (by name@version ref) under a profile: validates the manifest, checks engine-compat (out-of-bounds rejected), gates declared-vs-granted capabilities via the policy engine (over-claim denied), and loads the untrusted entry into the M6 sandbox. Returns the load decision + provenance event id.",
+      "permissions": [
+        "agent.write"
+      ],
+      "input": {
+        "ref": "string",
+        "agentId": "string",
+        "sessionId": "string",
+        "profile": "string"
+      },
+      "output": {
+        "ok": "boolean",
+        "ref": "string",
+        "agentId": "string|null",
+        "rule": "string|null",
+        "rejectReason": "string|null",
+        "reason": "string|null",
+        "loadEventId": "string|null"
+      }
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+---
+const base = import.meta.env.BASE_URL;
+const feats = [
+  { t: 'llms.txt', d: 'A concise, LLM-readable index of the whole site.' },
+  { t: 'llms-full.txt', d: 'Every doc page concatenated into one plain-text file.' },
+  { t: 'skills.json', d: 'All 45 skills as JSON Schema — names, inputs, permissions.' },
+  { t: 'MCP quickstart', d: 'Point a client at --mcp-stdio or --mcp-ws and start calling.' },
+];
+---
+<section class="section for-agents">
+  <div class="container fa-grid">
+    <div class="fa-copy reveal">
+      <p class="eyebrow">For agents</p>
+      <h2 class="h2">Docs your agents can <span class="grad-text">read too</span>.</h2>
+      <p class="lede">This is the SDK reference and the showcase. It is also machine-first: point an agent at a stable URL and it gets the whole surface as structured data — no HTML scraping.</p>
+      <ul class="fa-list">
+        {feats.map((f) => (
+          <li><code class="tag">{f.t}</code><span>{f.d}</span></li>
+        ))}
+      </ul>
+      <a class="btn btn-primary" href={`${base}agents`}>Explore the agent reference →</a>
+    </div>
+    <div class="fa-term reveal" aria-hidden="true">
+      <div class="term-bar"><span></span><span></span><span></span></div>
+      <pre class="term-body mono"><span class="c-com"># point any agent at a stable, structured surface</span>
+<span class="c-fn">curl</span> limina.dev/<span class="c-str">llms.txt</span>
+<span class="c-fn">curl</span> limina.dev/agents/<span class="c-str">skills.json</span>  <span class="c-com"># 45 typed skills</span>
+
+<span class="c-com"># or expose the live engine over MCP</span>
+<span class="c-fn">limina</span> --mcp-stdio
+<span class="c-fn">limina</span> --mcp-ws <span class="c-str">--port 7777</span></pre>
+    </div>
+  </div>
+</section>
+
+<style>
+  .for-agents { background: linear-gradient(180deg, rgba(139, 107, 255, 0.06), rgba(47, 230, 214, 0.04)); border-block: 1px solid var(--line); }
+  .fa-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 52px; align-items: center; }
+  .fa-copy .h2 { margin-top: 12px; }
+  .fa-copy .lede { margin-top: 16px; }
+  .fa-list { list-style: none; padding: 0; margin: 26px 0 30px; display: grid; gap: 14px; }
+  .fa-list li { display: flex; align-items: baseline; gap: 14px; }
+  .fa-list li span { color: var(--muted); font-size: 0.95rem; }
+  .fa-list code { flex-shrink: 0; min-width: 116px; text-align: center; }
+  .fa-term { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #070b14; box-shadow: var(--glow-violet); }
+  .term-bar { display: flex; gap: 7px; padding: 12px 16px; background: #0d1320; border-bottom: 1px solid var(--line); }
+  .term-bar span { width: 11px; height: 11px; border-radius: 50%; background: #2a3550; }
+  .term-body { margin: 0; padding: 22px; font-size: 0.86rem; line-height: 1.9; color: #cdd7ec; overflow-x: auto; }
+  @media (max-width: 900px) { .fa-grid { grid-template-columns: 1fr; gap: 34px; } }
+</style>

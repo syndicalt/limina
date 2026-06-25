@@ -1,0 +1,55 @@
+/* Brand Limina onto Starlight's docs chrome. */
+:root {
+  --sl-font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sl-font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #102a26;
+  --sl-color-accent: #1bb9aa;
+  --sl-color-accent-high: #9af2e8;
+  --sl-color-white: #f3f6fd;
+  --sl-color-gray-1: #e9eef9;
+  --sl-color-gray-2: #b9c3d8;
+  --sl-color-gray-3: #8593ac;
+  --sl-color-gray-4: #586378;
+  --sl-color-gray-5: #2a3450;
+  --sl-color-gray-6: #141c2f;
+  --sl-color-black: #070912;
+  --sl-color-bg: #070912;
+  --sl-color-bg-nav: rgba(7, 9, 18, 0.72);
+  --sl-color-bg-sidebar: #090d18;
+  --sl-color-text-accent: #2fe6d6;
+  --sl-color-hairline-light: rgba(255, 255, 255, 0.1);
+  --sl-color-hairline: rgba(255, 255, 255, 0.07);
+}
+
+/* Light theme: keep accessible but on-brand. */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #c8f5ef;
+  --sl-color-accent: #0d8a7d;
+  --sl-color-accent-high: #0a3b36;
+  --sl-color-text-accent: #0d8a7d;
+}
+
+/* The "For agents" sidebar entry, highlighted. */
+.sl-agents-link a,
+a[href$="/agents"].sl-agents-link {
+  color: var(--sl-color-text-accent) !important;
+  font-weight: 600;
+}
+.sidebar a.sl-agents-link {
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+}
+
+/* Nav blur to match the marketing site. */
+header.header {
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+/* Hero/cards used inside docs markdown via Starlight components stay default. */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-underline-offset: 3px;
+}

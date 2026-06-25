@@ -1,0 +1,1912 @@
+# Limina — full documentation
+
+> Limina is an agent-native real-time 3D engine: a single native binary (Rust host + V8 via deno_core + WebGPU via deno_webgpu + Three.js + native Rapier physics + bitECS) where LLM agents are first-class. External builders construct scenes over MCP; autonomous players perceive, decide, and act in-world. Every action is typed, permission-checked, and traced.
+
+Source: https://limina.dev
+This file concatenates every documentation page as plain text.
+
+
+
+========================================================================
+# Introduction
+URL: https://limina.dev/introduction
+
+Limina is an agent-native real-time 3D engine: one native binary where LLM agents build and inhabit a high-performance world.
+
+Limina is an **agent-native, high-performance real-time 3D engine**. It ships as a
+single native binary, and LLM agents are first-class citizens: they build scenes and
+live inside them through a typed, permission-checked, fully traced skill surface.
+
+The whole engine is one process — a Rust host embedding V8, driving WebGPU through
+Three.js, with native physics, spatial queries, and audio on the hot paths — running on
+a fixed-timestep loop. There is no separate renderer service, no game-server sidecar, no
+scripting daemon. One binary boots the world, opens a window (or runs headless), and
+exposes an [MCP](/pillars/mcp-interface) surface that external agents connect to.
+
+## One binary, one stack
+
+Every layer lives in the same process. Agents call **skills**; skills mutate the
+**ECS**; native **physics/spatial** ops advance the simulation in place over zero-copy
+data; the **renderer** reads that same data and presents a frame.
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│  Agents & skills                                             │
+│  Agent Builders (over MCP) · Agent Players (in-world)        │
+│  45 typed, permission-checked, traced skills                 │
+├──────────────────────────────────────────────────────────────┤
+│  Rendering                                                   │
+│  Three.js (WebGPURenderer) → WebGPU (deno_webgpu)            │
+├──────────────────────────────────────────────────────────────┤
+│  Simulation                                                  │
+│  bitECS — SoA TypedArrays · fixed-timestep loop (60 steps/s) │
+├──────────────────────────────────────────────────────────────┤
+│  Native hot paths                                            │
+│  Rapier3D physics · rayon spatial/ECS ops · rodio audio      │
+├──────────────────────────────────────────────────────────────┤
+│  Host                                                        │
+│  Rust embedder + V8 (deno_core) — the single `limina` binary │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Data flows down and back up every tick: agents and authoring code call skills at the
+top, the simulation and native subsystems advance the world's Structure-of-Arrays (SoA)
+state in the middle, and the renderer reads that state to present a frame — with **no
+serialization** between the layers. See [Architecture & stack](/architecture) for the
+crate-by-crate breakdown.
+
+## Two kinds of agents
+
+Limina treats agents as participants, not plugins. There are two kinds, and both speak
+the same skill vocabulary.
+
+| Kind | Where it runs | How it acts | Typical profile |
+|------|---------------|-------------|-----------------|
+| **Agent Builder** | External process, connected over MCP | Constructs and edits the world: create entities, set transforms/materials/lighting, load glTF | `builder.readWrite` |
+| **Agent Player** | In-world, on the engine's loop | Runs perceive → decide → act, inhabiting an entity and moving it via physics/locomotion | `player.limited`, `social.actor` |
+
+A Builder discovers tools over the [MCP interface](/pillars/mcp-interface) and calls them
+remotely; a Player runs its [perception → decision → action](/building-agents/players)
+cycle inside the engine, with its (slow, async) model decisions resolved **off** the
+frame loop so a slow model never drops a frame. Either way, every call is the same typed,
+permissioned, traced skill invocation. See [Building agents](/building-agents/builders)
+and the [agent ecosystem pillar](/pillars/agent-ecosystem).
+
+## Standing principles
+
+Two principles are load-bearing — they decide architectural tradeoffs across the engine.
+
+:::tip[Performance-first]
+Every architectural choice aims at making Limina **blazingly fast**. Hot paths (ECS
+iteration, physics, spatial queries, audio) are native; data is stored as data-oriented
+SoA TypedArrays; buffers are bridged **zero-copy** rather than serialized; and JS is the
+scripting/agent/authoring layer, never the inner loop. Agent *thinking* always runs off
+the frame loop — a slow model never drops a frame.
+:::
+
+:::note[The engine is the substrate, not the brain]
+Limina owns the **world** (ECS, physics, render), **perception**, the **skill/MCP
+surface**, and a **durable world event log**. It does *not* own an agent's brain or its
+memory. The decision provider is pluggable
+([Scripted / Ollama / Gateway](/building-agents/llm-providers)), and recall is part of
+the brain — fed by perception plus read access to the durable log, with any memory
+backend living as an external adapter behind the provider. Persisting the world well
+serves any memory-builder without the engine owning memory.
+:::
+
+## Where to go next
+
+- **[Getting started](/getting-started)** — prerequisites, build, and your first demo.
+- **[Architecture & stack](/architecture)** — the full layered stack, crate by crate.
+- **[Skills reference](/skills)** — the 45 typed skills agents and authors call.
+- **[For agents ↗](/agents)** — the agent-oriented entry point into Limina.
+
+:::note[Project status]
+Phases 0–5 are complete and verified: the native runtime, agent-native core, open world,
+single-instance scale & fidelity, the shared platform, and presentation & audio all ship
+today. See the [Roadmap & status](/roadmap) for the full breakdown.
+:::
+
+
+========================================================================
+# Getting started
+URL: https://limina.dev/getting-started
+
+Prerequisites, building the single Limina binary, and running your first demo windowed and headless.
+
+Limina builds into one native binary, `limina`. This page takes you from a clean checkout
+to a window with rolling billiard balls, then to the headless test suite — the same
+binary drives all three modes (windowed, headless, MCP server).
+
+## Prerequisites
+
+### Toolchain
+
+- **Rust + Cargo** (recent stable). The workspace pins a prebuilt V8 and `deno_core`, so a
+  current stable toolchain is expected. This is all you need to build and run the engine.
+- **Node.js + npm** — only for the JS tooling layer: the Three.js / bitECS / zod bundles
+  in `js/build/` are produced with esbuild, and the external example MCP client runs under
+  Node. The engine itself embeds V8 via `deno_core` and never shells out to Node at runtime.
+
+The prebuilt JS bundles (`js/build/three.bundle.mjs`, `zod.bundle.mjs`, `bitecs.bundle.mjs`)
+are already committed and are what the demos and tests import, so you only need Node if you
+change those dependencies.
+
+### System libraries (Linux)
+
+- **A Vulkan-capable GPU + driver.** Rendering is WebGPU via `deno_webgpu`/wgpu. Windowed
+  demos request a WebGPU adapter at startup; without one, `createEngine` fails with
+  `engine: no WebGPU adapter` — which is exactly why windowed demos cannot run in the
+  headless suite.
+- **A native window stack (X11/Wayland).** Limina opens its own window via `winit`.
+- **An audio output backend** (ALSA on Linux, via `cpal`) for the audio subsystem. This can
+  be disabled for headless/CI runs (see env vars below).
+- **`espeak-ng`** (or **Piper**) on `PATH` for agent voice/TTS. Optional — voice is
+  auto-disabled with an honest log if no provider is found.
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `LIMINA_AUDIO=null` | Force the no-op `Null` audio backend (device-free CI/headless). A missing device also auto-falls-back. |
+| `LIMINA_TTS` | Select the voice provider: `none` \| `espeak` \| `piper` \| `piper:<model.onnx>`. Unset = auto (espeak-ng if on `PATH`, else no voice). |
+
+The conversation demo additionally talks to a local **Ollama** server at
+`http://localhost:11434` (model `qwen2.5:7b`). That is optional: the demo runs and shows an
+honest "LLM offline" status if Ollama is unreachable.
+
+## Build
+
+```bash
+git clone https://github.com/syndicalt/limina.git
+cd limina
+
+# Optional: rebuild the JS bundles only if you changed three/bitecs/zod
+# cd js && npm install && npm run bundle:three && cd ..
+
+# Build the engine (optimized; recommended for demos and perf)
+cargo build --release
+```
+
+This produces the single binary at **`./target/release/limina`**. A plain `cargo build`
+produces a faster-to-compile debug binary at `./target/debug/limina`.
+
+:::note[First build is slow]
+The first release build downloads a prebuilt V8 and compiles a large native dependency
+graph (V8, wgpu, Rapier), so expect a multi-minute initial build. Incremental rebuilds
+afterward are fast.
+:::
+
+## Run your first demo (windowed)
+
+```bash
+./target/release/limina --window --frames 600 js/src/demos/billiards.ts
+```
+
+A window opens onto a billiards table: a racked break where dynamic spheres are stepped by
+native Rapier, with each ball's full transform (position **and** orientation) read back
+into the ECS so the balls visibly *roll* across the cloth. `--frames 600` auto-exits after
+600 frames, which is handy for non-interactive runs and screenshots; drop it to run until
+you close the window or press Escape.
+
+The CLI flags are:
+
+| Flag | Meaning |
+|------|---------|
+| `<module.ts>` | The TS module to run (bare positional argument). |
+| `--window` | Open a native window and drive the frame loop. |
+| `--frames N` | Auto-exit after `N` frames. |
+| `--fullscreen` | Run the window borderless-fullscreen. |
+| `--mcp-stdio` | Run as a newline-delimited JSON-RPC MCP server on stdin/stdout. |
+| `--mcp-ws [--port N]` | Run the authoritative multi-client MCP server over a localhost WebSocket. |
+
+Browse the full catalog on the [Demos](/demos) page.
+
+## Run the headless tests
+
+Headless tests are standalone TS modules under `js/test/`, run by the same binary with no
+window and no GPU:
+
+```bash
+# A representative agent-native test: registry + Zod validation + traced
+# permission denial, all headless (no GPU).
+./target/release/limina js/test/m1_registry.ts
+
+# The Phase-3 density capstone (release build recommended).
+./target/release/limina js/test/p3n4_capstone.ts
+```
+
+Audio tests are designed to run with `LIMINA_AUDIO=null`. The external MCP transport is
+exercised separately with `node examples/mcp_stdio_client.mjs`, which spawns the binary in
+`--mcp-stdio` mode and walks an `initialize → tools/list → tools/call → shutdown`
+handshake.
+
+## What just happened
+
+A windowed run wired up the whole stack in one process:
+
+1. The Rust host created a native window and a WebGPU device, then booted a V8 isolate and
+   loaded your TS module.
+2. The module called `createEngine`, which built the Three.js `WebGPURenderer`, the scene
+   and camera, and a bitECS world over SoA TypedArrays.
+3. The host's [fixed-timestep loop](/concepts/loop) called the module's fixed-step callback
+   ~60 times per second: native Rapier advanced the physics, transforms were synced into
+   the ECS, and the render callback presented a frame with interpolation.
+
+That is the same loop every demo and every Agent Player runs on. To understand the moving
+parts, read [Architecture & stack](/architecture).
+
+:::caution[Headless and audio gotchas]
+Windowed demos require a real WebGPU adapter; running one headless throws
+`engine: no WebGPU adapter` by design — use the `js/test/*.ts` modules for headless work.
+For CI or machines without an audio device, set `LIMINA_AUDIO=null` to use the no-op audio
+backend, and set `LIMINA_TTS=none` (or install `espeak-ng`) so voice synthesis does not
+warn. None of these affect determinism: audio and TTS never block the frame.
+:::
+
+
+========================================================================
+# Demos
+URL: https://limina.dev/demos
+
+Every Limina demo: what each one shows, the capabilities it exercises, and the exact command to run it.
+
+The demos live in `js/src/demos/`. Each is a standalone TS module the `limina` binary
+runs directly. Most are **windowed** (they call `createEngine`, which needs a WebGPU
+adapter); a couple run **headless**. Together they exercise the full engine — physics,
+agents, the native spatial pipeline, audio, UI/text, MCP, permissions, and the trace.
+
+## The catalog
+
+| Demo | Mode | What it shows | Capabilities exercised |
+|------|------|---------------|------------------------|
+| `billiards.ts` | windowed | A bordered table of static rails and a racked break of dynamic spheres; native Rapier steps and full transforms (position + quaternion) are read back to the ECS so the balls visibly **roll**. No agents — pure physics. | physics, ECS, render sync |
+| `builder.ts` | headless | An in-process agent discovers tools over MCP and builds a scene (`createEntity` / `setTransform` / `setMaterial` / `setLighting` / `loadGLTF`); one call is permission-denied; the whole sequence is permission-checked and traced. | skills, MCP, permissions, observability |
+| `player.ts` | windowed | An autonomous player agent runs perception → decision → action in the fixed loop, pursuing the nearest target via physics impulses; decisions resolve off-loop so frame rate is unaffected. | agents, physics, skills |
+| `fidelity_scene.ts` | windowed | A visual-fidelity scene authored **through** `scene.*`/`three.*` skills: a shadow-casting directional light with real shadow maps on a receiving floor, textured glTF, ACES Filmic tone mapping + MSAA; the caster spins so the shadow sweeps. | render fidelity, skills |
+| `forest_conversation.ts` | windowed | An agent humanoid walks to two NPCs and holds a real, non-deterministic Ollama (`qwen2.5:7b`) conversation rendered as speech bubbles **and** spoken aloud over an ambient bed, with a live agent-ops HUD; the LLM/decisions run off-loop, with an honest "LLM offline" fallback. | agents, LLM, UI/text, spatial audio + TTS, observability |
+| `hedgehog_dance.ts` | windowed | A procedural hedgehog dances **and sings** to a JS-synthesized dance track played through the native mixer, beat-synced to BPM; the sung TTS is spatialized at its mouth and the listener follows the camera. | audio (music + spatial + TTS) |
+| `numbers_party.ts` | windowed | ~200 instanced extruded-numeral "number-people" agents wander, approach, and chat in transient pairs via the real Phase-3 perception → decision → action pipeline (native batched spatial query, off-loop decisions, every move a traced `three.setTransform`); an agent-ops HUD streams the real tracer feed alongside a perf overlay, with an ambient bed and positional chatter. | scale, agents, native spatial parallelism, audio, UI, observability |
+| `phase3_showcase.ts` | windowed | Textured glTF, bound MCP builder sessions, in-world Agent Players, scheduler budgets, physics sync, and trace/devtools evidence — all combined in one graphical scene. | broad Phase-3: agents, MCP, physics, fidelity, scheduler, devtools |
+| `ui_showcase.ts` | windowed | In-scene UI containers authored through `ui.*` skills (speech bubble, thought bubble, titled text box, callout leader line) plus a screen-anchored agent-ops HUD; world panels billboard while the HUD stays fixed as the camera orbits. | UI/text rendering, skills, permissions |
+
+:::note[Shared helpers, not demos]
+`fidelity_scene_core.ts` and `phase3_showcase_core.ts` are shared helper modules imported
+by the windowed demos above — they are not standalone demos and should not be run directly.
+:::
+
+## Run a few highlights
+
+**Billiards** — the quickest "it works" check; pure native physics, no agents:
+
+```bash
+./target/release/limina --window --frames 600 js/src/demos/billiards.ts
+```
+
+**Numbers party** — the scale + native-spatial-parallelism showcase (~200 agents). A flythrough
+runs at roughly 102 fps. This demo is windowed-only:
+
+```bash
+./target/release/limina --window --fullscreen js/src/demos/numbers_party.ts
+# or a bounded run:
+./target/release/limina --window --frames 600 js/src/demos/numbers_party.ts
+```
+
+**Builder** — the only headless demo; an in-process agent builds a scene over MCP, with one
+call denied and the whole run traced:
+
+```bash
+./target/release/limina js/src/demos/builder.ts
+```
+
+## What to read next
+
+- The pipeline the agent demos run on: [Perception](/concepts/perception) and the
+  [fixed-timestep loop](/concepts/loop).
+- How a Builder constructs a scene over MCP:
+  [Agent Builders](/building-agents/builders).
+- How a Player perceives, decides, and acts in-world:
+  [Agent Players](/building-agents/players).
+- The skills every demo calls: the [Skills reference](/skills).
+
+
+========================================================================
+# Architecture & stack
+URL: https://limina.dev/architecture
+
+The full Limina stack, layer by layer: Rust host, V8, WebGPU, bitECS, native Rapier/rayon/audio, and the crates that implement them.
+
+Limina is one native binary built from a Rust workspace. A Rust host embeds V8, runs your
+TypeScript, and exposes native subsystems — rendering, physics, ECS hot paths, spatial
+queries, audio — as ops that JS calls directly. The design is performance-first: native
+where it counts, zero-copy between layers, and agent thinking off the frame loop.
+
+This page walks the stack top to bottom and names the crate behind each layer.
+
+## The layered stack
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│  Agents & skills (TypeScript)                                 │
+│  Builders over MCP · in-world Players · 45 typed skills       │
+├──────────────────────────────────────────────────────────────┤
+│  Rendering                                                    │
+│  Three.js WebGPURenderer → deno_webgpu → native surface       │  limina-render
+├──────────────────────────────────────────────────────────────┤
+│  Simulation                                                   │
+│  bitECS world · SoA TypedArrays · fixed-timestep loop          │  (JS) + limina-ecs
+├──────────────────────────────────────────────────────────────┤
+│  Native hot paths                                            │
+│  Rapier3D physics · rayon CSR spatial/ECS ops · rodio audio   │  limina-physics
+│                                                              │  limina-ecs · limina-audio
+├──────────────────────────────────────────────────────────────┤
+│  Bridge & isolation                                         │
+│  #[op2] op bridge · QuickJS sandbox for untrusted code        │  limina-ops · limina-sandbox
+├──────────────────────────────────────────────────────────────┤
+│  Host                                                       │
+│  Rust embedder + V8 (deno_core) — the single `limina` binary  │  limina-runtime
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Layer by layer
+
+### Host — `limina-runtime`
+
+The embedder, and the only binary (`limina`). It boots a V8 isolate via `deno_core`,
+transpiles and loads your TypeScript main module, and then either runs it to completion
+headless or drives the native `winit` window with the [fixed-timestep loop](/concepts/loop).
+It also hosts the `--mcp-stdio` and `--mcp-ws` JSON-RPC servers that external
+[Agent Builders](/building-agents/builders) connect to. Everything else is a library this
+crate links.
+
+### Rendering — `limina-render`
+
+Owns the WebGPU device and the native window surface. It registers the `deno_webgpu`
+extension stack plus a JS bootstrap so `navigator.gpu` and the `GPU*` types exist inside
+V8, injects a native surface (so the engine presents directly from Rust rather than through
+a browser canvas), and presents frames. On top of this, JS builds a standard **Three.js
+`WebGPURenderer`** — so authors and agents work in familiar Three.js terms while the device
+underneath is native WebGPU.
+
+### Simulation — bitECS + `limina-ecs`
+
+The world's state is a [bitECS](/concepts/ecs-and-world) world whose components are
+**Structure-of-Arrays (SoA) TypedArrays** backing transforms (position, rotation, scale)
+for up to `MAX_ENTITIES = 16384` entities. Iteration-heavy work that JS is slow at is pushed
+into `limina-ecs`: native, **rayon-parallel** ECS ops over those same JS-owned buffers,
+including a batched uniform-grid (CSR) radius query that is **bit-identical** to the JS
+spatial oracle — 4.5–5.4× faster and ≤2 ms. The JS index remains the determinism oracle;
+the native op only accelerates it.
+
+### Native hot paths — `limina-physics`, `limina-ecs`, `limina-audio`
+
+- **`limina-physics`** integrates native **Rapier3D** via `#[op2]`: a `PhysicsWorld` lives
+  in the host's `OpState`, bodies are addressed by stable `u32` handles (with tombstoning),
+  and collision events and on-demand raycasts are exposed to JS. Physics steps in native
+  code; transforms are read back into the ECS SoA each tick.
+- **`limina-ecs`** provides the rayon-parallel spatial/ECS ops described above — the engine's
+  answer to "perceive 200 agents against 2000 entities every few ticks without burning the
+  frame budget." See [Perception](/concepts/perception).
+- **`limina-audio`** runs native audio (rodio/cpal) on a dedicated thread: a 4-bus mixer
+  (master/sfx/ambience/voice), a spatial player with 1/d² attenuation relative to the camera
+  listener, and fire-and-forget Rust-side TTS (espeak-ng / Piper). It never blocks the frame.
+
+### Bridge & isolation — `limina-ops`, `limina-sandbox`
+
+- **`limina-ops`** is the shared `#[op2]` bridge every native subsystem reuses: fast numeric
+  ops, **zero-copy buffer round-trips** (e.g. scaling a `Float32Array` in place), structured
+  catchable errors, and the `OpState` resource conventions for host-owned state.
+- **`limina-sandbox`** is the isolation substrate for untrusted skill/agent code: a QuickJS
+  (`rquickjs`) runtime per agent with a standard-ECMAScript-only global and a single injected
+  `host.invoke` surface. Reads are served from an injected perception snapshot; mutations are
+  recorded as intents and driven through the real skill registry under host attribution, with
+  per-agent memory/CPU/stack budgets.
+
+## Three design properties
+
+These three properties are why the stack holds together at speed.
+
+**Zero-copy SoA bridging.** Component data lives in JS-owned TypedArrays over `ArrayBuffer`s.
+Native ops read and write those buffers in place — no serialization, no marshalling copies
+crossing the JS↔Rust boundary on the hot path. The same bytes the physics step writes are
+the bytes the spatial query reads and the renderer presents.
+
+**Native hot paths, JS as the authoring layer.** Iteration, physics, spatial queries, and
+audio mixing run in native code (often rayon-parallel). JS is the scripting, agent, and
+authoring layer — expressive where expressiveness matters, and out of the inner loop where
+it does not.
+
+**Off-loop agent thinking.** Perception and action are on-frame and deterministic, but an
+agent's (slow, async) model decision fires **off** the frame path; its validated tool calls
+are enqueued and applied at a tick boundary. A slow model adds latency to a decision, never
+a dropped frame. See the [loop](/concepts/loop) and [perception](/concepts/perception).
+
+## Crate map
+
+| Crate | Responsibility |
+|-------|----------------|
+| `limina-runtime` | The embedder and the only binary: boots V8 via `deno_core`, loads TS, runs headless or drives the native `winit` window loop, hosts the `--mcp-stdio` / `--mcp-ws` servers. |
+| `limina-render` | WebGPU device + native `winit` surface; registers the `deno_webgpu` extension stack + JS bootstrap; presents frames from Rust. |
+| `limina-ecs` | Native rayon-parallel ECS hot-path ops over zero-copy JS-owned SoA TypedArrays; batched CSR radius query, bit-identical to the JS oracle. |
+| `limina-physics` | Native Rapier3D via `#[op2]`: `PhysicsWorld` in `OpState`, `u32` body handles, collision events, on-demand raycast. |
+| `limina-audio` | Native audio (rodio/cpal): dedicated thread, 4-bus mixer, spatial 1/d² player, fire-and-forget TTS. |
+| `limina-ops` | Shared `#[op2]` bridge + `OpState` resource conventions: fast ops, zero-copy buffers, structured errors. |
+| `limina-sandbox` | QuickJS isolation substrate for untrusted skill/agent code; single injected `host.invoke`, per-agent budgets. |
+
+## Where to go deeper
+
+- **Concepts:** [ECS & the world](/concepts/ecs-and-world) ·
+  [The fixed-timestep loop](/concepts/loop) · [Perception](/concepts/perception) ·
+  [Observability & the world log](/concepts/observability)
+- **Pillars:** [Skill / Hook registry](/pillars/skill-registry) ·
+  [MCP interface](/pillars/mcp-interface) · [Observability](/pillars/observability) ·
+  [Agent ecosystem](/pillars/agent-ecosystem)
+
+
+========================================================================
+# ECS & the world
+URL: https://limina.dev/concepts/ecs-and-world
+
+How Limina stores the world: bitECS, SoA TypedArrays, opaque ent_ ids that are never reused, and native rayon ECS ops.
+
+The world's state is an **Entity-Component-System (ECS)** built on
+[bitECS](https://github.com/NateTheGreatt/bitECS). Limina chooses data-oriented storage on
+purpose: components are **Structure-of-Arrays (SoA) TypedArrays**, which keeps the hot
+loops cache-friendly and — crucially — lets native code read and write the same bytes
+**zero-copy**. This is the foundation the [renderer](/architecture), physics, and the
+[native spatial query](/concepts/perception) all share.
+
+## Components are SoA TypedArrays
+
+Core transform components are plain typed arrays sized to a fixed entity ceiling. Position,
+rotation (a quaternion), and scale each store one `Float32Array` per axis:
+
+```ts
+export const MAX_ENTITIES = 16384;
+
+export const Position = {
+  x: new Float32Array(MAX_ENTITIES),
+  y: new Float32Array(MAX_ENTITIES),
+  z: new Float32Array(MAX_ENTITIES),
+};
+export const Rotation = {
+  x: new Float32Array(MAX_ENTITIES),
+  y: new Float32Array(MAX_ENTITIES),
+  z: new Float32Array(MAX_ENTITIES),
+  w: new Float32Array(MAX_ENTITIES),
+};
+export const Scale = {
+  x: new Float32Array(MAX_ENTITIES),
+  y: new Float32Array(MAX_ENTITIES),
+  z: new Float32Array(MAX_ENTITIES),
+};
+```
+
+An entity is an integer index (`eid`) into these arrays. Because the data is laid out by
+field across all entities rather than by entity, iterating "every position" is a linear
+sweep over contiguous memory — and a native op can be handed the underlying `ArrayBuffer`
+and operate on it in place, with no copy crossing the JS↔Rust boundary.
+
+:::note[Why SoA]
+SoA storage is a performance-first decision. It keeps iteration cache-friendly, vectorizes
+cleanly, and is the precondition for zero-copy native hot paths. The same `Float32Array`
+the physics step writes is the one the spatial query reads and the renderer presents.
+:::
+
+`MAX_ENTITIES` is **16384**. Spawning past the ceiling is rejected rather than silently
+overflowing — for example `scene.createEntity` despawns the renderable and throws
+`entity capacity exceeded (MAX_ENTITIES)` if the new `eid` would exceed the limit.
+
+## Entities and opaque `ent_` ids
+
+Agents and authoring code never touch raw `eid` integers. They work with **opaque string
+ids** of the form `ent_<n>`, handed out by the `EntityTable`, which maps those strings to
+internal handles (the `eid`, a generation counter, an optional mesh, an optional physics
+body id, and any loaded resource metadata).
+
+The contract that makes this safe:
+
+```ts
+// `ent_` strings are monotonic and NEVER reused, so a destroyed entity's id
+// resolves to `undefined` forever — a recycled bitECS eid can never be reached
+// through a stale `ent_`.
+```
+
+- **Monotonic.** Each `create` allocates the next `ent_<seq>` and bumps a table version.
+- **Never reused.** Destroying an entity removes its mapping; the id is gone for good.
+- **Stale-safe.** A bitECS `eid` may be recycled internally, but a stale `ent_` string
+  resolves to `undefined` — it can never accidentally address a different entity that later
+  reused the same `eid`.
+
+This is what lets agents hold ids across ticks and even across a save/restore: the table can
+snapshot its live entries (in creation order) plus its allocation counter and version, and
+restore to issue the *same* next ids — so replay and snapshot recovery stay deterministic.
+
+## Components beyond transforms
+
+Beyond the transform SoA, entities carry **named component tags** (e.g. `target`,
+`hostile`) tracked per entity, and optional bindings the table holds: a Three.js mesh, a
+Rapier body id, and loaded-resource metadata for glTF entities. Tags are how agents mark and
+query the world semantically; transforms are how they move it.
+
+## Native rayon ECS ops — `limina-ecs`
+
+The iteration-heavy work JS is slow at is pushed into the native `limina-ecs` crate:
+**rayon-parallel ECS ops** that run over the *same* JS-owned SoA buffers. The headline op is
+a batched uniform-grid (CSR) radius query used by [perception](/concepts/perception): it is
+**bit-identical** to the JS spatial index (which remains the determinism oracle), runs
+**4.5–5.4×** faster, and stays **≤2 ms**. Raising `MAX_ENTITIES` to 16384 and wiring this op
+into perception is what let the density capstone run 200 agents + 256 dynamic bodies + 2000
+entities at a sim-step p95 of 4 ms.
+
+## How `scene.*` and `ecs.*` skills map to it
+
+Agents and authoring code drive the ECS through typed [skills](/skills), not by touching the
+arrays directly:
+
+| Skill | What it does to the world |
+|-------|---------------------------|
+| `scene.createEntity` | Spawns a renderable (box/sphere) at a position, optionally with a dynamic physics body; returns its `ent_` id. Allocates the `eid`, writes the transform SoA, and registers it in the `EntityTable`. |
+| `scene.destroyEntity` | Removes the entity, frees its scene object and physics body, and retires its `ent_` id forever. |
+| `scene.queryEntities` | Lists entities (optionally by tag and/or within a radius), returning ids, positions, and distances — backed by the spatial index. |
+| `ecs.updateComponent` | Sets an entity's `position` `[x,y,z]`, `rotation` quaternion `[x,y,z,w]`, or `scale` `[x,y,z]` — i.e. writes the transform SoA. |
+| `ecs.addComponent` / `ecs.removeComponent` | Adds or removes a named component tag (e.g. `target`). |
+
+`scene.*` skills create and query whole entities; `ecs.*` skills mutate components on an
+existing entity. Both go through the [skill registry](/pillars/skill-registry), so every
+write is typed, permission-checked, and traced into the [world log](/concepts/observability).
+
+## Related
+
+- [The fixed-timestep loop](/concepts/loop) — when the ECS is read and written each tick.
+- [Perception](/concepts/perception) — the native batched spatial query in action.
+- [Architecture & stack](/architecture) — where `limina-ecs` sits in the stack.
+
+
+========================================================================
+# The fixed-timestep loop
+URL: https://limina.dev/concepts/loop
+
+Limina's fixed-timestep accumulator at 60 steps/s, render interpolation, determinism and replay, and why agent decisions resolve off the loop.
+
+Limina advances the world on a **fixed-timestep loop**. Logic always steps at a fixed `dt`,
+decoupled from how often the screen is drawn. This is what makes the simulation deterministic
+(and therefore replayable), keeps physics stable, and lets the renderer run as fast as it can
+without changing the outcome.
+
+## The accumulator
+
+The Rust host drives the loop with a classic accumulator. Each frame it measures real
+elapsed time, adds it to an accumulator, and runs the fixed-step callback as many whole steps
+as have "fit" — then renders once with whatever fraction is left over:
+
+```text
+FIXED_DT            = 1.0 / 60.0     // 60 fixed steps per second
+MAX_STEPS_PER_FRAME = 5              // clamp to avoid a death spiral
+
+accumulator += min(realElapsed, 0.25)        // never integrate a huge stall
+while accumulator >= FIXED_DT and sub < MAX_STEPS_PER_FRAME:
+    step(FIXED_DT)                            // run the JS fixed-step callback
+    accumulator -= FIXED_DT
+alpha = accumulator / FIXED_DT                // leftover fraction in [0,1)
+frame(alpha)                                  // run the JS render callback once
+```
+
+Two safety clamps matter:
+
+- **`MAX_STEPS_PER_FRAME = 5`** caps how many logic steps a single frame may run. If the
+  machine falls behind, the loop catches up by at most five steps per frame instead of
+  spiraling.
+- **`min(realElapsed, 0.25)`** clamps the per-frame delta, so a long stall (a breakpoint, a
+  GC pause, a window drag) never injects a giant time jump into the simulation.
+
+The result is exactly **60 logic steps per second**, regardless of render rate.
+
+## Render interpolation
+
+Rendering happens once per frame, and physics/logic almost never land exactly on a frame
+boundary. The leftover accumulator fraction is passed to the render callback as
+**`alpha` ∈ [0, 1)** — the interpolation factor between the previous and current fixed
+states. Demos render with that `alpha` so motion looks smooth even when the display refresh
+and the 60 Hz step rate disagree. Logic stays quantized to `FIXED_DT`; only the *picture*
+interpolates.
+
+In a demo this is just two callbacks registered with the host:
+
+```ts
+ops.op_set_fixed_step_callback((dt) => {
+  ops.op_physics_step();      // advance native Rapier at the fixed dt
+  // ...sync transforms into the ECS, run agent systems, etc.
+});
+ops.op_set_frame_callback((alpha) => {
+  // render with interpolation factor `alpha`
+});
+```
+
+## Determinism and replay
+
+Because logic only ever advances in whole `FIXED_DT` increments, a run is a deterministic
+sequence of steps. Limina leans on this hard:
+
+- **Replay.** The durable [world log](/concepts/observability) records the ordered stream of
+  events; replaying them reproduces the run. Phase 4 verified replay determinism and
+  snapshot recovery for durable shared worlds.
+- **Snapshot recovery.** The [`EntityTable`](/concepts/ecs-and-world) snapshots its identity
+  state — live entries in creation order, the `ent_` allocation counter, and the table
+  version — so a restored world issues the *same* next ids and the spatial index's version
+  gate behaves exactly as in the original run.
+- **Authoritative sync.** The multi-client server owns the fixed-step sim and the world log,
+  applies client intents at tick boundaries in one total order, and fans out per-tick deltas
+  (authoritative multi-client sync at a p95 of 11 ms).
+
+Determinism is not a nice-to-have here; it is the property that makes the trace a *source of
+truth* rather than a log of approximations.
+
+## Why agent decisions resolve off the loop
+
+An [Agent Player](/building-agents/players)'s decision is a (potentially slow, async) call
+to a language model. Running that on the frame path would be fatal: a model that takes
+hundreds of milliseconds would stall the accumulator and drop frames. So Limina splits the
+agent cycle by latency:
+
+- **Perception and action are on-frame and deterministic.** Each tick, perception is built
+  (only when a decision is due) and any *already-validated* tool calls in an agent's queue
+  are applied.
+- **Decision is off-loop.** When a decision is due, the agent fires its provider
+  asynchronously and is marked `inFlight`. The fixed step does **not** wait. When the
+  provider resolves, its tool calls are validated and **enqueued** as `QueuedAction`s, each
+  tagged with the decision id that produced it.
+- **The queue is the bridge.** Those queued actions are drained and executed at a tick
+  boundary, preserving the perception → decision → action causal chain in the trace.
+
+```text
+tick N      : perception built  ──▶  decision fires (async, off-loop) ──┐
+tick N..N+k : loop keeps stepping at 60/s, frames keep rendering        │  model thinks
+tick N+k    : provider resolves ──▶ validated tool calls enqueued  ◀────┘
+tick N+k+1  : queued actions applied at the tick boundary (traced)
+```
+
+:::tip[A slow model never drops a frame]
+This is the performance-first principle made concrete: agent *thinking* always runs off the
+frame loop. A slow model adds latency to a decision — never a dropped frame. The loop runs at
+60 steps/s whether the agent answers in 5 ms or 5 seconds.
+:::
+
+## Related
+
+- [ECS & the world](/concepts/ecs-and-world) — the SoA state the loop reads and writes.
+- [Perception](/concepts/perception) — how perception is batched on the steps where it runs.
+- [Observability & the world log](/concepts/observability) — the ordered event stream that
+  makes replay possible.
+
+
+========================================================================
+# Perception
+URL: https://limina.dev/concepts/perception
+
+What a Limina agent perceives: a typed view of nearby entities, transforms, and recent events, built by a native batched CSR spatial query.
+
+Perception is how an agent *sees* the world. In Limina it is a **typed, bounded snapshot** —
+the entities near the agent, their positions and distances, and a tail of recent events —
+assembled fresh when the agent is due to decide. It is the input to the
+[decision step](/building-agents/players), and it is computed by a native, parallel spatial
+query so it stays cheap even with hundreds of agents.
+
+## What an agent perceives
+
+An agent's perception is a small, well-typed envelope:
+
+```ts
+interface PerceivedEntity {
+  id: string;                          // the ent_ id of a nearby entity
+  position: [number, number, number];
+  distance: number;                    // from the agent, sorted ascending
+}
+
+interface Perception {
+  selfId: string;                      // the agent's own id
+  selfEntity?: string;                 // the ent_ it inhabits, if any
+  position?: [number, number, number]; // the agent's own world position
+  nearby: PerceivedEntity[];           // entities within perceptionRadius
+  recentEvents: { type: string }[];    // a tail of recent event types
+  tick: number;                        // the tick this snapshot was built
+}
+```
+
+So an agent sees, within a radius around itself: which entities are nearby, where they are,
+how far away, and what has recently happened — nothing more. It is a **view**, not the whole
+world: perception is bounded by the agent's `perceptionRadius` (default 15), which keeps both
+the data and the cost local.
+
+Perception is only rebuilt when the agent is actually due to decide (an agent decides every
+`decisionIntervalTicks`, default 30), not every tick — building it for every agent every
+tick would be `O(agents × entities)` of wasted work.
+
+## The native batched CSR spatial query
+
+The expensive part of perception is "find the entities near me." With many agents and many
+entities, doing that per-agent in JS does not scale. Limina batches it into a single native
+op in the [`limina-ecs`](/concepts/ecs-and-world) crate.
+
+Each step where decisions are due, the perception system gathers every due agent's self
+position, perception radius, and self `eid` into one packed query buffer, then calls a single
+native op that runs a **rayon-parallel uniform-grid (CSR) radius query** over the ECS SoA
+buffers and returns each agent's nearby list. The results are then assembled into the
+`Perception` envelope above.
+
+Two properties make this safe to depend on:
+
+- **Bit-identical to the JS oracle.** The native op uses the **same f64 distance math and the
+  same insertion-order tiebreak** as the JS spatial index, which remains the *determinism
+  oracle*. The native path and the JS fallback path produce byte-identical perception, so the
+  acceleration never changes behavior.
+- **A clean fallback.** Agents with no resolvable self position — or every agent when no
+  spatial index exists — fall back to the per-agent JS grid query. The envelope is assembled
+  in one place so both paths match exactly.
+
+Measured against the JS oracle, the native query is **4.5–5.4× faster** and stays **≤2 ms**.
+Together with raising `MAX_ENTITIES` to 16384, this is what let the density capstone run
+**200 agents perceiving against 2000 entities + 256 dynamic bodies at a sim-step p95 of
+4 ms** (well under the 8 ms budget), over ≥300 ticks at 60 steps/s.
+
+```text
+due agents ─▶ pack [selfX, selfY, selfZ, radius, selfEid] × N
+           ─▶ op_ecs_spatial_query_batch  (rayon, CSR uniform grid, ≤2 ms)
+           ─▶ per-agent nearby lists  ─▶  assemble Perception envelopes
+```
+
+## The `agent.getPerception` skill
+
+An agent reads its own current perception through a [skill](/skills), like everything else:
+
+| Skill | Permission | Returns |
+|-------|------------|---------|
+| `agent.getPerception` | `agent.read` | The calling agent's current perception (nearby entities + recent events), or `null` if there is no lookup. |
+
+Because it is a normal skill invocation, the read is typed and permission-gated. Perception
+is wired into the [decision provider](/building-agents/llm-providers) as well: when a
+decision fires, the agent's current `Perception` is handed to the provider alongside the
+available tools — and that decision is traced as caused by the
+`agent.perception.updated` event, preserving the **perception → decision → action** causal
+chain in the [world log](/concepts/observability).
+
+:::note[Perception feeds the brain; it is not the brain]
+Limina supplies perception and read access to the durable log. *Recall* — turning that into
+memory — is part of the agent's pluggable brain, behind the provider. The engine is the
+substrate, not the brain. See [LLM providers](/building-agents/llm-providers).
+:::
+
+## Related
+
+- [The fixed-timestep loop](/concepts/loop) — perception runs on-frame; decisions run off it.
+- [ECS & the world](/concepts/ecs-and-world) — the SoA buffers the spatial query reads.
+- [Agent Players](/building-agents/players) — the full perceive → decide → act cycle.
+
+
+========================================================================
+# Observability & the world log
+URL: https://limina.dev/concepts/observability
+
+Limina's EventLoom-shaped event envelope, the sha256 continuous integrity chain, JSONL export, and the durable world log with replay and snapshot recovery.
+
+Every meaningful thing that happens in Limina becomes an **event**. Skill calls, permission
+decisions, agent perception updates, agent signals — all of them are emitted into a single
+ordered stream with a stable, **EventLoom-shaped** envelope, chained with sha256 for
+tamper-evidence, and exportable as JSONL. This stream is the **durable world log**: the
+substrate for replay, snapshot recovery, and after-the-fact audit.
+
+## The event envelope
+
+Events use the same field names as the EventLoom on-disk format, so a persistence layer can
+read Limina's trace with no schema change:
+
+```ts
+interface EngineEvent {
+  id: string;            // "evt_<actorId>_<seq:012d>_<fnv16>"
+  type: string;          // e.g. "skill.executed", "policy.denied"
+  actorId: string;       // who acted (an agent or system id)
+  threadId: string;      // the session/thread this event belongs to
+  parentEventId: string | null;
+  causedBy: string[];    // causal parents — the perception → decision → action chain
+  timestamp: string;     // ISO 8601
+  payload: unknown;      // event-specific data
+  integrity?: { hash: string; previousHash: string | null }; // populated on export/append
+}
+```
+
+A few deliberate choices:
+
+- **The hot path stays hash-free.** `emit` assigns the `id` from a monotonically increasing
+  sequence number (12-digit, zero-padded) plus a cheap **non-crypto FNV-1a-16** discriminator
+  computed over `{seq, type, actorId, payload}`, and stamps the timestamp. No cryptography
+  runs on the frame loop.
+- **Causality is first-class.** `parentEventId` and `causedBy` record *why* an event
+  happened. A `skill.executed` links the policy decision that allowed it; an agent's decision
+  links the `agent.perception.updated` that fed it — so the **perception → decision → action**
+  chain is reconstructable.
+- **Bounded in memory, complete on disk.** The in-memory tail is bounded (default 8192
+  events); the full history is retained for export and flush.
+
+## The sha256 continuous chain
+
+The cryptographic integrity chain is computed lazily — off the frame loop — when the trace is
+exported (or appended, when append-on-emit is enabled). Each event's hash folds in the
+previous event's hash, forming a genesis-anchored chain:
+
+```text
+hashEvent(ev, previousHash) = "sha256:" + sha256( canonicalEvent(ev) + (previousHash ?? "") )
+
+previousHash(0) = null                 // genesis
+previousHash(N) = hash(N-1)            // every later event chains the one before it
+```
+
+`canonicalEvent` is a deterministic, **sorted-key** stringify of the envelope *excluding* the
+`integrity` field itself, so the hash is stable and reproducible. Because each link depends on
+all prior links, any edit, reorder, or drop is detectable.
+
+On re-read, integrity verification can fail with a `TraceIntegrityError` whose reason names
+exactly what broke: `invalid_json`, `partial_final_line`, `missing_integrity`,
+`previous_hash_mismatch`, or `hash_mismatch`.
+
+## JSONL export
+
+Exporting walks the durable history, computes the chain, and writes **one JSON object per
+line** — each line a full `EngineEvent` *with* its `integrity: { hash, previousHash }`
+populated — newline-joined with a trailing newline (empty when there are no events).
+
+Agents and tools flush the log through the [`trace.export` skill](/skills), which writes a
+sandboxed JSONL file and returns `{ name, events, bytes }` (`events` = the durable count,
+`bytes` = the content length). The related read skills let callers inspect the live stream:
+
+| Skill | What it does |
+|-------|--------------|
+| `trace.tail` | Tail events with cursor pagination and optional `actorId` / `type` filters. |
+| `trace.explainEvent` | Return an event with its resolved causal parents and children. |
+| `trace.export` | Flush durable history to a sandboxed trace JSONL file. |
+
+These reads require no permission, so any agent can inspect the world's history — which is the
+whole point of an observable, agent-native engine.
+
+## The durable world log: replay & snapshot recovery
+
+The ordered, chained event stream is what makes the world *durable*. Phase 4 built persistent
+shared worlds on top of it:
+
+- **Replay determinism.** Because logic advances only in fixed `dt` steps
+  ([the loop](/concepts/loop)), replaying the recorded event stream reproduces the run.
+- **Snapshot recovery.** The world can be snapshotted and restored — including the
+  [`EntityTable`](/concepts/ecs-and-world)'s identity state (live entries in creation order,
+  the `ent_` allocation counter, and the table version) — so a restored world issues the same
+  next ids and behaves exactly as the original.
+- **Authoritative sync.** The multi-client server owns the fixed-step sim and this same world
+  log, applying client intents at tick boundaries in one total order before fanning out
+  per-tick deltas.
+
+```text
+emit (hash-free, FNV id) ──▶ durable history (full) + bounded in-memory tail
+        │                                   │
+        │ lazily, off-loop                  ├─▶ trace.tail / trace.explainEvent (read)
+        ▼                                   │
+  sha256 chain  ──▶ JSONL export (trace.export) ──▶ replay · snapshot recovery · audit
+```
+
+:::tip[Logging is how the engine serves any memory backend]
+The engine owns the world and its durable log; it does **not** own agent memory. By
+persisting the world well, the log feeds any external memory-builder — a vector DB, an
+EventLoom/Zaxy persistence layer, or none — without the engine taking on a memory dependency.
+:::
+
+## Related
+
+- [Observability pillar](/pillars/observability) — the trace as a product surface.
+- [The fixed-timestep loop](/concepts/loop) — why the recorded stream replays deterministically.
+- [Perception](/concepts/perception) — the `agent.perception.updated` events that anchor the
+  causal chain.
+
+
+========================================================================
+# Skill / Hook Registry
+URL: https://limina.dev/pillars/skill-registry
+
+The typed, versioned, permissioned path every agent action flows through.
+
+Every action an agent takes in Limina — external builder or in-world player — goes through one place: the **Skill Registry**. A skill is a named, versioned, schema-described capability with declared permissions and a handler. The registry is the canonical pipeline: **resolve → Zod-validate → permission/policy → before-hook → handler → after-hook → emit**. The MCP `callTool` surface is a thin wrapper over `registry.invoke()`; nothing reaches the ECS, physics, or renderer without crossing it.
+
+This is the substrate boundary. The engine owns the world and the skill surface; an agent's *brain* lives outside it. See [Skills reference](/skills) for the full catalog of 45 registered skills.
+
+## The SkillDefinition shape
+
+Each skill is a `SkillDefinition` (`js/src/skills/registry.ts`). Input and output are **Zod schemas** — the input schema is what gets compiled to JSON Schema and handed to agents over MCP; the output schema validates the handler's result.
+
+```ts
+export type SkillCategory =
+  | "scene" | "ecs" | "three" | "physics"
+  | "agent" | "system" | "ui" | "social" | "audio";
+
+export interface SkillDefinition<I = unknown, O = unknown> {
+  name: string;            // e.g. "scene.createEntity" — also the MCP tool name
+  version: string;         // "1.0.0"
+  description: string;
+  category: SkillCategory;
+  input: z.ZodType<I>;     // Zod -> JSON Schema (draft-07) for discovery
+  output: z.ZodType<O>;    // validates the handler result
+  permissions: string[];   // e.g. ["scene.write"]
+  handler(input: I, ctx: ExecutionContext): Promise<O> | O;
+  hooks?: {
+    before?(input: I, ctx: ExecutionContext): Promise<void> | void;
+    after?(result: O, ctx: ExecutionContext): Promise<void> | void;
+  };
+}
+```
+
+The `name` is also the MCP tool name — there is no renaming layer between a skill and the tool an agent calls. `version` and `category` are surfaced by discovery so agents can reason about what they're invoking.
+
+:::note
+The original MVP spec in `README.md` sketched `inputSchema`/`outputSchema` as generic JSON Schema. In the shipped engine these are **Zod** schemas (`z.ZodType`); the JSON Schema an agent sees is derived from the Zod input via `z.toJSONSchema(...)`. Zod is the single source of truth for both validation and discovery.
+:::
+
+### Hooks
+
+`before` runs after validation and permission checks but before the handler — the place for extra pre-flight assertions. `after` runs once the handler resolves, with the typed result — useful for side-channel logging or post-conditions. Both receive the same `ExecutionContext` as the handler.
+
+## ExecutionContext
+
+The handler and its hooks run against an `ExecutionContext` built by the registry from the caller's `InvokeBase`:
+
+```ts
+export interface ExecutionContext {
+  agentId: string;
+  sessionId: string;
+  permissions: ReadonlySet<string>;
+  tick: number;                 // the fixed-timestep tick at invocation
+  world: WorldContext;          // ECS, transforms, spatial index, scene, camera, ops
+  emit(type: string, payload: unknown, causedBy?: string[]): string;
+}
+```
+
+- **`agentId` / `sessionId`** — who is acting and under which session. For social skills the speaker is host-bound to `ctx.agentId`; a payload cannot spoof identity.
+- **`permissions`** — the caller's granted capability set, resolved once as a `Set` for O(1) membership checks.
+- **`tick`** — the fixed-step tick, so an action can be correlated to the exact world frame it ran on.
+- **`world`** — the read/write surface (`WorldContext`): the bitECS world, transform storage, spatial index, entity table, tags, scene, camera, and engine ops.
+- **`emit`** — write an event into the observability trace, optionally linking causal parents (see [Observability](/pillars/observability)).
+
+The registry also carries optional provenance on the `InvokeBase`: `profile` (the caller's permission profile name, recorded for audit) and `pkg` (set when the call originates from a loaded package).
+
+## Registration & discovery
+
+`registerCoreSkills(registry)` wires the full core set at startup by calling each module registrar in order (`registerSceneSkills`, `registerEcsSkills`, `registerThreeSkills`, `registerPhysicsSkills`, `registerAgentSkills`, `registerSystemSkills`, `registerAuditSkills`, `registerUiSkills`, `registerAudioSkills`, `registerSocialSkills`, `registerPackageSkills`). The total is **45 registered skills**.
+
+Agents discover the surface through two no-permission skills:
+
+| skill | input | returns |
+|---|---|---|
+| `skills.list` | `{}` | `tools`: array of `{ name, description }` |
+| `skills.describe` | `{ name }` | `name`, `version`, `category`, `description`, and `input_schema` (JSON Schema) |
+
+`skills.list` mirrors the MCP `listTools` view; `skills.describe` returns a single skill's metadata including its draft-07 input schema. Skills can also be hot-reloaded at runtime via `dev.reload` (unregister + re-register so a later `callTool` runs the new handler), which emits an honest `dev.*.reload.completed`/`.failed` event.
+
+## The permission model
+
+Every skill declares the permission strings it requires. Across the whole surface the permission strings are:
+
+`scene.read`, `scene.write`, `ecs.read`, `ecs.modify`, `physics.read`, `physics.write`, `agent.read`, `agent.write`, `ui.write`, `audio.play`, `social.act`.
+
+A session is created under a named **profile** — a static allow-list resolved to a `Set` for O(1) checks (`resolveProfile(name)`; an unknown profile resolves to the empty set, so it can do nothing).
+
+| profile | granted permissions |
+|---|---|
+| `builder.readWrite` | `scene.read`, `scene.write`, `ecs.read`, `ecs.modify`, `physics.read`, `physics.write`, `agent.read`, `agent.write`, `ui.write`, `audio.play` |
+| `player.limited` | `scene.read`, `ecs.read`, `physics.read`, `physics.write`, `agent.read`, `agent.write` |
+| `social.actor` | `scene.read`, `ecs.read`, `physics.read`, `agent.read`, `agent.write`, `social.act`, `audio.play` |
+| `system.readonly` | `scene.read`, `ecs.read`, `physics.read`, `agent.read` |
+
+Notes that fall out of the table:
+
+- `social.act` is granted **only** by `social.actor`. It is deliberately absent from `player.limited`, so a non-social agent calling `social.approach` / `social.say` is denied with zero effect.
+- `builder.readWrite` does **not** include `social.act`; `social.actor` does **not** include `scene.write` / `ecs.modify` / `physics.write` / `ui.write`.
+- `ecs.read` is granted by every profile and is required by `inspector.snapshot`.
+- Skills declaring `permissions: []` (`skills.list`, `skills.describe`, `trace.*`, `audit.*`, `package.list`) are callable under any profile.
+
+### Static profiles vs. the dynamic policy engine
+
+There are two enforcement modes, sharing the same boundary.
+
+**Static check (legacy / MVP).** With no policy engine attached, `invoke()` checks each required permission against the caller's set. The first missing permission emits a `security.permission.denied { skill, missing, agentId }` event and returns `forbidden` with message `missing permission: <perm>`.
+
+**Dynamic policy engine (Phase 4b / M7).** With a `PolicyEngine` attached, a profile becomes just one *input* to a contextual decision. The engine evaluates every crossing — at the registry, the sandbox host bridge, session admission, and package load — with deny-overrides, fail-closed ordering (first matching deny wins):
+
+1. session admission revoked → `session.revoked`
+2. capability/agent revoked → `revoked`
+3. profile does not grant the capability → `profile.denied`
+4. quota window exhausted → `quota.exceeded`
+5. resource budget exhausted → `budget.calls` / `budget.cpu` / `budget.mem`
+6. otherwise → `allow` (`profile.grant`) and commit usage
+
+Beyond profiles, the engine adds **quotas** (deny the N+1th call in a sliding window), **revocation** (revoke a capability mid-session so the next call is denied), and **resource budgets** (a per-session ledger of calls / CPU-ms / memory-bytes, the CPU/mem dimensions tied to the sandbox knobs). Every decision is audited: an allow emits `policy.decision`, a deny emits `policy.denied`, each carrying the rule that fired, a human reason, the salient context, and the live quota/budget snapshot. A permission denial additionally emits `security.permission.denied`. These recorded decisions are exactly what the `audit.explain` / `audit.query` / `audit.usage` skills read back.
+
+:::tip
+Want to know *why* an action was allowed or denied? Call `audit.explain { eventId }` — it returns the governing decision (rule, reason, context, quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain, all from the real recorded trace.
+:::
+
+## On success
+
+When a call is allowed and the handler resolves, `invoke()` emits `skill.executed { skill, version, input, tick }` (with the policy decision linked via `causedBy` when the engine is attached) and returns `{ success: true, result, metadata }`, where `metadata` carries `executionTimeMs` and the `eventsEmitted` list. Every action is typed, permission-checked, and traced — by construction, because there is no other path.
+
+
+========================================================================
+# MCP Interface
+URL: https://limina.dev/pillars/mcp-interface
+
+The discoverable, typed tool-calling contract — in-process, stdio, and WebSocket.
+
+Limina speaks **MCP**: a structured, discoverable tool-calling protocol optimized for LLM agents. The MCP layer is a thin wrapper over the [Skill Registry](/pillars/skill-registry) — `callTool` routes straight to `registry.invoke()`, so every MCP call gets the same resolve → validate → permission → handler → emit pipeline as an in-engine call. Tools *are* skills; there is no renaming layer.
+
+An agent's workflow is always the same: **discover** the tools, then **call** them with full context and permission checks. This page is the wire contract; for a concrete walk-through see [Building agents → Builders](/building-agents/builders), and for the live agent roster see [Agents](/agents).
+
+## listTools
+
+`listTools()` returns the registered tools. Each is an `MCPTool`:
+
+```ts
+interface MCPTool {
+  name: string;          // the skill name, e.g. "scene.createEntity"
+  description: string;
+  input_schema: unknown; // JSON Schema, draft-07
+}
+```
+
+The `input_schema` is JSON Schema **draft-07**, produced from the skill's Zod input via `z.toJSONSchema(skill.input, { target: "draft-07", unrepresentable: "any" })`. Only the **input** schema is exposed as a tool schema — output schemas validate internally but are not part of the tool surface. The list is memoized and invalidated on register / unregister / replace.
+
+## callTool
+
+A call is an `MCPRequest`; the response is an `MCPResponse`:
+
+```ts
+interface MCPRequest {
+  tool: string;
+  input: Record<string, unknown>;
+  context?: { agentId: string; sessionId: string; previousResults?: unknown[] };
+}
+
+interface MCPResponse {
+  success: boolean;
+  result?: unknown;                                 // present on success
+  error?: { code: MCPErrorCode; message: string };  // present on failure
+  metadata?: { executionTimeMs: number; eventsEmitted: string[] };
+}
+```
+
+`callTool` requires an initialized session — `{ agentId, sessionId, permissions }`. Without one it returns `forbidden` ("MCP session is not initialized"). On success it builds the invocation base from the session and calls `registry.invoke(req.tool, req.input, base)`.
+
+A trusted in-process variant, `callToolInternal`, lets engine systems that already own attribution override `context.agentId`/`sessionId` (permissions still come from the session) — this is how the player's DecisionSystem routes a player's actions through the same path as an external builder.
+
+## Error codes
+
+`MCPErrorCode = "not_found" | "invalid_input" | "forbidden" | "handler_error" | "capacity_exceeded"`.
+
+| code | when |
+|---|---|
+| `not_found` | unknown skill name |
+| `invalid_input` | Zod `safeParse` failure (`message` is the Zod error) |
+| `forbidden` | permission / policy denial (`message` is the decision reason) |
+| `handler_error` | the handler threw (`message` is the error) |
+| `capacity_exceeded` | declared in the protocol; mapped to JSON-RPC `-32002` |
+
+Over JSON-RPC these map via `mcpErrorToJsonRpc`: standard codes plus `not_found → -32601`, `invalid_input → -32602`, `forbidden → -32001`, `capacity_exceeded → -32002`, `handler_error → -32603`.
+
+## Example
+
+A `tools/list` then `tools/call` exchange over JSON-RPC 2.0:
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "tools": [
+      {
+        "name": "scene.createEntity",
+        "description": "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. Returns its entity id.",
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "shape": { "enum": ["box", "sphere"], "default": "box" },
+            "size": { "type": "number", "exclusiveMinimum": 0, "maximum": 50, "default": 1 },
+            "position": { "type": "array", "items": { "type": "number" } },
+            "dynamic": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "scene.createEntity",
+    "arguments": { "shape": "sphere", "color": 16747546, "position": [0, 0.5, 0], "dynamic": true }
+  }
+}
+```
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "success": true,
+    "result": { "entity": "ent_0001" },
+    "metadata": { "executionTimeMs": 0.42, "eventsEmitted": ["skill.executed"] }
+  }
+}
+```
+
+On an `MCPResponse` failure, the transport returns a JSON-RPC **error** (via `mcpErrorToJsonRpc(code)`) with the full `MCPResponse` attached as `error.data`.
+
+## Three transports
+
+All three share identical JSON-RPC 2.0 semantics, the same `initialize` handshake, the same tool-call behavior, and the same error codes. Only the channel — and, for WebSocket, an extra read-only state-sync — differs.
+
+| transport | entry | use |
+|---|---|---|
+| **in-process** | the `Mcp` class | engine systems and the player's DecisionSystem; no serialization |
+| **stdio** | `limina --mcp-stdio` | a single external agent over newline-delimited JSON-RPC on stdin/stdout; exits on stdin EOF |
+| **WebSocket** | `limina --mcp-ws [--port N]` | the authoritative, multi-client server over a localhost WebSocket |
+
+### In-process
+
+The `Mcp` class directly: `listTools` / `callTool` / `callToolInternal`. No serialization — used by engine systems and the in-world player loop.
+
+### stdio
+
+`limina --mcp-stdio` runs a newline-delimited JSON-RPC 2.0 server on stdin/stdout. JSON-RPC methods:
+
+- `initialize` — params `{ agentId, sessionId, profile }`; binds the session with `permissions = resolveProfile(profile)`. Result: `{ protocolVersion, session }`.
+- `tools/list` (alias `listTools`) — `{ tools: MCPTool[] }`.
+- `tools/call` (alias `callTool`) — params `{ name, arguments?, context? }`; requires a bound session.
+- `shutdown` — clears the session; `{ ok: true }`.
+
+Notifications (no `id`) execute but produce no response; an unknown method returns `-32601`.
+
+### WebSocket
+
+`limina --mcp-ws [--port N]` is the authoritative multi-client server (Phase 4). It uses the same initialize handshake, tool-call semantics, and error codes as stdio, **extended** with a read-only state-sync channel:
+
+- `state/subscribe` → an initial snapshot plus per-tick deltas.
+- `aoi/declare` → declare an area-of-interest so a client only receives state for what it can "see".
+
+This is how many builders and players share one authoritative world while every mutating action still goes through the permission-checked, traced skill pipeline. Authoritative multi-client sync runs at p95 11 ms.
+
+
+========================================================================
+# Observability
+URL: https://limina.dev/pillars/observability
+
+The typed event bus, causal trace trees, the sha256 chain, and JSONL export.
+
+Every significant action by a builder or player is observable, traceable, and replayable. Observability is not a side feature in Limina — it is the **durable world log**, one of the four things the engine owns (world, perception, skill surface, log). The brain and its memory live outside; the engine's job is to record what happened, faithfully and verifiably.
+
+:::note
+This page is the **pillar / usage** view: the APIs and skills you use to read and export traces. For the higher-level idea — *why* the world log is the substrate that any memory backend can build on — see the [Observability concept](/concepts/observability).
+:::
+
+## The typed event bus
+
+Every skill execution, component change, agent decision, and perception update emits an event. Events are immutable and EventLoom-shaped — the same field names as the on-disk format a persistence layer expects, so it can be read with no schema change:
+
+```ts
+interface EngineEvent {
+  id: string;                  // "evt_<actorId>_<seq:012d>_<fnv16>"
+  type: string;               // e.g. "skill.executed", "agent.decision.made"
+  actorId: string;
+  threadId: string;
+  parentEventId: string | null;
+  causedBy: string[];          // causal parents — builds the trace tree
+  timestamp: string;           // ISO 8601
+  payload: unknown;
+  integrity?: { hash: string; previousHash: string | null }; // on export/append
+}
+```
+
+The hot path stays hash-free. `emit()` assigns the `id` from a monotonically increasing sequence number (12-digit zero-padded) plus a cheap **non-crypto FNV-1a-16** discriminator computed over `{ seq, type, actorId, payload }`, and sets the timestamp. No hashing happens on the frame loop. The in-memory tail is bounded (default 8192 events); full history is retained in `durableEvents` for export.
+
+Typical event types include `skill.executed`, `agent.decision.made`, `ecs.component.added`, `three.material.updated`, `policy.decision` / `policy.denied`, and `security.permission.denied`.
+
+## Causal trace trees (`causedBy`)
+
+The trace is not a flat log — it is a causal tree. `parentEventId` gives an event its lineage; `causedBy` links the explicit parents that produced it. A player's full decision chain reads `perception → decision → tool call → state change`, each event linking back to the one that caused it. Two skills make the tree queryable:
+
+| skill | input | returns |
+|---|---|---|
+| `trace.tail` | `afterSeq?`, `limit?`, `actorId?`, `type?` | `events`, `nextAfterSeq` — cursor-paginated, optionally filtered |
+| `trace.explainEvent` | `eventId` | the `event` plus resolved `parents[]` and `children[]` |
+
+Because builder sessions can spawn player agents, a builder trace naturally contains the sub-traces of the agents it created — hierarchical by construction.
+
+## The sha256 integrity chain
+
+On export the durable history is sealed into a genesis-anchored hash chain:
+
+```
+hashEvent(ev, previousHash) = "sha256:" + sha256(canonicalEvent(ev) + (previousHash ?? ""))
+```
+
+`canonicalEvent` is a deterministic, sorted-key stringify of the event's fields (the `integrity` field itself is excluded from its own hash input). The first event's `previousHash` is `null`; thereafter `previousHash(N) = hash(N-1)`. When append-on-emit is enabled, each event is hashed and appended immediately and the chain advances live; otherwise the chain is computed lazily at export time — keeping cryptographic work off the frame loop.
+
+Re-reading a trace verifies the chain and fails loudly on tampering or truncation, with a `TraceIntegrityError` whose reason is one of: `invalid_json`, `partial_final_line`, `missing_integrity`, `previous_hash_mismatch`, `hash_mismatch`.
+
+## JSONL export
+
+`exportJsonl()` walks the durable events, computes the chain, and emits one JSON object per line — each line a full `EngineEvent` **with** its `integrity: { hash, previousHash }` populated — joined by newlines. The `trace.export { name }` skill flushes that content to a sandboxed `.jsonl` file and returns `{ name, events, bytes }` (`events` = durable count, `bytes` = content length). This is the durable, replayable artifact: a complete, hash-chained record of a session.
+
+## Inspector / devtools
+
+For a live snapshot rather than a stream, `inspector.snapshot` returns a bounded, paginated view of the world: entities (with transforms, tags, physics, resources), agents, registered skills, the caller's permissions and profiles, resource counts, and trace metadata. The lighter `inspect()` tracer call returns the thread id, event count, the set of actors seen, and the recent tail:
+
+```ts
+interface InspectorSnapshot {
+  threadId: string;
+  eventCount: number;
+  actors: string[];
+  recent: EngineEvent[];
+}
+```
+
+The agent-ops HUD in the windowed demos is fed directly from this real tracer feed — what you see on screen is the actual recorded trace, not a mock.
+
+## Replay window
+
+Events are sequenced and timestamped, so an agent's recent history can be replayed over a short window for debugging a builder session or a player's behavior. `tracer.trace(actorId, sinceTick?)` returns one actor's recent events; combined with `trace.explainEvent` you can reconstruct exactly why an agent did what it did, and with the sha256 chain you can prove the record was never altered.
+
+
+========================================================================
+# Agent Ecosystem
+URL: https://limina.dev/pillars/agent-ecosystem
+
+AgentComponent, the perception/decision/action systems, and the scheduler that runs them at scale.
+
+Limina runs two kinds of LLM agents as first-class citizens of the same ECS world: external **Agent Builders** that construct scenes over MCP, and in-world **Agent Players** that perceive, decide, and act autonomously on the fixed-timestep loop. Both share the same safety, observability, and skill infrastructure — a builder can even create or modify player agents. This page covers the in-engine machinery; for hands-on guides see [Building agents → Builders](/building-agents/builders) and [→ Players](/building-agents/players).
+
+## The agent record
+
+An agent is a JS-side record (strings and LLM config aren't SoA-friendly); a player optionally inhabits an `ent_` entity in the world:
+
+```ts
+interface AgentRecord {
+  id: string;                  // agt_
+  type: "builder" | "player";
+  entityId?: string;           // the ent_ a player inhabits
+  perceptionRadius: number;    // default 15
+  decisionIntervalTicks: number; // default 30
+  profile: string;             // permission profile name
+  sessionId: string;
+  llm: { provider: string; model: string; systemPrompt: string };
+  // runtime state
+  perception?: Perception;
+  inFlight: boolean;           // a decision is currently running off-loop
+  lastDecisionTick: number;
+  queue: QueuedAction[];       // validated tool calls awaiting execution
+}
+```
+
+The decision provider is named, not hard-wired (`llm.provider`) — Scripted for tests, Ollama for local, a gateway for cloud. The engine owns the *world* and the *perception*; the *brain* (the provider) is pluggable. See [LLM providers](/building-agents/llm-providers).
+
+## The four systems
+
+The agent systems run under the fixed-timestep scheduler. Perception and Action are on-frame and deterministic; Decision fires the slow, async provider **off** the frame path and only enqueues results when it resolves.
+
+```text
+PerceptionSystem ──▶ DecisionSystem ──▶ action queue ──▶ ActionSystem ──▶ world state
+   (on-frame)        (off-loop, async)    (validated)     (on-frame)          │
+        ▲                                              registry.invoke        │
+        │                                                                     ▼
+        └───────────────── ObservabilitySystem ◀──(traces every step)── ──────┘
+```
+
+- **PerceptionSystem** — populates each agent's `Perception` (self position, nearby entities, recent events) *only when a decision is due*, to avoid an O(agents × entities) pass every tick. At scale it serves every due agent's spatial query with a single native batched grid build + radius query (the `op_ecs_spatial_query_batch` op), byte-identical to the per-agent JS oracle.
+
+  ```ts
+  interface Perception {
+    selfId: string;
+    selfEntity?: string;
+    position?: [number, number, number];
+    nearby: { id: string; position: [number, number, number]; distance: number }[];
+    recentEvents: { type: string }[];
+    tick: number;
+  }
+  ```
+
+- **DecisionSystem** — for a due agent, calls the provider's `decide()` **asynchronously, off the frame loop**, then validates each returned tool call against its skill schema before enqueuing it. A malformed or hallucinated call is rejected (`agent.toolcall.rejected`) and never executed. Only one decision is in flight per agent at a time; a slow model never drops a frame.
+
+- **ActionSystem** — drains validated actions from the queue and routes them through `registry.invoke()`, so a player's action gets the exact same permission/policy/trace path as a builder's MCP call. Each queued action carries the `decisionId` that produced it, preserving the perception → decision → action causal chain.
+
+- **ObservabilitySystem** — listens to the relevant events and maintains the traces (see [Observability](/pillars/observability)).
+
+## Off-loop decisions via the action queue
+
+The key to running LLM agents in a real-time loop is the seam between *thinking* and *acting*. Thinking is slow and async; acting must be deterministic and on-frame. The action queue is that seam:
+
+1. A decision is due (`tick - lastDecisionTick >= decisionIntervalTicks`).
+2. The provider is invoked off-loop; the agent is marked `inFlight`.
+3. When it resolves, the candidate tool calls are schema-validated and pushed onto `queue`.
+4. The ActionSystem drains them on subsequent ticks through the registry.
+
+Because step 2 never blocks the loop, the fixed-step rate holds (~60 steps/s) even while a slow local model is mid-thought.
+
+## The scheduler: budgets and density
+
+The `AgentScheduler` enforces fairness and a frame budget so many agents share one loop without any single agent starving the others. Budgets exist at two levels:
+
+```ts
+interface AgentBudget {
+  weight: number;
+  maxQueueDepth: number;
+  maxToolCallsPerDecision: number;
+  maxActionsPerTick: number;
+  decisionTimeoutMs: number;
+}
+
+interface SchedulerBudget {
+  maxDecisionStartsPerTick: number;
+  maxGlobalActionsPerTick: number;
+  defaultAgentBudget: AgentBudget;
+  agents?: Record<string, Partial<AgentBudget>>;  // per-agent overrides
+}
+```
+
+The scheduler caps how many decisions start per tick and how many actions execute globally per tick, tracks a per-agent deficit for weighted-fair ordering, and bounds each agent's queue depth, tool calls per decision, and decision timeout. A decision that overruns `decisionTimeoutMs` is timed out by generation, so a stuck provider can't hold a slot forever.
+
+This is what makes density possible. The Phase 3 capstone runs **200 agents + 256 dynamic physics bodies + 2000 entities at sim-step p95 4 ms** (≤ 8 ms budget) over ≥300 ticks at 60 steps/s — every agent fully perceiving, deciding, and acting, every action traced. The `numbers_party` demo puts ~200 instanced "number-people" through exactly this pipeline live.
+
+## Builders vs. players
+
+| | Agent Builder | Agent Player |
+|---|---|---|
+| location | external, over MCP | in-world, inhabits an entity |
+| typical profile | `builder.readWrite` | `player.limited` / `social.actor` |
+| driven by | external agent's own loop | engine DecisionSystem |
+| decision trigger | the builder sends `callTool` | due by `decisionIntervalTicks` |
+| transport | stdio / WebSocket MCP | in-process `callToolInternal` |
+
+Both flow through the same skill registry, the same permission model, and the same trace. The difference is only *who drives the loop* — the safety and observability are identical, by design.
+
+
+========================================================================
+# Skills reference
+URL: https://limina.dev/skills
+
+Every built-in Limina skill — the agent-facing SDK surface — grouped by domain.
+
+Limina ships **45 typed skills**: the complete set of actions an agent can take in the world. Each skill is **versioned**, declares the **permissions** it needs, and validates its input against a [Zod](https://zod.dev) schema. Every skill maps **1:1 to an MCP tool** whose name is the skill name — so this page is also the MCP tool list.
+
+:::tip[For agents]
+The same catalog is available as machine-readable JSON at [`/agents/skills.json`](/agents/skills.json) (names, permissions, and JSON-Schema inputs). See [the MCP interface](/pillars/mcp-interface) for the wire contract and [the registry](/pillars/skill-registry) for the skill model.
+:::
+
+## Permission profiles
+
+A session is opened under a profile; the engine enforces the profile's allow-list before any handler runs. A skill with no declared permission is callable under any profile.
+
+| Profile | Grants |
+|---------|--------|
+| `builder.readWrite` | `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `agent.read` `agent.write` `ui.write` `audio.play` |
+| `player.limited` | `scene.read` `ecs.read` `physics.read` `physics.write` `agent.read` `agent.write` |
+| `social.actor` | `scene.read` `ecs.read` `physics.read` `agent.read` `agent.write` `social.act` `audio.play` |
+| `system.readonly` | `scene.read` `ecs.read` `physics.read` `agent.read` |
+
+All permission strings: `scene.read`, `scene.write`, `ecs.read`, `ecs.modify`, `physics.read`, `physics.write`, `agent.read`, `agent.write`, `ui.write`, `audio.play`, `social.act`.
+
+## Scene & world
+
+Create, destroy, and query renderable entities.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `scene.createEntity` | Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. Returns its entity id. | `scene.write` | `shape`, `collider`, `size`, `color`, `position`, `dynamic`, `static`, `friction`, `restitution` | `entity` |
+| `scene.destroyEntity` | Destroy an entity and free its scene object and physics body. | `scene.write` | `entity` | `removed` |
+| `scene.queryEntities` | List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances. | `scene.read` | `near`, `radius`, `tag` | `entities` |
+
+## ECS components
+
+Read and mutate component data on entities.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `ecs.updateComponent` | Set an entity's position [x,y,z], rotation quaternion [x,y,z,w], or scale [x,y,z]. | `ecs.modify` | `entity`, `component`, `value` | `ok` |
+| `ecs.addComponent` | Tag an entity with a named component (e.g. 'target', 'hostile'). | `ecs.modify` | `entity`, `component` | `ok` |
+| `ecs.removeComponent` | Remove a named component tag from an entity. | `ecs.modify` | `entity`, `component` | `ok` |
+
+## Rendering · Three.js
+
+Transforms, PBR materials, lighting, and glTF.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `three.setTransform` | Set an entity's position, rotation (Euler radians), and/or scale. | `scene.write` | `entity`, `position`, `rotationEuler`, `scale` | `ok` |
+| `three.setMaterial` | Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow). Applies across all meshes of a glTF entity. | `scene.write` | `entity`, `color`, `roughness`, `metalness`, `castShadow`, `receiveShadow` | `ok` |
+| `three.setLighting` | Set scene lighting: one ambient + one directional light, optionally casting real shadow maps. | `scene.write` | `ambientColor`, `ambientIntensity`, `directionalColor`, `directionalIntensity`, `direction`, `castShadow`, `shadowMapSize`, `shadowCameraExtent`, `shadowCameraNear`, `shadowCameraFar`, `shadowBias` | `ok` |
+| `three.loadGLTF` | Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position. | `scene.write` | `assetId`, `position` | `entity`, `resource` |
+
+## Physics · Rapier
+
+Impulses, raycasts, and collision events from native Rapier.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `physics.applyImpulse` | Apply an impulse [x,y,z] to an entity's dynamic body (wakes it). | `physics.write` | `entity`, `impulse` | `ok` |
+| `physics.raycast` | Cast a ray from origin along direction; returns the first hit (distance, point, entity). | `physics.read` | `origin`, `direction`, `maxDistance` | `hit`, `distance`, `point`, `entity` |
+| `physics.collisionEvents` | Drain physics collision start/stop events, mapped to entity ids where available. | `physics.read` | — | `events` |
+
+## Agent / meta
+
+Perception and custom event signals for agents.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `agent.emitEvent` | Emit a custom event into the observability trace (inter-agent or system signal). Emitted as agent.signal.<type>. | `agent.write` | `type`, `payload` | `eventId` |
+| `agent.getPerception` | Get the calling agent's current perception (nearby entities + recent events). | `agent.read` | — | `perception` |
+
+## System & introspection
+
+Discover skills, tail the trace, snapshot the world, hot-reload.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `skills.list` | List all available skills (names + descriptions). | _none_ | — | `tools` |
+| `skills.describe` | Describe a skill: version, category, and JSON-Schema input. | _none_ | `name` | `name`, `version`, `category`, `description`, `input_schema` |
+| `trace.tail` | Tail trace events with cursor pagination and optional actor/type filters. | _none_ | `afterSeq`, `limit`, `actorId`, `type` | `events`, `nextAfterSeq` |
+| `trace.explainEvent` | Explain a trace event with resolved causal parents and children. | _none_ | `eventId` | `event`, `parents`, `children` |
+| `trace.export` | Flush the durable trace history to a sandboxed trace JSONL file. | _none_ | `name` | `name`, `events`, `bytes` |
+| `inspector.snapshot` | Return a bounded, paginated snapshot of world, entities, agents, skills, permissions, resources, and trace metadata. | `scene.read` `ecs.read` `physics.read` `agent.read` | `afterEntity`, `limit` | `page`, `world`, `entities`, `agents`, `skills`, `permissions`, `resources`, `trace` |
+| `dev.reload` | Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success. | `scene.read` | `target`, `name`, `reason` | `ok`, `target`, `invalidated`, `reason` |
+
+## Audit & policy
+
+Query the recorded policy decisions and resource usage.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `audit.explain` | Answer 'why was action X allowed/denied': the governing policy decision (rule + reason + context + quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain — all from the real recorded trace. | _none_ | `eventId` | `eventId`, `eventType`, `found`, `decision`, `provenance`, `causalTrace` |
+| `audit.query` | Query recorded policy decisions: filter by allow/deny, cap, rule, agent, session, or package (package provenance). Returns matching decision events plus an allow/deny + by-rule + by-cap summary. | _none_ | `decision`, `cap`, `rule`, `agentId`, `sessionId`, `package`, `limit` | `summary`, `decisions` |
+| `audit.usage` | Resource usage from recorded decisions: allowed/denied call counts per session+cap, plus the latest quota and budget snapshots seen for each session — derived from the real policy events. | _none_ | `sessionId` | `perSessionCap`, `quotas`, `budgets` |
+
+## In-world UI & text
+
+Speech bubbles, labels, callouts, and screen HUD panels.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `ui.panel` | Author a styled UI container (kind = label/textBox/speechBubble/thoughtBubble/callout/hudPanel) with a full Zod style object, world/screen anchor, optional tail/leader and lifecycle (fade/typewriter/ttl/queue/feed). Returns an opaque handle. | `ui.write` | `kind`, `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.label` | Place a billboard label (minimal chrome) tracking an entity or world point. | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.textBox` | Place a titled text box (header bar + wrapped body) at a world or screen anchor. | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.speechBubble` | Place a speech bubble with a directional tail aimed at the speaker (entity/point). | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.thoughtBubble` | Place a thought bubble with trailing puffs leading back to the thinker. | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.callout` | Place an annotation box with a leader line to a target point. | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.hudPanel` | Place a screen-anchored HUD/overlay panel (corner-pinned, DPI-aware, over the scene). | `ui.write` | `anchor`, `style`, `text`, `title`, `lines`, `maxWidth`, `width`, `maxLines`, `pixelScale`, `tail`, `leader`, `lifecycle` | `handle` |
+| `ui.update` | Update a live container by handle: change its text, title, body lines, and/or restyle it (re-composites). Returns whether the handle existed and re-composited. | `ui.write` | `handle`, `text`, `title`, `style`, `lines` | `ok`, `changed` |
+| `ui.remove` | Remove a live container by handle: detach its mesh from the scene and dispose its GPU resources. | `ui.write` | `handle` | `removed` |
+
+## Spatial audio
+
+Synthesized SFX, ambience, positional sound, and TTS.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `audio.play` | Play a one-shot synthesized SFX blip (sine + envelope) on a bus (master/sfx/ambience/voice). Returns an opaque handle. | `audio.play` | `freq`, `secs`, `bus`, `volume` | `handle` |
+| `audio.ambient` | Start a looping synthesized ambience bed on a bus (default ambience). Returns an opaque handle. | `audio.play` | `bus`, `volume` | `handle` |
+| `audio.playAt` | Play a one-shot POSITIONAL synthesized SFX at a world position; 3D-panned + attenuated relative to the camera listener. Optional maxDistance cutoff. Returns an opaque handle. | `audio.play` | `freq`, `secs`, `position`, `bus`, `volume`, `maxDistance` | `handle` |
+| `audio.speak` | Speak a line of text aloud at a world position via a pluggable local TTS voice (voice bus, positional). FIRE-AND-FORGET: returns immediately; synthesis runs off-thread and never blocks the frame. Returns an opaque handle. | `audio.play` | `text`, `position`, `volume` | `handle` |
+| `audio.stop` | Stop a playing sound by handle. | `audio.play` | `handle` | `ok` |
+| `audio.setVolume` | Set a playing sound's volume (0..1) by handle. | `audio.play` | `handle`, `volume` | `ok` |
+| `audio.setBusVolume` | Set a mixer bus volume (master/sfx/ambience/voice), re-gaining all live sounds on it. | `audio.play` | `bus`, `volume` | `ok` |
+
+## Embodied social
+
+Walk toward targets and speak as the calling agent.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `social.approach` | Walk the calling agent toward a target (an agent id, an entity id, or a world point). Sets the move target the locomotion system pursues; emits social.approached. | `social.act` | `target`, `talkDistance` | `approaching`, `target` |
+| `social.say` | Speak a line as the calling agent: emits social.said (actorId = the host-bound caller) and shows a real speech bubble anchored above the speaker's humanoid (per-speaker queue). | `social.act` | `text`, `actorId` | `said`, `speaker`, `handle` |
+
+## Packages
+
+List and load versioned, attested capability packages.
+
+| Skill | Description | Permissions | Input | Output |
+|---|---|---|---|---|
+| `package.list` | List installed packages with their manifest provenance: ref (name@version), kind, declared capabilities, engine-compat range, content hash, and whether the package is attested. | _none_ | `name` | `packages` |
+| `package.load` | Load an installed package (by name@version ref) under a profile: validates the manifest, checks engine-compat (out-of-bounds rejected), gates declared-vs-granted capabilities via the policy engine (over-claim denied), and loads the untrusted entry into the M6 sandbox. Returns the load decision + provenance event id. | `agent.write` | `ref`, `agentId`, `sessionId`, `profile` | `ok`, `ref`, `agentId`, `rule`, `rejectReason`, `reason`, `loadEventId` |
+
+---
+
+Input field types, defaults, and full JSON Schema for every skill live in [`/agents/skills.json`](/agents/skills.json). To call these over the wire, see [Agent Builders](/building-agents/builders).
+
+
+========================================================================
+# Building with Agent Builders
+URL: https://limina.dev/building-agents/builders
+
+Connect an external LLM agent over MCP and construct a scene, fully typed and traced.
+
+An **Agent Builder** is an external agent — your LLM, your gateway, your own loop — that connects to Limina over [MCP](/pillars/mcp-interface) and constructs a scene by calling skills. It never touches the engine internals; it discovers the tool surface, then issues a sequence of `callTool` requests. Every call is schema-validated, permission-checked, and traced into the world log. This page walks a concrete build with the real skill names from the [Skills catalog](/skills).
+
+## Quickstart: stdio
+
+Build the engine, then start the stdio MCP server:
+
+```bash
+cargo build --release
+./target/release/limina --mcp-stdio
+```
+
+It speaks newline-delimited JSON-RPC 2.0 on stdin/stdout and exits on stdin EOF. A minimal external client lives at `examples/mcp_stdio_client.mjs` — it spawns the binary and sends `initialize → tools/list → tools/call → shutdown`:
+
+```js
+import { spawn } from "node:child_process";
+
+const child = spawn("target/release/limina", ["--mcp-stdio"], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+child.stdout.setEncoding("utf8");
+child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+
+const requests = [
+  { jsonrpc: "2.0", id: 1, method: "initialize",
+    params: { agentId: "agt_external", sessionId: "ses_external", profile: "builder.readWrite" } },
+  { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+  { jsonrpc: "2.0", id: 3, method: "tools/call",
+    params: { name: "scene.queryEntities", arguments: {} } },
+  { jsonrpc: "2.0", id: 4, method: "shutdown", params: {} },
+];
+for (const r of requests) child.stdin.write(JSON.stringify(r) + "\n");
+child.stdin.end();
+```
+
+Run it:
+
+```bash
+node examples/mcp_stdio_client.mjs
+```
+
+The `initialize` step binds the session and its permissions from the profile (`permissions = resolveProfile("builder.readWrite")`). After that, every `tools/call` runs under those grants.
+
+## A concrete build sequence
+
+A builder follows the same shape every time: **discover, then call**. Here is a full scene built skill by skill. Each `tools/call` returns an `MCPResponse`; entity ids (`ent_…`) thread through later calls.
+
+### 1. Discover the surface
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }
+```
+
+The result is the tool list — each tool a `{ name, description, input_schema }` with a JSON Schema (draft-07) input. Your agent can now plan calls against real schemas instead of guessing. (`skills.describe { name }` returns a single tool's metadata if you want detail on demand.)
+
+### 2. Light the scene — `three.setLighting`
+
+```json
+{ "name": "three.setLighting",
+  "arguments": { "directionalIntensity": 4, "castShadow": true } }
+```
+
+One ambient + one directional light, optionally casting real shadow maps. Requires `scene.write`. → `{ ok: true }`
+
+### 3. Create an entity — `scene.createEntity`
+
+```json
+{ "name": "scene.createEntity",
+  "arguments": { "shape": "box", "color": 4886754, "position": [0, 0.5, 0], "dynamic": true } }
+```
+
+Creates a renderable box (optionally with a dynamic physics body) and returns its id. Requires `scene.write`. → `{ entity: "ent_0001" }`
+
+### 4. Position it — `three.setTransform`
+
+```json
+{ "name": "three.setTransform",
+  "arguments": { "entity": "ent_0001", "position": [2, 0.5, -1], "rotationEuler": [0, 0.78, 0] } }
+```
+
+Sets position, rotation (Euler radians), and/or scale. Requires `scene.write`. → `{ ok: true }`
+
+### 5. Style it — `three.setMaterial`
+
+```json
+{ "name": "three.setMaterial",
+  "arguments": { "entity": "ent_0001", "color": 16747546, "roughness": 0.4, "metalness": 0.1, "receiveShadow": true } }
+```
+
+Updates the PBR material and shadow participation (applies across all meshes of a glTF entity). Requires `scene.write`. → `{ ok: true }`
+
+### 6. Load a model — `three.loadGLTF`
+
+```json
+{ "name": "three.loadGLTF",
+  "arguments": { "assetId": "tree_oak", "position": [-3, 0, 2] } }
+```
+
+Loads a glTF/glb from a **sandboxed asset id** (not an arbitrary path) and adds it at a position. Requires `scene.write`. → `{ entity: "ent_0002", resource: { kind: "gltf", meshCount: 3, materialCount: 2, ... } }`
+
+At any point the builder can query what exists with `scene.queryEntities` (filter by tag and/or radius) or take a full `inspector.snapshot`.
+
+## A permission-denied call, also traced
+
+The `builder.readWrite` profile grants scene/ecs/physics/ui/audio write but **not** `social.act` (that capability belongs to `social.actor`). So a builder attempting to speak as an agent is denied — cleanly, with zero effect:
+
+```json
+{ "name": "social.say", "arguments": { "text": "hello" } }
+```
+
+→ JSON-RPC error `-32001` with `error.data`:
+
+```json
+{
+  "success": false,
+  "error": { "code": "forbidden", "message": "missing permission: social.act" }
+}
+```
+
+The denial is not silent: the engine emits a `security.permission.denied { skill, missing, agentId }` event into the trace (and, under the dynamic policy engine, a `policy.denied` decision). The world log records the *attempt* and the *refusal*, not just the successes — which is exactly what makes the surface auditable.
+
+## Everything is traced
+
+Each successful call emits `skill.executed { skill, version, input, tick }`; each denial emits `security.permission.denied`. The whole sequence forms a causal chain you can replay with `trace.tail` and `trace.explainEvent`, or seal and export with `trace.export` (a hash-chained JSONL file). The headless `builder.ts` demo does exactly this end to end:
+
+```bash
+./target/release/limina js/src/demos/builder.ts
+```
+
+An in-process agent discovers the tools, builds a scene (`createEntity` / `setTransform` / `setMaterial` / `setLighting` / `loadGLTF`), hits one permission-denied call, and the whole permission-checked, traced sequence is verified — the same path an external agent takes over stdio or [WebSocket](/pillars/mcp-interface). To see the agents themselves, visit [Agents](/agents).
+
+
+========================================================================
+# Building Agent Players
+URL: https://limina.dev/building-agents/players
+
+Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
+
+An **Agent Player** lives inside the world. Unlike a [builder](/building-agents/builders), which drives the engine from outside over MCP, a player inhabits an entity and is driven *by* the engine: the scheduler runs its perceive → decide → act loop every few ticks, off the frame path, and routes its chosen actions through the same permission-checked, traced skill pipeline. You give it a body, a permission profile, and an [LLM provider](/building-agents/llm-providers); the engine does the rest.
+
+## Register an agent
+
+A player is an `AgentRecord` added to the `AgentRegistry`. The minimum is an id, a body to inhabit, a profile, a session, and an LLM config naming a provider:
+
+```ts
+const agents = new AgentRegistry();
+
+agents.add({
+  id: "agt_player",
+  type: "player",
+  entityId: player,                 // the ent_ this agent inhabits
+  perceptionRadius: 100,            // how far it can see (default 15)
+  decisionIntervalTicks: 20,        // decide every 20 ticks (default 30)
+  profile: "player.limited",        // its permission grants
+  sessionId: "ses_player",
+  llm: { provider: "scripted", model: "", systemPrompt: "pursue the nearest entity" },
+});
+```
+
+`perceptionRadius` and `decisionIntervalTicks` tune how much the agent sees and how often it thinks — the levers that, together with the [scheduler](/pillars/agent-ecosystem) budgets, let many players share one loop.
+
+## The perceive → decide → act loop
+
+The engine runs three systems for the agent each frame; decisions go off-loop so a slow model never drops a frame.
+
+```text
+ perceive  ──▶  decide  ──(validated tool calls)──▶  action queue  ──▶  act
+ nearby         provider.decide()                                       registry.invoke()
+ entities       (async · off the frame loop)
+ + events
+```
+
+1. **Perceive.** When a decision is due, the PerceptionSystem fills the agent's `Perception` — its self position, the `nearby` entities within `perceptionRadius` (served by the native batched spatial query), and recent events. See [Perception](/concepts/perception).
+2. **Decide.** The DecisionSystem calls `provider.decide({ systemPrompt, perception, tools, previousResults })` asynchronously. Every returned tool call is validated against its skill schema before it is queued — a malformed or hallucinated call is rejected (`agent.toolcall.rejected`) and never runs.
+3. **Act.** The ActionSystem drains validated calls through `registry.invoke()`, so a player's action gets the exact same permission/policy/trace path as a builder's MCP call, tagged with the `decisionId` that produced it.
+
+## Attaching an LLM provider
+
+The provider is a swap, not a rewrite — the agent names it; you supply the implementation in a `ProviderMap`. The deterministic `ScriptedProvider` is the test path and the demo baseline:
+
+```ts
+const scripted = new ScriptedProvider((req: DecideRequest): MCPRequest[] => {
+  const target = req.perception.nearby[0];
+  if (!target || !req.perception.position || !req.perception.selfEntity) return [];
+  const s = req.perception.position;
+  const d = [target.position[0] - s[0], 0, target.position[2] - s[2]];
+  const len = Math.hypot(d[0], d[1], d[2]) || 1;
+  return [{
+    tool: "physics.applyImpulse",
+    input: { entity: req.perception.selfEntity, impulse: [d[0] / len * 1.2, 0, d[2] / len * 1.2] },
+  }];
+});
+const providers: ProviderMap = { scripted };
+```
+
+Swap `scripted` for an `OllamaProvider` (local) or a gateway (cloud) and the loop is unchanged — same perception in, same validated tool calls out. See [LLM providers](/building-agents/llm-providers) for the full seam.
+
+## Acting through skills
+
+A player acts only through the skill surface — it has exactly the capabilities its profile grants. Common player actions:
+
+| skill | profile that grants it | what it does |
+|---|---|---|
+| `physics.applyImpulse` | `player.limited` (`physics.write`) | push the agent's dynamic body — locomotion via physics |
+| `social.approach` | `social.actor` (`social.act`) | walk toward an agent, entity, or world point |
+| `social.say` | `social.actor` (`social.act`) | speak a line — emits `social.said` and shows a real speech bubble above the speaker |
+
+Speaker identity for social skills is **host-bound to `ctx.agentId`** — a payload cannot spoof who is talking. Note that `social.act` is *not* in `player.limited`; a conversational agent runs under `social.actor`, while a purely physical pursuer runs under `player.limited` (and a `social.*` call from it is denied with zero effect).
+
+## Two reference demos
+
+**`player.ts`** (windowed) — an autonomous player runs perception → decision → action in the fixed loop, pursuing the nearest target via physics impulses, with a `ScriptedProvider`. Decisions are off-loop, so frame rate is unaffected.
+
+```bash
+./target/release/limina --window --frames 600 js/src/demos/player.ts
+```
+
+**`forest_conversation.ts`** (windowed) — an agent-controlled humanoid walks up to two NPCs and holds a real, non-deterministic conversation driven by a local Ollama model (`qwen2.5:7b`), rendered as real speech bubbles, with a live agent-ops HUD. Nothing is canned: run it twice and the dialogue differs. If Ollama is unreachable it shows an honest "LLM offline / waiting" and never fabricates a line. Decisions and LLM calls run off the frame loop, so render never blocks on the slow model.
+
+```bash
+./target/release/limina --window --frames 9000 js/src/demos/forest_conversation.ts
+```
+
+Both demos route every action through the same registry, permission model, and trace as an external builder — the only difference is that the engine, not an outside loop, drives the decision cadence.
+
+
+========================================================================
+# LLM Providers
+URL: https://limina.dev/building-agents/llm-providers
+
+One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
+
+Limina is the substrate, not the brain. The engine owns the world, perception, the skill surface, and the durable log; the *decision* is pluggable. That seam is the **`LLMProvider`** — one small async interface with swappable backends. An agent names a provider in its config; you supply the implementation. Swapping a scripted policy for a local model for a cloud gateway is a config change, not a rewrite of the [player loop](/building-agents/players).
+
+## The interface
+
+A provider takes a decision request and returns *candidate* tool calls. It does not act — the [DecisionSystem](/pillars/agent-ecosystem) validates each candidate against its skill schema before anything is enqueued, so a malformed or hallucinated call is never executed.
+
+```ts
+interface DecideRequest {
+  systemPrompt: string;
+  perception: Perception;   // what the agent currently sees
+  tools: MCPTool[];         // the discoverable skill surface, with JSON schemas
+  previousResults: unknown[];
+}
+
+interface LLMProvider {
+  readonly name: string;
+  decide(req: DecideRequest): Promise<{
+    toolCalls: MCPRequest[];
+    usage?: { totalTokens?: number };
+  }>;
+}
+```
+
+Two design choices matter:
+
+- **Single-shot tool selection.** `decide()` is one round trip: perception + tools in, candidate tool calls out. There is no in-provider multi-turn orchestration; the agent loop drives cadence via `decisionIntervalTicks`. (A separate bounded multi-turn path exists for agents that genuinely need several decisions before yielding.)
+- **Thinking off the frame loop.** `decide()` returns a `Promise`. The DecisionSystem awaits it *off* the fixed-step path and only enqueues results when it resolves. A slow model never drops a frame — the loop holds ~60 steps/s while a call is in flight.
+
+## ScriptedProvider — deterministic
+
+The test path and demo baseline. A pure function of the request, so behavior is reproducible in CI:
+
+```ts
+export class ScriptedProvider implements LLMProvider {
+  readonly name = "scripted";
+  constructor(private readonly policy: (req: DecideRequest) => MCPRequest[]) {}
+  decide(req: DecideRequest) {
+    return Promise.resolve({ toolCalls: this.policy(req) });
+  }
+}
+```
+
+Because it is deterministic, it is what the headless suite uses to assert the perception → decision → action chain exactly — no model required.
+
+## OllamaProvider — local
+
+A real round trip to a local Ollama server (`http://localhost:11434/api/chat`) via `op_http_post`. It shapes the request for native tool-calling: each skill becomes a `function` tool (the skill name's dot is encoded as `__`, since function names must match `^[A-Za-z0-9_-]+$`, and decoded back on the way out), with `temperature: 0` for stable selection. The perception is sent as the user message; the model's `tool_calls` are parsed into `MCPRequest`s (with a fallback that reads a `{ name, arguments }` JSON object out of the message content, since smaller models sometimes emit the call as text).
+
+Models used in the demos and tests:
+
+- **`qwen2.5-coder:3b`** — fast local iteration.
+- **`qwen2.5:7b`** — stronger tool use; the model the live `forest_conversation` demo drives.
+
+Ollama is slow but free and offline — the live smoke path. Failure is honest: a dead server, non-JSON, or an empty reply is rejected, never fabricated, so a player surfaces "offline" instead of inventing an action.
+
+For free-form dialogue (spoken lines rather than tool calls), there is a parallel `ChatClient` seam — `OllamaChat` against the same `/api/chat` endpoint — which the conversation demos use; the same honest-failure rule applies.
+
+## GatewayProvider — cloud
+
+A cloud OpenAI-compatible gateway over the same transport, for speed or quality when a local model isn't enough:
+
+```ts
+export class GatewayProvider implements LLMProvider {
+  readonly name = "gateway";
+  constructor(private readonly model: string) {}
+  decide() {
+    return Promise.reject(new Error(`GatewayProvider(${this.model}) not configured`));
+  }
+}
+```
+
+It is the same `LLMProvider` shape — a config swap from local to cloud — and rejects honestly until configured rather than pretending to decide.
+
+## Providers are config swaps; memory is external
+
+| provider | use | determinism |
+|---|---|---|
+| `ScriptedProvider` | tests, demo baselines | fully deterministic |
+| `OllamaProvider` / `OllamaChat` | local smoke, offline dev | non-deterministic |
+| `GatewayProvider` | cloud speed/quality | non-deterministic |
+
+Choosing a provider is a one-line change to an agent's `llm.provider` plus an entry in the `ProviderMap`; the agent loop, the skill surface, and the trace are identical across all three.
+
+:::note
+**Memory and recall live outside the engine.** The provider is the *brain*; recall is part of the brain too — fed by perception plus read access to the durable [world log](/pillars/observability), with any memory backend (a vector DB, an event store, or none) sitting as an external adapter *behind* the provider. Limina never takes a memory backend as a runtime dependency. External builders bring their own memory over MCP. The engine persists the world well so any memory-builder can be built on top — without the engine owning memory.
+:::
+
+
+========================================================================
+# Roadmap & status
+URL: https://limina.dev/roadmap
+
+Where Limina is: six phases shipped, the standing principles, and the numbers.
+
+Limina is an agent-native, high-performance real-time 3D engine where LLM agents — external [Agent Builders](/building-agents/builders) and in-world [Agent Players](/building-agents/players) — are first-class citizens, every action typed, permission-checked, and traced. Phases 0 through 5 are **complete and verified**.
+
+## Where we are
+
+| Phase | Theme | Status — what shipped |
+|---|---|---|
+| **0 — Foundation** | Native runtime + render + physics + ECS + loop | ✅ The native floor: one binary, Rust host → V8 (`deno_core`) → WebGPU (`deno_webgpu` + Three.js) → native Rapier physics → bitECS, on a fixed-timestep loop. |
+| **1 — Agent-Native Core** | Skill registry, MCP, observability, agent ecosystem | ✅ The four pillars: a typed/permissioned/versioned [skill registry](/pillars/skill-registry) with hooks, an in-process [MCP](/pillars/mcp-interface) `listTools`/`callTool` surface, EventLoom-shaped traces with a sha256 chain + JSONL export, and the [agent ecosystem](/pillars/agent-ecosystem) (perception → decision → action, LLM-agnostic). |
+| **2 — Open World** | Real external agents + interactive world + persistence | ✅ Real external agents over network MCP, interactive physics (collisions/events), and durable persistence. |
+| **3 — Scale & Fidelity** | Many agents + data ownership/job system + rich worlds + devtools | ✅ Scheduler/budgets, a spatial index, devtools, shadows + textures, and a perf pass (9.4 → 74 fps), capped by **native parallelism**: a native CSR spatial op wired into perception. |
+| **4 — Shared Platform** | Persistent shared worlds + governance + ecosystem + browser/wasm | ✅ Durable shared worlds (replay determinism, snapshot recovery, authoritative multi-client sync, interest management) + a governed ecosystem (QuickJS isolation, the dynamic policy engine, audit surfaces, versioned packages with manifest + attestation + content-hash provenance). |
+| **5 — Presentation & Audio** | On-screen text/UI + spatial audio (multimodal output) | ✅ Expressive in-scene UI containers (speech/thought bubbles, callouts, labels, screen HUD) via permission-gated `ui.*` skills; and `limina-audio` (rodio/cpal) — a dedicated audio thread, 4-bus mixer, spatial player, `audio.*` skills, and fire-and-forget Rust-side TTS that never freezes the frame. |
+
+Phase 2 is an executable plan; Phases 3–4 were detailed at kickoff. Phase 5 is independent — Presentation & Audio depend only on the Phase 0 render/runtime floor, so they were pulled forward on demand.
+
+## The arc
+
+```text
+Phase 0           Phase 1            Phase 2        Phase 3          Phase 4
+Foundation  ──▶  Agent-Native  ──▶  Open World ──▶ Scale &     ──▶  Shared
+                 Core                              Fidelity          Platform
+                   │
+                   └──▶  Phase 5 · Presentation & Audio   (independent · pull-forward)
+```
+
+The ordering follows the dependencies: you cannot *scale* agents you cannot *connect* (2 before 3), and a shared platform only pays off once one instance can host many builders and players in a rich world without losing frame budget, traceability, or capability boundaries (3 before 4). Each phase ends in demoable acceptance and de-risks the next.
+
+## Standing principle: performance-first
+
+Every architectural choice is aimed at making Limina blazingly fast. When quality or power competes with speed, the tradeoff is surfaced, weighed, decided deliberately, and the rationale recorded. Concretely: native hot paths (ECS iteration, physics, spatial queries) over JS; data-oriented SoA/TypedArray storage; zero-copy buffer bridging over serialization; JS is the scripting/agent/authoring layer, **not** the inner loop. Agent *thinking* always runs off the frame loop — a slow model never drops a frame.
+
+## Standing principle: the engine is the substrate, not the brain
+
+Limina owns the **world** (ECS, physics, render), **perception**, the **skill/MCP surface**, and a **durable world event log**. It does **not** own the agent's brain or its memory. The decision provider is pluggable ([`LLMProvider`](/building-agents/llm-providers): Scripted / Ollama / Gateway), and recall is part of the brain — fed by perception plus read access to the durable log, with any memory backend living as an external adapter behind the provider, never an engine runtime dependency. So: **engine = world + perception + durable log; brain = decision + recall (pluggable); memory backend = external.**
+
+## The numbers
+
+| Metric | Result | Source |
+|---|---|---|
+| Density capstone | 200 agents + 256 dynamic bodies + 2000 entities @ sim-step **p95 4 ms** (≤ 8 ms budget), 60 steps/s over ≥300 ticks | Phase 3 |
+| Render perf fix pass | **9.4 → 74 fps** | Phase 3 |
+| Native spatial parallelism | **4.5–5.4×** over the JS oracle, **≤ 2 ms**, byte-identical; `MAX_ENTITIES` raised to 16384 | Phase 3 |
+| Authoritative multi-client sync | **p95 11 ms** | Phase 4 |
+| Numbers-party flythrough | **~102 fps** (~200 instanced agents) | Phase 5 |
+
+Every density agent fully perceives → decides → acts, and every action is traced. The shipped headline: one native binary — **Rust host → V8 (`deno_core`) → WebGPU (`deno_webgpu` + Three.js) → native Rapier → bitECS**, on a fixed-timestep loop, with a typed/permissioned/versioned skill registry, an in-process + stdio/WebSocket MCP surface, and sha256-chained EventLoom-shaped JSONL traces.

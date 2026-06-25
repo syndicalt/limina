@@ -1,0 +1,56 @@
+---
+import { Image } from 'astro:assets';
+import arena from '../../assets/renders/agents-arena.png';
+---
+<section class="section" id="vision">
+  <div class="container vision-grid">
+    <div class="vision-copy reveal">
+      <p class="eyebrow">The idea</p>
+      <h2 class="h2">A skill call — now a world an&nbsp;agent can&nbsp;<span class="grad-text">shape</span>.</h2>
+      <p class="lede">
+        External LLM <strong>builders</strong> connect over MCP and compose scenes by calling
+        typed skills. Autonomous <strong>players</strong> live in the same ECS world, running a
+        perceive&nbsp;→&nbsp;decide&nbsp;→&nbsp;act loop. Both reach the world through one surface —
+        and every call is type-checked, permission-gated, and traced.
+      </p>
+      <div class="principle">
+        <span class="tag">Standing principle</span>
+        <p>
+          <strong>The engine is the substrate, not the brain.</strong> Limina owns the world,
+          perception, the skill / MCP surface, and a durable event log. The decision-maker and its
+          memory stay pluggable — bring any LLM, any memory backend, or none.
+        </p>
+      </div>
+    </div>
+    <figure class="vision-media reveal">
+      <Image
+        src={arena}
+        alt="Top-down Limina arena: agents as lit pillars ringed by cyan perception radii, with dotted decision paths converging on scattered targets."
+        widths={[600, 900, 1200]}
+        sizes="(max-width: 980px) 100vw, 540px"
+      />
+      <figcaption class="mono">perception radii · decision paths · live world</figcaption>
+    </figure>
+  </div>
+</section>
+
+<style>
+  .vision-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; }
+  .vision-copy .h2 { margin-top: 14px; }
+  .vision-copy .lede { margin-top: 18px; }
+  .vision-copy .lede strong { color: var(--ink); font-weight: 600; }
+  .principle {
+    margin-top: 28px;
+    padding: 20px 22px;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--teal);
+    border-radius: 12px;
+    background: var(--grad-soft);
+  }
+  .principle p { margin-top: 10px; color: var(--muted); font-size: 0.98rem; }
+  .principle strong { color: var(--ink); }
+  .vision-media { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: 0 30px 80px -50px rgba(47, 230, 214, 0.4); }
+  .vision-media img { width: 100%; display: block; }
+  .vision-media figcaption { padding: 12px 16px; font-size: 0.76rem; color: var(--faint); border-top: 1px solid var(--line); background: #0a0e1a; letter-spacing: 0.04em; }
+  @media (max-width: 980px) { .vision-grid { grid-template-columns: 1fr; gap: 36px; } }
+</style>

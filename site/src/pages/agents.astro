@@ -1,0 +1,168 @@
+---
+import Landing from '../layouts/Landing.astro';
+import skills from '../data/skills.json';
+const base = import.meta.env.BASE_URL;
+
+const endpoints = [
+  { name: 'llms.txt', href: `${base}llms.txt`, d: 'A concise, LLM-readable index of the whole site — page titles, summaries, and links.' },
+  { name: 'llms-full.txt', href: `${base}llms-full.txt`, d: 'Every documentation page concatenated into a single plain-text file.' },
+  { name: 'agents/skills.json', href: `${base}agents/skills.json`, d: `All ${skills.count} skills as structured JSON — names, permissions, and JSON-Schema inputs.` },
+  { name: 'sitemap-index.xml', href: `${base}sitemap-index.xml`, d: 'A standard XML sitemap enumerating every page.' },
+];
+const domains = ['Scene', 'ECS', 'Rendering', 'Physics', 'Agent', 'System', 'Audit', 'UI', 'Audio', 'Social', 'Packages'];
+const profiles = Object.entries(skills.permissionProfiles);
+---
+<Landing
+  title="Limina for agents — MCP tools, a JSON catalog, and plain-text docs"
+  description="Limina exposes its entire capability surface to LLM agents: 45 typed skills as MCP tools, a machine-readable skills.json, and plain-text documentation."
+>
+  <section class="section agents-hero">
+    <div class="container">
+      <p class="eyebrow reveal">For agents</p>
+      <h1 class="display reveal">The agent <span class="grad-text">reference</span>.</h1>
+      <p class="lede reveal">
+        Limina is built for LLM agents, so its reference is machine-first. Pull the whole
+        capability surface as structured data, then drive the engine over MCP — to
+        <strong>build</strong> a world from outside, or to <strong>live</strong> in one.
+      </p>
+      <div class="hero-cta reveal">
+        <a class="btn btn-primary" href={`${base}agents/skills.json`}>Open skills.json</a>
+        <a class="btn btn-ghost" href="#mcp">Connect over MCP →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="container">
+      <div class="section-head reveal">
+        <p class="eyebrow">Machine endpoints</p>
+        <h2 class="h2">Stable URLs, structured data.</h2>
+        <p class="lede">No HTML scraping required. Every artifact below is a plain, cache-friendly file.</p>
+      </div>
+      <div class="grid cols-2 reveal">
+        {endpoints.map((e) => (
+          <a class="card endpoint" href={e.href}>
+            <code class="tag">{e.name}</code>
+            <p>{e.d}</p>
+            <span class="curl mono">curl limina.dev{e.href}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="mcp">
+    <div class="container">
+      <div class="section-head reveal">
+        <p class="eyebrow">Connect over MCP</p>
+        <h2 class="h2">One surface, three transports.</h2>
+        <p class="lede">
+          Every skill is an MCP tool whose name is the skill name. The same JSON-RPC&nbsp;2.0
+          semantics, handshake, and error codes apply in-process, over stdio, and over a
+          WebSocket. Open a session, list tools, call them.
+        </p>
+      </div>
+
+      <div class="grid cols-2 reveal mcp-grid">
+        <div class="card">
+          <h3>stdio</h3>
+          <p class="muted">Newline-delimited JSON-RPC on stdin/stdout — ideal for a local subprocess client.</p>
+          <pre class="codeblock">./target/release/limina --mcp-stdio</pre>
+        </div>
+        <div class="card">
+          <h3>WebSocket</h3>
+          <p class="muted">The authoritative multi-client server, with a read-only state-sync channel for observers.</p>
+          <pre class="codeblock">./target/release/limina --mcp-ws --port 7777</pre>
+        </div>
+      </div>
+
+      <div class="reveal flow">
+        <h3 class="h3">A session, end to end</h3>
+        <pre class="codeblock">{`// 1 — open a session under a permission profile
+→ {"jsonrpc":"2.0","id":1,"method":"initialize",
+   "params":{"agentId":"builder-1","sessionId":"s1","profile":"builder.readWrite"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2026-06-23",
+   "session":{"agentId":"builder-1","sessionId":"s1","profile":"builder.readWrite"}}}
+
+// 2 — discover the tools (each input_schema is JSON Schema draft-07)
+→ {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+← {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"scene.createEntity", ...}]}}
+
+// 3 — call a tool
+→ {"jsonrpc":"2.0","id":3,"method":"tools/call",
+   "params":{"name":"scene.createEntity",
+     "arguments":{"shape":"box","position":[0,1,0],"color":16746496,"dynamic":true}}}
+← {"jsonrpc":"2.0","id":3,"result":{"success":true,"result":{"entity":"ent_12"},
+   "metadata":{"executionTimeMs":0.4,"eventsEmitted":["skill.executed"]}}}`}</pre>
+        <p class="muted small">Errors come back as JSON-RPC errors with the full response attached as <code>error.data</code>. Error codes: <code>not_found</code>, <code>invalid_input</code>, <code>forbidden</code>, <code>handler_error</code>, <code>capacity_exceeded</code>. See the <a href={`${base}pillars/mcp-interface`}>MCP interface reference</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="container">
+      <div class="grid cols-2 reveal">
+        <a class="card kind" href={`${base}building-agents/builders`}>
+          <h3>Build from outside →</h3>
+          <p class="muted">Connect any MCP client and compose a scene: create entities, set transforms and materials, load glTF, place lights — permission-checked, every call traced.</p>
+        </a>
+        <a class="card kind" href={`${base}building-agents/players`}>
+          <h3>Live inside →</h3>
+          <p class="muted">Spawn an in-world player that perceives the world, decides with any LLM off the loop, and acts through the same skills as everyone else.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container skills-cta reveal">
+      <div>
+        <p class="eyebrow">The surface</p>
+        <h2 class="h2">{skills.count} skills, {domains.length} domains.</h2>
+        <p class="lede">Typed, versioned, permissioned — from <code>scene.createEntity</code> to <code>audio.speak</code>. Browse them human-readably, or fetch the JSON.</p>
+        <ul class="domains">
+          {domains.map((d) => <li class="pill"><span class="dot"></span>{d}</li>)}
+        </ul>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href={`${base}skills`}>Skills reference</a>
+          <a class="btn btn-ghost" href={`${base}agents/skills.json`}>skills.json</a>
+        </div>
+      </div>
+      <div class="profiles card">
+        <h3 class="h3">Permission profiles</h3>
+        <ul>
+          {profiles.map(([name, list]) => (
+            <li><code class="tag">{name}</code><span class="mono">{(list as string[]).length} caps</span></li>
+          ))}
+        </ul>
+        <p class="muted small">A session runs under a profile; the engine enforces its allow-list before any handler runs.</p>
+      </div>
+    </div>
+  </section>
+
+  <style>
+    .agents-hero { padding-top: clamp(40px, 6vw, 76px); padding-bottom: 12px; }
+    .agents-hero .display { margin-top: 14px; font-size: clamp(2.4rem, 5.5vw, 4.2rem); }
+    .agents-hero .lede { margin-top: 20px; }
+    .agents-hero .lede strong { color: var(--ink); font-weight: 600; }
+    .hero-cta { display: flex; gap: 14px; margin-top: 28px; flex-wrap: wrap; }
+
+    .endpoint { display: flex; flex-direction: column; gap: 10px; }
+    .endpoint p { margin: 0; }
+    .endpoint .curl { color: var(--faint); font-size: 0.78rem; word-break: break-all; }
+    .endpoint:hover .curl { color: var(--teal); }
+
+    .mcp-grid { margin-bottom: 26px; }
+    .mcp-grid .codeblock { margin-top: 14px; }
+    .flow .codeblock { white-space: pre; }
+    .small { font-size: 0.85rem; margin-top: 14px; }
+
+    .skills-cta { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 44px; align-items: center; }
+    .domains { list-style: none; padding: 0; margin: 22px 0 26px; display: flex; flex-wrap: wrap; gap: 9px; }
+    .profiles ul { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }
+    .profiles li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .profiles .mono { color: var(--faint); font-size: 0.8rem; }
+    .kind h3 { margin-bottom: 8px; }
+    @media (max-width: 880px) { .skills-cta { grid-template-columns: 1fr; gap: 30px; } }
+  </style>
+</Landing>

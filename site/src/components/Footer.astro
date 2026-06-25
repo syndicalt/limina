@@ -1,0 +1,124 @@
+---
+import Logo from './Logo.astro';
+const base = import.meta.env.BASE_URL;
+const year = new Date().getFullYear();
+
+const cols = [
+  {
+    title: 'Product',
+    links: [
+      { label: 'How it works', href: `${base}#how` },
+      { label: 'Capabilities', href: `${base}#capabilities` },
+      { label: 'Gallery', href: `${base}#gallery` },
+      { label: 'Demos', href: `${base}demos` },
+    ],
+  },
+  {
+    title: 'Documentation',
+    links: [
+      { label: 'Introduction', href: `${base}introduction` },
+      { label: 'Getting started', href: `${base}getting-started` },
+      { label: 'Architecture', href: `${base}architecture` },
+      { label: 'Skills reference', href: `${base}skills` },
+      { label: 'Roadmap & status', href: `${base}roadmap` },
+    ],
+  },
+  {
+    title: 'For agents',
+    links: [
+      { label: 'Agent overview', href: `${base}agents` },
+      { label: 'Agent Builders (MCP)', href: `${base}building-agents/builders` },
+      { label: 'Agent Players', href: `${base}building-agents/players` },
+      { label: 'llms.txt', href: `${base}llms.txt` },
+      { label: 'skills.json', href: `${base}agents/skills.json` },
+    ],
+  },
+];
+---
+<footer class="site-footer">
+  <div class="container footer-grid">
+    <div class="footer-brand">
+      <Logo />
+      <p class="muted">The agent-native real-time 3D engine. LLM agents build and inhabit the world through one typed, permissioned, traced surface.</p>
+      <a class="repo" href="https://github.com/syndicalt/limina" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        github.com/syndicalt/limina
+      </a>
+    </div>
+    {cols.map((col) => (
+      <nav class="footer-col" aria-label={col.title}>
+        <h4>{col.title}</h4>
+        <ul>
+          {col.links.map((l) => (
+            <li><a href={l.href}>{l.label}</a></li>
+          ))}
+        </ul>
+      </nav>
+    ))}
+  </div>
+  <div class="container footer-bottom">
+    <span>© {year} Limina</span>
+    <span class="dimsep">·</span>
+    <span class="muted">An agent-native real-time 3D engine.</span>
+    <span class="grow"></span>
+    <span class="mono built">Rust · V8 · WebGPU · Three.js · Rapier · bitECS</span>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    border-top: 1px solid var(--line);
+    padding-top: 64px;
+    margin-top: 40px;
+    background: linear-gradient(180deg, transparent, rgba(139, 107, 255, 0.04));
+  }
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr 1fr 1fr;
+    gap: 40px;
+    padding-bottom: 52px;
+  }
+  .footer-brand { max-width: 320px; }
+  .footer-brand p { margin: 16px 0 18px; font-size: 0.95rem; }
+  .repo {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--muted);
+    transition: color 0.2s var(--ease);
+  }
+  .repo:hover { color: var(--teal); }
+  .footer-col h4 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--faint);
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+  .footer-col ul { list-style: none; padding: 0; display: grid; gap: 11px; }
+  .footer-col a { color: var(--muted); font-size: 0.93rem; transition: color 0.2s var(--ease); }
+  .footer-col a:hover { color: var(--ink); }
+  .footer-bottom {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 24px 0 40px;
+    border-top: 1px solid var(--line-2);
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .footer-bottom .grow { flex: 1; }
+  .footer-bottom .built { font-size: 0.76rem; color: var(--faint); }
+  .dimsep { color: var(--faint); }
+  @media (max-width: 860px) {
+    .footer-grid { grid-template-columns: 1fr 1fr; gap: 32px; }
+    .footer-brand { grid-column: 1 / -1; max-width: none; }
+  }
+  @media (max-width: 520px) {
+    .footer-grid { grid-template-columns: 1fr; }
+  }
+</style>

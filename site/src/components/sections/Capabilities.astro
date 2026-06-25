@@ -1,0 +1,69 @@
+---
+const base = import.meta.env.BASE_URL;
+const pillars = [
+  {
+    t: 'Skill / Hook Registry',
+    d: 'A typed, versioned, permissioned registry of everything an agent can do, with before/after hooks and an ExecutionContext carrying identity and permissions.',
+    href: `${base}pillars/skill-registry`,
+    icon: '<path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2.4"/>',
+  },
+  {
+    t: 'MCP interface',
+    d: 'listTools / callTool over the same registry — in-process, stdio, or websocket. Inputs validated against JSON Schema; denials and errors are first-class.',
+    href: `${base}pillars/mcp-interface`,
+    icon: '<path d="M7 8 3 12l4 4M17 8l4 4-4 4M14 4l-4 16"/>',
+  },
+  {
+    t: 'Observability',
+    d: 'Every call emits a typed, EventLoom-shaped event into a sha256-chained world log — replayable, exportable as JSONL, and durable across crashes.',
+    href: `${base}pillars/observability`,
+    icon: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  },
+  {
+    t: 'Agent ecosystem',
+    d: 'AgentComponent plus Perception, Decision, and Action systems turn entities into builders and players — LLM-agnostic and scheduled off the frame loop.',
+    href: `${base}pillars/agent-ecosystem`,
+    icon: '<circle cx="12" cy="7" r="3"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>',
+  },
+];
+const more = [
+  'Spatial 3D audio', 'In-world text & UI', 'Durable world log + replay', 'Authoritative multiplayer',
+  'Interest management', 'QuickJS isolation', 'Dynamic policy engine', 'Versioned packages + attestation',
+  'Native rayon spatial query', 'Textured glTF + shadows', 'Humanoid locomotion', 'Snapshot recovery',
+];
+---
+<section class="section" id="capabilities">
+  <div class="container">
+    <div class="section-head reveal">
+      <p class="eyebrow">Capabilities</p>
+      <h2 class="h2">Four pillars, fully built.</h2>
+      <p class="lede">The agent-native core is not a sketch — it shipped, was reviewed, and is verified end-to-end. Each pillar has its own reference in the docs.</p>
+    </div>
+
+    <div class="grid cols-2 reveal">
+      {pillars.map((p) => (
+        <a class="card pillar" href={p.href}>
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={p.icon} /></span>
+          <h3>{p.t}</h3>
+          <p>{p.d}</p>
+        </a>
+      ))}
+    </div>
+
+    <div class="more reveal">
+      <span class="more-label mono">and across phases 2&ndash;5</span>
+      <ul class="chips">
+        {more.map((m) => <li class="pill"><span class="dot"></span>{m}</li>)}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<style>
+  .pillar svg { width: 22px; height: 22px; }
+  .pillar { display: block; }
+  .more { margin-top: 40px; display: flex; align-items: flex-start; gap: 22px; flex-wrap: wrap; }
+  .more-label { color: var(--faint); font-size: 0.74rem; letter-spacing: 0.16em; text-transform: uppercase; padding-top: 8px; white-space: nowrap; }
+  .chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 9px; flex: 1; }
+  @media (max-width: 700px) { .more { flex-direction: column; gap: 14px; } }
+</style>

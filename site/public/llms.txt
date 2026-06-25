@@ -1,0 +1,34 @@
+# Limina
+
+> Limina is an agent-native real-time 3D engine: a single native binary (Rust host + V8 via deno_core + WebGPU via deno_webgpu + Three.js + native Rapier physics + bitECS) where LLM agents are first-class. External builders construct scenes over MCP; autonomous players perceive, decide, and act in-world. Every action is typed, permission-checked, and traced.
+
+Key facts for agents:
+- The engine is the substrate, not the brain: it owns the world, perception, the skill/MCP surface, and a durable event log. Decision-making and memory are pluggable and external.
+- Agents act only through 45 typed, versioned, permission-checked skills, exposed as MCP tools over in-process, stdio (`--mcp-stdio`), or websocket (`--mcp-ws`) transports.
+- Every action emits a typed, sha256-chained event into a durable, replayable world log.
+
+## Documentation
+
+- [Introduction](https://limina.dev/introduction): Limina is an agent-native real-time 3D engine: one native binary where LLM agents build and inhabit a high-performance world.
+- [Getting started](https://limina.dev/getting-started): Prerequisites, building the single Limina binary, and running your first demo windowed and headless.
+- [Demos](https://limina.dev/demos): Every Limina demo: what each one shows, the capabilities it exercises, and the exact command to run it.
+- [Architecture & stack](https://limina.dev/architecture): The full Limina stack, layer by layer: Rust host, V8, WebGPU, bitECS, native Rapier/rayon/audio, and the crates that implement them.
+- [ECS & the world](https://limina.dev/concepts/ecs-and-world): How Limina stores the world: bitECS, SoA TypedArrays, opaque ent_ ids that are never reused, and native rayon ECS ops.
+- [The fixed-timestep loop](https://limina.dev/concepts/loop): Limina's fixed-timestep accumulator at 60 steps/s, render interpolation, determinism and replay, and why agent decisions resolve off the loop.
+- [Perception](https://limina.dev/concepts/perception): What a Limina agent perceives: a typed view of nearby entities, transforms, and recent events, built by a native batched CSR spatial query.
+- [Observability & the world log](https://limina.dev/concepts/observability): Limina's EventLoom-shaped event envelope, the sha256 continuous integrity chain, JSONL export, and the durable world log with replay and snapshot recovery.
+- [Skill / Hook Registry](https://limina.dev/pillars/skill-registry): The typed, versioned, permissioned path every agent action flows through.
+- [MCP Interface](https://limina.dev/pillars/mcp-interface): The discoverable, typed tool-calling contract — in-process, stdio, and WebSocket.
+- [Observability](https://limina.dev/pillars/observability): The typed event bus, causal trace trees, the sha256 chain, and JSONL export.
+- [Agent Ecosystem](https://limina.dev/pillars/agent-ecosystem): AgentComponent, the perception/decision/action systems, and the scheduler that runs them at scale.
+- [Skills reference](https://limina.dev/skills): Every built-in Limina skill — the agent-facing SDK surface — grouped by domain.
+- [Building with Agent Builders](https://limina.dev/building-agents/builders): Connect an external LLM agent over MCP and construct a scene, fully typed and traced.
+- [Building Agent Players](https://limina.dev/building-agents/players): Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
+- [LLM Providers](https://limina.dev/building-agents/llm-providers): One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
+- [Roadmap & status](https://limina.dev/roadmap): Where Limina is: six phases shipped, the standing principles, and the numbers.
+
+## For agents
+
+- [skills.json](https://limina.dev/agents/skills.json): machine-readable catalog of all skills (names, permissions, JSON-Schema inputs)
+- [llms-full.txt](https://limina.dev/llms-full.txt): the full documentation as a single plain-text file
+- [Agents hub](https://limina.dev/agents): machine endpoints and the MCP connect quickstart
