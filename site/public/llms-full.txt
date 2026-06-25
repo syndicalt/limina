@@ -2,14 +2,14 @@
 
 > Limina is an agent-native real-time 3D engine: a single native binary (Rust host + V8 via deno_core + WebGPU via deno_webgpu + Three.js + native Rapier physics + bitECS) where LLM agents are first-class. External builders construct scenes over MCP; autonomous players perceive, decide, and act in-world. Every action is typed, permission-checked, and traced.
 
-Source: https://limina.dev
+Source: https://syndicalt.github.io/limina
 This file concatenates every documentation page as plain text.
 
 
 
 ========================================================================
 # Introduction
-URL: https://limina.dev/introduction
+URL: https://syndicalt.github.io/limina/introduction
 
 Limina is an agent-native real-time 3D engine: one native binary where LLM agents build and inhabit a high-performance world.
 
@@ -110,7 +110,7 @@ today. See the [Roadmap & status](/roadmap) for the full breakdown.
 
 ========================================================================
 # Getting started
-URL: https://limina.dev/getting-started
+URL: https://syndicalt.github.io/limina/getting-started
 
 Prerequisites, building the single Limina binary, and running your first demo windowed and headless.
 
@@ -247,7 +247,7 @@ warn. None of these affect determinism: audio and TTS never block the frame.
 
 ========================================================================
 # Demos
-URL: https://limina.dev/demos
+URL: https://syndicalt.github.io/limina/demos
 
 Every Limina demo: what each one shows, the capabilities it exercises, and the exact command to run it.
 
@@ -312,7 +312,7 @@ call denied and the whole run traced:
 
 ========================================================================
 # Architecture & stack
-URL: https://limina.dev/architecture
+URL: https://syndicalt.github.io/limina/architecture
 
 The full Limina stack, layer by layer: Rust host, V8, WebGPU, bitECS, native Rapier/rayon/audio, and the crates that implement them.
 
@@ -445,7 +445,7 @@ a dropped frame. See the [loop](/concepts/loop) and [perception](/concepts/perce
 
 ========================================================================
 # ECS & the world
-URL: https://limina.dev/concepts/ecs-and-world
+URL: https://syndicalt.github.io/limina/concepts/ecs-and-world
 
 How Limina stores the world: bitECS, SoA TypedArrays, opaque ent_ ids that are never reused, and native rayon ECS ops.
 
@@ -565,7 +565,7 @@ write is typed, permission-checked, and traced into the [world log](/concepts/ob
 
 ========================================================================
 # The fixed-timestep loop
-URL: https://limina.dev/concepts/loop
+URL: https://syndicalt.github.io/limina/concepts/loop
 
 Limina's fixed-timestep accumulator at 60 steps/s, render interpolation, determinism and replay, and why agent decisions resolve off the loop.
 
@@ -682,7 +682,7 @@ frame loop. A slow model adds latency to a decision — never a dropped frame. T
 
 ========================================================================
 # Perception
-URL: https://limina.dev/concepts/perception
+URL: https://syndicalt.github.io/limina/concepts/perception
 
 What a Limina agent perceives: a typed view of nearby entities, transforms, and recent events, built by a native batched CSR spatial query.
 
@@ -785,7 +785,7 @@ substrate, not the brain. See [LLM providers](/building-agents/llm-providers).
 
 ========================================================================
 # Observability & the world log
-URL: https://limina.dev/concepts/observability
+URL: https://syndicalt.github.io/limina/concepts/observability
 
 Limina's EventLoom-shaped event envelope, the sha256 continuous integrity chain, JSONL export, and the durable world log with replay and snapshot recovery.
 
@@ -906,7 +906,7 @@ EventLoom/Zaxy persistence layer, or none — without the engine taking on a mem
 
 ========================================================================
 # Skill / Hook Registry
-URL: https://limina.dev/pillars/skill-registry
+URL: https://syndicalt.github.io/limina/pillars/skill-registry
 
 The typed, versioned, permissioned path every agent action flows through.
 
@@ -1035,7 +1035,7 @@ When a call is allowed and the handler resolves, `invoke()` emits `skill.execute
 
 ========================================================================
 # MCP Interface
-URL: https://limina.dev/pillars/mcp-interface
+URL: https://syndicalt.github.io/limina/pillars/mcp-interface
 
 The discoverable, typed tool-calling contract — in-process, stdio, and WebSocket.
 
@@ -1190,7 +1190,7 @@ This is how many builders and players share one authoritative world while every 
 
 ========================================================================
 # Observability
-URL: https://limina.dev/pillars/observability
+URL: https://syndicalt.github.io/limina/pillars/observability
 
 The typed event bus, causal trace trees, the sha256 chain, and JSONL export.
 
@@ -1271,7 +1271,7 @@ Events are sequenced and timestamped, so an agent's recent history can be replay
 
 ========================================================================
 # Agent Ecosystem
-URL: https://limina.dev/pillars/agent-ecosystem
+URL: https://syndicalt.github.io/limina/pillars/agent-ecosystem
 
 AgentComponent, the perception/decision/action systems, and the scheduler that runs them at scale.
 
@@ -1383,7 +1383,7 @@ Both flow through the same skill registry, the same permission model, and the sa
 
 ========================================================================
 # Skills reference
-URL: https://limina.dev/skills
+URL: https://syndicalt.github.io/limina/skills
 
 Every built-in Limina skill — the agent-facing SDK surface — grouped by domain.
 
@@ -1535,7 +1535,7 @@ Input field types, defaults, and full JSON Schema for every skill live in [`/age
 
 ========================================================================
 # Building with Agent Builders
-URL: https://limina.dev/building-agents/builders
+URL: https://syndicalt.github.io/limina/building-agents/builders
 
 Connect an external LLM agent over MCP and construct a scene, fully typed and traced.
 
@@ -1672,7 +1672,7 @@ An in-process agent discovers the tools, builds a scene (`createEntity` / `setTr
 
 ========================================================================
 # Building Agent Players
-URL: https://limina.dev/building-agents/players
+URL: https://syndicalt.github.io/limina/building-agents/players
 
 Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
 
@@ -1766,7 +1766,7 @@ Both demos route every action through the same registry, permission model, and t
 
 ========================================================================
 # LLM Providers
-URL: https://limina.dev/building-agents/llm-providers
+URL: https://syndicalt.github.io/limina/building-agents/llm-providers
 
 One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
 
@@ -1860,7 +1860,7 @@ Choosing a provider is a one-line change to an agent's `llm.provider` plus an en
 
 ========================================================================
 # Roadmap & status
-URL: https://limina.dev/roadmap
+URL: https://syndicalt.github.io/limina/roadmap
 
 Where Limina is: six phases shipped, the standing principles, and the numbers.
 

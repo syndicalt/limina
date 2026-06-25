@@ -11,7 +11,7 @@ interface Props {
 const {
   title = 'Limina — the agent-native 3D engine',
   description = 'Limina is an agent-native real-time 3D engine. LLM agents are first-class citizens: they build and inhabit a living world through one typed, permissioned, traced skill + MCP surface.',
-  ogImage = '/media/og.png',
+  ogImage = `${import.meta.env.BASE_URL}media/og.png`,
 } = Astro.props;
 
 const site = Astro.site;

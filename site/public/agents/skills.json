@@ -1,7 +1,7 @@
 {
   "engine": "limina",
   "description": "Canonical machine-readable catalog of Limina built-in skills. Each skill maps 1:1 to an MCP tool whose name IS the skill name; the tool input is validated against a JSON Schema (draft-07) derived from the skill Zod schema. Source-grounded from js/src/skills/*.",
-  "docs": "https://limina.dev/skills",
+  "docs": "https://syndicalt.github.io/limina/skills",
   "count": 45,
   "transports": {
     "in-process": "Mcp class (listTools/callTool)",

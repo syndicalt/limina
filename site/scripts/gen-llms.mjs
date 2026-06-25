@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const docsDir = path.join(root, 'src/content/docs');
-const SITE = (process.env.SITE || 'https://limina.dev').replace(/\/$/, '');
+const ORIGIN = (process.env.SITE_URL || process.env.SITE || 'https://syndicalt.github.io').replace(/\/$/, '');
+const BASE = (process.env.BASE_PATH ?? '/limina').replace(/\/$/, '');
+const SITE = ORIGIN + BASE;
 
 function walk(dir) {
   const out = [];

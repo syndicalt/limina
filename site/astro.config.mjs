@@ -2,10 +2,36 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// NOTE: update `site` to your real deployment origin before publishing.
-// For a GitHub Pages *project* site (syndicalt.github.io/limina) also set `base: '/limina'`.
+// Prefix root-relative links/images in Markdown with the base path so the docs'
+// cross-links (e.g. /getting-started) resolve under a project subpath like /limina.
+// No-op when base is '/' (custom-domain / root hosting).
+function rehypeBasePath(base) {
+	const prefix = base && base !== '/' ? base.replace(/\/$/, '') : '';
+	const fix = (u) =>
+		prefix && typeof u === 'string' && u.startsWith('/') && !u.startsWith('//') && !u.startsWith(prefix + '/') && u !== prefix
+			? prefix + u
+			: u;
+	const walk = (node) => {
+		if (node.type === 'element' && node.properties) {
+			if (node.tagName === 'a' && typeof node.properties.href === 'string') node.properties.href = fix(node.properties.href);
+			if ((node.tagName === 'img' || node.tagName === 'source') && typeof node.properties.src === 'string')
+				node.properties.src = fix(node.properties.src);
+		}
+		if (node.children) for (const c of node.children) walk(c);
+	};
+	return () => (tree) => walk(tree);
+}
+
+// Hosting: GitHub Pages *project* site → https://syndicalt.github.io/limina
+// Custom domain instead? Set BASE_PATH='' and SITE_URL to your origin, then add a
+// CNAME file in site/public/ (see site/README.md). base/site are env-overridable.
+const SITE_URL = process.env.SITE_URL || 'https://syndicalt.github.io';
+const BASE_PATH = process.env.BASE_PATH ?? '/limina';
+
 export default defineConfig({
-	site: 'https://limina.dev',
+	site: SITE_URL,
+	base: BASE_PATH,
+	markdown: { rehypePlugins: [rehypeBasePath(BASE_PATH)] },
 	integrations: [
 		starlight({
 			title: 'Limina',

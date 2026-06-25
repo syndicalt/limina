@@ -9,26 +9,26 @@ Key facts for agents:
 
 ## Documentation
 
-- [Introduction](https://limina.dev/introduction): Limina is an agent-native real-time 3D engine: one native binary where LLM agents build and inhabit a high-performance world.
-- [Getting started](https://limina.dev/getting-started): Prerequisites, building the single Limina binary, and running your first demo windowed and headless.
-- [Demos](https://limina.dev/demos): Every Limina demo: what each one shows, the capabilities it exercises, and the exact command to run it.
-- [Architecture & stack](https://limina.dev/architecture): The full Limina stack, layer by layer: Rust host, V8, WebGPU, bitECS, native Rapier/rayon/audio, and the crates that implement them.
-- [ECS & the world](https://limina.dev/concepts/ecs-and-world): How Limina stores the world: bitECS, SoA TypedArrays, opaque ent_ ids that are never reused, and native rayon ECS ops.
-- [The fixed-timestep loop](https://limina.dev/concepts/loop): Limina's fixed-timestep accumulator at 60 steps/s, render interpolation, determinism and replay, and why agent decisions resolve off the loop.
-- [Perception](https://limina.dev/concepts/perception): What a Limina agent perceives: a typed view of nearby entities, transforms, and recent events, built by a native batched CSR spatial query.
-- [Observability & the world log](https://limina.dev/concepts/observability): Limina's EventLoom-shaped event envelope, the sha256 continuous integrity chain, JSONL export, and the durable world log with replay and snapshot recovery.
-- [Skill / Hook Registry](https://limina.dev/pillars/skill-registry): The typed, versioned, permissioned path every agent action flows through.
-- [MCP Interface](https://limina.dev/pillars/mcp-interface): The discoverable, typed tool-calling contract — in-process, stdio, and WebSocket.
-- [Observability](https://limina.dev/pillars/observability): The typed event bus, causal trace trees, the sha256 chain, and JSONL export.
-- [Agent Ecosystem](https://limina.dev/pillars/agent-ecosystem): AgentComponent, the perception/decision/action systems, and the scheduler that runs them at scale.
-- [Skills reference](https://limina.dev/skills): Every built-in Limina skill — the agent-facing SDK surface — grouped by domain.
-- [Building with Agent Builders](https://limina.dev/building-agents/builders): Connect an external LLM agent over MCP and construct a scene, fully typed and traced.
-- [Building Agent Players](https://limina.dev/building-agents/players): Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
-- [LLM Providers](https://limina.dev/building-agents/llm-providers): One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
-- [Roadmap & status](https://limina.dev/roadmap): Where Limina is: six phases shipped, the standing principles, and the numbers.
+- [Introduction](https://syndicalt.github.io/limina/introduction): Limina is an agent-native real-time 3D engine: one native binary where LLM agents build and inhabit a high-performance world.
+- [Getting started](https://syndicalt.github.io/limina/getting-started): Prerequisites, building the single Limina binary, and running your first demo windowed and headless.
+- [Demos](https://syndicalt.github.io/limina/demos): Every Limina demo: what each one shows, the capabilities it exercises, and the exact command to run it.
+- [Architecture & stack](https://syndicalt.github.io/limina/architecture): The full Limina stack, layer by layer: Rust host, V8, WebGPU, bitECS, native Rapier/rayon/audio, and the crates that implement them.
+- [ECS & the world](https://syndicalt.github.io/limina/concepts/ecs-and-world): How Limina stores the world: bitECS, SoA TypedArrays, opaque ent_ ids that are never reused, and native rayon ECS ops.
+- [The fixed-timestep loop](https://syndicalt.github.io/limina/concepts/loop): Limina's fixed-timestep accumulator at 60 steps/s, render interpolation, determinism and replay, and why agent decisions resolve off the loop.
+- [Perception](https://syndicalt.github.io/limina/concepts/perception): What a Limina agent perceives: a typed view of nearby entities, transforms, and recent events, built by a native batched CSR spatial query.
+- [Observability & the world log](https://syndicalt.github.io/limina/concepts/observability): Limina's EventLoom-shaped event envelope, the sha256 continuous integrity chain, JSONL export, and the durable world log with replay and snapshot recovery.
+- [Skill / Hook Registry](https://syndicalt.github.io/limina/pillars/skill-registry): The typed, versioned, permissioned path every agent action flows through.
+- [MCP Interface](https://syndicalt.github.io/limina/pillars/mcp-interface): The discoverable, typed tool-calling contract — in-process, stdio, and WebSocket.
+- [Observability](https://syndicalt.github.io/limina/pillars/observability): The typed event bus, causal trace trees, the sha256 chain, and JSONL export.
+- [Agent Ecosystem](https://syndicalt.github.io/limina/pillars/agent-ecosystem): AgentComponent, the perception/decision/action systems, and the scheduler that runs them at scale.
+- [Skills reference](https://syndicalt.github.io/limina/skills): Every built-in Limina skill — the agent-facing SDK surface — grouped by domain.
+- [Building with Agent Builders](https://syndicalt.github.io/limina/building-agents/builders): Connect an external LLM agent over MCP and construct a scene, fully typed and traced.
+- [Building Agent Players](https://syndicalt.github.io/limina/building-agents/players): Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
+- [LLM Providers](https://syndicalt.github.io/limina/building-agents/llm-providers): One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
+- [Roadmap & status](https://syndicalt.github.io/limina/roadmap): Where Limina is: six phases shipped, the standing principles, and the numbers.
 
 ## For agents
 
-- [skills.json](https://limina.dev/agents/skills.json): machine-readable catalog of all skills (names, permissions, JSON-Schema inputs)
-- [llms-full.txt](https://limina.dev/llms-full.txt): the full documentation as a single plain-text file
-- [Agents hub](https://limina.dev/agents): machine endpoints and the MCP connect quickstart
+- [skills.json](https://syndicalt.github.io/limina/agents/skills.json): machine-readable catalog of all skills (names, permissions, JSON-Schema inputs)
+- [llms-full.txt](https://syndicalt.github.io/limina/llms-full.txt): the full documentation as a single plain-text file
+- [Agents hub](https://syndicalt.github.io/limina/agents): machine endpoints and the MCP connect quickstart

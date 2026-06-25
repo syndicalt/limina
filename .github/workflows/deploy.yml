@@ -1,0 +1,45 @@
+name: Deploy site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Project Pages: served at https://syndicalt.github.io/limina
+      # Custom domain? set BASE_PATH to '' and SITE_URL to your origin, add site/public/CNAME.
+      SITE_URL: https://syndicalt.github.io
+      BASE_PATH: /limina
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with Astro
+        uses: withastro/action@v3
+        with:
+          path: ./site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
