@@ -82736,7 +82736,9 @@ var PERMISSION_PROFILES = {
     "agent.read",
     "agent.write",
     "ui.write",
-    "audio.play"
+    "audio.play",
+    "terrain.read",
+    "terrain.generate"
   ],
   "player.limited": [
     "scene.read",
@@ -82744,7 +82746,21 @@ var PERMISSION_PROFILES = {
     "physics.read",
     "physics.write",
     "agent.read",
-    "agent.write"
+    "agent.write",
+    "terrain.read"
+  ],
+  // Phase 9 terrain authoring: perceive + query terrain and run the HIGH-COST
+  // `world.generateRegion` / `world.streamFollow` generators (gated by
+  // `terrain.generate`), plus the physics needed to drop/roll an agent on it.
+  "terrain.author": [
+    "scene.read",
+    "scene.write",
+    "ecs.read",
+    "ecs.modify",
+    "physics.read",
+    "physics.write",
+    "terrain.read",
+    "terrain.generate"
   ],
   // Conversational agents: perceive the world + act SOCIALLY (approach/say). The
   // `social.act` capability gates the social.* skills; it is deliberately ABSENT
@@ -87675,8 +87691,407 @@ function registerAudioSkills(registry2, audio) {
   registry2.register(setBusVolume);
 }
 
+// src/terrain/procedural.ts
+var TILE_SIZE = 48;
+var TILE_RES = 33;
+var HEIGHT_SCALE = 12;
+function tilePlacement(tx, tz) {
+  return {
+    origin: [tx * TILE_SIZE + TILE_SIZE / 2, 0, tz * TILE_SIZE + TILE_SIZE / 2],
+    scale: [TILE_SIZE, HEIGHT_SCALE, TILE_SIZE]
+  };
+}
+function hashLattice(seed, ix, iz) {
+  let h = seed | 0;
+  h = Math.imul(h ^ (ix | 0), 668265261);
+  h ^= h >>> 15;
+  h = Math.imul(h ^ (iz | 0), 2246822507);
+  h ^= h >>> 13;
+  h = Math.imul(h, 3266489909);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function smoothstep4(t) {
+  return t * t * (3 - 2 * t);
+}
+function lerp2(a, b2, t) {
+  return a + (b2 - a) * t;
+}
+function valueNoise(seed, x2, z3) {
+  const ix = Math.floor(x2);
+  const iz = Math.floor(z3);
+  const fx = x2 - ix;
+  const fz = z3 - iz;
+  const v00 = hashLattice(seed, ix, iz);
+  const v10 = hashLattice(seed, ix + 1, iz);
+  const v01 = hashLattice(seed, ix, iz + 1);
+  const v11 = hashLattice(seed, ix + 1, iz + 1);
+  const ux = smoothstep4(fx);
+  const uz = smoothstep4(fz);
+  return lerp2(lerp2(v00, v10, ux), lerp2(v01, v11, ux), uz);
+}
+function fbm(seed, x2, z3, octaves, freq) {
+  let amp = 1;
+  let sum = 0;
+  let norm = 0;
+  let f = freq;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * valueNoise(seed + Math.imul(o, 2654435761) | 0, x2 * f, z3 * f);
+    norm += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return sum / norm;
+}
+var ELEV_BASE_FREQ = 1 / 96;
+var WARMTH_FREQ = 1 / 320;
+var PRECIP_FREQ = 1 / 220;
+function elevation01(seed, x2, z3, lod) {
+  const octaves = 3 + Math.max(0, Math.min(4, lod | 0));
+  return fbm(seed | 0, x2, z3, octaves, ELEV_BASE_FREQ);
+}
+function biomeOf(tempC, precipMm) {
+  if (tempC < 0) return 0;
+  if (precipMm < 250) return tempC > 22 ? 1 : 2;
+  if (precipMm < 1200) return tempC > 18 ? 3 : 4;
+  return tempC > 20 ? 5 : 6;
+}
+var ProceduralTerrainSource = class {
+  name;
+  constructor(name = "procedural") {
+    this.name = name;
+  }
+  /** Generate one tile — a byte-identical function of the request. Heights are
+   *  the raw [0,1] elevation field (the collider multiplies by scale[1]); a
+   *  3-channel climate grid (tempC, precipMm, biome) rides along for perception. */
+  generateTile(req) {
+    const seed = req.seed | 0;
+    const lod = req.lod | 0;
+    const { origin, scale: scale2 } = tilePlacement(req.tx, req.tz);
+    const nrows = TILE_RES;
+    const ncols = TILE_RES;
+    const x0 = req.tx * TILE_SIZE;
+    const z0 = req.tz * TILE_SIZE;
+    const heights = new Float32Array(nrows * ncols);
+    const climateChannels = 3;
+    const climate = new Float32Array(climateChannels * nrows * ncols);
+    for (let r = 0; r < nrows; r++) {
+      const z3 = z0 + r / (nrows - 1) * TILE_SIZE;
+      for (let c = 0; c < ncols; c++) {
+        const x2 = x0 + c / (ncols - 1) * TILE_SIZE;
+        const e = elevation01(seed, x2, z3, lod);
+        const idx = r * ncols + c;
+        heights[idx] = e;
+        const cl = this.climateAt(seed, x2, z3, e);
+        const cidx = idx * climateChannels;
+        climate[cidx] = cl.tempC;
+        climate[cidx + 1] = cl.precipMm;
+        climate[cidx + 2] = cl.biome;
+      }
+    }
+    return { nrows, ncols, origin, scale: scale2, heights, climate, climateChannels };
+  }
+  /** O(1) world-space elevation query (snapping/placement). Returns the surface
+   *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). */
+  sampleHeight(seed, x2, z3, lod) {
+    return elevation01(seed | 0, x2, z3, lod | 0) * HEIGHT_SCALE;
+  }
+  /** Per-coordinate climate for agent perception. Deterministic per (seed,x,z). */
+  sampleClimate(seed, x2, z3) {
+    return this.climateAt(seed | 0, x2, z3, elevation01(seed | 0, x2, z3, 0));
+  }
+  /** Shared climate model so generateTile and sampleClimate agree exactly. */
+  climateAt(seed, x2, z3, elev01) {
+    const warmth = fbm(seed ^ 522133279 | 0, x2, z3, 3, WARMTH_FREQ);
+    const wet = fbm(seed ^ 741092396 | 0, x2, z3, 3, PRECIP_FREQ);
+    const tempC = 4 + warmth * 30 - elev01 * 22;
+    const precipMm = wet * 3e3;
+    return { tempC, precipMm, biome: biomeOf(tempC, precipMm) };
+  }
+};
+
+// src/terrain/tilecache.ts
+function requestKey(req) {
+  const hints = req.hints;
+  let hintStr = "";
+  if (hints !== void 0) {
+    const keys = Object.keys(hints).sort();
+    hintStr = JSON.stringify(keys.map((k2) => [k2, hints[k2]]));
+  }
+  return `s${req.seed | 0}|x${req.tx | 0}|z${req.tz | 0}|l${req.lod | 0}|h${hintStr}`;
+}
+var _f32 = new Float32Array(1);
+var _i32 = new Int32Array(_f32.buffer);
+function floatToBits(x2) {
+  _f32[0] = x2;
+  return _i32[0];
+}
+function bitsToFloat(i) {
+  _i32[0] = i;
+  return _f32[0];
+}
+function bitsOf(arr) {
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = floatToBits(arr[i]);
+  return out;
+}
+function floatsFromBits(bits) {
+  const out = new Float32Array(bits.length);
+  for (let i = 0; i < bits.length; i++) out[i] = bitsToFloat(bits[i]);
+  return out;
+}
+function tileContentHash(tile) {
+  const parts = [
+    `${tile.nrows}x${tile.ncols}`,
+    tile.origin.map(floatToBits).join(","),
+    tile.scale.map(floatToBits).join(","),
+    bitsOf(tile.heights).join(","),
+    tile.climate !== void 0 ? `${tile.climateChannels ?? 0}:${bitsOf(tile.climate).join(",")}` : ""
+  ];
+  return "sha256:" + ops.op_sha256(parts.join("|"));
+}
+var TileCache = class {
+  tiles = /* @__PURE__ */ new Map();
+  has(req) {
+    return this.tiles.has(requestKey(req));
+  }
+  get(req) {
+    return this.tiles.get(requestKey(req));
+  }
+  put(req, tile) {
+    this.tiles.set(requestKey(req), tile);
+  }
+  /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
+   *  via `source`, caches it, and returns it. The single seam where "model at
+   *  authoring / cache at replay / procedural offline" all flow through. */
+  async resolve(req, source) {
+    const key = requestKey(req);
+    const hit = this.tiles.get(key);
+    if (hit !== void 0) return hit;
+    const tile = await source.generateTile(req);
+    this.tiles.set(key, tile);
+    return tile;
+  }
+  /** All cached tiles with their keys + content hashes, for the export artifact. */
+  entries() {
+    const out = [];
+    for (const [key, tile] of this.tiles) out.push({ key, hash: tileContentHash(tile), tile });
+    return out;
+  }
+  get size() {
+    return this.tiles.size;
+  }
+};
+function parseTiles(jsonl) {
+  const out = [];
+  if (jsonl === void 0 || jsonl.length === 0) return out;
+  const lines = jsonl.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 0) continue;
+    let raw;
+    try {
+      raw = JSON.parse(line);
+    } catch (err) {
+      throw new Error(`tiles: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (typeof raw.key !== "string" || !Array.isArray(raw.heights) || raw.heights.length !== raw.nrows * raw.ncols) {
+      throw new Error(`tiles: malformed tile on line ${i + 1}`);
+    }
+    const tile = {
+      nrows: raw.nrows,
+      ncols: raw.ncols,
+      origin: raw.origin,
+      scale: raw.scale,
+      heights: floatsFromBits(raw.heights)
+    };
+    if (raw.climate !== void 0) {
+      tile.climate = floatsFromBits(raw.climate);
+      tile.climateChannels = raw.climateChannels;
+    }
+    const hash4 = tileContentHash(tile);
+    if (hash4 !== "sha256:" && hash4 !== raw.hash) {
+      throw new Error(`tiles: content hash mismatch on line ${i + 1} (stored ${raw.hash}, computed ${hash4})`);
+    }
+    out.push({ key: raw.key, hash: raw.hash, tile });
+  }
+  return out;
+}
+
+// src/skills/terrain.ts
+var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+function inertTransform() {
+  return { position: { set() {
+  } }, quaternion: { set() {
+  } }, scale: { set() {
+  } } };
+}
+function regionIdOf(seed, lod, b2) {
+  return `rgn_${seed | 0}_l${lod | 0}_${b2.minTx}_${b2.minTz}_${b2.maxTx}_${b2.maxTz}`;
+}
+function registerTerrainSkills(registry2, source, cache3 = new TileCache()) {
+  const regions = /* @__PURE__ */ new Map();
+  async function applyTile(region, regionId, tx, tz, ctx) {
+    const req = { seed: region.seed, tx, tz, lod: region.lod, hints: region.hints };
+    const key = requestKey(req);
+    const existing = region.tiles.get(key);
+    if (existing !== void 0) return { key, bodyId: existing.bodyId, entity: existing.entity };
+    const tile = await cache3.resolve(req, source);
+    const [ox, oy, oz] = tile.origin;
+    const [sx, sy, sz] = tile.scale;
+    const bodyId = ctx.world.ops.op_physics_add_heightfield(ox, oy, oz, tile.nrows, tile.ncols, sx, sy, sz, tile.heights);
+    const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
+    if (eid >= MAX_ENTITIES) {
+      despawnRenderable(ctx.world.ecs, eid);
+      ctx.world.ops.op_physics_remove_body(bodyId);
+      throw new Error("terrain: entity capacity exceeded (MAX_ENTITIES)");
+    }
+    const entity = ctx.world.entities.create({ eid, bodyId });
+    region.tiles.set(key, { bodyId, entity, eid, tx, tz });
+    ctx.emit("terrain.tile.ready", {
+      regionId,
+      tx,
+      tz,
+      key,
+      hash: tileContentHash(tile),
+      bodyId,
+      entity,
+      origin: tile.origin,
+      source: source.name
+    });
+    return { key, bodyId, entity };
+  }
+  const boundsSchema = external_exports.object({
+    minTx: external_exports.number().int(),
+    minTz: external_exports.number().int(),
+    maxTx: external_exports.number().int(),
+    maxTz: external_exports.number().int()
+  }).refine((b2) => b2.maxTx >= b2.minTx && b2.maxTz >= b2.minTz, "bounds max must be >= min").refine((b2) => (b2.maxTx - b2.minTx + 1) * (b2.maxTz - b2.minTz + 1) <= 256, "region too large (>256 tiles)");
+  const generateRegionInput = external_exports.object({
+    seed: external_exports.number().int(),
+    bounds: boundsSchema,
+    lod: external_exports.number().int().min(0).max(4).default(0),
+    hints: external_exports.record(external_exports.string(), external_exports.number()).optional()
+  });
+  const generateRegionOutput = external_exports.object({
+    regionId: external_exports.string(),
+    tiles: external_exports.number().int(),
+    bodies: external_exports.array(external_exports.number().int()),
+    keys: external_exports.array(external_exports.string())
+  });
+  const generateRegion = {
+    name: "world.generateRegion",
+    version: "1.0.0",
+    description: "Generate + apply a rectangular region of terrain tiles (heightfield colliders) from a deterministic source. High-cost; streams tiles, emitting terrain.tile.ready per tile. Returns a region handle. The world log records this REQUEST; the tile bytes ride the cache/export.",
+    category: "world",
+    permissions: ["terrain.generate"],
+    input: generateRegionInput,
+    output: generateRegionOutput,
+    handler: async (input, ctx) => {
+      const regionId = regionIdOf(input.seed, input.lod, input.bounds);
+      let region = regions.get(regionId);
+      if (region === void 0) {
+        region = { seed: input.seed, lod: input.lod, hints: input.hints, tiles: /* @__PURE__ */ new Map() };
+        regions.set(regionId, region);
+      }
+      const bodies = [];
+      const keys = [];
+      for (let tz = input.bounds.minTz; tz <= input.bounds.maxTz; tz++) {
+        for (let tx = input.bounds.minTx; tx <= input.bounds.maxTx; tx++) {
+          const applied = await applyTile(region, regionId, tx, tz, ctx);
+          bodies.push(applied.bodyId);
+          keys.push(applied.key);
+        }
+      }
+      ctx.emit("terrain.region.ready", { regionId, tiles: bodies.length });
+      return { regionId, tiles: bodies.length, bodies, keys };
+    }
+  };
+  const streamFollowInput = external_exports.object({
+    regionId: external_exports.string(),
+    anchor: Vec35,
+    radius: external_exports.number().int().min(0).max(8).default(1)
+  });
+  const streamFollowOutput = external_exports.object({
+    regionId: external_exports.string(),
+    loaded: external_exports.array(external_exports.string()),
+    removed: external_exports.array(external_exports.string()),
+    active: external_exports.number().int()
+  });
+  const streamFollow = {
+    name: "world.streamFollow",
+    version: "1.0.0",
+    description: "Stream terrain tiles in a square window around an anchor (agent/camera): generate+apply tiles entering the window, remove tiles leaving a keep-margin. Returns the loaded/removed tile keys. Off-loop in production; synchronous here.",
+    category: "world",
+    permissions: ["terrain.generate"],
+    input: streamFollowInput,
+    output: streamFollowOutput,
+    handler: async (input, ctx) => {
+      const region = regions.get(input.regionId);
+      if (region === void 0) throw new Error(`world.streamFollow: unknown region ${input.regionId}`);
+      const atx = Math.floor(input.anchor[0] / TILE_SIZE);
+      const atz = Math.floor(input.anchor[2] / TILE_SIZE);
+      const keep = input.radius + 1;
+      const loaded = [];
+      for (let tz = atz - input.radius; tz <= atz + input.radius; tz++) {
+        for (let tx = atx - input.radius; tx <= atx + input.radius; tx++) {
+          const req = { seed: region.seed, tx, tz, lod: region.lod, hints: region.hints };
+          if (!region.tiles.has(requestKey(req))) {
+            const applied = await applyTile(region, input.regionId, tx, tz, ctx);
+            loaded.push(applied.key);
+          }
+        }
+      }
+      const removed = [];
+      for (const [key, t] of [...region.tiles]) {
+        if (Math.abs(t.tx - atx) > keep || Math.abs(t.tz - atz) > keep) {
+          ctx.world.ops.op_physics_remove_body(t.bodyId);
+          despawnRenderable(ctx.world.ecs, t.eid);
+          ctx.world.entities.destroy(t.entity);
+          region.tiles.delete(key);
+          removed.push(key);
+          ctx.emit("terrain.tile.unloaded", { regionId: input.regionId, key, tx: t.tx, tz: t.tz });
+        }
+      }
+      return { regionId: input.regionId, loaded, removed, active: region.tiles.size };
+    }
+  };
+  const sampleHeightInput = external_exports.object({
+    seed: external_exports.number().int(),
+    x: external_exports.number(),
+    z: external_exports.number(),
+    lod: external_exports.number().int().min(0).max(4).default(0)
+  });
+  const sampleHeight = {
+    name: "terrain.sampleHeight",
+    version: "1.0.0",
+    description: "O(1) deterministic surface-elevation query at a world (x,z) for a seed/lod (snapping/placement). Returns world Y.",
+    category: "terrain",
+    permissions: ["terrain.read"],
+    input: sampleHeightInput,
+    output: external_exports.object({ y: external_exports.number() }),
+    handler: (input) => ({ y: source.sampleHeight(input.seed, input.x, input.z, input.lod) })
+  };
+  const sampleClimateInput = external_exports.object({ seed: external_exports.number().int(), x: external_exports.number(), z: external_exports.number() });
+  const sampleClimate = {
+    name: "terrain.sampleClimate",
+    version: "1.0.0",
+    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception.",
+    category: "terrain",
+    permissions: ["terrain.read"],
+    input: sampleClimateInput,
+    output: external_exports.object({ tempC: external_exports.number(), precipMm: external_exports.number(), biome: external_exports.number().int() }),
+    handler: (input) => source.sampleClimate(input.seed, input.x, input.z)
+  };
+  registry2.register(generateRegion);
+  registry2.register(streamFollow);
+  registry2.register(sampleHeight);
+  registry2.register(sampleClimate);
+  return { cache: cache3, regions };
+}
+
 // src/skills/index.ts
-function registerCoreSkills(registry2) {
+function registerCoreSkills(registry2, opts) {
   registerSceneSkills(registry2);
   registerEcsSkills(registry2);
   registerThreeSkills(registry2);
@@ -87698,7 +88113,10 @@ function registerCoreSkills(registry2) {
   const host = new SandboxedSkillHost(registry2, registry2.tracer);
   const packages = new PackageRegistry(registry2, host, registry2.tracer);
   registerPackageSkills(registry2, packages);
-  return { packages, ui, locomotion, social, audio };
+  const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  const terrainCache = opts?.terrainCache ?? new TileCache();
+  registerTerrainSkills(registry2, terrainSource, terrainCache);
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
 }
 
 // src/observability/event.ts
@@ -88116,11 +88534,11 @@ function syncAllBodies(world) {
 }
 
 // src/worldlog/keyframes.ts
-var _f32 = new Float32Array(1);
-var _i32 = new Int32Array(_f32.buffer);
-function bitsToFloat(i) {
-  _i32[0] = i;
-  return _f32[0];
+var _f322 = new Float32Array(1);
+var _i322 = new Int32Array(_f322.buffer);
+function bitsToFloat2(i) {
+  _i322[0] = i;
+  return _f322[0];
 }
 function parseKeyframes(jsonl) {
   const out = [];
@@ -88145,7 +88563,7 @@ function parseKeyframes(jsonl) {
         throw new Error(`keyframes: malformed body in keyframe on line ${i + 1}`);
       }
       const bits = rb.b;
-      bodies.push({ id: rb.id, t: [bitsToFloat(bits[0]), bitsToFloat(bits[1]), bitsToFloat(bits[2]), bitsToFloat(bits[3]), bitsToFloat(bits[4]), bitsToFloat(bits[5]), bitsToFloat(bits[6])] });
+      bodies.push({ id: rb.id, t: [bitsToFloat2(bits[0]), bitsToFloat2(bits[1]), bitsToFloat2(bits[2]), bitsToFloat2(bits[3]), bitsToFloat2(bits[4]), bitsToFloat2(bits[5]), bitsToFloat2(bits[6])] });
     }
     out.push({ tick: kf.tick, bodies });
   }
@@ -88167,9 +88585,12 @@ function loadExport(files) {
   if (manifest.logVersion !== LOG_VERSION) throw new Error(`export: unsupported logVersion ${manifest.logVersion} (expected ${LOG_VERSION})`);
   const { commands } = parseWorldLog(files["log.jsonl"]);
   const keyframes = parseKeyframes(files["keyframes.jsonl"]);
+  const tiles = parseTiles(files["tiles.jsonl"]);
   if (commands.length !== manifest.commands) throw new Error(`export: command count mismatch (manifest ${manifest.commands}, parsed ${commands.length})`);
   if (keyframes.length !== manifest.keyframes) throw new Error(`export: keyframe count mismatch (manifest ${manifest.keyframes}, parsed ${keyframes.length})`);
-  return { manifest, commands, keyframes };
+  const manifestTiles = manifest.tiles ?? 0;
+  if (tiles.length !== manifestTiles) throw new Error(`export: tile count mismatch (manifest ${manifestTiles}, parsed ${tiles.length})`);
+  return { manifest, commands, keyframes, tiles };
 }
 
 // src/browser/keyframe-physics.ts
@@ -88268,6 +88689,11 @@ var KeyframePhysics = class {
   op_physics_add_static_capsule() {
     return this.nextBodyId++;
   }
+  // A heightfield consumes a body id like any insert_body (keeps id parity with
+  // native); playback motion comes from keyframes, the terrain mesh from render.
+  op_physics_add_heightfield() {
+    return this.nextBodyId++;
+  }
   op_physics_remove_body(_id) {
   }
   op_physics_apply_impulse() {
@@ -88314,6 +88740,7 @@ function playbackOps(physics, overrides = {}) {
     op_physics_add_static_box: () => physics.op_physics_add_static_box(),
     op_physics_add_static_sphere: () => physics.op_physics_add_static_sphere(),
     op_physics_add_static_capsule: () => physics.op_physics_add_static_capsule(),
+    op_physics_add_heightfield: () => physics.op_physics_add_heightfield(),
     op_physics_remove_body: (id) => physics.op_physics_remove_body(id),
     op_physics_apply_impulse: () => physics.op_physics_apply_impulse(),
     op_physics_step: () => physics.op_physics_step(),
@@ -88446,6 +88873,240 @@ var ReplayPlayer = class {
   /** The current comparable world state (ECS transforms + body transforms). */
   state() {
     return captureWorldState(this.world);
+  }
+};
+
+// src/terrain/mesh.ts
+function terrainTileGeometry(tile) {
+  const { nrows, ncols, heights } = tile;
+  if (!Number.isInteger(nrows) || !Number.isInteger(ncols) || nrows < 2 || ncols < 2) {
+    throw new Error(`terrainTileGeometry: need nrows,ncols >= 2 (got ${nrows}x${ncols})`);
+  }
+  const expected = nrows * ncols;
+  if (heights.length !== expected) {
+    throw new Error(`terrainTileGeometry: heights length ${heights.length} != nrows*ncols ${expected}`);
+  }
+  const [ox, oy, oz] = tile.origin;
+  const [scaleX, scaleY, scaleZ] = tile.scale;
+  const x0 = ox - scaleX / 2;
+  const z0 = oz - scaleZ / 2;
+  const dxStep = scaleX / (ncols - 1);
+  const dzStep = scaleZ / (nrows - 1);
+  const vertCount = nrows * ncols;
+  const positions = new Float32Array(vertCount * 3);
+  const normals = new Float32Array(vertCount * 3);
+  for (let r = 0; r < nrows; r++) {
+    for (let c = 0; c < ncols; c++) {
+      const v2 = r * ncols + c;
+      const o = v2 * 3;
+      positions[o] = x0 + c * dxStep;
+      positions[o + 1] = oy + heights[v2] * scaleY;
+      positions[o + 2] = z0 + r * dzStep;
+    }
+  }
+  const quadCount = (nrows - 1) * (ncols - 1);
+  const indices = new Uint32Array(quadCount * 6);
+  let i = 0;
+  for (let r = 0; r < nrows - 1; r++) {
+    for (let c = 0; c < ncols - 1; c++) {
+      const v00 = r * ncols + c;
+      const v01 = v00 + 1;
+      const v10 = v00 + ncols;
+      const v11 = v10 + 1;
+      indices[i++] = v00;
+      indices[i++] = v10;
+      indices[i++] = v01;
+      indices[i++] = v10;
+      indices[i++] = v11;
+      indices[i++] = v01;
+    }
+  }
+  for (let t = 0; t < indices.length; t += 3) {
+    const ia = indices[t] * 3, ib = indices[t + 1] * 3, ic = indices[t + 2] * 3;
+    const ax = positions[ia], ay = positions[ia + 1], az = positions[ia + 2];
+    const e1x = positions[ib] - ax, e1y = positions[ib + 1] - ay, e1z = positions[ib + 2] - az;
+    const e2x = positions[ic] - ax, e2y = positions[ic + 1] - ay, e2z = positions[ic + 2] - az;
+    const nx = e1y * e2z - e1z * e2y;
+    const ny = e1z * e2x - e1x * e2z;
+    const nz = e1x * e2y - e1y * e2x;
+    normals[ia] += nx;
+    normals[ia + 1] += ny;
+    normals[ia + 2] += nz;
+    normals[ib] += nx;
+    normals[ib + 1] += ny;
+    normals[ib + 2] += nz;
+    normals[ic] += nx;
+    normals[ic + 1] += ny;
+    normals[ic + 2] += nz;
+  }
+  for (let v2 = 0; v2 < vertCount; v2++) {
+    const o = v2 * 3;
+    const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
+    const len = Math.hypot(nx, ny, nz);
+    if (len > 0) {
+      normals[o] = nx / len;
+      normals[o + 1] = ny / len;
+      normals[o + 2] = nz / len;
+    } else {
+      normals[o] = 0;
+      normals[o + 1] = 1;
+      normals[o + 2] = 0;
+    }
+  }
+  return { positions, indices, normals };
+}
+
+// src/terrain/stream.ts
+function tileKey(tx, tz) {
+  return `${tx},${tz}`;
+}
+function worldToTile(x2, z3, tileSize) {
+  return { tx: Math.floor(x2 / tileSize), tz: Math.floor(z3 / tileSize) };
+}
+function inWindow(dtx, dtz, radius, shape) {
+  if (shape === "disc") return dtx * dtx + dtz * dtz <= radius * radius;
+  return Math.max(Math.abs(dtx), Math.abs(dtz)) <= radius;
+}
+function desiredTiles(anchor, radius, shape = "square") {
+  if (!(radius >= 0)) throw new Error(`desiredTiles: radius must be >= 0 (got ${radius})`);
+  const out = [];
+  const r = Math.floor(radius);
+  for (let dtz = -r; dtz <= r; dtz++) {
+    for (let dtx = -r; dtx <= r; dtx++) {
+      if (inWindow(dtx, dtz, radius, shape)) out.push({ tx: anchor.tx + dtx, tz: anchor.tz + dtz });
+    }
+  }
+  return out;
+}
+var StreamFollower = class {
+  tileSize;
+  radius;
+  shape;
+  hysteresis;
+  resident = /* @__PURE__ */ new Map();
+  anchor;
+  constructor(opts) {
+    if (!(opts.tileSize > 0)) throw new Error(`StreamFollower: tileSize must be > 0 (got ${opts.tileSize})`);
+    if (!(opts.radius >= 0)) throw new Error(`StreamFollower: radius must be >= 0 (got ${opts.radius})`);
+    this.tileSize = opts.tileSize;
+    this.radius = opts.radius;
+    this.shape = opts.shape ?? "square";
+    this.hysteresis = opts.hysteresis ?? 0;
+    if (!(this.hysteresis >= 0)) throw new Error(`StreamFollower: hysteresis must be >= 0 (got ${this.hysteresis})`);
+  }
+  /** Current resident tiles (stable insertion-free order: sorted tz then tx). */
+  residentTiles() {
+    return [...this.resident.values()].sort((a, b2) => a.tz - b2.tz || a.tx - b2.tx);
+  }
+  residentKeys() {
+    return new Set(this.resident.keys());
+  }
+  /** The tile the anchor currently sits in (undefined before the first update). */
+  anchorTile() {
+    return this.anchor;
+  }
+  /** Advance to a new anchor WORLD position; returns the load/unload diff. */
+  update(anchorX, anchorZ) {
+    return this.updateTile(worldToTile(anchorX, anchorZ, this.tileSize));
+  }
+  /** Advance to a new anchor TILE; returns the load/unload diff. */
+  updateTile(anchor) {
+    this.anchor = anchor;
+    const desired = desiredTiles(anchor, this.radius, this.shape);
+    const load = [];
+    for (const t of desired) {
+      const k2 = tileKey(t.tx, t.tz);
+      if (!this.resident.has(k2)) {
+        load.push(t);
+        this.resident.set(k2, t);
+      }
+    }
+    const keepR = this.radius + this.hysteresis;
+    const unload = [];
+    for (const [k2, t] of this.resident) {
+      if (!inWindow(t.tx - anchor.tx, t.tz - anchor.tz, keepR, this.shape)) {
+        unload.push(t);
+        this.resident.delete(k2);
+      }
+    }
+    load.sort((a, b2) => a.tz - b2.tz || a.tx - b2.tx);
+    unload.sort((a, b2) => a.tz - b2.tz || a.tx - b2.tx);
+    return { anchor, load, unload, resident: this.residentTiles(), changed: load.length > 0 || unload.length > 0 };
+  }
+};
+
+// src/terrain/render.ts
+function terrainTileBufferGeometry(tile) {
+  const { positions, indices, normals } = terrainTileGeometry(tile);
+  const geom = new BufferGeometry();
+  geom.setAttribute("position", new BufferAttribute(positions, 3));
+  geom.setAttribute("normal", new BufferAttribute(normals, 3));
+  geom.setIndex(new BufferAttribute(indices, 1));
+  geom.computeBoundingSphere();
+  geom.computeBoundingBox();
+  return geom;
+}
+function buildTerrainMesh(tile, opts = {}) {
+  const geom = terrainTileBufferGeometry(tile);
+  const material = new MeshStandardNodeMaterial({
+    color: opts.color ?? 4877114,
+    roughness: opts.roughness ?? 0.95,
+    metalness: opts.metalness ?? 0
+  });
+  if (opts.doubleSide === true) material.side = DoubleSide;
+  const mesh = new Mesh(geom, material);
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+function disposeTerrainMesh(mesh) {
+  mesh.geometry?.dispose?.();
+  const mat = mesh.material;
+  mat?.dispose?.();
+}
+var TerrainStreamRenderer = class {
+  constructor(scene, opts) {
+    this.scene = scene;
+    this.follower = new StreamFollower(opts);
+    this.getTile = opts.getTile;
+    this.meshOpts = opts.mesh ?? {};
+  }
+  follower;
+  getTile;
+  meshOpts;
+  meshes = /* @__PURE__ */ new Map();
+  /** Tiles currently mounted in the scene. */
+  mountedKeys() {
+    return new Set(this.meshes.keys());
+  }
+  /** Advance the anchor to a world position; mounts/unmounts terrain meshes to match. */
+  update(anchorX, anchorZ) {
+    const diff = this.follower.update(anchorX, anchorZ);
+    for (const t of diff.unload) {
+      const k2 = tileKey(t.tx, t.tz);
+      const mesh = this.meshes.get(k2);
+      if (mesh !== void 0) {
+        this.scene.remove(mesh);
+        disposeTerrainMesh(mesh);
+        this.meshes.delete(k2);
+      }
+    }
+    for (const t of diff.load) {
+      const k2 = tileKey(t.tx, t.tz);
+      if (this.meshes.has(k2)) continue;
+      const mesh = buildTerrainMesh(this.getTile(t), this.meshOpts);
+      this.meshes.set(k2, mesh);
+      this.scene.add(mesh);
+    }
+    return { loaded: diff.load.length, unloaded: diff.unload.length };
+  }
+  /** Remove + dispose every mounted tile (teardown). */
+  clear() {
+    for (const mesh of this.meshes.values()) {
+      this.scene.remove(mesh);
+      disposeTerrainMesh(mesh);
+    }
+    this.meshes.clear();
   }
 };
 
@@ -88653,12 +89314,17 @@ async function fetchExport(worldUrl) {
     if (!res.ok) throw new Error(`fetch ${name}: HTTP ${res.status}`);
     return await res.text();
   };
-  const [manifest, log4, keyframes] = await Promise.all([
+  const getOptional = async (name) => {
+    const res = await fetch(base + name);
+    return res.ok ? await res.text() : "";
+  };
+  const [manifest, log4, keyframes, tiles] = await Promise.all([
     get("manifest.json"),
     get("log.jsonl"),
-    get("keyframes.jsonl")
+    get("keyframes.jsonl"),
+    getOptional("tiles.jsonl")
   ]);
-  return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes });
+  return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
 }
 async function buildRenderTarget(canvas, width, height, forceWebGL) {
   const renderer = new WebGPURenderer({ canvas, antialias: true, forceWebGL });
@@ -88686,8 +89352,6 @@ async function buildRenderTarget(canvas, width, height, forceWebGL) {
 async function run(opts) {
   const status = opts.onStatus ?? (() => {
   });
-  status("loading", "fetching export");
-  const loaded = await fetchExport(opts.worldUrl);
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
   const input = new BrowserInput();
@@ -88704,6 +89368,8 @@ async function run(opts) {
     op_read_trace: (name) => traceStore.op_read_trace(name)
   };
   installOps(playbackOps(new KeyframePhysics([]), hostOverrides));
+  status("loading", "fetching export");
+  const loaded = await fetchExport(opts.worldUrl);
   const player = new ReplayPlayer(loaded, {
     makeWorld: (worldOps) => {
       const ecs = createEcsWorld();
@@ -88732,6 +89398,7 @@ async function run(opts) {
   });
   await player.init();
   status("ready", `${loaded.manifest.ticks} ticks, ${loaded.keyframes.length} keyframes`);
+  const terrain = opts.terrain !== void 0 ? new TerrainStreamRenderer(scene, opts.terrain) : void 0;
   let angle = 0;
   let radius = 16;
   let camHeight = 8;
@@ -88754,6 +89421,7 @@ async function run(opts) {
       camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
       camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
       camera.lookAt(0, 1, 0);
+      if (terrain !== void 0) terrain.update(Math.cos(angle) * radius, Math.sin(angle) * radius);
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);
     }
@@ -88763,6 +89431,7 @@ async function run(opts) {
     loop,
     stop: () => {
       loop.stop();
+      terrain?.clear();
       if (opts.input !== void 0) input.detach(opts.input);
     }
   };

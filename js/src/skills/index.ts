@@ -18,6 +18,10 @@ import { Locomotion } from "../world/locomotion.ts";
 import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
+import { registerTerrainSkills } from "./terrain.ts";
+import { ProceduralTerrainSource } from "../terrain/procedural.ts";
+import { TileCache } from "../terrain/tilecache.ts";
+import type { TerrainSource } from "../terrain/types.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -30,9 +34,12 @@ export interface CoreSkills {
   locomotion: Locomotion;
   /** Inspection surface for the per-speaker speech bubbles social.say authors. */
   social: SocialRuntime;
+  /** Phase 9 terrain source + content-addressed tile cache backing the terrain.*
+   *  / world.* skills (default: the deterministic procedural source). */
+  terrain: { source: TerrainSource; cache: TileCache };
 }
 
-export function registerCoreSkills(registry: SkillRegistry): CoreSkills {
+export function registerCoreSkills(registry: SkillRegistry, opts?: { terrainSource?: TerrainSource; terrainCache?: TileCache }): CoreSkills {
   registerSceneSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry);
@@ -68,5 +75,12 @@ export function registerCoreSkills(registry: SkillRegistry): CoreSkills {
   const host = new SandboxedSkillHost(registry, registry.tracer);
   const packages = new PackageRegistry(registry, host, registry.tracer as LiminaTracer);
   registerPackageSkills(registry, packages);
-  return { packages, ui, locomotion, social, audio };
+  // Phase 9 terrain seam: the terrain.* / world.* skills over a deterministic
+  // procedural source + a content-addressed tile cache. A runtime can override
+  // the source (model at authoring, cache at replay) via opts; the cache is the
+  // snapshot/export-carried tile store.
+  const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  const terrainCache = opts?.terrainCache ?? new TileCache();
+  registerTerrainSkills(registry, terrainSource, terrainCache);
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
 }

@@ -77,6 +77,9 @@ export class KeyframePhysics {
   op_physics_add_static_box(): number { return this.nextBodyId++; }
   op_physics_add_static_sphere(): number { return this.nextBodyId++; }
   op_physics_add_static_capsule(): number { return this.nextBodyId++; }
+  // A heightfield consumes a body id like any insert_body (keeps id parity with
+  // native); playback motion comes from keyframes, the terrain mesh from render.
+  op_physics_add_heightfield(): number { return this.nextBodyId++; }
   op_physics_remove_body(_id: number): void { /* tombstone: ids never reused (matches native) */ }
   op_physics_apply_impulse(): void { /* motion comes from keyframes, not impulses */ }
   op_physics_step(): void { this.tick++; }
@@ -109,6 +112,7 @@ export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineO
     op_physics_add_static_box: () => physics.op_physics_add_static_box(),
     op_physics_add_static_sphere: () => physics.op_physics_add_static_sphere(),
     op_physics_add_static_capsule: () => physics.op_physics_add_static_capsule(),
+    op_physics_add_heightfield: () => physics.op_physics_add_heightfield(),
     op_physics_remove_body: (id) => physics.op_physics_remove_body(id),
     op_physics_apply_impulse: () => physics.op_physics_apply_impulse(),
     op_physics_step: () => physics.op_physics_step(),

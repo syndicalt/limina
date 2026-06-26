@@ -10,6 +10,8 @@
 
 import { LOG_VERSION, parseWorldLog, serializeWorldLog, type WorldCommand, type WorldLogMeta } from "../worldlog/log.ts";
 import { parseKeyframes, serializeKeyframes, type Keyframe } from "../worldlog/keyframes.ts";
+import { parseTiles, serializeTiles, type ParsedTile } from "../terrain/tilecache.ts";
+import type { TerrainTile } from "../terrain/types.ts";
 
 export const EXPORT_VERSION = 1;
 
@@ -29,15 +31,20 @@ export interface ExportManifest {
   ticks: number;
   commands: number;
   keyframes: number;
+  /** Phase 9: count of content-addressed terrain tiles carried in tiles.jsonl.
+   *  0 (and an absent tiles.jsonl) for a terrain-free world — back-compatible. */
+  tiles: number;
   assets: ExportAsset[];
   createdAt: string;
 }
 
-/** The serialized export — exactly the files written to disk / served / cached. */
+/** The serialized export — exactly the files written to disk / served / cached.
+ *  `tiles.jsonl` is the Phase 9 terrain artifact (empty string when no terrain). */
 export interface ExportFiles {
   "manifest.json": string;
   "log.jsonl": string;
   "keyframes.jsonl": string;
+  "tiles.jsonl": string;
 }
 
 export interface AssembleExportInput {
@@ -48,10 +55,14 @@ export interface AssembleExportInput {
   keyframeInterval: number;
   createdAt: string;
   assets?: ExportAsset[];
+  /** Phase 9: the content-addressed terrain tiles to carry (e.g. TileCache.entries()). */
+  tiles?: { key: string; hash: string; tile: TerrainTile }[];
 }
 
-/** Assemble the portable export files from a recorded session + its keyframes. */
+/** Assemble the portable export files from a recorded session + its keyframes
+ *  (+ optional terrain tiles). */
 export function assembleExport(input: AssembleExportInput): ExportFiles {
+  const tiles = input.tiles ?? [];
   const manifest: ExportManifest = {
     kind: "limina.export",
     exportVersion: EXPORT_VERSION,
@@ -61,6 +72,7 @@ export function assembleExport(input: AssembleExportInput): ExportFiles {
     ticks: input.meta.ticks,
     commands: input.commands.length,
     keyframes: input.keyframes.length,
+    tiles: tiles.length,
     assets: input.assets ?? [],
     createdAt: input.createdAt,
   };
@@ -68,6 +80,7 @@ export function assembleExport(input: AssembleExportInput): ExportFiles {
     "manifest.json": JSON.stringify(manifest, null, 2) + "\n",
     "log.jsonl": serializeWorldLog(input.meta, input.commands),
     "keyframes.jsonl": serializeKeyframes(input.keyframes),
+    "tiles.jsonl": serializeTiles(tiles),
   };
 }
 
@@ -75,11 +88,15 @@ export interface LoadedExport {
   manifest: ExportManifest;
   commands: WorldCommand[];
   keyframes: Keyframe[];
+  /** Phase 9: the content-addressed terrain tiles (hash-verified on load). Empty
+   *  for a terrain-free world. Feed these to a CachedTerrainSource for playback. */
+  tiles: ParsedTile[];
 }
 
 /** Parse + validate an export package (the browser runtime entry point). Fails
- *  loudly on a bad kind / version / torn line rather than silently mis-loading. */
-export function loadExport(files: { "manifest.json": string; "log.jsonl": string; "keyframes.jsonl": string }): LoadedExport {
+ *  loudly on a bad kind / version / torn line rather than silently mis-loading.
+ *  `tiles.jsonl` is optional for back-compat with pre-Phase-9 packages. */
+export function loadExport(files: { "manifest.json": string; "log.jsonl": string; "keyframes.jsonl": string; "tiles.jsonl"?: string }): LoadedExport {
   let manifest: ExportManifest;
   try {
     manifest = JSON.parse(files["manifest.json"]) as ExportManifest;
@@ -91,10 +108,14 @@ export function loadExport(files: { "manifest.json": string; "log.jsonl": string
   if (manifest.logVersion !== LOG_VERSION) throw new Error(`export: unsupported logVersion ${manifest.logVersion} (expected ${LOG_VERSION})`);
   const { commands } = parseWorldLog(files["log.jsonl"]);
   const keyframes = parseKeyframes(files["keyframes.jsonl"]);
-  // Cross-check against the manifest so a cleanly-truncated log/keyframe file
+  const tiles = parseTiles(files["tiles.jsonl"]);
+  // Cross-check against the manifest so a cleanly-truncated log/keyframe/tile file
   // (whole lines lost — e.g. an interrupted write) fails loudly instead of
   // silently playing back a short, wrong world.
   if (commands.length !== manifest.commands) throw new Error(`export: command count mismatch (manifest ${manifest.commands}, parsed ${commands.length})`);
   if (keyframes.length !== manifest.keyframes) throw new Error(`export: keyframe count mismatch (manifest ${manifest.keyframes}, parsed ${keyframes.length})`);
-  return { manifest, commands, keyframes };
+  // `tiles` may be undefined in a pre-Phase-9 manifest; treat missing as 0.
+  const manifestTiles = manifest.tiles ?? 0;
+  if (tiles.length !== manifestTiles) throw new Error(`export: tile count mismatch (manifest ${manifestTiles}, parsed ${tiles.length})`);
+  return { manifest, commands, keyframes, tiles };
 }

@@ -120,6 +120,22 @@ the core (bitECS, skill registry, JSONL log, Three `WebGPURenderer`) already por
 Rapier-wasm swap, the surface seam, and IndexedDB, with native↔wasm physics parity as the decisive
 unknown and snapshot keyframes as the safety net.
 
+**Architecture note — the live browser runtime (mode B foundation).** The Phase 8 first cut (shipped) is
+*playback*: it replays recorded commands + interpolated keyframes on the main thread — cheap, and correctly
+simple (no worker needed, no SharedArrayBuffer, no cross-origin isolation). The *live* browser runtime —
+**mode B (in-browser authoring with wasm-Rapier)** and the **Phase 7 editor's live 3D viewport** — has a
+different cost profile (an expensive fixed-step sim plus the agent loop running live), and there the right
+architecture is a **sim-worker / render-main-thread split**: the worker is the authoritative fixed-step clock
+(ECS + physics + agent loop), the main thread is a view that reads transforms **zero-copy from a
+SharedArrayBuffer-backed ECS** and interpolates between ticks (`Frame(alpha)` — the native accumulator made
+physical). This *preserves* replay determinism (the sim stays the single source of truth) and honors the
+standing "heavy work off the frame loop" principle; bitECS's SoA typed arrays map onto an SAB almost directly.
+Caveats to plan for: SAB requires cross-origin isolation (COOP/COEP) at deploy; keep WebGPU on the main thread
+(the canvas owns the GPU context — the lower-risk split); input crosses main→worker with a one-frame delay
+(fine under fixed-step + interpolation). **It is its own track** — NOT needed for **Phase 9** (generation is
+native + off-loop; generated worlds ship via the Phase 8 playback path) and NOT retrofitted onto the playback
+runtime we just shipped. Sequence it when we commit to mode B / the live editor viewport.
+
 ---
 
 ## Phase 9 — Worlds worth authoring  *(spike-gated)*

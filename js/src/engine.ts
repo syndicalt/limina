@@ -41,6 +41,11 @@ export interface EngineOps {
   op_physics_add_static_box(x: number, y: number, z: number, hx: number, hy: number, hz: number, friction: number, restitution: number): number;
   op_physics_add_static_sphere(x: number, y: number, z: number, radius: number, friction: number, restitution: number): number;
   op_physics_add_static_capsule(x: number, y: number, z: number, halfHeight: number, radius: number, friction: number, restitution: number): number;
+  /** Add a fixed heightfield collider (Phase 9 terrain). `heights` is an
+   *  nrows×ncols grid in row-major order (index = row*ncols + col), spanning
+   *  scaleX×scaleZ world units centered at (x,y,z), heights scaled by scaleY.
+   *  Returns its stable body id. */
+  op_physics_add_heightfield(x: number, y: number, z: number, nrows: number, ncols: number, scaleX: number, scaleY: number, scaleZ: number, heights: Float32Array): number;
   op_physics_remove_body(id: number): void;
   op_physics_apply_impulse(id: number, ix: number, iy: number, iz: number): void;
   op_physics_step(): void;
@@ -133,6 +138,7 @@ export type PhysicsOps = Pick<
   | "op_physics_create_world" | "op_physics_add_ground" | "op_physics_add_box"
   | "op_physics_add_box_material" | "op_physics_add_sphere" | "op_physics_add_capsule"
   | "op_physics_add_static_box" | "op_physics_add_static_sphere" | "op_physics_add_static_capsule"
+  | "op_physics_add_heightfield"
   | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
   | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
   | "op_physics_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"

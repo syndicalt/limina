@@ -5,10 +5,18 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "builder.readWrite": [
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
-    "ui.write", "audio.play",
+    "ui.write", "audio.play", "terrain.read", "terrain.generate",
   ],
   "player.limited": [
     "scene.read", "ecs.read", "physics.read", "physics.write", "agent.read", "agent.write",
+    "terrain.read",
+  ],
+  // Phase 9 terrain authoring: perceive + query terrain and run the HIGH-COST
+  // `world.generateRegion` / `world.streamFollow` generators (gated by
+  // `terrain.generate`), plus the physics needed to drop/roll an agent on it.
+  "terrain.author": [
+    "scene.read", "scene.write", "ecs.read", "ecs.modify",
+    "physics.read", "physics.write", "terrain.read", "terrain.generate",
   ],
   // Conversational agents: perceive the world + act SOCIALLY (approach/say). The
   // `social.act` capability gates the social.* skills; it is deliberately ABSENT
