@@ -325,6 +325,9 @@ async function bootstrap(): Promise<void> {
       shape: "disc",
       getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }) as TerrainTile,
       mesh: { color: 0x5a7d4a },
+      // Phase 9.1: scatter trees/rocks/grass on each tile (deterministic from seed+tile).
+      seed,
+      props: true,
     };
   }
 

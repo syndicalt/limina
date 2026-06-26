@@ -88995,6 +88995,272 @@ function terrainTileGeometry(tile) {
   return { positions, indices, normals };
 }
 
+// src/terrain/scatter.ts
+function hashSeed(seed, a, b2) {
+  let h = (seed | 0) >>> 0;
+  h = Math.imul(h ^ (a | 0) >>> 0, 2654435761) >>> 0;
+  h = Math.imul(h ^ (b2 | 0) >>> 0, 2246822519) >>> 0;
+  h ^= h >>> 15;
+  return h >>> 0;
+}
+function mulberry32(s) {
+  let a = s >>> 0;
+  return () => {
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function scatterProps(tile, seed, opts = {}) {
+  const density = opts.density ?? 16;
+  const rockSlope = opts.rockSlope ?? 0.6;
+  const [ox, oy, oz] = tile.origin;
+  const [sx, sy, sz] = tile.scale;
+  const { nrows, ncols, heights } = tile;
+  const rng = mulberry32(hashSeed(seed, Math.round(ox), Math.round(oz)));
+  const sampleRaw = (fr, fc) => {
+    const r0 = Math.min(nrows - 1, Math.max(0, Math.floor(fr)));
+    const c0 = Math.min(ncols - 1, Math.max(0, Math.floor(fc)));
+    const r1 = Math.min(nrows - 1, r0 + 1), c1 = Math.min(ncols - 1, c0 + 1);
+    const tr = fr - r0, tc = fc - c0;
+    const h = (r, c) => heights[r * ncols + c];
+    const top = h(r0, c0) * (1 - tc) + h(r0, c1) * tc;
+    const bot = h(r1, c0) * (1 - tc) + h(r1, c1) * tc;
+    return top * (1 - tr) + bot * tr;
+  };
+  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
+  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
+  const props = [];
+  for (let i = 0; i < density; i++) {
+    for (let j2 = 0; j2 < density; j2++) {
+      const u2 = (i + rng()) / density;
+      const v2 = (j2 + rng()) / density;
+      const fc = u2 * (ncols - 1);
+      const fr = v2 * (nrows - 1);
+      const x2 = ox - sx / 2 + u2 * sx;
+      const z3 = oz - sz / 2 + v2 * sz;
+      const y2 = oy + sampleRaw(fr, fc) * sy;
+      const dC = (sampleRaw(fr, Math.min(ncols - 1, fc + 1)) - sampleRaw(fr, Math.max(0, fc - 1))) * sy;
+      const dR = (sampleRaw(Math.min(nrows - 1, fr + 1), fc) - sampleRaw(Math.max(0, fr - 1), fc)) * sy;
+      const ax = dC / runX, az = dR / runZ;
+      const slope = Math.sqrt(ax * ax + az * az);
+      const roll = rng();
+      let kind;
+      let accept;
+      if (slope > rockSlope) {
+        kind = 1 /* Rock */;
+        accept = 0.5;
+      } else if (rng() < 0.3) {
+        kind = 0 /* Tree */;
+        accept = 0.45;
+      } else {
+        kind = 2 /* Grass */;
+        accept = 0.75;
+      }
+      const yaw = rng() * Math.PI * 2;
+      const sizeJitter = rng();
+      if (roll > accept) continue;
+      props.push({
+        kind,
+        x: x2,
+        y: y2,
+        z: z3,
+        yaw,
+        scale: kind === 2 /* Grass */ ? 0.6 + sizeJitter * 0.5 : 0.8 + sizeJitter * 0.8
+      });
+    }
+  }
+  return props;
+}
+
+// src/terrain/props.ts
+function hexRGB(hex3) {
+  return [(hex3 >> 16 & 255) / 255, (hex3 >> 8 & 255) / 255, (hex3 & 255) / 255];
+}
+var TRUNK = hexRGB(5981750);
+var FOLIAGE = hexRGB(3108153);
+var ROCKCOL = hexRGB(7303018);
+var GRASSCOL = hexRGB(5212735);
+function addTri(s, color3, ax, ay, az, bx, by, bz, cx, cy, cz) {
+  const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+  const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+  let nx = e1y * e2z - e1z * e2y;
+  let ny = e1z * e2x - e1x * e2z;
+  let nz = e1x * e2y - e1y * e2x;
+  const len = Math.hypot(nx, ny, nz) || 1;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  s.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  s.nrm.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+  const [r, g2, b2] = color3;
+  s.col.push(r, g2, b2, r, g2, b2, r, g2, b2);
+}
+function addQuad(s, color3, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz) {
+  addTri(s, color3, ax, ay, az, bx, by, bz, cx, cy, cz);
+  addTri(s, color3, ax, ay, az, cx, cy, cz, dx, dy, dz);
+}
+function addBoxSides(s, color3, cx, cy, cz, hx, hy, hz) {
+  const x0 = cx - hx, x1 = cx + hx;
+  const y0 = cy - hy, y1 = cy + hy;
+  const z0 = cz - hz, z1 = cz + hz;
+  addQuad(s, color3, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1);
+  addQuad(s, color3, x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0);
+  addQuad(s, color3, x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1);
+  addQuad(s, color3, x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0);
+}
+function addOpenCone(s, color3, baseY, topY, radius, sides) {
+  const ring = [];
+  for (let i = 0; i < sides; i++) {
+    const a = i / sides * Math.PI * 2;
+    ring.push([Math.cos(a) * radius, Math.sin(a) * radius]);
+  }
+  for (let i = 0; i < sides; i++) {
+    const [x0, z0] = ring[i];
+    const [x1, z1] = ring[(i + 1) % sides];
+    addTri(s, color3, 0, topY, 0, x1, baseY, z1, x0, baseY, z0);
+  }
+}
+function treeSoup() {
+  const s = { pos: [], nrm: [], col: [] };
+  addBoxSides(s, TRUNK, 0, 0.3, 0, 0.07, 0.3, 0.07);
+  addOpenCone(s, FOLIAGE, 0.45, 1.1, 0.5, 6);
+  addOpenCone(s, FOLIAGE, 0.9, 1.55, 0.38, 6);
+  addOpenCone(s, FOLIAGE, 1.35, 2, 0.26, 6);
+  return s;
+}
+function rockSoup() {
+  const s = { pos: [], nrm: [], col: [] };
+  const px = 0.6, nx = 0.52, py = 0.3, ny = 0.22, pz = 0.56, nz = 0.54;
+  const top = [0, py, 0];
+  const bot = [0, -ny, 0];
+  const eq = [
+    [px, 0, 0],
+    [0, 0, pz],
+    [-nx, 0, 0],
+    [0, 0, -nz]
+  ];
+  for (let i = 0; i < 4; i++) {
+    const a = eq[i], b2 = eq[(i + 1) % 4];
+    addTri(s, ROCKCOL, top[0], top[1], top[2], b2[0], b2[1], b2[2], a[0], a[1], a[2]);
+    addTri(s, ROCKCOL, bot[0], bot[1], bot[2], a[0], a[1], a[2], b2[0], b2[1], b2[2]);
+  }
+  return s;
+}
+function grassSoup() {
+  const s = { pos: [], nrm: [], col: [] };
+  const rb = 0.06;
+  const lean = 0.09;
+  const wb = 0.08;
+  const wt = 0.012;
+  const heights = [0.55, 0.48, 0.6, 0.5];
+  for (let k2 = 0; k2 < 4; k2++) {
+    const th = k2 / 4 * Math.PI * 2 + 0.4;
+    const rx = Math.cos(th), rz = Math.sin(th);
+    const tx = -Math.sin(th), tz = Math.cos(th);
+    const h = heights[k2];
+    const blx = rb * rx - wb / 2 * tx, blz = rb * rz - wb / 2 * tz;
+    const brx = rb * rx + wb / 2 * tx, brz = rb * rz + wb / 2 * tz;
+    const tcx = (rb + lean) * rx, tcz = (rb + lean) * rz;
+    const tlx = tcx - wt / 2 * tx, tlz = tcz - wt / 2 * tz;
+    const trx = tcx + wt / 2 * tx, trz = tcz + wt / 2 * tz;
+    addQuad(s, GRASSCOL, blx, 0, blz, tlx, h, tlz, trx, h, trz, brx, 0, brz);
+  }
+  return s;
+}
+function soupToGeometry(s) {
+  const positions = new Float32Array(s.pos);
+  const normals = new Float32Array(s.nrm);
+  const colors = new Float32Array(s.col);
+  const vertCount = positions.length / 3;
+  const indices = new Uint32Array(vertCount);
+  for (let i = 0; i < vertCount; i++) indices[i] = i;
+  return { positions, indices, normals, colors };
+}
+function propGeometry(kind) {
+  switch (kind) {
+    case 0 /* Tree */:
+      return soupToGeometry(treeSoup());
+    case 1 /* Rock */:
+      return soupToGeometry(rockSoup());
+    case 2 /* Grass */:
+      return soupToGeometry(grassSoup());
+    default:
+      throw new Error(`propGeometry: unknown PropKind ${kind}`);
+  }
+}
+
+// src/terrain/props-render.ts
+var MATERIALS = {
+  [0 /* Tree */]: { roughness: 0.9, metalness: 0, doubleSide: false },
+  [1 /* Rock */]: { roughness: 0.95, metalness: 0, doubleSide: false },
+  [2 /* Grass */]: { roughness: 0.85, metalness: 0, doubleSide: true }
+};
+function propBufferGeometry(kind) {
+  const { positions, indices, normals, colors } = propGeometry(kind);
+  const geom = new BufferGeometry();
+  geom.setAttribute("position", new BufferAttribute(positions, 3));
+  geom.setAttribute("normal", new BufferAttribute(normals, 3));
+  geom.setAttribute("color", new BufferAttribute(colors, 3));
+  geom.setIndex(new BufferAttribute(indices, 1));
+  geom.computeBoundingSphere();
+  geom.computeBoundingBox();
+  return geom;
+}
+var Y_AXIS = new Vector3(0, 1, 0);
+function buildPropInstancedMesh(kind, instances) {
+  if (instances.length === 0) return null;
+  const spec = MATERIALS[kind] ?? MATERIALS[1 /* Rock */];
+  const geom = propBufferGeometry(kind);
+  const material = new MeshStandardNodeMaterial({
+    vertexColors: true,
+    roughness: spec.roughness,
+    metalness: spec.metalness
+  });
+  if (spec.doubleSide) material.side = DoubleSide;
+  const mesh = new InstancedMesh(geom, material, instances.length);
+  const m = new Matrix4();
+  const q2 = new Quaternion();
+  const pos = new Vector3();
+  const scl = new Vector3();
+  for (let i = 0; i < instances.length; i++) {
+    const p = instances[i];
+    pos.set(p.x, p.y, p.z);
+    q2.setFromAxisAngle(Y_AXIS, p.yaw);
+    scl.set(p.scale, p.scale, p.scale);
+    m.compose(pos, q2, scl);
+    mesh.setMatrixAt(i, m);
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
+function buildTilePropMeshes(props) {
+  const byKind = /* @__PURE__ */ new Map();
+  for (const p of props) {
+    let list = byKind.get(p.kind);
+    if (list === void 0) {
+      list = [];
+      byKind.set(p.kind, list);
+    }
+    list.push(p);
+  }
+  const meshes = [];
+  for (const [kind, list] of byKind) {
+    const mesh = buildPropInstancedMesh(kind, list);
+    if (mesh !== null) meshes.push(mesh);
+  }
+  return meshes;
+}
+function disposePropMesh(mesh) {
+  mesh.geometry?.dispose?.();
+  const mat = mesh.material;
+  mat?.dispose?.();
+  mesh.dispose?.();
+}
+
 // src/terrain/stream.ts
 function tileKey(tx, tz) {
   return `${tx},${tz}`;
@@ -89109,11 +89375,17 @@ var TerrainStreamRenderer = class {
     this.follower = new StreamFollower(opts);
     this.getTile = opts.getTile;
     this.meshOpts = opts.mesh ?? {};
+    this.propsEnabled = opts.props === true;
+    this.seed = opts.seed ?? 0;
   }
   follower;
   getTile;
   meshOpts;
   meshes = /* @__PURE__ */ new Map();
+  propsEnabled;
+  seed;
+  // Per-tile prop InstancedMeshes (one per present kind), mounted/disposed with the tile.
+  propMeshes = /* @__PURE__ */ new Map();
   /** Tiles currently mounted in the scene. */
   mountedKeys() {
     return new Set(this.meshes.keys());
@@ -89129,13 +89401,29 @@ var TerrainStreamRenderer = class {
         disposeTerrainMesh(mesh);
         this.meshes.delete(k2);
       }
+      const props = this.propMeshes.get(k2);
+      if (props !== void 0) {
+        for (const pm of props) {
+          this.scene.remove(pm);
+          disposePropMesh(pm);
+        }
+        this.propMeshes.delete(k2);
+      }
     }
     for (const t of diff.load) {
       const k2 = tileKey(t.tx, t.tz);
       if (this.meshes.has(k2)) continue;
-      const mesh = buildTerrainMesh(this.getTile(t), this.meshOpts);
+      const tile = this.getTile(t);
+      const mesh = buildTerrainMesh(tile, this.meshOpts);
       this.meshes.set(k2, mesh);
       this.scene.add(mesh);
+      if (this.propsEnabled) {
+        const propMeshes = buildTilePropMeshes(scatterProps(tile, this.seed));
+        if (propMeshes.length > 0) {
+          this.propMeshes.set(k2, propMeshes);
+          for (const pm of propMeshes) this.scene.add(pm);
+        }
+      }
     }
     return { loaded: diff.load.length, unloaded: diff.unload.length };
   }
@@ -89146,6 +89434,13 @@ var TerrainStreamRenderer = class {
       disposeTerrainMesh(mesh);
     }
     this.meshes.clear();
+    for (const props of this.propMeshes.values()) {
+      for (const pm of props) {
+        this.scene.remove(pm);
+        disposePropMesh(pm);
+      }
+    }
+    this.propMeshes.clear();
   }
 };
 
@@ -89633,7 +89928,10 @@ async function bootstrap() {
       radius: 5,
       shape: "disc",
       getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }),
-      mesh: { color: 5930314 }
+      mesh: { color: 5930314 },
+      // Phase 9.1: scatter trees/rocks/grass on each tile (deterministic from seed+tile).
+      seed,
+      props: true
     };
   }
   try {
