@@ -17,6 +17,16 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
   "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read"],
+  // Phase 7 human-in-the-loop. `builder.review` is a builder whose MUTATING edits
+  // are held by the review gate (same capabilities as builder.readWrite — it can
+  // PROPOSE; the gate decides when its world-writes apply). `reviewer` is the human
+  // granter: read the world + resolve held actions via the approval.* skills.
+  "builder.review": [
+    "scene.read", "scene.write", "ecs.read", "ecs.modify",
+    "physics.read", "physics.write", "agent.read", "agent.write",
+    "ui.write", "audio.play",
+  ],
+  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review"],
 };
 
 export function resolveProfile(name: string): ReadonlySet<string> {

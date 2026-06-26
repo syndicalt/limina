@@ -18,6 +18,7 @@ export type MCPErrorCode =
   | "not_found"
   | "invalid_input"
   | "forbidden"
+  | "pending_approval"
   | "handler_error"
   | "capacity_exceeded";
 
@@ -67,6 +68,8 @@ export function mcpErrorToJsonRpc(code: MCPErrorCode): number {
       return JSON_RPC_ERRORS.invalidParams;
     case "forbidden":
       return -32001;
+    case "pending_approval":
+      return -32003;
     case "capacity_exceeded":
       return -32002;
     case "handler_error":

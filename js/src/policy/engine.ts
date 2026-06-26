@@ -344,6 +344,14 @@ export class PolicyEngine {
     return this.admittedSessions.has(sessionId);
   }
 
+  /** Whether a capability (or its whole session) is currently revoked. Used to
+   *  RE-AUTHORIZE a held action at apply time without re-committing quota/budget
+   *  (a full `evaluate` would double-count): a previously-approved action must not
+   *  outlive the authorization that permitted it. */
+  isRevoked(sessionId: string, cap: string): boolean {
+    return this.revokedSessions.has(sessionId) || this.revokedCaps.has(`${sessionId}::${cap}`);
+  }
+
   // ---- internals -----------------------------------------------------------
 
   private baseDecision(ctx: PolicyContext): PolicyDecision {
