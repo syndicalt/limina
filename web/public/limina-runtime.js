@@ -89455,6 +89455,19 @@ async function bootstrap() {
   const height = win.innerHeight || 640;
   canvas.width = width;
   canvas.height = height;
+  let terrain;
+  if (canvas.getAttribute("data-terrain") !== null) {
+    const seedAttr = canvas.getAttribute("data-terrain-seed");
+    const seed = seedAttr !== null && seedAttr.length > 0 ? Number(seedAttr) : 1337;
+    const source = new ProceduralTerrainSource();
+    terrain = {
+      tileSize: TILE_SIZE,
+      radius: 3,
+      shape: "disc",
+      getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }),
+      mesh: { color: 5930314 }
+    };
+  }
   try {
     await run({
       canvas,
@@ -89463,6 +89476,7 @@ async function bootstrap() {
       height,
       input: globalThis,
       forceWebGL: !webgpu,
+      terrain,
       onStatus: (phase, detail) => setStatus(phase, detail)
     });
   } catch (err) {

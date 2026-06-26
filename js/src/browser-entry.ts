@@ -25,6 +25,8 @@ import { loadExport, type LoadedExport } from "./export/package.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
 import { ReplayPlayer } from "./browser/player.ts";
 import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terrain/render.ts";
+import { ProceduralTerrainSource, TILE_SIZE } from "./terrain/procedural.ts";
+import type { TerrainTile } from "./terrain/types.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
@@ -276,6 +278,25 @@ async function bootstrap(): Promise<void> {
   const height = win.innerHeight || 640;
   canvas.width = width;
   canvas.height = height;
+
+  // Phase 9 terrain demo: `data-terrain` streams an in-browser PROCEDURAL terrain
+  // (deterministic, no model) around the camera — the in-tab terrain render UAT.
+  // `data-terrain-seed` picks the world; the mesh sits on the same surface the
+  // heightfield collider would (drop-test parity, proven headlessly).
+  let terrain: TerrainStreamRendererOptions | undefined;
+  if (canvas.getAttribute("data-terrain") !== null) {
+    const seedAttr = canvas.getAttribute("data-terrain-seed");
+    const seed = seedAttr !== null && seedAttr.length > 0 ? Number(seedAttr) : 1337;
+    const source = new ProceduralTerrainSource();
+    terrain = {
+      tileSize: TILE_SIZE,
+      radius: 3,
+      shape: "disc",
+      getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }) as TerrainTile,
+      mesh: { color: 0x5a7d4a },
+    };
+  }
+
   try {
     await run({
       canvas,
@@ -284,6 +305,7 @@ async function bootstrap(): Promise<void> {
       height,
       input: globalThis,
       forceWebGL: !webgpu,
+      terrain,
       onStatus: (phase, detail) => setStatus(phase, detail),
     });
   } catch (err) {
