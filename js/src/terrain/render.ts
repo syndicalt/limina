@@ -9,6 +9,8 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import type { TerrainTile } from "./types.ts";
 import { terrainTileGeometry } from "./mesh.ts";
+import { scatterProps } from "./scatter.ts";
+import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
 
 export interface TerrainMeshOptions {
@@ -70,6 +72,10 @@ export interface TerrainStreamRendererOptions extends StreamFollowOptions {
   getTile(coord: TileCoord): TerrainTile;
   /** Mesh appearance. */
   mesh?: TerrainMeshOptions;
+  /** Seed for the deterministic prop scatter (Phase 9.1). Required when `props` is on. */
+  seed?: number;
+  /** Scatter + mount trees/rocks/grass on each tile (recomputed from the tile, render-only). Default off. */
+  props?: boolean;
 }
 
 /**
@@ -83,11 +89,17 @@ export class TerrainStreamRenderer {
   private readonly getTile: (coord: TileCoord) => TerrainTile;
   private readonly meshOpts: TerrainMeshOptions;
   private readonly meshes = new Map<TileKey, THREE.Mesh>();
+  private readonly propsEnabled: boolean;
+  private readonly seed: number;
+  // Per-tile prop InstancedMeshes (one per present kind), mounted/disposed with the tile.
+  private readonly propMeshes = new Map<TileKey, THREE.InstancedMesh[]>();
 
   constructor(private readonly scene: SceneAddRemove, opts: TerrainStreamRendererOptions) {
     this.follower = new StreamFollower(opts);
     this.getTile = opts.getTile;
     this.meshOpts = opts.mesh ?? {};
+    this.propsEnabled = opts.props === true;
+    this.seed = opts.seed ?? 0;
   }
 
   /** Tiles currently mounted in the scene. */
@@ -106,13 +118,27 @@ export class TerrainStreamRenderer {
         disposeTerrainMesh(mesh);
         this.meshes.delete(k);
       }
+      const props = this.propMeshes.get(k);
+      if (props !== undefined) {
+        for (const pm of props) { this.scene.remove(pm); disposePropMesh(pm); }
+        this.propMeshes.delete(k);
+      }
     }
     for (const t of diff.load) {
       const k = tileKey(t.tx, t.tz);
       if (this.meshes.has(k)) continue;
-      const mesh = buildTerrainMesh(this.getTile(t), this.meshOpts);
+      const tile = this.getTile(t);
+      const mesh = buildTerrainMesh(tile, this.meshOpts);
       this.meshes.set(k, mesh);
       this.scene.add(mesh);
+      // Props are recomputed from the tile (render-only) and mounted alongside the mesh.
+      if (this.propsEnabled) {
+        const propMeshes = buildTilePropMeshes(scatterProps(tile, this.seed));
+        if (propMeshes.length > 0) {
+          this.propMeshes.set(k, propMeshes);
+          for (const pm of propMeshes) this.scene.add(pm);
+        }
+      }
     }
     return { loaded: diff.load.length, unloaded: diff.unload.length };
   }
@@ -124,5 +150,9 @@ export class TerrainStreamRenderer {
       disposeTerrainMesh(mesh);
     }
     this.meshes.clear();
+    for (const props of this.propMeshes.values()) {
+      for (const pm of props) { this.scene.remove(pm); disposePropMesh(pm); }
+    }
+    this.propMeshes.clear();
   }
 }
