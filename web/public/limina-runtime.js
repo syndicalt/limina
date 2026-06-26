@@ -88195,27 +88195,50 @@ var KeyframePhysics = class {
   get currentTick() {
     return this.tick;
   }
-  /** Write the body's transform at the current tick into `out` — the largest
-   *  keyframe with tick <= current (step-to-keyframe; exact at keyframe ticks). */
+  /** Write the body's transform at the current tick into `out`. EXACT on a
+   *  keyframe tick (and past the last) — so keyframe ticks, incl. the forced final
+   *  tick, stay bit-identical to native — and INTERPOLATED between keyframes
+   *  (position lerp + shortest-path quaternion nlerp) so a body moves every tick
+   *  (60Hz) instead of stepping at the keyframe interval. */
   lookup(id, out) {
     const tl = this.timelines.get(id);
     if (tl === void 0 || tl.ticks.length === 0) {
       out.fill(0);
       return;
     }
-    let idx = 0;
-    if (this.tick >= tl.ticks[0]) {
-      let lo = 0, hi = tl.ticks.length - 1;
-      while (lo <= hi) {
-        const mid = lo + hi >> 1;
-        if (tl.ticks[mid] <= this.tick) {
-          idx = mid;
-          lo = mid + 1;
-        } else hi = mid - 1;
-      }
+    if (this.tick <= tl.ticks[0]) {
+      const a2 = tl.xforms[0];
+      for (let i = 0; i < 7; i++) out[i] = a2[i];
+      return;
     }
-    const t = tl.xforms[idx];
-    for (let i = 0; i < 7; i++) out[i] = t[i];
+    let idx = 0, lo = 0, hi = tl.ticks.length - 1;
+    while (lo <= hi) {
+      const mid = lo + hi >> 1;
+      if (tl.ticks[mid] <= this.tick) {
+        idx = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    const a = tl.xforms[idx];
+    if (this.tick === tl.ticks[idx] || idx === tl.ticks.length - 1) {
+      for (let i = 0; i < 7; i++) out[i] = a[i];
+      return;
+    }
+    const b2 = tl.xforms[idx + 1];
+    const f = (this.tick - tl.ticks[idx]) / (tl.ticks[idx + 1] - tl.ticks[idx]);
+    out[0] = a[0] + (b2[0] - a[0]) * f;
+    out[1] = a[1] + (b2[1] - a[1]) * f;
+    out[2] = a[2] + (b2[2] - a[2]) * f;
+    const s = a[3] * b2[3] + a[4] * b2[4] + a[5] * b2[5] + a[6] * b2[6] < 0 ? -1 : 1;
+    const qx = a[3] + (b2[3] * s - a[3]) * f;
+    const qy = a[4] + (b2[4] * s - a[4]) * f;
+    const qz = a[5] + (b2[5] * s - a[5]) * f;
+    const qw = a[6] + (b2[6] * s - a[6]) * f;
+    const inv = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+    out[3] = qx * inv;
+    out[4] = qy * inv;
+    out[5] = qz * inv;
+    out[6] = qw * inv;
   }
   // ---- the PhysicsOps surface (structurally matches engine.ts PhysicsOps) ---
   op_physics_create_world(_gravityY) {

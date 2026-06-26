@@ -174,7 +174,12 @@ portability guard) **and** the human UAT report passes (render + playback + phon
 - **Verification:** 57/57 runnable headless tests pass, 0 regressions (`p3n4` perf capstone excluded as
   load-gated). The in-tab **WebGPU render + playback + phone** remain **UAT** (no browser here) — the
   acceptance checklist above stands; serve `web/` and open the sample world.
-- **Known limitations (first-cut follow-ups):** playback is **step-to-keyframe** (exact at keyframe ticks
-  + the forced final tick; between keyframes a body HOLDS its last pose, so motion can visibly step at the
-  keyframe interval — render-time interpolation is the fix); live in-browser authoring (wasm-Rapier, mode B)
-  is deferred; assets beyond the log/keyframes are not yet packaged.
+- **Playback smoothness — interpolated.** `KeyframePhysics` is EXACT on keyframe ticks (so the parity gate
+  stays bit-identical) and **interpolates between them** (position lerp + shortest-path quaternion nlerp),
+  so a body moves every tick at 60Hz instead of stepping at the keyframe interval (the UAT-flagged
+  jerkiness). Verified by `p8_export` (exact at keyframes, smooth between) with `p8_playback_parity` still
+  bit-identical.
+- **Known limitations (first-cut follow-ups):** WebGPU is preferred with a WebGL2 fallback (renders on
+  browsers/GPUs without WebGPU); sub-tick render interpolation (frame `alpha`) could smooth >60Hz displays
+  further; live in-browser authoring (wasm-Rapier, mode B) is deferred; assets beyond the log/keyframes are
+  not yet packaged.
