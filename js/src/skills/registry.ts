@@ -189,10 +189,11 @@ export class SkillRegistry {
     return this.skills.get(name);
   }
 
-  list(): MCPTool[] {
-    // Cached: z.toJSONSchema per skill is ~ms-expensive and identical until the
-    // skill set changes. decisionSystem calls this once per admitted agent per
-    // tick and MCP listTools once per request, so the rebuild was a real hot path.
+  /** The FULL tool list. Cached: z.toJSONSchema per skill is ~ms-expensive and
+   *  identical until the skill set changes. decisionSystem calls this once per
+   *  admitted agent per tick and MCP listTools once per request, so the rebuild
+   *  was a real hot path. */
+  private fullList(): MCPTool[] {
     if (this.listCache === undefined) {
       this.listCache = [...this.skills.values()].map((s) => ({
         name: s.name,
@@ -201,6 +202,21 @@ export class SkillRegistry {
       }));
     }
     return this.listCache;
+  }
+
+  /** Advertised tools. With `grants`, returns ONLY the skills the caller could
+   *  invoke (its grants cover the skill's required permissions) — least-privilege
+   *  EXPOSURE that matches the invocation boundary, so a large catalog never floods
+   *  or over-exposes an agent. No-arg returns the full catalog (back-compat: the
+   *  inspection surface + legacy callers are unchanged). The filter is O(n) over the
+   *  memoized list — the expensive schema build stays cached. */
+  list(grants?: ReadonlySet<string>): MCPTool[] {
+    const full = this.fullList();
+    if (grants === undefined) return full;
+    return full.filter((t) => {
+      const s = this.skills.get(t.name);
+      return s !== undefined && s.permissions.every((p) => grants.has(p));
+    });
   }
 
   /** Whether a skill is currently registered. */

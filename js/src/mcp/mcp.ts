@@ -24,8 +24,10 @@ export class Mcp {
     this.tick = tick;
   }
 
-  listTools(): MCPTool[] {
-    return this.registry.list();
+  /** Advertise only the tools this session may invoke (least-privilege exposure).
+   *  Before initialize (no session) the full catalog is returned (back-compat). */
+  listTools(session = this.session): MCPTool[] {
+    return this.registry.list(session?.permissions);
   }
 
   callTool(req: MCPRequest, session = this.session): Promise<MCPResponse> {
