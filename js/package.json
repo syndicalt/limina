@@ -15,6 +15,8 @@
     "bundle:three": "esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs",
     "bundle:runtime": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/limina-runtime.js --loader:.ts=ts",
     "export:demo": "cd .. && ./target/release/limina js/scripts/export-demo.ts && mkdir -p web/public/worlds/demo && cp -f traces/demo.manifest.json web/public/worlds/demo/manifest.json && cp -f traces/demo.log.jsonl web/public/worlds/demo/log.jsonl && cp -f traces/demo.keyframes.jsonl web/public/worlds/demo/keyframes.jsonl",
-    "check:portability": "node scripts/check-host-portability.mjs"
+    "check:portability": "node scripts/check-host-portability.mjs",
+    "bundle:coordinator-demo": "esbuild ../coordinator-demo/src/app.js --bundle --format=esm --platform=browser --outfile=../coordinator-demo/dist/coordinator-demo.js --loader:.ts=ts",
+    "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs"
   }
 }
