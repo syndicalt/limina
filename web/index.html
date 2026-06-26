@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>limina — run anywhere (export playback)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- The runtime renders into this canvas. `data-world` is the base URL of the
+       exported world dir (manifest.json / log.jsonl / keyframes.jsonl). -->
+  <canvas id="limina-canvas" data-world="public/worlds/demo"></canvas>
+
+  <div id="hud">
+    <span id="badge">limina</span>
+    <span id="limina-status">starting…</span>
+    <span id="hint">drag-free orbit · WASD/QE to steer the camera</span>
+  </div>
+
+  <!-- The browser runtime bundle (esbuild --platform=browser of
+       js/src/browser-entry.ts). It auto-bootstraps against #limina-canvas. -->
+  <script type="module" src="public/limina-runtime.js"></script>
+</body>
+</html>

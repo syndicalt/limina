@@ -303,6 +303,38 @@ async function main() {
   const { files, violations } = runStatic();
   console.log(`[static] scanned ${files.length} .ts files under js/src`);
   console.log(`[static] allow-list: ${ALLOW_LIST.join(", ")}`);
+
+  // Phase 8 focused assertion: the browser RUNTIME ENTRY + host surfaces are the
+  // newest browser-reachable modules and the ones a browser bundle evaluates at
+  // module init. Assert each is present in the scanned set AND carries zero
+  // `Deno.` violations (they must run with NO `Deno` global). This is a subset of
+  // the full scan above, called out explicitly so a regression names the file.
+  const BROWSER_ENTRY = [
+    "browser-entry.ts",
+    "browser/host.ts",
+    "browser/player.ts",
+    "browser/keyframe-physics.ts",
+  ];
+  const scannedRel = new Set(files.map((f) => relative(SRC_ROOT, f).split(sep).join("/")));
+  let browserEntryFailed = false;
+  for (const rel of BROWSER_ENTRY) {
+    if (!scannedRel.has(rel)) {
+      browserEntryFailed = true;
+      console.log(`[browser] FAIL — expected browser-reachable module missing from scan: ${rel}`);
+      continue;
+    }
+    const hits = violations.filter((v) => v.file === rel);
+    if (hits.length > 0) {
+      browserEntryFailed = true;
+      console.log(`[browser] FAIL — ${rel} has ${hits.length} ungated \`Deno.\` reference(s)`);
+    }
+  }
+  if (!browserEntryFailed) {
+    console.log(`[browser] PASS — browser-entry.ts + browser/* are Deno-free at module init (${BROWSER_ENTRY.length} files)\n`);
+  } else {
+    console.log("");
+  }
+
   if (violations.length === 0) {
     console.log("[static] PASS — no unguarded top-level `Deno.` in browser-reachable modules\n");
   } else {
@@ -340,7 +372,7 @@ async function main() {
     console.log("[dynamic] skipped (--static-only)\n");
   }
 
-  const pass = violations.length === 0 && !dynamicFailed;
+  const pass = violations.length === 0 && !dynamicFailed && !browserEntryFailed;
   console.log(`VERDICT: Seam 4 ${pass ? "PASS" : "FAIL"}`);
   process.exit(pass ? 0 : 1);
 }
