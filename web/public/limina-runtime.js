@@ -88637,8 +88637,8 @@ async function fetchExport(worldUrl) {
   ]);
   return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes });
 }
-async function buildRenderTarget(canvas, width, height) {
-  const renderer = new WebGPURenderer({ canvas, antialias: true });
+async function buildRenderTarget(canvas, width, height, forceWebGL) {
+  const renderer = new WebGPURenderer({ canvas, antialias: true, forceWebGL });
   await renderer.init();
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
@@ -88666,7 +88666,7 @@ async function run(opts) {
   status("loading", "fetching export");
   const loaded = await fetchExport(opts.worldUrl);
   status("loading", "starting WebGPU");
-  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height);
+  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
   const input = new BrowserInput();
   if (opts.input !== void 0) {
     input.attach(opts.input);
@@ -88756,13 +88756,8 @@ async function bootstrap() {
     setStatus("error", "missing #limina-canvas");
     return;
   }
-  if (!await hasWebGpu()) {
-    setStatus(
-      "error",
-      "WebGPU unavailable in this browser. Try Chrome/Edge (desktop) or iOS 18+/Android Chrome with WebGPU enabled."
-    );
-    return;
-  }
+  const webgpu = await hasWebGpu();
+  if (!webgpu) setStatus("loading", "WebGPU unavailable \u2014 falling back to WebGL2");
   const worldUrl = canvas.getAttribute("data-world") ?? "./worlds/demo";
   const width = win.innerWidth || 960;
   const height = win.innerHeight || 640;
@@ -88775,6 +88770,7 @@ async function bootstrap() {
       width,
       height,
       input: globalThis,
+      forceWebGL: !webgpu,
       onStatus: (phase, detail) => setStatus(phase, detail)
     });
   } catch (err) {
