@@ -112,3 +112,30 @@ stay green: filtering with no grants and full grants must be byte-identical to t
 3. **Nesting depth** — cap coordinator→worker→worker depth (a budget) to bound fan-out.
 4. **Back-compat is the main risk** — `list()`/`listTools()` keep their no-arg behavior; only the new grant-passing
    call sites filter. The p10 test asserts the unfiltered path is unchanged.
+
+---
+
+## Status & outcomes (implemented)
+
+- **A + B (merged, PR #15):** `registry.list(grants?)` filters the memoized catalog to invocable skills (no-arg =
+  full, back-compat); `mcp.listTools(session)` + the agent decision/multi-turn loop draw exposure AND invocation
+  from `agentGrants(agent) = bundle ?? resolveProfile(profile)`; `AgentRecord.bundle?` adds dynamic least-privilege
+  sets; `skills.list`/`describe` filter by caller + new `skills.search`. Verified by `p10_exposure`
+  (full 53 → player.limited 21; bundle scoping; meta-skill filtering; no-arg unchanged).
+- **C (delegate/coordinator):** `skills/orchestration.ts` — `delegate(task, bundle)` spawns a least-privilege
+  worker (bundle scopes exposure + invocation) and runs it bounded; review is the Phase 7 approval gate, now
+  driven by a coordinator. `reviewer.coordinator` profile holds `orchestrate` + `approval.review`. Verified by
+  `p10_delegate` (two workers, distinct bundles, edits HELD, coordinator grants one / denies the other, causal
+  tree intact, deterministic).
+- **Adversarial review — 3 confirmed bugs fixed:** (B1) `registerOrchestrationSkills` now **co-installs** the
+  review gate (composably, via the new `registry.addApprovalGate`) — it was previously installed only by the
+  test, so production would have run workers unreviewed; (B2) `reviewProfileGate` is now **default-hold** (a
+  denylist of reads), so EVERY write-class skill an arbitrary bundle grants (agent/ui/audio/social/terrain
+  writes) is held, not just scene/ecs/physics; (B3) worker bundles **reject** `approval.review` (self-approval)
+  and `orchestrate` (unbounded recursion). `p10_delegate` proves all three (it no longer installs the gate
+  itself; it asserts the broadened hold + bundle rejection).
+- **Verification:** 66/66 runnable headless tests, 0 regressions (`p7_approval` still green with the broadened
+  gate).
+- **Known follow-ups** (documented in `orchestration.ts`): the `permissions:[]` trace skills are exposed to
+  every worker (gate the trace surface behind a read cap); a delegation-depth counter for intentional
+  multi-level delegation; the inherited Phase 7 propose-time-authority/tick on a granted action.
