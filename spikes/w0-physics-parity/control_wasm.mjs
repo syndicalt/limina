@@ -1,0 +1,20 @@
+// W0 control (wasm): single box free-fall + rest, mirrors control_native.ts.
+import RAPIER from "@dimforge/rapier3d-compat";
+await RAPIER.init();
+const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+world.timestep = 1 / 60;
+world.createCollider(RAPIER.ColliderDesc.cuboid(100, 0.5, 100).setTranslation(0, -0.5, 0));
+const rb = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 5, 0));
+world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5), rb);
+for (let i = 0; i < 300; i++) world.step();
+const t = rb.translation(), r = rb.rotation();
+const n = JSON.parse((await import("node:fs")).readFileSync(new URL("../../traces/w0_control_native.json", import.meta.url), "utf8"));
+const dx = t.x - n.pos[0], dy = t.y - n.pos[1], dz = t.z - n.pos[2];
+const posL2 = Math.sqrt(dx * dx + dy * dy + dz * dz);
+let dot = r.x * n.quat[0] + r.y * n.quat[1] + r.z * n.quat[2] + r.w * n.quat[3];
+dot = Math.min(1, Math.abs(dot));
+const ang = 2 * Math.acos(dot);
+console.log(`control native pos: ${JSON.stringify(n.pos)}`);
+console.log(`control wasm   pos: [${t.x},${t.y},${t.z}]`);
+console.log(`control pos L2 drift: ${posL2.toExponential(6)} m`);
+console.log(`control rot drift:    ${ang.toExponential(6)} rad (${((ang * 180) / Math.PI).toFixed(6)} deg)`);

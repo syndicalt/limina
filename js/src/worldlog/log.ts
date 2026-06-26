@@ -44,6 +44,16 @@
 //
 // Serialization: JSONL, ASCII-only. Line 1 is a `meta` header; each subsequent
 // line is one command.
+//
+// INVARIANT (Seam 3 -- COMMANDS, NOT BYTES): a persisted world log is human-
+// readable TEXT (JSONL), and it records ONLY the deterministic INPUTS -- the
+// `seed` plus the ordered command stream (skills as {tool,input}, raw physics as
+// {op,args}, in total `seq` order). It NEVER stores raw runtime bytes: there is
+// no serialized native Rapier world, no ECS SoA dump, no opaque blob field on any
+// line. Final world state is REBUILT by re-executing these commands into a fresh
+// engine (see replay.ts), so the command stream is the single source of truth;
+// M2 snapshots are a replay-acceleration CACHE, never authoritative. (Content
+// hashing / sha256 chaining lives in the companion observability trace, above.)
 
 import type { EngineOps } from "../engine.ts";
 import { Position, Rotation, Scale, syncPhysicsBodyTransform } from "../ecs/world.ts";
