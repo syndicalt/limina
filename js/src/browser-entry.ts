@@ -27,6 +27,7 @@ import { ReplayPlayer } from "./browser/player.ts";
 import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terrain/render.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "./terrain/procedural.ts";
 import type { TerrainTile } from "./terrain/types.ts";
+import { FlyCamera } from "./browser/fly-camera.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
@@ -203,12 +204,34 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   // the actual WebGPU draw of these meshes is UAT.
   const terrain = opts.terrain !== undefined ? new TerrainStreamRenderer(scene, opts.terrain) : undefined;
 
-  // Camera orbit state (WASD/QE adjust like the native demo).
+  // In terrain mode, fly freely (mouse-look + WASD) and stream terrain around the
+  // flier; otherwise orbit (the Phase 8 export demo, unchanged). Fog + a pushed-out
+  // far plane fade the streamed edge into a horizon instead of a hard pop.
+  const nowMs = (): number => {
+    const perf = (globalThis as unknown as { performance?: { now(): number } }).performance;
+    return perf !== undefined ? perf.now() : Date.now();
+  };
+  const fly = terrain !== undefined ? new FlyCamera({ x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : undefined;
+  if (fly !== undefined) {
+    const doc = (globalThis as unknown as { document?: unknown }).document;
+    fly.attach(
+      opts.input as Parameters<FlyCamera["attach"]>[0],
+      opts.canvas as Parameters<FlyCamera["attach"]>[1],
+      doc as Parameters<FlyCamera["attach"]>[2],
+    );
+    const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
+    cam.far = 900;
+    cam.updateProjectionMatrix();
+    (scene as unknown as { fog: unknown }).fog = new THREE.Fog(0x0b0e14, 140, 380);
+  }
+
+  // Camera orbit state (used only when NOT flying).
   let angle = 0;
   let radius = 16;
   let camHeight = 8;
   const axes = new Float32Array(3);
   let announcedDone = false;
+  let lastFrame = nowMs();
 
   const loop = startAccumulatorLoop({
     step: async (): Promise<void> => {
@@ -221,14 +244,21 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
       }
     },
     frame: (): void => {
-      renderOps.op_input_axes(axes);
-      angle += 0.004 + axes[0] * 0.03;
-      radius = Math.min(40, Math.max(5, radius - axes[2] * 0.25));
-      camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
-      camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
-      camera.lookAt(0, 1, 0);
-      // Stream terrain tiles in/out around the camera's ground position.
-      if (terrain !== undefined) terrain.update(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      if (fly !== undefined) {
+        const t = nowMs();
+        let dt = (t - lastFrame) / 1000;
+        lastFrame = t;
+        if (dt > 0.1) dt = 0.1;
+        const g = fly.update(dt, camera);
+        terrain?.update(g.x, g.z);
+      } else {
+        renderOps.op_input_axes(axes);
+        angle += 0.004 + axes[0] * 0.03;
+        radius = Math.min(40, Math.max(5, radius - axes[2] * 0.25));
+        camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
+        camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
+        camera.lookAt(0, 1, 0);
+      }
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);
     },
@@ -240,6 +270,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     stop: (): void => {
       loop.stop();
       terrain?.clear();
+      fly?.detach();
       if (opts.input !== undefined) input.detach(opts.input as Parameters<BrowserInput["detach"]>[0]);
     },
   };
@@ -290,7 +321,7 @@ async function bootstrap(): Promise<void> {
     const source = new ProceduralTerrainSource();
     terrain = {
       tileSize: TILE_SIZE,
-      radius: 3,
+      radius: 5,
       shape: "disc",
       getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }) as TerrainTile,
       mesh: { color: 0x5a7d4a },
