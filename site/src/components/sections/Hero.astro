@@ -28,6 +28,17 @@ const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
       <a class="btn btn-primary" href={`${base}getting-started`}>Get started</a>
       <a class="btn btn-ghost" href={`${base}agents`}>For agents →</a>
     </div>
+    <div class="hero-install reveal" data-install>
+      <div class="hi-os" role="tablist" aria-label="Operating system">
+        <button type="button" class="hi-tab" data-os="unix" aria-selected="true">macOS / Linux</button>
+        <button type="button" class="hi-tab" data-os="win" aria-selected="false">Windows</button>
+      </div>
+      <div class="hi-cmd">
+        <span class="hi-dollar" aria-hidden="true">$</span>
+        <code class="hi-code">curl -fsSL https://www.liminaengine.com/install.sh | bash</code>
+        <button type="button" class="hi-copy" aria-label="Copy install command">Copy</button>
+      </div>
+    </div>
     <ul class="hero-pills reveal" aria-label="Built on">
       {pills.map((p) => <li class="pill"><span class="dot"></span>{p}</li>)}
     </ul>
@@ -180,5 +191,81 @@ const pills = ['Rust', 'V8', 'WebGPU', 'Three.js', 'Rapier', 'bitECS'];
         // poster stays visible as the static fallback
       },
     });
+  }
+</script>
+
+<style>
+  .hero-install { display: flex; flex-direction: column; align-items: center; gap: 11px; margin-top: 26px; }
+  .hi-os {
+    display: inline-flex; gap: 4px; padding: 3px;
+    border-radius: 999px; background: rgba(150, 180, 230, 0.08); border: 1px solid var(--line);
+  }
+  .hi-tab {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.03em;
+    padding: 5px 13px; border-radius: 999px; color: var(--muted);
+    border: 0; background: transparent; cursor: pointer;
+    transition: color 0.2s, background 0.2s;
+  }
+  .hi-tab[aria-selected='true'] { background: rgba(120, 230, 255, 0.15); color: var(--glow); }
+  .hi-cmd {
+    display: inline-flex; align-items: center; gap: 10px;
+    max-width: min(92vw, 560px);
+    padding: 10px 10px 10px 16px;
+    border-radius: var(--radius-btn);
+    background: rgba(7, 10, 20, 0.62); border: 1px solid var(--line);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 30px -10px rgba(120, 230, 255, 0.3);
+  }
+  .hi-dollar { color: var(--glow); font-family: var(--mono); opacity: 0.8; }
+  .hi-code {
+    font-family: var(--mono); font-size: 0.85rem; color: #dce6fb;
+    white-space: nowrap; overflow-x: auto; scrollbar-width: none;
+  }
+  .hi-code::-webkit-scrollbar { display: none; }
+  .hi-copy {
+    flex: none; font-family: var(--mono); font-size: 0.72rem; color: var(--ink);
+    padding: 7px 13px; border-radius: 9px; border: 1px solid var(--line);
+    background: rgba(120, 230, 255, 0.08); cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .hi-copy:hover { border-color: rgba(120, 230, 255, 0.5); }
+  .hi-copy.copied { color: var(--glow); border-color: rgba(120, 230, 255, 0.5); }
+  @media (max-width: 520px) { .hi-code { font-size: 0.76rem; } }
+</style>
+
+<script>
+  const root = document.querySelector<HTMLElement>('[data-install]');
+  if (root) {
+    const CMD: Record<string, string> = {
+      unix: 'curl -fsSL https://www.liminaengine.com/install.sh | bash',
+      win: 'irm https://www.liminaengine.com/install.ps1 | iex',
+    };
+    const code = root.querySelector<HTMLElement>('.hi-code')!;
+    const copy = root.querySelector<HTMLButtonElement>('.hi-copy')!;
+    const tabs = [...root.querySelectorAll<HTMLElement>('.hi-tab')];
+
+    const detect = (): string => {
+      const nav = navigator as unknown as { userAgentData?: { platform?: string } };
+      const plat = nav.userAgentData?.platform || navigator.platform || '';
+      const ua = navigator.userAgent || '';
+      return /win/i.test(plat) || /Windows/i.test(ua) ? 'win' : 'unix';
+    };
+
+    let os = detect();
+    const render = () => {
+      code.textContent = CMD[os];
+      tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.os === os)));
+      copy.textContent = 'Copy';
+      copy.classList.remove('copied');
+    };
+    tabs.forEach((t) => t.addEventListener('click', () => { os = t.dataset.os || 'unix'; render(); }));
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(CMD[os]);
+        copy.textContent = 'Copied';
+        copy.classList.add('copied');
+      } catch { /* clipboard unavailable */ }
+    });
+    render();
   }
 </script>

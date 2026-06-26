@@ -125,8 +125,22 @@ function parseJsonRpc(line: string): JsonRpcRequest | JsonRpcFailure {
   return { jsonrpc: "2.0", id: rec.id, method: rec.method, params: rec.params };
 }
 
+// limina release version reported in MCP `serverInfo`.
+const SERVER_VERSION = "0.1.0";
+// Profile granted to a standard MCP client, which does not supply limina's
+// agentId/sessionId/profile. `builder.readWrite` = full authoring (what someone
+// installing limina into their agent wants). Making this configurable per
+// connection needs an engine env/argv channel to JS (follow-up); today it is the
+// fixed default for spec-mode sessions.
+const DEFAULT_MCP_PROFILE = "builder.readWrite";
+// MCP protocol version advertised when a spec client omits one.
+const FALLBACK_PROTOCOL_VERSION = "2025-06-18";
+
 export class JsonRpcTransport {
   private session?: Session;
+  /** "native" = limina-native init (explicit attribution); "spec" = a standard MCP client. */
+  private mode: "native" | "spec" = "native";
+  private sessionSeq = 0;
 
   constructor(
     private readonly mcp: Mcp,
@@ -160,27 +174,70 @@ export class JsonRpcTransport {
   private async dispatch(req: JsonRpcRequest, id: JsonRpcId): Promise<JsonRpcResponse> {
     switch (req.method) {
       case "initialize": {
-        const params = parseInitializeParams(req.params);
-        if (params === undefined) return failure(id, JSON_RPC_ERRORS.invalidParams, "initialize requires agentId, sessionId, and profile");
+        // limina-native init: caller supplies explicit attribution + profile.
+        const native = parseInitializeParams(req.params);
+        if (native !== undefined) {
+          this.mode = "native";
+          this.session = {
+            agentId: native.agentId,
+            sessionId: native.sessionId,
+            permissions: resolveProfile(native.profile),
+          };
+          return success(id, {
+            protocolVersion: "2026-06-23",
+            session: { agentId: native.agentId, sessionId: native.sessionId, profile: native.profile },
+          });
+        }
+        // Spec MCP init: a standard client (Claude, Codex, Cursor, ...) that does
+        // not know limina's attribution. Synthesize a default session and reply
+        // with the spec-required capabilities + serverInfo.
+        this.mode = "spec";
+        const params = asRecord(req.params);
+        const clientInfo = asRecord(params?.clientInfo);
+        const clientName = typeof clientInfo?.name === "string" ? clientInfo.name : "mcp-client";
+        const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : FALLBACK_PROTOCOL_VERSION;
         this.session = {
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          permissions: resolveProfile(params.profile),
+          agentId: clientName,
+          sessionId: `mcp-${++this.sessionSeq}`,
+          permissions: resolveProfile(DEFAULT_MCP_PROFILE),
         };
         return success(id, {
-          protocolVersion: "2026-06-23",
-          session: { agentId: params.agentId, sessionId: params.sessionId, profile: params.profile },
+          protocolVersion: requested,
+          capabilities: { tools: {} },
+          serverInfo: { name: "limina", version: SERVER_VERSION },
         });
       }
+      // Post-initialize handshake notification (no id → reply is dropped) + keepalive.
+      case "notifications/initialized":
+        return success(id, {});
+      case "ping":
+        return success(id, {});
       case "tools/list":
-      case "listTools":
-        return success(id, { tools: this.mcp.listTools() });
+      case "listTools": {
+        const tools = this.mcp.listTools();
+        if (this.mode === "spec") {
+          // Spec field is `inputSchema` (camelCase); limina-native uses `input_schema`.
+          return success(id, {
+            tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema })),
+          });
+        }
+        return success(id, { tools });
+      }
       case "tools/call":
       case "callTool": {
         if (this.session === undefined) return failure(id, -32000, "MCP session is not initialized");
         const params = parseToolCallParams(req.params);
         if (params === undefined) return failure(id, JSON_RPC_ERRORS.invalidParams, "tools/call requires name and object arguments");
         const result = await this.mcp.callTool({ tool: params.name, input: params.arguments ?? {} }, this.session);
+        if (this.mode === "spec") {
+          // Spec wants tool outcomes as a content[] result; tool failures are
+          // `isError` results, not JSON-RPC protocol errors.
+          if (!result.success) {
+            const message = result.error?.message ?? "tool error";
+            return success(id, { content: [{ type: "text", text: message }], isError: true });
+          }
+          return success(id, { content: [{ type: "text", text: JSON.stringify(result.result ?? null) }] });
+        }
         if (!result.success && result.error !== undefined) {
           return failure(id, mcpErrorToJsonRpc(result.error.code), result.error.message, result);
         }
@@ -190,6 +247,8 @@ export class JsonRpcTransport {
         this.session = undefined;
         return success(id, { ok: true });
       default:
+        // Ignore any other client notifications rather than erroring.
+        if (req.method.startsWith("notifications/")) return success(id, {});
         return failure(id, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${req.method}`);
     }
   }
