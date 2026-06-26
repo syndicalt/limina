@@ -8391,6 +8391,45 @@ var Color = class {
 };
 var _color = /* @__PURE__ */ new Color();
 Color.NAMES = _colorKeywords;
+var Fog = class _Fog {
+  /**
+   * Constructs a new fog.
+   *
+   * @param {number|Color} color - The fog's color.
+   * @param {number} [near=1] - The minimum distance to start applying fog.
+   * @param {number} [far=1000] - The maximum distance at which fog stops being calculated and applied.
+   */
+  constructor(color3, near = 1, far = 1e3) {
+    this.isFog = true;
+    this.name = "";
+    this.color = new Color(color3);
+    this.near = near;
+    this.far = far;
+  }
+  /**
+   * Returns a new fog with copied values from this instance.
+   *
+   * @return {Fog} A clone of this instance.
+   */
+  clone() {
+    return new _Fog(this.color, this.near, this.far);
+  }
+  /**
+   * Serializes the fog into JSON.
+   *
+   * @param {?(Object|string)} meta - An optional value holding meta information about the serialization.
+   * @return {Object} A JSON object representing the serialized fog
+   */
+  toJSON() {
+    return {
+      type: "Fog",
+      name: this.name,
+      color: this.color.getHex(),
+      near: this.near,
+      far: this.far
+    };
+  }
+};
 var Scene = class extends Object3D {
   /**
    * Constructs a new scene.
@@ -89110,6 +89149,108 @@ var TerrainStreamRenderer = class {
   }
 };
 
+// src/browser/fly-camera.ts
+var FlyCamera = class {
+  x;
+  y;
+  z;
+  yaw;
+  pitch;
+  keys = /* @__PURE__ */ new Set();
+  locked = false;
+  /** Base move speed (units/sec); ShiftLeft applies a boost. */
+  speed = 26;
+  sensitivity = 22e-4;
+  win;
+  canvas;
+  doc;
+  constructor(s) {
+    this.x = s.x;
+    this.y = s.y;
+    this.z = s.z;
+    this.yaw = s.yaw ?? 0;
+    this.pitch = s.pitch ?? -0.25;
+  }
+  onKeyDown = (e) => {
+    this.keys.add(e.code);
+    if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
+  };
+  onKeyUp = (e) => {
+    this.keys.delete(e.code);
+  };
+  onMouse = (e) => {
+    if (!this.locked) return;
+    this.yaw += e.movementX * this.sensitivity;
+    this.pitch -= e.movementY * this.sensitivity;
+    const lim = Math.PI / 2 - 0.01;
+    this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
+  };
+  onLockChange = () => {
+    this.locked = this.doc?.pointerLockElement === this.canvas;
+  };
+  onClick = () => {
+    this.canvas?.requestPointerLock?.();
+  };
+  attach(win, canvas, doc) {
+    this.win = win;
+    this.canvas = canvas;
+    this.doc = doc;
+    win.addEventListener("keydown", this.onKeyDown);
+    win.addEventListener("keyup", this.onKeyUp);
+    canvas.addEventListener("click", this.onClick);
+    doc.addEventListener("mousemove", this.onMouse);
+    doc.addEventListener("pointerlockchange", this.onLockChange);
+  }
+  detach() {
+    this.win?.removeEventListener("keydown", this.onKeyDown);
+    this.win?.removeEventListener("keyup", this.onKeyUp);
+    this.canvas?.removeEventListener("click", this.onClick);
+    this.doc?.removeEventListener("mousemove", this.onMouse);
+    this.doc?.removeEventListener("pointerlockchange", this.onLockChange);
+  }
+  /** Advance by `dt` seconds, write the pose into `camera`, return the new ground
+   *  (x,z) so the caller can stream terrain around it. */
+  update(dt, camera) {
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+    const dir = [cp * sy, sp, -cp * cy];
+    const right = [cy, 0, sy];
+    const k2 = this.keys;
+    let mx = 0, my = 0, mz = 0;
+    if (k2.has("KeyW")) {
+      mx += dir[0];
+      my += dir[1];
+      mz += dir[2];
+    }
+    if (k2.has("KeyS")) {
+      mx -= dir[0];
+      my -= dir[1];
+      mz -= dir[2];
+    }
+    if (k2.has("KeyD")) {
+      mx += right[0];
+      mz += right[2];
+    }
+    if (k2.has("KeyA")) {
+      mx -= right[0];
+      mz -= right[2];
+    }
+    if (k2.has("Space")) my += 1;
+    if (k2.has("KeyC")) my -= 1;
+    const len = Math.hypot(mx, my, mz);
+    if (len > 0) {
+      const boost = k2.has("ShiftLeft") || k2.has("ShiftRight") ? 3.5 : 1;
+      const s = this.speed * boost * dt / len;
+      this.x += mx * s;
+      this.y += my * s;
+      this.z += mz * s;
+    }
+    camera.position.set(this.x, this.y, this.z);
+    camera.lookAt(this.x + dir[0], this.y + dir[1], this.z + dir[2]);
+    return { x: this.x, z: this.z };
+  }
+};
+
 // src/browser/host.ts
 var BrowserInput = class {
   pressed = /* @__PURE__ */ new Set();
@@ -89399,11 +89540,29 @@ async function run(opts) {
   await player.init();
   status("ready", `${loaded.manifest.ticks} ticks, ${loaded.keyframes.length} keyframes`);
   const terrain = opts.terrain !== void 0 ? new TerrainStreamRenderer(scene, opts.terrain) : void 0;
+  const nowMs = () => {
+    const perf = globalThis.performance;
+    return perf !== void 0 ? perf.now() : Date.now();
+  };
+  const fly = terrain !== void 0 ? new FlyCamera({ x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : void 0;
+  if (fly !== void 0) {
+    const doc = globalThis.document;
+    fly.attach(
+      opts.input,
+      opts.canvas,
+      doc
+    );
+    const cam = camera;
+    cam.far = 900;
+    cam.updateProjectionMatrix();
+    scene.fog = new Fog(724500, 140, 380);
+  }
   let angle = 0;
   let radius = 16;
   let camHeight = 8;
   const axes = new Float32Array(3);
   let announcedDone = false;
+  let lastFrame = nowMs();
   const loop = startAccumulatorLoop({
     step: async () => {
       if (!player.done) {
@@ -89415,13 +89574,21 @@ async function run(opts) {
       }
     },
     frame: () => {
-      renderOps.op_input_axes(axes);
-      angle += 4e-3 + axes[0] * 0.03;
-      radius = Math.min(40, Math.max(5, radius - axes[2] * 0.25));
-      camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
-      camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
-      camera.lookAt(0, 1, 0);
-      if (terrain !== void 0) terrain.update(Math.cos(angle) * radius, Math.sin(angle) * radius);
+      if (fly !== void 0) {
+        const t = nowMs();
+        let dt = (t - lastFrame) / 1e3;
+        lastFrame = t;
+        if (dt > 0.1) dt = 0.1;
+        const g2 = fly.update(dt, camera);
+        terrain?.update(g2.x, g2.z);
+      } else {
+        renderOps.op_input_axes(axes);
+        angle += 4e-3 + axes[0] * 0.03;
+        radius = Math.min(40, Math.max(5, radius - axes[2] * 0.25));
+        camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
+        camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
+        camera.lookAt(0, 1, 0);
+      }
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);
     }
@@ -89432,6 +89599,7 @@ async function run(opts) {
     stop: () => {
       loop.stop();
       terrain?.clear();
+      fly?.detach();
       if (opts.input !== void 0) input.detach(opts.input);
     }
   };
@@ -89462,7 +89630,7 @@ async function bootstrap() {
     const source = new ProceduralTerrainSource();
     terrain = {
       tileSize: TILE_SIZE,
-      radius: 3,
+      radius: 5,
       shape: "disc",
       getTile: (coord) => source.generateTile({ seed, tx: coord.tx, tz: coord.tz, lod: 0 }),
       mesh: { color: 5930314 }
