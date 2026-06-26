@@ -1,0 +1,12 @@
+{
+  "kind": "limina.export",
+  "exportVersion": 1,
+  "worldId": "demo",
+  "logVersion": 1,
+  "keyframeInterval": 10,
+  "ticks": 300,
+  "commands": 2711,
+  "keyframes": 31,
+  "assets": [],
+  "createdAt": "2026-06-26T14:40:37.124Z"
+}
