@@ -46,6 +46,8 @@ export interface RunOptions {
   height: number;
   /** Optional event target for keyboard camera control (usually `window`). */
   input?: unknown;
+  /** Force the WebGL2 backend instead of WebGPU (set when WebGPU is unavailable). */
+  forceWebGL?: boolean;
   /** Status sink for the page UI (loading / playing / error). */
   onStatus?: (phase: "loading" | "ready" | "playing" | "done" | "error", detail?: string) => void;
   /** Override the trace store (tests inject a fake; defaults to IndexedDB). */
@@ -85,12 +87,14 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
 }
 
 /** Build the real three renderer + scene + camera for browser playback. */
-async function buildRenderTarget(canvas: unknown, width: number, height: number): Promise<{
+async function buildRenderTarget(canvas: unknown, width: number, height: number, forceWebGL: boolean): Promise<{
   renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void };
   scene: SceneLike;
   camera: CameraLike;
 }> {
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
+  // THREE's WebGPURenderer targets either a WebGPU or a WebGL2 backend; forceWebGL
+  // selects WebGL2 so the world still renders where WebGPU is unavailable.
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL });
   await renderer.init();
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
@@ -125,7 +129,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   const loaded = await fetchExport(opts.worldUrl);
 
   status("loading", "starting WebGPU");
-  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height);
+  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
 
   // Host surfaces: render ops bound to the canvas + input, durable trace over
   // IndexedDB (hydrated before playback).
@@ -239,13 +243,11 @@ async function bootstrap(): Promise<void> {
   };
   if (canvas === null) { setStatus("error", "missing #limina-canvas"); return; }
 
-  if (!(await hasWebGpu())) {
-    setStatus(
-      "error",
-      "WebGPU unavailable in this browser. Try Chrome/Edge (desktop) or iOS 18+/Android Chrome with WebGPU enabled.",
-    );
-    return;
-  }
+  // Prefer WebGPU; gracefully fall back to the WebGL2 backend so the world still
+  // renders where WebGPU is unavailable (Linux Chrome without the flag, Firefox,
+  // older devices). If WebGL2 is also missing, run() surfaces the init error below.
+  const webgpu = await hasWebGpu();
+  if (!webgpu) setStatus("loading", "WebGPU unavailable — falling back to WebGL2");
 
   const worldUrl = canvas.getAttribute("data-world") ?? "./worlds/demo";
   const width = win.innerWidth || 960;
@@ -259,6 +261,7 @@ async function bootstrap(): Promise<void> {
       width,
       height,
       input: globalThis,
+      forceWebGL: !webgpu,
       onStatus: (phase, detail) => setStatus(phase, detail),
     });
   } catch (err) {
