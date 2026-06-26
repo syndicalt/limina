@@ -95,6 +95,11 @@ export class AgentRegistry implements AgentLookup {
   all(): AgentRecord[] {
     return [...this.agents.values()];
   }
+  /** Forget every registered agent. Used by demo coordinators that reset their
+   *  world between runs so a fresh build does not inherit prior workers. */
+  clear(): void {
+    this.agents.clear();
+  }
   getPerception(agentId: string): unknown {
     return this.agents.get(agentId)?.perception ?? null;
   }

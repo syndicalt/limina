@@ -45,14 +45,15 @@ ops.op_physics_create_world(0);
 const c = setupCoordinatorCottage("ses_demo_vm");
 // A read base with the inspector.snapshot permission set (reads are never gated).
 const snapPerms = resolveProfile("system.readonly");
-const snapBase = (tick: number) => ({
+const snapBaseFor = (setup: { world: unknown }, tick: number) => ({
   agentId: "agt_inspector",
-  sessionId: "ses_demo_vm",
+  sessionId: "ses_demo_snap",
   permissions: snapPerms,
   profile: "system.readonly",
   tick,
-  world: c.world,
+  world: setup.world,
 });
+const snapBase = (tick: number) => snapBaseFor(c, tick);
 const traceEvents = () => c.tracer.replay().events as unknown as Array<{ type: string; actorId: string; payload: { kind?: string } }>;
 const listPending = async (tick: number): Promise<PendingView[]> => {
   const r = await c.registry.invoke("approval.list", {}, c.coordBase(tick));
@@ -128,43 +129,70 @@ assert(world0.entities.length === 0, "fresh cottage world should have 0 solid en
 assert(world0.ghosts.length === 5, "expected 5 positioned ghost markers, got " + world0.ghosts.length);
 assert(world0.ghosts.some((g) => g.kind === "ground") && world0.ghosts.some((g) => g.kind === "structure") && world0.ghosts.filter((g) => g.kind === "prop").length === 3, "ghost kinds wrong: " + JSON.stringify(world0.ghosts.map((g) => g.kind)));
 
-// === (d) GRANT the beach + cottage, DENY the props; re-derive everything ====
-const tfApproval = pending.find((p) => p.skill === "world.generateRegion")!;
-const cottageApproval = pending.find((p) => p.agentId === "agt_coord.w2")!;
-const propApprovals = pending.filter((p) => p.agentId === "agt_coord.w3");
-assert((await c.registry.invoke("approval.grant", { approvalId: tfApproval.approvalId }, c.coordBase(4))).success, "grant terrain failed");
-assert((await c.registry.invoke("approval.grant", { approvalId: cottageApproval.approvalId }, c.coordBase(5))).success, "grant cottage failed");
-for (const p of propApprovals) {
-  assert((await c.registry.invoke("approval.deny", { approvalId: p.approvalId, reason: "keep it sparse" }, c.coordBase(6))).success, "deny prop failed");
+// === (d) APPROVE the whole beach; entities classify RICHLY by position ======
+// The client captures each granted card's typed placement (kind/shape/size/colour)
+// and joins it to the snapshot entity BY POSITION — so an approved cottage is a
+// "structure" and approved palms are "prop"s, NOT generic cubes (the UAT fix). The
+// snapshot alone can't say this (created entities are unit-scale, untagged).
+const approved = queue.cards.map((c2) => ({ kind: c2.kind, position: c2.position, shape: c2.shape, size: c2.size, color: c2.color }));
+for (const p of pending) {
+  assert((await c.registry.invoke("approval.grant", { approvalId: p.approvalId }, c.coordBase(4))).success, "grant failed for " + p.skill);
 }
-
 const pendingAfter = await listPending(7);
-assert(pendingAfter.length === 0, "no edits should remain held after grant/deny, got " + pendingAfter.length);
+assert(pendingAfter.length === 0, "no edits should remain held after granting all, got " + pendingAfter.length);
 
-// org-chart status TRANSITION: Terraform + Builder applied, Decorator rejected.
+// org-chart: every worker now reads "applied".
 const org1 = buildOrgChart(traceEvents());
-const byId = Object.fromEntries(org1.workers.map((w) => [w.workerId, w]));
-assert(byId["agt_coord.w1"].status === "applied" && byId["agt_coord.w2"].status === "applied", "granted workers should read 'applied': " + JSON.stringify([byId["agt_coord.w1"].status, byId["agt_coord.w2"].status]));
-assert(byId["agt_coord.w3"].status === "rejected" && byId["agt_coord.w3"].counts.denied === 3, "denied worker should read 'rejected' (3 denied): " + JSON.stringify(byId["agt_coord.w3"]));
+assert(org1.workers.every((w) => w.status === "applied"), "all granted workers should read 'applied': " + JSON.stringify(org1.workers.map((w) => w.status)));
 
-// world model now: granted beach (4 tiles) + cottage (1) = 5 solid entities, 0 ghosts.
+// world model with the approved placements: 8 solids (4 terrain tiles + cottage + 3
+// props), 0 ghosts, and the RICH kinds the renderer needs.
 const snap1 = await snapshot(8);
-const world1 = buildWorldModel(snap1, pendingAfter);
-assert(world1.entities.length === 5, "granted world should have 5 solid entities (4 tiles + cottage), got " + world1.entities.length);
+const world1 = buildWorldModel(snap1, pendingAfter, approved);
+assert(world1.entities.length === 8, "approved world should have 8 solid entities (4 tiles + cottage + 3 props), got " + world1.entities.length);
 assert(world1.ghosts.length === 0, "no ghosts should remain after all edits resolved, got " + world1.ghosts.length);
+const kinds = world1.entities.map((e) => e.kind).sort();
+const kindCount = (k: string) => world1.entities.filter((e) => e.kind === k).length;
+assert(kindCount("structure") === 1, "expected exactly 1 'structure' (the cottage), got " + kindCount("structure") + " kinds=" + JSON.stringify(kinds));
+assert(kindCount("prop") === 3, "expected 3 'prop' entities (palms+driftwood), got " + kindCount("prop"));
+assert(kindCount("ground") === 4, "expected 4 'ground' terrain tiles, got " + kindCount("ground"));
+// the matched cottage carries its real placement (seated at its authored spot + size).
+const cottageEnt = world1.entities.find((e) => e.kind === "structure")!;
+assert(cottageEnt.size === 3 && cottageEnt.position[0] === 0 && cottageEnt.position[1] === 1.5, "matched cottage lost its placement: " + JSON.stringify(cottageEnt));
+// props carry their colours so the renderer can split palm (green) vs driftwood (brown).
+const propEnts = world1.entities.filter((e) => e.kind === "prop");
+assert(propEnts.filter((e) => e.color === 0x2e8b57).length === 2 && propEnts.filter((e) => e.color === 0xa0522d).length === 1, "prop colours not joined: " + JSON.stringify(propEnts.map((e) => e.color)));
 
-// === trace ribbon reaches "apply" ==========================================
+// === trace ribbon reaches "apply" (all five edits landed) ===================
 const ribbon = buildTraceRibbon(traceEvents());
 assert(ribbon.current === "apply", "ribbon should have reached the apply phase, got " + ribbon.current);
 const phaseCount = (k: string) => ribbon.phases.find((p) => p.key === k)!.count;
 assert(phaseCount("decompose") === 1 && phaseCount("delegate") === 3, "ribbon decompose/delegate counts wrong");
-assert(phaseCount("propose") === 5 && phaseCount("review") === 5 && phaseCount("apply") === 2, "ribbon propose/review/apply counts wrong: " + JSON.stringify(ribbon.phases.map((p) => p.count)));
+assert(phaseCount("propose") === 5 && phaseCount("review") === 5 && phaseCount("apply") === 5, "ribbon propose/review/apply counts wrong: " + JSON.stringify(ribbon.phases.map((p) => p.count)));
+
+// === (e) DENY path on a fresh build — rejected status, no solids, no ghosts ==
+const d = setupCoordinatorCottage("ses_demo_deny");
+await d.runCottageBuild(1);
+const denyPending = (await (async () => {
+  const r = await d.registry.invoke("approval.list", {}, d.coordBase(2));
+  return (r.result as { pending: PendingView[] }).pending;
+})());
+assert(denyPending.length === 5, "deny build should hold 5 edits");
+for (const p of denyPending) {
+  assert((await d.registry.invoke("approval.deny", { approvalId: p.approvalId, reason: "not this time" }, d.coordBase(3))).success, "deny failed");
+}
+const orgDeny = buildOrgChart(d.tracer.replay().events as unknown as Parameters<typeof buildOrgChart>[0]);
+assert(orgDeny.workers.every((w) => w.status === "rejected"), "all denied workers should read 'rejected': " + JSON.stringify(orgDeny.workers.map((w) => w.status)));
+const denySnap = await d.registry.invoke("inspector.snapshot", { limit: 200 }, snapBaseFor(d, 4));
+const denyWorld = buildWorldModel(denySnap.result, []);
+assert(denyWorld.entities.length === 0 && denyWorld.ghosts.length === 0, "denied build must leave the world empty (no solids, no ghosts): " + JSON.stringify([denyWorld.entities.length, denyWorld.ghosts.length]));
 
 ops.op_log(
   `p_coordinator_demo OK: view-model builders verified against AUTHENTIC engine data ` +
   `(seed ${BEACH_SEED}). (a) org-chart: coordinator agt_coord + 3 workers ` +
   `[Terraform/Builder/Decorator] with least-privilege bundle chips + live statuses; ` +
   `(b) review queue: 5 cards w/ worker+skill+parsed position (cottage @0,1.5,0; region @${TILE_SIZE},0,${TILE_SIZE}); ` +
-  `(c) world model: 0 solid/5 ghosts pre-review; (d) after grant beach+cottage / deny props -> ` +
-  `5 solid entities, 0 ghosts, statuses applied/applied/rejected, ribbon -> apply.`,
+  `(c) world model: 0 solid/5 ghosts pre-review; (d) approve all -> 8 solids classified ` +
+  `RICHLY by position-join (1 structure + 3 prop[2 green/1 brown] + 4 ground), 0 ghosts, ` +
+  `all workers 'applied', ribbon -> apply(5); (e) fresh deny build -> all 'rejected', world empty.`,
 );

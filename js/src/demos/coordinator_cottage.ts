@@ -30,7 +30,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { EntityTable, ops } from "../engine.ts";
-import { createEcsWorld } from "../ecs/world.ts";
+import { createEcsWorld, despawnRenderable } from "../ecs/world.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { ScriptedProvider } from "../agents/llm.ts";
 import type { DecideRequest } from "../agents/llm.ts";
@@ -111,13 +111,51 @@ export interface CottageWorkerResult {
   reason: string;
 }
 
+/** Reset the demo world to empty before a fresh build. Idempotent + deterministic:
+ *  (1) DENY every still-held edit from a prior run (dropped, never applied); (2)
+ *  remove every entity (its scene mesh, ECS renderable, table row, tags); (3) rebuild
+ *  the physics world wholesale (wipes the prior run's heightfields/bodies); (4) forget
+ *  the prior run's worker agents. After this the only things a subsequent grant can
+ *  add are THIS build's edits — so two builds never accumulate (no duplicate beaches/
+ *  cottages). On the very first build (empty world, nothing held) it is a no-op apart
+ *  from re-creating the empty physics world, and emits no trace events. */
+async function resetCottageWorld(registry: SkillRegistry, world: WorldContext, agents?: AgentRegistry): Promise<void> {
+  // 1. Drop edits still held from a prior build (deny -> dropped, never applied).
+  for (const p of registry.pendingApprovals()) {
+    await registry.resolveApproval(p.approvalId, false, { agentId: "agt_coord", reason: "reset for fresh build" });
+  }
+  // 2. Clear every entity created by the prior build.
+  for (const id of world.entities.ids()) {
+    const entry = world.entities.resolve(id);
+    if (entry === undefined) continue;
+    if (entry.mesh !== undefined) world.scene.remove(entry.mesh);
+    despawnRenderable(world.ecs, entry.eid);
+    world.tags.delete(entry.eid);
+    world.entities.destroy(id);
+  }
+  // 3. Rebuild the physics world (drops all colliders/bodies from the prior build).
+  world.ops.op_physics_create_world(0);
+  // 4. Forget the prior run's worker agents.
+  agents?.clear();
+}
+
 /** Core delegation routine, shared by the `coordinator.build` skill and the
  *  standalone `runCottageBuild` helper. Emits the coordinator's decomposition
  *  decision, then DELEGATES the three workers (each held under review), linking each
  *  delegate action to that decision so the causal tree is intact. Returns the per-
  *  worker outcomes; the workers' mutating edits are now HELD in the registry's
  *  pending store for a reviewer to resolve. */
-async function delegateCottageWorkers(registry: SkillRegistry, base: InvokeBase): Promise<{ decisionId: string; workers: CottageWorkerResult[] }> {
+async function delegateCottageWorkers(
+  registry: SkillRegistry,
+  base: InvokeBase,
+  agents?: AgentRegistry,
+): Promise<{ decisionId: string; workers: CottageWorkerResult[] }> {
+  // FRESH BUILD: reset the demo world to empty before delegating, so each build is
+  // clean + repeatable (the inspector.snapshot must not carry the previous run's
+  // entities). This drops any still-held edits from the prior run, clears its
+  // entities, rebuilds the physics world, and forgets its workers.
+  await resetCottageWorld(registry, base.world, agents);
+
   // The coordinator's decompose decision — the cause every delegate links back to.
   const decisionId = base.causedBy === undefined || base.causedBy.length === 0
     ? registry.tracer.emit({
@@ -151,7 +189,7 @@ async function delegateCottageWorkers(registry: SkillRegistry, base: InvokeBase)
  *  Skills). This is the clean entry point the web client calls to START the build:
  *  one `tools/call` to `coordinator.build` decomposes the goal and delegates all
  *  three workers, leaving their edits HELD for review. Requires `orchestrate`. */
-export function registerCottageBuildSkill(registry: SkillRegistry): void {
+export function registerCottageBuildSkill(registry: SkillRegistry, agents?: AgentRegistry): void {
   registry.register({
     name: "coordinator.build",
     version: "1.0.0",
@@ -182,7 +220,7 @@ export function registerCottageBuildSkill(registry: SkillRegistry): void {
         tick: ctx.tick,
         world: ctx.world,
       };
-      return await delegateCottageWorkers(registry, base);
+      return await delegateCottageWorkers(registry, base, agents);
     },
   });
 }
@@ -200,7 +238,7 @@ export function installCottageScenario(
   const providers = cottageProviders();
   const agents = opts.agents ?? new AgentRegistry();
   registerOrchestrationSkills(registry, { providers, agents, world: opts.world });
-  registerCottageBuildSkill(registry);
+  registerCottageBuildSkill(registry, agents);
   return { providers, agents };
 }
 
@@ -235,14 +273,14 @@ export function setupCoordinatorCottage(sessionId = "ses_cottage"): CottageSetup
   // registerCoreSkills(providers) wires the delegate skill AND co-installs the
   // delegate review gate (so workers' edits are held); then add the trigger.
   registerCoreSkills(registry, { providers, agents });
-  registerCottageBuildSkill(registry);
+  registerCottageBuildSkill(registry, agents);
 
   const coordPerms = resolveProfile(COORDINATOR_PROFILE);
   const coordBase = (tick: number, causedBy?: string[]): InvokeBase => ({
     agentId: "agt_coord", sessionId, permissions: coordPerms, profile: COORDINATOR_PROFILE, tick, world, causedBy,
   });
 
-  const runCottageBuild = (tick = 1) => delegateCottageWorkers(registry, coordBase(tick));
+  const runCottageBuild = (tick = 1) => delegateCottageWorkers(registry, coordBase(tick), agents);
 
   return { registry, world, agents, tracer, providers, coordBase, runCottageBuild };
 }

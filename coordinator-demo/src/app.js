@@ -32,10 +32,12 @@ const el = (tag, cls, text) => {
 const state = {
   /** @type {McpClient | undefined} */ client: undefined,
   /** @type {WorldRenderer | undefined} */ renderer: undefined,
-  events: new Map(), // id -> trace event (accumulated)
+  events: new Map(), // id -> trace event (accumulated for the CURRENT build)
   afterSeq: -1,
   snapshot: undefined,
   pending: [],
+  approved: [], // placements the human has approved this build (for the position-join)
+  building: false,
   polling: undefined,
   built: false,
   log: [],
@@ -98,7 +100,10 @@ function disconnect() {
   state.afterSeq = -1;
   state.snapshot = undefined;
   state.pending = [];
+  state.approved = [];
   state.built = false;
+  state.building = false;
+  state.renderer?.reset();
   setBuildEnabled(false);
   setStatus(false);
 }
@@ -120,8 +125,15 @@ function startPolling() {
 async function startBuild() {
   const c = state.client;
   if (!c) { logLine("connect first", "warn"); return; }
+  if (state.building) return;
   try {
+    state.building = true;
     setBuildEnabled(false);
+    // Show ONE clean build: clear the accumulated view and fast-forward the trace
+    // cursor PAST everything already on the server, so this build's events are the
+    // only ones we render (a re-run re-delegates w4/w5/w6 server-side — we don't
+    // carry the stale workers into the org-chart/queue/world).
+    await resetClientView();
     logLine("coordinator.build — decomposing 'a cottage on the beach'…", "info");
     const res = await c.callTool("coordinator.build", {});
     state.built = true;
@@ -135,8 +147,25 @@ async function startBuild() {
     } else {
       logLine("build failed: " + msgOf(e), "err");
     }
+  } finally {
+    state.building = false;
     setBuildEnabled(true);
   }
+}
+
+/** Clear the client view + re-baseline the trace cursor to the server's current
+ *  high-water mark, so only the next build's events flow in. */
+async function resetClientView() {
+  state.events.clear();
+  state.pending = [];
+  state.approved = [];
+  state.snapshot = undefined;
+  state.renderer?.reset();
+  try {
+    const probe = await state.client.callTool("trace.tail", { afterSeq: -1, limit: 1000 });
+    state.afterSeq = (probe && typeof probe.nextAfterSeq === "number") ? probe.nextAfterSeq : -1;
+  } catch { state.afterSeq = -1; }
+  renderAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -166,10 +195,17 @@ async function refreshAll() {
 
 function renderAll() {
   const events = [...state.events.values()];
-  renderOrgChart(buildOrgChart(events));
-  renderQueue(buildReviewQueue({ pending: state.pending }));
+  const org = buildOrgChart(events);
+  // Scope the queue + ghosts to the CURRENT build's workers (a re-run's stale holds
+  // from a prior build are not this build's; the trace cursor already scopes events).
+  const currentWorkers = new Set(org.workers.map((w) => w.workerId));
+  const pendingForView = currentWorkers.size > 0
+    ? state.pending.filter((p) => currentWorkers.has(p.agentId))
+    : state.pending;
+  renderOrgChart(org);
+  renderQueue(buildReviewQueue({ pending: pendingForView }));
   renderRibbon(buildTraceRibbon(events));
-  const model = buildWorldModel(state.snapshot, state.pending);
+  const model = buildWorldModel(state.snapshot, pendingForView, state.approved);
   renderWorldCounts(model);
   if (state.renderer && state.renderer.ready) {
     try { state.renderer.render(model); } catch (e) { /* render is UAT */ }
@@ -242,9 +278,9 @@ function renderQueue(queue) {
     c.appendChild(summary);
     const actions = el("div", "review-actions");
     const approve = el("button", "btn btn-approve", "Approve");
-    approve.onclick = () => void resolve(card.approvalId, true);
+    approve.onclick = () => void resolve(card, true);
     const reject = el("button", "btn btn-reject", "Reject");
-    reject.onclick = () => void resolve(card.approvalId, false);
+    reject.onclick = () => void resolve(card, false);
     actions.appendChild(approve);
     actions.appendChild(reject);
     c.appendChild(actions);
@@ -252,12 +288,19 @@ function renderQueue(queue) {
   }
 }
 
-async function resolve(approvalId, grant) {
+async function resolve(card, grant) {
   const c = state.client;
   if (!c) return;
+  const approvalId = card.approvalId;
   try {
     if (grant) {
       const r = await c.callTool("approval.grant", { approvalId });
+      // Remember the typed placement so the snapshot entity it produces can be
+      // joined BY POSITION and rendered with its real shape (cottage/tree), not a
+      // generic cube — the snapshot itself carries only the position.
+      if (Array.isArray(card.position) || card.kind === "ground") {
+        state.approved.push({ kind: card.kind, position: card.position, shape: card.shape, size: card.size, color: card.color });
+      }
       logLine(`approved ${short(approvalId)} — applied=${r.applied}`, r.applied ? "ok" : "warn");
     } else {
       const r = await c.callTool("approval.deny", { approvalId, reason: "rejected in review" });

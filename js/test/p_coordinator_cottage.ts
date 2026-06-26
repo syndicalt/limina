@@ -162,11 +162,47 @@ const sigA = await heldTraceSig("ses_cottage_det");
 const sigB = await heldTraceSig("ses_cottage_det");
 assert(sigA === sigB, "re-running the cottage build produced a different trace (non-deterministic)");
 
+// (f) REPEATABLE / FRESH BUILD — a second coordinator.build on the SAME world must
+// RESET it first, so the world never accumulates duplicate beaches/cottages. We
+// dirty the world (grant build #1's beach + cottage -> real entities), then build
+// again and assert the world was wiped back to empty and the held-edit SET is the
+// SAME (by skill+input), not doubled.
+const rep = setupCoordinatorCottage("ses_cottage_repeat");
+const heldSet = async (tickList: number): Promise<string[]> => {
+  const r = await rep.registry.invoke("approval.list", {}, rep.coordBase(tickList));
+  return (r.result as { pending: PendingView[] }).pending
+    .map((p) => `${p.skill}|${JSON.stringify(p.input)}`)
+    .sort();
+};
+
+await rep.runCottageBuild(1);
+const set1 = await heldSet(2);
+assert(set1.length === 5, `build #1 should hold 5 edits, got ${set1.length}`);
+// Grant build #1's beach + cottage so the world holds REAL entities (the dirty state
+// the UAT saw doubling).
+const p1 = (await rep.registry.invoke("approval.list", {}, rep.coordBase(3)).then((r) => (r.result as { pending: PendingView[] }).pending));
+const beach1 = p1.find((p) => p.skill === "world.generateRegion")!;
+const cottage1 = p1.find((p) => p.skill === "scene.createEntity")!;
+await rep.registry.invoke("approval.grant", { approvalId: beach1.approvalId }, rep.coordBase(4));
+await rep.registry.invoke("approval.grant", { approvalId: cottage1.approvalId }, rep.coordBase(5));
+const dirtyEntities = rep.world.entities.ids().length;
+assert(dirtyEntities === 5, `expected 5 entities after granting build #1's beach+cottage, got ${dirtyEntities}`);
+
+// SECOND build: must reset the world (wipe the 5 entities + drop the 3 leftover held
+// props) and re-delegate a FRESH set of held edits — no doubling.
+const built2 = await rep.runCottageBuild(6);
+assert(built2.workers.length === 3, "second build did not delegate 3 workers");
+assert(rep.world.entities.ids().length === 0, `second build did not reset the world (entities=${rep.world.entities.ids().length}, expected 0)`);
+const set2 = await heldSet(7);
+assert(set2.length === 5, `second build should hold 5 edits (not doubled), got ${set2.length}`);
+assert(JSON.stringify(set1) === JSON.stringify(set2), "second build's held-edit set differs from the first (should be identical by skill+input)");
+
 ops.op_log(
   `p_coordinator_cottage OK: coordinator decomposed 'a cottage on the beach' + delegated 3 workers ` +
   `(${COTTAGE_WORKERS.map((w) => w.provider).join("/")}) with distinct least-privilege bundles; ` +
   `all 5 mutating edits HELD (world ${baseline}->${baseline}); approval.list surfaced them per worker+skill+input; ` +
   `granted beach(+4 tiles)+cottage(+1) applied, denied 3 props dropped (entities->${entitiesAfterResolve}); ` +
   `causal tree delegated->pending->granted->executed intact (agent.delegated carries workerId+bundle); ` +
-  `build+hold deterministic across 2 runs.`,
+  `build+hold deterministic across 2 runs; a SECOND build resets the world to empty + re-holds the ` +
+  `SAME 5-edit set (no doubling).`,
 );
