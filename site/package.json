@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "prebuild": "node scripts/gen-skills-doc.mjs && node scripts/gen-llms.mjs",
+    "prebuild": "node scripts/gen-skills-doc.mjs && node scripts/gen-llms.mjs && node scripts/sync-installers.mjs",
     "gen": "node scripts/gen-skills-doc.mjs && node scripts/gen-llms.mjs",
     "build": "astro build",
     "preview": "astro preview",

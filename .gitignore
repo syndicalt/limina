@@ -14,6 +14,10 @@ dist/
 /zaxy-mcp.json
 /AGENTS.md
 
+# --- Generated MCP wrapper (absolute paths baked in by install.sh / install.ps1) ---
+/bin/limina-mcp
+/bin/limina-mcp.cmd
+
 # --- Zaxy memory store + generated runtime traces ---
 .eventloom/
 traces/
