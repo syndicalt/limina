@@ -20,10 +20,11 @@ import { reviewProfileGate } from "./approval.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { type BoundedMultiTurnOptions, type ProviderMap, runBoundedMultiTurn } from "../agents/systems.ts";
 
-/** Capabilities a worker BUNDLE may never contain — they would let a worker escape
- *  review (approval.review -> self-approve its own held edits) or fan out unbounded
- *  (orchestrate -> spawn further workers). Coordinators hold these; workers never. */
-const ESCALATION_CAPS = new Set(["approval.review", "orchestrate"]);
+/** Capability a worker BUNDLE may NEVER contain at ANY depth — it would let a worker
+ *  escape review by self-approving its own held edits. Coordinators hold it; workers
+ *  never. (`orchestrate` is the OTHER escalation cap, but it is gated by DEPTH rather
+ *  than denied outright — see the handler's depth-budget check.) */
+const SELF_APPROVAL_CAP = "approval.review";
 
 /** Capability a coordinator session must hold to delegate work. */
 export const ORCHESTRATE_PERMISSION = "orchestrate";
@@ -45,6 +46,12 @@ export interface OrchestrationDeps {
   world?: WorldContext;
   /** Provider used when a delegate call does not name one. */
   defaultProvider?: string;
+  /** Maximum delegation NESTING depth. The top coordinator delegates at depth 0
+   *  (spawning depth-1 workers); a worker may itself hold `orchestrate` (and thus
+   *  delegate) only while the worker it would spawn stays within this budget.
+   *  DEFAULT 1 = exactly today's behavior: only the top coordinator delegates and
+   *  no worker bundle may contain `orchestrate` (nesting blocked at depth 1). */
+  maxDepth?: number;
 }
 
 const delegateInput = z.object({
@@ -67,6 +74,12 @@ const delegateInput = z.object({
 export function registerOrchestrationSkills(registry: SkillRegistry, deps: OrchestrationDeps): void {
   const workers = deps.agents ?? new AgentRegistry();
   let workerSeq = 0;
+  const maxDepth = deps.maxDepth ?? 1;
+  // Per-agent delegation depth. The top coordinator is absent -> depth 0; each worker
+  // it spawns is recorded at its parent's depth + 1. A worker may be granted
+  // `orchestrate` (and so delegate) only while the worker IT would spawn stays inside
+  // the budget — see the handler's depth check.
+  const depthOf = new Map<string, number>();
 
   // Co-install the review gate so a delegated worker's MUTATING edits are HELD for
   // the coordinator — this is the security contract of delegation, so it must be
@@ -91,11 +104,18 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
       reason: z.string(),
     }),
     handler: async (input, ctx) => {
-      // Fail-closed on a privilege-escalation bundle (self-approval / unbounded
-      // recursion) BEFORE spawning anything.
-      const escalating = input.bundle.find((c) => ESCALATION_CAPS.has(c));
-      if (escalating !== undefined) {
-        throw new Error(`delegate: a worker bundle may not contain the escalation capability '${escalating}'`);
+      const depth = depthOf.get(ctx.agentId) ?? 0;
+      const childDepth = depth + 1;
+      // Fail-closed BEFORE spawning anything. (1) `approval.review` is ALWAYS denied —
+      // a worker holding it would self-approve its own held edits, escaping review at
+      // any depth. (2) `orchestrate` is gated by the DEPTH budget: a worker may itself
+      // delegate only while the worker IT would spawn (at childDepth + 1) stays inside
+      // maxDepth — i.e. childDepth < maxDepth (equivalently depth + 1 < maxDepth).
+      if (input.bundle.includes(SELF_APPROVAL_CAP)) {
+        throw new Error(`delegate: a worker bundle may not contain the escalation capability '${SELF_APPROVAL_CAP}' (it would self-approve its own held edits)`);
+      }
+      if (input.bundle.includes(ORCHESTRATE_PERMISSION) && !(childDepth < maxDepth)) {
+        throw new Error(`delegate: a worker at depth ${childDepth} may not be granted '${ORCHESTRATE_PERMISSION}' — delegation depth cap is ${maxDepth} (a depth-${childDepth} worker would spawn at depth ${childDepth + 1})`);
       }
       const providerName = input.provider ?? deps.defaultProvider;
       if (providerName === undefined || deps.providers[providerName] === undefined) {
@@ -106,6 +126,9 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
 
       // Deterministic worker identity: the coordinator id + a monotonic counter.
       const workerId = `${ctx.agentId}.w${++workerSeq}`;
+      // Record the worker's nesting depth so IF it holds `orchestrate` its own
+      // delegations are budgeted against the same cap (an absent agent is depth 0).
+      depthOf.set(workerId, childDepth);
       const worker = workers.add({
         id: workerId,
         type: input.type,
@@ -135,6 +158,7 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
         type: input.type,
         bundle: [...input.bundle].sort(),
         task: input.task,
+        depth: childDepth,
         steps: result.steps,
         toolCalls: result.toolCalls,
         reason: result.reason,
@@ -145,14 +169,18 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
   });
 }
 
-// ---- Known limitations / follow-ups (first cut) --------------------------
-// 1. Escalation caps (approval.review, orchestrate) are denied in worker bundles, so
-//    nesting depth is bounded to 1 (workers can't delegate). A depth COUNTER (for
-//    intentional multi-level delegation) is a later extension.
-// 2. The `permissions: []` trace skills (trace.tail / trace.explainEvent / trace.export
-//    in skills/system.ts) are advertised to every worker regardless of bundle — a
-//    delegated worker can read the cross-agent trace and trace.export can write disk.
-//    Pre-existing, but delegation newly exposes it to scoped/untrusted workers; gate
-//    the trace surface behind a read capability as a governance follow-up.
-// 3. A granted action re-applies with the WORKER's propose-time authority + tick (the
-//    inherited Phase 7 approval limitation — see skills/approval.ts).
+// ---- Governance status (Phase 10 follow-ups) -----------------------------
+// 1. RESOLVED — delegation depth is now a BOUNDED BUDGET (deps.maxDepth, default 1).
+//    `approval.review` is still denied in any bundle at any depth (self-approval), but
+//    `orchestrate` is gated by depth: a worker may delegate only while the worker it
+//    would spawn stays inside maxDepth. Default 1 reproduces the old behavior exactly
+//    (workers can't delegate); maxDepth >= 2 enables intentional multi-level nesting.
+// 2. RESOLVED — the trace skills (trace.tail / trace.explainEvent / trace.export in
+//    skills/system.ts) now require the `trace.read` capability, which only observer
+//    profiles (reviewer / reviewer.coordinator / system.readonly) carry. A bundle-
+//    scoped `delegate.review` worker has neither, so it can no longer read or export
+//    the cross-agent trace.
+// 3. RESOLVED (apply-tick provenance) — a granted action's `skill.approval.granted` +
+//    `skill.executed` are now stamped with the reviewer's APPLY tick (see skills/
+//    registry.ts resolveApproval + skills/approval.ts). Propose-time AUTHORITY is still
+//    inherited from the parked base (the worker proposed it); that is by design.

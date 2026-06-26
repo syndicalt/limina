@@ -25,7 +25,8 @@ import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
 import { registerCoreSkills } from "../src/skills/index.ts";
 import { reviewProfileGate } from "../src/skills/approval.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
-import { DELEGATE_REVIEW_PROFILE, ORCHESTRATE_PERMISSION } from "../src/skills/orchestration.ts";
+import { DELEGATE_REVIEW_PROFILE, ORCHESTRATE_PERMISSION, registerOrchestrationSkills } from "../src/skills/orchestration.ts";
+import { agentGrants } from "../src/agents/agent.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p10_delegate FAIL: " + msg);
@@ -237,7 +238,9 @@ assert(r2.delA.workerId === r.delA.workerId && r2.delB.workerId === r.delB.worke
   assert(!held(["scene.read"]) && !held(["scene.read", "ecs.read"]), "read-only skills must NOT be held");
 }
 
-// (B3) a worker BUNDLE may not contain escalation caps (self-approval / recursion).
+// (B3) a worker BUNDLE may not contain escalation caps. At the DEFAULT depth budget
+// (maxDepth=1, via registerCoreSkills) `approval.review` (self-approval) AND
+// `orchestrate` (a depth-1 worker would spawn at depth 2, past the cap) are both denied.
 {
   const agents = new AgentRegistry();
   const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene: sceneStub, camera, ops, agents };
@@ -247,7 +250,95 @@ assert(r2.delA.workerId === r.delA.workerId && r2.delB.workerId === r.delB.worke
   const escApproval = await registry.invoke("delegate", { task: "x", bundle: ["scene.read", "approval.review"], provider: "p" }, base);
   assert(!escApproval.success, "delegate with approval.review in the bundle must be REJECTED (would self-approve)");
   const escOrch = await registry.invoke("delegate", { task: "x", bundle: ["scene.read", "orchestrate"], provider: "p" }, base);
-  assert(!escOrch.success, "delegate with orchestrate in the bundle must be REJECTED (would recurse unbounded)");
+  assert(!escOrch.success, "delegate with orchestrate in the bundle must be REJECTED at the default depth cap (maxDepth=1)");
+}
+
+// (FIX 1) The cross-agent TRACE surface is gated behind `trace.read`: a scoped
+// delegate worker can neither SEE nor INVOKE trace.tail / explainEvent / export, while
+// an observer profile (system.readonly) carries trace.read and keeps all three.
+{
+  const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene: sceneStub, camera, ops };
+  const registry = new SkillRegistry(new LiminaTracer("ses_traceguard"));
+  registerCoreSkills(registry, { providers: { p: new ScriptedProvider(() => []) }, agents: new AgentRegistry() });
+  const traceSkills = ["trace.tail", "trace.explainEvent", "trace.export"];
+
+  // A least-privilege worker runs on its BUNDLE grants (agentGrants prefers the bundle).
+  const workerGrants = agentGrants({ profile: DELEGATE_REVIEW_PROFILE, bundle: new Set(BUNDLE_A) });
+  assert(!workerGrants.has("trace.read"), "a delegate.review worker bundle must NOT carry trace.read");
+  for (const s of traceSkills) {
+    assert(!registry.list(workerGrants).some((t) => t.name === s), `worker bundle wrongly EXPOSED ${s} (trace surface must be behind trace.read)`);
+  }
+  // Invocation is denied too (exposure == invocation boundary): forbidden, not pending.
+  const workerBase = { agentId: "agt_coord.w1", sessionId: "ses_traceguard", permissions: workerGrants, profile: DELEGATE_REVIEW_PROFILE, tick: 0, world };
+  const deniedTail = await registry.invoke("trace.tail", { limit: 10 }, workerBase);
+  assert(!deniedTail.success && deniedTail.error?.code === "forbidden", "a scoped worker must be DENIED trace.tail (forbidden): " + JSON.stringify(deniedTail.error));
+  const deniedExport = await registry.invoke("trace.export", { name: "leak.jsonl" }, workerBase);
+  assert(!deniedExport.success && deniedExport.error?.code === "forbidden", "a scoped worker must be DENIED trace.export (no disk write): " + JSON.stringify(deniedExport.error));
+
+  // An observer (system.readonly) carries trace.read -> sees AND invokes the surface.
+  const obs = resolveProfile("system.readonly");
+  assert(obs.has("trace.read"), "system.readonly must carry trace.read");
+  for (const s of traceSkills) {
+    assert(registry.list(obs).some((t) => t.name === s), `observer profile (system.readonly) should SEE ${s}`);
+  }
+  const obsTail = await registry.invoke("trace.tail", { limit: 10 }, { agentId: "agt_obs", sessionId: "ses_traceguard", permissions: obs, profile: "system.readonly", tick: 0, world });
+  assert(obsTail.success, "observer trace.tail should succeed: " + JSON.stringify(obsTail.error));
+
+  // (FINDING 1) inspector.snapshot must NOT be a trace.read BYPASS. Its `trace` block is
+  // the same cross-agent surface; a caller holding the four reads but NO trace.read must
+  // get a count-only stub (no actor identities, no event payloads), while a trace.read
+  // holder still gets the real recent trace. (On revert to `trace: tracer.inspect()`
+  // unconditionally, the four-read caller would see real events and this fails.)
+  const fourReads = new Set(["scene.read", "ecs.read", "physics.read", "agent.read"]);
+  assert(!fourReads.has("trace.read"), "guard: the four-reads set must not include trace.read");
+  const snapNoTrace = await registry.invoke("inspector.snapshot", { limit: 5 }, { agentId: "agt_fourread", sessionId: "ses_traceguard", permissions: fourReads, profile: "system.readonly", tick: 0, world });
+  assert(snapNoTrace.success, "inspector.snapshot must STAY invocable for a four-read caller (only the trace block is redacted): " + JSON.stringify(snapNoTrace.error));
+  const tNo = (snapNoTrace.result as { trace: { recent: unknown[]; actors: unknown[]; eventCount: number } }).trace;
+  assert(tNo.recent.length === 0 && tNo.actors.length === 0, "inspector.snapshot leaked the cross-agent trace to a caller WITHOUT trace.read (recent/actors must be empty) — trace.read bypass");
+  assert(tNo.eventCount > 0, "the stub should still report a non-payload eventCount");
+  const snapObs = await registry.invoke("inspector.snapshot", { limit: 5 }, { agentId: "agt_obs2", sessionId: "ses_traceguard", permissions: obs, profile: "system.readonly", tick: 0, world });
+  assert(snapObs.success, "inspector.snapshot for a trace.read observer failed: " + JSON.stringify(snapObs.error));
+  const tObs = (snapObs.result as { trace: { recent: unknown[]; actors: unknown[] } }).trace;
+  assert(tObs.recent.length > 0 && tObs.actors.length > 0, "a trace.read holder must still get the REAL recent trace from inspector.snapshot");
+}
+
+// (FIX 2) Delegation DEPTH budget. With maxDepth=2 a depth-1 worker MAY delegate a
+// leaf sub-worker, but a worker that would land at depth 2 is denied `orchestrate`;
+// `approval.review` is denied at EVERY depth. (Default maxDepth=1 — blocking ALL
+// nesting — is covered by the B3 block above; this proves the budget is honored.)
+{
+  const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene: sceneStub, camera, ops };
+  const registry = new SkillRegistry(new LiminaTracer("ses_depth"));
+  registerCoreSkills(registry); // core skills, but NO delegate/gate yet
+  // Wire delegation with a depth budget of 2. registerOrchestrationSkills co-installs
+  // the review gate; clear it so this focused test isolates the DEPTH-budget contract
+  // from the orthogonal review-holding of the `delegate` call itself.
+  registerOrchestrationSkills(registry, { providers: { p: new ScriptedProvider(() => []) }, agents: new AgentRegistry(), maxDepth: 2 });
+  registry.clearApprovalGate();
+  // delegation depth is looked up by ctx.agentId; the spawned worker id carries it forward.
+  const asAgent = (agentId: string, tick: number) => ({
+    agentId, sessionId: "ses_depth",
+    permissions: new Set([ORCHESTRATE_PERMISSION, "scene.read"]), profile: DELEGATE_REVIEW_PROFILE, tick, world,
+  });
+
+  // depth 0 coordinator -> MAY grant a depth-1 worker `orchestrate` (childDepth 1 < 2).
+  const d1 = await registry.invoke("delegate", { task: "t", bundle: ["scene.read", ORCHESTRATE_PERMISSION], provider: "p" }, asAgent("agt_coord", 0));
+  assert(d1.success, "maxDepth=2: a depth-0 coordinator must be able to grant a depth-1 worker orchestrate: " + JSON.stringify(d1.error));
+  const w1 = (d1.result as { workerId: string }).workerId; // depthOf=1
+
+  // depth 1 worker -> CAN delegate a LEAF sub-worker (bundle without orchestrate).
+  const d2 = await registry.invoke("delegate", { task: "t", bundle: ["scene.read"], provider: "p" }, asAgent(w1, 1));
+  assert(d2.success, "maxDepth=2: a depth-1 worker must be able to delegate a leaf sub-worker: " + JSON.stringify(d2.error));
+
+  // depth 1 worker -> may NOT grant a sub-worker that would land at depth 2 `orchestrate`.
+  const d2bad = await registry.invoke("delegate", { task: "t", bundle: ["scene.read", ORCHESTRATE_PERMISSION], provider: "p" }, asAgent(w1, 1));
+  assert(!d2bad.success, "maxDepth=2: orchestrate must be REJECTED for a worker that would sit at depth 2 (the cap)");
+
+  // `approval.review` is rejected at EVERY depth (self-approval — never relaxed).
+  for (const [id, depth] of [["agt_coord", 0], [w1, 1]] as const) {
+    const r = await registry.invoke("delegate", { task: "t", bundle: ["scene.read", "approval.review"], provider: "p" }, asAgent(id, depth));
+    assert(!r.success, `approval.review must be rejected in a worker bundle at depth ${depth}`);
+  }
 }
 
 ops.op_log(

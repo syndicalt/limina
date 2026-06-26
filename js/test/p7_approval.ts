@@ -72,6 +72,16 @@ const executedEv = evs.find((e) => e.type === "skill.executed" && (e.payload as 
 assert(grantedEv !== undefined && grantedEv.causedBy.includes(approvalId), "granted not linked to pending");
 assert(executedEv !== undefined && executedEv.causedBy.includes(grantedEv.id), "executed not linked to granted");
 
+// 6b. APPLY-TICK provenance (FIX 3): the action was PROPOSED at tick 1 and GRANTED at
+// tick 4. The propose-time `skill.approval.pending` keeps the propose tick; the
+// apply-time `skill.approval.granted` + `skill.executed` carry the APPLY tick (4).
+const pendingTick = (pendingEvents[0].payload as { tick?: number }).tick;
+const grantedTick = (grantedEv.payload as { tick?: number }).tick;
+const executedTick = (executedEv.payload as { tick?: number }).tick;
+assert(pendingTick === 1, `skill.approval.pending must keep the PROPOSE tick (1), got ${pendingTick}`);
+assert(grantedTick === 4, `skill.approval.granted must carry the APPLY tick (4), got ${grantedTick}`);
+assert(executedTick === 4, `granted action's skill.executed must carry the APPLY tick (4), not the propose tick, got ${executedTick}`);
+
 // 7. Re-granting a resolved approval is an honest no-op (not found, nothing applied).
 const regrant = await registry.invoke("approval.grant", { approvalId }, reviewerBase(5));
 assert(regrant.success, "approval.grant skill itself should not error");
@@ -91,6 +101,23 @@ assert(tracer.trace("agt_review").some((e) => e.type === "skill.approval.denied"
 // 9. READS are never gated.
 const read = await registry.invoke("scene.queryEntities", {}, agentBase(8));
 assert(read.success, "a read (scene.queryEntities) was incorrectly gated");
+
+// 9b. APPLY-TICK FLOOR (FINDING 2): an MCP reviewer that never advanced a sim tick
+// passes tick 0. Granting at tick 0 an action PROPOSED at tick 5 must NOT stamp it
+// "applied at 0" (applied-before-proposed); the apply tick is FLOORED to the propose
+// tick. (On revert to `applyTick ?? base.tick`, tick 0 would survive and these fail.)
+const held3 = await registry.invoke("scene.createEntity", { position: [4, 0, 0] }, agentBase(5));
+assert(!held3.success && held3.error?.code === "pending_approval", "third mutating action not held");
+const approvalId3 = held3.error!.message;
+const granted3 = await registry.invoke("approval.grant", { approvalId: approvalId3 }, reviewerBase(0));
+assert(granted3.success && (granted3.result as { applied: boolean }).applied, "grant at reviewer tick 0 did not apply");
+const evs3 = tracer.trace("agt_review");
+const granted3Evs = evs3.filter((e) => e.type === "skill.approval.granted");
+const executed3Evs = evs3.filter((e) => e.type === "skill.executed" && (e.payload as { skill?: string }).skill === "scene.createEntity");
+const granted3Tick = (granted3Evs[granted3Evs.length - 1].payload as { tick: number }).tick;
+const executed3Tick = (executed3Evs[executed3Evs.length - 1].payload as { tick: number }).tick;
+assert(granted3Tick === 5, `skill.approval.granted at reviewer tick 0 must FLOOR to the propose tick 5 (never 0), got ${granted3Tick}`);
+assert(executed3Tick === 5, `granted action's skill.executed at reviewer tick 0 must FLOOR to the propose tick 5 (never 0), got ${executed3Tick}`);
 
 // 10. Gate OFF -> a mutating action applies directly (existing behaviour restored).
 registry.clearApprovalGate();

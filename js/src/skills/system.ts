@@ -173,7 +173,10 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Tail trace events with cursor pagination and optional actor/type filters.",
     category: "system",
-    permissions: [],
+    // The trace is CROSS-AGENT: tailing it reveals every actor's events. Gate it
+    // behind `trace.read` so only observer profiles (reviewer / reviewer.coordinator
+    // / system.readonly) can read it — a scoped delegate worker must NOT.
+    permissions: ["trace.read"],
     input: z.object({
       afterSeq: z.number().int().min(-1).optional(),
       limit: z.number().int().min(0).max(1000).optional(),
@@ -192,7 +195,9 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Explain a trace event with resolved causal parents and children.",
     category: "system",
-    permissions: [],
+    // Resolves a cross-agent event + its causal neighbours — same read surface as
+    // trace.tail, so it is gated behind the same `trace.read` capability.
+    permissions: ["trace.read"],
     input: z.object({ eventId: z.string() }),
     output: z.object({
       event: eventSchema,
@@ -211,7 +216,10 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Flush the durable trace history to a sandboxed trace JSONL file.",
     category: "system",
-    permissions: [],
+    // Reads the WHOLE durable trace AND writes it to disk — strictly more powerful
+    // than trace.tail, so it stays behind the same `trace.read` observer capability
+    // (one cap, kept simple). A scoped worker has neither read nor export.
+    permissions: ["trace.read"],
     input: z.object({ name: z.string().min(1) }),
     output: z.object({ name: z.string(), events: z.number().int(), bytes: z.number().int() }),
     handler: (input) => tracer.flush(input.name),
@@ -295,11 +303,28 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         return resource === undefined ? [] : [{ entity, ...resource }];
       });
       const resources = loaded.map((r) => r as LoadedResourceMetadata);
+      // The trace block is the SAME cross-agent surface trace.tail exposes — so it is
+      // gated by the SAME `trace.read` capability (Fix 1). inspector.snapshot stays
+      // invocable by the four-read profiles (world/entities/agents/skills still
+      // returned), but a caller WITHOUT trace.read gets a count-only stub: no actor
+      // identities, no event payloads. Otherwise inspector.snapshot would be a
+      // trace.read bypass for any agent holding the four reads.
+      const traceView = tracer.inspect();
+      const trace = ctx.permissions.has("trace.read")
+        ? traceView
+        : { threadId: traceView.threadId, eventCount: traceView.eventCount, actors: [], recent: [] };
       return {
         page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity },
         world: sceneMetadata(ctx),
         entities,
         agents: ctx.world.agents?.all?.().map(agentSnapshot) ?? [],
+        // NOTE: this is the FULL skill catalog ON PURPOSE — inspector.snapshot is an
+        // observability surface (it also dumps every profile's permissions just below),
+        // and an observer/reviewer that cannot INVOKE build skills still needs to SEE
+        // the catalog (the Phase 7 editor renders it). Skill name + required-perms are
+        // static catalog metadata, NOT sensitive cross-agent runtime data, so this is
+        // not a capability leak. The trace block (real cross-agent events WITH payloads)
+        // IS sensitive and is gated by trace.read below.
         skills: [...registry.list()].map((tool) => {
           const def = registry.describe(tool.name);
           return {
@@ -317,7 +342,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           counts: resourceCounts(resources),
           loaded,
         },
-        trace: tracer.inspect(),
+        trace,
       };
     },
   });
