@@ -44,9 +44,12 @@ spatial audio. See `ROADMAP.md` for the evidence.
 |---|---|---|
 | **6 — Open the door & de-risk** | Cheap enabling seams + the two spikes' cheapest stages | none (current substrate) |
 | **7 — The authoring surface** | A person and an agent co-author a world, every step visible | Phase 6 seams |
-| **8 — Run anywhere** | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) |
-| **9 — Worlds worth authoring** | Agents sketch large worlds a learned generator details | Phase 6 worldgen greenlight; rides Phase 8 |
-| **10 — Ecosystem & gravity** | Other people publish skills others install | stable skill/package surface (shipped); benefits from Phase 8 |
+| **8 — Run anywhere** ✅ | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) |
+| **9 — Worlds worth authoring** ✅ | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 |
+| **10 — Agent governance & orchestration** | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) |
+| **11 — Content & assets** | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter |
+| **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) |
+| **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 |
 
 Phase 6 is cheap and mostly parallelizable. **Phase 7 is the first real sprint** (agent-native authoring
 is the lead). Phase 8 is the headline. Phases 9–10 follow, with 9 gated on a spike.
@@ -159,7 +162,63 @@ plan: [`worldgen-terrain-diffusion-spike.md`](./worldgen-terrain-diffusion-spike
 
 ---
 
-## Phase 10 — Ecosystem & gravity  *(the lasting advantage)*
+## Phase 10 — Agent governance & orchestration  *(the safe-scaling foundation)*
+
+**Goal:** make it safe + tractable to point many agents at one game as the catalog grows — least privilege in
+exposure *and* invocation, with a first-class delegate/review loop. Full plan:
+[`phase-10-governance-orchestration.md`](./phase-10-governance-orchestration.md).
+
+**Work:** **exposure scoping** (profile/bundle-filtered tool list — today `registry.list()` hands every agent
+the *whole* catalog; progressive disclosure via categories + a `skills.search` meta-skill; task-scoped working
+sets); **dynamic permission bundles** (least-privilege capability sets per task, enforced by the policy
+engine); the **coordinator/delegate model** (a `delegate(task, bundle)` skill + a coordinator loop that
+decomposes → spawns scoped workers → reviews their held edits via the Phase 7 approval gate).
+
+**Gate:** a `player.limited` agent's tool list excludes `system.*`/`terrain.generate`; a coordinator spawns
+workers with scoped bundles, reviews/approves their mutating edits, and the whole tree traces + replays.
+
+**Depends on:** the policy engine + Phase 7 approval gate (shipped) — ~70% is assembly. **Comes first:** every
+new skill in Phases 11–12 makes the unscoped exposure worse until this lands.
+
+---
+
+## Phase 11 — Content & assets  *(make content look intentional)*
+
+**Goal:** agents place/instance real assets and configure deterministic generation; assets import once and
+instance everywhere; everything stays replayable + portable. Full plan:
+[`phase-11-content-assets.md`](./phase-11-content-assets.md).
+
+**Work:** an **asset registry + GLTF import** (content-addressed, exported in `assets/`); **`asset.*`/`prop.*`
+placement skills** (scatter/place by id, deterministic); **agent-configurable generation seeds** (promote the
+prop `ScatterOptions` to a logged, elevation-aware `ScatterConfig` — the agent sets the art direction);
+**pluggable asset sources** (a curated library first; a **text→3D generator** spike-gated — the "agent
+generates the art" source, same shape as the S0 terrain probe). The engine consumes assets behind the seam; it
+never becomes a modeler.
+
+**Gate:** an agent scatters/places an asset by id; it imports + content-addresses + ships in the export;
+placement is deterministic and a generation config the agent sets reproduces the exact world.
+
+**Depends on:** Phase 10 (scoped skills), the Phase 8 export, Phase 9.1 scatter.
+
+---
+
+## Phase 12 — Game-building skill catalog  *(the fully-featured-games through-line; living)*
+
+**Goal:** stock the agent's *vocabulary* for building whole games — characters + animation, gameplay logic
+(items/stats/combat/quests/triggers/navmesh), interaction (input/camera/menus), meta. A **living backlog**, not
+a single build: each verb is a bounded build (typed/permissioned/traced/deterministic). Living catalog:
+[`agent-skill-catalog.md`](./agent-skill-catalog.md).
+
+**Sequence by leverage:** assets/props (Ph 11) → character controller + animation → interaction + triggers +
+objectives → inventory/stats/combat. After enough exists, Phase 13 lets the community publish verbs we never
+wrote — the real "fully-featured" unlock.
+
+**Depends on:** Phase 10 (safe to grow a large catalog) + Phase 11 (content + the asset/generation pattern).
+Runs *ongoing*, alongside and after the others.
+
+---
+
+## Phase 13 — Ecosystem & marketplace  *(the lasting advantage)*
 *Folds in former themes: Ecosystem & community + Advanced external memory adapters.*
 
 **Goal:** other people publish skills that others install and run, and richer external memory plugs in
@@ -177,9 +236,10 @@ cleanly.
 **Gate:** a third party publishes a skill that others discover, install, and run; and an external memory
 adapter plugs in behind the provider seam without the engine taking a dependency on it.
 
-**Depends on:** the stable skill/package surface (already shipped); benefits from the reach Phase 8 adds.
+**Depends on:** the stable skill/package surface (already shipped) **plus a catalog + governance worth trading**
+— so it's downstream of Phases 10–12; benefits from the reach Phase 8 adds.
 
-**Productized separately:** Phase 10 delivers the *engine-side* registry mechanism + contribution process.
+**Productized separately:** Phase 13 delivers the *engine-side* registry mechanism + contribution process.
 The full marketplace product — hybrid monetization, a web UI + agent-consumable API, and a catalog of
 skills/packages/worlds/assets — is its own roadmap: [`skills-exchange-roadmap.md`](./skills-exchange-roadmap.md).
 That product builds on this phase; it is never something the engine depends on at runtime.
@@ -189,5 +249,5 @@ That product builds on this phase; it is never something the engine depends on a
 ## Out of scope (non-goals, still)
 
 - Engine-owned agent memory or a built-in "brain" (violates the substrate principle; recall stays
-  external, see Phase 10).
+  external, see Phase 13).
 - A bespoke JS engine (V8 via `deno_core` is the runtime; see Phase 0 decisions).
