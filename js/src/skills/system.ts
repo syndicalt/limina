@@ -85,13 +85,14 @@ export function registerSystemSkills(registry: SkillRegistry): void {
   registry.register({
     name: "skills.list",
     version: "1.0.0",
-    description: "List all available skills (names + descriptions).",
+    description: "List the skills the caller is authorized to invoke (names + descriptions).",
     category: "system",
     permissions: [],
     input: z.object({}),
     output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string() })) }),
-    handler: () => ({
-      tools: registry.list().map((t) => ({ name: t.name, description: t.description })),
+    handler: (_input, ctx) => ({
+      // Least-privilege: list only what THIS caller could invoke (its grants).
+      tools: registry.list(ctx.permissions).map((t) => ({ name: t.name, description: t.description })),
     }),
   });
 
@@ -110,17 +111,47 @@ export function registerSystemSkills(registry: SkillRegistry): void {
       description: z.string(),
       input_schema: z.unknown(),
     }),
-    handler: (input) => {
+    handler: (input, ctx) => {
+      // Only describe a skill the caller could invoke — don't leak the catalog.
+      const tool = registry.list(ctx.permissions).find((t) => t.name === input.name);
       const def = registry.describe(input.name);
-      if (def === undefined) throw new Error(`unknown skill: ${input.name}`);
-      const tool = registry.list().find((t) => t.name === input.name);
+      if (tool === undefined || def === undefined) throw new Error(`unknown skill: ${input.name}`);
       return {
         name: def.name,
         version: def.version,
         category: def.category,
         description: def.description,
-        input_schema: tool?.input_schema,
+        input_schema: tool.input_schema,
       };
+    },
+  });
+
+  const searchInput = z.object({
+    query: z.string(),
+    category: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  });
+  registry.register({
+    name: "skills.search",
+    version: "1.0.0",
+    description: "Search the AUTHORIZED skills by name/description (+ optional category) — browse a large catalog instead of listing everything.",
+    category: "system",
+    permissions: [],
+    input: searchInput,
+    output: z.object({ matches: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
+    handler: (input, ctx) => {
+      const q = input.query.toLowerCase();
+      const limit = input.limit ?? 25;
+      const matches: { name: string; description: string; category: string }[] = [];
+      for (const t of registry.list(ctx.permissions)) {
+        const def = registry.describe(t.name);
+        if (def === undefined) continue;
+        if (input.category !== undefined && def.category !== input.category) continue;
+        if (q.length > 0 && !t.name.toLowerCase().includes(q) && !t.description.toLowerCase().includes(q)) continue;
+        matches.push({ name: t.name, description: t.description, category: def.category });
+        if (matches.length >= limit) break;
+      }
+      return { matches };
     },
   });
 

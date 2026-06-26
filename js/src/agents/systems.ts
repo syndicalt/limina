@@ -4,9 +4,9 @@
 
 import { Position } from "../ecs/world.ts";
 import { ops } from "../engine.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import type { Tracer } from "../observability/event.ts";
+import { agentGrants } from "./agent.ts";
 import type { AgentRecord, AgentRegistry, PerceivedEntity, Perception } from "./agent.ts";
 import type { LLMProvider } from "./llm.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
@@ -181,7 +181,7 @@ export function decisionSystem(
       causedBy: agent.lastPerceptionEventId !== undefined ? [agent.lastPerceptionEventId] : [],
       payload: { tick, provider: agent.llm.provider },
     });
-    const tools = registry.list();
+    const tools = registry.list(agentGrants(agent));
 
     provider
       .decide({ systemPrompt: agent.llm.systemPrompt, perception: agent.perception, tools, previousResults: [] })
@@ -231,7 +231,7 @@ export async function actionSystem(
       const response = await registry.invoke(action.req.tool, action.req.input, {
         agentId: agent.id,
         sessionId: agent.sessionId,
-        permissions: resolveProfile(agent.profile),
+        permissions: agentGrants(agent),
         profile: agent.profile,
         tick,
         world,
@@ -345,7 +345,7 @@ export async function runBoundedMultiTurn(
     const decision = await decideWithTimeout(provider, {
       systemPrompt: agent.llm.systemPrompt,
       perception: agent.perception,
-      tools: registry.list(),
+      tools: registry.list(agentGrants(agent)),
       previousResults: [...previousResults],
     }, options.timeoutMs - elapsed(start));
     if (decision === "timeout") {
@@ -378,7 +378,7 @@ export async function runBoundedMultiTurn(
       const response = await registry.invoke(call.tool, call.input, {
         agentId: agent.id,
         sessionId: agent.sessionId,
-        permissions: resolveProfile(agent.profile),
+        permissions: agentGrants(agent),
         profile: agent.profile,
         tick,
         world,

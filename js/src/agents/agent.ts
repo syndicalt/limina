@@ -3,6 +3,7 @@
 
 import type { MCPRequest } from "../mcp/protocol.ts";
 import type { AgentLookup } from "../skills/registry.ts";
+import { resolveProfile } from "../skills/permissions.ts";
 
 export interface PerceivedEntity {
   id: string;
@@ -26,6 +27,10 @@ export interface AgentRecord {
   perceptionRadius: number;
   decisionIntervalTicks: number;
   profile: string; // permission profile name
+  /** Optional dynamic capability BUNDLE — a least-privilege set assigned per task
+   *  (e.g. by a coordinator's delegate). When present it governs BOTH exposure and
+   *  invocation (via agentGrants); absent -> the profile's grants. */
+  bundle?: ReadonlySet<string>;
   sessionId: string;
   llm: { provider: string; model: string; systemPrompt: string };
   // runtime state
@@ -50,8 +55,16 @@ export interface NewAgent {
   perceptionRadius?: number;
   decisionIntervalTicks?: number;
   profile: string;
+  bundle?: ReadonlySet<string>;
   sessionId: string;
   llm: { provider: string; model: string; systemPrompt: string };
+}
+
+/** The capability grants that govern an agent — its dynamic bundle if assigned,
+ *  else its profile's grants. The SINGLE source for both what the agent SEES
+ *  (registry.list) and what it can INVOKE (InvokeBase.permissions). */
+export function agentGrants(agent: { profile: string; bundle?: ReadonlySet<string> }): ReadonlySet<string> {
+  return agent.bundle ?? resolveProfile(agent.profile);
 }
 
 export class AgentRegistry implements AgentLookup {
@@ -65,6 +78,7 @@ export class AgentRegistry implements AgentLookup {
       perceptionRadius: spec.perceptionRadius ?? 15,
       decisionIntervalTicks: spec.decisionIntervalTicks ?? 30,
       profile: spec.profile,
+      bundle: spec.bundle,
       sessionId: spec.sessionId,
       llm: spec.llm,
       inFlight: false,
