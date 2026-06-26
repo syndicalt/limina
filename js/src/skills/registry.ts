@@ -313,9 +313,18 @@ export class SkillRegistry {
   private reviewGate?: ApprovalGate;
   private readonly pending = new Map<string, PendingApproval>();
 
-  /** Install the review gate (e.g. `reviewProfileGate(...)`). */
+  /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate: ApprovalGate): void {
     this.reviewGate = gate;
+  }
+  /** COMPOSE a review gate: a call is held if the existing gate OR `gate` holds it.
+   *  Lets independent subsystems each install their own review predicate (e.g. a
+   *  host's human-review gate + the delegate-worker gate) without clobbering. */
+  addApprovalGate(gate: ApprovalGate): void {
+    const prev = this.reviewGate;
+    this.reviewGate = prev === undefined
+      ? gate
+      : (name, base, skill): boolean => prev(name, base, skill) || gate(name, base, skill);
   }
   /** Remove the review gate — calls apply directly again. */
   clearApprovalGate(): void {

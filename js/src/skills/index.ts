@@ -22,6 +22,9 @@ import { registerTerrainSkills } from "./terrain.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { TerrainSource } from "../terrain/types.ts";
+import { registerOrchestrationSkills } from "./orchestration.ts";
+import type { ProviderMap } from "../agents/systems.ts";
+import type { AgentRegistry } from "../agents/agent.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -39,7 +42,20 @@ export interface CoreSkills {
   terrain: { source: TerrainSource; cache: TileCache };
 }
 
-export function registerCoreSkills(registry: SkillRegistry, opts?: { terrainSource?: TerrainSource; terrainCache?: TileCache }): CoreSkills {
+export function registerCoreSkills(
+  registry: SkillRegistry,
+  opts?: {
+    terrainSource?: TerrainSource;
+    terrainCache?: TileCache;
+    /** Phase 10 coordinator/delegate: when a provider map is supplied, the
+     *  `delegate` skill is wired so a coordinator can spawn least-privilege
+     *  workers under review. Omitted -> no orchestration surface (back-compat). */
+    providers?: ProviderMap;
+    /** Where delegated workers are registered (optional; a self-contained
+     *  registry is used when omitted). */
+    agents?: AgentRegistry;
+  },
+): CoreSkills {
   registerSceneSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry);
@@ -82,5 +98,11 @@ export function registerCoreSkills(registry: SkillRegistry, opts?: { terrainSour
   const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   registerTerrainSkills(registry, terrainSource, terrainCache);
+  // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
+  // map is supplied (the worker loop needs real providers); without it the engine
+  // behaves exactly as before — no `delegate` skill registered.
+  if (opts?.providers !== undefined) {
+    registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
+  }
   return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
 }

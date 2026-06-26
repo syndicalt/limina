@@ -77,11 +77,16 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
  *  or the approval.* skills themselves. Relies on the live agent loop passing the
  *  agent's `profile` in the invoke base (actionSystem / runBoundedMultiTurn do). */
 export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): ApprovalGate {
-  const MUTATING = new Set(["scene.write", "ecs.modify", "physics.write"]);
+  // DEFAULT-HOLD: a reviewed agent's call is HELD unless EVERY capability it requires
+  // is read-only / introspection. This is a denylist of reads, not an allowlist of a
+  // few known-mutating perms — so it catches ALL write-class skills for an ARBITRARY
+  // bundle (scene/ecs/physics writes, agent.write, ui.write, audio.play, social.act,
+  // terrain.generate, and any future write cap), which an allowlist would silently miss.
+  const READ_ONLY = new Set(["scene.read", "ecs.read", "physics.read", "agent.read", "terrain.read"]);
   return (name, base, skill: SkillDefinition): boolean => {
     if (base.profile === undefined || !reviewProfiles.has(base.profile)) return false;
-    if (name.startsWith("approval.")) return false;
-    return skill.permissions.some((p) => MUTATING.has(p));
+    if (name.startsWith("approval.")) return false; // never gate the resolution skills
+    return skill.permissions.some((p) => !READ_ONLY.has(p));
   };
 }
 

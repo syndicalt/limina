@@ -35,6 +35,13 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "ui.write", "audio.play",
   ],
   "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review"],
+  // Phase 10 coordinator/delegate. A coordinator DECOMPOSES a goal and DELEGATES
+  // bounded tasks to least-privilege workers (`orchestrate`), then REVIEWS their
+  // held mutating edits (`approval.review`) — the same gate a human reviewer drives.
+  "reviewer.coordinator": [
+    "orchestrate", "approval.review",
+    "scene.read", "ecs.read", "physics.read", "agent.read",
+  ],
 };
 
 export function resolveProfile(name: string): ReadonlySet<string> {
