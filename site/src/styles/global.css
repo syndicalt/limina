@@ -1,47 +1,56 @@
 /* ============================================================
    Limina — design system
-   Palette + motifs pulled from the engine's own renders:
-   near-black navy, teal grid glow, violet/magenta/amber agents.
+   The page is the run through the worlds. Palette + motifs come
+   from the live hero cinematic: a stylised low-poly agent running
+   builder → fantasy → western → sci-fi → sim through glowing portals.
+   Soft, painterly, daylight-capable — not a cold techy shell.
    ============================================================ */
 
 :root {
-  /* surfaces */
-  --bg:        #070912;
-  --bg-2:      #0a0e1a;
-  --panel:     #0d1322;
-  --panel-2:   #111a2d;
-  --panel-3:   #16203a;
+  /* base surfaces — warm twilight, not cold black */
+  --bg:        #0a0d18;
+  --bg-2:      #0c1020;
+  --panel:     #121933;
+  --panel-2:   #161f3d;
+  --panel-3:   #1b264a;
 
   /* ink */
-  --ink:    #e9eef9;
-  --muted:  #9aa7c0;
-  --faint:  #67748f;
+  --ink:    #eef2fb;
+  --muted:  #aab6d2;
+  --faint:  #74809e;
 
-  /* lines */
-  --line:   rgba(255, 255, 255, 0.09);
-  --line-2: rgba(255, 255, 255, 0.055);
+  /* lines — softer */
+  --line:   rgba(150, 180, 230, 0.14);
+  --line-2: rgba(150, 180, 230, 0.08);
 
-  /* engine accents */
-  --teal:    #2fe6d6;
-  --cyan:    #3bc9ff;
-  --violet:  #8b6bff;
+  /* portal + agent glow (the accent that runs through everything) */
+  --glow:    #78e6ff;   /* portal/agent rim light */
+  --glow-2:  #3bc9ff;
+  --violet:  #8b6bff;   /* portal core */
   --magenta: #ff5aa0;
   --amber:   #ffb454;
-  --accent:  var(--teal);
+  --teal:    #2fe6d6;
+  --accent:  var(--glow);
 
-  --grad: linear-gradient(100deg, var(--teal), var(--cyan) 45%, var(--violet));
-  --grad-soft: linear-gradient(120deg, rgba(47,230,214,.16), rgba(139,107,255,.16));
+  /* the five worlds — per-section grades (the journey) */
+  --w-builder-bg: #0a0d18;  --w-builder-ink: #eef2fb;  --w-builder-key: #78e6ff;
+  --w-fantasy-bg: #dfeede;  --w-fantasy-ink: #20351f;  --w-fantasy-key: #2f9e57;
+  --w-western-bg: #2a1d14;  --w-western-ink: #ffe9cf;  --w-western-key: #ffb454;
+  --w-scifi-bg:   #05060f;  --w-scifi-ink:   #dfe9ff;  --w-scifi-key:   #6fa8ff;
+  --w-sim-bg:     #e7f0ff;  --w-sim-ink:     #16233a;  --w-sim-key:     #3f9be0;
 
-  --glow-teal:   0 0 48px rgba(47, 230, 214, 0.22);
-  --glow-violet: 0 0 48px rgba(139, 107, 255, 0.22);
+  --portal: linear-gradient(100deg, var(--glow), var(--violet) 70%);
+  --portal-soft: linear-gradient(120deg, rgba(120,230,255,.16), rgba(139,107,255,.16));
 
-  --radius:    16px;
-  --radius-sm: 10px;
+  --radius:    18px;
+  --radius-sm: 12px;
+  --radius-btn: 14px;
   --maxw:      1180px;
   --maxw-text: 720px;
 
+  --display: "Comfortaa", "Inter", system-ui, -apple-system, sans-serif;
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -69,67 +78,71 @@ body {
   min-height: 100vh;
 }
 
-/* Ambient backdrop: faint grid + horizon glow, fixed behind content */
+/* Ambient atmosphere: a painterly dawn sky — cool agent-glow up top,
+   a violet portal bloom, a warm amber horizon. No techy grid. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -2;
   background:
-    radial-gradient(120% 80% at 50% -10%, rgba(47,230,214,0.10), transparent 55%),
-    radial-gradient(90% 70% at 85% 110%, rgba(139,107,255,0.10), transparent 60%),
-    var(--bg);
+    radial-gradient(140% 95% at 50% -25%, rgba(120, 230, 255, 0.12), transparent 55%),
+    radial-gradient(70% 55% at 12% 6%, rgba(139, 107, 255, 0.12), transparent 60%),
+    radial-gradient(95% 70% at 88% 108%, rgba(255, 180, 84, 0.10), transparent 62%),
+    linear-gradient(180deg, #0a0d18 0%, #0c1020 45%, #090c15 100%);
 }
+/* gentle top/bottom vignette for depth (replaces the grid) */
 body::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background-image:
-    linear-gradient(var(--line-2) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(130% 90% at 50% 0%, #000 35%, transparent 78%);
-  opacity: 0.55;
+  background: radial-gradient(120% 80% at 50% 30%, transparent 60%, rgba(5, 7, 14, 0.55));
 }
 
 img, svg, canvas { display: block; max-width: 100%; }
 a { color: inherit; text-decoration: none; }
 
-::selection { background: rgba(47, 230, 214, 0.28); color: #fff; }
+::selection { background: rgba(120, 230, 255, 0.30); color: #04121a; }
 
 /* ---- Typography ---------------------------------------------------- */
 
-h1, h2, h3, h4 { line-height: 1.08; letter-spacing: -0.03em; font-weight: 680; }
+h1, h2, h3, h4 {
+  font-family: var(--display);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
 
 .display {
-  font-size: clamp(2.6rem, 6.4vw, 5rem);
-  font-weight: 760;
-  letter-spacing: -0.04em;
-  line-height: 0.98;
+  font-family: var(--display);
+  font-size: clamp(2.6rem, 6.2vw, 4.8rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
 }
-.h2 { font-size: clamp(1.9rem, 3.6vw, 3rem); font-weight: 720; }
-.h3 { font-size: clamp(1.25rem, 2vw, 1.6rem); font-weight: 680; }
+.h2 { font-family: var(--display); font-size: clamp(1.9rem, 3.6vw, 2.9rem); font-weight: 700; }
+.h3 { font-family: var(--display); font-size: clamp(1.25rem, 2vw, 1.55rem); font-weight: 600; }
 
 .eyebrow {
   font-family: var(--mono);
-  font-size: 0.78rem;
+  font-size: 0.76rem;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--teal);
+  color: var(--glow);
   font-weight: 500;
 }
 
 .lede {
-  font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+  font-size: clamp(1.05rem, 1.6vw, 1.28rem);
   color: var(--muted);
-  line-height: 1.55;
+  line-height: 1.6;
   max-width: var(--maxw-text);
 }
 
 .grad-text {
-  background: var(--grad);
+  background: var(--portal);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -167,16 +180,17 @@ h1, h2, h3, h4 { line-height: 1.08; letter-spacing: -0.03em; font-weight: 680; }
   .cols-2, .cols-3, .cols-4 { grid-template-columns: 1fr; }
 }
 
-/* ---- Buttons ------------------------------------------------------- */
+/* ---- Buttons — step through a portal -------------------------------- */
 
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 9px;
+  font-family: var(--display);
   font-weight: 600;
-  font-size: 0.97rem;
-  padding: 13px 22px;
-  border-radius: 999px;
+  font-size: 0.98rem;
+  padding: 13px 24px;
+  border-radius: var(--radius-btn);
   border: 1px solid transparent;
   cursor: pointer;
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease),
@@ -185,52 +199,74 @@ h1, h2, h3, h4 { line-height: 1.08; letter-spacing: -0.03em; font-weight: 680; }
 }
 .btn:hover { transform: translateY(-2px); }
 .btn-primary {
-  background: var(--grad);
-  color: #04121a;
-  box-shadow: var(--glow-teal);
+  background: radial-gradient(130% 150% at 50% -10%, #9af0ff, #45c8ee 48%, #2ba5e0 100%);
+  color: #042029;
+  box-shadow:
+    inset 0 0 0 1px rgba(160, 240, 255, 0.55),
+    0 10px 34px -10px rgba(60, 201, 230, 0.7),
+    0 0 46px -8px rgba(120, 230, 255, 0.5);
 }
-.btn-primary:hover { box-shadow: 0 0 60px rgba(47, 230, 214, 0.4); }
+.btn-primary:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(180, 245, 255, 0.7),
+    0 14px 40px -10px rgba(60, 201, 230, 0.85),
+    0 0 60px -6px rgba(120, 230, 255, 0.7);
+}
 .btn-ghost {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(150, 180, 230, 0.06);
   border-color: var(--line);
   color: var(--ink);
+  backdrop-filter: blur(4px);
 }
-.btn-ghost:hover { border-color: rgba(47, 230, 214, 0.5); background: rgba(47, 230, 214, 0.06); }
+.btn-ghost:hover { border-color: rgba(120, 230, 255, 0.55); background: rgba(120, 230, 255, 0.08); }
 
-/* ---- Panels & cards ------------------------------------------------ */
+/* ---- Panels & cards — portal thresholds ----------------------------- */
 
 .panel {
-  background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0));
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   position: relative;
 }
 
 .card {
-  background: linear-gradient(180deg, var(--panel), var(--bg-2));
+  background: linear-gradient(180deg, rgba(150, 180, 230, 0.05), rgba(150, 180, 230, 0.012));
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 26px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 28px 60px -42px rgba(0, 0, 0, 0.85);
   transition: transform 0.25s var(--ease), border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
 }
+/* a portal threshold glows along the top edge of each card */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--glow) 30%, var(--violet) 70%, transparent);
+  opacity: 0.55;
+}
 .card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(47, 230, 214, 0.35);
-  box-shadow: 0 20px 60px -30px rgba(47, 230, 214, 0.5);
+  transform: translateY(-3px);
+  border-color: rgba(120, 230, 255, 0.42);
+  box-shadow: 0 34px 70px -38px rgba(60, 201, 230, 0.5);
 }
 .card .ic {
-  width: 44px; height: 44px;
+  width: 46px; height: 46px;
   display: grid; place-items: center;
-  border-radius: 12px;
-  background: var(--grad-soft);
-  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--portal-soft);
+  border: 1px solid rgba(120, 230, 255, 0.25);
+  box-shadow: 0 0 24px -6px rgba(120, 230, 255, 0.4);
   margin-bottom: 18px;
-  color: var(--teal);
+  color: var(--glow);
 }
-.card h3 { margin-bottom: 8px; font-size: 1.18rem; }
+.card h3 { margin-bottom: 8px; font-size: 1.2rem; }
 .card p { color: var(--muted); font-size: 0.98rem; }
 
-/* ---- Pills / badges ------------------------------------------------ */
+/* ---- Pills / badges — soft low-poly tags ---------------------------- */
 
 .pill {
   display: inline-flex;
@@ -239,48 +275,94 @@ h1, h2, h3, h4 { line-height: 1.08; letter-spacing: -0.03em; font-weight: 680; }
   font-family: var(--mono);
   font-size: 0.74rem;
   letter-spacing: 0.04em;
-  padding: 6px 12px;
+  padding: 6px 13px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(150, 180, 230, 0.05);
   color: var(--muted);
 }
-.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 10px var(--teal); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--glow); box-shadow: 0 0 10px var(--glow); }
 
 .tag {
   font-family: var(--mono);
   font-size: 0.72rem;
-  color: var(--teal);
-  border: 1px solid rgba(47, 230, 214, 0.3);
+  color: var(--glow);
+  border: 1px solid rgba(120, 230, 255, 0.3);
   border-radius: 6px;
   padding: 2px 8px;
-  background: rgba(47, 230, 214, 0.06);
+  background: rgba(120, 230, 255, 0.07);
 }
+
+/* ---- Portal divider — passing into the next world ------------------- */
+
+.portal {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 150px;
+  margin-block: 6px;
+  overflow: hidden;
+}
+.portal .glow {
+  position: absolute;
+  width: min(680px, 88%);
+  height: 230px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(120, 230, 255, 0.20), rgba(139, 107, 255, 0.12) 58%, transparent 76%);
+  filter: blur(3px);
+}
+.portal svg { position: relative; width: min(580px, 84%); height: auto; overflow: visible; }
+.portal .label {
+  position: absolute;
+  bottom: 26px;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.portal .label b { color: var(--glow); font-weight: 500; }
+
+/* ---- Per-world section tints (the journey) -------------------------- */
+/* wrap a section in one of these to take that world's light + grade */
+.world-fantasy {
+  background: linear-gradient(180deg, #cfe6dc 0%, #dff0e4 60%, #cfe6dc 100%);
+  color: var(--w-fantasy-ink);
+  --ink: var(--w-fantasy-ink); --muted: #4a6147; --faint: #6f8869;
+  --line: rgba(30, 60, 30, 0.16); --glow: var(--w-fantasy-key);
+}
+.world-western {
+  background: linear-gradient(180deg, #241811 0%, #32241a 55%, #241811 100%);
+  --ink: var(--w-western-ink); --muted: #c8a784; --line: rgba(255, 200, 140, 0.16); --glow: var(--w-western-key);
+}
+.world-scifi {
+  background: linear-gradient(180deg, #04060f 0%, #070b1c 60%, #04060f 100%);
+  --ink: var(--w-scifi-ink); --muted: #9fb4e0; --line: rgba(110, 168, 255, 0.16); --glow: var(--w-scifi-key);
+}
+.world-fantasy .eyebrow, .world-sim .eyebrow { color: var(--w-fantasy-key); }
+.world-fantasy .lede, .world-sim .lede { color: #4a6147; }
 
 /* ---- Mono / code ---------------------------------------------------- */
 
 .mono { font-family: var(--mono); }
 
-code, .code {
-  font-family: var(--mono);
-  font-size: 0.88em;
-}
+code, .code { font-family: var(--mono); font-size: 0.88em; }
 
 .codeblock {
   font-family: var(--mono);
   font-size: 0.86rem;
   line-height: 1.7;
-  background: #070b14;
+  background: #080c18;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 18px 20px;
   overflow-x: auto;
-  color: #cdd7ec;
+  color: #cdd9f0;
 }
 .codeblock .c-key { color: var(--violet); }
-.codeblock .c-str { color: var(--teal); }
+.codeblock .c-str { color: var(--glow); }
 .codeblock .c-com { color: var(--faint); }
-.codeblock .c-fn  { color: var(--cyan); }
+.codeblock .c-fn  { color: var(--glow-2); }
 
 /* ---- Reveal-on-scroll --------------------------------------------- */
 .reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s var(--ease), transform 0.7s var(--ease); }
