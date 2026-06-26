@@ -50,7 +50,9 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     input: z.object({ approvalId: z.string() }),
     output: z.object({ resolved: z.boolean(), applied: z.boolean(), error: z.string().nullable() }),
     handler: async (input, ctx) => {
-      const res = await registry.resolveApproval(input.approvalId, true, { agentId: ctx.agentId });
+      // Pass the reviewer's CURRENT tick as the apply tick so the granted action's
+      // provenance reflects WHEN it applied, not when it was proposed.
+      const res = await registry.resolveApproval(input.approvalId, true, { agentId: ctx.agentId, applyTick: ctx.tick });
       const resolved = res.error?.code !== "not_found";
       return { resolved, applied: res.success, error: res.success ? null : (res.error?.message ?? null) };
     },
@@ -94,8 +96,20 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 // 1. Re-authorization at grant (registry.resolveApproval) re-checks REVOCATION
 //    only — not quotas/budgets, since re-running the full policy would double-count
 //    the propose-time commit. Quota consumed at propose is not refunded on deny.
-// 2. A granted action's `skill.executed` is stamped with the PROPOSE tick (the
-//    parked base), not the apply tick — a provenance gap for the durable log.
+// 2. RESOLVED — a granted action's apply-time events now carry the APPLY tick. The
+//    `approval.grant` handler passes its `ctx.tick` to `resolveApproval`, which stamps
+//    BOTH `skill.approval.granted` and `skill.executed` via registry.stampTick. The
+//    propose-time `skill.approval.pending` event STAYS at the propose tick. Net per
+//    emitted event:
+//      - skill.approval.pending  -> PROPOSE tick (base.tick, in invoke)    [unchanged]
+//      - skill.approval.granted  -> APPLY tick, FLOORED at the propose tick [new]
+//      - skill.executed (granted)-> APPLY tick, FLOORED at the propose tick [new]
+//      - skill.approval.denied   -> (no tick field; deny applies nothing)  [unchanged]
+//    The floor (stampTick) guards "applied before proposed": a reviewer that never
+//    advanced a sim tick (apply tick 0) cannot stamp an action proposed at a LATER tick
+//    as if it applied at 0 — such a tick is floored back to the propose tick. A
+//    non-gated invoke() supplies no apply tick, so its `skill.executed` keeps the
+//    propose==apply base.tick exactly as before (replay-safe; p4_worldlog_* unaffected).
 // 3. Durable-log REPLAY of an APPROVAL-GATED session is not yet faithful: the
 //    recorder logs the propose-invoke (worldlog/recorder.ts `attach`), so on a
 //    gate-off replay a DENIED action would re-apply. The gate is OFF by default,

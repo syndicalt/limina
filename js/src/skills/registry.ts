@@ -13,6 +13,18 @@ import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEvent
 
 export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "system" | "ui" | "social" | "audio" | "terrain" | "world";
 
+/** Pick the tick to stamp on an APPLY-TIME event. The apply tick (the reviewer's
+ *  current tick for an approval-gated action) is used ONLY when it is a finite number
+ *  that is NOT BEFORE the propose tick — otherwise we floor at the propose tick. This
+ *  guards against "applied before proposed" provenance: an MCP reviewer that never
+ *  advanced a sim tick passes tick 0, which must not stamp an action proposed at a
+ *  later tick as if it applied at 0. Absent apply tick -> propose tick (back-compat). */
+function stampTick(applyTick: number | undefined, proposeTick: number): number {
+  return typeof applyTick === "number" && Number.isFinite(applyTick) && applyTick >= proposeTick
+    ? applyTick
+    : proposeTick;
+}
+
 /** Minimal agent-perception lookup (the AgentRegistry implements it) so the
  *  agent.getPerception skill can read the calling agent's perception. */
 export interface AgentLookup {
@@ -371,7 +383,14 @@ export class SkillRegistry {
   }
 
   /** Run before -> handler -> after -> emit `skill.executed` for a resolved,
-   *  validated, policy-approved (and approval-granted, if gated) call. */
+   *  validated, policy-approved (and approval-granted, if gated) call.
+   *
+   *  `applyTick` overrides the tick stamped on `skill.executed`: for an APPROVAL-GATED
+   *  action it is the reviewer's APPLY tick (when the grant landed), not the parked
+   *  PROPOSE tick — but only when it is finite and NOT BEFORE the propose tick (see
+   *  stampTick; an early/zero reviewer tick is floored to the propose tick so an action
+   *  is never stamped "applied before proposed"). Absent (the direct invoke() path), it
+   *  falls back to `base.tick`, so a non-gated call stamps propose==apply as before. */
   private async applyHandler(
     skill: SkillDefinition,
     input: unknown,
@@ -379,12 +398,13 @@ export class SkillRegistry {
     ctx: ExecutionContext,
     meta: () => MCPResponse["metadata"],
     execCausedBy: string[] | undefined,
+    applyTick?: number,
   ): Promise<MCPResponse> {
     try {
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
       const result = await skill.handler(input, ctx);
       if (skill.hooks?.after) await skill.hooks.after(result, ctx);
-      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: base.tick }, execCausedBy);
+      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
       return { success: true, result, metadata: meta() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -466,7 +486,7 @@ export class SkillRegistry {
   async resolveApproval(
     approvalId: string,
     granted: boolean,
-    reviewer?: { agentId: string; reason?: string },
+    reviewer?: { agentId: string; reason?: string; applyTick?: number },
   ): Promise<MCPResponse> {
     const parked = this.pending.get(approvalId);
     if (parked === undefined) {
@@ -489,8 +509,14 @@ export class SkillRegistry {
       this.tracer.emit({ type: "skill.approval.denied", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reason: "authorization revoked since propose", reviewer: reviewer?.agentId } });
       return { success: false, error: { code: "forbidden", message: `authorization revoked: ${parked.skill}` } };
     }
-    const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId } });
+    // Apply-time provenance: stamp the grant + the executed action with the APPLY
+    // tick (the reviewer's current tick) when it is supplied AND not before the propose
+    // tick (stampTick floors it), falling back to the parked propose tick otherwise.
+    // The propose-time `skill.approval.pending` event (emitted in invoke) KEEPS the
+    // propose tick — only these apply-time events move.
+    const applyTick = reviewer?.applyTick;
+    const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId, tick: stampTick(applyTick, parked.base.tick) } });
     const { ctx, meta } = this.makeCtx(parked.base);
-    return this.applyHandler(skill, parked.input, parked.base, ctx, meta, [approvalId, grantedId]);
+    return this.applyHandler(skill, parked.input, parked.base, ctx, meta, [approvalId, grantedId], applyTick);
   }
 }

@@ -24,7 +24,11 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "social.actor": [
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
-  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read"],
+  // `trace.read` gates the cross-agent trace surface (trace.tail / .explainEvent /
+  // .export). Only the OBSERVER profiles below carry it; build/play/social/terrain
+  // actors and a bundle-scoped `delegate.review` worker deliberately do NOT, so a
+  // least-privilege worker cannot read or export the global trace.
+  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read"],
   // Phase 7 human-in-the-loop. `builder.review` is a builder whose MUTATING edits
   // are held by the review gate (same capabilities as builder.readWrite — it can
   // PROPOSE; the gate decides when its world-writes apply). `reviewer` is the human
@@ -34,13 +38,13 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review"],
+  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read"],
   // Phase 10 coordinator/delegate. A coordinator DECOMPOSES a goal and DELEGATES
   // bounded tasks to least-privilege workers (`orchestrate`), then REVIEWS their
   // held mutating edits (`approval.review`) — the same gate a human reviewer drives.
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
-    "scene.read", "ecs.read", "physics.read", "agent.read",
+    "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read",
   ],
 };
 
