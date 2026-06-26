@@ -7,7 +7,8 @@
 //     collider with NO body id; removed ids tombstone and never reuse);
 //   - op_physics_step advances the playback tick;
 //   - op_physics_body_transform returns the authoritative keyframe transform for
-//     (bodyId, tick) — exact at keyframe ticks, step-held in between.
+//     (bodyId, tick) — EXACT on keyframe ticks (so the parity gate holds) and
+//     INTERPOLATED between them so playback is smooth at 60Hz.
 
 import type { CollisionEventRecord, EngineOps } from "../engine.ts";
 import type { Keyframe } from "../worldlog/keyframes.ts";
@@ -34,21 +35,36 @@ export class KeyframePhysics {
   /** Current playback tick (advanced by op_physics_step). */
   get currentTick(): number { return this.tick; }
 
-  /** Write the body's transform at the current tick into `out` — the largest
-   *  keyframe with tick <= current (step-to-keyframe; exact at keyframe ticks). */
+  /** Write the body's transform at the current tick into `out`. EXACT on a
+   *  keyframe tick (and past the last) — so keyframe ticks, incl. the forced final
+   *  tick, stay bit-identical to native — and INTERPOLATED between keyframes
+   *  (position lerp + shortest-path quaternion nlerp) so a body moves every tick
+   *  (60Hz) instead of stepping at the keyframe interval. */
   private lookup(id: number, out: Float32Array): void {
     const tl = this.timelines.get(id);
     if (tl === undefined || tl.ticks.length === 0) { out.fill(0); return; }
-    let idx = 0;
-    if (this.tick >= tl.ticks[0]) {
-      let lo = 0, hi = tl.ticks.length - 1;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (tl.ticks[mid] <= this.tick) { idx = mid; lo = mid + 1; } else hi = mid - 1;
-      }
-    }
-    const t = tl.xforms[idx];
-    for (let i = 0; i < 7; i++) out[i] = t[i];
+    // At or before the first keyframe: hold the first pose.
+    if (this.tick <= tl.ticks[0]) { const a = tl.xforms[0]; for (let i = 0; i < 7; i++) out[i] = a[i]; return; }
+    // Largest keyframe index with tick <= current.
+    let idx = 0, lo = 0, hi = tl.ticks.length - 1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (tl.ticks[mid] <= this.tick) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
+    const a = tl.xforms[idx];
+    // Exactly on a keyframe, or past the last keyframe: return it EXACTLY.
+    if (this.tick === tl.ticks[idx] || idx === tl.ticks.length - 1) { for (let i = 0; i < 7; i++) out[i] = a[i]; return; }
+    // Interpolate toward the next keyframe by the fractional tick.
+    const b = tl.xforms[idx + 1];
+    const f = (this.tick - tl.ticks[idx]) / (tl.ticks[idx + 1] - tl.ticks[idx]);
+    out[0] = a[0] + (b[0] - a[0]) * f;
+    out[1] = a[1] + (b[1] - a[1]) * f;
+    out[2] = a[2] + (b[2] - a[2]) * f;
+    // Quaternion: shortest-path normalized lerp (negate b across the double cover).
+    const s = (a[3] * b[3] + a[4] * b[4] + a[5] * b[5] + a[6] * b[6]) < 0 ? -1 : 1;
+    const qx = a[3] + (b[3] * s - a[3]) * f;
+    const qy = a[4] + (b[4] * s - a[4]) * f;
+    const qz = a[5] + (b[5] * s - a[5]) * f;
+    const qw = a[6] + (b[6] * s - a[6]) * f;
+    const inv = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+    out[3] = qx * inv; out[4] = qy * inv; out[5] = qz * inv; out[6] = qw * inv;
   }
 
   // ---- the PhysicsOps surface (structurally matches engine.ts PhysicsOps) ---

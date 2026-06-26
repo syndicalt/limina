@@ -71,9 +71,10 @@ try {
 } catch { truncRejected = true; }
 assert(truncRejected, "loadExport accepted a keyframe count mismatch (silent truncation)");
 
-// 3. KeyframePhysics step-to-keyframe lookup ----------------------------------
-// body 0 keyframed at ticks 0,10,20; transform x = the tick/10. Between keyframes
-// the transform HOLDS the last keyframe (step-to-keyframe), exact AT keyframes.
+// 3. KeyframePhysics lookup: EXACT at keyframes, INTERPOLATED between -----------
+// body 0 keyframed at ticks 0,10,20 with x = tick/10. On a keyframe tick the
+// transform is exact (parity-preserving); between keyframes it interpolates so a
+// body moves every tick (the smoothness the UAT needs), holding past the last.
 const kf: Keyframe[] = [
   { tick: 0, bodies: [{ id: 0, t: [0, 0, 0, 0, 0, 0, 1] }] },
   { tick: 10, bodies: [{ id: 0, t: [1, 0, 0, 0, 0, 0, 1] }] },
@@ -87,13 +88,15 @@ const xAt = (steps: number): number => {
   for (let i = 0; i < steps; i++) p.op_physics_step();
   const o = new Float32Array(7); p.op_physics_body_transform(0, o); return o[0];
 };
-assert(xAt(0) === 0, `tick 0 should read keyframe 0 (got ${xAt(0)})`);
-assert(xAt(5) === 0, `tick 5 should HOLD keyframe 0 (got ${xAt(5)})`);
-assert(xAt(10) === 1, `tick 10 should read keyframe 10 (got ${xAt(10)})`);
-assert(xAt(15) === 1, `tick 15 should HOLD keyframe 10 (got ${xAt(15)})`);
-assert(xAt(20) === 2, `tick 20 should read keyframe 20 (got ${xAt(20)})`);
-assert(xAt(99) === 2, `past the last keyframe should HOLD it (got ${xAt(99)})`);
-// body_pos returns only the position triple.
+assert(xAt(0) === 0, `tick 0 = keyframe 0 exactly (got ${xAt(0)})`);
+assert(xAt(10) === 1, `tick 10 = keyframe 10 exactly (got ${xAt(10)})`);
+assert(xAt(20) === 2, `tick 20 = keyframe 20 exactly (got ${xAt(20)})`);
+assert(xAt(99) === 2, `past the last keyframe holds it (got ${xAt(99)})`);
+assert(xAt(5) === 0.5, `tick 5 interpolates kf0->kf10 (got ${xAt(5)})`);
+assert(xAt(15) === 1.5, `tick 15 interpolates kf10->kf20 (got ${xAt(15)})`);
+// strictly moving every tick between keyframes = smooth (not stepped).
+assert(xAt(1) > 0 && xAt(2) > xAt(1) && xAt(9) > xAt(2) && xAt(9) < 1, "must interpolate every tick between keyframes (smoothness)");
+// body_pos returns only the position triple (exact on keyframe tick 10).
 phys.op_physics_create_world(-9.81); for (let i = 0; i < 10; i++) phys.op_physics_step();
 phys.op_physics_body_pos(0, out); assert(out[0] === 1 && out[1] === 0 && out[2] === 0, "body_pos wrong");
 
