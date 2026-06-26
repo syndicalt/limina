@@ -76,6 +76,31 @@ export interface SkillDefinition<I = unknown, O = unknown> {
   };
 }
 
+/** Decides whether a validated, policy-approved call is HELD for human approval
+ *  instead of applied immediately. Installed via `SkillRegistry.setApprovalGate`;
+ *  unset by default, so `invoke()` behaves exactly as before. */
+export type ApprovalGate = (skillName: string, base: InvokeBase, skill: SkillDefinition) => boolean;
+
+/** An action held pending approval — the validated, policy-approved intent. */
+interface PendingApproval {
+  approvalId: string;
+  skill: string;
+  input: unknown;
+  base: InvokeBase;
+  createdTick: number;
+}
+
+/** A pending approval surfaced to a reviewer/editor (no closures or world ref). */
+export interface PendingApprovalView {
+  approvalId: string;
+  skill: string;
+  input: unknown;
+  agentId: string;
+  sessionId: string;
+  profile?: string;
+  tick: number;
+}
+
 /** Produces the latest definition for a hot-reloadable skill. A real runtime
  *  re-imports the skill module; the returned definition replaces the live one. */
 export type SkillSource = () => SkillDefinition | Promise<SkillDefinition>;
@@ -263,7 +288,39 @@ export class SkillRegistry {
     return { ok: true, invalidated: [`scene:${name}`], summary };
   }
 
-  async invoke(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
+  // ---- Human-in-the-loop approval (review gate) --------------------------
+  // Off by default: with no gate installed, invoke() applies calls immediately,
+  // exactly as before. When a gate is installed and returns true for a
+  // (validated, policy-approved) call, the intent is HELD — surfaced as a
+  // `skill.approval.pending` event and parked under its id — and applied only
+  // when a reviewer grants it via resolveApproval (the approval.* skills).
+  private reviewGate?: ApprovalGate;
+  private readonly pending = new Map<string, PendingApproval>();
+
+  /** Install the review gate (e.g. `reviewProfileGate(...)`). */
+  setApprovalGate(gate: ApprovalGate): void {
+    this.reviewGate = gate;
+  }
+  /** Remove the review gate — calls apply directly again. */
+  clearApprovalGate(): void {
+    this.reviewGate = undefined;
+  }
+  /** Snapshot of the actions currently held for approval (for a reviewer/editor). */
+  pendingApprovals(): PendingApprovalView[] {
+    return [...this.pending.values()].map((p) => ({
+      approvalId: p.approvalId,
+      skill: p.skill,
+      input: p.input,
+      agentId: p.base.agentId,
+      sessionId: p.base.sessionId,
+      profile: p.base.profile,
+      tick: p.createdTick,
+    }));
+  }
+
+  /** Build the per-invocation execution context + a metadata thunk. Shared by
+   *  invoke() and resolveApproval() so emitted-event accounting is identical. */
+  private makeCtx(base: InvokeBase): { ctx: ExecutionContext; meta: () => MCPResponse["metadata"] } {
     const start = Date.now();
     const emitted: string[] = [];
     const ctx: ExecutionContext = {
@@ -285,7 +342,33 @@ export class SkillRegistry {
         return id;
       },
     };
-    const meta = () => ({ executionTimeMs: Date.now() - start, eventsEmitted: emitted });
+    return { ctx, meta: () => ({ executionTimeMs: Date.now() - start, eventsEmitted: emitted }) };
+  }
+
+  /** Run before -> handler -> after -> emit `skill.executed` for a resolved,
+   *  validated, policy-approved (and approval-granted, if gated) call. */
+  private async applyHandler(
+    skill: SkillDefinition,
+    input: unknown,
+    base: InvokeBase,
+    ctx: ExecutionContext,
+    meta: () => MCPResponse["metadata"],
+    execCausedBy: string[] | undefined,
+  ): Promise<MCPResponse> {
+    try {
+      if (skill.hooks?.before) await skill.hooks.before(input, ctx);
+      const result = await skill.handler(input, ctx);
+      if (skill.hooks?.after) await skill.hooks.after(result, ctx);
+      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: base.tick }, execCausedBy);
+      return { success: true, result, metadata: meta() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: { code: "handler_error", message }, metadata: meta() };
+    }
+  }
+
+  async invoke(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
+    const { ctx, meta } = this.makeCtx(base);
 
     // 1. Resolve.
     const skill = this.skills.get(name);
@@ -332,17 +415,57 @@ export class SkillRegistry {
         }
       }
     }
-    // 4. before -> handler -> after -> emit.
-    try {
-      if (skill.hooks?.before) await skill.hooks.before(parsed.data, ctx);
-      const result = await skill.handler(parsed.data, ctx);
-      if (skill.hooks?.after) await skill.hooks.after(result, ctx);
-      const execCausedBy = policyEventId !== undefined ? [...(base.causedBy ?? []), policyEventId] : base.causedBy;
-      ctx.emit("skill.executed", { skill: name, version: skill.version, input: parsed.data, tick: base.tick }, execCausedBy);
-      return { success: true, result, metadata: meta() };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: { code: "handler_error", message }, metadata: meta() };
+    const execCausedBy = policyEventId !== undefined ? [...(base.causedBy ?? []), policyEventId] : base.causedBy;
+
+    // 3b. Approval gate (off by default). Hold the validated, policy-approved
+    //     intent for human review instead of applying it — no world change until
+    //     a reviewer grants it.
+    if (this.reviewGate !== undefined && this.reviewGate(name, base, skill)) {
+      const approvalId = ctx.emit(
+        "skill.approval.pending",
+        { skill: name, version: skill.version, input: parsed.data, agentId: base.agentId, profile: base.profile, tick: base.tick },
+        execCausedBy,
+      );
+      this.pending.set(approvalId, { approvalId, skill: name, input: parsed.data, base, createdTick: base.tick });
+      return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta() };
     }
+
+    // 4. Apply.
+    return this.applyHandler(skill, parsed.data, base, ctx, meta, execCausedBy);
+  }
+
+  /** Resolve a held approval. `grant` -> apply the parked intent now and return
+   *  its result; deny -> drop it. Honest failure on an unknown/already-resolved
+   *  id. Emits `skill.approval.granted` / `denied` on the original agent's thread,
+   *  linked to the pending event so the causal chain stays intact. */
+  async resolveApproval(
+    approvalId: string,
+    granted: boolean,
+    reviewer?: { agentId: string; reason?: string },
+  ): Promise<MCPResponse> {
+    const parked = this.pending.get(approvalId);
+    if (parked === undefined) {
+      return { success: false, error: { code: "not_found", message: `unknown or already-resolved approval: ${approvalId}` } };
+    }
+    this.pending.delete(approvalId);
+    const skill = this.skills.get(parked.skill);
+    if (skill === undefined) {
+      this.tracer.emit({ type: "skill.approval.denied", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reason: "skill no longer registered" } });
+      return { success: false, error: { code: "not_found", message: `skill '${parked.skill}' is no longer registered` } };
+    }
+    if (!granted) {
+      this.tracer.emit({ type: "skill.approval.denied", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId, reason: reviewer?.reason } });
+      return { success: false, error: { code: "forbidden", message: `approval denied: ${parked.skill}` } };
+    }
+    // Re-authorize at apply time: a capability (or the whole session) may have
+    // been revoked since the action was proposed. A held action must not outlive
+    // the authorization that permitted it — fail closed.
+    if (this.policy !== undefined && this.policy.isRevoked(parked.base.sessionId, parked.skill)) {
+      this.tracer.emit({ type: "skill.approval.denied", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reason: "authorization revoked since propose", reviewer: reviewer?.agentId } });
+      return { success: false, error: { code: "forbidden", message: `authorization revoked: ${parked.skill}` } };
+    }
+    const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId } });
+    const { ctx, meta } = this.makeCtx(parked.base);
+    return this.applyHandler(skill, parked.input, parked.base, ctx, meta, [approvalId, grantedId]);
   }
 }

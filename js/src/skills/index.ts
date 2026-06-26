@@ -8,6 +8,7 @@ import { registerThreeSkills } from "./three.ts";
 import { registerPhysicsSkills } from "./physics.ts";
 import { registerAgentSkills } from "./agent.ts";
 import { registerSystemSkills } from "./system.ts";
+import { registerApprovalSkills } from "./approval.ts";
 import { registerAuditSkills } from "../policy/audit.ts";
 import { registerUiSkills } from "./ui.ts";
 import { SandboxedSkillHost } from "../sandbox/host.ts";
@@ -38,6 +39,7 @@ export function registerCoreSkills(registry: SkillRegistry): CoreSkills {
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
+  registerApprovalSkills(registry);
   registerAuditSkills(registry);
   // A4 UI surface: the `ui.*` skills author live containers against a shared
   // UiManager; the host ticks UiManager.update(camera,…) each frame.

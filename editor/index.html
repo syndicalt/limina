@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>limina · co-authoring editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">limina <span class="brand-sub">co-authoring editor</span></div>
+    <div class="conn">
+      <label>server <input id="url" type="text" value="ws://localhost:8787/" size="22" /></label>
+      <label>as
+        <select id="profile">
+          <option value="reviewer" selected>reviewer</option>
+          <option value="system.readonly">system.readonly</option>
+          <option value="builder.readWrite">builder.readWrite</option>
+        </select>
+      </label>
+      <label>poll ms <input id="interval" type="number" value="1000" min="250" step="250" size="5" /></label>
+      <button id="connect" class="btn">Connect</button>
+      <button id="disconnect" class="btn btn-ghost">Disconnect</button>
+      <span class="status"><span id="status-dot" class="dot dot-off"></span><span id="status-text">disconnected</span></span>
+    </div>
+  </header>
+
+  <main class="panels">
+    <section class="panel" id="world">
+      <div class="panel-head"><h3>World</h3><span class="hint">inspector.snapshot</span></div>
+      <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
+    </section>
+
+    <section class="panel" id="reasoning">
+      <div class="panel-head"><h3>Reasoning</h3><span class="hint">trace.tail · causedBy</span></div>
+      <div class="panel-body" id="reason-body"><div class="muted">connect to begin</div></div>
+    </section>
+
+    <section class="panel" id="approval">
+      <div class="panel-head">
+        <h3>Approval queue <span id="approval-count" class="count">0</span></h3>
+        <button id="propose" class="btn btn-small" title="Connect a builder.review agent and propose a held edit">+ test edit</button>
+      </div>
+      <div class="panel-body" id="approval-body"><div class="muted">connect to begin</div></div>
+    </section>
+  </main>
+
+  <footer class="logbar">
+    <div class="log-head">activity</div>
+    <div id="log" class="log"></div>
+  </footer>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
