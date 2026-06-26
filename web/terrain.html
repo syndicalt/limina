@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>limina — worlds worth authoring (procedural terrain stream)</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Same runtime as index.html, with `data-terrain` enabled: an in-browser
+       PROCEDURAL terrain (deterministic, no model) streams as visible meshes
+       around the camera (Phase 9). `data-world` still plays the exported scene
+       underneath; `data-terrain-seed` picks the terrain. -->
+  <canvas id="limina-canvas" data-world="public/worlds/demo" data-terrain data-terrain-seed="1337"></canvas>
+
+  <div id="hud">
+    <span id="badge">limina</span>
+    <span id="limina-status">starting…</span>
+    <span id="hint">procedural terrain streams around the camera · WASD/QE to steer</span>
+  </div>
+
+  <script type="module" src="public/limina-runtime.js"></script>
+</body>
+</html>
