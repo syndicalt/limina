@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>limina · coordinator demo — a cottage on the beach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Full-bleed live world viewport (the hero). -->
+  <canvas id="viewport"></canvas>
+  <div id="viewport-fallback" class="viewport-fallback">
+    <div>
+      <h2>World viewport needs WebGPU</h2>
+      <p>The panels below stay fully live over the MCP connection. The in-tab render is the visual layer.</p>
+    </div>
+  </div>
+
+  <!-- Top bar -->
+  <header class="topbar glass">
+    <div class="brand">limina <span class="brand-sub">coordinator demo</span></div>
+    <div class="goal">building <strong>“a cottage on the beach”</strong> under human review</div>
+    <div class="conn">
+      <input id="url" type="text" value="ws://localhost:8787/" size="20" aria-label="server url" />
+      <input id="interval" type="number" value="900" min="400" step="100" size="4" title="poll interval (ms)" />
+      <button id="connect" class="btn">Connect</button>
+      <button id="disconnect" class="btn btn-ghost">Disconnect</button>
+      <button id="build" class="btn btn-primary" disabled>▶ Start the build</button>
+      <span class="status"><span id="status-dot" class="dot dot-off"></span><span id="status-text">offline</span></span>
+    </div>
+  </header>
+
+  <!-- LEFT — agent org-chart -->
+  <section class="surface left glass">
+    <div class="surface-head"><h3>Agent team</h3><span class="hint">trace.tail</span></div>
+    <div class="surface-body" id="org-body"><div class="muted">connect to begin</div></div>
+  </section>
+
+  <!-- RIGHT — review queue -->
+  <section class="surface right glass">
+    <div class="surface-head"><h3>Review queue <span id="queue-count" class="count">0</span></h3><span class="hint">approval.list</span></div>
+    <div class="surface-body" id="queue-body"><div class="muted">connect to begin</div></div>
+  </section>
+
+  <!-- BOTTOM — trace ribbon -->
+  <footer class="ribbon-bar glass">
+    <div class="ribbon-wrap">
+      <div class="ribbon" id="ribbon"></div>
+      <div class="world-counts" id="world-counts">0 entities · 0 held</div>
+    </div>
+    <div id="log" class="log"></div>
+  </footer>
+
+  <script type="module" src="dist/coordinator-demo.js"></script>
+</body>
+</html>

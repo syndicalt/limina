@@ -19,6 +19,7 @@ import { AuthoritativeServer, listenerTransport } from "../../js/src/net/server.
 import { reviewProfileGate } from "../../js/src/skills/approval.ts";
 import type { WorldContext } from "../../js/src/skills/registry.ts";
 import type { NetOps } from "../../js/src/net/protocol.ts";
+import { installCottageScenario } from "../../js/src/demos/coordinator_cottage.ts";
 
 const net = ops as unknown as NetOps;
 const PORT = 8787;
@@ -49,11 +50,22 @@ const server = new AuthoritativeServer(listenerTransport(net, listenerId), {
 // Install the human-in-the-loop review gate: builder.review clients PROPOSE,
 // the reviewer (the editor) approves. Reads + approval.* are never gated.
 server.registry.setApprovalGate(reviewProfileGate(new Set(["builder.review"])));
+
+// "Cottage on the beach" coordinator showcase: wire the `delegate` skill + the
+// `coordinator.build` trigger onto this authoritative server. installCottageScenario
+// COMPOSES its delegate-worker review gate with the builder.review gate above (it
+// uses addApprovalGate, not setApprovalGate), so both stay active. A client that
+// connects as `reviewer.coordinator` (holds `orchestrate` + `approval.review`) can
+// call coordinator.build to delegate the three workers, then list/grant/deny their
+// HELD edits via the approval.* skills. The stock builder.review flow is untouched.
+installCottageScenario(server.registry, { world: server.world });
+
 server.start();
 
 ops.op_log(
   `editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:${port}/ ` +
-    `(profiles: reviewer = the editor, builder.review = a proposing agent). Open editor/index.html.`,
+    `(profiles: reviewer = the editor, builder.review = a proposing agent, ` +
+    `reviewer.coordinator = the cottage coordinator -> tools/call coordinator.build). Open editor/index.html.`,
 );
 
 // Keep the process alive; the accept + tick loops run in the background.
