@@ -24,6 +24,7 @@ import { LiminaTracer } from "./observability/event.ts";
 import { loadExport, type LoadedExport } from "./export/package.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
 import { ReplayPlayer } from "./browser/player.ts";
+import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terrain/render.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
@@ -52,6 +53,10 @@ export interface RunOptions {
   onStatus?: (phase: "loading" | "ready" | "playing" | "done" | "error", detail?: string) => void;
   /** Override the trace store (tests inject a fake; defaults to IndexedDB). */
   traceStore?: DurableTraceStore;
+  /** Optional Phase 9 terrain stream: cached tiles become visible meshes that stream
+   *  in/out around the camera. Logic (mesh math + stream set) is headless-proven; the
+   *  in-tab WebGPU render of the terrain is UAT. */
+  terrain?: TerrainStreamRendererOptions;
 }
 
 export interface RunningPlayer {
@@ -78,12 +83,18 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
     if (!res.ok) throw new Error(`fetch ${name}: HTTP ${res.status}`);
     return await res.text();
   };
-  const [manifest, log, keyframes] = await Promise.all([
+  // tiles.jsonl is OPTIONAL (only terrain worlds carry it) -> "" when absent.
+  const getOptional = async (name: string): Promise<string> => {
+    const res = await fetch(base + name);
+    return res.ok ? await res.text() : "";
+  };
+  const [manifest, log, keyframes, tiles] = await Promise.all([
     get("manifest.json"),
     get("log.jsonl"),
     get("keyframes.jsonl"),
+    getOptional("tiles.jsonl"),
   ]);
-  return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes });
+  return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
 }
 
 /** Build the real three renderer + scene + camera for browser playback. */
@@ -125,8 +136,6 @@ async function buildRenderTarget(canvas: unknown, width: number, height: number,
  *  hard failure — caller surfaces it via `onStatus("error")`). */
 export async function run(opts: RunOptions): Promise<RunningPlayer> {
   const status = opts.onStatus ?? ((): void => {});
-  status("loading", "fetching export");
-  const loaded = await fetchExport(opts.worldUrl);
 
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
@@ -152,6 +161,11 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   // module-level `ops` binding (off the native host the lazy bind left it unset)
   // finds the browser host. The player's world uses its OWN composed ops below.
   installOps(playbackOps(new KeyframePhysics([]), hostOverrides));
+
+  // Fetch + load the export AFTER installOps so tile hash verification can reach
+  // the host op_sha256 (the module `ops` binding is unset until installOps).
+  status("loading", "fetching export");
+  const loaded = await fetchExport(opts.worldUrl);
 
   // Build the player. makeWorld binds the player's keyframe-driven ops to the
   // REAL three scene + camera, so replayed scene.createEntity skills add real
@@ -182,6 +196,11 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   await player.init();
   status("ready", `${loaded.manifest.ticks} ticks, ${loaded.keyframes.length} keyframes`);
 
+  // Phase 9 terrain stream (optional): mount cached tiles as meshes around the camera.
+  // The set math (StreamFollower) and geometry (terrainTileGeometry) are headless-proven;
+  // the actual WebGPU draw of these meshes is UAT.
+  const terrain = opts.terrain !== undefined ? new TerrainStreamRenderer(scene, opts.terrain) : undefined;
+
   // Camera orbit state (WASD/QE adjust like the native demo).
   let angle = 0;
   let radius = 16;
@@ -206,6 +225,8 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
       camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
       camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
       camera.lookAt(0, 1, 0);
+      // Stream terrain tiles in/out around the camera's ground position.
+      if (terrain !== undefined) terrain.update(Math.cos(angle) * radius, Math.sin(angle) * radius);
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);
     },
@@ -216,6 +237,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     loop,
     stop: (): void => {
       loop.stop();
+      terrain?.clear();
       if (opts.input !== undefined) input.detach(opts.input as Parameters<BrowserInput["detach"]>[0]);
     },
   };

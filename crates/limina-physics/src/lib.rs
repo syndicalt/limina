@@ -9,6 +9,7 @@
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
+use rapier3d::geometry::Array2;
 use rapier3d::prelude::*;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
@@ -346,6 +347,40 @@ pub fn op_physics_add_static_capsule(
     world.insert_body(body, collider)
 }
 
+/// Add a fixed HEIGHTFIELD collider (Phase 9 terrain). `heights` is an
+/// `nrows`×`ncols` grid of elevation samples in ROW-MAJOR order from JS
+/// (`index = row*ncols + col`); the field spans `scale_x` × `scale_z` world units
+/// centered at (x, y, z), with sample heights multiplied by `scale_y`. Returns its
+/// stable body id (removable for streaming). Deterministic: identical `heights`
+/// build a bit-identical collider, so a body resting on it replays exactly — the
+/// terrain tile is reproduced from the cache on replay, never re-generated.
+#[op2(fast)]
+#[allow(clippy::too_many_arguments)]
+pub fn op_physics_add_heightfield(
+    state: &mut OpState,
+    x: f32,
+    y: f32,
+    z: f32,
+    nrows: u32,
+    ncols: u32,
+    scale_x: f32,
+    scale_y: f32,
+    scale_z: f32,
+    #[buffer] heights: &[f32],
+) -> u32 {
+    let world = state.borrow_mut::<PhysicsWorld>();
+    let nr = nrows as usize;
+    let nc = ncols as usize;
+    // Rapier's heightfield matrix is `heights_zx` (rows -> local z, cols -> local x);
+    // JS sends row-major `index = row*ncols + col` (out-of-range samples read 0).
+    let mat = Array2::from_fn(nr, nc, |r, c| heights.get(r * nc + c).copied().unwrap_or(0.0));
+    let body = RigidBodyBuilder::fixed()
+        .translation(Vector::new(x, y, z))
+        .build();
+    let collider = ColliderBuilder::heightfield(mat, Vector::new(scale_x, scale_y, scale_z)).build();
+    world.insert_body(body, collider)
+}
+
 /// Remove a body (and its colliders), tombstoning its id slot.
 #[op2(fast)]
 pub fn op_physics_remove_body(state: &mut OpState, id: u32) {
@@ -604,6 +639,7 @@ extension!(
         op_physics_add_static_box,
         op_physics_add_static_sphere,
         op_physics_add_static_capsule,
+        op_physics_add_heightfield,
         op_physics_remove_body,
         op_physics_apply_impulse,
         op_physics_step,
