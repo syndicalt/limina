@@ -212,21 +212,53 @@ export function buildReviewQueue(payload) {
 // (c) WORLD MODEL — renderable entities from a snapshot + ghosts from pending.
 // ---------------------------------------------------------------------------
 
+/** Position → a stable join key (snapshot positions equal the edit's input
+ *  position exactly; round to absorb float formatting only). */
+function posKey(p) {
+  return Array.isArray(p) ? `${round2(p[0])},${round2(p[1])},${round2(p[2])}` : "";
+}
+
 /**
- * Build the world view-model from an inspector.snapshot and the pending-approval
- * list: the SOLID entities currently in the world (positions/scale/tags → kind),
- * plus translucent GHOST markers for every held edit that has a position.
+ * Build the world view-model from an inspector.snapshot, the pending-approval
+ * list, and the placements the client has ALREADY APPROVED.
+ *
+ * The snapshot only carries an entity's POSITION (created entities get unit scale,
+ * no tags, no colour), so the renderable SHAPE comes from correlating each entity
+ * to an approved edit BY POSITION — the same typed placement (kind/shape/size/
+ * colour) the ghost used. So an approved cottage renders as the box+roof cottage
+ * and approved palms render as trees, not generic cubes. Unmatched entities fall
+ * back to their tags; an untagged entity in a world whose terrain region was
+ * approved is treated as ground (a terrain tile).
+ *
+ * @param {object} snapshot inspector.snapshot result
+ * @param {Array} pending   approval.list pending[] (for ghost markers)
+ * @param {Array} approved  placements already granted (cards from buildReviewQueue)
  */
-export function buildWorldModel(snapshot, pending) {
+export function buildWorldModel(snapshot, pending, approved = []) {
   const ents = (snapshot && snapshot.entities) || [];
-  const entities = ents.map((e) => ({
-    id: e.entity,
-    position: e.transform.position,
-    rotation: e.transform.rotation,
-    scale: e.transform.scale,
-    tags: e.tags || [],
-    kind: classifyEntity(e.tags || []),
-  }));
+  const sceneApproved = new Map(); // posKey -> placement
+  let terrainApproved = false;
+  for (const a of approved) {
+    if (!a) continue;
+    if (a.kind === "ground") { terrainApproved = true; continue; }
+    if (Array.isArray(a.position)) sceneApproved.set(posKey(a.position), a);
+  }
+
+  const entities = ents.map((e) => {
+    const position = e.transform.position;
+    const tags = e.tags || [];
+    const match = sceneApproved.get(posKey(position));
+    if (match) {
+      return {
+        id: e.entity, position, rotation: e.transform.rotation, scale: e.transform.scale, tags,
+        kind: match.kind, shape: match.shape, size: match.size, color: match.color,
+      };
+    }
+    let kind = classifyEntity(tags);
+    if (kind === "object" && terrainApproved) kind = "ground"; // a terrain tile
+    return { id: e.entity, position, rotation: e.transform.rotation, scale: e.transform.scale, tags, kind };
+  });
+
   const queue = buildReviewQueue({ pending: pending || [] });
   const ghosts = queue.cards
     .filter((c) => Array.isArray(c.position))
