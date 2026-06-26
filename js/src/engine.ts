@@ -95,9 +95,52 @@ export interface EngineOps {
 }
 interface Adapter { requestDevice(): Promise<unknown>; }
 declare const navigator: { gpu: { requestAdapter(): Promise<Adapter | null> } };
-declare const Deno: { core: { ops: EngineOps } };
+declare const Deno: { core: { ops: EngineOps } } | undefined;
 
-export const ops: EngineOps = Deno.core.ops;
+// ---- Host-capabilities boundary ------------------------------------------
+// The native host exposes its ops as `Deno.core.ops`; bind to them lazily and
+// ONLY when the global is present, so importing this module with no `Deno`
+// global (a browser) does NOT throw. A non-native host (browser/wasm) calls
+// installOps() with its own EngineOps implementation — wasm Rapier + a WebGPU
+// canvas surface + IndexedDB trace — before any engine code runs. This is the
+// single seam that keeps the engine portable: no other module touches `Deno.*`.
+// `typeof Deno` short-circuits before `Deno?.core` so an undeclared global never
+// throws a ReferenceError. Native binds once at module eval; importers read a
+// live binding, so there is no per-call overhead and call sites are unchanged.
+export let ops: EngineOps =
+  typeof Deno !== "undefined" && Deno?.core?.ops
+    ? Deno.core.ops
+    : (undefined as unknown as EngineOps);
+
+/** Inject the host capability surface (a browser/wasm host, or a test harness).
+ *  Native runs auto-bind to `Deno.core.ops` at import, so this is only needed
+ *  off the native host. Call it before any op is used. */
+export function installOps(host: EngineOps): void {
+  ops = host;
+}
+
+// Capability sub-surfaces a non-native host must implement — explicit subsets of
+// EngineOps so a browser/wasm host (and the export spike) know the exact seam per
+// concern. Pure types; no runtime change.
+export type RenderOps = Pick<
+  EngineOps,
+  | "op_create_window_context" | "op_surface_present" | "op_surface_resize"
+  | "op_set_frame_callback" | "op_set_fixed_step_callback" | "op_set_resize_callback"
+  | "op_input_axes"
+>;
+export type PhysicsOps = Pick<
+  EngineOps,
+  | "op_physics_create_world" | "op_physics_add_ground" | "op_physics_add_box"
+  | "op_physics_add_box_material" | "op_physics_add_sphere" | "op_physics_add_capsule"
+  | "op_physics_add_static_box" | "op_physics_add_static_sphere" | "op_physics_add_static_capsule"
+  | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
+  | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
+  | "op_physics_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"
+>;
+/** Durable world-log I/O. INVARIANT: a trace is seed + the command stream +
+ *  content hashes — NEVER raw runtime bytes; snapshots are caches, not the
+ *  source of truth. A browser host implements this over IndexedDB. */
+export type TraceOps = Pick<EngineOps, "op_write_trace" | "op_append_trace" | "op_read_trace">;
 
 // ---- Minimal three.js surface used across the engine (avoids `any`) -------
 

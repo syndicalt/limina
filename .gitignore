@@ -22,6 +22,10 @@ dist/
 .eventloom/
 traces/
 
+# --- Spike scratch (large model weights / python envs — never commit) ---
+/spikes/**/.venv/
+/spikes/**/weights/
+
 # --- Editor / OS ---
 .claude/
 .vscode/

@@ -1,0 +1,14 @@
+{
+  "name": "w0-physics-parity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "W0 spike: native (FFI rapier 0.33) vs wasm (@dimforge/rapier3d-compat) physics parity probe",
+  "scripts": {
+    "wasm": "node wasm_dump.mjs",
+    "compare": "node compare.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3"
+  }
+}
