@@ -24,6 +24,7 @@ import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.t
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
+import { TERRAIN_TYPE_NAMES, terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -115,6 +116,11 @@ export function registerTerrainSkills(
     seed: z.number().int(),
     bounds: boundsSchema,
     lod: z.number().int().min(0).max(4).default(0),
+    // AGENT-NATIVE SEEDING: pick a named terrain TYPE ("beach", "mountains", "desert", …)
+    // and it resolves to the full shaping+climate config for the region (the deterministic
+    // generator builds that world). Mutually composable with raw `hints` (explicit hints
+    // override the type's resolved knobs); omit both for the byte-identical default field.
+    type: z.enum(TERRAIN_TYPE_NAMES as [string, ...string[]]).optional(),
     hints: z.record(z.string(), z.number()).optional(),
   });
   const generateRegionOutput = z.object({
@@ -132,10 +138,17 @@ export function registerTerrainSkills(
     input: generateRegionInput,
     output: generateRegionOutput,
     handler: async (input, ctx) => {
+      // Resolve a named terrain TYPE into the full shaping+climate hint map, then let any
+      // explicit `hints` override individual knobs. Pure + deterministic, so replay (which
+      // re-invokes this skill with the recorded request) re-derives the identical hints.
+      const typed = input.type !== undefined ? terrainTypeHints(input.type as TerrainTypeName, input.bounds) : undefined;
+      const merged = (typed !== undefined || input.hints !== undefined)
+        ? { ...(typed ?? {}), ...(input.hints ?? {}) }
+        : undefined;
       const regionId = regionIdOf(input.seed, input.lod, input.bounds);
       let region = regions.get(regionId);
       if (region === undefined) {
-        region = { seed: input.seed, lod: input.lod, hints: input.hints, tiles: new Map() };
+        region = { seed: input.seed, lod: input.lod, hints: merged, tiles: new Map() };
         regions.set(regionId, region);
       }
       const bodies: number[] = [];
@@ -226,16 +239,23 @@ export function registerTerrainSkills(
   };
 
   // ---- terrain.sampleClimate -----------------------------------------------
-  const sampleClimateInput = z.object({ seed: z.number().int(), x: z.number(), z: z.number() });
+  const sampleClimateInput = z.object({
+    seed: z.number().int(),
+    x: z.number(),
+    z: z.number(),
+    // SAME opt-in shaping (incl. per-type climate bias) a region was generated with, so
+    // the perceived biome matches the shaped tiles; omit for the byte-identical base.
+    hints: z.record(z.string(), z.number()).optional(),
+  });
   const sampleClimate: SkillDefinition<z.infer<typeof sampleClimateInput>, { tempC: number; precipMm: number; biome: number }> = {
     name: "terrain.sampleClimate",
     version: "1.0.0",
-    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception.",
+    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception. Pass the region's terrain hints to read the per-type biome.",
     category: "terrain",
     permissions: ["terrain.read"],
     input: sampleClimateInput,
     output: z.object({ tempC: z.number(), precipMm: z.number(), biome: z.number().int() }),
-    handler: (input) => source.sampleClimate(input.seed, input.x, input.z),
+    handler: (input) => source.sampleClimate(input.seed, input.x, input.z, input.hints),
   };
 
   registry.register(generateRegion);
