@@ -9,6 +9,12 @@
 > Companion to [`worldgen-terrain-diffusion-spike.md`](./worldgen-terrain-diffusion-spike.md)
 > (the S0 evidence) and [`post-mvp-roadmap.md`](./post-mvp-roadmap.md). Extends the Phase 9
 > terrain work; the new generation quality lands in Phase 11 (Content & Assets) territory.
+>
+> **Status — QUEUED as the Phase 11 generator-richness polish round (2026-06).** The Phase 11 foundation
+> shipped + its acceptance gate is met (the cottage-on-a-beach reads right), but the terrain is still a flat
+> sand dome and the water is a basic plane. This roadmap is the next round. **Start with W1 — domain warping
+> + ridged terrain + a real sand material** (cheapest, no deps, no erosion sim — turns the flat dome into
+> dune-charactered sand); then W2 (erosion/climate) and the render-only water upgrade (foam/caustics).
 
 ## What the experiment settled
 
