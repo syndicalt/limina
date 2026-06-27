@@ -15,11 +15,11 @@ use deno_core::{resolve_path, v8, JsRuntime, PollEventLoopOptions, RuntimeOption
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 use limina_render::{InputState, WindowTarget};
 
@@ -35,6 +35,13 @@ struct App {
     keys: HashSet<KeyCode>,
     close: bool,
     fullscreen: bool,
+    /// Mouse-look delta accumulated across winit events since the last frame's
+    /// drain; only accumulated while the cursor is grabbed.
+    look_dx: f32,
+    look_dy: f32,
+    /// Cursor grabbed (pointer-locked + hidden) for free-fly look. Toggled by a
+    /// left-click (grab) and Escape (release).
+    grabbed: bool,
 }
 
 impl App {
@@ -46,6 +53,28 @@ impl App {
             move_x: axis(KeyCode::KeyA, KeyCode::KeyD),
             move_y: axis(KeyCode::KeyQ, KeyCode::KeyE),
             move_z: axis(KeyCode::KeyS, KeyCode::KeyW),
+            look_dx: self.look_dx,
+            look_dy: self.look_dy,
+        }
+    }
+
+    /// Grab (pointer-lock + hide) or release the cursor for mouse-look. Tries
+    /// `Locked` (Wayland) and falls back to `Confined` (X11).
+    fn set_grab(&mut self, grab: bool) {
+        let Some(window) = &self.window else { return };
+        if grab {
+            let ok = window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
+                .is_ok();
+            if ok {
+                window.set_cursor_visible(false);
+                self.grabbed = true;
+            }
+        } else {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            window.set_cursor_visible(true);
+            self.grabbed = false;
         }
     }
 }
@@ -70,10 +99,26 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 self.resized = Some((size.width.max(1), size.height.max(1)));
             }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                // Click to capture the mouse for free-fly look (no-op if already grabbed).
+                if !self.grabbed {
+                    self.set_grab(true);
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if code == KeyCode::Escape {
-                        self.close = true;
+                        // Escape releases the cursor first (so free-fly demos can be
+                        // exited safely); a second Escape with no grab closes the window.
+                        if self.grabbed {
+                            self.set_grab(false);
+                        } else {
+                            self.close = true;
+                        }
                     } else if event.state == ElementState::Pressed {
                         self.keys.insert(code);
                     } else {
@@ -82,6 +127,17 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        // Raw mouse motion → look delta, accumulated only while grabbed (drained per
+        // frame in the host loop). Raw device deltas avoid OS pointer acceleration.
+        if let DeviceEvent::MouseMotion { delta } = event {
+            if self.grabbed {
+                self.look_dx += delta.0 as f32;
+                self.look_dy += delta.1 as f32;
+            }
         }
     }
 }
@@ -162,6 +218,10 @@ pub fn run_windowed(
                 let op_state = js_runtime.op_state();
                 op_state.borrow_mut().put(app.input_state());
             }
+            // Drain the accumulated mouse-look delta now that it's been published for
+            // this frame (the put copied it into op_state; JS reads that copy).
+            app.look_dx = 0.0;
+            app.look_dy = 0.0;
 
             // Fixed-timestep accumulator: advance logic on wall-clock time.
             let now = Instant::now();

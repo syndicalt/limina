@@ -49,6 +49,11 @@ pub struct InputState {
     pub move_x: f32,
     pub move_y: f32,
     pub move_z: f32,
+    /// Mouse-look delta (raw device units) accumulated since the last frame and
+    /// drained by the host each frame; zero unless the cursor is grabbed. JS reads
+    /// it via `op_input_look` to drive a free-fly / FPS camera.
+    pub look_dx: f32,
+    pub look_dy: f32,
 }
 
 /// Create the window's `GPUCanvasContext`. Must be called from JS after
@@ -172,4 +177,20 @@ pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) {
     out[0] = input.move_x;
     out[1] = input.move_y;
     out[2] = input.move_z;
+}
+
+/// Write the mouse-look delta into `out[0..2]` (dx, dy in raw device units),
+/// accumulated by the host since the last frame; zero when the cursor isn't
+/// grabbed. Drives a free-fly / FPS camera (yaw += dx, pitch += dy).
+#[op2(fast)]
+pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
+    if out.len() < 2 {
+        return;
+    }
+    let input = state
+        .try_borrow::<InputState>()
+        .copied()
+        .unwrap_or_default();
+    out[0] = input.look_dx;
+    out[1] = input.look_dy;
 }

@@ -24,6 +24,7 @@ extension!(
         surface::op_set_resize_callback,
         surface::op_set_fixed_step_callback,
         surface::op_input_axes,
+        surface::op_input_look,
     ],
     esm_entry_point = "ext:limina_bootstrap/00_bootstrap.js",
     esm = [dir "js", "00_bootstrap.js"],
