@@ -101,3 +101,31 @@ engine applies by default**. The single human gate is **E's UAT**: the effortles
 4. **CC0 pack** — which source to bundle + license hygiene (CC0 = no attribution burden; verify per-asset).
 5. **Headless render path** — the baseline's *visual* effect is UAT-only; headless asserts the applied config,
    not pixels (no GPU in CI).
+
+---
+
+## Status & outcomes (implemented 2026-06)
+
+All six chunks landed on main — expert-built, adversarially reviewed, headless-verified (**74/74, 0 regressions**).
+The cottage-on-a-beach gate (E) is met for the build logic; the in-tab LOOK with curated assets is the remaining UAT.
+
+- **A — render baseline (PR #21):** `render-baseline.ts` applied in `createEngine()` — sun + hemisphere fill +
+  gradient-sky IBL (PMREM / graceful headless fallback) + ACES + ground/camera; browser-entry/demo consume it.
+  Every world is lit by default.
+- **B — material palette (merged):** `materials/palette.ts` — 10 named PBR materials; `createEntity`/`setMaterial`
+  accept a name (back-compat).
+- **C — asset registry + `asset.place` (PR #22):** content-addressed registry; bytes ride the export
+  (`assets.jsonl`); replay loads from the package + verifies the committed hash (`commitFields`). *Adversarial
+  review caught + fixed an unwired portability contract before merge.*
+- **D — `asset.scatter` + `ScatterConfig` (PR #23):** elevation/slope/biome-aware scatter bound to a `regionId`;
+  replay over BAKED tiles (model-free `CachedTerrainSource`). *Adversarial review caught + fixed the
+  baked-replay / seed-binding / climate-channel gaps.*
+- **F — water surface (merged):** render-only sea-level water (`world.addWater`), no physics/replay impact.
+- **E — cottage gate (PR #24):** `demos/cottage_beach.ts` assembles the scene from intent-level skills with
+  **zero hand-authored geometry** (falsifiable: no `scene.createEntity` in the command stream); deterministic +
+  replayable. Asset ids are swappable constants — the curated CC0 pack swaps in by changing 3 lines.
+
+**Remaining for the full gate (UAT + content):** bundle the curated CC0 beach pack (cottage / palm / driftwood)
+in place of the stand-in GLTFs (swap the three `*_ASSET` constants in `cottage_beach.ts`), then UAT the look
+(`./target/release/limina --window js/src/demos/cottage_beach_window.ts`). The render baseline + palette +
+place/scatter are all in; only the curated assets + the human "looks good, no wrangling" check remain.
