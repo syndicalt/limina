@@ -3,6 +3,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { getMaterialParams } from "../materials/palette.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -12,6 +13,10 @@ const createEntityInput = z.object({
   shape: z.enum(["box", "sphere"]).default("box"),
   collider: z.enum(["box", "sphere", "capsule"]).optional(),
   size: z.number().positive().max(50).default(1),
+  // Pick a material by intent ("sand", "wood", ...) from the named palette. When
+  // set it supplies color/roughness/metalness; the numeric `color` below is the
+  // back-compat path used when no palette name is given.
+  material: z.string().optional(),
   color: z.number().int().min(0).max(0xffffff).default(0xffffff),
   position: Vec3.default([0, 0, 0]),
   dynamic: z.boolean().default(false),
@@ -32,7 +37,14 @@ const createEntity: SkillDefinition<z.infer<typeof createEntityInput>, { entity:
     const geometry = input.shape === "sphere"
       ? new THREE.SphereGeometry(input.size / 2, 24, 16)
       : new THREE.BoxGeometry(input.size, input.size, input.size);
-    const material = new THREE.MeshStandardNodeMaterial({ color: input.color, roughness: 0.6, metalness: 0.1 });
+    // Palette path: a `material` name resolves to a named preset (throws cleanly
+    // on an unknown name). Otherwise the existing numeric color path is unchanged.
+    const surface = input.material !== undefined
+      ? getMaterialParams(input.material)
+      : { color: input.color, roughness: 0.6, metalness: 0.1 };
+    const material = new THREE.MeshStandardNodeMaterial({
+      color: surface.color, roughness: surface.roughness, metalness: surface.metalness,
+    });
     const mesh = new THREE.Mesh(geometry, material);
     ctx.world.scene.add(mesh);
     const eid = spawnRenderable(ctx.world.ecs, mesh, x, y, z);

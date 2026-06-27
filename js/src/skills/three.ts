@@ -4,6 +4,7 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { Position, Rotation, Scale, spawnRenderable } from "../ecs/world.ts";
 import type { LoadedResourceMetadata, SceneObject, SceneLike } from "../engine.ts";
+import { getMaterialParams } from "../materials/palette.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -45,6 +46,10 @@ const setTransform: SkillDefinition<z.infer<typeof setTransformInput>, { ok: boo
 
 const setMaterialInput = z.object({
   entity: z.string(),
+  // Pick a material by intent ("sand", "wood", ...) from the named palette. It
+  // supplies color/roughness/metalness; explicit numeric fields below still win,
+  // so you can start from a preset and tweak a single value.
+  material: z.string().optional(),
   color: z.number().int().min(0).max(0xffffff).optional(),
   roughness: z.number().min(0).max(1).optional(),
   metalness: z.number().min(0).max(1).optional(),
@@ -63,12 +68,19 @@ const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boole
     const root = ctx.world.entities.resolve(input.entity)?.mesh;
     if (root === undefined) return { ok: false };
 
-    const hasMaterialChange = input.color !== undefined || input.roughness !== undefined || input.metalness !== undefined;
+    // A palette `material` name supplies preset color/roughness/metalness (throws
+    // cleanly on an unknown name); explicit numeric fields override the preset.
+    const preset = input.material !== undefined ? getMaterialParams(input.material) : undefined;
+    const color = input.color ?? preset?.color;
+    const roughness = input.roughness ?? preset?.roughness;
+    const metalness = input.metalness ?? preset?.metalness;
+
+    const hasMaterialChange = color !== undefined || roughness !== undefined || metalness !== undefined;
 
     const applyMaterialProps = (material: MaterialLike): void => {
-      if (input.color !== undefined) material.color.set(input.color);
-      if (input.roughness !== undefined) material.roughness = input.roughness;
-      if (input.metalness !== undefined) material.metalness = input.metalness;
+      if (color !== undefined) material.color.set(color);
+      if (roughness !== undefined) material.roughness = roughness;
+      if (metalness !== undefined) material.metalness = metalness;
     };
 
     const visit = (object: SceneObject): void => {
