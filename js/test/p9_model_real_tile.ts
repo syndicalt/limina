@@ -14,11 +14,15 @@ const tile = await src.generateTile({ seed: 4242, tx: 0, tz: 0, lod: 0 });
 const ms = Date.now() - t0;
 assert(tile.nrows === 256 && tile.ncols === 256, `dims ${tile.nrows}x${tile.ncols}`);
 assert(tile.heights.length === 256 * 256, "heights length");
-assert(tile.scale[1] === 1, "scaleY must be 1 (metres)");
+assert(tile.scale[1] > 0, "scaleY must be the (positive) metre span");
+assert(tile.heights.every((h) => h >= 0 && h <= 1), "heights normalized into [0,1]");
 assert(tile.heights.every(Number.isFinite), "heights finite");
 
+// Reconstruct metres for reporting (surface = origin.y + h·scaleY).
 let hMin = Infinity, hMax = -Infinity;
 for (const h of tile.heights) { if (h < hMin) hMin = h; if (h > hMax) hMax = h; }
+hMin = tile.origin[1] + hMin * tile.scale[1];
+hMax = tile.origin[1] + hMax * tile.scale[1];
 const sx = src.sampleHeight(4242, tile.origin[0], tile.origin[2], 0);
 const cs = src.sampleClimate(4242, tile.origin[0], tile.origin[2]);
 console.log(

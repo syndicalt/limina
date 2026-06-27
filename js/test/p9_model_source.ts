@@ -7,11 +7,13 @@
 // channel-major climate), so the parser is exercised against the real envelope shape.
 //
 // What is verified here (headless, deterministic):
-//   1. round-trip: request → TerrainTile with the right dims/geometry/units;
-//   2. units: int16 metres → Float32 metres (lossless), heightfield-ready (scaleY=1);
+//   1. round-trip: request → TerrainTile with the right dims/geometry;
+//   2. units: int16 metres → Float32 [0,1] over the fixed range; origin.y + h·scaleY
+//      reconstructs true metres (heightfield-ready, matching the procedural convention);
 //   3. determinism: two identical requests yield byte-identical tiles (replay contract);
-//   4. climate: channel-major parse + sampleClimate temp/precip/biome mapping;
-//   5. point queries: sampleHeight bilinear from the cache; cache-miss throws clearly;
+//   4. climate: worker's N-channel WorldClim block → canonical 3-channel CELL-MAJOR
+//      [tempC, precipMm, biome] grid + sampleClimate temp/precip/biome mapping;
+//   5. point queries: sampleHeight bilinear (in metres) from the cache; cache-miss throws;
 //   6. lifecycle: /health probe, request timeout, and worker-error propagation.
 //
 // The MODEL OUTPUT itself (determinism/latency/VRAM of the diffusion net) is NOT tested
@@ -24,7 +26,13 @@ import {
   ModelTerrainSource,
   type TileTransport,
 } from "../src/terrain/model-source.ts";
-import type { TileRequest } from "../src/terrain/types.ts";
+import {
+  CLIMATE_BIOME,
+  CLIMATE_CHANNELS,
+  CLIMATE_PRECIP_MM,
+  CLIMATE_TEMP_C,
+  type TileRequest,
+} from "../src/terrain/types.ts";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error("p9_model_source FAIL: " + msg);
@@ -32,7 +40,10 @@ function assert(cond: unknown, msg: string): asserts cond {
 
 const TILE = 8; // small grid so the synthetic payload is easy to reason about
 const M_PER_PX = 30;
-const CHANNELS = 5;
+const CHANNELS = 5; // channels the (mock) worker emits — remapped to the canonical 3
+const ELEV_MIN = -500; // fixed normalization floor (metres) → tile origin.y
+const ELEV_MAX = 9000; // fixed normalization ceiling (metres)
+const SPAN = ELEV_MAX - ELEV_MIN; // → tile scaleY (9500 m)
 
 // --- synthetic payload: a known elev ramp + constant-per-channel climate ---
 // elev[r][c] = r*10 + c   (metres, int16). Distinct per cell so bilinear + indexing
@@ -80,6 +91,8 @@ function makeSource(transport: TileTransport = mockTransport) {
     tilePx: TILE,
     metersPerPx: M_PER_PX,
     climateChannels: CHANNELS,
+    elevMinM: ELEV_MIN,
+    elevMaxM: ELEV_MAX,
     timeoutMs: 2000,
   });
 }
@@ -100,20 +113,27 @@ assert(tile.heights.length === TILE * TILE, "heights length");
 assert(tile.origin[0] === 1.5 * extent && tile.origin[2] === 2.5 * extent,
   `origin ${tile.origin} (expected centred on tile 1,2 over extent ${extent})`);
 assert(tile.scale[0] === extent && tile.scale[2] === extent, `xz scale ${tile.scale}`);
-// scaleY === 1 so heights are already metres → drops straight into op_physics_add_heightfield
-assert(tile.scale[1] === 1, "scaleY must be 1 (heights already in metres)");
-// units: elev[r][c] = r*10 + c, exact int16 → float
-assert(tile.heights[0] === 0, "height[0,0] should be 0 m");
-assert(tile.heights[1 * TILE + 0] === 10, "height[1,0] should be 10 m");
-assert(tile.heights[(TILE - 1) * TILE + (TILE - 1)] === (TILE - 1) * 10 + (TILE - 1),
-  "height[max,max] mismatch (indexing/units bug)");
+// heights are normalized to [0,1] over the FIXED range; scaleY = the metre span and
+// origin.y = the metre floor, so surface = origin.y + h·scaleY reconstructs true metres
+// (the procedural convention → the model source drops in behind world.generateRegion).
+assert(tile.scale[1] === SPAN, `scaleY must equal the height span ${SPAN}, got ${tile.scale[1]}`);
+assert(tile.origin[1] === ELEV_MIN, `origin.y must be the metre floor ${ELEV_MIN}, got ${tile.origin[1]}`);
+assert(tile.heights.every((h) => h >= 0 && h <= 1), "heights must be normalized into [0,1]");
+// units: elev[r][c] = r*10 + c metres → h = (m - elevMin)/span; reconstruct must round-trip.
+const recon = (i: number) => tile.origin[1] + tile.heights[i] * tile.scale[1];
+assert(Math.abs(recon(0) - 0) < 0.05, `height[0,0] reconstructs ${recon(0)} m, expected ~0`);
+assert(Math.abs(recon(1 * TILE + 0) - 10) < 0.05, `height[1,0] reconstructs ${recon(1 * TILE + 0)} m, expected ~10`);
+const maxIdx = (TILE - 1) * TILE + (TILE - 1);
+assert(Math.abs(recon(maxIdx) - ((TILE - 1) * 10 + (TILE - 1))) < 0.05,
+  `height[max,max] reconstructs ${recon(maxIdx)} m, expected ~${(TILE - 1) * 10 + (TILE - 1)} (indexing/units bug)`);
 
-// === 3. climate parse ===
-assert(tile.climateChannels === CHANNELS, "climateChannels");
-assert(tile.climate && tile.climate.length === CHANNELS * TILE * TILE, "climate length");
-// channel-major: channel 0 plane is all 12.5
-assert(tile.climate![0] === 12.5, "climate ch0 value");
-assert(tile.climate![2 * TILE * TILE] === 800, "climate ch2 (precip) plane value");
+// === 3. climate parse: worker's 5-channel block → canonical 3-channel cell-major grid ===
+assert(tile.climateChannels === CLIMATE_CHANNELS, `climateChannels should be canonical ${CLIMATE_CHANNELS}, got ${tile.climateChannels}`);
+assert(tile.climate && tile.climate.length === CLIMATE_CHANNELS * TILE * TILE, "climate length (canonical 3-channel)");
+// CELL-MAJOR: cell 0 = [tempC, precipMm, biome]
+assert(tile.climate![CLIMATE_TEMP_C] === 12.5, "climate cell0 tempC (from worker temp channel)");
+assert(tile.climate![CLIMATE_PRECIP_MM] === 800, "climate cell0 precipMm (from worker precip channel)");
+assert(tile.climate![CLIMATE_BIOME] === Biome.TemperateForest, `climate cell0 biome ${tile.climate![CLIMATE_BIOME]} (expected TemperateForest ${Biome.TemperateForest})`);
 
 // === 4. determinism: a second identical request is byte-identical ===
 const tileB = await makeSource().generateTile({ ...req });
@@ -200,8 +220,9 @@ assert(lenErr, "a truncated elev payload must be rejected");
 console.log(
   `p9_model_source OK: IPC marshalling + wire-format parse + lifecycle verified headless ` +
     `(mock transport). round-trip dims ${tile.nrows}x${tile.ncols}, ` +
-    `heights in metres (scaleY=1, heightfield-ready), climate ${CHANNELS}ch channel-major, ` +
-    `sampleHeight bilinear=${yMid.toFixed(3)}, sampleClimate→biome ${cs.biome}, ` +
+    `heights normalized [0,1] over [${ELEV_MIN},${ELEV_MAX}]m (scaleY=${SPAN}, origin.y=${ELEV_MIN}; ` +
+    `surface reconstructs metres), climate ${CHANNELS}ch worker block → canonical 3ch cell-major ` +
+    `[tempC,precipMm,biome], sampleHeight bilinear=${yMid.toFixed(3)}m, sampleClimate→biome ${cs.biome}, ` +
     `byte-identical across two identical requests; timeout + error + bad-payload all rejected. ` +
     `[model output itself is S0-covered, not run here]`,
 );

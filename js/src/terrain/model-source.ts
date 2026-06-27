@@ -15,9 +15,22 @@
 //
 // DETERMINISM (the replay contract): a `TerrainTile` is a PURE function of
 // `(request, source config)`. The model itself is bit-identical per request on a given
-// machine (S0, measured). Parsing carries the worker's exact bytes through unchanged
-// (int16 meters → f32 is lossless; climate f32 bytes are copied verbatim), so identical
-// worker bytes ⇒ byte-identical tiles. We add NO timestamps/nondeterministic fields.
+// machine (S0, measured). Parsing is a PURE, fixed-config transform of the worker's
+// exact bytes — int16 metres normalized into [0,1] over a FIXED documented elevation
+// range, climate remapped from the worker's WorldClim channels into the canonical
+// [tempC, precipMm, biome] layout — so identical worker bytes ⇒ byte-identical tiles.
+// We add NO timestamps/nondeterministic fields, and the normalization is the SAME fixed
+// range for every tile (never per-tile min/max), so adjacent tiles stay seam-consistent.
+//
+// THE TerrainTile CONTRACT (what `generateTile` must emit — see terrain/types.ts):
+//   - heights ∈ [0,1], row-major; the tile's scaleY carries the metre span and origin.y
+//     the metre floor, so the heightfield collider / mesh surface = origin.y + h·scaleY
+//     reconstructs true metres (Rapier multiplies each cell by scale.y; lossless within
+//     the configured range). This matches the ProceduralTerrainSource convention, so the
+//     model source drops in behind `world.generateRegion` with no consumer changes.
+//   - climate is the canonical 3-channel CELL-MAJOR grid [CLIMATE_TEMP_C, CLIMATE_PRECIP_MM,
+//     CLIMATE_BIOME] (NOT the worker's raw N-channel WorldClim block). We pull temperature +
+//     precipitation from their worker channels and classify a biome per cell.
 //
 // TRANSPORT IS INJECTABLE: the default transport is the host `op_http_post` op (real
 // HTTP to the Flask worker). Tests inject a mock transport that returns a known
@@ -25,11 +38,15 @@
 // verifiable headlessly without a GPU. The model output itself is S0-covered.
 
 import { ops } from "../engine.ts";
-import type {
-  ClimateSample,
-  TerrainSource,
-  TerrainTile,
-  TileRequest,
+import {
+  CLIMATE_BIOME,
+  CLIMATE_CHANNELS,
+  CLIMATE_PRECIP_MM,
+  CLIMATE_TEMP_C,
+  type ClimateSample,
+  type TerrainSource,
+  type TerrainTile,
+  type TileRequest,
 } from "./types.ts";
 
 /** The IPC seam. `post` sends a JSON body to `url` and resolves the response text.
@@ -56,6 +73,15 @@ export interface ModelTerrainSourceOptions {
   tempChannel?: number;
   /** Climate channel index carrying annual precipitation in mm (WorldClim BIO12). */
   precipChannel?: number;
+  /** Lower bound (metres) of the FIXED elevation range the int16 model output is
+   *  normalized into [0,1]. Becomes the tile's origin.y (the metre floor). */
+  elevMinM?: number;
+  /** Upper bound (metres) of the FIXED elevation range. (elevMaxM − elevMinM) becomes
+   *  the tile's scaleY, so surface = origin.y + h·scaleY reconstructs true metres.
+   *  The range is FIXED (never per-tile min/max) so adjacent tiles normalize identically
+   *  → seam-consistent + composable. Defaults bound Earth DEM (−500 m .. 9000 m); a host
+   *  whose model can exceed this should widen it (out-of-range cells clamp, not wrap). */
+  elevMaxM?: number;
   /** Per-request IPC timeout in ms. Generous: S0 worst-case isolated tile ≈ 5.5 s. */
   timeoutMs?: number;
   /** Provenance name recorded in the log. */
@@ -87,6 +113,8 @@ const DEFAULTS = {
   climateChannels: 5,
   tempChannel: 0, // BIO1  — mean annual temperature (°C)
   precipChannel: 2, // BIO12 — annual precipitation (mm)
+  elevMinM: -500, // metre floor of the normalization range (origin.y)
+  elevMaxM: 9000, // metre ceiling; span = ceiling − floor becomes scaleY
   timeoutMs: 30_000,
   name: "model:terrain-diffusion-30m",
 };
@@ -183,10 +211,14 @@ export class ModelTerrainSource implements TerrainSource {
   readonly climateChannels: number;
   readonly tempChannel: number;
   readonly precipChannel: number;
+  readonly elevMinM: number;
+  readonly elevMaxM: number;
   readonly timeoutMs: number;
 
   /** World metres spanned by one tile edge. */
   readonly extent: number;
+  /** Vertical metre span of the normalization range (== tile scaleY). */
+  readonly heightSpan: number;
 
   private readonly transport: TileTransport;
   /** Generated tiles, keyed by `${seed}:${lod}:${tx}:${tz}`. Backs O(1) point queries
@@ -201,9 +233,17 @@ export class ModelTerrainSource implements TerrainSource {
     this.climateChannels = opts.climateChannels ?? DEFAULTS.climateChannels;
     this.tempChannel = opts.tempChannel ?? DEFAULTS.tempChannel;
     this.precipChannel = opts.precipChannel ?? DEFAULTS.precipChannel;
+    this.elevMinM = opts.elevMinM ?? DEFAULTS.elevMinM;
+    this.elevMaxM = opts.elevMaxM ?? DEFAULTS.elevMaxM;
     this.timeoutMs = opts.timeoutMs ?? DEFAULTS.timeoutMs;
     this.transport = opts.transport ?? httpTransport;
     this.extent = this.tilePx * this.metersPerPx;
+    this.heightSpan = this.elevMaxM - this.elevMinM;
+    if (!(this.heightSpan > 0)) {
+      throw new Error(
+        `ModelTerrainSource: elevMaxM (${this.elevMaxM}) must exceed elevMinM (${this.elevMinM})`,
+      );
+    }
   }
 
   private key(seed: number, lod: number, tx: number, tz: number): string {
@@ -272,7 +312,11 @@ export class ModelTerrainSource implements TerrainSource {
       throw new Error(`ModelTerrainSource: bad tile dims ${nrows}x${ncols}`);
     }
 
-    // --- elevation: int16 LE metres → Float32 metres (lossless) ---
+    // --- elevation: int16 LE metres → Float32 [0,1], normalized over the FIXED
+    // documented range. heights[i] = clamp01((metres − elevMinM)/heightSpan); the tile's
+    // scaleY = heightSpan + origin.y = elevMinM reconstruct true metres downstream
+    // (surface = origin.y + h·scaleY), lossless within range. Pure + fixed-range, so it
+    // is byte-identical per request and seam-consistent across tiles. ---
     const elevBytes = decodeBase64(env.elev.b64);
     const expectElevBytes = nrows * ncols * 2;
     if (elevBytes.byteLength !== expectElevBytes) {
@@ -282,52 +326,73 @@ export class ModelTerrainSource implements TerrainSource {
       );
     }
     const ev = new DataView(elevBytes.buffer, elevBytes.byteOffset, elevBytes.byteLength);
+    const span = this.heightSpan;
+    const floor = this.elevMinM;
     const heights = new Float32Array(nrows * ncols);
     for (let i = 0; i < heights.length; i++) {
-      heights[i] = ev.getInt16(i * 2, /* littleEndian */ true);
+      const metres = ev.getInt16(i * 2, /* littleEndian */ true);
+      heights[i] = clamp01((metres - floor) / span);
     }
 
-    // --- climate: channel-major (C,H,W) float32 LE (verbatim copy) ---
+    // --- climate: the worker's channel-major (C,H,W) WorldClim float32 block →
+    // the canonical 3-channel CELL-MAJOR grid [tempC, precipMm, biome] the TerrainTile
+    // contract mandates. Temperature + precipitation are pulled from their worker
+    // channels; the biome is classified per cell (deterministic from the two). ---
     let climate: Float32Array | undefined;
     let climateChannels: number | undefined;
     if (env.climate && env.climate.b64) {
       if (env.climate.dtype !== "float32") {
         throw new Error("ModelTerrainSource: climate dtype must be float32");
       }
-      const ch = env.climate.channels | 0;
+      const wch = env.climate.channels | 0; // channels the worker emitted
+      if (this.tempChannel >= wch || this.precipChannel >= wch || this.tempChannel < 0 || this.precipChannel < 0) {
+        throw new Error(
+          `ModelTerrainSource: temp/precip channel (${this.tempChannel}/${this.precipChannel}) ` +
+            `out of range for a ${wch}-channel climate block`,
+        );
+      }
       const cBytes = decodeBase64(env.climate.b64);
-      const expectCBytes = ch * nrows * ncols * 4;
+      const plane = nrows * ncols;
+      const expectCBytes = wch * plane * 4;
       if (cBytes.byteLength !== expectCBytes) {
         throw new Error(
           `ModelTerrainSource: climate byte length ${cBytes.byteLength} ≠ ` +
-            `expected ${expectCBytes} (${ch}×${nrows}×${ncols} float32)`,
+            `expected ${expectCBytes} (${wch}×${nrows}×${ncols} float32)`,
         );
       }
       const cv = new DataView(cBytes.buffer, cBytes.byteOffset, cBytes.byteLength);
-      climate = new Float32Array(ch * nrows * ncols);
-      for (let i = 0; i < climate.length; i++) {
-        climate[i] = cv.getFloat32(i * 4, /* littleEndian */ true);
+      const tempBase = this.tempChannel * plane;
+      const precipBase = this.precipChannel * plane;
+      climate = new Float32Array(CLIMATE_CHANNELS * plane);
+      for (let i = 0; i < plane; i++) {
+        const tempC = cv.getFloat32((tempBase + i) * 4, /* littleEndian */ true);
+        const precipMm = cv.getFloat32((precipBase + i) * 4, /* littleEndian */ true);
+        const base = i * CLIMATE_CHANNELS;
+        climate[base + CLIMATE_TEMP_C] = tempC;
+        climate[base + CLIMATE_PRECIP_MM] = precipMm;
+        climate[base + CLIMATE_BIOME] = classifyBiome(tempC, precipMm);
       }
-      climateChannels = ch;
+      climateChannels = CLIMATE_CHANNELS;
     }
 
     // Geometry: tile (tx,tz) covers world x∈[tx·extent,(tx+1)·extent), centred origin.
-    // heights are already metres, so scaleY = 1 maps height samples → metres directly
-    // (matches op_physics_add_heightfield, which multiplies samples by scaleY).
+    // origin.y = elevMinM (metre floor), scaleY = heightSpan, so the heightfield collider
+    // (which maps cell → translation.y + h·scaleY) places the surface at true metres.
     const origin: [number, number, number] = [
       req.tx * this.extent + this.extent / 2,
-      0,
+      this.elevMinM,
       req.tz * this.extent + this.extent / 2,
     ];
-    const scale: [number, number, number] = [this.extent, 1, this.extent];
+    const scale: [number, number, number] = [this.extent, this.heightSpan, this.extent];
 
     return { nrows, ncols, origin, scale, heights, climate, climateChannels };
   }
 
-  /** O(1) point elevation (metres). Served from the tile cache (the model is async
-   *  + tile-based; a synchronous coordinate query can only read already-generated
-   *  tiles — exactly the snapshot/replay path). Throws if the covering tile isn't
-   *  cached yet, directing the caller to generateTile first. */
+  /** O(1) world-space surface elevation (metres). Served from the tile cache (the model
+   *  is async + tile-based; a synchronous coordinate query can only read already-generated
+   *  tiles — exactly the snapshot/replay path). Reconstructs metres from the tile's [0,1]
+   *  heights: y = origin.y + h·scaleY (matching the heightfield collider's surface). Throws
+   *  if the covering tile isn't cached yet, directing the caller to generateTile first. */
   sampleHeight(seed: number, x: number, z: number, lod: number): number {
     const tx = Math.floor(x / this.extent);
     const tz = Math.floor(z / this.extent);
@@ -339,10 +404,12 @@ export class ModelTerrainSource implements TerrainSource {
       );
     }
     const { fx, fz } = this.localCell(tile, x, z); // fractional col/row
-    return bilinear(tile.heights, tile.ncols, tile.nrows, fx, fz);
+    const h = bilinear(tile.heights, tile.ncols, tile.nrows, fx, fz); // [0,1]
+    return tile.origin[1] + h * tile.scale[1]; // → world metres
   }
 
-  /** Per-coordinate climate (agent perception). Served from the cache; nearest cell. */
+  /** Per-coordinate climate (agent perception). Served from the cache; nearest cell of
+   *  the canonical 3-channel [tempC, precipMm, biome] grid. */
   sampleClimate(seed: number, x: number, z: number): ClimateSample {
     // Point climate is independent of lod; use the finest cached lod that covers (x,z).
     const tile = this.findCoveringTile(seed, x, z);
@@ -356,11 +423,12 @@ export class ModelTerrainSource implements TerrainSource {
       throw new Error("ModelTerrainSource.sampleClimate: tile has no climate channels");
     }
     const { col, row } = this.localCell(tile, x, z);
-    const plane = tile.nrows * tile.ncols;
-    const idx = row * tile.ncols + col;
-    const tempC = tile.climate[this.tempChannel * plane + idx];
-    const precipMm = tile.climate[this.precipChannel * plane + idx];
-    return { tempC, precipMm, biome: classifyBiome(tempC, precipMm) };
+    const base = (row * tile.ncols + col) * tile.climateChannels;
+    return {
+      tempC: tile.climate[base + CLIMATE_TEMP_C],
+      precipMm: tile.climate[base + CLIMATE_PRECIP_MM],
+      biome: tile.climate[base + CLIMATE_BIOME],
+    };
   }
 
   /** True if the tile covering (seed,lod,x,z) has been generated. */
