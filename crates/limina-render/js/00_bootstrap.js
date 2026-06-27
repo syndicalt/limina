@@ -46,6 +46,29 @@ if (typeof globalThis.URL === "undefined" && webUrl.URL !== undefined) {
 if (typeof globalThis.Blob === "undefined" && webFile.Blob !== undefined) {
   globalThis.Blob = webFile.Blob;
 }
+
+// Blob object-URL registry. deno_web's native URL.createObjectURL relies on a
+// host BlobStore that this bare embedder does not wire up, so it yields opaque
+// `blob:null/...` URLs that limina's asset-only fetch cannot resolve. three's
+// GLTFLoader uses createObjectURL to load bufferView-embedded images (the image
+// bytes packed in a .glb's BIN chunk), so those textures fail to decode and
+// render white. We back object URLs with a JS-side Map so the blob round-trips
+// through liminaFetch (below): createObjectURL stores the Blob, fetch reads its
+// bytes back, and createImageBitmap decodes it -- the exact path that data: URI
+// embedded textures already take. ASCII only.
+const __liminaObjectUrls = new Map();
+let __liminaObjectUrlSeq = 0;
+if (typeof globalThis.URL === "function") {
+  globalThis.URL.createObjectURL = function createObjectURL(blob) {
+    const id = (__liminaObjectUrlSeq = (__liminaObjectUrlSeq + 1) >>> 0);
+    const url = `blob:limina/${id}-${Date.now()}`;
+    __liminaObjectUrls.set(url, blob);
+    return url;
+  };
+  globalThis.URL.revokeObjectURL = function revokeObjectURL(url) {
+    __liminaObjectUrls.delete(String(url));
+  };
+}
 if (typeof globalThis.createImageBitmap === "undefined" && webImage.createImageBitmap !== undefined) {
   globalThis.createImageBitmap = webImage.createImageBitmap;
   globalThis.ImageBitmap = webImage.ImageBitmap;
@@ -180,6 +203,19 @@ if (typeof globalThis.Response === "undefined") globalThis.Response = LiminaResp
 if (typeof globalThis.fetch === "undefined") {
   globalThis.fetch = function liminaFetch(input) {
     const url = typeof input === "string" ? input : String(input.url ?? "");
+    if (url.startsWith("blob:")) {
+      const blob = __liminaObjectUrls.get(url);
+      if (blob === undefined) {
+        return Promise.reject(new Error(`unknown object URL: ${url}`));
+      }
+      return blob.arrayBuffer().then((buffer) => new LiminaResponse(new Uint8Array(buffer), {
+        url,
+        headers: {
+          "content-type": typeof blob.type === "string" ? blob.type : "",
+          "content-length": String(blob.size ?? 0),
+        },
+      }));
+    }
     const data = decodeDataUrl(url);
     if (data !== undefined) {
       return Promise.resolve(new LiminaResponse(data.bytes, {
