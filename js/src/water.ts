@@ -105,35 +105,35 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   // deepening only toward the run-out toward the horizon).
   material.colorNode = T.mix(deepV, shallowV, facing.pow(0.55));
 
-  // Animated micro-waves (render-graph only). Two crossing sinusoids in world XZ,
-  // scrolled by the `time` node; reused for the roughness shimmer and the sun glint.
+  // Animated micro-shimmer (render-graph only). A 2-D INTERFERENCE of crossing waves at
+  // similar low frequencies — multiplied, so the field is cellular (no single direction →
+  // no candy-cane stripes), scrolled by the `time` node.
   const t = T.time;
   const wx = T.positionWorld.x;
   const wz = T.positionWorld.z;
-  const waveA = wx.mul(0.22).add(wz.mul(0.15)).add(t.mul(0.6)).sin();
-  const waveB = wx.mul(0.9).sub(wz.mul(0.7)).sub(t.mul(1.2)).sin();
-  const wave01 = waveA.mul(0.5).add(0.5); // 0..1
+  const w1 = wx.mul(0.13).add(wz.mul(0.17)).add(t.mul(0.5)).sin();
+  const w2 = wx.mul(0.19).sub(wz.mul(0.11)).sub(t.mul(0.4)).sin();
+  const w3 = wx.mul(0.06).add(wz.mul(0.05)).add(t.mul(0.2)).sin();
+  // product of crossing waves (cellular) plus a broad swell → 0..1, not striped.
+  const shimmer = w1.mul(w2).mul(0.5).add(0.5).mul(0.6).add(w3.mul(0.5).add(0.5).mul(0.4));
 
-  // Roughness shimmer: calm water is near-mirror; crests roughen so the sky IBL
-  // reflection breaks up and travels — the cheapest WebGPU-safe way to animate a
-  // reflection without touching normals.
-  material.roughnessNode = T.float(0.05).add(wave01.mul(0.12)); // 0.05 .. 0.17
+  // Roughness: near-mirror calm tropical water with a GENTLE 2-D shimmer so the sky IBL
+  // reflection has subtle life without banding. Small range → clean, no stripes.
+  material.roughnessNode = T.float(0.06).add(shimmer.mul(0.06)); // 0.06 .. 0.12
 
   // Opacity: more opaque + reflective at the grazing horizon, clearer top-down.
   material.opacityNode = T.float(0.72).add(fresnel.mul(0.27)); // 0.72 .. 0.99
 
-  // Sun glint: sharp moving sparkles on the wave peaks (warm, small, additive).
-  const sparkle = T.max(waveB, 0).pow(7);
-  material.emissiveNode = T.vec3(1.0, 0.94, 0.78).mul(sparkle.mul(0.6));
+  // No stark directional sun-glint (that produced the candy-cane stripes). The sky IBL
+  // reflection + the gentle 2-D roughness shimmer give the water its life on their own.
 
-  // Gentle vertex ripple along the plane's local normal (local Z → world up after the
-  // -90° X rotation). Small amplitude: alive, never choppy. positionLocal.xy is the
-  // in-plane coordinate; displacing local Z lifts/drops the surface.
+  // Gentle 2-D vertex ripple along the plane's local normal (local Z → world up after the
+  // -90° X rotation). Two crossing components → cellular, never striped; small amplitude.
   const lx = T.positionLocal.x;
   const ly = T.positionLocal.y;
-  const ripple = lx.mul(0.16).add(t.mul(0.9)).sin()
-    .add(ly.mul(0.2).sub(t.mul(0.7)).sin())
-    .mul(0.07);
+  const ripple = lx.mul(0.12).add(ly.mul(0.16)).add(t.mul(0.8)).sin()
+    .add(lx.mul(0.21).sub(ly.mul(0.13)).sub(t.mul(0.6)).sin())
+    .mul(0.05);
   material.positionNode = T.positionLocal.add(T.vec3(0, 0, ripple));
 
   const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
