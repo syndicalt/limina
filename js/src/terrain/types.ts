@@ -64,8 +64,11 @@ export interface TerrainSource {
   readonly name: string;
   /** Generate one tile. Deterministic per (seed, lod, tx, tz[, hints]). */
   generateTile(req: TileRequest): TerrainTile | Promise<TerrainTile>;
-  /** O(1) point elevation query (snapping/queries). Deterministic per (seed, x, z, lod). */
-  sampleHeight(seed: number, x: number, z: number, lod: number): number;
+  /** O(1) point elevation query (snapping/queries). Deterministic per (seed, x, z, lod
+   *  [, hints]). The optional `hints` carry the SAME opt-in shaping a region was
+   *  generated with, so a point query matches the shaped tiles (sources that don't
+   *  shape simply ignore it). */
+  sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number;
   /** Per-coordinate climate (agent perception). Deterministic per (seed, x, z). */
   sampleClimate(seed: number, x: number, z: number): ClimateSample;
 }

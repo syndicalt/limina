@@ -20,6 +20,67 @@ export interface TerrainMeshOptions {
   metalness?: number;
   /** Draw both faces (debug / steep overhangs). Default false — winding faces +y. */
   doubleSide?: boolean;
+  /**
+   * OPT-IN tropical shoreline shading (render-only). When set, the sand surface is
+   * shaded by its world-Y relative to `seaLevel`: a darker, glossier WET band around
+   * the waterline and a bright animated FOAM line right at it — the literal "where
+   * water meets sand" wet edge. It is GROUND-TRUTH (the sand mesh knows its own
+   * height), deterministic, and needs no scene-depth buffer; the foam lap is driven by
+   * the TSL `time` node (render graph only — never the sim/log). Omit for the plain
+   * matte sand every other world gets (no behaviour change when absent).
+   */
+  shoreline?: {
+    /** Sea-level world Y the wet/foam bands are centred on. */
+    seaLevel: number;
+    /** Foam line colour (hex, near-white). Default 0xf2f6f4. */
+    foamColor?: number;
+    /** Wet-sand tint the dry albedo darkens toward (hex). Default a damp brown. */
+    wetColor?: number;
+    /** Half-height (world units) of the wet band above/below the waterline. Default 0.9. */
+    wetBand?: number;
+    /** Half-height (world units) of the bright foam line. Default 0.22. */
+    foamBand?: number;
+  };
+}
+
+// TSL handle for the opt-in shoreline graph (loosely typed: the fluent node API is
+// dynamic; the graph is validated by the live WebGPU shader compile / in-tab UAT).
+// deno-lint-ignore no-explicit-any
+const T = (THREE as any).TSL;
+
+/** Build the opt-in shoreline `colorNode`/`roughnessNode` for the sand material: a wet
+ *  band + an animated foam line keyed to world-Y vs sea level. Render-only, time-driven
+ *  in the render graph (never the sim/log). */
+function applyShoreline(
+  material: THREE.MeshStandardNodeMaterial,
+  dryColor: number,
+  baseRough: number,
+  shore: NonNullable<TerrainMeshOptions["shoreline"]>,
+): void {
+  const dry = new THREE.Color(dryColor); // linear components
+  const wet = new THREE.Color(shore.wetColor ?? 0x6f5b44);
+  const foam = new THREE.Color(shore.foamColor ?? 0xf2f6f4);
+  const wetBand = shore.wetBand ?? 0.9;
+  const foamBand = shore.foamBand ?? 0.22;
+
+  // Signed height above the waterline (negative = submerged), plus a small time-driven
+  // lap so the foam edge breathes in/out like a wash. `ad` = distance from waterline.
+  const lap = T.positionWorld.x.mul(0.6).add(T.positionWorld.z.mul(0.55)).add(T.time.mul(1.1)).sin().mul(0.13);
+  const ad = T.positionWorld.y.sub(shore.seaLevel).add(lap).abs();
+
+  // Wet band: 1 at the waterline → 0 a `wetBand` away. Foam: a tighter bright band.
+  const wetMask = T.oneMinus(T.smoothstep(0, wetBand, ad));
+  const foamMask = T.oneMinus(T.smoothstep(0, foamBand, ad));
+
+  const dryV = T.vec3(dry.r, dry.g, dry.b);
+  const wetV = T.vec3(wet.r, wet.g, wet.b);
+  const foamV = T.vec3(foam.r, foam.g, foam.b);
+
+  let col = T.mix(dryV, wetV, wetMask.mul(0.85));
+  col = T.mix(col, foamV, foamMask);
+  material.colorNode = col;
+  // Wet sand is glossier (lower roughness) → catches a sky sheen; foam/dry stay matte.
+  material.roughnessNode = T.float(baseRough).sub(wetMask.mul(Math.max(0, baseRough - 0.45)));
 }
 
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
@@ -42,12 +103,16 @@ export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeomet
  */
 export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {}): THREE.Mesh {
   const geom = terrainTileBufferGeometry(tile);
+  const baseColor = opts.color ?? 0x4a6b3a;
+  const baseRough = opts.roughness ?? 0.95;
   const material = new THREE.MeshStandardNodeMaterial({
-    color: opts.color ?? 0x4a6b3a,
-    roughness: opts.roughness ?? 0.95,
+    color: baseColor,
+    roughness: baseRough,
     metalness: opts.metalness ?? 0.0,
   });
   if (opts.doubleSide === true) material.side = THREE.DoubleSide;
+  // Opt-in tropical shoreline (wet band + animated foam line). No-op when absent.
+  if (opts.shoreline !== undefined) applyShoreline(material, baseColor, baseRough, opts.shoreline);
   const mesh = new THREE.Mesh(geom, material);
   mesh.castShadow = false;
   mesh.receiveShadow = true;

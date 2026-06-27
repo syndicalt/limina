@@ -48,6 +48,15 @@ export interface ScatterConfig {
   sizeRange?: [number, number];
   /** Fraction of passing candidates actually placed (sparser cover). Default 1. */
   coverage?: number;
+  /** OPT-IN clumping strength [0,1]. 0 (default) = the legacy uniform grid (byte-
+   *  identical). >0 modulates acceptance by a low-frequency deterministic noise field
+   *  so instances gather into natural clusters (palm groves) instead of an even spread.
+   *  Purely spatial — it never changes the per-candidate RNG draw ORDER, so the
+   *  superset/replay guarantees hold (a looser elevation/slope rule still yields a
+   *  strict superset). */
+  cluster?: number;
+  /** World-space frequency of the cluster field (smaller = larger clumps). Default 1/26. */
+  clusterFreq?: number;
   /** Optional biome whitelist (reads the tile climate grid's biome channel). */
   biomes?: number[];
   /** Optional inclusive temperature window (reads the climate grid's tempC channel). */
@@ -72,6 +81,24 @@ function baseSeed(seed: number, configSeed: number): number {
   return (Math.imul((seed | 0) ^ 0x9e3779b1, 0x85ebca77) ^ (configSeed | 0)) >>> 0;
 }
 
+/** Smooth deterministic value noise in [0,1] for the cluster mask. Built on the same
+ *  integer hashSeed lattice (no transcendentals) so it is bit-identical across engines
+ *  — the clumping reproduces exactly on replay/browser playback like every placement. */
+function clusterNoise(seed: number, x: number, z: number): number {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fz = z - iz;
+  const corner = (cx: number, cz: number): number => hashSeed(seed, cx, cz) / 4294967296;
+  const v00 = corner(ix, iz), v10 = corner(ix + 1, iz);
+  const v01 = corner(ix, iz + 1), v11 = corner(ix + 1, iz + 1);
+  const ux = fx * fx * (3 - 2 * fx);
+  const uz = fz * fz * (3 - 2 * fz);
+  const top = v00 + (v10 - v00) * ux;
+  const bot = v01 + (v11 - v01) * ux;
+  return top + (bot - top) * uz;
+}
+
 /**
  * Scatter curated assets over a single tile under `config`. Deterministic:
  * identical (tile, seed, config) -> identical instances.
@@ -93,6 +120,11 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
   const elevationMax = config.elevationMax ?? Infinity;
   const slopeMax = config.slopeMax ?? Infinity;
   const coverage = config.coverage ?? 1;
+  const cluster = config.cluster ?? 0;
+  const clusterFreq = config.clusterFreq ?? (1 / 26);
+  // The cluster mask reshuffles with the world+config seed (independent salt) so it
+  // doesn't lock to the candidate RNG stream.
+  const clusterSeed = (baseSeed(seed, config.seed) ^ 0x7f4a7c15) | 0;
   const [sizeLo, sizeHi] = config.sizeRange ?? [0.8, 1.2];
   const wantClimate = config.biomes !== undefined || config.tempMin !== undefined || config.tempMax !== undefined;
 
@@ -167,7 +199,16 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
       const scale = sizeLo + sizeT * (sizeHi - sizeLo);
 
       // --- RULES: consult the tile's height + climate fields --------------------
-      if (coverRoll > coverage) continue;
+      // OPT-IN clumping: bias the coverage threshold by a low-freq spatial mask so
+      // placements gather into groves (hotspots pass; gaps thin out). cluster=0 leaves
+      // effCoverage === coverage (byte-identical to the uniform path).
+      let effCoverage = coverage;
+      if (cluster > 0) {
+        const cm = clusterNoise(clusterSeed, x * clusterFreq, z * clusterFreq); // [0,1]
+        const hot = cm * cm * (3 - 2 * cm); // smootherstep-ish emphasis of the hotspots
+        effCoverage = coverage * ((1 - cluster) + cluster * hot * 2); // mean ≈ coverage
+      }
+      if (coverRoll > effCoverage) continue;
       if (y < elevationMin || y > elevationMax) continue; // tree line / water line (heights)
       if (slope > slopeMax) continue; // cliffs (heights)
       if (wantClimate) {

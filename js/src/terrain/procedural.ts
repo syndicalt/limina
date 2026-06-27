@@ -103,6 +103,103 @@ function elevation01(seed: number, x: number, z: number, lod: number): number {
   return fbm(seed | 0, x, z, octaves, ELEV_BASE_FREQ);
 }
 
+// ---- OPT-IN rich shaping (deterministic, byte-identical default) -----------
+// With NO hints the elevation path above is used VERBATIM, so every existing tile
+// is byte-identical to today. When a request carries shaping hints (hints.shape>0),
+// generateTile / sampleHeight route through `shapedElevation01` instead, which layers
+// three OPT-IN effects on the same value-noise primitives:
+//   • domain WARP — displace the sample point by an independent low-freq noise field
+//     so landforms meander (organic coastlines/dune fronts) instead of axis-aligned
+//     value-noise blobs;
+//   • RIDGED multifractal — sharpened inverted-abs octaves blended in for crisp dune
+//     ridgelines (a tan dome has none);
+//   • island FALLOFF — a radial mask so the landmass rises from the sea floor, crests
+//     into dunes, and slopes back down into the water: a real island + beach, not a dome.
+// Every op is the SAME pure poly/integer family the base field uses (mul/add/smoothstep/
+// lerp + Math.abs/Math.sqrt, both IEEE-correctly-rounded) — no sin/pow/random — so the
+// rich path is just as deterministic + replay-safe behind the same seam + tile cache.
+
+/** The parsed shaping recipe (decoded from the numeric `hints` map). */
+interface ShapeConfig {
+  warpAmp: number;  // world-meter amplitude of the domain warp (0 = off)
+  warpFreq: number; // spatial frequency of the warp field
+  ridge: number;    // [0,1] blend of ridged dune detail into the smooth base
+  cx: number; cz: number; // island centre (world x,z)
+  radius: number;   // distance from centre where the beach slope begins (Infinity = no island)
+  falloff: number;  // width (m) over which land slopes down to the sea floor
+}
+
+const RIDGE_SALT = 0x5bd1e995 | 0;
+const WARP_X_SALT = 0x68bc21eb | 0;
+const WARP_Z_SALT = 0x02e5be93 | 0;
+
+function clamp01(t: number): number { return t < 0 ? 0 : t > 1 ? 1 : t; }
+
+/** Decode the OPT-IN shaping hints. Returns undefined when shaping is OFF (no hints,
+ *  or hints.shape <= 0) so the caller keeps the byte-identical default path. */
+function parseShape(hints: Record<string, number> | undefined): ShapeConfig | undefined {
+  if (hints === undefined || !(hints.shape > 0)) return undefined;
+  return {
+    warpAmp: hints.warp ?? 0,
+    warpFreq: hints.warpFreq ?? (1 / 130),
+    ridge: clamp01(hints.ridge ?? 0),
+    cx: hints.islandCx ?? 0,
+    cz: hints.islandCz ?? 0,
+    radius: hints.islandRadius ?? Infinity,
+    falloff: hints.islandFalloff ?? 1,
+  };
+}
+
+/** Ridged multifractal in [0,1]: each octave is an inverted-abs value-noise crest
+ *  (1-|2n-1|), squared to sharpen the ridge, summed + normalized — crisp dune lines. */
+function ridgedFbm(seed: number, x: number, z: number, octaves: number, freq: number): number {
+  let amp = 1;
+  let sum = 0;
+  let norm = 0;
+  let f = freq;
+  for (let o = 0; o < octaves; o++) {
+    const n = valueNoise((seed + Math.imul(o, 0x9e3779b1)) | 0, x * f, z * f);
+    let r = 1 - Math.abs(2 * n - 1); // [0,1], peaks where n≈0.5
+    r = r * r; // sharpen the crest
+    sum += amp * r;
+    norm += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return sum / norm;
+}
+
+/** Rich elevation in [0,1]: domain-warped fbm + optional ridged dunes, masked by an
+ *  optional radial island falloff. Pure + deterministic (same as elevation01). */
+function shapedElevation01(seed: number, x: number, z: number, lod: number, s: ShapeConfig): number {
+  const octaves = 3 + Math.max(0, Math.min(4, lod | 0));
+  // Domain warp: meander the sample point so landforms aren't axis-aligned blobs.
+  let wx = x;
+  let wz = z;
+  if (s.warpAmp !== 0) {
+    const nx = valueNoise((seed ^ WARP_X_SALT) | 0, x * s.warpFreq, z * s.warpFreq);
+    const nz = valueNoise((seed ^ WARP_Z_SALT) | 0, x * s.warpFreq, z * s.warpFreq);
+    wx = x + (nx - 0.5) * 2 * s.warpAmp;
+    wz = z + (nz - 0.5) * 2 * s.warpAmp;
+  }
+  const base = fbm(seed | 0, wx, wz, octaves, ELEV_BASE_FREQ); // [0,1]
+  let e = base;
+  if (s.ridge > 0) {
+    const dunes = ridgedFbm((seed ^ RIDGE_SALT) | 0, wx, wz, octaves, ELEV_BASE_FREQ * 2); // [0,1]
+    e = base * (1 - s.ridge) + dunes * s.ridge; // convex blend → e stays in [0,1]
+  }
+  // Radial island falloff: 1 inside `radius`, smoothstep down to 0 across `falloff`,
+  // so the surface rises from the sea floor into the dunes and slopes back into water.
+  if (s.radius !== Infinity) {
+    const dx = x - s.cx;
+    const dz = z - s.cz;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const t = clamp01((dist - s.radius) / (s.falloff <= 0 ? 1 : s.falloff));
+    e *= 1 - smoothstep(t); // 1 (land) → 0 (sea floor)
+  }
+  return e;
+}
+
 /** Quantize (temperature, precipitation) into a small biome enum. Stable integer
  *  boundaries so the mapping is exactly reproducible. */
 function biomeOf(tempC: number, precipMm: number): number {
@@ -126,6 +223,8 @@ export class ProceduralTerrainSource implements TerrainSource {
   generateTile(req: TileRequest): TerrainTile {
     const seed = req.seed | 0;
     const lod = req.lod | 0;
+    // OPT-IN shaping: undefined (the default) ⇒ byte-identical to the base field.
+    const shape = parseShape(req.hints);
     const { origin, scale } = tilePlacement(req.tx, req.tz);
     const nrows = TILE_RES;
     const ncols = TILE_RES;
@@ -139,7 +238,7 @@ export class ProceduralTerrainSource implements TerrainSource {
       const z = z0 + (r / (nrows - 1)) * TILE_SIZE;
       for (let c = 0; c < ncols; c++) {
         const x = x0 + (c / (ncols - 1)) * TILE_SIZE;
-        const e = elevation01(seed, x, z, lod);
+        const e = shape === undefined ? elevation01(seed, x, z, lod) : shapedElevation01(seed, x, z, lod, shape);
         const idx = r * ncols + c;
         heights[idx] = e;
         const cl = this.climateAt(seed, x, z, e);
@@ -153,9 +252,13 @@ export class ProceduralTerrainSource implements TerrainSource {
   }
 
   /** O(1) world-space elevation query (snapping/placement). Returns the surface
-   *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). */
-  sampleHeight(seed: number, x: number, z: number, lod: number): number {
-    return elevation01(seed | 0, x, z, lod | 0) * HEIGHT_SCALE;
+   *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). Passing the SAME
+   *  shaping `hints` a region was generated with samples the SHAPED surface (so a
+   *  survey/snap matches the rich tiles); omit them for the byte-identical base field. */
+  sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
+    const shape = parseShape(hints);
+    const e = shape === undefined ? elevation01(seed | 0, x, z, lod | 0) : shapedElevation01(seed | 0, x, z, lod | 0, shape);
+    return e * HEIGHT_SCALE;
   }
 
   /** Per-coordinate climate for agent perception. Deterministic per (seed,x,z). */

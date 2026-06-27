@@ -59,6 +59,8 @@ const scatterConfigSchema = z.object({
   slopeMax: z.number().nonnegative().optional(),
   sizeRange: z.tuple([z.number().positive(), z.number().positive()]).optional(),
   coverage: z.number().min(0).max(1).optional(),
+  cluster: z.number().min(0).max(1).optional(),
+  clusterFreq: z.number().positive().optional(),
   biomes: z.array(z.number().int()).optional(),
   tempMin: z.number().optional(),
   tempMax: z.number().optional(),

@@ -57,6 +57,64 @@ export const BEACH_BOUNDS = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 } as const;
 /** Where the sea sits between the region's lowest and highest surface point. 0.4 →
  *  the low ~40% of the height range floods, leaving dry sand above it. */
 const SEA_FRACTION = 0.4;
+
+/**
+ * The OPT-IN terrain-shaping hints that turn the procedural surface from a flat tan
+ * dome into a genuine sand island: a domain-WARPED base (organic, meandering shoreline),
+ * RIDGED dune detail blended on the crest, and a radial island FALLOFF centred on the
+ * region so the land rises from the sea floor, crests into dunes, and slopes back down
+ * into the water (a real beach). Derived from the region bounds so the island is always
+ * centred and scaled to the generated rectangle. Passed to BOTH world.generateRegion
+ * (the tiles/colliders) and source.sampleHeight (the survey that picks the sea level +
+ * cottage spot), so the survey matches the shaped tiles. Pure numbers → recorded
+ * verbatim in the world log, reproduced bit-for-bit on replay.
+ *
+ * Tuning knobs (all world meters / [0,1]):
+ *   warp        domain-warp amplitude — higher = more sinuous coastline/dunes
+ *   warpFreq    warp field frequency — smaller = broader meanders
+ *   ridge       [0,1] dune-ridge blend — higher = sharper, more defined dune lines
+ *   islandRadius / islandFalloff   the flat-top radius and the beach-slope width
+ */
+export function beachShapeHints(b: BeachBounds): Record<string, number> {
+  const cx = ((b.minTx + b.maxTx + 1) / 2) * TILE_SIZE;
+  const cz = ((b.minTz + b.maxTz + 1) / 2) * TILE_SIZE;
+  const spanX = (b.maxTx - b.minTx + 1) * TILE_SIZE;
+  const spanZ = (b.maxTz - b.minTz + 1) * TILE_SIZE;
+  const half = Math.min(spanX, spanZ) / 2; // 48 m for the default 96 m region
+  return {
+    shape: 1,
+    warp: 22,
+    warpFreq: 1 / 130,
+    ridge: 0.45,
+    islandCx: cx,
+    islandCz: cz,
+    islandRadius: half * 0.62, // ~30 m flat-ish dune core
+    islandFalloff: half * 0.7, // ~34 m beach slope down to the sea floor
+  };
+}
+
+/**
+ * The deterministic palm/driftwood scatter recipe for the beach, as a pure function of
+ * the surveyed `seaLevel` (the only runtime input — everything else is fixed). Shared by
+ * the builder AND the acceptance test so the falsifiable waterline check runs the EXACT
+ * same config. Reads naturally: CLUSTERED into a few groves (not a uniform lattice) with
+ * extra driftwood variety and a natural size spread. The cluster mask is purely spatial,
+ * so the per-candidate RNG order is unchanged → the elevation gate stays falsifiable
+ * (a lower elevationMin yields a strict superset).
+ */
+export function beachScatterConfig(seaLevel: number): ScatterConfig {
+  return {
+    seed: 21,
+    density: 14, //            per-tile candidate grid resolution (14×14 per tile, INT)
+    coverage: 0.05, //         sparse, but a richer shoreline than before
+    cluster: 0.85, //          strong clumping → palm GROVES + driftwood piles, not a lattice
+    clusterFreq: 1 / 30, //    ~30 m clumps across the 96 m beach (a few groves)
+    assets: [{ id: PALM_ASSET, weight: 3 }, { id: DRIFTWOOD_ASSET, weight: 2 }], // more driftwood variety
+    elevationMin: seaLevel, // dry sand only — props never sit below the waterline
+    slopeMax: 0.7, //          allow the gentler dune faces, still off the steepest
+    sizeRange: [1.1, 2.4], //  palm ≈3.1–6.4 m tall, rock ≈0.7–1.5 m — natural size spread
+  };
+}
 /** Cottage scale: the Hut model is ≈1.46 × 1.18 m at unit scale, so ×5 gives a ≈7.3 ×
  *  5.9 m footprint and ≈3.8 m ridge — a sensible beach hut sitting ON the sand (the
  *  model's base is at Y≈0, so placing it at the surface height seats it, not buries it). */
@@ -100,7 +158,7 @@ function ok(res: MCPResponse | undefined, what: string): Record<string, unknown>
 /** Sample the procedural surface across the region (deterministic, fixed order) to
  *  find its Y extent and a dry-sand spot for the cottage near the waterline. Pure
  *  READ of the bound source — records no commands, mutates nothing. */
-function surveyBeach(source: TerrainSource, seed: number, b: BeachBounds): {
+function surveyBeach(source: TerrainSource, seed: number, b: BeachBounds, hints: Record<string, number>): {
   minY: number; maxY: number; samples: { x: number; z: number; y: number }[];
 } {
   const STEP = TILE_SIZE / 8; // 8 samples per tile edge
@@ -110,7 +168,9 @@ function surveyBeach(source: TerrainSource, seed: number, b: BeachBounds): {
   let minY = Infinity, maxY = -Infinity;
   for (let z = z0; z <= z1 + 1e-6; z += STEP) {
     for (let x = x0; x <= x1 + 1e-6; x += STEP) {
-      const y = source.sampleHeight(seed, x, z, 0);
+      // Sample the SHAPED surface (same hints the region is generated with) so the
+      // sea level + cottage spot match the rich tiles, not the flat base field.
+      const y = source.sampleHeight(seed, x, z, 0, hints);
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
       samples.push({ x, z, y });
@@ -137,12 +197,15 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
     world,
   };
 
-  // 1. THE GROUND — generate the procedural beach region (real heightfield surface).
-  const gen = ok(await registry.invoke("world.generateRegion", { seed: BEACH_SEED, bounds, lod: 0 }, base), "world.generateRegion");
+  // 1. THE GROUND — generate the procedural beach region (real heightfield surface),
+  //    OPTING IN to the rich island/dune/beach shaping via hints (the default-off knobs
+  //    that keep every other terrain test byte-identical — see procedural.ts / beachShapeHints).
+  const hints = beachShapeHints(bounds);
+  const gen = ok(await registry.invoke("world.generateRegion", { seed: BEACH_SEED, bounds, lod: 0, hints }, base), "world.generateRegion");
   const regionId = gen.regionId as string;
 
-  // Survey the generated surface (deterministic read) → sea level + cottage spot.
-  const { minY, maxY, samples } = surveyBeach(source, BEACH_SEED, bounds);
+  // Survey the generated surface (deterministic read, SAME hints) → sea level + cottage spot.
+  const { minY, maxY, samples } = surveyBeach(source, BEACH_SEED, bounds, hints);
   const seaLevel = minY + SEA_FRACTION * (maxY - minY);
 
   // 2. THE SEA — a render-only water surface at sea level; the low sand floods. The
@@ -168,17 +231,9 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
   const placed = ok(await registry.invoke("asset.place", { assetId: COTTAGE_ASSET, position: cottagePos, scale: COTTAGE_SCALE }, base), "asset.place");
 
   // 4. THE PROPS — scatter palms + driftwood BY ID across the region, elevation-gated
-  //    to the DRY sand (elevationMin = seaLevel) so nothing floats in the water.
-  const scatterConfig: ScatterConfig = {
-    seed: 21,
-    density: 12, //            per-tile candidate grid resolution (12×12 per tile, INT)
-    coverage: 0.02, //         keep it SPARSE: ~2% of passing candidates → ~9 props
-    //                         total across the dry sand (a believable shoreline, not 500)
-    assets: [{ id: PALM_ASSET, weight: 2 }, { id: DRIFTWOOD_ASSET, weight: 1 }],
-    elevationMin: seaLevel, // dry sand only — props never sit below the waterline
-    slopeMax: 0.6, //          keep them off steep back-dune faces
-    sizeRange: [1.2, 2.2], //  palm ≈3.2–5.9 m tall, rock ≈0.7–1.3 m — natural on a beach
-  };
+  //    to the DRY sand (elevationMin = seaLevel) so nothing floats in the water, and
+  //    CLUMPED into groves (see beachScatterConfig) so it reads as a natural shoreline.
+  const scatterConfig = beachScatterConfig(seaLevel);
   const scattered = ok(await registry.invoke("asset.scatter", { regionId, config: scatterConfig }, base), "asset.scatter");
 
   return {
