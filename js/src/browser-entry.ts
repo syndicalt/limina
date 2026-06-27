@@ -28,6 +28,7 @@ import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terr
 import { ProceduralTerrainSource, TILE_SIZE } from "./terrain/procedural.ts";
 import type { TerrainTile } from "./terrain/types.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
+import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
@@ -100,8 +101,18 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
   return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
 }
 
-/** Build the real three renderer + scene + camera for browser playback. */
-async function buildRenderTarget(canvas: unknown, width: number, height: number, forceWebGL: boolean): Promise<{
+/** Build the real three renderer + scene + camera for browser playback. The
+ *  Phase 11 render baseline (lights + procedural-sky IBL + ground + framing) is
+ *  the single source of truth for "looks rendered", so this no longer hand-rolls
+ *  cosmetic lights/ground — it just applies the baseline. `baseline` lets the
+ *  caller tweak it (terrain mode disables the flat ground, for example). */
+async function buildRenderTarget(
+  canvas: unknown,
+  width: number,
+  height: number,
+  forceWebGL: boolean,
+  baseline: RenderBaselineOverride | false,
+): Promise<{
   renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void };
   scene: SceneLike;
   camera: CameraLike;
@@ -111,27 +122,14 @@ async function buildRenderTarget(canvas: unknown, width: number, height: number,
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL });
   await renderer.init();
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
 
   const scene: SceneLike = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0e14);
-  // Cosmetic stage dressing (NOT part of the replay): lights + a ground plane so
-  // the keyframed bodies are lit and grounded. The replay adds the real entities.
-  scene.add(new THREE.AmbientLight(0x404060, 1.3));
-  const key = new THREE.DirectionalLight(0xffffff, 3.2);
-  key.position.set(5, 9, 6);
-  scene.add(key);
-  const ground = new THREE.Mesh(
-    new THREE.BoxGeometry(40, 0.2, 40),
-    new THREE.MeshStandardNodeMaterial({ color: 0x1b2230, roughness: 0.9 }),
-  );
-  ground.position.y = -0.1;
-  scene.add(ground);
-
   const camera: CameraLike = new THREE.PerspectiveCamera(60, width / height, 0.1, 200);
+
+  // One source of truth: lights, procedural-sky IBL, tonemapping, ground, camera.
+  if (baseline !== false) {
+    applyRenderBaseline({ scene, renderer: renderer as never, camera }, baseline);
+  }
   return { renderer, scene, camera };
 }
 
@@ -141,7 +139,13 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   const status = opts.onStatus ?? ((): void => {});
 
   status("loading", "starting WebGPU");
-  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
+  // Terrain mode renders its own streamed surface, so suppress the baseline's
+  // flat ground plane (it would clip through the terrain); keep everything else.
+  const baseline: RenderBaselineOverride =
+    opts.terrain !== undefined ? { ground: { enabled: false } } : {};
+  const { renderer, scene, camera } = await buildRenderTarget(
+    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, baseline,
+  );
 
   // Host surfaces: render ops bound to the canvas + input, durable trace over
   // IndexedDB (hydrated before playback).
@@ -222,7 +226,8 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
     cam.far = 900;
     cam.updateProjectionMatrix();
-    (scene as unknown as { fog: unknown }).fog = new THREE.Fog(0x0b0e14, 140, 380);
+    // Fade the streamed edge into the baseline sky's horizon haze (not black).
+    (scene as unknown as { fog: unknown }).fog = new THREE.Fog(0xcdd9e6, 140, 380);
   }
 
   // Camera orbit state (used only when NOT flying).

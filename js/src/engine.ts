@@ -6,6 +6,7 @@ import * as THREE from "../build/three.bundle.mjs";
 import { createTransformStorage, type TransformStorage } from "./ecs/facade.ts";
 import { createEcsWorld, type Transformable } from "./ecs/world.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
+import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
 
 // ---- Typed op surface (provider-agnostic; no `any`) ----------------------
 
@@ -155,7 +156,12 @@ export interface Object3DLike {
   add(child: unknown): void;
   remove(child: unknown): void;
 }
-export interface SceneLike extends Object3DLike { background: unknown; }
+export interface SceneLike extends Object3DLike {
+  background: unknown;
+  /** PBR image-based-lighting source (set by the Phase 11 render baseline). */
+  environment?: unknown;
+  environmentIntensity?: number;
+}
 export interface CameraLike {
   position: { set(x: number, y: number, z: number): void };
   aspect: number;
@@ -311,7 +317,14 @@ export interface Engine {
 /** Acquire the GPU device + window surface, build the Three.js renderer/scene/
  *  camera and a bitECS world. The host must have created the window first
  *  (windowed mode) before op_create_window_context succeeds. */
-export async function createEngine(opts: { width: number; height: number }): Promise<Engine> {
+export async function createEngine(opts: {
+  width: number;
+  height: number;
+  /** Phase 11 render baseline. Omit for the tasteful default (lit + IBL +
+   *  tonemapped sky). Pass a partial to tweak, or `false` to opt out entirely
+   *  (a bare scene — the pre-Phase-11 void). */
+  renderBaseline?: RenderBaselineOverride | false;
+}): Promise<Engine> {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error("engine: no WebGPU adapter");
   const device = await adapter.requestDevice();
@@ -358,6 +371,13 @@ export async function createEngine(opts: { width: number; height: number }): Pro
     engine.width = w;
     engine.height = h;
   });
+
+  // Phase 11: every world inherits the render baseline (lights + IBL + sky +
+  // ground + framing) unless the caller opts out with `renderBaseline: false`.
+  // The renderer is live (init() awaited above), so PMREM IBL runs here.
+  if (opts.renderBaseline !== false) {
+    applyRenderBaseline(engine, opts.renderBaseline);
+  }
 
   return engine;
 }

@@ -54054,8 +54054,8 @@ var WebGLTimestampQueryPool = class extends TimestampQueryPool {
             timeoutId = setTimeout(checkQuery, 1);
             return;
           }
-          const elapsed = this.gl.getQueryParameter(query, this.gl.QUERY_RESULT);
-          resolve(Number(elapsed) / 1e6);
+          const elapsed2 = this.gl.getQueryParameter(query, this.gl.QUERY_RESULT);
+          resolve(Number(elapsed2) / 1e6);
         } catch (e) {
           error("Error checking query:", e);
           resolve(this.lastValue);
@@ -68345,6 +68345,178 @@ function querySpatialEntitiesBruteForce(world, options = {}) {
       returnedEntities: entities.length
     }
   };
+}
+
+// src/render-baseline.ts
+var DEFAULT_RENDER_BASELINE = {
+  enabled: true,
+  toneMapping: ACESFilmicToneMapping,
+  exposure: 1,
+  shadows: true,
+  sun: { color: 16774374, intensity: 3, direction: [5, 9, 6] },
+  hemisphere: { skyColor: 10205439, groundColor: 7035460, intensity: 0.9 },
+  ambientIntensity: 0.15,
+  sky: { top: 4882372, horizon: 13490662, bottom: 2762272 },
+  environment: true,
+  environmentIntensity: 1,
+  background: true,
+  ground: { enabled: true, color: 3818064, size: 80, y: 0, roughness: 0.95 },
+  camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 }
+};
+function mergePreset(base, over) {
+  if (over === void 0) return { ...base };
+  return {
+    enabled: over.enabled ?? base.enabled,
+    toneMapping: over.toneMapping ?? base.toneMapping,
+    exposure: over.exposure ?? base.exposure,
+    shadows: over.shadows ?? base.shadows,
+    sun: { ...base.sun, ...over.sun },
+    hemisphere: { ...base.hemisphere, ...over.hemisphere },
+    ambientIntensity: over.ambientIntensity ?? base.ambientIntensity,
+    sky: { ...base.sky, ...over.sky },
+    environment: over.environment ?? base.environment,
+    environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
+    background: over.background ?? base.background,
+    ground: { ...base.ground, ...over.ground },
+    camera: { ...base.camera, ...over.camera }
+  };
+}
+function lerpByte(a, b2, t) {
+  return Math.round(a + (b2 - a) * t);
+}
+function buildSkyEquirect(sky) {
+  const width = 16;
+  const height = 128;
+  const data = new Uint8Array(width * height * 4);
+  const top = [sky.top >> 16 & 255, sky.top >> 8 & 255, sky.top & 255];
+  const hor = [sky.horizon >> 16 & 255, sky.horizon >> 8 & 255, sky.horizon & 255];
+  const bot = [sky.bottom >> 16 & 255, sky.bottom >> 8 & 255, sky.bottom & 255];
+  for (let y2 = 0; y2 < height; y2++) {
+    const v2 = y2 / (height - 1);
+    let r, g2, b2;
+    if (v2 < 0.5) {
+      const t = v2 / 0.5;
+      r = lerpByte(top[0], hor[0], t);
+      g2 = lerpByte(top[1], hor[1], t);
+      b2 = lerpByte(top[2], hor[2], t);
+    } else {
+      const t = (v2 - 0.5) / 0.5;
+      r = lerpByte(hor[0], bot[0], t);
+      g2 = lerpByte(hor[1], bot[1], t);
+      b2 = lerpByte(hor[2], bot[2], t);
+    }
+    for (let x2 = 0; x2 < width; x2++) {
+      const i = (y2 * width + x2) * 4;
+      data[i] = r;
+      data[i + 1] = g2;
+      data[i + 2] = b2;
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new DataTexture(data, width, height, RGBAFormat, UnsignedByteType);
+  tex.mapping = EquirectangularReflectionMapping;
+  tex.colorSpace = SRGBColorSpace;
+  tex.minFilter = LinearFilter;
+  tex.magFilter = LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+function rendererIsUsable(r) {
+  return !!r && typeof r.render === "function";
+}
+function applyRenderBaseline(target, override) {
+  const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
+  if (!preset.enabled) return { preset, environmentMode: "none" };
+  const { scene, renderer, camera } = target;
+  if (renderer !== void 0) {
+    renderer.toneMapping = preset.toneMapping;
+    renderer.toneMappingExposure = preset.exposure;
+    if (renderer.shadowMap !== void 0) {
+      renderer.shadowMap.enabled = preset.shadows;
+      if (preset.shadows && renderer.shadowMap.type === void 0) {
+        renderer.shadowMap.type = PCFSoftShadowMap;
+      }
+    }
+  }
+  const [sx, sy, sz] = preset.sun.direction;
+  const sun = new DirectionalLight(preset.sun.color, preset.sun.intensity);
+  sun.position.set(sx, sy, sz);
+  if (preset.shadows) {
+    sun.castShadow = true;
+    const cam = sun.shadow.camera;
+    const half = Math.max(10, preset.ground.size * 0.35);
+    cam.left = -half;
+    cam.right = half;
+    cam.top = half;
+    cam.bottom = -half;
+    cam.near = 0.5;
+    cam.far = 200;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -5e-4;
+    sun.shadow.normalBias = 0.02;
+  }
+  scene.add(sun);
+  const hemi = new HemisphereLight(
+    preset.hemisphere.skyColor,
+    preset.hemisphere.groundColor,
+    preset.hemisphere.intensity
+  );
+  scene.add(hemi);
+  let ambient;
+  if (preset.ambientIntensity > 0) {
+    ambient = new AmbientLight(16777215, preset.ambientIntensity);
+    scene.add(ambient);
+  }
+  const skyTex = buildSkyEquirect(preset.sky);
+  if (preset.background && "background" in scene) {
+    scene.background = skyTex;
+  }
+  let environmentMode = "none";
+  if (preset.environment) {
+    let envTexture = skyTex;
+    if (rendererIsUsable(renderer)) {
+      try {
+        const pmrem = new PMREMGenerator(renderer);
+        const rt2 = pmrem.fromEquirectangular(skyTex);
+        envTexture = rt2.texture;
+        pmrem.dispose();
+        environmentMode = "pmrem";
+      } catch {
+        envTexture = skyTex;
+        environmentMode = "gradient";
+      }
+    } else {
+      environmentMode = "gradient";
+    }
+    scene.environment = envTexture;
+    if ("environmentIntensity" in scene) {
+      scene.environmentIntensity = preset.environmentIntensity;
+    }
+  }
+  let ground;
+  if (preset.ground.enabled) {
+    const mesh = new Mesh(
+      new PlaneGeometry(preset.ground.size, preset.ground.size),
+      new MeshStandardNodeMaterial({ color: preset.ground.color, roughness: preset.ground.roughness, metalness: 0 })
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(0, preset.ground.y, 0);
+    if (preset.shadows) mesh.receiveShadow = true;
+    scene.add(mesh);
+    ground = mesh;
+  }
+  if (camera !== void 0) {
+    const [px, py, pz] = preset.camera.position;
+    camera.position?.set(px, py, pz);
+    if (camera.far !== void 0) {
+      camera.far = preset.camera.far;
+      camera.updateProjectionMatrix?.();
+    }
+    const [tx, ty, tz] = preset.camera.target;
+    camera.lookAt?.(tx, ty, tz);
+  }
+  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode };
 }
 
 // src/engine.ts
@@ -82813,7 +82985,11 @@ var PERMISSION_PROFILES = {
     "social.act",
     "audio.play"
   ],
-  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read"],
+  // `trace.read` gates the cross-agent trace surface (trace.tail / .explainEvent /
+  // .export). Only the OBSERVER profiles below carry it; build/play/social/terrain
+  // actors and a bundle-scoped `delegate.review` worker deliberately do NOT, so a
+  // least-privilege worker cannot read or export the global trace.
+  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read"],
   // Phase 7 human-in-the-loop. `builder.review` is a builder whose MUTATING edits
   // are held by the review gate (same capabilities as builder.readWrite — it can
   // PROPOSE; the gate decides when its world-writes apply). `reviewer` is the human
@@ -82830,7 +83006,19 @@ var PERMISSION_PROFILES = {
     "ui.write",
     "audio.play"
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review"]
+  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read"],
+  // Phase 10 coordinator/delegate. A coordinator DECOMPOSES a goal and DELEGATES
+  // bounded tasks to least-privilege workers (`orchestrate`), then REVIEWS their
+  // held mutating edits (`approval.review`) — the same gate a human reviewer drives.
+  "reviewer.coordinator": [
+    "orchestrate",
+    "approval.review",
+    "scene.read",
+    "ecs.read",
+    "physics.read",
+    "agent.read",
+    "trace.read"
+  ]
 };
 function resolveProfile(name) {
   return new Set(PERMISSION_PROFILES[name] ?? []);
@@ -82859,6 +83047,9 @@ function policyEventPayload(d) {
 }
 
 // src/skills/registry.ts
+function stampTick(applyTick, proposeTick) {
+  return typeof applyTick === "number" && Number.isFinite(applyTick) && applyTick >= proposeTick ? applyTick : proposeTick;
+}
 var SkillRegistry = class {
   constructor(tracer, policy) {
     this.tracer = tracer;
@@ -82918,7 +83109,11 @@ var SkillRegistry = class {
   describe(name) {
     return this.skills.get(name);
   }
-  list() {
+  /** The FULL tool list. Cached: z.toJSONSchema per skill is ~ms-expensive and
+   *  identical until the skill set changes. decisionSystem calls this once per
+   *  admitted agent per tick and MCP listTools once per request, so the rebuild
+   *  was a real hot path. */
+  fullList() {
     if (this.listCache === void 0) {
       this.listCache = [...this.skills.values()].map((s) => ({
         name: s.name,
@@ -82927,6 +83122,20 @@ var SkillRegistry = class {
       }));
     }
     return this.listCache;
+  }
+  /** Advertised tools. With `grants`, returns ONLY the skills the caller could
+   *  invoke (its grants cover the skill's required permissions) — least-privilege
+   *  EXPOSURE that matches the invocation boundary, so a large catalog never floods
+   *  or over-exposes an agent. No-arg returns the full catalog (back-compat: the
+   *  inspection surface + legacy callers are unchanged). The filter is O(n) over the
+   *  memoized list — the expensive schema build stays cached. */
+  list(grants) {
+    const full = this.fullList();
+    if (grants === void 0) return full;
+    return full.filter((t) => {
+      const s = this.skills.get(t.name);
+      return s !== void 0 && s.permissions.every((p) => grants.has(p));
+    });
   }
   /** Whether a skill is currently registered. */
   has(name) {
@@ -83010,9 +83219,16 @@ var SkillRegistry = class {
   // when a reviewer grants it via resolveApproval (the approval.* skills).
   reviewGate;
   pending = /* @__PURE__ */ new Map();
-  /** Install the review gate (e.g. `reviewProfileGate(...)`). */
+  /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate) {
     this.reviewGate = gate;
+  }
+  /** COMPOSE a review gate: a call is held if the existing gate OR `gate` holds it.
+   *  Lets independent subsystems each install their own review predicate (e.g. a
+   *  host's human-review gate + the delegate-worker gate) without clobbering. */
+  addApprovalGate(gate) {
+    const prev = this.reviewGate;
+    this.reviewGate = prev === void 0 ? gate : (name, base, skill) => prev(name, base, skill) || gate(name, base, skill);
   }
   /** Remove the review gate — calls apply directly again. */
   clearApprovalGate() {
@@ -83057,13 +83273,20 @@ var SkillRegistry = class {
     return { ctx, meta: () => ({ executionTimeMs: Date.now() - start, eventsEmitted: emitted }) };
   }
   /** Run before -> handler -> after -> emit `skill.executed` for a resolved,
-   *  validated, policy-approved (and approval-granted, if gated) call. */
-  async applyHandler(skill, input, base, ctx, meta3, execCausedBy) {
+   *  validated, policy-approved (and approval-granted, if gated) call.
+   *
+   *  `applyTick` overrides the tick stamped on `skill.executed`: for an APPROVAL-GATED
+   *  action it is the reviewer's APPLY tick (when the grant landed), not the parked
+   *  PROPOSE tick — but only when it is finite and NOT BEFORE the propose tick (see
+   *  stampTick; an early/zero reviewer tick is floored to the propose tick so an action
+   *  is never stamped "applied before proposed"). Absent (the direct invoke() path), it
+   *  falls back to `base.tick`, so a non-gated call stamps propose==apply as before. */
+  async applyHandler(skill, input, base, ctx, meta3, execCausedBy, applyTick) {
     try {
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
       const result = await skill.handler(input, ctx);
       if (skill.hooks?.after) await skill.hooks.after(result, ctx);
-      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: base.tick }, execCausedBy);
+      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
       return { success: true, result, metadata: meta3() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -83144,9 +83367,10 @@ var SkillRegistry = class {
       this.tracer.emit({ type: "skill.approval.denied", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reason: "authorization revoked since propose", reviewer: reviewer?.agentId } });
       return { success: false, error: { code: "forbidden", message: `authorization revoked: ${parked.skill}` } };
     }
-    const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId } });
+    const applyTick = reviewer?.applyTick;
+    const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId, tick: stampTick(applyTick, parked.base.tick) } });
     const { ctx, meta: meta3 } = this.makeCtx(parked.base);
-    return this.applyHandler(skill, parked.input, parked.base, ctx, meta3, [approvalId, grantedId]);
+    return this.applyHandler(skill, parked.input, parked.base, ctx, meta3, [approvalId, grantedId], applyTick);
   }
 };
 
@@ -83867,13 +84091,14 @@ function registerSystemSkills(registry2) {
   registry2.register({
     name: "skills.list",
     version: "1.0.0",
-    description: "List all available skills (names + descriptions).",
+    description: "List the skills the caller is authorized to invoke (names + descriptions).",
     category: "system",
     permissions: [],
     input: external_exports.object({}),
     output: external_exports.object({ tools: external_exports.array(external_exports.object({ name: external_exports.string(), description: external_exports.string() })) }),
-    handler: () => ({
-      tools: registry2.list().map((t) => ({ name: t.name, description: t.description }))
+    handler: (_input, ctx) => ({
+      // Least-privilege: list only what THIS caller could invoke (its grants).
+      tools: registry2.list(ctx.permissions).map((t) => ({ name: t.name, description: t.description }))
     })
   });
   const describeInput = external_exports.object({ name: external_exports.string() });
@@ -83891,17 +84116,45 @@ function registerSystemSkills(registry2) {
       description: external_exports.string(),
       input_schema: external_exports.unknown()
     }),
-    handler: (input) => {
+    handler: (input, ctx) => {
+      const tool = registry2.list(ctx.permissions).find((t) => t.name === input.name);
       const def = registry2.describe(input.name);
-      if (def === void 0) throw new Error(`unknown skill: ${input.name}`);
-      const tool = registry2.list().find((t) => t.name === input.name);
+      if (tool === void 0 || def === void 0) throw new Error(`unknown skill: ${input.name}`);
       return {
         name: def.name,
         version: def.version,
         category: def.category,
         description: def.description,
-        input_schema: tool?.input_schema
+        input_schema: tool.input_schema
       };
+    }
+  });
+  const searchInput = external_exports.object({
+    query: external_exports.string(),
+    category: external_exports.string().optional(),
+    limit: external_exports.number().int().min(1).max(100).optional()
+  });
+  registry2.register({
+    name: "skills.search",
+    version: "1.0.0",
+    description: "Search the AUTHORIZED skills by name/description (+ optional category) \u2014 browse a large catalog instead of listing everything.",
+    category: "system",
+    permissions: [],
+    input: searchInput,
+    output: external_exports.object({ matches: external_exports.array(external_exports.object({ name: external_exports.string(), description: external_exports.string(), category: external_exports.string() })) }),
+    handler: (input, ctx) => {
+      const q2 = input.query.toLowerCase();
+      const limit = input.limit ?? 25;
+      const matches = [];
+      for (const t of registry2.list(ctx.permissions)) {
+        const def = registry2.describe(t.name);
+        if (def === void 0) continue;
+        if (input.category !== void 0 && def.category !== input.category) continue;
+        if (q2.length > 0 && !t.name.toLowerCase().includes(q2) && !t.description.toLowerCase().includes(q2)) continue;
+        matches.push({ name: t.name, description: t.description, category: def.category });
+        if (matches.length >= limit) break;
+      }
+      return { matches };
     }
   });
   const tracer = registry2.tracer;
@@ -83921,7 +84174,10 @@ function registerSystemSkills(registry2) {
     version: "1.0.0",
     description: "Tail trace events with cursor pagination and optional actor/type filters.",
     category: "system",
-    permissions: [],
+    // The trace is CROSS-AGENT: tailing it reveals every actor's events. Gate it
+    // behind `trace.read` so only observer profiles (reviewer / reviewer.coordinator
+    // / system.readonly) can read it — a scoped delegate worker must NOT.
+    permissions: ["trace.read"],
     input: external_exports.object({
       afterSeq: external_exports.number().int().min(-1).optional(),
       limit: external_exports.number().int().min(0).max(1e3).optional(),
@@ -83939,7 +84195,9 @@ function registerSystemSkills(registry2) {
     version: "1.0.0",
     description: "Explain a trace event with resolved causal parents and children.",
     category: "system",
-    permissions: [],
+    // Resolves a cross-agent event + its causal neighbours — same read surface as
+    // trace.tail, so it is gated behind the same `trace.read` capability.
+    permissions: ["trace.read"],
     input: external_exports.object({ eventId: external_exports.string() }),
     output: external_exports.object({
       event: eventSchema,
@@ -83957,7 +84215,10 @@ function registerSystemSkills(registry2) {
     version: "1.0.0",
     description: "Flush the durable trace history to a sandboxed trace JSONL file.",
     category: "system",
-    permissions: [],
+    // Reads the WHOLE durable trace AND writes it to disk — strictly more powerful
+    // than trace.tail, so it stays behind the same `trace.read` observer capability
+    // (one cap, kept simple). A scoped worker has neither read nor export.
+    permissions: ["trace.read"],
     input: external_exports.object({ name: external_exports.string().min(1) }),
     output: external_exports.object({ name: external_exports.string(), events: external_exports.number().int(), bytes: external_exports.number().int() }),
     handler: (input) => tracer.flush(input.name)
@@ -84040,11 +84301,20 @@ function registerSystemSkills(registry2) {
         return resource === void 0 ? [] : [{ entity, ...resource }];
       });
       const resources = loaded.map((r) => r);
+      const traceView = tracer.inspect();
+      const trace = ctx.permissions.has("trace.read") ? traceView : { threadId: traceView.threadId, eventCount: traceView.eventCount, actors: [], recent: [] };
       return {
         page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity },
         world: sceneMetadata(ctx),
         entities,
         agents: ctx.world.agents?.all?.().map(agentSnapshot) ?? [],
+        // NOTE: this is the FULL skill catalog ON PURPOSE — inspector.snapshot is an
+        // observability surface (it also dumps every profile's permissions just below),
+        // and an observer/reviewer that cannot INVOKE build skills still needs to SEE
+        // the catalog (the Phase 7 editor renders it). Skill name + required-perms are
+        // static catalog metadata, NOT sensitive cross-agent runtime data, so this is
+        // not a capability leak. The trace block (real cross-agent events WITH payloads)
+        // IS sensitive and is gated by trace.read below.
         skills: [...registry2.list()].map((tool) => {
           const def = registry2.describe(tool.name);
           return {
@@ -84062,7 +84332,7 @@ function registerSystemSkills(registry2) {
           counts: resourceCounts(resources),
           loaded
         },
-        trace: tracer.inspect()
+        trace
       };
     }
   });
@@ -84163,7 +84433,7 @@ function registerApprovalSkills(registry2) {
     input: external_exports.object({ approvalId: external_exports.string() }),
     output: external_exports.object({ resolved: external_exports.boolean(), applied: external_exports.boolean(), error: external_exports.string().nullable() }),
     handler: async (input, ctx) => {
-      const res = await registry2.resolveApproval(input.approvalId, true, { agentId: ctx.agentId });
+      const res = await registry2.resolveApproval(input.approvalId, true, { agentId: ctx.agentId, applyTick: ctx.tick });
       const resolved = res.error?.code !== "not_found";
       return { resolved, applied: res.success, error: res.success ? null : res.error?.message ?? null };
     }
@@ -84182,6 +84452,14 @@ function registerApprovalSkills(registry2) {
       return { resolved, error: resolved ? null : res.error?.message ?? "unknown approval" };
     }
   });
+}
+function reviewProfileGate(reviewProfiles) {
+  const READ_ONLY = /* @__PURE__ */ new Set(["scene.read", "ecs.read", "physics.read", "agent.read", "terrain.read"]);
+  return (name, base, skill) => {
+    if (base.profile === void 0 || !reviewProfiles.has(base.profile)) return false;
+    if (name.startsWith("approval.")) return false;
+    return skill.permissions.some((p) => !READ_ONLY.has(p));
+  };
 }
 
 // src/policy/audit.ts
@@ -88129,6 +88407,471 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache()) {
   return { cache: cache3, regions };
 }
 
+// src/agents/agent.ts
+function agentGrants(agent) {
+  return agent.bundle ?? resolveProfile(agent.profile);
+}
+var AgentRegistry = class {
+  agents = /* @__PURE__ */ new Map();
+  add(spec) {
+    const record2 = {
+      id: spec.id,
+      type: spec.type,
+      entityId: spec.entityId,
+      perceptionRadius: spec.perceptionRadius ?? 15,
+      decisionIntervalTicks: spec.decisionIntervalTicks ?? 30,
+      profile: spec.profile,
+      bundle: spec.bundle,
+      sessionId: spec.sessionId,
+      llm: spec.llm,
+      inFlight: false,
+      lastDecisionTick: -(spec.decisionIntervalTicks ?? 30),
+      // due immediately
+      queue: []
+    };
+    this.agents.set(record2.id, record2);
+    return record2;
+  }
+  get(id) {
+    return this.agents.get(id);
+  }
+  all() {
+    return [...this.agents.values()];
+  }
+  /** Forget every registered agent. Used by demo coordinators that reset their
+   *  world between runs so a fresh build does not inherit prior workers. */
+  clear() {
+    this.agents.clear();
+  }
+  getPerception(agentId) {
+    return this.agents.get(agentId)?.perception ?? null;
+  }
+};
+
+// src/agents/scheduler.ts
+var DEFAULT_AGENT_BUDGET = {
+  weight: 1,
+  maxQueueDepth: Number.MAX_SAFE_INTEGER,
+  maxToolCallsPerDecision: Number.MAX_SAFE_INTEGER,
+  maxActionsPerTick: 1,
+  decisionTimeoutMs: Number.POSITIVE_INFINITY
+};
+var DEFAULT_SCHEDULER_BUDGET = {
+  maxDecisionStartsPerTick: Number.MAX_SAFE_INTEGER,
+  maxGlobalActionsPerTick: Number.MAX_SAFE_INTEGER,
+  defaultAgentBudget: DEFAULT_AGENT_BUDGET
+};
+function asPositiveInt(value, fallback) {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+}
+function ordered(agents) {
+  return [...agents].sort((a, b2) => a.id.localeCompare(b2.id));
+}
+var AgentScheduler = class {
+  budget;
+  states = /* @__PURE__ */ new Map();
+  decisionCursor = 0;
+  constructor(budget = {}) {
+    this.budget = {
+      maxDecisionStartsPerTick: budget.maxDecisionStartsPerTick ?? DEFAULT_SCHEDULER_BUDGET.maxDecisionStartsPerTick,
+      maxGlobalActionsPerTick: budget.maxGlobalActionsPerTick ?? DEFAULT_SCHEDULER_BUDGET.maxGlobalActionsPerTick,
+      defaultAgentBudget: { ...DEFAULT_AGENT_BUDGET, ...budget.defaultAgentBudget },
+      agents: budget.agents ?? {}
+    };
+  }
+  agentBudget(agent) {
+    return { ...this.budget.defaultAgentBudget, ...this.budget.agents?.[agent.id] ?? {} };
+  }
+  runtimeState(agent) {
+    let state = this.states.get(agent.id);
+    if (state === void 0) {
+      state = {
+        agentId: agent.id,
+        generation: 0,
+        inFlightGeneration: null,
+        lastTimedOutGeneration: null,
+        decisionDeadlineMs: null,
+        deficit: 0,
+        actionsExecutedThisTick: 0,
+        actionTick: -1
+      };
+      this.states.set(agent.id, state);
+    }
+    return state;
+  }
+  admitDecisions(agents, tick, tracer, isDue) {
+    const candidates = ordered(agents).filter((agent) => !agent.inFlight && agent.perception !== void 0 && isDue(agent));
+    const cap = asPositiveInt(this.budget.maxDecisionStartsPerTick, Number.MAX_SAFE_INTEGER);
+    if (candidates.length === 0 || cap === 0) {
+      if (candidates.length > 0) {
+        for (const agent of candidates) this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap });
+      }
+      return [];
+    }
+    const admitted = [];
+    let visits = 0;
+    while (admitted.length < cap && visits < candidates.length * 2) {
+      const index = this.decisionCursor % candidates.length;
+      const agent = candidates[index];
+      const state = this.runtimeState(agent);
+      const budget = this.agentBudget(agent);
+      state.deficit += Math.max(1, Math.floor(budget.weight));
+      if (state.deficit >= 1) {
+        state.deficit -= 1;
+        const generation = ++state.generation;
+        state.inFlightGeneration = generation;
+        admitted.push({ agent, generation });
+        this.emit(tracer, agent, "agent.scheduled", {
+          tick,
+          generation,
+          queueDepth: agent.queue.length,
+          maxQueueDepth: budget.maxQueueDepth
+        });
+      }
+      this.decisionCursor = (index + 1) % candidates.length;
+      visits++;
+    }
+    if (admitted.length < candidates.length) {
+      const admittedIds = new Set(admitted.map((item) => item.agent.id));
+      for (const agent of candidates) {
+        if (!admittedIds.has(agent.id)) {
+          this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap, candidates: candidates.length });
+        }
+      }
+    }
+    return admitted;
+  }
+  /** Record the wall-clock deadline for an in-flight decision. Detection is
+   *  performed synchronously by `sweepDecisionTimeouts` each tick rather than via
+   *  a real `op_sleep_ms` timer: a pending watchdog timer keeps the host event
+   *  loop non-idle, and the windowed host drains the loop every frame, so a
+   *  per-decision timer stalled each frame for the full timeout (~100ms -> 9fps).
+   *  A swept deadline keeps the exact timeout semantics with zero host-blocking. */
+  armDecisionTimeout(agent, generation) {
+    const state = this.runtimeState(agent);
+    if (state.inFlightGeneration !== generation) return;
+    const timeoutMs = this.agentBudget(agent).decisionTimeoutMs;
+    state.decisionDeadlineMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
+  }
+  /** Expire in-flight decisions whose deadline has passed. Mirrors the old
+   *  timer's effect (mark the generation timed out, clear in-flight, emit
+   *  `agent.budget.exceeded`) so late tool calls from the stale generation are
+   *  still rejected by the generation guard in `completeDecision`. */
+  sweepDecisionTimeouts(agents, tick, tracer, now = Date.now()) {
+    for (const agent of agents) {
+      const state = this.states.get(agent.id);
+      if (state === void 0 || state.inFlightGeneration === null || state.decisionDeadlineMs === null) continue;
+      if (now < state.decisionDeadlineMs) continue;
+      const generation = state.inFlightGeneration;
+      state.lastTimedOutGeneration = generation;
+      state.inFlightGeneration = null;
+      state.decisionDeadlineMs = null;
+      agent.inFlight = false;
+      this.emit(tracer, agent, "agent.budget.exceeded", {
+        tick,
+        generation,
+        budget: "decisionTimeoutMs",
+        limit: this.agentBudget(agent).decisionTimeoutMs
+      });
+    }
+  }
+  completeDecision(agent, generation) {
+    const state = this.runtimeState(agent);
+    if (state.inFlightGeneration !== generation) return false;
+    state.inFlightGeneration = null;
+    state.decisionDeadlineMs = null;
+    agent.inFlight = false;
+    return true;
+  }
+  failDecision(agent, generation) {
+    return this.completeDecision(agent, generation);
+  }
+  enqueueDecisionToolCalls(agent, generation, decisionId, calls, tracer, tick) {
+    if (!this.completeDecision(agent, generation)) return;
+    const budget = this.agentBudget(agent);
+    const callCap = asPositiveInt(budget.maxToolCallsPerDecision, Number.MAX_SAFE_INTEGER);
+    const queueCap = asPositiveInt(budget.maxQueueDepth, Number.MAX_SAFE_INTEGER);
+    for (let i = 0; i < calls.length; i++) {
+      const call3 = calls[i];
+      if (!call3.valid) {
+        call3.reject?.();
+        continue;
+      }
+      if (i >= callCap) {
+        this.emitDrop(tracer, agent, tick, decisionId, "tool_call_cap", {
+          generation,
+          index: i,
+          maxToolCallsPerDecision: callCap
+        });
+        continue;
+      }
+      if (agent.queue.length >= queueCap) {
+        this.emitDrop(tracer, agent, tick, decisionId, "queue_full", {
+          generation,
+          queueDepth: agent.queue.length,
+          maxQueueDepth: queueCap
+        });
+        continue;
+      }
+      agent.queue.push({ req: call3.req, decisionId });
+    }
+  }
+  canExecuteAction(agent, tick, globalExecuted, tracer) {
+    const globalCap = asPositiveInt(this.budget.maxGlobalActionsPerTick, Number.MAX_SAFE_INTEGER);
+    if (globalExecuted >= globalCap) {
+      this.emitBackpressure(tracer, agent, tick, "global_action_cap", { maxGlobalActionsPerTick: globalCap });
+      return false;
+    }
+    const state = this.runtimeState(agent);
+    if (state.actionTick !== tick) {
+      state.actionTick = tick;
+      state.actionsExecutedThisTick = 0;
+    }
+    const agentCap = asPositiveInt(this.agentBudget(agent).maxActionsPerTick, Number.MAX_SAFE_INTEGER);
+    if (state.actionsExecutedThisTick >= agentCap) {
+      this.emitBackpressure(tracer, agent, tick, "agent_action_cap", { maxActionsPerTick: agentCap });
+      return false;
+    }
+    state.actionsExecutedThisTick++;
+    return true;
+  }
+  emitActionExecuted(tracer, agent, tick, tool, decisionId, success2) {
+    this.emit(tracer, agent, "agent.action.executed", { tick, tool, decisionId, success: success2 });
+  }
+  emitDrop(tracer, agent, tick, decisionId, reason, payload) {
+    this.emit(tracer, agent, "agent.queue.dropped", { tick, reason, decisionId, ...payload });
+    this.emitBackpressure(tracer, agent, tick, reason, payload);
+  }
+  emitBackpressure(tracer, agent, tick, reason, payload) {
+    this.emit(tracer, agent, "agent.backpressure.applied", { tick, reason, ...payload });
+  }
+  emit(tracer, agent, type, payload) {
+    return tracer.emit({
+      type,
+      actorId: agent.id,
+      threadId: agent.sessionId,
+      parentEventId: null,
+      causedBy: [],
+      payload
+    });
+  }
+};
+var defaultAgentScheduler = new AgentScheduler();
+
+// src/agents/systems.ts
+function buildPerception(agent, world, tracer, tick, batched) {
+  let selfPos = batched?.selfPos;
+  let nearby = batched?.nearby;
+  if (nearby === void 0) {
+    if (agent.entityId !== void 0) {
+      const e = world.entities.resolve(agent.entityId);
+      if (e !== void 0) selfPos = [Position.x[e.eid], Position.y[e.eid], Position.z[e.eid]];
+    }
+    nearby = querySpatialEntities(world, {
+      near: selfPos,
+      radius: selfPos === void 0 ? void 0 : agent.perceptionRadius,
+      excludeEntity: agent.entityId,
+      sortBy: "distance"
+    }).entities.map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
+  }
+  const recentEvents = tracer.trace(agent.id).slice(-5).map((e) => ({ type: e.type }));
+  return { selfId: agent.id, selfEntity: agent.entityId, position: selfPos, nearby, recentEvents, tick };
+}
+function elapsed(start) {
+  return Date.now() - start;
+}
+function tokenUsage(res) {
+  return typeof res.usage?.totalTokens === "number" && Number.isFinite(res.usage.totalTokens) ? Math.max(0, res.usage.totalTokens) : 0;
+}
+function timeoutAfter(ms) {
+  return ops.op_sleep_ms(Math.max(0, Math.ceil(ms))).then(() => "timeout");
+}
+async function decideWithTimeout(provider, req, remainingMs) {
+  if (remainingMs <= 0) return "timeout";
+  return await Promise.race([provider.decide(req), timeoutAfter(remainingMs)]);
+}
+function emitToolResult(tracer, agent, response, causedBy) {
+  return tracer.emit({
+    type: "agent.tool_result",
+    actorId: agent.id,
+    threadId: agent.sessionId,
+    parentEventId: null,
+    causedBy,
+    payload: { success: response.success, error: response.error?.code }
+  });
+}
+async function runBoundedMultiTurn(agent, registry2, providers, world, tracer, options) {
+  const provider = providers[agent.llm.provider];
+  if (provider === void 0) return { steps: 0, toolCalls: 0, tokensUsed: 0, reason: "provider_missing" };
+  const start = Date.now();
+  const previousResults = [];
+  let lastToolResultId;
+  let steps = 0;
+  let toolCalls = 0;
+  let tokensUsed = 0;
+  for (; steps < options.maxSteps; steps++) {
+    if (elapsed(start) >= options.timeoutMs) return { steps, toolCalls, tokensUsed, reason: "timeout" };
+    if (toolCalls >= options.maxToolCalls) return { steps, toolCalls, tokensUsed, reason: "max_tool_calls" };
+    if (options.maxTokens !== void 0 && tokensUsed >= options.maxTokens) {
+      return { steps, toolCalls, tokensUsed, reason: "token_budget" };
+    }
+    const tick = options.startTick + steps;
+    agent.perception = buildPerception(agent, world, tracer, tick);
+    agent.lastPerceptionEventId = tracer.emit({
+      type: "agent.perception.updated",
+      actorId: agent.id,
+      threadId: agent.sessionId,
+      parentEventId: null,
+      causedBy: lastToolResultId === void 0 ? [] : [lastToolResultId],
+      payload: { nearby: agent.perception.nearby.length, tick, turnStep: steps }
+    });
+    const decisionCauses = lastToolResultId === void 0 ? [agent.lastPerceptionEventId] : [agent.lastPerceptionEventId, lastToolResultId];
+    const decisionId = tracer.emit({
+      type: "agent.decision.made",
+      actorId: agent.id,
+      threadId: agent.sessionId,
+      parentEventId: null,
+      causedBy: decisionCauses,
+      payload: { tick, provider: agent.llm.provider, turnStep: steps }
+    });
+    const decision = await decideWithTimeout(provider, {
+      systemPrompt: agent.llm.systemPrompt,
+      perception: agent.perception,
+      tools: registry2.list(agentGrants(agent)),
+      previousResults: [...previousResults]
+    }, options.timeoutMs - elapsed(start));
+    if (decision === "timeout") {
+      return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };
+    }
+    tokensUsed += tokenUsage(decision);
+    if (options.maxTokens !== void 0 && tokensUsed > options.maxTokens) {
+      return { steps: steps + 1, toolCalls, tokensUsed, reason: "token_budget" };
+    }
+    if (decision.toolCalls.length === 0) {
+      return { steps: steps + 1, toolCalls, tokensUsed, reason: "no_tool_calls" };
+    }
+    for (const call3 of decision.toolCalls) {
+      if (elapsed(start) >= options.timeoutMs) return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };
+      if (toolCalls >= options.maxToolCalls) return { steps: steps + 1, toolCalls, tokensUsed, reason: "max_tool_calls" };
+      const skill = registry2.describe(call3.tool);
+      if (skill === void 0) {
+        const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "unknown_tool", tool: call3.tool } });
+        lastToolResultId = rejected;
+        previousResults.push({ success: false, error: { code: "not_found", message: `unknown skill: ${call3.tool}` } });
+        continue;
+      }
+      if (!skill.input.safeParse(call3.input).success) {
+        const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "invalid_args", tool: call3.tool } });
+        lastToolResultId = rejected;
+        previousResults.push({ success: false, error: { code: "invalid_input", message: `invalid input: ${call3.tool}` } });
+        continue;
+      }
+      const response = await registry2.invoke(call3.tool, call3.input, {
+        agentId: agent.id,
+        sessionId: agent.sessionId,
+        permissions: agentGrants(agent),
+        profile: agent.profile,
+        tick,
+        world,
+        causedBy: [decisionId]
+      });
+      toolCalls++;
+      lastToolResultId = emitToolResult(tracer, agent, response, response.metadata?.eventsEmitted.length ? [decisionId, ...response.metadata.eventsEmitted] : [decisionId]);
+      previousResults.push(response);
+    }
+  }
+  return { steps, toolCalls, tokensUsed, reason: "max_steps" };
+}
+
+// src/skills/orchestration.ts
+var SELF_APPROVAL_CAP = "approval.review";
+var ORCHESTRATE_PERMISSION = "orchestrate";
+var DELEGATE_REVIEW_PROFILE = "delegate.review";
+var delegateInput = external_exports.object({
+  /** The worker's goal — becomes its llm.systemPrompt. */
+  task: external_exports.string().min(1),
+  /** The worker's least-privilege capability set (scopes exposure AND invocation). */
+  bundle: external_exports.array(external_exports.string()).min(1),
+  /** Worker kind (default builder). */
+  type: external_exports.enum(["builder", "player"]).default("builder"),
+  /** Provider name for the worker loop (falls back to deps.defaultProvider). */
+  provider: external_exports.string().optional(),
+  maxSteps: external_exports.number().int().positive().max(256).default(4),
+  maxToolCalls: external_exports.number().int().positive().max(256).default(4),
+  timeoutMs: external_exports.number().int().positive().max(6e5).default(5e3),
+  maxTokens: external_exports.number().int().positive().optional()
+});
+function registerOrchestrationSkills(registry2, deps) {
+  const workers = deps.agents ?? new AgentRegistry();
+  let workerSeq = 0;
+  const maxDepth = deps.maxDepth ?? 1;
+  const depthOf = /* @__PURE__ */ new Map();
+  registry2.addApprovalGate(reviewProfileGate(/* @__PURE__ */ new Set([DELEGATE_REVIEW_PROFILE])));
+  registry2.register({
+    name: "delegate",
+    version: "1.0.0",
+    description: "Delegate a bounded task to a fresh least-privilege worker agent scoped to `bundle`, running it under review. The worker's MUTATING edits are HELD by the approval gate for the coordinator to grant/deny. Returns the worker id and its run outcome.",
+    category: "agent",
+    permissions: [ORCHESTRATE_PERMISSION],
+    input: delegateInput,
+    output: external_exports.object({
+      workerId: external_exports.string(),
+      steps: external_exports.number(),
+      toolCalls: external_exports.number(),
+      reason: external_exports.string()
+    }),
+    handler: async (input, ctx) => {
+      const depth3 = depthOf.get(ctx.agentId) ?? 0;
+      const childDepth = depth3 + 1;
+      if (input.bundle.includes(SELF_APPROVAL_CAP)) {
+        throw new Error(`delegate: a worker bundle may not contain the escalation capability '${SELF_APPROVAL_CAP}' (it would self-approve its own held edits)`);
+      }
+      if (input.bundle.includes(ORCHESTRATE_PERMISSION) && !(childDepth < maxDepth)) {
+        throw new Error(`delegate: a worker at depth ${childDepth} may not be granted '${ORCHESTRATE_PERMISSION}' \u2014 delegation depth cap is ${maxDepth} (a depth-${childDepth} worker would spawn at depth ${childDepth + 1})`);
+      }
+      const providerName = input.provider ?? deps.defaultProvider;
+      if (providerName === void 0 || deps.providers[providerName] === void 0) {
+        throw new Error(`delegate: no provider '${providerName ?? "(unset)"}' available`);
+      }
+      const world = ctx.world ?? deps.world;
+      if (world === void 0) throw new Error("delegate: no world available for the worker loop");
+      const workerId = `${ctx.agentId}.w${++workerSeq}`;
+      depthOf.set(workerId, childDepth);
+      const worker = workers.add({
+        id: workerId,
+        type: input.type,
+        perceptionRadius: 50,
+        decisionIntervalTicks: 1,
+        // Least-privilege: the BUNDLE governs exposure + invocation (agentGrants);
+        // the review-marker PROFILE only flags the worker for the approval gate.
+        profile: DELEGATE_REVIEW_PROFILE,
+        bundle: new Set(input.bundle),
+        sessionId: workerId,
+        llm: { provider: providerName, model: "", systemPrompt: input.task }
+      });
+      const bounds = {
+        startTick: ctx.tick,
+        maxSteps: input.maxSteps,
+        maxToolCalls: input.maxToolCalls,
+        timeoutMs: input.timeoutMs,
+        maxTokens: input.maxTokens
+      };
+      const result = await runBoundedMultiTurn(worker, registry2, deps.providers, world, registry2.tracer, bounds);
+      ctx.emit("agent.delegated", {
+        workerId,
+        type: input.type,
+        bundle: [...input.bundle].sort(),
+        task: input.task,
+        depth: childDepth,
+        steps: result.steps,
+        toolCalls: result.toolCalls,
+        reason: result.reason
+      });
+      return { workerId, steps: result.steps, toolCalls: result.toolCalls, reason: result.reason };
+    }
+  });
+}
+
 // src/skills/index.ts
 function registerCoreSkills(registry2, opts) {
   registerSceneSkills(registry2);
@@ -88155,6 +88898,9 @@ function registerCoreSkills(registry2, opts) {
   const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   registerTerrainSkills(registry2, terrainSource, terrainCache);
+  if (opts?.providers !== void 0) {
+    registerOrchestrationSkills(registry2, { providers: opts.providers, agents: opts.agents });
+  }
   return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
 }
 
@@ -89762,34 +90508,29 @@ async function fetchExport(worldUrl) {
   ]);
   return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
 }
-async function buildRenderTarget(canvas, width, height, forceWebGL) {
+async function buildRenderTarget(canvas, width, height, forceWebGL, baseline) {
   const renderer = new WebGPURenderer({ canvas, antialias: true, forceWebGL });
   await renderer.init();
   renderer.setSize(width, height, false);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = PCFSoftShadowMap;
-  renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1;
   const scene = new Scene();
-  scene.background = new Color(724500);
-  scene.add(new AmbientLight(4210784, 1.3));
-  const key = new DirectionalLight(16777215, 3.2);
-  key.position.set(5, 9, 6);
-  scene.add(key);
-  const ground = new Mesh(
-    new BoxGeometry(40, 0.2, 40),
-    new MeshStandardNodeMaterial({ color: 1778224, roughness: 0.9 })
-  );
-  ground.position.y = -0.1;
-  scene.add(ground);
   const camera = new PerspectiveCamera(60, width / height, 0.1, 200);
+  if (baseline !== false) {
+    applyRenderBaseline({ scene, renderer, camera }, baseline);
+  }
   return { renderer, scene, camera };
 }
 async function run(opts) {
   const status = opts.onStatus ?? (() => {
   });
   status("loading", "starting WebGPU");
-  const { renderer, scene, camera } = await buildRenderTarget(opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false);
+  const baseline = opts.terrain !== void 0 ? { ground: { enabled: false } } : {};
+  const { renderer, scene, camera } = await buildRenderTarget(
+    opts.canvas,
+    opts.width,
+    opts.height,
+    opts.forceWebGL ?? false,
+    baseline
+  );
   const input = new BrowserInput();
   if (opts.input !== void 0) {
     input.attach(opts.input);
@@ -89850,7 +90591,7 @@ async function run(opts) {
     const cam = camera;
     cam.far = 900;
     cam.updateProjectionMatrix();
-    scene.fog = new Fog(724500, 140, 380);
+    scene.fog = new Fog(13490662, 140, 380);
   }
   let angle = 0;
   let radius = 16;
