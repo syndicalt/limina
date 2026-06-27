@@ -12,11 +12,19 @@ THIS RUNS ONLY AT AUTHORING TIME, ON THE AUTHOR'S GPU. End users never run it �
 replay cached tiles (Phase 8). Model loading mirrors `spikes/s0-terrain-diffusion/run.py`
 exactly (same WorldPipeline path, same fp16 dtype, same caching strategy).
 
-WIRE FORMAT (must stay in lockstep with model-source.ts):
+WIRE FORMAT (must stay in lockstep with model-source.ts AND tools/terrain-diffusion/shim.py
+— this in-process worker and that wrap-the-shipped-service shim are TWO EQUIVALENT backends:
+same axis, same channels/order, same 30 m/px native, same elev quantization (floor), so a
+consumer gets the SAME world for the same (seed, coords) from either):
   POST /tile   {seed, tx, tz, lod, tile, hints} ->
     { name, seed, tx, tz, lod, nrows, ncols,
-      elev:    { dtype:"int16",   b64 },                  # nrows*ncols int16 LE, metres
-      climate: { channels:N, dtype:"float32", b64 } }     # (C,H,W) float32 LE, channel-major
+      elev:    { dtype:"int16",   b64 },                  # nrows*ncols int16 LE, metres (floor)
+      climate: { channels:4, dtype:"float32", b64 } }     # (C,H,W) float32 LE, channel-major:
+                                                          #   [temp@0, t_season@1, precip@2, p_cv@3]
+                                                          #   (model-source reads temp@0/precip@2
+                                                          #    + classifies biome itself; no biome
+                                                          #    channel on the wire)
+  AXIS: x->j (cols), z->i (rows). RESOLUTION: 30 m/px native (terrain-diffusion-30m).
   POST|GET /health  -> { ok, model, seed, dtype, device, loaded_seeds }
   errors -> HTTP 500 { error: "<message>" }   (the source surfaces this verbatim)
 
@@ -80,13 +88,15 @@ class TileGenerator:
             return world
 
     def generate(self, seed: int, tx: int, tz: int, tile: int):
-        """Generate one tile. Contiguous px coords (tx,tz -> i,j) so adjacent tiles
-        share the coarse/latent stages (the amortized ~0.87 s/tile path, per S0)."""
+        """Generate one tile. AXIS: x->j (cols), z->i (rows) — i = tz*tile, j = tx*tile —
+        matching model-source.ts localCell (x->col, z->row) and tools/terrain-diffusion/shim.py
+        (i1=tz*px, j1=tx*px). world.get(i1,j1,i2,j2) takes i=rows, j=cols. Contiguous px
+        coords so adjacent tiles share the coarse/latent stages (the ~0.87 s/tile path, per S0)."""
         import torch
 
         world = self._pipeline(seed)
-        i = tx * tile
-        j = tz * tile
+        i = tz * tile  # rows (height)  <- z
+        j = tx * tile  # cols (width)   <- x
         with self._lock:
             out = world.get(i, j, i + tile, j + tile, with_climate=True)
             if self.device == "cuda":
@@ -99,7 +109,9 @@ class TileGenerator:
             raise ValueError(f"unexpected elev shape {elev.shape}")
         nrows, ncols = int(elev.shape[0]), int(elev.shape[1])
         # int16 metres, little-endian, row-major — exactly what model-source.ts decodes.
-        elev_i16 = np.rint(elev).astype("<i2", copy=False)
+        # Quantize by FLOOR (then clip), identical to terrain_diffusion api.py `_elev_to_int16`
+        # so this worker and the shim emit byte-identical elevation for the same world.
+        elev_i16 = np.clip(np.floor(elev), -32768, 32767).astype("<i2", copy=False)
         elev_b64 = base64.b64encode(np.ascontiguousarray(elev_i16).tobytes()).decode("ascii")
 
         env = {
@@ -115,6 +127,11 @@ class TileGenerator:
             clim = np.squeeze(clim)
             if clim.ndim == 2:  # single channel
                 clim = clim[None, ...]
+            # CANONICAL 4 channels [temp(BIO1), t_season(BIO4), precip(BIO12), p_cv(BIO15)],
+            # matching terrain_diffusion api.py (`climate[:4]`) and the shim. precip stays at
+            # index 2 so a DEFAULT ModelTerrainSource (tempChannel 0, precipChannel 2) decodes
+            # it; model-source classifies biome itself, so no biome channel on the wire.
+            clim = clim[:4]
             channels = int(clim.shape[0])
             # channel-major (C,H,W) float32 LE — index = ch*H*W + r*W + c.
             clim_f32 = np.ascontiguousarray(clim.astype("<f4", copy=False))
