@@ -7,7 +7,10 @@
 // no Math.random — so the same request yields a byte-identical tile on any run of
 // the same build, which is what makes the cache/replay path reproduce the world.
 
-import type { ClimateSample, TerrainSource, TerrainTile, TileRequest } from "./types.ts";
+import {
+  CLIMATE_BIOME, CLIMATE_CHANNELS, CLIMATE_PRECIP_MM, CLIMATE_TEMP_C,
+  type ClimateSample, type TerrainSource, type TerrainTile, type TileRequest,
+} from "./types.ts";
 
 // ---- Tile geometry (the world<->tile-grid mapping the heightfield op consumes) --
 /** World-space edge length of one square tile (meters). A tile (tx,tz) spans
@@ -129,7 +132,7 @@ export class ProceduralTerrainSource implements TerrainSource {
     const x0 = req.tx * TILE_SIZE;
     const z0 = req.tz * TILE_SIZE;
     const heights = new Float32Array(nrows * ncols);
-    const climateChannels = 3;
+    const climateChannels = CLIMATE_CHANNELS;
     const climate = new Float32Array(climateChannels * nrows * ncols);
     for (let r = 0; r < nrows; r++) {
       // rows -> z, cols -> x (the heightfield contract).
@@ -141,9 +144,9 @@ export class ProceduralTerrainSource implements TerrainSource {
         heights[idx] = e;
         const cl = this.climateAt(seed, x, z, e);
         const cidx = idx * climateChannels;
-        climate[cidx] = cl.tempC;
-        climate[cidx + 1] = cl.precipMm;
-        climate[cidx + 2] = cl.biome;
+        climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
+        climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
+        climate[cidx + CLIMATE_BIOME] = cl.biome;
       }
     }
     return { nrows, ncols, origin, scale, heights, climate, climateChannels };
