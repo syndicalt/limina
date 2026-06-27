@@ -12,6 +12,7 @@ import {
   CLIMATE_BIOME, CLIMATE_CHANNELS, CLIMATE_PRECIP_MM, CLIMATE_TEMP_C,
   type ClimateSample, type TerrainSource, type TerrainTile, type TileRequest,
 } from "./types.ts";
+import { apronFor, erodeBlock, parseErosion, type ErosionParams } from "./erosion.ts";
 
 // ---- Tile geometry (the world<->tile-grid mapping the heightfield op consumes) --
 /** World-space edge length of one square tile (meters). A tile (tx,tz) spans
@@ -38,8 +39,9 @@ export function tilePlacement(tx: number, tz: number): { origin: [number, number
 
 /** 32-bit integer hash of an integer lattice cell -> a value in [0,1). Pure
  *  integer ops (Math.imul + xorshift) then a single divide: identical on any
- *  build, no transcendental functions. */
-function hashLattice(seed: number, ix: number, iz: number): number {
+ *  build, no transcendental functions. Exported for the erosion bake, which reuses
+ *  it to seed droplets per GLOBAL cell (so neighbouring blocks agree on the overlap). */
+export function hashLattice(seed: number, ix: number, iz: number): number {
   let h = seed | 0;
   h = Math.imul(h ^ (ix | 0), 0x27d4eb2d);
   h ^= h >>> 15;
@@ -226,12 +228,118 @@ function biomeOf(tempC: number, precipMm: number): number {
   return tempC > 20 ? Biome.TROPICAL : Biome.BOREAL_WET;
 }
 
+/** World-space spacing between adjacent height samples (meters). Adjacent tiles share
+ *  an edge sample, so a single GLOBAL cell lattice (index = tx*(TILE_RES-1)+col) spans
+ *  the world at this spacing — the lattice the erosion bake addresses droplets on. */
+const CELL_SIZE = TILE_SIZE / (TILE_RES - 1);
+
+/** Raw [0,1]-ish elevation at a world coordinate, on whichever field (base or shaped)
+ *  the request selected — the single source the erosion block samples so the eroded
+ *  field is a pure continuation of the un-eroded one. */
+function rawElevation01(seed: number, x: number, z: number, lod: number, shape: ShapeConfig | undefined): number {
+  return shape === undefined ? elevation01(seed, x, z, lod) : shapedElevation01(seed, x, z, lod, shape);
+}
+
+/** The EXACT raw (pre-erosion) [0,1]-ish elevation generateTile would store for (seed,x,z,lod,
+ *  hints) — the same field the erosion bake samples. Exported so tools/tests can reproduce the
+ *  erosion input bit-for-bit (sampleHeight's ×HEIGHT_SCALE round-trip is NOT bit-exact and the
+ *  chaotic erosion amplifies that, so use THIS to feed a faithful erosion reproduction). */
+export function rawElevationField(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
+  return rawElevation01(seed | 0, x, z, lod | 0, parseShape(hints));
+}
+
+/** Stable string of the hint map (sorted keys) — the part of the request the macro-block
+ *  bake depends on, so two requests with the same recipe share one bake. */
+function requestHintKey(hints: Record<string, number> | undefined): string {
+  if (hints === undefined) return "";
+  const keys = Object.keys(hints).sort();
+  return JSON.stringify(keys.map((k) => [k, hints[k]]));
+}
+
+/** Edge length (in TILES) of an erosion MACRO-BLOCK — the fixed, world-aligned unit a single
+ *  erosion bake covers. Erosion is computed once per macro-block (over an apron of neighbour
+ *  terrain) and every tile inside it is a SLICE of that one eroded grid. This is the crux of
+ *  the seam + determinism contract:
+ *   • SEAM-EXACT inside a macro-block — adjacent tiles read the SAME eroded cells at their
+ *     shared edge, so the seam is bit-identical (drainage networks are globally coupled, so a
+ *     per-tile apron can only approximate seams; sharing one grid makes them exact).
+ *   • REGION-INDEPENDENT — a tile's macro-block is a function of its OWN (tx,tz) alone
+ *     (mbx=floor(tx/MACRO)), never of the requested region's bounds, so the per-tile cache key
+ *     (which omits bounds) stays sound: the tile bakes identically no matter which region — or
+ *     how big a region, or streamFollow window — asked for it.
+ *   • Only the sparse seams BETWEEN macro-blocks are apron-approximate (within a tight
+ *     tolerance); the apron makes those match and is the falsifiable knob (apron=0 diverges). */
+export const EROSION_MACRO = 8;
+
+/** A baked macro-block: the eroded interior grid + the global cell index of its (0,0). */
+interface MacroBake { interior: Float32Array; dim: number; gcStart: number; grStart: number }
+
 /** The shippable, deterministic offline terrain source. */
 export class ProceduralTerrainSource implements TerrainSource {
   readonly name: string;
+  /** Memo of baked erosion macro-blocks (pure results, so memoizing is sound + just amortizes
+   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord. */
+  private readonly macroMemo = new Map<string, MacroBake>();
 
   constructor(name = "procedural") {
     this.name = name;
+  }
+
+  /** Bake (or fetch from the memo) the eroded macro-block that contains tile (tx,tz). Pure +
+   *  deterministic in (seed, lod, shape, ep, macro coord); independent of any region bounds. */
+  private bakeMacro(
+    seed: number, tx: number, tz: number, lod: number,
+    shape: ShapeConfig | undefined, ep: ErosionParams, hintKey: string,
+  ): MacroBake {
+    const mbx = Math.floor(tx / EROSION_MACRO);
+    const mbz = Math.floor(tz / EROSION_MACRO);
+    const key = `${seed}|${lod}|${hintKey}|${mbx}|${mbz}`;
+    const hit = this.macroMemo.get(key);
+    if (hit !== undefined) return hit;
+
+    const apron = apronFor(ep);
+    const span = EROSION_MACRO * (TILE_RES - 1) + 1; // interior cells across the macro-block
+    const dim = span + 2 * apron;                    // full block incl. apron
+    const gcStart = mbx * EROSION_MACRO * (TILE_RES - 1); // global cell index of interior (0,0)
+    const grStart = mbz * EROSION_MACRO * (TILE_RES - 1);
+    const gc0 = gcStart - apron; // global cell index of block (0,0) incl. apron
+    const gr0 = grStart - apron;
+    const raw = new Float32Array(dim * dim);
+    for (let r = 0; r < dim; r++) {
+      const z = (gr0 + r) * CELL_SIZE;
+      for (let c = 0; c < dim; c++) {
+        const x = (gc0 + c) * CELL_SIZE;
+        raw[r * dim + c] = rawElevation01(seed, x, z, lod, shape);
+      }
+    }
+    const eroded = erodeBlock(raw, dim, dim, gr0, gc0, seed, ep);
+    // Slice the interior (drop the apron) once; tiles index into this shared grid.
+    const interior = new Float32Array(span * span);
+    for (let r = 0; r < span; r++) {
+      for (let c = 0; c < span; c++) interior[r * span + c] = eroded[(r + apron) * dim + (c + apron)];
+    }
+    const bake: MacroBake = { interior, dim: span, gcStart, grStart };
+    this.macroMemo.set(key, bake);
+    return bake;
+  }
+
+  /** One tile's eroded heights — a SLICE of its macro-block's shared eroded grid (so tiles
+   *  inside a macro-block share their edges bit-for-bit). */
+  private erodedTileHeights(
+    seed: number, tx: number, tz: number, lod: number,
+    shape: ShapeConfig | undefined, ep: ErosionParams, hintKey: string,
+  ): Float32Array {
+    const bake = this.bakeMacro(seed, tx, tz, lod, shape, ep, hintKey);
+    // This tile's global cell origin, offset into the macro interior.
+    const col0 = tx * (TILE_RES - 1) - bake.gcStart;
+    const row0 = tz * (TILE_RES - 1) - bake.grStart;
+    const out = new Float32Array(TILE_RES * TILE_RES);
+    for (let r = 0; r < TILE_RES; r++) {
+      for (let c = 0; c < TILE_RES; c++) {
+        out[r * TILE_RES + c] = bake.interior[(row0 + r) * bake.dim + (col0 + c)];
+      }
+    }
+    return out;
   }
 
   /** Generate one tile — a byte-identical function of the request. Heights are
@@ -242,6 +350,14 @@ export class ProceduralTerrainSource implements TerrainSource {
     const lod = req.lod | 0;
     // OPT-IN shaping: undefined (the default) ⇒ byte-identical to the base field.
     const shape = parseShape(req.hints);
+    // OPT-IN erosion: undefined (the default) ⇒ the per-cell field below is used VERBATIM.
+    // When set, the tile's interior is a slice of its eroded MACRO-BLOCK (a neighbourhood sim
+    // baked once over an apron), so climate below tracks the eroded surface and intra-block
+    // seams are exact. `hintKey` keys the macro bake on the full shaping+erosion recipe.
+    const erosion = parseErosion(req.hints);
+    const eroded = erosion === undefined
+      ? undefined
+      : this.erodedTileHeights(seed, req.tx, req.tz, lod, shape, erosion, requestHintKey(req.hints));
     const { origin, scale } = tilePlacement(req.tx, req.tz);
     const nrows = TILE_RES;
     const ncols = TILE_RES;
@@ -255,8 +371,10 @@ export class ProceduralTerrainSource implements TerrainSource {
       const z = z0 + (r / (nrows - 1)) * TILE_SIZE;
       for (let c = 0; c < ncols; c++) {
         const x = x0 + (c / (ncols - 1)) * TILE_SIZE;
-        const e = shape === undefined ? elevation01(seed, x, z, lod) : shapedElevation01(seed, x, z, lod, shape);
         const idx = r * ncols + c;
+        const e = eroded === undefined
+          ? (shape === undefined ? elevation01(seed, x, z, lod) : shapedElevation01(seed, x, z, lod, shape))
+          : eroded[idx];
         heights[idx] = e;
         // Per-type climate bias (0 by default → byte-identical) so the biome grid reads
         // sensibly per terrain type (desert hot/dry, forest wet, alpine cold, …).
