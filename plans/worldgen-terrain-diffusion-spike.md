@@ -109,3 +109,25 @@ Ran `xandergos/terrain-diffusion-30m` via the shipped Flask API (`python -m terr
 **Implication.** The latency reframes the capability from "live streamer" to "**baked generator**" — which lands exactly on the existing design: the durable log records the *request* + content hash, tiles are **snapshotted/cached** (Phase 4), and replay loads cached tiles, never re-running the model. So S1 (the `terrain.*` skill seam) should marshal `world.generateRegion` **off-loop / async**, stream tiles in as they land, and bake them into snapshots — never block on inline generation. Live stream-as-you-move would need a stronger GPU or the **S2** native/quantized path (`burn-wgpu`/CubeCL, fp16/int8); that's the latency follow-up, not a prerequisite to using the capability.
 
 **Next:** S1 is justified — wire `world.generateRegion` to the Python service off-loop, bake tiles into snapshots, validate replay parity. S2 only if live streaming becomes a hard requirement.
+
+## S1 — engine-side seam DONE (2026-06-27)
+
+The `terrain.*` skill seam is wired: **`ModelTerrainSource`** (`js/src/terrain/model-source.ts`) implements the
+`TerrainSource` interface as an out-of-process, **baked** backend behind `world.generateRegion`.
+- **Protocol:** `POST {baseUrl}/tile {seed,tx,tz,lod,tile,hints}` → `{nrows,ncols, elev:int16-LE-b64 (metres),
+  climate:float32-LE-b64 (channel-major WorldClim)}`; `POST /health`. Transport is injectable (default the host
+  `op_http_post`).
+- **Mapping:** int16 metres → `heights∈[0,1]` over a **fixed** configurable range (`elevMinM/elevMaxM`, default
+  −500..9000), `origin.y=elevMinM`/`scaleY=span` so the collider/mesh reconstruct true metres + **adjacent tiles
+  stay seam-consistent** (no per-tile normalization). N-channel climate → the canonical 3-channel
+  `[tempC,precipMm,Biome]` cell-major grid (the **canonical `Biome` enum** in `terrain/types.ts`, shared with the
+  procedural source so biome-gated scatter works identically for both).
+- **Bake/replay (the determinism contract held):** tiles bake into the `TileCache` + ride the export
+  (`tiles.jsonl`); replay loads from baked tiles via a model-free `CachedTerrainSource` (throws on miss) — the
+  **model service is provably absent at replay**, bit-identical + content-hash-pinned. The model is NEVER a
+  runtime/export dependency; the procedural source stays the default + the floor.
+- **Selection:** `registerCoreSkills(registry, { terrainSource: new ModelTerrainSource({ baseUrl }) })`.
+- **Tested headless WITHOUT the GPU** via a deterministic mock transport (`p11_model_source.ts`, `p9_model_source.ts`):
+  bake → model-absent replay, falsifiable. **Real-GPU generation is UAT** — run the terrain-diffusion Flask service
+  + point `baseUrl` at it (the S0 harness in `~/td-spike/`). **S2** (native wgpu) remains a later optimization, not
+  a prerequisite.
