@@ -9,6 +9,7 @@
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
+use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::geometry::Array2;
 use rapier3d::prelude::*;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -381,6 +382,120 @@ pub fn op_physics_add_heightfield(
     world.insert_body(body, collider)
 }
 
+/// Add a KINEMATIC position-based Y-axis capsule for use as a character controller
+/// body (Phase 12). `half_height` is the cylindrical half-height (excludes the
+/// radius caps). The body is driven exclusively by `op_physics_move_character`
+/// (it is unaffected by gravity/forces and acts as an obstacle to dynamic bodies).
+/// Returns its stable body id.
+#[op2(fast)]
+pub fn op_physics_add_character(
+    state: &mut OpState,
+    x: f32,
+    y: f32,
+    z: f32,
+    half_height: f32,
+    radius: f32,
+) -> u32 {
+    let world = state.borrow_mut::<PhysicsWorld>();
+    let body = RigidBodyBuilder::kinematic_position_based()
+        .translation(Vector::new(x, y, z))
+        .build();
+    let collider = ColliderBuilder::capsule_y(half_height, radius)
+        .active_events(ActiveEvents::COLLISION_EVENTS)
+        .build();
+    world.insert_body(body, collider)
+}
+
+/// Move a character body (created by `op_physics_add_character`) by a desired
+/// translation, resolving it against the world via Rapier's
+/// `KinematicCharacterController` (slide, slope limit, autostep, snap-to-ground).
+/// This computes the collision-free movement and queues it as the body's next
+/// kinematic translation; the motion is applied on the following `op_physics_step`.
+/// Writes `out = [newX, newY, newZ, grounded(1/0)]`. Deterministic: identical
+/// world state + desired translation produce a bit-identical correction. The
+/// world log records the SCALAR inputs (id, dx, dy, dz) of each call (the out
+/// buffer carries no input); on replay `move_shape` re-resolves the same
+/// correction from the reconstructed world, so a recorded character session
+/// replays bit-identically (see js/src/worldlog/log.ts).
+#[op2(fast)]
+#[allow(clippy::too_many_arguments)]
+pub fn op_physics_move_character(
+    state: &mut OpState,
+    id: u32,
+    dx: f32,
+    dy: f32,
+    dz: f32,
+    #[buffer] out: &mut [f32],
+) {
+    if out.len() < 4 {
+        return;
+    }
+    let world = state.borrow_mut::<PhysicsWorld>();
+    let handle = match world.handle(id) {
+        Some(h) => h,
+        None => return,
+    };
+    // Phase 1: immutable scene query to compute the collision-free correction.
+    let computed = {
+        let body = match world.bodies.get(handle) {
+            Some(b) => b,
+            None => return,
+        };
+        let collider_handle = match body.colliders().first() {
+            Some(c) => *c,
+            None => return,
+        };
+        let collider = match world.colliders.get(collider_handle) {
+            Some(c) => c,
+            None => return,
+        };
+        let shape = collider.shape();
+        let char_pos = *collider.position();
+        let base = body.translation();
+        // Query pipeline excludes the character's own body so it doesn't
+        // shape-cast against itself.
+        let query = world.broad_phase.as_query_pipeline(
+            world.narrow_phase.query_dispatcher(),
+            &world.bodies,
+            &world.colliders,
+            QueryFilter::default().exclude_rigid_body(handle),
+        );
+        let controller = KinematicCharacterController {
+            offset: CharacterLength::Absolute(0.02),
+            max_slope_climb_angle: 50.0_f32.to_radians(),
+            min_slope_slide_angle: 45.0_f32.to_radians(),
+            autostep: Some(CharacterAutostep {
+                max_height: CharacterLength::Absolute(0.4),
+                min_width: CharacterLength::Absolute(0.3),
+                include_dynamic_bodies: true,
+            }),
+            snap_to_ground: Some(CharacterLength::Absolute(0.5)),
+            ..Default::default()
+        };
+        let movement = controller.move_shape(
+            world.integration_parameters.dt,
+            &query,
+            shape,
+            &char_pos,
+            Vector::new(dx, dy, dz),
+            |_| {},
+        );
+        let t = movement.translation;
+        (
+            Vector::new(base.x + t.x, base.y + t.y, base.z + t.z),
+            movement.grounded,
+        )
+    };
+    // Phase 2: queue the corrected position; applied on the next step.
+    if let Some(body) = world.bodies.get_mut(handle) {
+        body.set_next_kinematic_translation(computed.0);
+    }
+    out[0] = computed.0.x;
+    out[1] = computed.0.y;
+    out[2] = computed.0.z;
+    out[3] = if computed.1 { 1.0 } else { 0.0 };
+}
+
 /// Remove a body (and its colliders), tombstoning its id slot.
 #[op2(fast)]
 pub fn op_physics_remove_body(state: &mut OpState, id: u32) {
@@ -640,6 +755,8 @@ extension!(
         op_physics_add_static_sphere,
         op_physics_add_static_capsule,
         op_physics_add_heightfield,
+        op_physics_add_character,
+        op_physics_move_character,
         op_physics_remove_body,
         op_physics_apply_impulse,
         op_physics_step,

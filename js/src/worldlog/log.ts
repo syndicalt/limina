@@ -85,6 +85,8 @@ export type PhysicsOpName =
   | "add_static_box"
   | "add_static_sphere"
   | "add_static_capsule"
+  | "add_character"
+  | "move_character"
   | "remove_body"
   | "apply_impulse"
   | "step";
@@ -100,9 +102,21 @@ export const PHYSICS_OP_FN: Record<PhysicsOpName, keyof EngineOps> = {
   add_static_box: "op_physics_add_static_box",
   add_static_sphere: "op_physics_add_static_sphere",
   add_static_capsule: "op_physics_add_static_capsule",
+  add_character: "op_physics_add_character",
+  move_character: "op_physics_move_character",
   remove_body: "op_physics_remove_body",
   apply_impulse: "op_physics_apply_impulse",
   step: "op_physics_step",
+};
+
+/** Recorded physics ops that take a TRAILING zero-copy out-buffer arg. The buffer
+ *  carries no input (it is filled by the op), so the recorder strips it from the
+ *  logged args and replay re-supplies a fresh scratch buffer of this length. The
+ *  recorded SCALAR inputs (e.g. move_character's id + desired dx,dy,dz) are what
+ *  make the op reproducible; `move_shape` re-resolves the correction
+ *  deterministically from the world state on replay. */
+export const PHYSICS_OP_OUT_BUFFER: Partial<Record<PhysicsOpName, number>> = {
+  move_character: 4,
 };
 
 /** The set of EngineOps method names whose call mutates the native world and is
@@ -117,6 +131,8 @@ export const RECORDED_PHYSICS_METHODS: Record<string, PhysicsOpName> = {
   op_physics_add_static_box: "add_static_box",
   op_physics_add_static_sphere: "add_static_sphere",
   op_physics_add_static_capsule: "add_static_capsule",
+  op_physics_add_character: "add_character",
+  op_physics_move_character: "move_character",
   op_physics_remove_body: "remove_body",
   op_physics_apply_impulse: "apply_impulse",
   op_physics_step: "step",
@@ -175,6 +191,7 @@ export function serializeWorldLog(meta: WorldLogMeta, commands: WorldCommand[]):
 const physicsOpEnum = z.enum([
   "create_world", "add_ground", "add_box", "add_box_material", "add_sphere",
   "add_capsule", "add_static_box", "add_static_sphere", "add_static_capsule",
+  "add_character", "move_character",
   "remove_body", "apply_impulse", "step",
 ]);
 const metaSchema = z.object({

@@ -54,7 +54,16 @@ pub struct InputState {
     /// it via `op_input_look` to drive a free-fly / FPS camera.
     pub look_dx: f32,
     pub look_dy: f32,
+    /// Discrete action buttons as a bitmask, refreshed each frame from the
+    /// keyboard. JS reads them via `op_input_buttons`. Bit 0 = jump (Space),
+    /// bit 1 = run (Shift). A bitmask keeps the op arity stable as buttons grow.
+    pub buttons: u32,
 }
+
+/// Button bit: jump (Space).
+pub const BUTTON_JUMP: u32 = 1 << 0;
+/// Button bit: run / sprint (Shift).
+pub const BUTTON_RUN: u32 = 1 << 1;
 
 /// Create the window's `GPUCanvasContext`. Must be called from JS after
 /// `navigator.gpu.requestAdapter()` (which creates the shared `Instance`).
@@ -193,4 +202,21 @@ pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
         .unwrap_or_default();
     out[0] = input.look_dx;
     out[1] = input.look_dy;
+}
+
+/// Write the discrete action-button states into `out[0..2]` as 0/1 floats
+/// (`out[0]` = jump/Space, `out[1]` = run/Shift), decoded from the host's button
+/// bitmask. Drives a character controller (jump on the rising edge, run while
+/// held). Zero when unset.
+#[op2(fast)]
+pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) {
+    if out.len() < 2 {
+        return;
+    }
+    let input = state
+        .try_borrow::<InputState>()
+        .copied()
+        .unwrap_or_default();
+    out[0] = if input.buttons & BUTTON_JUMP != 0 { 1.0 } else { 0.0 };
+    out[1] = if input.buttons & BUTTON_RUN != 0 { 1.0 } else { 0.0 };
 }

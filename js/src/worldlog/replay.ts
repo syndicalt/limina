@@ -25,6 +25,7 @@ import {
   installSeededRandom,
   parseWorldLog,
   PHYSICS_OP_FN,
+  PHYSICS_OP_OUT_BUFFER,
   syncAllBodies,
   type WorldCommand,
   type WorldStateSnapshot,
@@ -81,9 +82,13 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
     // physics + skill both carry a tick.
     if (cmd.tick > ticks) ticks = cmd.tick;
     if (cmd.kind === "physics") {
-      // EngineOps method resolved dynamically from the recorded op name.
-      const op = world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: number[]) => unknown;
-      op(...cmd.args);
+      // EngineOps method resolved dynamically from the recorded op name. Ops with a
+      // trailing out-buffer get a fresh scratch buffer appended (the recorded args
+      // are the scalar inputs only); move_shape re-resolves deterministically.
+      const op = world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: unknown[]) => unknown;
+      const outLen = PHYSICS_OP_OUT_BUFFER[cmd.op];
+      if (outLen === undefined) op(...cmd.args);
+      else op(...cmd.args, new Float32Array(outLen));
       physicsOps++;
       if (cmd.op === "step") {
         steps++;

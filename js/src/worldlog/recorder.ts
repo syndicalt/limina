@@ -21,6 +21,7 @@ import type { InvokeBase, SkillRegistry } from "../skills/registry.ts";
 import {
   installSeededRandom,
   LOG_VERSION,
+  PHYSICS_OP_OUT_BUFFER,
   RECORDED_PHYSICS_METHODS,
   serializeWorldLog,
   type SkillCommand,
@@ -68,7 +69,12 @@ export class WorldRecorder {
           if (rec.depth === 0) {
             const tick = rec.tick;
             if (tick > rec.maxTick) rec.maxTick = tick;
-            rec.commands.push({ kind: "physics", seq: rec.seq++, tick, op: opName, args: args.slice() });
+            // Ops with a trailing out-buffer (e.g. move_character) carry no input in
+            // that buffer; record only the leading scalar inputs so the logged args
+            // stay `number[]` (replay re-supplies a fresh scratch buffer).
+            const args2 =
+              PHYSICS_OP_OUT_BUFFER[opName] === undefined ? args.slice() : args.slice(0, args.length - 1);
+            rec.commands.push({ kind: "physics", seq: rec.seq++, tick, op: opName, args: args2 });
           }
           return method.apply(target, args);
         };

@@ -39,6 +39,7 @@ import {
   captureWorldState,
   installRandomState,
   PHYSICS_OP_FN,
+  PHYSICS_OP_OUT_BUFFER,
   syncAllBodies,
   type WorldCommand,
   type WorldStateSnapshot,
@@ -46,7 +47,27 @@ import {
 import type { ReplayDeps } from "./replay.ts";
 import { LiminaTracer } from "../observability/event.ts";
 
-export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_VERSION = 2;
+
+/** A character controller's body-LESS resume state at the snapshot tick. The
+ *  kinematic body's TRANSFORM rides in the native physics blob, but a controller's
+ *  vertical velocity / grounded flag / facing are JS-owned (not reconstructable
+ *  from the transform) and must be captured for an exact mid-stream resume. */
+export interface CharacterSnapshotEntry {
+  bodyId: number;
+  vy: number;
+  grounded: boolean;
+  heading: number;
+}
+
+/** Structural shape a snapshot reads/writes for a character controller. The
+ *  concrete `CharacterController` (js/src/world/character.ts) satisfies this; the
+ *  interface keeps the worldlog layer free of a dependency on the world layer. */
+export interface SnapshotableCharacter {
+  readonly bodyId: number;
+  serializeState(): { vy: number; grounded: boolean; heading: number };
+  restoreState(state: { vy: number; grounded: boolean; heading: number }): void;
+}
 
 /** The bitECS entity-index allocator state (see createEntityIndex). Capturing it
  *  verbatim lets a restored world allocate the SAME next eids, including reuse of
@@ -90,6 +111,9 @@ export interface WorldSnapshot {
   entityVersion: number;
   entityIndex: EntityIndexSnapshot;
   entities: SnapshotEntity[];
+  /** Character-controller resume state (vy/grounded/heading) per controller body.
+   *  Empty when the session has no character controllers. */
+  characters: CharacterSnapshotEntry[];
   /** base64 of the native Rapier physics blob (op_physics_snapshot). */
   physics: string;
 }
@@ -194,6 +218,10 @@ export interface CaptureSnapshotOptions {
   /** The recorder's next seq value (== commands recorded so far). Commands with
    *  seq < this are baked into the snapshot; seq >= this form the delta. */
   snapshotSeq: number;
+  /** Live character controllers whose JS-owned resume state must be captured.
+   *  Their kinematic bodies are already in the native blob; this captures the
+   *  vy/grounded/heading the blob cannot reconstruct. */
+  characters?: readonly SnapshotableCharacter[];
 }
 
 /** Capture a complete world snapshot at the current tick boundary. MUST be called
@@ -214,6 +242,10 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]],
     });
   }
+  const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
+    const s = c.serializeState();
+    return { bodyId: c.bodyId, vy: s.vy, grounded: s.grounded, heading: s.heading };
+  });
   const physics = world.ops.op_physics_snapshot();
   return {
     snapshotVersion: SNAPSHOT_VERSION,
@@ -225,6 +257,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
     entityVersion: table.version,
     entityIndex: captureEntityIndex(world.ecs),
     entities,
+    characters,
     physics: bytesToBase64(physics),
   };
 }
@@ -241,6 +274,7 @@ export function parseSnapshot(json: string): WorldSnapshot {
   if (!Array.isArray(snap.entities) || typeof snap.physics !== "string" || snap.entityIndex === undefined) {
     throw new Error("world snapshot: malformed snapshot");
   }
+  if (snap.characters === undefined) snap.characters = [];
   return snap;
 }
 
@@ -259,7 +293,11 @@ export interface RecoveryResult {
 /** Apply a snapshot to a fresh world: restore RNG, native physics, the bitECS
  *  allocator, the entity table, and every live entity's SoA transform. Leaves the
  *  world primed to replay the delta from tick T. */
-export function restoreSnapshot(world: WorldContext, snapshot: WorldSnapshot): void {
+export function restoreSnapshot(
+  world: WorldContext,
+  snapshot: WorldSnapshot,
+  characters?: readonly SnapshotableCharacter[],
+): void {
   // 1. RNG: resume the seeded generator mid-stream.
   installRandomState(snapshot.rngState);
   // 2. Native physics: deserialize the real Rapier state (body ids stay stable).
@@ -284,6 +322,18 @@ export function restoreSnapshot(world: WorldContext, snapshot: WorldSnapshot): v
     Rotation.x[e.eid] = e.rot[0]; Rotation.y[e.eid] = e.rot[1]; Rotation.z[e.eid] = e.rot[2]; Rotation.w[e.eid] = e.rot[3];
     Scale.x[e.eid] = e.scale[0]; Scale.y[e.eid] = e.scale[1]; Scale.z[e.eid] = e.scale[2];
   }
+  // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
+  //    native blob cannot carry (matched to live controllers by body id). The
+  //    body transform itself was restored in step 2.
+  if (characters !== undefined && snapshot.characters.length > 0) {
+    const byId = new Map(characters.map((c) => [c.bodyId, c]));
+    for (const entry of snapshot.characters) {
+      const controller = byId.get(entry.bodyId);
+      if (controller !== undefined) {
+        controller.restoreState({ vy: entry.vy, grounded: entry.grounded, heading: entry.heading });
+      }
+    }
+  }
 }
 
 /** Recover a world from a snapshot + the delta command stream. Builds a FRESH
@@ -299,6 +349,7 @@ export async function recoverWorld(
   snapshot: WorldSnapshot,
   deltaCommands: WorldCommand[],
   deps: ReplayDeps,
+  characters?: readonly SnapshotableCharacter[],
 ): Promise<RecoveryResult> {
   const tracer = deps.tracer ?? new LiminaTracer("ses_worldlog_recover");
   const registry = deps.makeRegistry(tracer);
@@ -310,7 +361,7 @@ export async function recoverWorld(
   Position.x.fill(0); Position.y.fill(0); Position.z.fill(0);
   Rotation.x.fill(0); Rotation.y.fill(0); Rotation.z.fill(0); Rotation.w.fill(0);
   Scale.x.fill(0); Scale.y.fill(0); Scale.z.fill(0);
-  restoreSnapshot(world, snapshot);
+  restoreSnapshot(world, snapshot, characters);
 
   let deltaSkillInvokes = 0;
   let deltaPhysicsOps = 0;
@@ -323,8 +374,10 @@ export async function recoverWorld(
       throw new Error("world recovery: delta unexpectedly contains a seed command");
     }
     if (cmd.kind === "physics") {
-      const op = world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: number[]) => unknown;
-      op(...cmd.args);
+      const op = world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: unknown[]) => unknown;
+      const outLen = PHYSICS_OP_OUT_BUFFER[cmd.op];
+      if (outLen === undefined) op(...cmd.args);
+      else op(...cmd.args, new Float32Array(outLen));
       deltaPhysicsOps++;
       if (cmd.op === "step") {
         deltaSteps++;

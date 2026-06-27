@@ -49,12 +49,20 @@ impl App {
         let axis = |neg: KeyCode, pos: KeyCode| -> f32 {
             (self.keys.contains(&pos) as i32 - self.keys.contains(&neg) as i32) as f32
         };
+        let mut buttons = 0u32;
+        if self.keys.contains(&KeyCode::Space) {
+            buttons |= limina_render::BUTTON_JUMP;
+        }
+        if self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight) {
+            buttons |= limina_render::BUTTON_RUN;
+        }
         InputState {
             move_x: axis(KeyCode::KeyA, KeyCode::KeyD),
             move_y: axis(KeyCode::KeyQ, KeyCode::KeyE),
             move_z: axis(KeyCode::KeyS, KeyCode::KeyW),
             look_dx: self.look_dx,
             look_dy: self.look_dy,
+            buttons,
         }
     }
 

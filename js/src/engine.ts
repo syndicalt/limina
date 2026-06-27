@@ -33,6 +33,9 @@ export interface EngineOps {
   op_set_resize_callback(cb: (w: number, h: number) => void): void;
   op_input_axes(out: Float32Array): void;
   op_input_look(out: Float32Array): void;
+  /** Write discrete action-button states into out[0..2] as 0/1 floats
+   *  (out[0]=jump/Space, out[1]=run/Shift). */
+  op_input_buttons(out: Float32Array): void;
   // physics
   op_physics_create_world(gravityY: number): void;
   op_physics_add_ground(y: number): void;
@@ -48,6 +51,17 @@ export interface EngineOps {
    *  scaleX×scaleZ world units centered at (x,y,z), heights scaled by scaleY.
    *  Returns its stable body id. */
   op_physics_add_heightfield(x: number, y: number, z: number, nrows: number, ncols: number, scaleX: number, scaleY: number, scaleZ: number, heights: Float32Array): number;
+  /** Add a KINEMATIC position-based capsule for use as a character-controller
+   *  body (Phase 12). `halfHeight` is the cylindrical half-height (excludes the
+   *  radius caps). Driven only by op_physics_move_character (unaffected by
+   *  gravity/forces). Returns its stable body id. */
+  op_physics_add_character(x: number, y: number, z: number, halfHeight: number, radius: number): number;
+  /** Move a character body by a desired translation, resolved via Rapier's
+   *  KinematicCharacterController (slide, slope limit, autostep, snap-to-ground).
+   *  Queues the corrected position as the body's next kinematic translation
+   *  (applied on the next op_physics_step). Writes
+   *  out = [newX, newY, newZ, grounded(1/0)] (out length >= 4). */
+  op_physics_move_character(id: number, dx: number, dy: number, dz: number, out: Float32Array): void;
   op_physics_remove_body(id: number): void;
   op_physics_apply_impulse(id: number, ix: number, iy: number, iz: number): void;
   op_physics_step(): void;
@@ -133,14 +147,14 @@ export type RenderOps = Pick<
   EngineOps,
   | "op_create_window_context" | "op_surface_present" | "op_surface_resize"
   | "op_set_frame_callback" | "op_set_fixed_step_callback" | "op_set_resize_callback"
-  | "op_input_axes" | "op_input_look"
+  | "op_input_axes" | "op_input_look" | "op_input_buttons"
 >;
 export type PhysicsOps = Pick<
   EngineOps,
   | "op_physics_create_world" | "op_physics_add_ground" | "op_physics_add_box"
   | "op_physics_add_box_material" | "op_physics_add_sphere" | "op_physics_add_capsule"
   | "op_physics_add_static_box" | "op_physics_add_static_sphere" | "op_physics_add_static_capsule"
-  | "op_physics_add_heightfield"
+  | "op_physics_add_heightfield" | "op_physics_add_character" | "op_physics_move_character"
   | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
   | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
   | "op_physics_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"

@@ -11,7 +11,9 @@ mod surface;
 use deno_core::{extension, Extension};
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
 
-pub use surface::{FrameCallback, InputState, ResizeCallback, StepCallback, WindowTarget};
+pub use surface::{
+    BUTTON_JUMP, BUTTON_RUN, FrameCallback, InputState, ResizeCallback, StepCallback, WindowTarget,
+};
 
 extension!(
     limina_bootstrap,
@@ -25,6 +27,7 @@ extension!(
         surface::op_set_fixed_step_callback,
         surface::op_input_axes,
         surface::op_input_look,
+        surface::op_input_buttons,
     ],
     esm_entry_point = "ext:limina_bootstrap/00_bootstrap.js",
     esm = [dir "js", "00_bootstrap.js"],
