@@ -200,8 +200,16 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
 
   // 2. THE SEA — a render-only water surface at sea level; the low sand floods. The
   //    surface plane is centred at the origin, so the default (large) size is used so
-  //    it fully covers the positive-coordinate region and reads as open water.
-  ok(await registry.invoke("world.addWater", { level: seaLevel, color: MATERIALS.water.color }, base), "world.addWater");
+  //    it fully covers the positive-coordinate region and reads as open water. The
+  //    `region` descriptor (seed + type + bounds — pure, log-safe) turns on TRUE
+  //    water-column-depth shading: the water samples the SAME terrain field the region
+  //    was generated with, so the colour/opacity grade by actual depth and the shoreline
+  //    band tracks the real coastline (no camera-distance surf ring). Render-only.
+  ok(await registry.invoke("world.addWater", {
+    level: seaLevel,
+    color: MATERIALS.water.color,
+    region: { seed: BEACH_SEED, type: "beach", bounds },
+  }, base), "world.addWater");
 
   // 3. THE COTTAGE — placed BY ID on dry sand just above the waterline. Pick the
   //    interior sample (above the sea) whose height is nearest a low shoreline target,
