@@ -88,6 +88,13 @@ const cz = TILE_SIZE; // mid-depth of the 2-tile-deep strips
 const cy = HEIGHT_SCALE * 0.5;
 const orbitRadius = (stripMaxX - stripMinX) * 0.62;
 
+// The engine's default camera far-plane (200 m) is far too small for this ~960 m row viewed
+// from a ~600 m orbit — it clipped the entire scene, leaving only the sky. Widen near/far to
+// cover the orbit + the whole row (this demo overrides the camera each frame anyway).
+engine.camera.near = 1;
+engine.camera.far = orbitRadius * 3.5;
+engine.camera.updateProjectionMatrix();
+
 let angle = 0;
 const axes = new Float32Array(3);
 function render(_alpha: number): void {
