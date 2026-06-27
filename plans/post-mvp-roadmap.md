@@ -43,10 +43,10 @@ spatial audio. See `ROADMAP.md` for the evidence.
 | Phase | Goal in one line | Gating dependency |
 |---|---|---|
 | **6 — Open the door & de-risk** | Cheap enabling seams + the two spikes' cheapest stages | none (current substrate) |
-| **7 — The authoring surface** | A person and an agent co-author a world, every step visible | Phase 6 seams |
+| **7 — The authoring surface** ✅ | A person and an agent co-author a world, every step visible | Phase 6 seams |
 | **8 — Run anywhere** ✅ | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) |
 | **9 — Worlds worth authoring** ✅ | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 |
-| **10 — Agent governance & orchestration** | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) |
+| **10 — Agent governance & orchestration** ✅ | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) |
 | **11 — Content & assets** | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter |
 | **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) |
 | **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 |
@@ -158,7 +158,7 @@ seed reproduce the region (replay parity via snapshot).
 
 **Depends on:** Phase 6's S0 greenlight; rides Phase 8 so generated worlds ship everywhere too. Engine
 stays the substrate — the generator is always behind a skill, never an engine runtime dependency. Full
-plan: [`worldgen-terrain-diffusion-spike.md`](./worldgen-terrain-diffusion-spike.md).
+plan: [`worldgen-terrain-diffusion-spike.md`](./worldgen-terrain-diffusion-spike.md). **S0 ran** (2026-06: terrain-diffusion fits a 4 GB GPU + good quality, but seconds/tile → a *baked* source, not live); the generation-quality + pluggable-model follow-through is [`worldgen-roadmap.md`](./worldgen-roadmap.md).
 
 ---
 
@@ -193,7 +193,9 @@ placement skills** (scatter/place by id, deterministic); **agent-configurable ge
 prop `ScatterOptions` to a logged, elevation-aware `ScatterConfig` — the agent sets the art direction);
 **pluggable asset sources** (a curated library first; a **text→3D generator** spike-gated — the "agent
 generates the art" source, same shape as the S0 terrain probe). The engine consumes assets behind the seam; it
-never becomes a modeler.
+never becomes a modeler. The parallel **terrain-generation** thread — improve the native procedural
+generator (erosion / warping / climate, borrowed from the S0 model) + finish the pluggable,
+never-a-dependency model backend — is [`worldgen-roadmap.md`](./worldgen-roadmap.md).
 
 **Gate:** an agent scatters/places an asset by id; it imports + content-addresses + ships in the export;
 placement is deterministic and a generation config the agent sets reproduces the exact world.

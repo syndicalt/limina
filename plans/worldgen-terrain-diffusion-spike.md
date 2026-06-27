@@ -88,3 +88,24 @@ All under a new `terrain.*` (or `world.*`) namespace, each with a Zod-typed I/O 
 ## Recommendation / sequencing
 
 Do **S0 first** (cheapest, highest-signal) and gate on it. Only proceed to **S1** (the skill seam, Python service behind it) if value + determinism hold. Treat **S2** (native wgpu) as a later optimization, not a prerequisite to using the capability. Throughout, hold the standing principles: off the frame loop, deterministic + replayable, engine = substrate (generator behind a skill, never an engine runtime dependency).
+
+---
+
+## S0 results — 2026-06-26 (RTX 3050 Laptop, 4 GB, CUDA torch 2.12)
+
+**S0 complete. Verdict: conditional GREENLIGHT — adopt as an async, snapshot-cached `world.generateRegion` source (the *bake* path), NOT a live stream-as-you-move generator on 4 GB consumer hardware.** Harness + renders live in `~/td-spike/` (`measure.py`, `render_hero.py`, `s0_summary.json`, `hero.png`, `hero_temp.png`).
+
+Ran `xandergos/terrain-diffusion-30m` via the shipped Flask API (`python -m terrain_diffusion.inference.api --hdf5-file TEMP --seed <s>`) out-of-process. The lean inference deps install on conda's CUDA torch (need `rasterio` + `torchvision` + `matplotlib` beyond the obvious set; the heavy geo/training deps are NOT needed for inference). Two non-model snags worth recording for S1: the API **interactively prompts** to download a ~48 MB WorldClim dataset (auto-confirm with `yes |`), and it **loads the whole pipeline at startup before binding the port** (so `/health` only answers once the model is warm).
+
+| Unknown | Result |
+|---|---|
+| **4 GB VRAM fit** | ✅ Loads + `torch.compile` + warms up all 3 UNets; **peak ~3.66 GB / 4 GB** (~430 MB headroom — tight; little room for the engine's own GPU work alongside) |
+| **Terrain quality / aesthetic fit** | ✅ Coherent naturalistic DEM — coastlines, hillshaded relief, valleys, snow-capped peaks (elev −92 → 1644 m in the hero region) |
+| **Climate channels** | ✅ 4 WorldClim-equivalent channels (temp / t-season / precip / p-cv) per pixel; temperature cools with elevation (physically plausible) — real agent-perception input |
+| **Seam consistency** | ✅ Overlapping queries match to **≤1 m (mean 0.00 m)** — int16 quantization only; InfiniteDiffusion's seam-consistency holds |
+| **Determinism** | ✅ Spatial determinism confirmed via the seam test; cross-restart reproducibility is determinism-by-design (full cold-restart confirm deferred — a restart re-compiles, ~minutes) |
+| **Latency (decisive)** | ❌ **Not live-streamable on this GPU** — median **6.6 s/tile @ 90 m/px, 4.9 s/tile @ 11.25 m** (256², ~75–100 µs/px), high variance (1.3–9.5 s from `torch.compile` recompilation). Seconds/tile vs the <~100 ms live streaming wants |
+
+**Implication.** The latency reframes the capability from "live streamer" to "**baked generator**" — which lands exactly on the existing design: the durable log records the *request* + content hash, tiles are **snapshotted/cached** (Phase 4), and replay loads cached tiles, never re-running the model. So S1 (the `terrain.*` skill seam) should marshal `world.generateRegion` **off-loop / async**, stream tiles in as they land, and bake them into snapshots — never block on inline generation. Live stream-as-you-move would need a stronger GPU or the **S2** native/quantized path (`burn-wgpu`/CubeCL, fp16/int8); that's the latency follow-up, not a prerequisite to using the capability.
+
+**Next:** S1 is justified — wire `world.generateRegion` to the Python service off-loop, bake tiles into snapshots, validate replay parity. S2 only if live streaming becomes a hard requirement.
