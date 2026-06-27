@@ -5,6 +5,8 @@ import type { LiminaTracer } from "../observability/event.ts";
 import { registerSceneSkills } from "./scene.ts";
 import { registerEcsSkills } from "./ecs.ts";
 import { registerThreeSkills } from "./three.ts";
+import { registerAssetSkills } from "./asset.ts";
+import { AssetRegistry } from "../asset-registry.ts";
 import { registerPhysicsSkills } from "./physics.ts";
 import { registerAgentSkills } from "./agent.ts";
 import { registerSystemSkills } from "./system.ts";
@@ -40,6 +42,9 @@ export interface CoreSkills {
   /** Phase 9 terrain source + content-addressed tile cache backing the terrain.*
    *  / world.* skills (default: the deterministic procedural source). */
   terrain: { source: TerrainSource; cache: TileCache };
+  /** Phase 11 content-addressed asset registry backing the asset.* skills — the
+   *  lookup layer (id -> bytes + content hash) over the host's op_read_asset. */
+  assets: AssetRegistry;
 }
 
 export function registerCoreSkills(
@@ -54,11 +59,20 @@ export function registerCoreSkills(
     /** Where delegated workers are registered (optional; a self-contained
      *  registry is used when omitted). */
     agents?: AgentRegistry;
+    /** Phase 11: override the content-addressed asset registry (e.g. a pre-pinned
+     *  curated registry). Default: a fresh registry over the host ops. */
+    assets?: AssetRegistry;
   },
 ): CoreSkills {
+  // Phase 11 content-addressed asset seam: BOTH three.loadGLTF and asset.place
+  // resolve a GLTF by id through this one registry (id -> bytes + cached content
+  // hash). A runtime can inject a package-backed registry (AssetRegistry.fromBundle)
+  // so a replayed/browser asset.place loads from the export, never the host root.
+  const assets = opts?.assets ?? new AssetRegistry();
   registerSceneSkills(registry);
   registerEcsSkills(registry);
-  registerThreeSkills(registry);
+  registerThreeSkills(registry, assets);
+  registerAssetSkills(registry, assets);
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
@@ -104,5 +118,5 @@ export function registerCoreSkills(
   if (opts?.providers !== undefined) {
     registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache }, assets };
 }

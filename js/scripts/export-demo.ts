@@ -59,7 +59,7 @@ void new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardNodeMa
 
 const tracer = new LiminaTracer("ses_demo_export");
 const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
+const core = registerCoreSkills(registry);
 const recorder = new WorldRecorder("ses_demo_export");
 recorder.attach(registry);
 recorder.seed(SEED);
@@ -116,6 +116,9 @@ const files = assembleExport({
   keyframes: keyframeRec.keyframes,
   keyframeInterval: INTERVAL,
   createdAt: new Date().toISOString(),
+  // Phase 11: carry the content-addressed bytes of every asset placed this session
+  // (empty here — this demo places none) so the package is self-contained.
+  assets: core.assets.bundle(),
 });
 
 // Confirm it round-trips before writing it to disk.

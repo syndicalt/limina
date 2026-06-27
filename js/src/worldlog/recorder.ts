@@ -23,9 +23,14 @@ import {
   LOG_VERSION,
   RECORDED_PHYSICS_METHODS,
   serializeWorldLog,
+  type SkillCommand,
   type WorldCommand,
   type WorldLogMeta,
 } from "./log.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 export class WorldRecorder {
   readonly commands: WorldCommand[] = [];
@@ -78,10 +83,13 @@ export class WorldRecorder {
     const rec = this;
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
+      // Hold a reference to the command we record at depth 0 so the post-invoke
+      // commit-back (below) can pin resolved identity into it.
+      let cmd: SkillCommand | undefined;
       if (rec.depth === 0) {
         const tick = base.tick;
         if (tick > rec.maxTick) rec.maxTick = tick;
-        rec.commands.push({
+        cmd = {
           kind: "skill",
           seq: rec.seq++,
           tick,
@@ -90,13 +98,32 @@ export class WorldRecorder {
           actorId: base.agentId,
           sessionId: base.sessionId,
           perms: [...base.permissions].sort(),
-        });
+        };
+        rec.commands.push(cmd);
       }
       rec.depth++;
       // depth must drop whether the invoke resolves or rejects (re-entrancy guard).
-      return original(name, input, base).finally(() => {
-        rec.depth--;
-      });
+      return original(name, input, base)
+        .then((res) => {
+          // COMMIT-BACK: copy the skill's declared commitFields from its OUTPUT into
+          // the recorded command's input, so the replay log PINS authored-resolved
+          // identity (e.g. asset.place's content hash). Author-supplied input wins;
+          // we only fill fields the author left undefined.
+          if (cmd !== undefined && res.success) {
+            const def = registry.describe(name);
+            const fields = def?.commitFields;
+            if (fields !== undefined && fields.length > 0 && isRecord(res.result)) {
+              const into = isRecord(cmd.input) ? (cmd.input as Record<string, unknown>) : (cmd.input = {} as Record<string, unknown>);
+              for (const f of fields) {
+                if (into[f] === undefined && f in res.result) into[f] = (res.result as Record<string, unknown>)[f];
+              }
+            }
+          }
+          return res;
+        })
+        .finally(() => {
+          rec.depth--;
+        });
     };
   }
 

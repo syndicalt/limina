@@ -81,6 +81,11 @@ export interface SkillDefinition<I = unknown, O = unknown> {
   input: z.ZodType<I>;
   output: z.ZodType<O>;
   permissions: string[];
+  /** OUTPUT field names the RECORDER commits back into the recorded command's
+   *  input, so the replay log PINS authored-resolved identity (e.g. asset.place's
+   *  content hash). Each named field must also be an OPTIONAL input field so the
+   *  committed value validates on replay. Absent -> nothing committed (default). */
+  commitFields?: string[];
   handler(input: I, ctx: ExecutionContext): Promise<O> | O;
   hooks?: {
     before?(input: I, ctx: ExecutionContext): Promise<void> | void;
