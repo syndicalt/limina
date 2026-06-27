@@ -83374,12 +83374,53 @@ var SkillRegistry = class {
   }
 };
 
+// src/materials/palette.ts
+var MATERIALS = {
+  // Granular ground — warm, pale, fully matte.
+  sand: { color: 14929312, roughness: 0.92, metalness: 0 },
+  // Worked/quarried stone — neutral grey, matte.
+  stone: { color: 10197136, roughness: 0.82, metalness: 0 },
+  // Raw rock — darker, browner, slightly rougher than stone.
+  rock: { color: 7300958, roughness: 0.88, metalness: 0 },
+  // Tree trunk / dark timber — rich brown.
+  wood: { color: 9067051, roughness: 0.72, metalness: 0 },
+  // Sawn/finished board — lighter, warmer, a touch smoother than raw wood.
+  plank: { color: 12618322, roughness: 0.62, metalness: 0 },
+  // Dense canopy / bushes — deep saturated green.
+  foliage: { color: 3504683, roughness: 0.8, metalness: 0 },
+  // Bright individual leaves — lighter, more vivid green.
+  leaf: { color: 7323455, roughness: 0.68, metalness: 0 },
+  // Ground cover — vivid grass green, matte.
+  grass: { color: 5875770, roughness: 0.85, metalness: 0 },
+  // Bare metal — neutral steel, true conductor with a low-ish roughness sheen.
+  metal: { color: 12764876, roughness: 0.38, metalness: 1 },
+  // Water surface — saturated blue, smooth dielectric for specular highlights.
+  water: { color: 3050432, roughness: 0.14, metalness: 0 }
+};
+var MATERIAL_NAMES = Object.freeze(Object.keys(MATERIALS));
+function isMaterialName(name) {
+  return Object.prototype.hasOwnProperty.call(MATERIALS, name);
+}
+function getMaterialParams(name) {
+  if (!isMaterialName(name)) {
+    throw new Error(
+      `unknown material "${name}"; known materials: ${MATERIAL_NAMES.join(", ")}`
+    );
+  }
+  const preset = MATERIALS[name];
+  return { color: preset.color, roughness: preset.roughness, metalness: preset.metalness };
+}
+
 // src/skills/scene.ts
 var Vec3 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var createEntityInput = external_exports.object({
   shape: external_exports.enum(["box", "sphere"]).default("box"),
   collider: external_exports.enum(["box", "sphere", "capsule"]).optional(),
   size: external_exports.number().positive().max(50).default(1),
+  // Pick a material by intent ("sand", "wood", ...) from the named palette. When
+  // set it supplies color/roughness/metalness; the numeric `color` below is the
+  // back-compat path used when no palette name is given.
+  material: external_exports.string().optional(),
   color: external_exports.number().int().min(0).max(16777215).default(16777215),
   position: Vec3.default([0, 0, 0]),
   dynamic: external_exports.boolean().default(false),
@@ -83398,7 +83439,12 @@ var createEntity = {
   handler: (input, ctx) => {
     const [x2, y2, z3] = input.position;
     const geometry = input.shape === "sphere" ? new SphereGeometry(input.size / 2, 24, 16) : new BoxGeometry(input.size, input.size, input.size);
-    const material = new MeshStandardNodeMaterial({ color: input.color, roughness: 0.6, metalness: 0.1 });
+    const surface = input.material !== void 0 ? getMaterialParams(input.material) : { color: input.color, roughness: 0.6, metalness: 0.1 };
+    const material = new MeshStandardNodeMaterial({
+      color: surface.color,
+      roughness: surface.roughness,
+      metalness: surface.metalness
+    });
     const mesh = new Mesh(geometry, material);
     ctx.world.scene.add(mesh);
     const eid = spawnRenderable(ctx.world.ecs, mesh, x2, y2, z3);
@@ -83578,6 +83624,18 @@ function registerEcsSkills(registry2) {
 
 // src/skills/three.ts
 var Vec32 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var gltfResourceSchema = external_exports.object({
+  kind: external_exports.literal("gltf"),
+  assetId: external_exports.string(),
+  source: external_exports.string(),
+  hash: external_exports.string(),
+  bytes: external_exports.number().int(),
+  rootName: external_exports.string().optional(),
+  objectCount: external_exports.number().int(),
+  meshCount: external_exports.number().int(),
+  materialCount: external_exports.number().int(),
+  textureCount: external_exports.number().int()
+});
 var setTransformInput = external_exports.object({
   entity: external_exports.string(),
   position: Vec32.optional(),
@@ -83622,6 +83680,10 @@ var setTransform = {
 };
 var setMaterialInput = external_exports.object({
   entity: external_exports.string(),
+  // Pick a material by intent ("sand", "wood", ...) from the named palette. It
+  // supplies color/roughness/metalness; explicit numeric fields below still win,
+  // so you can start from a preset and tweak a single value.
+  material: external_exports.string().optional(),
   color: external_exports.number().int().min(0).max(16777215).optional(),
   roughness: external_exports.number().min(0).max(1).optional(),
   metalness: external_exports.number().min(0).max(1).optional(),
@@ -83639,11 +83701,15 @@ var setMaterial = {
   handler: (input, ctx) => {
     const root = ctx.world.entities.resolve(input.entity)?.mesh;
     if (root === void 0) return { ok: false };
-    const hasMaterialChange = input.color !== void 0 || input.roughness !== void 0 || input.metalness !== void 0;
+    const preset = input.material !== void 0 ? getMaterialParams(input.material) : void 0;
+    const color3 = input.color ?? preset?.color;
+    const roughness3 = input.roughness ?? preset?.roughness;
+    const metalness3 = input.metalness ?? preset?.metalness;
+    const hasMaterialChange = color3 !== void 0 || roughness3 !== void 0 || metalness3 !== void 0;
     const applyMaterialProps = (material) => {
-      if (input.color !== void 0) material.color.set(input.color);
-      if (input.roughness !== void 0) material.roughness = input.roughness;
-      if (input.metalness !== void 0) material.metalness = input.metalness;
+      if (color3 !== void 0) material.color.set(color3);
+      if (roughness3 !== void 0) material.roughness = roughness3;
+      if (metalness3 !== void 0) material.metalness = metalness3;
     };
     const visit = (object2) => {
       if (input.castShadow !== void 0) object2.castShadow = input.castShadow;
@@ -83773,7 +83839,7 @@ function prepareGltfTextures(root) {
   if (typeof root.traverse === "function") root.traverse(visit);
   else visit(root);
 }
-function collectGltfMetadata(assetId, bytes, root) {
+function collectGltfMetadata(assetId, hash4, bytes, root) {
   let objectCount = 0;
   let meshCount = 0;
   const materials = /* @__PURE__ */ new Set();
@@ -83803,6 +83869,7 @@ function collectGltfMetadata(assetId, bytes, root) {
     kind: "gltf",
     assetId,
     source: `assets/${assetId}`,
+    hash: hash4,
     bytes: bytes.byteLength,
     rootName: name,
     objectCount,
@@ -83811,65 +83878,674 @@ function collectGltfMetadata(assetId, bytes, root) {
     textureCount: textures.size
   };
 }
-var loadGLTF = {
-  name: "three.loadGLTF",
-  version: "1.0.0",
-  description: "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
-  category: "three",
-  permissions: ["scene.write"],
-  input: loadGltfInput,
-  output: external_exports.object({
-    entity: external_exports.string(),
-    resource: external_exports.object({
-      kind: external_exports.literal("gltf"),
-      assetId: external_exports.string(),
-      source: external_exports.string(),
-      bytes: external_exports.number().int(),
-      rootName: external_exports.string().optional(),
-      objectCount: external_exports.number().int(),
-      meshCount: external_exports.number().int(),
-      materialCount: external_exports.number().int(),
-      textureCount: external_exports.number().int()
-    })
-  }),
-  handler: async (input, ctx) => {
-    const bytes = ctx.world.ops.op_read_asset(input.assetId);
-    const manager = new LoadingManager();
-    const base = input.assetId.includes("/") ? input.assetId.slice(0, input.assetId.lastIndexOf("/") + 1) : "";
-    manager.setURLModifier((url2) => {
-      if (url2.startsWith("data:") || url2.startsWith("blob:") || url2.startsWith("limina-asset://")) return url2;
-      return `limina-asset://${base}${url2}`;
-    });
-    const loader = new GLTFLoader(manager);
-    const payload = input.assetId.endsWith(".gltf") ? new TextDecoder().decode(bytes) : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    const gltf = await new Promise((resolve, reject) => {
-      loader.parse(
-        payload,
-        `limina-asset://${base}`,
-        (g2) => resolve(g2),
-        (err) => reject(err instanceof Error ? err : new Error(String(err)))
-      );
-    });
-    const root = gltf.scene;
-    prepareGltfTextures(root);
-    const [x2, y2, z3] = input.position;
-    ctx.world.scene.add(root);
-    const eid = spawnRenderable(ctx.world.ecs, root, x2, y2, z3);
-    const resource = collectGltfMetadata(input.assetId, bytes, root);
-    const entity = ctx.world.entities.create({ eid, mesh: root, resource });
-    ctx.emit("three.gltf.loaded", { entity, ...resource });
-    return { entity, resource };
+async function parseGltfScene(assetId, bytes) {
+  const manager = new LoadingManager();
+  const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
+  manager.setURLModifier((url2) => {
+    if (url2.startsWith("data:") || url2.startsWith("blob:") || url2.startsWith("limina-asset://")) return url2;
+    return `limina-asset://${base}${url2}`;
+  });
+  const loader = new GLTFLoader(manager);
+  const payload = assetId.endsWith(".gltf") ? new TextDecoder().decode(bytes) : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const gltf = await new Promise((resolve, reject) => {
+    loader.parse(
+      payload,
+      `limina-asset://${base}`,
+      (g2) => resolve(g2),
+      (err) => reject(err instanceof Error ? err : new Error(String(err)))
+    );
+  });
+  const root = gltf.scene;
+  prepareGltfTextures(root);
+  return root;
+}
+async function loadGltfIntoScene(ctx, assetId, bytes, hash4, placement) {
+  const root = await parseGltfScene(assetId, bytes);
+  const [x2, y2, z3] = placement.position;
+  ctx.world.scene.add(root);
+  const eid = spawnRenderable(ctx.world.ecs, root, x2, y2, z3);
+  if (placement.rotationEuler !== void 0) {
+    const q2 = new Quaternion().setFromEuler(
+      new Euler(placement.rotationEuler[0], placement.rotationEuler[1], placement.rotationEuler[2])
+    );
+    Rotation.x[eid] = q2.x;
+    Rotation.y[eid] = q2.y;
+    Rotation.z[eid] = q2.z;
+    Rotation.w[eid] = q2.w;
   }
-};
-function registerThreeSkills(registry2) {
+  if (placement.scale !== void 0) {
+    Scale.x[eid] = placement.scale[0];
+    Scale.y[eid] = placement.scale[1];
+    Scale.z[eid] = placement.scale[2];
+  }
+  const resource = collectGltfMetadata(assetId, hash4, bytes, root);
+  const entity = ctx.world.entities.create({ eid, mesh: root, resource });
+  return { entity, resource };
+}
+function makeLoadGltf(assets) {
+  return {
+    name: "three.loadGLTF",
+    version: "1.0.0",
+    description: "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
+    category: "three",
+    permissions: ["scene.write"],
+    input: loadGltfInput,
+    output: external_exports.object({
+      entity: external_exports.string(),
+      resource: gltfResourceSchema
+    }),
+    handler: async (input, ctx) => {
+      const resolved = assets.resolve(input.assetId);
+      const { entity, resource } = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, { position: input.position });
+      ctx.emit("three.gltf.loaded", { entity, ...resource });
+      return { entity, resource };
+    }
+  };
+}
+function registerThreeSkills(registry2, assets) {
   registry2.register(setTransform);
   registry2.register(setMaterial);
   registry2.register(setLighting);
-  registry2.register(loadGLTF);
+  registry2.register(makeLoadGltf(assets));
 }
 
-// src/skills/physics.ts
+// src/terrain/types.ts
+var CLIMATE_TEMP_C = 0;
+var CLIMATE_PRECIP_MM = 1;
+var CLIMATE_BIOME = 2;
+var CLIMATE_CHANNELS = 3;
+
+// src/terrain/scatter.ts
+function hashSeed(seed, a, b2) {
+  let h = (seed | 0) >>> 0;
+  h = Math.imul(h ^ (a | 0) >>> 0, 2654435761) >>> 0;
+  h = Math.imul(h ^ (b2 | 0) >>> 0, 2246822519) >>> 0;
+  h ^= h >>> 15;
+  return h >>> 0;
+}
+function mulberry32(s) {
+  let a = s >>> 0;
+  return () => {
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function scatterProps(tile, seed, opts = {}) {
+  const density = opts.density ?? 16;
+  const rockSlope = opts.rockSlope ?? 0.6;
+  const [ox, oy, oz] = tile.origin;
+  const [sx, sy, sz] = tile.scale;
+  const { nrows, ncols, heights } = tile;
+  const rng = mulberry32(hashSeed(seed, Math.round(ox), Math.round(oz)));
+  const sampleRaw = (fr, fc) => {
+    const r0 = Math.min(nrows - 1, Math.max(0, Math.floor(fr)));
+    const c0 = Math.min(ncols - 1, Math.max(0, Math.floor(fc)));
+    const r1 = Math.min(nrows - 1, r0 + 1), c1 = Math.min(ncols - 1, c0 + 1);
+    const tr = fr - r0, tc = fc - c0;
+    const h = (r, c) => heights[r * ncols + c];
+    const top = h(r0, c0) * (1 - tc) + h(r0, c1) * tc;
+    const bot = h(r1, c0) * (1 - tc) + h(r1, c1) * tc;
+    return top * (1 - tr) + bot * tr;
+  };
+  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
+  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
+  const props = [];
+  for (let i = 0; i < density; i++) {
+    for (let j2 = 0; j2 < density; j2++) {
+      const u2 = (i + rng()) / density;
+      const v2 = (j2 + rng()) / density;
+      const fc = u2 * (ncols - 1);
+      const fr = v2 * (nrows - 1);
+      const x2 = ox - sx / 2 + u2 * sx;
+      const z3 = oz - sz / 2 + v2 * sz;
+      const y2 = oy + sampleRaw(fr, fc) * sy;
+      const dC = (sampleRaw(fr, Math.min(ncols - 1, fc + 1)) - sampleRaw(fr, Math.max(0, fc - 1))) * sy;
+      const dR = (sampleRaw(Math.min(nrows - 1, fr + 1), fc) - sampleRaw(Math.max(0, fr - 1), fc)) * sy;
+      const ax = dC / runX, az = dR / runZ;
+      const slope = Math.sqrt(ax * ax + az * az);
+      const roll = rng();
+      let kind;
+      let accept;
+      if (slope > rockSlope) {
+        kind = 1 /* Rock */;
+        accept = 0.5;
+      } else if (rng() < 0.3) {
+        kind = 0 /* Tree */;
+        accept = 0.45;
+      } else {
+        kind = 2 /* Grass */;
+        accept = 0.75;
+      }
+      const yaw = rng() * Math.PI * 2;
+      const sizeJitter = rng();
+      if (roll > accept) continue;
+      props.push({
+        kind,
+        x: x2,
+        y: y2,
+        z: z3,
+        yaw,
+        scale: kind === 2 /* Grass */ ? 0.6 + sizeJitter * 0.5 : 0.8 + sizeJitter * 0.8
+      });
+    }
+  }
+  return props;
+}
+
+// src/terrain/asset-scatter.ts
+function baseSeed(seed, configSeed) {
+  return (Math.imul((seed | 0) ^ 2654435761, 2246822519) ^ (configSeed | 0)) >>> 0;
+}
+function scatterAssets(tile, seed, config2) {
+  const palette = config2.assets;
+  if (palette.length === 0) return [];
+  const weights = palette.map((a) => Math.max(0, a.weight ?? 1));
+  const totalW = weights.reduce((s, w4) => s + w4, 0);
+  if (totalW <= 0) return [];
+  const density = config2.density ?? 16;
+  const elevationMin = config2.elevationMin ?? -Infinity;
+  const elevationMax = config2.elevationMax ?? Infinity;
+  const slopeMax = config2.slopeMax ?? Infinity;
+  const coverage = config2.coverage ?? 1;
+  const [sizeLo, sizeHi] = config2.sizeRange ?? [0.8, 1.2];
+  const wantClimate = config2.biomes !== void 0 || config2.tempMin !== void 0 || config2.tempMax !== void 0;
+  const [ox, oy, oz] = tile.origin;
+  const [sx, sy, sz] = tile.scale;
+  const { nrows, ncols, heights } = tile;
+  const channels = tile.climateChannels ?? 0;
+  const climate = tile.climate;
+  if (wantClimate && (climate === void 0 || channels === 0)) {
+    throw new Error("scatterAssets: config requests a climate rule (biome/temperature) but the tile carries no climate grid");
+  }
+  if (wantClimate && channels !== CLIMATE_CHANNELS) {
+    throw new Error(`scatterAssets: tile climate has ${channels} channels but the climate rule expects the ${CLIMATE_CHANNELS}-channel [tempC, precipMm, biome] contract`);
+  }
+  const rng = mulberry32(hashSeed(baseSeed(seed, config2.seed), Math.round(ox), Math.round(oz)));
+  const sampleRaw = (fr, fc) => {
+    const r0 = Math.min(nrows - 1, Math.max(0, Math.floor(fr)));
+    const c0 = Math.min(ncols - 1, Math.max(0, Math.floor(fc)));
+    const r1 = Math.min(nrows - 1, r0 + 1), c1 = Math.min(ncols - 1, c0 + 1);
+    const tr = fr - r0, tc = fc - c0;
+    const h = (r, c) => heights[r * ncols + c];
+    const top = h(r0, c0) * (1 - tc) + h(r0, c1) * tc;
+    const bot = h(r1, c0) * (1 - tc) + h(r1, c1) * tc;
+    return top * (1 - tr) + bot * tr;
+  };
+  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
+  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
+  const out = [];
+  for (let i = 0; i < density; i++) {
+    for (let j2 = 0; j2 < density; j2++) {
+      const u2 = (i + rng()) / density;
+      const v2 = (j2 + rng()) / density;
+      const fc = u2 * (ncols - 1);
+      const fr = v2 * (nrows - 1);
+      const x2 = ox - sx / 2 + u2 * sx;
+      const z3 = oz - sz / 2 + v2 * sz;
+      const y2 = oy + sampleRaw(fr, fc) * sy;
+      const dC = (sampleRaw(fr, Math.min(ncols - 1, fc + 1)) - sampleRaw(fr, Math.max(0, fc - 1))) * sy;
+      const dR = (sampleRaw(Math.min(nrows - 1, fr + 1), fc) - sampleRaw(Math.max(0, fr - 1), fc)) * sy;
+      const ax = dC / runX, az = dR / runZ;
+      const slope = Math.sqrt(ax * ax + az * az);
+      const coverRoll = rng();
+      const pickRoll = rng();
+      const yaw = rng() * Math.PI * 2;
+      const sizeT = rng();
+      let acc = pickRoll * totalW;
+      let pick2 = palette.length - 1;
+      for (let k2 = 0; k2 < weights.length; k2++) {
+        if (acc < weights[k2]) {
+          pick2 = k2;
+          break;
+        }
+        acc -= weights[k2];
+      }
+      const scale2 = sizeLo + sizeT * (sizeHi - sizeLo);
+      if (coverRoll > coverage) continue;
+      if (y2 < elevationMin || y2 > elevationMax) continue;
+      if (slope > slopeMax) continue;
+      if (wantClimate) {
+        const r = Math.min(nrows - 1, Math.max(0, Math.round(fr)));
+        const c = Math.min(ncols - 1, Math.max(0, Math.round(fc)));
+        const cidx = (r * ncols + c) * channels;
+        const tempC = climate[cidx + CLIMATE_TEMP_C];
+        const biome = climate[cidx + CLIMATE_BIOME];
+        if (config2.biomes !== void 0 && !config2.biomes.includes(biome)) continue;
+        if (config2.tempMin !== void 0 && tempC < config2.tempMin) continue;
+        if (config2.tempMax !== void 0 && tempC > config2.tempMax) continue;
+      }
+      out.push({ assetId: palette[pick2].id, x: x2, y: y2, z: z3, yaw, scale: scale2 });
+    }
+  }
+  return out;
+}
+
+// src/terrain/asset-scatter-render.ts
+var Y_AXIS = new Vector3(0, 1, 0);
+function buildAssetInstancedMeshes(root, instances) {
+  if (instances.length === 0) return [];
+  const r = root;
+  r.updateMatrixWorld?.(true);
+  const rootInv = new Matrix4();
+  if (r.matrixWorld !== void 0) rootInv.copy(r.matrixWorld).invert();
+  const meshes = [];
+  const local = new Matrix4();
+  const m = new Matrix4();
+  const q2 = new Quaternion();
+  const pos = new Vector3();
+  const scl = new Vector3();
+  const processMesh = (node) => {
+    const n = node;
+    if (n.isMesh !== true || n.geometry === void 0 || n.material === void 0) return;
+    local.identity();
+    if (n.matrixWorld !== void 0) local.multiplyMatrices(rootInv, n.matrixWorld);
+    const inst = new InstancedMesh(n.geometry, n.material, instances.length);
+    for (let i = 0; i < instances.length; i++) {
+      const p = instances[i];
+      pos.set(p.x, p.y, p.z);
+      q2.setFromAxisAngle(Y_AXIS, p.yaw);
+      scl.set(p.scale, p.scale, p.scale);
+      m.compose(pos, q2, scl).multiply(local);
+      inst.setMatrixAt(i, m);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    inst.castShadow = false;
+    inst.receiveShadow = true;
+    meshes.push(inst);
+  };
+  if (typeof r.traverse === "function") {
+    r.traverse(processMesh);
+  } else {
+    const walk = (node) => {
+      processMesh(node);
+      const children = node.children;
+      if (Array.isArray(children)) for (const child of children) walk(child);
+    };
+    walk(root);
+  }
+  return meshes;
+}
+
+// src/terrain/tilecache.ts
+function requestKey(req) {
+  const hints = req.hints;
+  let hintStr = "";
+  if (hints !== void 0) {
+    const keys = Object.keys(hints).sort();
+    hintStr = JSON.stringify(keys.map((k2) => [k2, hints[k2]]));
+  }
+  return `s${req.seed | 0}|x${req.tx | 0}|z${req.tz | 0}|l${req.lod | 0}|h${hintStr}`;
+}
+var _f32 = new Float32Array(1);
+var _i32 = new Int32Array(_f32.buffer);
+function floatToBits(x2) {
+  _f32[0] = x2;
+  return _i32[0];
+}
+function bitsToFloat(i) {
+  _i32[0] = i;
+  return _f32[0];
+}
+function bitsOf(arr) {
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = floatToBits(arr[i]);
+  return out;
+}
+function floatsFromBits(bits) {
+  const out = new Float32Array(bits.length);
+  for (let i = 0; i < bits.length; i++) out[i] = bitsToFloat(bits[i]);
+  return out;
+}
+function tileContentHash(tile) {
+  const parts = [
+    `${tile.nrows}x${tile.ncols}`,
+    tile.origin.map(floatToBits).join(","),
+    tile.scale.map(floatToBits).join(","),
+    bitsOf(tile.heights).join(","),
+    tile.climate !== void 0 ? `${tile.climateChannels ?? 0}:${bitsOf(tile.climate).join(",")}` : ""
+  ];
+  return "sha256:" + ops.op_sha256(parts.join("|"));
+}
+var TileCache = class {
+  tiles = /* @__PURE__ */ new Map();
+  has(req) {
+    return this.tiles.has(requestKey(req));
+  }
+  get(req) {
+    return this.tiles.get(requestKey(req));
+  }
+  put(req, tile) {
+    this.tiles.set(requestKey(req), tile);
+  }
+  /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
+   *  via `source`, caches it, and returns it. The single seam where "model at
+   *  authoring / cache at replay / procedural offline" all flow through. */
+  async resolve(req, source) {
+    const key = requestKey(req);
+    const hit = this.tiles.get(key);
+    if (hit !== void 0) return hit;
+    const tile = await source.generateTile(req);
+    this.tiles.set(key, tile);
+    return tile;
+  }
+  /** All cached tiles with their keys + content hashes, for the export artifact. */
+  entries() {
+    const out = [];
+    for (const [key, tile] of this.tiles) out.push({ key, hash: tileContentHash(tile), tile });
+    return out;
+  }
+  get size() {
+    return this.tiles.size;
+  }
+};
+function parseTiles(jsonl) {
+  const out = [];
+  if (jsonl === void 0 || jsonl.length === 0) return out;
+  const lines = jsonl.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 0) continue;
+    let raw;
+    try {
+      raw = JSON.parse(line);
+    } catch (err) {
+      throw new Error(`tiles: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (typeof raw.key !== "string" || !Array.isArray(raw.heights) || raw.heights.length !== raw.nrows * raw.ncols) {
+      throw new Error(`tiles: malformed tile on line ${i + 1}`);
+    }
+    const tile = {
+      nrows: raw.nrows,
+      ncols: raw.ncols,
+      origin: raw.origin,
+      scale: raw.scale,
+      heights: floatsFromBits(raw.heights)
+    };
+    if (raw.climate !== void 0) {
+      tile.climate = floatsFromBits(raw.climate);
+      tile.climateChannels = raw.climateChannels;
+    }
+    const hash4 = tileContentHash(tile);
+    if (hash4 !== "sha256:" && hash4 !== raw.hash) {
+      throw new Error(`tiles: content hash mismatch on line ${i + 1} (stored ${raw.hash}, computed ${hash4})`);
+    }
+    out.push({ key: raw.key, hash: raw.hash, tile });
+  }
+  return out;
+}
+
+// src/skills/asset.ts
 var Vec33 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var placeInput = external_exports.object({
+  assetId: external_exports.string(),
+  position: Vec33.default([0, 0, 0]),
+  /** Euler radians (x,y,z). */
+  rotation: Vec33.optional(),
+  scale: Vec33.optional(),
+  /** Optional PBR overrides applied across the placed glTF's meshes. */
+  material: external_exports.object({
+    color: external_exports.number().int().min(0).max(16777215).optional(),
+    roughness: external_exports.number().min(0).max(1).optional(),
+    metalness: external_exports.number().min(0).max(1).optional()
+  }).optional(),
+  /** The COMMITTED content address ("sha256:...") of the asset. Absent at
+   *  authoring (resolved + returned), then committed into the recorded command by
+   *  the recorder. Present on REPLAY: the resolved bytes are verified against it so
+   *  the authored asset identity is pinned (a swapped/updated asset is rejected). */
+  hash: external_exports.string().optional()
+});
+var PLACE_PERMS = ["scene.write"];
+var scatterConfigSchema = external_exports.object({
+  seed: external_exports.number().int(),
+  density: external_exports.number().int().min(1).max(64).optional(),
+  assets: external_exports.array(external_exports.object({ id: external_exports.string(), weight: external_exports.number().positive().optional() })).min(1),
+  elevationMin: external_exports.number().optional(),
+  elevationMax: external_exports.number().optional(),
+  slopeMax: external_exports.number().nonnegative().optional(),
+  sizeRange: external_exports.tuple([external_exports.number().positive(), external_exports.number().positive()]).optional(),
+  coverage: external_exports.number().min(0).max(1).optional(),
+  biomes: external_exports.array(external_exports.number().int()).optional(),
+  tempMin: external_exports.number().optional(),
+  tempMax: external_exports.number().optional()
+});
+var scatterInput = external_exports.object({
+  /** The handle of an ALREADY-GENERATED region (from world.generateRegion). The
+   *  scatter is BOUND to that region — its seed/lod + the tiles it applied — so
+   *  placements provably sit on the visible, exported surface (no free-floating
+   *  scatter seed that could silently miss onto a different world). */
+  regionId: external_exports.string(),
+  config: scatterConfigSchema,
+  /** The COMMITTED content addresses of the palette assets (id -> "sha256:..."),
+   *  pinning authored identity. Absent at authoring (resolved + returned, then
+   *  committed back by the recorder); present on REPLAY where each resolved asset is
+   *  verified against it so a swapped asset is rejected (mirrors asset.place.hash). */
+  assetHashes: external_exports.record(external_exports.string(), external_exports.string()).optional()
+});
+function registerAssetSkills(registry2, assets, terrain) {
+  const place = {
+    name: "asset.place",
+    version: "1.0.0",
+    description: "Place a curated glTF asset BY ID at a transform. Resolves the id through the content-addressed asset registry, loads it via the shared glTF pipeline, and spawns an entity. The world log records the REQUEST (assetId + transform + committed content hash); the bytes ride the registry/export package. Returns the entity id + content hash.",
+    category: "three",
+    permissions: [...PLACE_PERMS],
+    // The recorder copies these OUTPUT fields into the recorded command's input so
+    // the replay log COMMITS to the resolved content hash (pins authored identity).
+    commitFields: ["hash"],
+    input: placeInput,
+    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), resource: gltfResourceSchema }),
+    handler: async (input, ctx) => {
+      const resolved = assets.resolve(input.assetId);
+      if (input.hash !== void 0 && input.hash !== resolved.hash) {
+        throw new Error(`asset.place: '${input.assetId}' content hash mismatch (committed ${input.hash}, resolved ${resolved.hash}) \u2014 authored asset identity changed`);
+      }
+      const { entity, resource } = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, {
+        position: input.position,
+        rotationEuler: input.rotation,
+        scale: input.scale
+      });
+      if (input.material !== void 0) {
+        const res = await registry2.invoke("three.setMaterial", { entity, ...input.material }, {
+          agentId: ctx.agentId,
+          sessionId: ctx.sessionId,
+          permissions: new Set(PLACE_PERMS),
+          tick: ctx.tick,
+          world: ctx.world
+        });
+        if (!res.success) throw new Error(`asset.place: material override failed: ${JSON.stringify(res.error)}`);
+      }
+      ctx.emit("asset.placed", {
+        assetId: input.assetId,
+        hash: resolved.hash,
+        position: input.position,
+        rotation: input.rotation ?? null,
+        scale: input.scale ?? null,
+        entity
+      });
+      return { entity, hash: resolved.hash, resource };
+    }
+  };
+  registry2.register(place);
+  const scatterOutput = external_exports.object({
+    regionId: external_exports.string(),
+    instances: external_exports.number().int(),
+    mounted: external_exports.number().int(),
+    assetHashes: external_exports.record(external_exports.string(), external_exports.string()),
+    /** The computed placements (render/inspection). NOT logged — recomputed on replay. */
+    placements: external_exports.array(external_exports.object({
+      assetId: external_exports.string(),
+      x: external_exports.number(),
+      y: external_exports.number(),
+      z: external_exports.number(),
+      yaw: external_exports.number(),
+      scale: external_exports.number()
+    }))
+  });
+  const scatter = {
+    name: "asset.scatter",
+    version: "1.0.0",
+    description: "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.",
+    category: "three",
+    permissions: [...PLACE_PERMS],
+    // The recorder copies the resolved per-asset content hashes back into the recorded
+    // command's input, so the replay log PINS authored identity for every palette asset.
+    commitFields: ["assetHashes"],
+    input: scatterInput,
+    output: scatterOutput,
+    handler: async (input, ctx) => {
+      if (terrain === void 0) throw new Error("asset.scatter: no terrain bound (register with a ScatterTerrain)");
+      const source = terrain.source;
+      const cache3 = terrain.cache ?? new TileCache();
+      const config2 = input.config;
+      const region = terrain.regions.get(input.regionId);
+      if (region === void 0) {
+        throw new Error(`asset.scatter: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`);
+      }
+      const assetHashes = {};
+      for (const id of new Set(config2.assets.map((a) => a.id))) {
+        const resolved = assets.resolve(id);
+        const committed = input.assetHashes?.[id];
+        if (committed !== void 0 && committed !== resolved.hash) {
+          throw new Error(`asset.scatter: '${id}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) \u2014 authored asset identity changed`);
+        }
+        assetHashes[id] = resolved.hash;
+      }
+      const tiles = [...region.tiles.values()].sort((a, b2) => a.tz - b2.tz || a.tx - b2.tx);
+      const placements = [];
+      for (const t of tiles) {
+        const req = { seed: region.seed, tx: t.tx, tz: t.tz, lod: region.lod, hints: region.hints };
+        const tile = await cache3.resolve(req, source);
+        for (const inst of scatterAssets(tile, region.seed, config2)) placements.push(inst);
+      }
+      let mounted = 0;
+      const scene = ctx.world.scene;
+      if (scene !== void 0 && typeof scene.add === "function") {
+        const byId = /* @__PURE__ */ new Map();
+        for (const inst of placements) {
+          let list = byId.get(inst.assetId);
+          if (list === void 0) {
+            list = [];
+            byId.set(inst.assetId, list);
+          }
+          list.push(inst);
+        }
+        for (const [id, list] of byId) {
+          const root = await parseGltfScene(id, assets.resolve(id).bytes);
+          for (const mesh of buildAssetInstancedMeshes(root, list)) {
+            scene.add(mesh);
+            mounted++;
+          }
+        }
+      }
+      ctx.emit("asset.scattered", {
+        regionId: input.regionId,
+        seed: region.seed,
+        lod: region.lod,
+        config: config2,
+        assetHashes,
+        instances: placements.length,
+        mounted
+      });
+      return { regionId: input.regionId, instances: placements.length, mounted, assetHashes, placements };
+    }
+  };
+  registry2.register(scatter);
+}
+
+// src/asset-registry.ts
+var HEX = (() => {
+  const t = new Array(256);
+  for (let i = 0; i < 256; i++) t[i] = i.toString(16).padStart(2, "0");
+  return t;
+})();
+function bytesToHex(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += HEX[bytes[i]];
+  return s;
+}
+function assetContentHash(bytes, ops2 = ops) {
+  return "sha256:" + ops2.op_sha256(bytesToHex(bytes));
+}
+var AssetRegistry = class _AssetRegistry {
+  cache = /* @__PURE__ */ new Map();
+  /** Ids whose bytes came from a package bundle (NOT the host asset root): resolve
+   *  must NEVER fall back to op_read_asset for these — a replay whose package
+   *  dropped a needed asset fails loudly rather than silently reading a host file. */
+  packaged = /* @__PURE__ */ new Set();
+  ops;
+  constructor(ops2 = ops) {
+    this.ops = ops2;
+  }
+  /** Build a registry pre-loaded from a package's asset bundle (the replay/browser
+   *  path — NO op_read_asset). Each entry's bytes are integrity-checked against its
+   *  stated hash on a real-sha256 host. */
+  static fromBundle(entries, ops2 = ops) {
+    const reg = new _AssetRegistry(ops2);
+    reg.loadBundle(entries);
+    return reg;
+  }
+  /** Pre-load package-carried asset bytes (content-addressed). Verifies each
+   *  entry's bytes against its stated hash (when the host sha256 is real) and pins
+   *  the id as package-sourced so resolve() serves these bytes without ever
+   *  touching the host asset root. */
+  loadBundle(entries) {
+    for (const e of entries) {
+      const hash4 = assetContentHash(e.bytes, this.ops);
+      if (hash4 !== "sha256:" && hash4 !== e.hash) {
+        throw new Error(`asset '${e.id}': bundle content hash mismatch (declared ${e.hash}, computed ${hash4})`);
+      }
+      this.cache.set(e.id, { assetId: e.id, bytes: e.bytes, hash: e.hash });
+      this.packaged.add(e.id);
+    }
+  }
+  /** Resolve an asset id -> bytes + content hash. A cache hit (or package-loaded
+   *  entry) returns the same resolved asset; a miss reads the bytes from the host
+   *  (op_read_asset), hashes them, caches, and returns. Same id -> same address. */
+  resolve(assetId) {
+    const hit = this.cache.get(assetId);
+    if (hit !== void 0) return hit;
+    if (this.packaged.has(assetId)) {
+      throw new Error(`asset '${assetId}': package-sourced but missing from the bundle`);
+    }
+    const bytes = this.ops.op_read_asset(assetId);
+    const hash4 = assetContentHash(bytes, this.ops);
+    const resolved = { assetId, bytes, hash: hash4 };
+    this.cache.set(assetId, resolved);
+    return resolved;
+  }
+  /** The content address of an asset id (resolving it if needed). */
+  hashOf(assetId) {
+    return this.resolve(assetId).hash;
+  }
+  /** Whether `bytes` match `expectedHash` — the falsifiable integrity check the
+   *  export round-trip uses to prove an asset was not swapped/corrupted. */
+  verify(bytes, expectedHash) {
+    return assetContentHash(bytes, this.ops) === expectedHash;
+  }
+  /** A content-addressed export ref for one resolved id (id + assets/ path + hash). */
+  toRef(assetId) {
+    const r = this.resolve(assetId);
+    return { id: assetId, path: `assets/${assetId}`, hash: r.hash };
+  }
+  /** Refs for every asset resolved this session, for the export manifest's
+   *  content-addressed `assets` list. */
+  refs() {
+    return [...this.cache.keys()].map((id) => this.toRef(id));
+  }
+  /** The full content-addressed bundle (refs + bytes) for every resolved asset —
+   *  what assembleExport serializes into assets.jsonl so the package is
+   *  SELF-CONTAINED (replay loads these bytes, never the host asset root). */
+  bundle() {
+    return [...this.cache.values()].map((r) => ({ id: r.assetId, path: `assets/${r.assetId}`, hash: r.hash, bytes: r.bytes }));
+  }
+  get size() {
+    return this.cache.size;
+  }
+};
+
+// src/skills/physics.ts
+var Vec34 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var collisionEventOutput = external_exports.object({
   events: external_exports.array(external_exports.object({
     started: external_exports.boolean(),
@@ -83877,11 +84553,11 @@ var collisionEventOutput = external_exports.object({
     bodyB: external_exports.number().int().nonnegative(),
     entityA: external_exports.string().optional(),
     entityB: external_exports.string().optional(),
-    point: Vec33.nullable(),
-    normal: Vec33.nullable()
+    point: Vec34.nullable(),
+    normal: Vec34.nullable()
   }))
 });
-var applyImpulseInput = external_exports.object({ entity: external_exports.string(), impulse: Vec33 });
+var applyImpulseInput = external_exports.object({ entity: external_exports.string(), impulse: Vec34 });
 var applyImpulse = {
   name: "physics.applyImpulse",
   version: "1.0.0",
@@ -83899,8 +84575,8 @@ var applyImpulse = {
   }
 };
 var raycastInput = external_exports.object({
-  origin: Vec33,
-  direction: Vec33,
+  origin: Vec34,
+  direction: Vec34,
   maxDistance: external_exports.number().positive().default(1e3)
 });
 var raycast = {
@@ -83913,7 +84589,7 @@ var raycast = {
   output: external_exports.object({
     hit: external_exports.boolean(),
     distance: external_exports.number().optional(),
-    point: Vec33.optional(),
+    point: Vec34.optional(),
     entity: external_exports.string().optional()
   }),
   handler: (input, ctx) => {
@@ -84021,7 +84697,7 @@ function registerAgentSkills(registry2) {
 }
 
 // src/skills/system.ts
-var Vec34 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Quat = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
 function isRecord2(value) {
   return typeof value === "object" && value !== null;
@@ -84245,7 +84921,7 @@ function registerSystemSkills(registry2) {
         entity: external_exports.string(),
         eid: external_exports.number().int(),
         generation: external_exports.number().int(),
-        transform: external_exports.object({ position: Vec34, rotation: Quat, scale: Vec34 }),
+        transform: external_exports.object({ position: Vec35, rotation: Quat, scale: Vec35 }),
         tags: external_exports.array(external_exports.string()),
         physics: external_exports.object({ bodyId: external_exports.number().int().optional() }),
         resource: external_exports.unknown().optional()
@@ -88090,7 +88766,7 @@ var ProceduralTerrainSource = class {
     const x0 = req.tx * TILE_SIZE;
     const z0 = req.tz * TILE_SIZE;
     const heights = new Float32Array(nrows * ncols);
-    const climateChannels = 3;
+    const climateChannels = CLIMATE_CHANNELS;
     const climate = new Float32Array(climateChannels * nrows * ncols);
     for (let r = 0; r < nrows; r++) {
       const z3 = z0 + r / (nrows - 1) * TILE_SIZE;
@@ -88101,9 +88777,9 @@ var ProceduralTerrainSource = class {
         heights[idx] = e;
         const cl = this.climateAt(seed, x2, z3, e);
         const cidx = idx * climateChannels;
-        climate[cidx] = cl.tempC;
-        climate[cidx + 1] = cl.precipMm;
-        climate[cidx + 2] = cl.biome;
+        climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
+        climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
+        climate[cidx + CLIMATE_BIOME] = cl.biome;
       }
     }
     return { nrows, ncols, origin, scale: scale2, heights, climate, climateChannels };
@@ -88127,116 +88803,8 @@ var ProceduralTerrainSource = class {
   }
 };
 
-// src/terrain/tilecache.ts
-function requestKey(req) {
-  const hints = req.hints;
-  let hintStr = "";
-  if (hints !== void 0) {
-    const keys = Object.keys(hints).sort();
-    hintStr = JSON.stringify(keys.map((k2) => [k2, hints[k2]]));
-  }
-  return `s${req.seed | 0}|x${req.tx | 0}|z${req.tz | 0}|l${req.lod | 0}|h${hintStr}`;
-}
-var _f32 = new Float32Array(1);
-var _i32 = new Int32Array(_f32.buffer);
-function floatToBits(x2) {
-  _f32[0] = x2;
-  return _i32[0];
-}
-function bitsToFloat(i) {
-  _i32[0] = i;
-  return _f32[0];
-}
-function bitsOf(arr) {
-  const out = new Array(arr.length);
-  for (let i = 0; i < arr.length; i++) out[i] = floatToBits(arr[i]);
-  return out;
-}
-function floatsFromBits(bits) {
-  const out = new Float32Array(bits.length);
-  for (let i = 0; i < bits.length; i++) out[i] = bitsToFloat(bits[i]);
-  return out;
-}
-function tileContentHash(tile) {
-  const parts = [
-    `${tile.nrows}x${tile.ncols}`,
-    tile.origin.map(floatToBits).join(","),
-    tile.scale.map(floatToBits).join(","),
-    bitsOf(tile.heights).join(","),
-    tile.climate !== void 0 ? `${tile.climateChannels ?? 0}:${bitsOf(tile.climate).join(",")}` : ""
-  ];
-  return "sha256:" + ops.op_sha256(parts.join("|"));
-}
-var TileCache = class {
-  tiles = /* @__PURE__ */ new Map();
-  has(req) {
-    return this.tiles.has(requestKey(req));
-  }
-  get(req) {
-    return this.tiles.get(requestKey(req));
-  }
-  put(req, tile) {
-    this.tiles.set(requestKey(req), tile);
-  }
-  /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
-   *  via `source`, caches it, and returns it. The single seam where "model at
-   *  authoring / cache at replay / procedural offline" all flow through. */
-  async resolve(req, source) {
-    const key = requestKey(req);
-    const hit = this.tiles.get(key);
-    if (hit !== void 0) return hit;
-    const tile = await source.generateTile(req);
-    this.tiles.set(key, tile);
-    return tile;
-  }
-  /** All cached tiles with their keys + content hashes, for the export artifact. */
-  entries() {
-    const out = [];
-    for (const [key, tile] of this.tiles) out.push({ key, hash: tileContentHash(tile), tile });
-    return out;
-  }
-  get size() {
-    return this.tiles.size;
-  }
-};
-function parseTiles(jsonl) {
-  const out = [];
-  if (jsonl === void 0 || jsonl.length === 0) return out;
-  const lines = jsonl.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.length === 0) continue;
-    let raw;
-    try {
-      raw = JSON.parse(line);
-    } catch (err) {
-      throw new Error(`tiles: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (typeof raw.key !== "string" || !Array.isArray(raw.heights) || raw.heights.length !== raw.nrows * raw.ncols) {
-      throw new Error(`tiles: malformed tile on line ${i + 1}`);
-    }
-    const tile = {
-      nrows: raw.nrows,
-      ncols: raw.ncols,
-      origin: raw.origin,
-      scale: raw.scale,
-      heights: floatsFromBits(raw.heights)
-    };
-    if (raw.climate !== void 0) {
-      tile.climate = floatsFromBits(raw.climate);
-      tile.climateChannels = raw.climateChannels;
-    }
-    const hash4 = tileContentHash(tile);
-    if (hash4 !== "sha256:" && hash4 !== raw.hash) {
-      throw new Error(`tiles: content hash mismatch on line ${i + 1} (stored ${raw.hash}, computed ${hash4})`);
-    }
-    out.push({ key: raw.key, hash: raw.hash, tile });
-  }
-  return out;
-}
-
 // src/skills/terrain.ts
-var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec36 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function inertTransform() {
   return { position: { set() {
   } }, quaternion: { set() {
@@ -88246,8 +88814,7 @@ function inertTransform() {
 function regionIdOf(seed, lod, b2) {
   return `rgn_${seed | 0}_l${lod | 0}_${b2.minTx}_${b2.minTz}_${b2.maxTx}_${b2.maxTz}`;
 }
-function registerTerrainSkills(registry2, source, cache3 = new TileCache()) {
-  const regions = /* @__PURE__ */ new Map();
+function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regions = /* @__PURE__ */ new Map()) {
   async function applyTile(region, regionId, tx, tz, ctx) {
     const req = { seed: region.seed, tx, tz, lod: region.lod, hints: region.hints };
     const key = requestKey(req);
@@ -88326,7 +88893,7 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache()) {
   };
   const streamFollowInput = external_exports.object({
     regionId: external_exports.string(),
-    anchor: Vec35,
+    anchor: Vec36,
     radius: external_exports.number().int().min(0).max(8).default(1)
   });
   const streamFollowOutput = external_exports.object({
@@ -88405,6 +88972,63 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache()) {
   registry2.register(sampleHeight);
   registry2.register(sampleClimate);
   return { cache: cache3, regions };
+}
+
+// src/water.ts
+var DEFAULT_WATER_SIZE = 400;
+var DEFAULT_WATER_COLOR = 2841970;
+function buildWaterSurface(opts) {
+  const size = opts.size ?? DEFAULT_WATER_SIZE;
+  const color3 = opts.color ?? DEFAULT_WATER_COLOR;
+  const geometry = new PlaneGeometry(size, size);
+  const material = new MeshStandardNodeMaterial({
+    color: color3,
+    roughness: 0.12,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.82
+  });
+  const mesh = new Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(0, opts.level, 0);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.name = "limina:water";
+  return mesh;
+}
+
+// src/skills/water.ts
+var addWaterInput = external_exports.object({
+  level: external_exports.number().default(0),
+  size: external_exports.number().positive().max(1e5).default(DEFAULT_WATER_SIZE),
+  color: external_exports.number().int().min(0).max(16777215).default(DEFAULT_WATER_COLOR)
+});
+var addWaterOutput = external_exports.object({
+  level: external_exports.number(),
+  size: external_exports.number(),
+  color: external_exports.number().int()
+});
+function registerWaterSkills(registry2) {
+  const surfaces = [];
+  const addWater = {
+    name: "world.addWater",
+    version: "1.0.0",
+    description: "Add a RENDER-ONLY water surface (a large plane) at a sea-level Y so beaches/lakes/oceans read as water. Cosmetic only: no physics body, no collider, no ECS entity \u2014 it never affects the deterministic sim or replay. The world log records the REQUEST (level/size/color); replay rebuilds the same surface from the logged level.",
+    category: "world",
+    permissions: ["scene.write"],
+    input: addWaterInput,
+    output: addWaterOutput,
+    handler: (input, ctx) => {
+      const mesh = buildWaterSurface({ level: input.level, size: input.size, color: input.color });
+      ctx.world.scene.add(mesh);
+      const surface = { level: input.level, size: input.size, color: input.color, mesh };
+      surfaces.push(surface);
+      ctx.emit("world.water.added", { level: input.level, size: input.size, color: input.color });
+      return { level: input.level, size: input.size, color: input.color };
+    }
+  };
+  registry2.register(addWater);
+  return { surfaces };
 }
 
 // src/agents/agent.ts
@@ -88874,9 +89498,14 @@ function registerOrchestrationSkills(registry2, deps) {
 
 // src/skills/index.ts
 function registerCoreSkills(registry2, opts) {
+  const assets = opts?.assets ?? new AssetRegistry();
+  const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  const terrainCache = opts?.terrainCache ?? new TileCache();
+  const terrainRegions = /* @__PURE__ */ new Map();
   registerSceneSkills(registry2);
   registerEcsSkills(registry2);
-  registerThreeSkills(registry2);
+  registerThreeSkills(registry2, assets);
+  registerAssetSkills(registry2, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
   registerPhysicsSkills(registry2);
   registerAgentSkills(registry2);
   registerSystemSkills(registry2);
@@ -88895,13 +89524,12 @@ function registerCoreSkills(registry2, opts) {
   const host = new SandboxedSkillHost(registry2, registry2.tracer);
   const packages = new PackageRegistry(registry2, host, registry2.tracer);
   registerPackageSkills(registry2, packages);
-  const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
-  const terrainCache = opts?.terrainCache ?? new TileCache();
-  registerTerrainSkills(registry2, terrainSource, terrainCache);
+  registerTerrainSkills(registry2, terrainSource, terrainCache, terrainRegions);
+  const water = registerWaterSkills(registry2);
   if (opts?.providers !== void 0) {
     registerOrchestrationSkills(registry2, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache }, assets, water };
 }
 
 // src/observability/event.ts
@@ -89356,9 +89984,62 @@ function parseKeyframes(jsonl) {
   return out;
 }
 
+// src/worldlog/snapshot.ts
+var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var B64_INV = (() => {
+  const inv = new Array(128).fill(-1);
+  for (let i = 0; i < B64.length; i++) inv[B64.charCodeAt(i)] = i;
+  return inv;
+})();
+function base64ToBytes(b64) {
+  let len = b64.length;
+  while (len > 0 && b64[len - 1] === "=") len--;
+  const outLen = len * 3 >> 2;
+  const out = new Uint8Array(outLen);
+  let o = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < len; i++) {
+    const v2 = B64_INV[b64.charCodeAt(i)];
+    if (v2 < 0) throw new Error("world snapshot: invalid base64 character");
+    acc = acc << 6 | v2;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[o++] = acc >> bits & 255;
+    }
+  }
+  return out;
+}
+
 // src/export/package.ts
 var EXPORT_VERSION = 1;
-function loadExport(files) {
+function parseAssets(jsonl, ops2) {
+  const out = [];
+  if (jsonl === void 0 || jsonl.length === 0) return out;
+  const lines = jsonl.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 0) continue;
+    let raw;
+    try {
+      raw = JSON.parse(line);
+    } catch (err) {
+      throw new Error(`assets: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (typeof raw.id !== "string" || typeof raw.hash !== "string" || typeof raw.b64 !== "string") {
+      throw new Error(`assets: malformed asset on line ${i + 1}`);
+    }
+    const bytes = base64ToBytes(raw.b64);
+    const hash4 = assetContentHash(bytes, ops2);
+    if (hash4 !== "sha256:" && hash4 !== raw.hash) {
+      throw new Error(`assets: content hash mismatch on line ${i + 1} (stored ${raw.hash}, computed ${hash4})`);
+    }
+    out.push({ id: raw.id, hash: raw.hash, bytes });
+  }
+  return out;
+}
+function loadExport(files, ops2) {
   let manifest;
   try {
     manifest = JSON.parse(files["manifest.json"]);
@@ -89371,11 +90052,22 @@ function loadExport(files) {
   const { commands } = parseWorldLog(files["log.jsonl"]);
   const keyframes = parseKeyframes(files["keyframes.jsonl"]);
   const tiles = parseTiles(files["tiles.jsonl"]);
+  const assets = parseAssets(files["assets.jsonl"], ops2);
   if (commands.length !== manifest.commands) throw new Error(`export: command count mismatch (manifest ${manifest.commands}, parsed ${commands.length})`);
   if (keyframes.length !== manifest.keyframes) throw new Error(`export: keyframe count mismatch (manifest ${manifest.keyframes}, parsed ${keyframes.length})`);
   const manifestTiles = manifest.tiles ?? 0;
   if (tiles.length !== manifestTiles) throw new Error(`export: tile count mismatch (manifest ${manifestTiles}, parsed ${tiles.length})`);
-  return { manifest, commands, keyframes, tiles };
+  const manifestAssets = manifest.assets ?? [];
+  if (assets.length !== manifestAssets.length) throw new Error(`export: asset count mismatch (manifest ${manifestAssets.length}, parsed ${assets.length})`);
+  for (const a of assets) {
+    const ref = manifestAssets.find((r) => r.id === a.id);
+    if (ref === void 0) throw new Error(`export: asset '${a.id}' carried in assets.jsonl but absent from the manifest`);
+    if (ref.hash !== a.hash) throw new Error(`export: asset '${a.id}' hash disagrees (manifest ${ref.hash}, assets.jsonl ${a.hash})`);
+  }
+  return { manifest, commands, keyframes, tiles, assets };
+}
+function exportAssetBundle(loaded) {
+  return loaded.assets.map((a) => ({ id: a.id, path: `assets/${a.id}`, hash: a.hash, bytes: a.bytes }));
 }
 
 // src/browser/keyframe-physics.ts
@@ -89741,85 +90433,6 @@ function terrainTileGeometry(tile) {
   return { positions, indices, normals };
 }
 
-// src/terrain/scatter.ts
-function hashSeed(seed, a, b2) {
-  let h = (seed | 0) >>> 0;
-  h = Math.imul(h ^ (a | 0) >>> 0, 2654435761) >>> 0;
-  h = Math.imul(h ^ (b2 | 0) >>> 0, 2246822519) >>> 0;
-  h ^= h >>> 15;
-  return h >>> 0;
-}
-function mulberry32(s) {
-  let a = s >>> 0;
-  return () => {
-    a = a + 1831565813 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function scatterProps(tile, seed, opts = {}) {
-  const density = opts.density ?? 16;
-  const rockSlope = opts.rockSlope ?? 0.6;
-  const [ox, oy, oz] = tile.origin;
-  const [sx, sy, sz] = tile.scale;
-  const { nrows, ncols, heights } = tile;
-  const rng = mulberry32(hashSeed(seed, Math.round(ox), Math.round(oz)));
-  const sampleRaw = (fr, fc) => {
-    const r0 = Math.min(nrows - 1, Math.max(0, Math.floor(fr)));
-    const c0 = Math.min(ncols - 1, Math.max(0, Math.floor(fc)));
-    const r1 = Math.min(nrows - 1, r0 + 1), c1 = Math.min(ncols - 1, c0 + 1);
-    const tr = fr - r0, tc = fc - c0;
-    const h = (r, c) => heights[r * ncols + c];
-    const top = h(r0, c0) * (1 - tc) + h(r0, c1) * tc;
-    const bot = h(r1, c0) * (1 - tc) + h(r1, c1) * tc;
-    return top * (1 - tr) + bot * tr;
-  };
-  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
-  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
-  const props = [];
-  for (let i = 0; i < density; i++) {
-    for (let j2 = 0; j2 < density; j2++) {
-      const u2 = (i + rng()) / density;
-      const v2 = (j2 + rng()) / density;
-      const fc = u2 * (ncols - 1);
-      const fr = v2 * (nrows - 1);
-      const x2 = ox - sx / 2 + u2 * sx;
-      const z3 = oz - sz / 2 + v2 * sz;
-      const y2 = oy + sampleRaw(fr, fc) * sy;
-      const dC = (sampleRaw(fr, Math.min(ncols - 1, fc + 1)) - sampleRaw(fr, Math.max(0, fc - 1))) * sy;
-      const dR = (sampleRaw(Math.min(nrows - 1, fr + 1), fc) - sampleRaw(Math.max(0, fr - 1), fc)) * sy;
-      const ax = dC / runX, az = dR / runZ;
-      const slope = Math.sqrt(ax * ax + az * az);
-      const roll = rng();
-      let kind;
-      let accept;
-      if (slope > rockSlope) {
-        kind = 1 /* Rock */;
-        accept = 0.5;
-      } else if (rng() < 0.3) {
-        kind = 0 /* Tree */;
-        accept = 0.45;
-      } else {
-        kind = 2 /* Grass */;
-        accept = 0.75;
-      }
-      const yaw = rng() * Math.PI * 2;
-      const sizeJitter = rng();
-      if (roll > accept) continue;
-      props.push({
-        kind,
-        x: x2,
-        y: y2,
-        z: z3,
-        yaw,
-        scale: kind === 2 /* Grass */ ? 0.6 + sizeJitter * 0.5 : 0.8 + sizeJitter * 0.8
-      });
-    }
-  }
-  return props;
-}
-
 // src/terrain/props.ts
 function hexRGB(hex3) {
   return [(hex3 >> 16 & 255) / 255, (hex3 >> 8 & 255) / 255, (hex3 & 255) / 255];
@@ -89938,7 +90551,7 @@ function propGeometry(kind) {
 }
 
 // src/terrain/props-render.ts
-var MATERIALS = {
+var MATERIALS2 = {
   [0 /* Tree */]: { roughness: 0.9, metalness: 0, doubleSide: false },
   [1 /* Rock */]: { roughness: 0.95, metalness: 0, doubleSide: false },
   [2 /* Grass */]: { roughness: 0.85, metalness: 0, doubleSide: true }
@@ -89954,10 +90567,10 @@ function propBufferGeometry(kind) {
   geom.computeBoundingBox();
   return geom;
 }
-var Y_AXIS = new Vector3(0, 1, 0);
+var Y_AXIS2 = new Vector3(0, 1, 0);
 function buildPropInstancedMesh(kind, instances) {
   if (instances.length === 0) return null;
-  const spec = MATERIALS[kind] ?? MATERIALS[1 /* Rock */];
+  const spec = MATERIALS2[kind] ?? MATERIALS2[1 /* Rock */];
   const geom = propBufferGeometry(kind);
   const material = new MeshStandardNodeMaterial({
     vertexColors: true,
@@ -89973,7 +90586,7 @@ function buildPropInstancedMesh(kind, instances) {
   for (let i = 0; i < instances.length; i++) {
     const p = instances[i];
     pos.set(p.x, p.y, p.z);
-    q2.setFromAxisAngle(Y_AXIS, p.yaw);
+    q2.setFromAxisAngle(Y_AXIS2, p.yaw);
     scl.set(p.scale, p.scale, p.scale);
     m.compose(pos, q2, scl);
     mesh.setMatrixAt(i, m);
@@ -90500,13 +91113,14 @@ async function fetchExport(worldUrl) {
     const res = await fetch(base + name);
     return res.ok ? await res.text() : "";
   };
-  const [manifest, log4, keyframes, tiles] = await Promise.all([
+  const [manifest, log4, keyframes, tiles, assets] = await Promise.all([
     get("manifest.json"),
     get("log.jsonl"),
     get("keyframes.jsonl"),
-    getOptional("tiles.jsonl")
+    getOptional("tiles.jsonl"),
+    getOptional("assets.jsonl")
   ]);
-  return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
+  return loadExport({ "manifest.json": manifest, "log.jsonl": log4, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles, "assets.jsonl": assets });
 }
 async function buildRenderTarget(canvas, width, height, forceWebGL, baseline) {
   const renderer = new WebGPURenderer({ canvas, antialias: true, forceWebGL });
@@ -90565,9 +91179,12 @@ async function run(opts) {
         mode: "windowed"
       };
     },
+    // Phase 11: a PACKAGE-BACKED asset registry so a replayed asset.place loads the
+    // GLTF bytes carried in the export (assets.jsonl), NOT the (stubbed/absent) host
+    // asset root. The bundle was hash-verified in loadExport.
     makeRegistry: (tracer) => {
       const r = new SkillRegistry(tracer);
-      registerCoreSkills(r);
+      registerCoreSkills(r, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)) });
       return r;
     },
     tracer: new LiminaTracer("ses_browser_player"),
