@@ -20,7 +20,7 @@ import { Locomotion } from "../world/locomotion.ts";
 import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
-import { registerTerrainSkills } from "./terrain.ts";
+import { registerTerrainSkills, type RegionState } from "./terrain.ts";
 import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
 import { TileCache } from "../terrain/tilecache.ts";
@@ -74,10 +74,20 @@ export function registerCoreSkills(
   // hash). A runtime can inject a package-backed registry (AssetRegistry.fromBundle)
   // so a replayed/browser asset.place loads from the export, never the host root.
   const assets = opts?.assets ?? new AssetRegistry();
+  // Phase 9 terrain source + content-addressed tile cache. Constructed up front so
+  // asset.scatter (registered below) shares the SAME deterministic source + cache the
+  // terrain.* / world.* skills use — a scattered region matches the generated world,
+  // and a replay re-resolves identical tiles. The terrain.* skills bind to them below.
+  const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  const terrainCache = opts?.terrainCache ?? new TileCache();
+  // The region table is shared by the terrain.* skills (which populate it in
+  // world.generateRegion) and asset.scatter (which binds a scatter to a region by id,
+  // reading its seed/lod + applied tiles — no free-floating scatter seed).
+  const terrainRegions = new Map<string, RegionState>();
   registerSceneSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry, assets);
-  registerAssetSkills(registry, assets);
+  registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
@@ -110,13 +120,12 @@ export function registerCoreSkills(
   const host = new SandboxedSkillHost(registry, registry.tracer);
   const packages = new PackageRegistry(registry, host, registry.tracer as LiminaTracer);
   registerPackageSkills(registry, packages);
-  // Phase 9 terrain seam: the terrain.* / world.* skills over a deterministic
-  // procedural source + a content-addressed tile cache. A runtime can override
-  // the source (model at authoring, cache at replay) via opts; the cache is the
+  // Phase 9 terrain seam: the terrain.* / world.* skills over the deterministic
+  // procedural source + content-addressed tile cache constructed above (also shared
+  // with asset.scatter, along with the region table). A runtime can override the
+  // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
-  const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
-  const terrainCache = opts?.terrainCache ?? new TileCache();
-  registerTerrainSkills(registry, terrainSource, terrainCache);
+  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions);
   // Render-only water seam: `world.addWater` adds a cosmetic sea-level surface so
   // beaches/lakes/oceans read as water. It touches neither physics nor the ECS, so
   // it can never change the deterministic sim/replay — the surface is recomputed

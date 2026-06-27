@@ -20,11 +20,25 @@ export interface TerrainTile {
   scale: [number, number, number];
   /** Row-major elevation samples (index = row*ncols + col), length nrows*ncols. */
   heights: Float32Array;
-  /** Optional climate channels (temp, tempSeasonality, precip, precipCV, …), flat
-   *  row-major, length = channels*nrows*ncols. Empty when the source omits it. */
+  /** Optional per-cell climate grid, flat row-major, length = climateChannels *
+   *  nrows * ncols. Channels are packed in the fixed CLIMATE_* order below —
+   *  [tempC, precipMm, biome], climateChannels === CLIMATE_CHANNELS — matching
+   *  ClimateSample. Empty when the source omits it. A source that emits a climate
+   *  grid MUST use this layout; consumers index it by the CLIMATE_* constants
+   *  (source-agnostic) and may assert climateChannels === CLIMATE_CHANNELS. */
   climate?: Float32Array;
   climateChannels?: number;
 }
+
+/** The fixed channel layout of `TerrainTile.climate` (and the order a source must
+ *  pack it in). One climate cell is CLIMATE_CHANNELS consecutive floats:
+ *  [tempC (°C), precipMm (mm/yr), biome (enum)] — the same fields as ClimateSample.
+ *  Consumers read a cell at base `(row*ncols + col) * climateChannels` + these
+ *  offsets, so a correctly-declared grid is read identically across sources. */
+export const CLIMATE_TEMP_C = 0;
+export const CLIMATE_PRECIP_MM = 1;
+export const CLIMATE_BIOME = 2;
+export const CLIMATE_CHANNELS = 3;
 
 /** Request for a single tile at tile-grid coordinate (tx, tz). The fields here are
  *  exactly what the durable log records — the deterministic input. */

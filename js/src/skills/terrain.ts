@@ -39,14 +39,17 @@ function inertTransform(): Transformable {
 /** Per-region state: which tiles are currently applied (for streamFollow load/
  *  unload bookkeeping). Lives in the closure of one registry, so a fresh replay
  *  registry starts empty and rebuilds it by re-invoking the recorded skills. */
-interface AppliedTile {
+export interface AppliedTile {
   bodyId: number;
   entity: string;
   eid: number;
   tx: number;
   tz: number;
 }
-interface RegionState {
+/** Live state of a generated region (the tiles actually applied). Exported so
+ *  asset.scatter can bind a scatter to the SAME region world.generateRegion built —
+ *  it reads the region's seed/lod + applied tile coords, never a free-floating seed. */
+export interface RegionState {
   seed: number;
   lod: number;
   hints?: Record<string, number>;
@@ -65,8 +68,8 @@ export function registerTerrainSkills(
   registry: SkillRegistry,
   source: TerrainSource,
   cache: TileCache = new TileCache(),
+  regions: Map<string, RegionState> = new Map(),
 ): { cache: TileCache; regions: Map<string, RegionState> } {
-  const regions = new Map<string, RegionState>();
 
   /** Resolve + apply one tile: build the native heightfield collider, register a
    *  terrain entity, record it in the region, and emit terrain.tile.ready. */

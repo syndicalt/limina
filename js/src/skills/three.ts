@@ -302,18 +302,11 @@ export interface GltfPlacement {
   scale?: [number, number, number];
 }
 
-/** THE shared asset->entity pipeline (the ONE place GLTFLoader + the WebGPU
- *  texture-rehome live). Parses `bytes` as the glTF named `assetId`, re-homes its
- *  textures, adds it to the scene, spawns a renderable at `placement`, and records
- *  the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
- *  asset.place call this — no duplicated loader/rehome code. */
-export async function loadGltfIntoScene(
-  ctx: { world: { scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh: SceneObject; resource: LoadedResourceMetadata }): string } } },
-  assetId: string,
-  bytes: Uint8Array,
-  hash: string,
-  placement: GltfPlacement,
-): Promise<{ entity: string; resource: LoadedResourceMetadata }> {
+/** Parse `bytes` as the glTF named `assetId` and return its scene root with textures
+ *  re-homed for the WebGPU backend (see rehomeTextureToData). THE ONE place the
+ *  GLTFLoader + the texture-rehome live: loadGltfIntoScene spawns an ENTITY from it,
+ *  while asset.scatter INSTANCES its meshes — neither duplicates the loader setup. */
+export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
   const manager = new THREE.LoadingManager();
   const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
   manager.setURLModifier((url: string) => {
@@ -334,6 +327,21 @@ export async function loadGltfIntoScene(
   });
   const root = gltf.scene;
   prepareGltfTextures(root);
+  return root;
+}
+
+/** THE shared asset->entity pipeline. Parses `bytes` as the glTF named `assetId`
+ *  (parseGltfScene), adds it to the scene, spawns a renderable at `placement`, and
+ *  records the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
+ *  asset.place call this — no duplicated loader/rehome code. */
+export async function loadGltfIntoScene(
+  ctx: { world: { scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh: SceneObject; resource: LoadedResourceMetadata }): string } } },
+  assetId: string,
+  bytes: Uint8Array,
+  hash: string,
+  placement: GltfPlacement,
+): Promise<{ entity: string; resource: LoadedResourceMetadata }> {
+  const root = await parseGltfScene(assetId, bytes);
   const [x, y, z] = placement.position;
   ctx.world.scene.add(root);
   const eid = spawnRenderable(ctx.world.ecs, root, x, y, z);

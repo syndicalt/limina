@@ -37,15 +37,16 @@ export interface ScatterOptions {
 }
 
 // Deterministic per-tile seed: fold (seed, tile origin x/z) so each tile is stable
-// and independent, and adjacent tiles don't repeat.
-function hashSeed(seed: number, a: number, b: number): number {
+// and independent, and adjacent tiles don't repeat. Exported so the asset scatter
+// (asset-scatter.ts) reuses the SAME hash/RNG primitives (one determinism contract).
+export function hashSeed(seed: number, a: number, b: number): number {
   let h = (seed | 0) >>> 0;
   h = Math.imul(h ^ ((a | 0) >>> 0), 0x9e3779b1) >>> 0;
   h = Math.imul(h ^ ((b | 0) >>> 0), 0x85ebca77) >>> 0;
   h ^= h >>> 15;
   return h >>> 0;
 }
-function mulberry32(s: number): () => number {
+export function mulberry32(s: number): () => number {
   let a = s >>> 0;
   return (): number => {
     a = (a + 0x6d2b79f5) | 0;
