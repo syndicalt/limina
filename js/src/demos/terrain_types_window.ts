@@ -22,6 +22,7 @@ import { resolveProfile } from "../skills/permissions.ts";
 import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE, HEIGHT_SCALE } from "../terrain/procedural.ts";
 import { TERRAIN_TYPE_NAMES, terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
+import { scatterBiomeContent } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 
 const SEED = 1234;
@@ -61,7 +62,8 @@ for (let i = 0; i < TERRAIN_TYPE_NAMES.length; i++) {
   const bounds = { minTx: i * BLOCK, minTz: 0, maxTx: i * BLOCK + 1, maxTz: 1 };
   const hints = terrainTypeHints(type, bounds);
   // Generate the COLLIDERS via the same agent-facing skill the test drives (type by NAME).
-  await registry.invoke("world.generateRegion", { seed: SEED, bounds, lod: 0, type }, base);
+  const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds, lod: 0, type }, base);
+  const regionId = (gen.result as { regionId: string }).regionId;
   // Mount the visible surface (host render path) — vertices coincide with the collider.
   for (let tz = bounds.minTz; tz <= bounds.maxTz; tz++) {
     for (let tx = bounds.minTx; tx <= bounds.maxTx; tx++) {
@@ -70,6 +72,12 @@ for (let i = 0; i < TERRAIN_TYPE_NAMES.length; i++) {
       engine.scene.add(mesh);
     }
   }
+  // POPULATE the type with its biome content (pines on mountains, cacti in desert,
+  // broadleaf/pine in forest, grass on plains, palms on the beach) — the SAME agent-native
+  // path the gate drives: scatterBiomeContent surveys the region + runs asset.scatter per
+  // layer, mounting curated CC0 InstancedMeshes onto the surface. Each strip is a lived-in
+  // world, not a bare heightfield.
+  await scatterBiomeContent({ registry, source: core.terrain.source, regionId, type, bounds, seed: SEED, base });
   stripMinX = Math.min(stripMinX, bounds.minTx * TILE_SIZE);
   stripMaxX = Math.max(stripMaxX, (bounds.maxTx + 1) * TILE_SIZE);
 }
@@ -103,5 +111,7 @@ ops.op_set_frame_callback(render);
 ops.op_set_resize_callback(onResize);
 ops.op_log(
   `terrain_types ready: ${TERRAIN_TYPE_NAMES.length} seedable types side by side — ${TERRAIN_TYPE_NAMES.join(", ")} — ` +
-  `all at seed ${SEED}, each built by world.generateRegion type:NAME (zero hand-authored geometry). Orbit auto; arrows nudge.`,
+  `all at seed ${SEED}, each built by world.generateRegion type:NAME + POPULATED with its biome content via ` +
+  `scatterBiomeContent (palms on the beach, pines on the mountains, cacti in the desert, broadleaf/pine forest, grass plains) — ` +
+  `zero hand-authored geometry, all curated CC0 assets by id. Orbit auto; arrows nudge.`,
 );

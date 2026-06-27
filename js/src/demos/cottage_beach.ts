@@ -21,6 +21,7 @@ import { MATERIALS } from "../materials/palette.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
+import { resolveBeachConfig } from "../terrain/biome-content.ts";
 import type { AssetInstance, ScatterConfig } from "../terrain/asset-scatter.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
@@ -94,17 +95,12 @@ export function beachShapeHints(b: BeachBounds): Record<string, number> {
  * (a lower elevationMin yields a strict superset).
  */
 export function beachScatterConfig(seaLevel: number): ScatterConfig {
-  return {
-    seed: 21,
-    density: 14, //            per-tile candidate grid resolution (14×14 per tile, INT)
-    coverage: 0.05, //         sparse, but a richer shoreline than before
-    cluster: 0.85, //          strong clumping → palm GROVES + driftwood piles, not a lattice
-    clusterFreq: 1 / 30, //    ~30 m clumps across the 96 m beach (a few groves)
-    assets: [{ id: PALM_ASSET, weight: 3 }, { id: DRIFTWOOD_ASSET, weight: 2 }], // more driftwood variety
-    elevationMin: seaLevel, // dry sand only — props never sit below the waterline
-    slopeMax: 0.7, //          allow the gentler dune faces, still off the steepest
-    sizeRange: [1.1, 2.4], //  palm ≈3.1–6.4 m tall, rock ≈0.7–1.5 m — natural size spread
-  };
+  // The beach is now ONE entry in the BIOME-CONTENT catalog (biome-content.ts) — the
+  // single source of truth for every type's scatter content. This thin wrapper preserves
+  // the old call site + name; the beach layer reproduces the original recipe bit-for-bit
+  // (palms weight 3 + driftwood weight 2, clustered groves on the DRY sand above seaLevel),
+  // so the cottage scene's placements are byte-identical.
+  return resolveBeachConfig(seaLevel);
 }
 /** Cottage scale: the Hut model is ≈1.46 × 1.18 m at unit scale, so ×5 gives a ≈7.3 ×
  *  5.9 m footprint and ≈3.8 m ridge — a sensible beach hut sitting ON the sand (the
