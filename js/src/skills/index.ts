@@ -19,6 +19,7 @@ import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills } from "./terrain.ts";
+import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { TerrainSource } from "../terrain/types.ts";
@@ -40,6 +41,10 @@ export interface CoreSkills {
   /** Phase 9 terrain source + content-addressed tile cache backing the terrain.*
    *  / world.* skills (default: the deterministic procedural source). */
   terrain: { source: TerrainSource; cache: TileCache };
+  /** Render-only sea-level water surfaces added via `world.addWater` (cosmetic;
+   *  never physics/ECS state). The list is rebuilt by re-invoking the recorded
+   *  request on replay. */
+  water: { surfaces: WaterSurfaceState[] };
 }
 
 export function registerCoreSkills(
@@ -98,11 +103,16 @@ export function registerCoreSkills(
   const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   registerTerrainSkills(registry, terrainSource, terrainCache);
+  // Render-only water seam: `world.addWater` adds a cosmetic sea-level surface so
+  // beaches/lakes/oceans read as water. It touches neither physics nor the ECS, so
+  // it can never change the deterministic sim/replay — the surface is recomputed
+  // from the logged level (like prop scatter).
+  const water = registerWaterSkills(registry);
   // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
   // map is supplied (the worker loop needs real providers); without it the engine
   // behaves exactly as before — no `delegate` skill registered.
   if (opts?.providers !== undefined) {
     registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache } };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache }, water };
 }
