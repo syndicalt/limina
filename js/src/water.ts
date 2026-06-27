@@ -9,15 +9,27 @@
 // The material is a TSL node graph over MeshStandardNodeMaterial (so it keeps full
 // PBR lighting + picks up `scene.environment` reflections), tuned to read as a
 // TROPICAL SEA:
-//   - DEPTH-FADED body colour + opacity: clear, light turquoise near the camera (the
-//     foreground shore — you see the wet sand), darkening to an OPAQUE deep blue with
-//     distance + at the grazing horizon. This dissolves the finite tile region's hard
-//     underwater shelf edge AND the void beyond the tiles into uniform deep sea
-//     ("island in deep water", not "island on a square tile"). The depth proxy is the
-//     water fragment's own VIEW DISTANCE — the deno_webgpu backend exposes no usable
-//     scene-depth texture (no depth-attachment/sampling path in the render crate; the
-//     bootstrap is all texture-UPLOAD workarounds), so a true water-column-depth read
-//     isn't reliable here; the geometric proxy needs no depth buffer and no terrain.
+//   - DEPTH-FADED body colour + opacity by TRUE WATER-COLUMN DEPTH. When the caller
+//     supplies the region's terrain heightfield (`opts.depth`), we bake it into a small
+//     data texture and the shader reads, at each water fragment's WORLD (x,z), the
+//     terrain surface height beneath it; the water column depth is `seaLevel − terrainY`.
+//     Clear, light turquoise where the column is shallow (you see the wet sand at the
+//     shore), darkening to an OPAQUE deep blue as the floor drops away — and the region's
+//     finite edge / the void BEYOND the heightfield both read as deep sea ("island in
+//     deep water", not "island on a square tile"). Because the band tracks the real
+//     shoreline contour, there is no camera-distance "surf" ring and no hard square edge.
+//     This is a deterministic geometric read of the SAME heightfield the terrain mesh is
+//     built from — no GPU scene-depth buffer required.
+//
+//     WHY NOT a real scene-depth texture: it is feasible at the WebGPU primitive level
+//     here (deno_webgpu 0.218 / wgpu-core 29 accept depth formats with TEXTURE_BINDING,
+//     and three's WebGPU backend already allocates its depth textures sampleable), BUT
+//     sampling scene depth from the water pass means restructuring the forward render
+//     into a depth pre-pass / MRT (you cannot sample the depth attachment the current
+//     transparent pass is writing). That is an unproven render-pipeline lift, whereas the
+//     terrain heightfield gives the IDENTICAL "true water-column depth" with zero pipeline
+//     risk and full determinism — so we take the terrain path. (If no terrain is supplied,
+//     e.g. a bare lake, we fall back to the legacy VIEW-DISTANCE proxy below.)
 //   - ANIMATED WAVE NORMALS: a summed field of four crossing directional waves drives
 //     a true bump `normalNode` (+ a matching vertex displacement), so the surface
 //     visibly undulates and the sky-IBL reflection breaks up and travels across it.
@@ -36,6 +48,23 @@ import * as THREE from "../build/three.bundle.mjs";
 // deno-lint-ignore no-explicit-any
 const T = (THREE as any).TSL;
 
+/** Terrain-heightfield coupling for TRUE water-column-depth shading. The caller
+ *  supplies a height query + the world-XZ rectangle it is valid over; the water
+ *  surface bakes it (deterministically) into a data texture the shader samples at each
+ *  fragment's world (x,z). Water column depth = `level − sampleHeight(x,z)`. RENDER-ONLY:
+ *  this only feeds the render graph (colour/opacity) — it never touches physics/ECS/log. */
+export interface WaterDepthOptions {
+  /** Terrain surface world Y under world (x,z). MUST be the SAME field (source+seed+
+   *  hints) the visible terrain mesh is built from, so the depth read matches the sand. */
+  sampleHeight: (x: number, z: number) => number;
+  /** The world-XZ rectangle `sampleHeight` covers (the generated region). Outside it the
+   *  water reads as deep sea, dissolving the region's finite edge into open water. */
+  bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
+  /** Baked grid resolution per axis (samples). Default 256 (a 256×256 R8 texture, 64 KB);
+   *  bilinearly filtered, so the shore gradient stays smooth between samples. */
+  resolution?: number;
+}
+
 /** Build-time options for a water surface. Only `level` (the sea-level world Y)
  *  is required; `size`/`color` have tasteful defaults. */
 export interface WaterOptions {
@@ -46,6 +75,10 @@ export interface WaterOptions {
   size?: number;
   /** Tint (sRGB hex) of the water body. Default: a deep ocean teal-blue. */
   color?: number;
+  /** OPTIONAL terrain coupling → TRUE water-column-depth shading (clear shallows →
+   *  opaque deep by actual depth, with a clean shoreline). Omit for the legacy
+   *  view-distance proxy (e.g. a bare lake with no heightfield to hand in). */
+  depth?: WaterDepthOptions;
 }
 
 /** A large plane so an ocean reads as endless within the default camera far (200). */
@@ -62,6 +95,57 @@ export interface WaterMesh {
   material: unknown;
   receiveShadow: boolean;
   castShadow: boolean;
+}
+
+/** A baked region depth field: a single-channel texture of NORMALISED water-column
+ *  depth (0 = at/above the waterline → 1 = the region's deepest floor) plus the world-XZ
+ *  rectangle it covers, so the shader can map a fragment's world (x,z) → texel. */
+interface BakedDepth {
+  texture: unknown; // THREE.DataTexture (loose to satisfy the WaterMesh test stubs)
+  bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
+}
+
+/** Bake the terrain heightfield into a normalised water-column-depth texture by sampling
+ *  `depth.sampleHeight` on a regular grid over its bounds. Deterministic: identical inputs
+ *  → identical bytes. Normalisation range = `seaLevel − (region min height)` (clamped to a
+ *  small floor), so depth 1.0 is the deepest sampled floor and the shallow→deep gradient
+ *  spans the real relief. R8 (256 levels) over a few-metre range is ~1 cm/step — finer than
+ *  the wave ripple — and LINEAR filtering smooths it further. */
+function bakeWaterDepth(depth: WaterDepthOptions, seaLevel: number): BakedDepth {
+  const res = Math.max(8, Math.min(1024, Math.round(depth.resolution ?? 256)));
+  const { minX, minZ, maxX, maxZ } = depth.bounds;
+  const spanX = maxX - minX;
+  const spanZ = maxZ - minZ;
+
+  // Pass 1: sample heights, find the deepest floor to set the normalisation range.
+  const heights = new Float32Array(res * res);
+  let minH = Infinity;
+  for (let r = 0; r < res; r++) {
+    const z = minZ + spanZ * (r / (res - 1));
+    for (let c = 0; c < res; c++) {
+      const x = minX + spanX * (c / (res - 1));
+      const h = depth.sampleHeight(x, z);
+      heights[r * res + c] = h;
+      if (h < minH) minH = h;
+    }
+  }
+  // Deepest column under the sea (>= a small floor so a near-flat lakebed still grades).
+  const range = Math.max(0.5, seaLevel - minH);
+
+  // Pass 2: quantise normalised depth into R8. Row-major, row r → world z (v = r/(res-1)),
+  // col c → world x (u = c/(res-1)); DataTexture.flipY defaults false so (u,v)→(c,r).
+  const data = new Uint8Array(res * res);
+  for (let i = 0; i < heights.length; i++) {
+    const d01 = Math.min(1, Math.max(0, (seaLevel - heights[i]) / range));
+    data[i] = Math.round(d01 * 255);
+  }
+  const texture = new THREE.DataTexture(data, res, res, THREE.RedFormat, THREE.UnsignedByteType);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return { texture, bounds: depth.bounds };
 }
 
 /** Build a render-only water surface mesh at sea-level `level`. The returned mesh is
@@ -149,18 +233,46 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   const h01 = T.clamp(height.mul(0.18).add(0.5), 0, 1);
   material.roughnessNode = T.float(0.05).add(h01.mul(0.07)); // 0.05 .. 0.12
 
-  // ── Depth-based colour + opacity (geometric: the deno_webgpu backend has no usable
-  // scene-DEPTH texture, so we use the water fragment's own view distance as the depth
-  // proxy). Near the camera (the foreground shore) the water is clear turquoise and you
-  // see the wet sand; it darkens to an OPAQUE deep blue with distance + at the grazing
-  // horizon. Result: the finite tile region's hard underwater shelf edge — and the void
-  // beyond the tiles — both dissolve into uniform deep sea ("island in deep water",
-  // not "island on a square tile"). No depth buffer, no terrain coupling, deterministic.
-  const dist = T.positionView.z.mul(-1); // view-forward distance in world units
-  const distFactor = T.smoothstep(6.0, 55.0, dist); // 0 near → 1 far
-  const deepness = T.clamp(distFactor.mul(0.85).add(fresnel.mul(0.5)), 0, 1);
-  material.colorNode = T.mix(shallowV, deepV, deepness);
-  material.opacityNode = T.float(0.55).add(deepness.mul(0.43)); // 0.55 clear → 0.98 opaque
+  // ── Depth-based colour + opacity ──────────────────────────────────────────────────
+  if (opts.depth !== undefined) {
+    // TRUE WATER-COLUMN DEPTH from the terrain heightfield. Bake the region's floor into
+    // a normalised-depth texture and read it at each fragment's WORLD (x,z): depth grows
+    // as the floor drops away from the sea level, so the colour/opacity track the actual
+    // shoreline contour (no camera-distance "surf" ring, no hard square shelf edge).
+    const baked = bakeWaterDepth(opts.depth, opts.level);
+    const { minX, minZ, maxX, maxZ } = baked.bounds;
+    const u = T.positionWorld.x.sub(minX).div(maxX - minX);
+    const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);
+    const sampled = T.texture(baked.texture, T.vec2(u, v)).r; // 0 shallow → 1 deepest floor
+    // Outside the baked region the floor is unknown → read it as deep open sea, so the
+    // finite heightfield edge AND the void beyond it dissolve into uniform deep water.
+    // A narrow feather (~0.025 of the region) avoids a hard line at the boundary.
+    const outU = T.max(u.mul(-1), u.sub(1));
+    const outV = T.max(v.mul(-1), v.sub(1));
+    const oob = T.clamp(T.max(outU, outV).mul(40), 0, 1);
+    const depth01 = T.mix(sampled, T.float(1.0), oob);
+
+    // Colour: clear turquoise in the shallows → deep blue once the column passes ~30% of
+    // the region's relief. A little grazing-Fresnel deepening (more sky reflection, less
+    // body transmission at the horizon) on top — kept small so the shallows stay bright.
+    const colourDeep = T.smoothstep(0.0, 0.30, depth01);
+    const deepness = T.clamp(colourDeep.add(fresnel.mul(0.30)), 0, 1);
+    material.colorNode = T.mix(shallowV, deepV, deepness);
+
+    // Opacity: a clear film at the waterline (you see the wet sand) → opaque over the
+    // deep. The shore reads soft because depth→0 smoothly up the beach slope.
+    const opaque = T.smoothstep(0.0, 0.50, depth01);
+    material.opacityNode = T.float(0.30).add(opaque.mul(0.66)); // 0.30 clear → 0.96 opaque
+  } else {
+    // FALLBACK (no heightfield supplied, e.g. a bare lake): the legacy geometric proxy —
+    // the water fragment's own VIEW DISTANCE stands in for depth. Clear near the camera,
+    // darkening with distance + at the grazing horizon. No depth buffer, deterministic.
+    const dist = T.positionView.z.mul(-1); // view-forward distance in world units
+    const distFactor = T.smoothstep(6.0, 55.0, dist); // 0 near → 1 far
+    const deepness = T.clamp(distFactor.mul(0.85).add(fresnel.mul(0.5)), 0, 1);
+    material.colorNode = T.mix(shallowV, deepV, deepness);
+    material.opacityNode = T.float(0.55).add(deepness.mul(0.43)); // 0.55 clear → 0.98 opaque
+  }
 
   const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
   mesh.rotation.x = -Math.PI / 2;
