@@ -131,3 +131,61 @@ The `terrain.*` skill seam is wired: **`ModelTerrainSource`** (`js/src/terrain/m
   bake → model-absent replay, falsifiable. **Real-GPU generation is UAT** — run the terrain-diffusion Flask service
   + point `baseUrl` at it (the S0 harness in `~/td-spike/`). **S2** (native wgpu) remains a later optimization, not
   a prerequisite.
+
+## S1 — real-GPU run via the reference shim (2026-06-27)
+
+The model is now wired **end-to-end** behind `ModelTerrainSource` through a reference
+**shim** (`tools/terrain-diffusion/`). limina's `/tile` contract is the **stable seam**;
+each model ships its own thin adapter to it — this is that adapter for `terrain-diffusion`.
+
+```
+ModelTerrainSource ──POST /tile──▶ shim.py ──GET /terrain──▶ terrain_diffusion.inference.api
+```
+
+- **Why a shim (not the in-process `worker.py`):** the shipped model is a standalone Flask
+  service (`terrain_diffusion.inference.api`) with its OWN protocol — `GET /terrain?i1,j1,i2,j2,scale`
+  → **raw bytes** (int16-LE elev `h*w*2`, then float32-LE climate **INTERLEAVED `(H,W,4)`**,
+  channels `[temp, t_season, precip, p_cv]`, dims in `X-Height`/`X-Width`), `GET /health` →
+  `{"status":"ok"}`, **seed fixed at launch** (`--seed`). The shim adapts that to limina's
+  `POST /tile`/`POST /health` so the model runs unmodified behind its native API.
+- **Translation (byte-exact, unit-tested):** elev int16-LE passthrough (optional clamp);
+  climate transposed interleaved `(H,W,4)` → **FAITHFUL channel-major `(4,H,W)`
+  `[temp@0, t_season@1, precip@2, p_cv@3]`** — same channels, same order, **no reduction, no
+  biome channel**. `model-source.ts` is the single source of truth for biome: it reads tempC
+  from ch0 + precipMm from ch2 (**its defaults**) and classifies the canonical `Biome` itself,
+  so a **default-configured `ModelTerrainSource` decodes the wire with NO override**.
+  `tools/terrain-diffusion/test_shim.py` pins this against a synthetic upstream + the
+  cross-component default-decode contract; `js/test/p9_shim_contract.ts` pins the TS consumer
+  side (default source decodes the wire → right temp/precip/biome). (Earlier review found the
+  reduced 3-channel `[temp,precip,biome]` wire collided with the default `precipChannel:2` —
+  fixed to the faithful 4-channel wire.)
+- **tile→pixel / lod→scale:** `scale = clamp(base_scale<<lod, .., max)`, `px_per_tile = tile*(scale//base_scale)`,
+  box `i=tz*px..`, `j=tx*px..` (**z→rows/i, x→cols/j** — matches `model-source.ts` localCell).
+  World metres per tile stay constant across lods (`tile*NATIVE/base_scale`, **`NATIVE=30` m/px**
+  at scale 1 — the "30m" model, matching the source's `metersPerPx` default) → matches the
+  source's fixed extent; set `metersPerPx = NATIVE/base_scale` (30 at `--scale 1`).
+- **two equivalent backends:** `tools/terrain-service/worker.py` (in-process, imports the model)
+  and `tools/terrain-diffusion/shim.py` (wraps the shipped HTTP service) emit the **same wire** —
+  same axis (`worker.py` axis bug fixed: `i=tz*tile, j=tx*tile`), same 4 channels (precip@2), same
+  30 m/px, same **floor**-quantized elev — so a consumer gets the same world from either.
+- **seed:** the launch seed is the region seed (shim `--region-seed`); a mismatched per-request
+  seed is rejected + never forwarded upstream (no expensive model rebuild).
+
+**Exact run commands (real-GPU UAT — needs a box with `terrain_diffusion` installed):**
+
+```bash
+# one shot (model → shim → demo; override via env, e.g. SEED=1234 SCALE=8):
+tools/terrain-diffusion/run.sh
+
+# or by hand:
+python -m terrain_diffusion.inference.api xandergos/terrain-diffusion-30m \
+    --seed 1234 --host 127.0.0.1 --port 8000
+python tools/terrain-diffusion/shim.py \
+    --target-url http://127.0.0.1:8000 --region-seed 1234 --scale 1 --port 8917
+./target/release/limina --window js/src/demos/model_terrain_window.ts   # shim = baseUrl 127.0.0.1:8917
+```
+
+The translation core is verified headless (`python tools/terrain-diffusion/test_shim.py`,
+byte-exact) and the limina seam is regression-clean (`p9_model_source`, `p11_model_source`).
+The live GPU generation itself remains S0-covered + UAT — not claimed here. **S2** (native
+wgpu) stays a later optimization.
