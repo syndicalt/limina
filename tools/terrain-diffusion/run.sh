@@ -5,8 +5,11 @@
 #   2. start the reference shim                   (POST /tile, POST /health -> /terrain)
 #   3. point a limina demo at the shim            (ModelTerrainSource baseUrl = the shim)
 #
-# Needs a GPU box with `terrain_diffusion` installed (UAT — not runnable here). Override any
-# knob via env, e.g.  SEED=42 SCALE=8 ./run.sh
+# Needs a GPU box where `terrain_diffusion` runs. The package is NOT pip-installable as a module;
+# it runs IN-PLACE from its cloned repo (TD_REPO), so we launch the service with that as cwd.
+# The chosen PYTHON must have the inference deps (torch+CUDA, flask, rasterio, diffusers, einops,
+# omegaconf, infinite-tensor, … see $TD_REPO/requirements.txt). Override any knob via env, e.g.
+#   TD_PYTHON=~/miniconda3/envs/td/bin/python SEED=42 SCALE=8 ./run.sh
 set -euo pipefail
 
 SEED="${SEED:-1234}"                 # the model world seed (== shim --region-seed == demo SEED)
@@ -16,7 +19,11 @@ TD_HOST="${TD_HOST:-127.0.0.1}"
 TD_PORT="${TD_PORT:-8000}"           # terrain-diffusion service
 SHIM_HOST="${SHIM_HOST:-127.0.0.1}"
 SHIM_PORT="${SHIM_PORT:-8917}"       # the shim == ModelTerrainSource default baseUrl
-PYTHON="${PYTHON:-python}"
+TD_REPO="${TD_REPO:-$HOME/terrain-diffusion}"   # the cloned model repo (cwd for the service)
+# PYTHON runs the service (needs cwd=$TD_REPO + the inference deps); SHIM_PYTHON runs the shim
+# (needs flask+numpy+requests only). Default both to PYTHON, default PYTHON to `python`.
+PYTHON="${TD_PYTHON:-${PYTHON:-python}}"
+SHIM_PYTHON="${SHIM_PYTHON:-$PYTHON}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
@@ -32,15 +39,40 @@ wait_health() { # url
   echo "timed out waiting for $1" >&2; return 1
 }
 
-echo "[run] starting terrain-diffusion (seed=$SEED) on $TD_HOST:$TD_PORT …"
-$PYTHON -m terrain_diffusion.inference.api "$MODEL" \
-  --seed "$SEED" --host "$TD_HOST" --port "$TD_PORT" &
+# --- preflight: fail early + clearly on a bad env, instead of a deep traceback ----------------
+[ -d "$TD_REPO/terrain_diffusion" ] || {
+  echo "ERROR: terrain-diffusion repo not found at TD_REPO=$TD_REPO" >&2
+  echo "       clone it (git clone https://github.com/xandergos/terrain-diffusion) and/or set TD_REPO=/path/to/it" >&2
+  exit 1
+}
+if ! ( cd "$TD_REPO" && "$PYTHON" -c "import terrain_diffusion, flask, numpy" ) 2>/dev/null; then
+  echo "ERROR: '$PYTHON' can't import the terrain-diffusion inference deps (run from $TD_REPO)." >&2
+  echo "       Missing modules:" >&2
+  ( cd "$TD_REPO" && "$PYTHON" - <<'PY' >&2
+import importlib.util as u
+need = ["torch","flask","numpy","rasterio","diffusers","einops","omegaconf","infinite_tensor",
+        "pyfastnoiselite","click","safetensors","scipy","tqdm"]
+miss = [m for m in need if u.find_spec(m) is None]
+print("        " + (", ".join(miss) if miss else "(terrain_diffusion import itself failed — check $TD_REPO/cwd)"))
+PY
+  )
+  echo "       Install into a CUDA-torch env, e.g.:" >&2
+  echo "         conda create -n td python=3.11 && conda activate td" >&2
+  echo "         pip install -r $TD_REPO/requirements.txt   # or the lean inference subset" >&2
+  echo "       then re-run with  TD_PYTHON=\$(which python) $0" >&2
+  exit 1
+fi
+echo "[run] preflight OK ($PYTHON can import terrain_diffusion from $TD_REPO)"
+
+echo "[run] starting terrain-diffusion (seed=$SEED) on $TD_HOST:$TD_PORT  [cwd=$TD_REPO] …"
+( cd "$TD_REPO" && exec "$PYTHON" -m terrain_diffusion.inference.api "$MODEL" \
+    --seed "$SEED" --host "$TD_HOST" --port "$TD_PORT" ) &
 pids+=($!)
 wait_health "http://$TD_HOST:$TD_PORT/health"
 echo "[run] terrain-diffusion healthy."
 
 echo "[run] starting shim on $SHIM_HOST:$SHIM_PORT -> http://$TD_HOST:$TD_PORT …"
-$PYTHON "$HERE/shim.py" \
+"$SHIM_PYTHON" "$HERE/shim.py" \
   --target-url "http://$TD_HOST:$TD_PORT" \
   --region-seed "$SEED" --scale "$SCALE" \
   --host "$SHIM_HOST" --port "$SHIM_PORT" &
