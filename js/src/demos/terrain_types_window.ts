@@ -82,28 +82,53 @@ for (let i = 0; i < TERRAIN_TYPE_NAMES.length; i++) {
   stripMaxX = Math.max(stripMaxX, (bounds.maxTx + 1) * TILE_SIZE);
 }
 
-// Frame the whole row.
+// FREE-FLY camera (for recording a walkthrough of the type row).
+//   move : W/S forward·back · A/D strafe · Q/E up·down   (op_input_axes)
+//   look : move the mouse — CLICK the window to capture it; ESCAPE releases.  (op_input_look)
+// Movement is relative to where you look (fly-cam); Q/E is always world-up/down.
 const cx = (stripMinX + stripMaxX) / 2;
 const cz = TILE_SIZE; // mid-depth of the 2-tile-deep strips
 const cy = HEIGHT_SCALE * 0.5;
-const orbitRadius = (stripMaxX - stripMinX) * 0.62;
+const rowSpan = stripMaxX - stripMinX;
 
-// The engine's default camera far-plane (200 m) is far too small for this ~960 m row viewed
-// from a ~600 m orbit — it clipped the entire scene, leaving only the sky. Widen near/far to
-// cover the orbit + the whole row (this demo overrides the camera each frame anyway).
-engine.camera.near = 1;
-engine.camera.far = orbitRadius * 3.5;
+// The default far-plane (200 m) clips this ~960 m row; widen it generously so free-fly can roam.
+engine.camera.near = 0.5;
+engine.camera.far = rowSpan * 4;
 engine.camera.updateProjectionMatrix();
 
-let angle = 0;
+// Start above + south (+Z) of the row, looking back across it and slightly down.
+const pos = { x: cx, y: cy + 170, z: cz + 340 };
+let yaw = 0;        // 0 → facing -Z (toward the row); yaw about world-up
+let pitch = -0.45;  // looking down ~26°
+const MOVE_SPEED = 85;     // m/s
+const LOOK_SENS = 0.0022;  // radians per raw mouse unit
+const PITCH_LIMIT = Math.PI / 2 - 0.03;
+const DT = 1 / 60;
+
 const axes = new Float32Array(3);
+const look = new Float32Array(2);
 function render(_alpha: number): void {
-  ops.op_input_axes(axes);
-  angle += 0.0025 + axes[0] * 0.03;
-  const r = orbitRadius * (1 - axes[2] * 0.2);
-  const h = cy + orbitRadius * 0.45 + axes[1] * 8;
-  engine.camera.position.set(cx + Math.cos(angle) * r, h, cz + Math.sin(angle) * r * 0.6);
-  engine.camera.lookAt(cx, cy, cz);
+  ops.op_input_axes(axes); // [0]=A/D strafe, [1]=Q/E up, [2]=S/W forward
+  ops.op_input_look(look); // [0]=mouse dx, [1]=mouse dy (raw, drained per frame)
+
+  yaw += look[0] * LOOK_SENS;   // mouse right → turn right
+  pitch -= look[1] * LOOK_SENS; // mouse up → look up
+  if (pitch > PITCH_LIMIT) pitch = PITCH_LIMIT;
+  if (pitch < -PITCH_LIMIT) pitch = -PITCH_LIMIT;
+
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const sy = Math.sin(yaw), cyaw = Math.cos(yaw);
+  // forward (yaw=0 → -Z, pitch tilts y); right (yaw=0 → +X), both on the horizontal for strafe.
+  const fwd = { x: cp * sy, y: sp, z: -cp * cyaw };
+  const right = { x: cyaw, y: 0, z: sy };
+
+  const s = MOVE_SPEED * DT;
+  pos.x += (fwd.x * axes[2] + right.x * axes[0]) * s;
+  pos.y += (fwd.y * axes[2] + axes[1]) * s;
+  pos.z += (fwd.z * axes[2] + right.z * axes[0]) * s;
+
+  engine.camera.position.set(pos.x, pos.y, pos.z);
+  engine.camera.lookAt(pos.x + fwd.x, pos.y + fwd.y, pos.z + fwd.z);
   renderSyncSystem(engine.world);
   engine.renderer.render(engine.scene, engine.camera);
   ops.op_surface_present(engine.context);
@@ -120,5 +145,6 @@ ops.op_log(
   `terrain_types ready: ${TERRAIN_TYPE_NAMES.length} seedable types side by side — ${TERRAIN_TYPE_NAMES.join(", ")} — ` +
   `all at seed ${SEED}, each built by world.generateRegion type:NAME + POPULATED with its biome content via ` +
   `scatterBiomeContent (palms on the beach, pines on the mountains, cacti in the desert, broadleaf/pine forest, grass plains) — ` +
-  `zero hand-authored geometry, all curated CC0 assets by id. Orbit auto; arrows nudge.`,
+  `zero hand-authored geometry, all curated CC0 assets by id. FREE-FLY: click to capture the mouse, ` +
+  `WASD to move, Q/E up·down, mouse to look, Escape to release.`,
 );

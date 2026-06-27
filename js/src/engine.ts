@@ -32,6 +32,7 @@ export interface EngineOps {
   op_set_fixed_step_callback(cb: (dt: number) => void): void;
   op_set_resize_callback(cb: (w: number, h: number) => void): void;
   op_input_axes(out: Float32Array): void;
+  op_input_look(out: Float32Array): void;
   // physics
   op_physics_create_world(gravityY: number): void;
   op_physics_add_ground(y: number): void;
@@ -132,7 +133,7 @@ export type RenderOps = Pick<
   EngineOps,
   | "op_create_window_context" | "op_surface_present" | "op_surface_resize"
   | "op_set_frame_callback" | "op_set_fixed_step_callback" | "op_set_resize_callback"
-  | "op_input_axes"
+  | "op_input_axes" | "op_input_look"
 >;
 export type PhysicsOps = Pick<
   EngineOps,
