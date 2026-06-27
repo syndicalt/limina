@@ -83,6 +83,35 @@ export const DEFAULT_RENDER_BASELINE: RenderBaselinePreset = {
   camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 },
 };
 
+/** NAMED preset — a warm "golden-hour tropical beach" look. ADDITIVE: it does NOT
+ *  touch DEFAULT_RENDER_BASELINE (every other world stays byte-identical), it is opt-in
+ *  by a world passing it to `createEngine({ renderBaseline })` (e.g. the cottage-beach
+ *  window demo). Differences from the default: a warm low-ish sun, a tropical-blue→warm-
+ *  hazy-horizon sky (so the IBL warms the sand and the water reflects a sunset-tinted
+ *  sky), a sandy-bounce hemisphere fill, slightly lifted exposure + environment so the
+ *  sand glows and the sea sparkles without blowing the highlights. */
+export const TROPICAL_BEACH_BASELINE: RenderBaselinePreset = {
+  enabled: true,
+  toneMapping: THREE.ACESFilmicToneMapping,
+  // A touch hotter than 1.0 so the sand reads sun-warmed; ACES rolls off the glints
+  // so the foam line and sky reflection stay inside the highlight shoulder.
+  exposure: 1.12,
+  shadows: true,
+  // Warm golden sun, raked lower-left so the beach gets long warm light + soft shadows.
+  sun: { color: 0xffd9a0, intensity: 3.3, direction: [6, 6, 7] },
+  // Tropical sky tint from above, warm dry-sand bounce from below.
+  hemisphere: { skyColor: 0x9fd0ff, groundColor: 0xc9a878, intensity: 0.85 },
+  ambientIntensity: 0.16,
+  // Deep tropical zenith → warm hazy horizon glow → warm sand bounce. The warm horizon
+  // band is what the low-roughness water reflects as a "sunset on the sea" sheen.
+  sky: { top: 0x2f7fd6, horizon: 0xffe7c4, bottom: 0x70573f },
+  environment: true,
+  environmentIntensity: 1.15,
+  background: true,
+  ground: { enabled: true, color: 0xCBA56B, size: 80, y: 0, roughness: 0.95 },
+  camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 },
+};
+
 // A deep-partial of the preset (override any nested knob in isolation).
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
 export type RenderBaselineOverride = DeepPartial<RenderBaselinePreset>;

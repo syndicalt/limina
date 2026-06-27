@@ -24,11 +24,18 @@ import { registerCoreSkills } from "../skills/index.ts";
 import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { MATERIALS } from "../materials/palette.ts";
-import { buildCottageBeach, BEACH_SEED, BEACH_BOUNDS } from "./cottage_beach.ts";
+import { TROPICAL_BEACH_BASELINE } from "../render-baseline.ts";
+import { buildCottageBeach, beachShapeHints, BEACH_SEED, BEACH_BOUNDS } from "./cottage_beach.ts";
 
-// The terrain IS the ground here, so suppress the baseline's flat ground plane (it
-// would clip through the beach); keep the sun/IBL/tonemapping/sky.
-const engine = await createEngine({ width: 1120, height: 720, renderBaseline: { ground: { enabled: false } } });
+// Opt into the NAMED warm "golden-hour tropical beach" baseline (warm sun + tropical
+// sky IBL + lifted exposure) — additive, it never changes the global default. The
+// terrain IS the ground here, so suppress the baseline's flat ground plane (it would
+// clip through the beach) while keeping the warm sun/IBL/tonemapping/sky.
+const engine = await createEngine({
+  width: 1120,
+  height: 720,
+  renderBaseline: { ...TROPICAL_BEACH_BASELINE, ground: { ...TROPICAL_BEACH_BASELINE.ground, enabled: false } },
+});
 
 const tracer = new LiminaTracer("ses_cottage_beach_window");
 const registry = new SkillRegistry(tracer);
@@ -62,17 +69,30 @@ const result = await buildCottageBeach({ registry, world, source: core.terrain.s
 // the collider surface, so the cottage/props sit exactly on what you see.
 for (let tz = BEACH_BOUNDS.minTz; tz <= BEACH_BOUNDS.maxTz; tz++) {
   for (let tx = BEACH_BOUNDS.minTx; tx <= BEACH_BOUNDS.maxTx; tx++) {
-    const tile = core.terrain.source.generateTile({ seed: BEACH_SEED, tx, tz, lod: 0 });
-    const mesh = buildTerrainMesh(tile, { color: MATERIALS.sand.color, roughness: MATERIALS.sand.roughness });
+    // OPT IN to the SAME island/dune/beach shaping the builder generated the colliders +
+    // surveyed the sea level with, so the visible mesh matches the surface the cottage/
+    // props/water sit on (without these hints the mesh would be the flat base field and
+    // everything would float). beachShapeHints is the single source of truth for both.
+    const tile = core.terrain.source.generateTile({ seed: BEACH_SEED, tx, tz, lod: 0, hints: beachShapeHints(BEACH_BOUNDS) });
+    // Render-only tropical shoreline: a wet band + an animated foam line right where the
+    // sand crosses the sea level (ground-truth from the sand's own height — no depth buffer).
+    const mesh = buildTerrainMesh(tile, {
+      color: MATERIALS.sand.color,
+      roughness: MATERIALS.sand.roughness,
+      shoreline: { seaLevel: result.seaLevel },
+    });
     engine.scene.add(mesh);
   }
 }
 
-// Frame the beach: orbit the region centre at roughly the sea level.
-const cx = (BEACH_BOUNDS.minTx + BEACH_BOUNDS.maxTx + 1) / 2 * TILE_SIZE;
-const cz = (BEACH_BOUNDS.minTz + BEACH_BOUNDS.maxTz + 1) / 2 * TILE_SIZE;
-const cy = result.seaLevel + 1.5;
-const orbitRadius = (Math.max(BEACH_BOUNDS.maxTx - BEACH_BOUNDS.minTx, BEACH_BOUNDS.maxTz - BEACH_BOUNDS.minTz) + 1) * TILE_SIZE * 0.9;
+// Frame the beach for a HERO shot: orbit the cottage just above the waterline, with a
+// LOW, grazing camera so the eye runs across the sea (the grazing angle is where the
+// tropical water deepens, reflects the warm sky, and meets the bright foam line at the
+// sand). Lower + a touch closer than a plain top-down orbit → a flattering postcard.
+const cx = result.cottage.position[0];
+const cz = result.cottage.position[2];
+const cy = result.seaLevel + 1.2; // look at the shoreline band, not the dune tops
+const orbitRadius = (Math.max(BEACH_BOUNDS.maxTx - BEACH_BOUNDS.minTx, BEACH_BOUNDS.maxTz - BEACH_BOUNDS.minTz) + 1) * TILE_SIZE * 1.05;
 
 let angle = 0;
 const axes = new Float32Array(3);
@@ -80,7 +100,8 @@ function render(_alpha: number): void {
   ops.op_input_axes(axes);
   angle += 0.0035 + axes[0] * 0.03;
   const r = orbitRadius * (1 - axes[2] * 0.15);
-  const h = cy + orbitRadius * 0.45 + axes[1] * 4;
+  // Low slung (≈0.28·radius above the water) so the shot grazes the sea; ↑/↓ still tilts.
+  const h = cy + orbitRadius * 0.28 + axes[1] * 4;
   engine.camera.position.set(cx + Math.cos(angle) * r, h, cz + Math.sin(angle) * r);
   engine.camera.lookAt(cx, cy, cz);
   renderSyncSystem(engine.world);

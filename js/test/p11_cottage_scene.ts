@@ -38,7 +38,7 @@ import type { AssetInstance, ScatterConfig } from "../src/terrain/asset-scatter.
 import type { SkillCommand } from "../src/worldlog/log.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 import {
-  buildCottageBeach, BEACH_SEED, BEACH_BOUNDS,
+  buildCottageBeach, beachShapeHints, beachScatterConfig, BEACH_SEED, BEACH_BOUNDS,
   COTTAGE_ASSET, PALM_ASSET, DRIFTWOOD_ASSET,
 } from "../src/demos/cottage_beach.ts";
 
@@ -145,7 +145,7 @@ let surfaceChecked = 0;
 const stride = Math.max(1, Math.floor(placements.length / 12));
 for (let i = 0; i < placements.length; i += stride) {
   const p = placements[i];
-  const sh = authCore.terrain.source.sampleHeight(BEACH_SEED, p.x, p.z, 0);
+  const sh = authCore.terrain.source.sampleHeight(BEACH_SEED, p.x, p.z, 0, beachShapeHints(BEACH_BOUNDS));
   assert(Math.abs(sh - p.y) < 0.6, `prop ${i} off the surface: y=${p.y.toFixed(3)} sampleHeight=${sh.toFixed(3)}`);
   surfaceChecked++;
 }
@@ -160,10 +160,12 @@ assert(surfaceChecked >= 6, `expected to surface-check several props, only ${sur
   const sideWorld = makeWorld(ops);
   ops.op_physics_create_world(-9.81);
   const sideBase = { agentId: "a", sessionId: "s", permissions: resolveProfile("builder.readWrite"), tick: 0, world: sideWorld };
-  const gen = await sideReg.invoke("world.generateRegion", { seed: BEACH_SEED, bounds: BEACH_BOUNDS, lod: 0 }, sideBase);
+  const gen = await sideReg.invoke("world.generateRegion", { seed: BEACH_SEED, bounds: BEACH_BOUNDS, lod: 0, hints: beachShapeHints(BEACH_BOUNDS) }, sideBase);
   assert(gen.success, "side region generate failed");
   const regionId = (gen.result as { regionId: string }).regionId;
-  const cfgBase: ScatterConfig = { seed: 21, density: 12, coverage: 0.02, assets: [{ id: PALM_ASSET, weight: 2 }, { id: DRIFTWOOD_ASSET, weight: 1 }], slopeMax: 0.6, sizeRange: [1.2, 2.2] };
+  // The SAME shared recipe the build uses (so the gated run reproduces it bit-for-bit);
+  // elevationMin is overridden below to prove the waterline cut is real + non-vacuous.
+  const cfgBase: ScatterConfig = beachScatterConfig(res.seaLevel);
   const gated = await sideReg.invoke("asset.scatter", { regionId, config: { ...cfgBase, elevationMin: res.seaLevel } }, sideBase);
   const flooded = await sideReg.invoke("asset.scatter", { regionId, config: { ...cfgBase, elevationMin: res.surface.minY - 5 } }, sideBase);
   assert(gated.success && flooded.success, "side scatter failed");
