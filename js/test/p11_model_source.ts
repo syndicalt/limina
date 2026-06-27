@@ -38,7 +38,9 @@ import { assembleExport, loadExport } from "../src/export/package.ts";
 import { ModelTerrainSource, encodeBase64, type TileTransport } from "../src/terrain/model-source.ts";
 import { ProceduralTerrainSource } from "../src/terrain/procedural.ts";
 import { CachedTerrainSource } from "../src/terrain/tilecache.ts";
-import type { TileRequest } from "../src/terrain/types.ts";
+import { Biome, CLIMATE_BIOME, type TileRequest } from "../src/terrain/types.ts";
+import { BIOME_CONTENT, BIOME_DESERT, CACTUS_ASSET, resolveLayer } from "../src/terrain/biome-content.ts";
+import { scatterAssets } from "../src/terrain/asset-scatter.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p11_model_source FAIL: " + msg);
@@ -55,7 +57,14 @@ const M_PER_PX = 30;
 const CHANNELS = 5;             // the (mock) worker emits 5 WorldClim channels
 const ELEV_MIN = -500, ELEV_MAX = 9000; // fixed normalization range
 const EXTENT = TILE_PX * M_PER_PX; // 480 m per tile edge
-const TICKS = 240;
+// Step long enough that the sphere actually SETTLES on the surface and comes to REST — not
+// merely a free-fall snapshot that happens to land in a wide window. Empirically the sphere
+// reaches the surface by ~tick 270 and is at rest (sub-mm/tick) from ~tick 590 onward, so 720
+// sits deep inside the rest plateau with margin. (Critically, if origin.y is reverted from
+// elevMinM to 0 the surface jumps to ~540 m — unreachable from the y=120 drop — and the sphere
+// free-falls forever, never at rest in a late window: the strengthened assertion below FAILS.)
+const TICKS = 720;
+const SETTLE_TICK = TICKS - 60; // a late tick to compare the final against (the at-rest probe)
 const INTERVAL = 30;
 const DROP: [number, number, number] = [120, 120, 120]; // over tile (0,0), above the surface
 
@@ -164,11 +173,15 @@ assert(sphereRes.success, "sphere createEntity failed");
 const sphereId = (sphereRes.result as { entity: string }).entity;
 
 keyframeRec.maybeCapture(world, 0);
+let settleY: number | undefined; // sphere y at SETTLE_TICK — the at-rest reference
 for (let tick = 1; tick <= TICKS; tick++) {
   recorder.tick = tick;
   recOps.op_physics_step();
   syncAllBodies(world);
   keyframeRec.maybeCapture(world, tick);
+  if (tick === SETTLE_TICK) {
+    settleY = captureWorldState(world).entities.find((e) => e.id === sphereId)?.body?.[1];
+  }
 }
 keyframeRec.capture(world, TICKS);
 
@@ -177,8 +190,18 @@ assert(nativeFinal.entities.length === TILES + 1, `expected ${TILES + 1} entitie
 const restY = nativeFinal.entities.find((e) => e.id === sphereId)?.body?.[1];
 assert(restY !== undefined && Number.isFinite(restY), "sphere transform not finite (fell through / NaN)");
 assert(restY < DROP[1] - 5, `sphere did not fall (y=${restY} from drop ${DROP[1]})`);
-// Surface over tile (0,0) ≈ 30..45 m (elevMetres) → the sphere must rest on it, not at 0/∞.
-assert(restY > 20 && restY < 80, `sphere not resting on the model surface (y=${restY}, expected ~30..45)`);
+// AT REST: the sphere is SETTLED, not still moving — its y is stable across the last 60 ticks
+// (near-zero velocity). A free-falling sphere (e.g. if origin.y were reverted to 0, leaving the
+// surface unreachable at ~540 m) moves tens of metres over this span → this FAILS.
+assert(settleY !== undefined && Number.isFinite(settleY), "settle probe not finite");
+const drift = Math.abs(restY - (settleY as number));
+assert(drift < 0.05, `sphere not at rest: moved ${drift.toFixed(4)} m between tick ${SETTLE_TICK} and ${TICKS} (still falling/rolling, not settled)`);
+// RESTS ON THE TRUE SURFACE: the model surface over the sphere's rest cell is ≈38 m (elevMetres,
+// reconstructed as origin.y(−500) + h·scaleY); a size-1 sphere rests centred ≈0.5 m above it, so
+// restY ≈ 38.5 m — a TIGHT 1 m window. If origin.y is reverted to 0 the reconstructed surface is
+// ≈538 m (h·9500), unreachable from the y=120 drop, and the sphere free-falls past this window
+// (deeply negative by tick 720) → this FAILS. (p9_model_source pins origin.y === elevMinM directly.)
+assert(restY > 38.0 && restY < 39.0, `sphere not resting on the true model surface (y=${restY}, expected ≈38.5 m); a reverted origin.y/free-fall lands outside this window`);
 
 // ============================================================================
 // (b) EXPORT — the baked tiles ride tiles.jsonl, content-hash verified on reload
@@ -256,6 +279,68 @@ const droppedReplay = await replayCommands(recorder.commands, {
   tracer: new LiminaTracer("ses_p11model_droptile"),
 });
 assert(!compareWorldState(nativeFinal, droppedReplay.state).identical, "dropping a baked tile did NOT diverge — replay silently regenerated a missing tile");
+
+// ============================================================================
+// (e) BIOME INTEGRATION GUARD — the model source's biome CLASSIFIER and the
+// biome-content DESERT gate agree on the SAME canonical integer, so cacti actually land
+// on a model-generated desert. Closes the "the two enums were never integrated" gap: the
+// model source now classifies onto the canonical Biome (terrain/types.ts), the same enum
+// procedural.ts:biomeOf emits and the cacti gate whitelists.
+// ============================================================================
+// A mock worker emitting an unambiguously HOT + ARID climate block (32 °C, 40 mm/yr) — the
+// canonical DESERT cell. ModelTerrainSource.classifyBiome must fold this onto Biome.DESERT.
+const HOT_C = 32.0, ARID_MM = 40.0;
+function buildDesertEnvelope(req: TileRequest): string {
+  const nrows = TILE_PX, ncols = TILE_PX;
+  const elev = new Int16Array(nrows * ncols);
+  for (let i = 0; i < elev.length; i++) elev[i] = 50; // flat lowland (metres) → no slope/elev gating
+  const climate = new Float32Array(CHANNELS * nrows * ncols);
+  const chValues = [HOT_C, 4.0, ARID_MM, 15.0, 1.0]; // temp(ch0)=hot, precip(ch2)=arid
+  for (let ch = 0; ch < CHANNELS; ch++) {
+    for (let i = 0; i < nrows * ncols; i++) climate[ch * nrows * ncols + i] = chValues[ch];
+  }
+  return JSON.stringify({
+    name: "mock:desert", seed: req.seed, tx: req.tx, tz: req.tz, lod: req.lod, nrows, ncols,
+    elev: { dtype: "int16", b64: encodeBase64(new Uint8Array(elev.buffer.slice(0))) },
+    climate: { channels: CHANNELS, dtype: "float32", b64: encodeBase64(new Uint8Array(climate.buffer.slice(0))) },
+  });
+}
+const desertTransport: TileTransport = {
+  post(url, body) {
+    if (url.endsWith("/health")) return Promise.resolve(JSON.stringify({ ok: true, model: "mock" }));
+    if (url.endsWith("/tile")) return Promise.resolve(buildDesertEnvelope(JSON.parse(body) as TileRequest));
+    return Promise.reject(new Error("mock: unknown route " + url));
+  },
+};
+const desertTile = await makeModelSource(desertTransport).generateTile({ seed: TERRAIN_SEED, tx: 0, tz: 0, lod: LOD });
+
+// THE LINCHPIN: the model's hot+arid cell classifies to the CANONICAL desert the gate checks.
+// (If classifyBiome emitted a non-canonical desert — e.g. the old 10-value 6 — this integer
+// would not equal BIOME_DESERT(1) and the cacti gate below would place NOTHING.)
+const desertCellBiome = desertTile.climate![CLIMATE_BIOME];
+assert(BIOME_DESERT === Biome.DESERT, `gate constant BIOME_DESERT(${BIOME_DESERT}) diverged from canonical Biome.DESERT(${Biome.DESERT})`);
+assert(desertCellBiome === Biome.DESERT, `model hot+arid cell classified ${desertCellBiome}, expected canonical DESERT ${Biome.DESERT} — model classifier ↔ gate enum mismatch`);
+// every cell of the uniform hot+arid tile is canonical DESERT (not just cell 0).
+for (let i = CLIMATE_BIOME; i < desertTile.climate!.length; i += desertTile.climateChannels!) {
+  assert(desertTile.climate![i] === Biome.DESERT, `a hot+arid cell classified ${desertTile.climate![i]} (≠ canonical DESERT)`);
+}
+
+// NON-VACUOUS: resolve the catalog's DESERT cacti layer (biome-gated to BIOME_DESERT) and scatter
+// it over the MODEL tile. Cacti must LAND (the gate's whitelist matches the model's biome integer).
+const cactusLayer = BIOME_CONTENT.desert.find((l) => l.biomes?.includes(BIOME_DESERT) && l.assets.some((a) => a.id === CACTUS_ASSET));
+assert(cactusLayer !== undefined, "no biome-gated cacti layer in BIOME_CONTENT.desert");
+const cactusConfig = resolveLayer(cactusLayer, { minY: 0, maxY: 1 }); // cacti layer has no elev gates → survey irrelevant
+const cacti = scatterAssets(desertTile, TERRAIN_SEED, cactusConfig);
+assert(cacti.length > 0, "cacti VANISHED on the model's desert tile — the model biome integer doesn't match the gate's BIOME_DESERT whitelist (enum integration broken)");
+assert(cacti.every((c) => c.assetId === CACTUS_ASSET), "desert scatter placed a non-cactus asset");
+// FALSIFIABLE the other way: the SAME scatter whitelisted to a NON-desert biome places nothing,
+// proving the gate genuinely reads the tile's biome channel (not coverage alone).
+const nonDesert = scatterAssets(desertTile, TERRAIN_SEED, { ...cactusConfig, biomes: [Biome.ICE] });
+assert(nonDesert.length === 0, "biome gate is vacuous — an ICE whitelist still placed cacti on a DESERT tile");
+ops.op_log(
+  `p11_model_source biome-integration OK: model hot(${HOT_C}°C)+arid(${ARID_MM}mm) cell → canonical DESERT(${desertCellBiome}); ` +
+  `biome-content cacti gate [biomes=${JSON.stringify(cactusConfig.biomes)}] placed ${cacti.length} cacti on the model desert tile, 0 under an ICE whitelist.`,
+);
 
 ops.op_log(
   `p11_model_source OK: ModelTerrainSource (mock service) generated ${TILES} tiles via world.generateRegion ` +

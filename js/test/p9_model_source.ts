@@ -48,7 +48,7 @@ const SPAN = ELEV_MAX - ELEV_MIN; // → tile scaleY (9500 m)
 // --- synthetic payload: a known elev ramp + constant-per-channel climate ---
 // elev[r][c] = r*10 + c   (metres, int16). Distinct per cell so bilinear + indexing
 // errors are caught. climate channel ch is filled with a channel-specific value:
-//   ch0 (temp °C) = 12.5, ch2 (precip mm) = 800  → biome = TemperateForest.
+//   ch0 (temp °C) = 12.5, ch2 (precip mm) = 800  → biome = canonical TEMPERATE_FOREST.
 function buildSyntheticEnvelope(req: TileRequest): string {
   const nrows = TILE, ncols = TILE;
   const elev = new Int16Array(nrows * ncols);
@@ -133,7 +133,7 @@ assert(tile.climate && tile.climate.length === CLIMATE_CHANNELS * TILE * TILE, "
 // CELL-MAJOR: cell 0 = [tempC, precipMm, biome]
 assert(tile.climate![CLIMATE_TEMP_C] === 12.5, "climate cell0 tempC (from worker temp channel)");
 assert(tile.climate![CLIMATE_PRECIP_MM] === 800, "climate cell0 precipMm (from worker precip channel)");
-assert(tile.climate![CLIMATE_BIOME] === Biome.TemperateForest, `climate cell0 biome ${tile.climate![CLIMATE_BIOME]} (expected TemperateForest ${Biome.TemperateForest})`);
+assert(tile.climate![CLIMATE_BIOME] === Biome.TEMPERATE_FOREST, `climate cell0 biome ${tile.climate![CLIMATE_BIOME]} (expected canonical TEMPERATE_FOREST ${Biome.TEMPERATE_FOREST})`);
 
 // === 4. determinism: a second identical request is byte-identical ===
 const tileB = await makeSource().generateTile({ ...req });
@@ -166,7 +166,7 @@ assert(yMid > 43 && yMid < 44, `bilinear midpoint ${yMid} not between 43 and 44`
 const cs = src.sampleClimate(1234, px, pz);
 assert(cs.tempC === 12.5, `sampleClimate tempC ${cs.tempC}`);
 assert(cs.precipMm === 800, `sampleClimate precipMm ${cs.precipMm}`);
-assert(cs.biome === Biome.TemperateForest, `biome ${cs.biome} (expected TemperateForest ${Biome.TemperateForest})`);
+assert(cs.biome === Biome.TEMPERATE_FOREST, `biome ${cs.biome} (expected canonical TEMPERATE_FOREST ${Biome.TEMPERATE_FOREST})`);
 
 // has() reflects the cache; an ungenerated tile is a clean throw, not a silent 0.
 assert(src.has(1234, px, pz, 0) === true, "has() should be true for generated tile");

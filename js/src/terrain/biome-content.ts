@@ -24,7 +24,7 @@
 import { TILE_SIZE } from "./procedural.ts";
 import { terrainTypeHints, TERRAIN_TYPES, type TerrainTypeName, type RegionBounds } from "./terrain-types.ts";
 import type { ScatterAsset, ScatterConfig } from "./asset-scatter.ts";
-import type { TerrainSource } from "./types.ts";
+import { Biome, type TerrainSource } from "./types.ts";
 import type { SkillRegistry, InvokeBase } from "../skills/registry.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
 
@@ -52,16 +52,19 @@ export const GRASS_ASSET = "grass.glb";
 export const ROCK_ASSET = "rock.glb"; //   boulder / desert rock / driftwood (reused)
 export const PALM_ASSET = "palm.glb"; //   tropical palm (the beach set)
 
-// ───────────────────────── the procedural biome enum (procedural.ts biomeOf) ─────────────
-// The integers the tile climate grid actually carries (asset.scatter's `biomes` gate
-// reads CLIMATE_BIOME). Kept here so the content gates read by NAME, not magic numbers.
-export const BIOME_ICE = 0;
-export const BIOME_DESERT = 1;
-export const BIOME_STEPPE = 2;
-export const BIOME_SAVANNA = 3;
-export const BIOME_TEMPERATE_FOREST = 4;
-export const BIOME_TROPICAL = 5;
-export const BIOME_BOREAL_WET = 6;
+// ───────────────────────── the canonical biome enum (terrain/types.ts) ─────────────
+// The integers the tile climate grid actually carries (asset.scatter's `biomes` gate reads
+// CLIMATE_BIOME). These ALIAS the canonical `Biome` (the single source of truth EVERY source
+// maps onto — procedural.ts:biomeOf AND model-source.ts:classifyBiome), so a content gate
+// means the same biome no matter which source generated the tile. Kept as named aliases here
+// so the catalog reads by NAME, not magic numbers.
+export const BIOME_ICE = Biome.ICE;
+export const BIOME_DESERT = Biome.DESERT;
+export const BIOME_STEPPE = Biome.STEPPE;
+export const BIOME_SAVANNA = Biome.SAVANNA;
+export const BIOME_TEMPERATE_FOREST = Biome.TEMPERATE_FOREST;
+export const BIOME_TROPICAL = Biome.TROPICAL;
+export const BIOME_BOREAL_WET = Biome.BOREAL_WET;
 
 /**
  * One scatter LAYER of a type's content. A ScatterConfig template whose elevation gates
