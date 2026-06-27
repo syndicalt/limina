@@ -47,7 +47,7 @@ spatial audio. See `ROADMAP.md` for the evidence.
 | **8 — Run anywhere** ✅ | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) |
 | **9 — Worlds worth authoring** ✅ | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 |
 | **10 — Agent governance & orchestration** ✅ | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) |
-| **11 — Content & assets** | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter |
+| **11 — Content & assets** ✅ | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter |
 | **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) |
 | **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 |
 
@@ -201,6 +201,18 @@ never-a-dependency model backend — is [`worldgen-roadmap.md`](./worldgen-roadm
 placement is deterministic and a generation config the agent sets reproduces the exact world.
 
 **Depends on:** Phase 10 (scoped skills), the Phase 8 export, Phase 9.1 scatter.
+
+**Status — foundation implemented + gate met (2026-06, ✅).** The OOB-quality foundation shipped: a default
+**render baseline** (every world lit/tonemapped/IBL by default), a **content-addressed asset registry +
+`asset.place`** (bytes ride the export, replay hash-pinned), **`asset.scatter` + `ScatterConfig`**
+(elevation-aware), a **material palette**, a render-only **water surface**, and embedded-glTF texture loading.
+The **cottage-on-a-beach acceptance gate is met** — `demos/cottage_beach.ts` builds the scene from
+intent-level skills with zero hand-authored geometry, and with curated CC0 assets (Quaternius hut/palm/rock)
+it reads as a real beach. Full plan + chunks: [`phase-11-implementation-plan.md`](./phase-11-implementation-plan.md).
+**Queued next — the generator-richness polish round:** improve the native terrain (W1 **domain warping +
+ridged + a real sand material** first, then W2 erosion/climate) + the water-rendering upgrade, all in
+[`worldgen-roadmap.md`](./worldgen-roadmap.md). Deferred deliberately so the foundation lands as a clean
+milestone; W1 is the cheapest high-impact start (no deps, no erosion sim).
 
 ---
 

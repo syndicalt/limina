@@ -125,7 +125,12 @@ The cottage-on-a-beach gate (E) is met for the build logic; the in-tab LOOK with
   **zero hand-authored geometry** (falsifiable: no `scene.createEntity` in the command stream); deterministic +
   replayable. Asset ids are swappable constants — the curated CC0 pack swaps in by changing 3 lines.
 
-**Remaining for the full gate (UAT + content):** bundle the curated CC0 beach pack (cottage / palm / driftwood)
-in place of the stand-in GLTFs (swap the three `*_ASSET` constants in `cottage_beach.ts`), then UAT the look
-(`./target/release/limina --window js/src/demos/cottage_beach_window.ts`). The render baseline + palette +
-place/scatter are all in; only the curated assets + the human "looks good, no wrangling" check remain.
+**Gate MET (2026-06).** Curated CC0 assets (Quaternius hut / palm / rock, public domain via Poly Pizza)
+swapped in for the stand-ins, scatter tuned sparse (`coverage`), and a render bug fixed — **embedded-glTF
+textures now load** (they were rendering white; `crates/limina-render/js/00_bootstrap.js`). The
+cottage-on-a-beach reads as a real beach (lit sand island, wood cabin, green palms, water) built from
+intent-level skills with **zero hand-authored geometry**. Phase 11 is **locked done**.
+
+**Queued — the generator-richness polish round** (its own round, not Phase 11): the terrain is still a flat
+sand dome and the water a basic plane. Next: W1 **domain warping + ridged + a real sand material** (cheapest,
+no deps), then W2 erosion/climate + the water upgrade — all in [`worldgen-roadmap.md`](./worldgen-roadmap.md).
