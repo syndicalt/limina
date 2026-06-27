@@ -163,7 +163,7 @@ assert(surfaceChecked >= 6, `expected to surface-check several props, only ${sur
   const gen = await sideReg.invoke("world.generateRegion", { seed: BEACH_SEED, bounds: BEACH_BOUNDS, lod: 0 }, sideBase);
   assert(gen.success, "side region generate failed");
   const regionId = (gen.result as { regionId: string }).regionId;
-  const cfgBase: ScatterConfig = { seed: 21, density: 12, assets: [{ id: PALM_ASSET, weight: 2 }, { id: DRIFTWOOD_ASSET, weight: 1 }], slopeMax: 0.6, sizeRange: [0.8, 1.8] };
+  const cfgBase: ScatterConfig = { seed: 21, density: 12, coverage: 0.02, assets: [{ id: PALM_ASSET, weight: 2 }, { id: DRIFTWOOD_ASSET, weight: 1 }], slopeMax: 0.6, sizeRange: [1.2, 2.2] };
   const gated = await sideReg.invoke("asset.scatter", { regionId, config: { ...cfgBase, elevationMin: res.seaLevel } }, sideBase);
   const flooded = await sideReg.invoke("asset.scatter", { regionId, config: { ...cfgBase, elevationMin: res.surface.minY - 5 } }, sideBase);
   assert(gated.success && flooded.success, "side scatter failed");

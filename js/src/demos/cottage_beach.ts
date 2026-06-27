@@ -29,16 +29,23 @@ import type { MCPResponse } from "../mcp/protocol.ts";
 // Place-by-id is the whole architecture: the scene never knows what a "cottage" or a
 // "palm" mesh looks like — it asks the content-addressed registry for an asset BY ID.
 //
-// For now these point at the two BUNDLED test GLTFs (assets/triangle.glb,
-// assets/textured-triangle.gltf) as FUNCTIONAL STAND-INS — enough to prove the
-// place-by-id + scatter-by-id pipeline end to end. To ship the real look, drop a
-// curated CC0 beach pack into assets/ and change ONLY these three constants; the
-// builder, the test, and the export package all flow from them unchanged. Do NOT
-// hand-author cottage/palm geometry here — that is the exact anti-pattern Phase 11
-// replaces (procedural region + curated assets, never bespoke meshes in the scene).
-export const COTTAGE_ASSET = "textured-triangle.gltf"; // → swap: a curated cottage GLTF
-export const PALM_ASSET = "triangle.glb"; //               → swap: a curated palm GLTF
-export const DRIFTWOOD_ASSET = "textured-triangle.gltf"; // → swap: a curated driftwood GLTF
+// These point at a curated CC0 beach pack dropped into assets/. To re-skin the look,
+// swap ONLY these three constants; the builder, the test, and the export package all
+// flow from them unchanged. Do NOT hand-author cottage/palm geometry here — that is
+// the exact anti-pattern Phase 11 replaces (procedural region + curated assets, never
+// bespoke meshes in the scene).
+// Curated CC0 (public-domain, attribution-free) low-poly beach pack from Poly Pizza
+// (poly.pizza — Kenney's CC0 model host). Each is plain glTF 2.0 (no Draco/meshopt/
+// KTX2), verified to load through parseGltfScene. Source + license per asset:
+//   cottage.glb — "Hut" by Quaternius, CC0 — https://poly.pizza/m/wxi3kAu5ey
+//                 (model unit extent ≈ 1.46 × 0.77 × 1.18 m, base at Y≈0)
+//   palm.glb    — "Palm Tree" by Quaternius, CC0 — https://poly.pizza/m/A6cKJYFsIb
+//                 (model unit extent ≈ 2.86 × 2.69 × 2.75 m, base at Y≈0)
+//   rock.glb    — "Rock" by Quaternius, CC0 — https://poly.pizza/m/RtLRqYjfMs
+//                 (model unit extent ≈ 0.62 × 0.57 × 0.70 m, base at Y≈0)
+export const COTTAGE_ASSET = "cottage.glb"; //   a curated cottage/beach-hut GLB (CC0)
+export const PALM_ASSET = "palm.glb"; //         a curated palm-tree GLB (CC0)
+export const DRIFTWOOD_ASSET = "rock.glb"; //    a curated rock/driftwood GLB (CC0)
 
 // ───────────────────────── SCENE PARAMETERS (deterministic) ─────────────────────────
 /** Deterministic world seed for the beach (seed 11's procedural surface dips below
@@ -50,8 +57,10 @@ export const BEACH_BOUNDS = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 } as const;
 /** Where the sea sits between the region's lowest and highest surface point. 0.4 →
  *  the low ~40% of the height range floods, leaving dry sand above it. */
 const SEA_FRACTION = 0.4;
-/** Cottage stand-in scale (the unit test asset reads as a small structure on the sand). */
-const COTTAGE_SCALE: [number, number, number] = [4, 4, 4];
+/** Cottage scale: the Hut model is ≈1.46 × 1.18 m at unit scale, so ×5 gives a ≈7.3 ×
+ *  5.9 m footprint and ≈3.8 m ridge — a sensible beach hut sitting ON the sand (the
+ *  model's base is at Y≈0, so placing it at the surface height seats it, not buries it). */
+const COTTAGE_SCALE: [number, number, number] = [5, 5, 5];
 
 export interface BeachBounds { minTx: number; minTz: number; maxTx: number; maxTz: number }
 
@@ -162,11 +171,13 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
   //    to the DRY sand (elevationMin = seaLevel) so nothing floats in the water.
   const scatterConfig: ScatterConfig = {
     seed: 21,
-    density: 12,
+    density: 12, //            per-tile candidate grid resolution (12×12 per tile, INT)
+    coverage: 0.02, //         keep it SPARSE: ~2% of passing candidates → ~9 props
+    //                         total across the dry sand (a believable shoreline, not 500)
     assets: [{ id: PALM_ASSET, weight: 2 }, { id: DRIFTWOOD_ASSET, weight: 1 }],
     elevationMin: seaLevel, // dry sand only — props never sit below the waterline
     slopeMax: 0.6, //          keep them off steep back-dune faces
-    sizeRange: [0.8, 1.8],
+    sizeRange: [1.2, 2.2], //  palm ≈3.2–5.9 m tall, rock ≈0.7–1.3 m — natural on a beach
   };
   const scattered = ok(await registry.invoke("asset.scatter", { regionId, config: scatterConfig }, base), "asset.scatter");
 
