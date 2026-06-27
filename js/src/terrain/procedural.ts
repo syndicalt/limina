@@ -124,9 +124,13 @@ interface ShapeConfig {
   warpAmp: number;  // world-meter amplitude of the domain warp (0 = off)
   warpFreq: number; // spatial frequency of the warp field
   ridge: number;    // [0,1] blend of ridged dune detail into the smooth base
+  amp: number;      // RELIEF multiplier on the final [0,1] elevation (1 = default; >1 mountains, <1 plains)
+  freqScale: number; // base-frequency multiplier (1 = default; <1 broader landforms, >1 finer)
   cx: number; cz: number; // island centre (world x,z)
   radius: number;   // distance from centre where the beach slope begins (Infinity = no island)
   falloff: number;  // width (m) over which land slopes down to the sea floor
+  tempBias: number;   // °C added to the climate temperature field (per-type climate)
+  precipBias: number; // mm/yr added to the climate precipitation field (per-type climate)
 }
 
 const RIDGE_SALT = 0x5bd1e995 | 0;
@@ -143,10 +147,14 @@ function parseShape(hints: Record<string, number> | undefined): ShapeConfig | un
     warpAmp: hints.warp ?? 0,
     warpFreq: hints.warpFreq ?? (1 / 130),
     ridge: clamp01(hints.ridge ?? 0),
+    amp: hints.amp ?? 1,
+    freqScale: hints.freqScale ?? 1,
     cx: hints.islandCx ?? 0,
     cz: hints.islandCz ?? 0,
     radius: hints.islandRadius ?? Infinity,
     falloff: hints.islandFalloff ?? 1,
+    tempBias: hints.tempBias ?? 0,
+    precipBias: hints.precipBias ?? 0,
   };
 }
 
@@ -182,10 +190,13 @@ function shapedElevation01(seed: number, x: number, z: number, lod: number, s: S
     wx = x + (nx - 0.5) * 2 * s.warpAmp;
     wz = z + (nz - 0.5) * 2 * s.warpAmp;
   }
-  const base = fbm(seed | 0, wx, wz, octaves, ELEV_BASE_FREQ); // [0,1]
+  // Base-frequency scale: <1 broadens landforms (plains), >1 makes them finer/busier
+  // (dunes, peaks). freqScale=1 (the default) is the original ELEV_BASE_FREQ exactly.
+  const f = ELEV_BASE_FREQ * s.freqScale;
+  const base = fbm(seed | 0, wx, wz, octaves, f); // [0,1]
   let e = base;
   if (s.ridge > 0) {
-    const dunes = ridgedFbm((seed ^ RIDGE_SALT) | 0, wx, wz, octaves, ELEV_BASE_FREQ * 2); // [0,1]
+    const dunes = ridgedFbm((seed ^ RIDGE_SALT) | 0, wx, wz, octaves, f * 2); // [0,1]
     e = base * (1 - s.ridge) + dunes * s.ridge; // convex blend → e stays in [0,1]
   }
   // Radial island falloff: 1 inside `radius`, smoothstep down to 0 across `falloff`,
@@ -197,7 +208,10 @@ function shapedElevation01(seed: number, x: number, z: number, lod: number, s: S
     const t = clamp01((dist - s.radius) / (s.falloff <= 0 ? 1 : s.falloff));
     e *= 1 - smoothstep(t); // 1 (land) → 0 (sea floor)
   }
-  return e;
+  // RELIEF multiplier: the type's height knob. amp=1 (the default) is identity, so the
+  // base/beach paths stay byte-identical; mountains (amp≫1) tower, plains (amp<1) flatten.
+  // e may exceed 1 here (tall peaks); the collider/mesh scale it by HEIGHT_SCALE either way.
+  return e * s.amp;
 }
 
 /** Quantize (temperature, precipitation) into a small biome enum. Stable integer
@@ -241,7 +255,9 @@ export class ProceduralTerrainSource implements TerrainSource {
         const e = shape === undefined ? elevation01(seed, x, z, lod) : shapedElevation01(seed, x, z, lod, shape);
         const idx = r * ncols + c;
         heights[idx] = e;
-        const cl = this.climateAt(seed, x, z, e);
+        // Per-type climate bias (0 by default → byte-identical) so the biome grid reads
+        // sensibly per terrain type (desert hot/dry, forest wet, alpine cold, …).
+        const cl = this.climateAt(seed, x, z, e, shape?.tempBias ?? 0, shape?.precipBias ?? 0);
         const cidx = idx * climateChannels;
         climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
         climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
@@ -262,18 +278,24 @@ export class ProceduralTerrainSource implements TerrainSource {
   }
 
   /** Per-coordinate climate for agent perception. Deterministic per (seed,x,z). */
-  sampleClimate(seed: number, x: number, z: number): ClimateSample {
-    return this.climateAt(seed | 0, x, z, elevation01(seed | 0, x, z, 0));
+  sampleClimate(seed: number, x: number, z: number, hints?: Record<string, number>): ClimateSample {
+    // Passing the SAME hints a region was generated with biases the point climate to
+    // match the shaped tiles (per-type biome); omit them for the byte-identical base.
+    const shape = parseShape(hints);
+    const elev01 = shape === undefined ? elevation01(seed | 0, x, z, 0) : shapedElevation01(seed | 0, x, z, 0, shape);
+    return this.climateAt(seed | 0, x, z, elev01, shape?.tempBias ?? 0, shape?.precipBias ?? 0);
   }
 
-  /** Shared climate model so generateTile and sampleClimate agree exactly. */
-  private climateAt(seed: number, x: number, z: number, elev01: number): ClimateSample {
+  /** Shared climate model so generateTile and sampleClimate agree exactly. The
+   *  tempBias/precipBias offsets (0 by default → byte-identical) carry the terrain
+   *  type's climate character into biomeOf. */
+  private climateAt(seed: number, x: number, z: number, elev01: number, tempBias = 0, precipBias = 0): ClimateSample {
     const warmth = fbm((seed ^ 0x1f1f1f1f) | 0, x, z, 3, WARMTH_FREQ); // [0,1]
     const wet = fbm((seed ^ 0x2c2c2c2c) | 0, x, z, 3, PRECIP_FREQ); // [0,1]
     // Warm in the lowlands, colder with elevation (a fixed lapse), modulated by
-    // the broad warmth province.
-    const tempC = 4 + warmth * 30 - elev01 * 22;
-    const precipMm = wet * 3000;
+    // the broad warmth province, then shifted by the per-type bias.
+    const tempC = 4 + warmth * 30 - elev01 * 22 + tempBias;
+    const precipMm = Math.max(0, wet * 3000 + precipBias);
     return { tempC, precipMm, biome: biomeOf(tempC, precipMm) };
   }
 }

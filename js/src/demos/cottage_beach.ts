@@ -20,6 +20,7 @@
 import { MATERIALS } from "../materials/palette.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
+import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { AssetInstance, ScatterConfig } from "../terrain/asset-scatter.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
@@ -76,21 +77,11 @@ const SEA_FRACTION = 0.4;
  *   islandRadius / islandFalloff   the flat-top radius and the beach-slope width
  */
 export function beachShapeHints(b: BeachBounds): Record<string, number> {
-  const cx = ((b.minTx + b.maxTx + 1) / 2) * TILE_SIZE;
-  const cz = ((b.minTz + b.maxTz + 1) / 2) * TILE_SIZE;
-  const spanX = (b.maxTx - b.minTx + 1) * TILE_SIZE;
-  const spanZ = (b.maxTz - b.minTz + 1) * TILE_SIZE;
-  const half = Math.min(spanX, spanZ) / 2; // 48 m for the default 96 m region
-  return {
-    shape: 1,
-    warp: 22,
-    warpFreq: 1 / 130,
-    ridge: 0.45,
-    islandCx: cx,
-    islandCz: cz,
-    islandRadius: half * 0.62, // ~30 m flat-ish dune core
-    islandFalloff: half * 0.7, // ~34 m beach slope down to the sea floor
-  };
+  // The beach is now ONE entry in the terrain-type catalog (terrain-types.ts) — the single
+  // source of truth for every type. This thin wrapper preserves the old call site + name;
+  // the "beach" preset reproduces the original shape (warp 22 / ridge 0.45 / island core
+  // 0.62 / slope 0.70) bit-for-bit, so the surface, sea level, and scatter are unchanged.
+  return terrainTypeHints("beach", b);
 }
 
 /**
@@ -200,8 +191,11 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
   // 1. THE GROUND — generate the procedural beach region (real heightfield surface),
   //    OPTING IN to the rich island/dune/beach shaping via hints (the default-off knobs
   //    that keep every other terrain test byte-identical — see procedural.ts / beachShapeHints).
+  // Seed the ground by terrain TYPE — the agent-native way: "beach" resolves (server-side,
+  // deterministically) to the same shaping+climate hints below. The survey/scatter reuse
+  // the resolved hints so every read matches the generated tiles bit-for-bit.
   const hints = beachShapeHints(bounds);
-  const gen = ok(await registry.invoke("world.generateRegion", { seed: BEACH_SEED, bounds, lod: 0, hints }, base), "world.generateRegion");
+  const gen = ok(await registry.invoke("world.generateRegion", { seed: BEACH_SEED, bounds, lod: 0, type: "beach" }, base), "world.generateRegion");
   const regionId = gen.regionId as string;
 
   // Survey the generated surface (deterministic read, SAME hints) → sea level + cottage spot.

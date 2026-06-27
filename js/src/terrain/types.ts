@@ -69,6 +69,9 @@ export interface TerrainSource {
    *  generated with, so a point query matches the shaped tiles (sources that don't
    *  shape simply ignore it). */
   sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number;
-  /** Per-coordinate climate (agent perception). Deterministic per (seed, x, z). */
-  sampleClimate(seed: number, x: number, z: number): ClimateSample;
+  /** Per-coordinate climate (agent perception). Deterministic per (seed, x, z[, hints]).
+   *  The optional `hints` carry the SAME opt-in shaping (incl. per-type climate bias) a
+   *  region was generated with, so a point query matches the shaped tiles' biomes;
+   *  sources that don't synthesize climate per-point ignore it. */
+  sampleClimate(seed: number, x: number, z: number, hints?: Record<string, number>): ClimateSample;
 }
