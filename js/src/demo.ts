@@ -10,20 +10,11 @@ import * as THREE from "../build/three.bundle.mjs";
 import { createEngine, ops } from "./engine.ts";
 import { renderSyncSystem, spawnRenderable, syncPhysicsBodyTransform } from "./ecs/world.ts";
 
+// The engine installs the Phase 11 render baseline (key sun + hemisphere fill +
+// procedural-sky IBL + ground + framing), so this demo no longer hand-rolls its
+// own lights/ground — one source of truth lives in render-baseline.ts.
 const engine = await createEngine({ width: 960, height: 640 });
 const { renderer, scene, camera, world } = engine;
-
-scene.add(new THREE.AmbientLight(0x404060, 1.3));
-const keyLight = new THREE.DirectionalLight(0xffffff, 3.2);
-keyLight.position.set(5, 9, 6);
-scene.add(keyLight);
-
-const ground = new THREE.Mesh(
-  new THREE.BoxGeometry(24, 0.2, 24),
-  new THREE.MeshStandardNodeMaterial({ color: 0x1b2230, roughness: 0.9 }),
-);
-ground.position.y = -0.1;
-scene.add(ground);
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
