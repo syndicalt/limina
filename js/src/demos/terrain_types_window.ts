@@ -39,7 +39,10 @@ const TYPE_COLOR: Record<TerrainTypeName, number> = {
   islands: MATERIALS.sand.color,
 };
 
-const engine = await createEngine({ width: 1280, height: 720 });
+// Disable the baseline's flat ground plane: the generated terrain IS the ground here, and the
+// default 80 m ground only underlies the first strip — a dark slab that reads as broken water.
+// (Each type's surface is its own region; the strips compare SHAPE, so no shared base.)
+const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
 
 const tracer = new LiminaTracer("ses_terrain_types_window");
 const registry = new SkillRegistry(tracer);
