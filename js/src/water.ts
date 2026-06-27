@@ -9,19 +9,24 @@
 // The material is a TSL node graph over MeshStandardNodeMaterial (so it keeps full
 // PBR lighting + picks up `scene.environment` reflections), tuned to read as a
 // TROPICAL SEA:
-//   - a turquoise-shallows → deep-blue body gradient driven by the view's facing
-//     angle (top-down water reads shallow/turquoise, the grazing run-out toward the
-//     horizon deepens and turns reflective — the classic open-water look, and it
-//     needs no scene-depth buffer);
-//   - a Fresnel term that makes the grazing horizon both more opaque and more
-//     reflective of the sky IBL;
-//   - GENTLE ANIMATED WAVES: a time-driven vertex ripple plus a roughness shimmer
-//     that breaks up the reflection on the crests, and moving sun-glint sparkles.
-// All animation is driven by the TSL `time` node — it lives ENTIRELY in the render
-// graph (a per-frame GPU uniform), never in the sim/world-log, so determinism and
-// replay parity are untouched. Refraction/caustics + a scene-depth shoreline foam
-// remain a later upgrade (they need the scene depth/back buffers); the shoreline
-// wet-edge/foam is rendered ground-truth on the sand surface (terrain/render.ts).
+//   - DEPTH-FADED body colour + opacity: clear, light turquoise near the camera (the
+//     foreground shore — you see the wet sand), darkening to an OPAQUE deep blue with
+//     distance + at the grazing horizon. This dissolves the finite tile region's hard
+//     underwater shelf edge AND the void beyond the tiles into uniform deep sea
+//     ("island in deep water", not "island on a square tile"). The depth proxy is the
+//     water fragment's own VIEW DISTANCE — the deno_webgpu backend exposes no usable
+//     scene-depth texture (no depth-attachment/sampling path in the render crate; the
+//     bootstrap is all texture-UPLOAD workarounds), so a true water-column-depth read
+//     isn't reliable here; the geometric proxy needs no depth buffer and no terrain.
+//   - ANIMATED WAVE NORMALS: a summed field of four crossing directional waves drives
+//     a true bump `normalNode` (+ a matching vertex displacement), so the surface
+//     visibly undulates and the sky-IBL reflection breaks up and travels across it.
+//     Cellular (no single direction) → no candy-cane stripes. Plus a faint roughness
+//     shimmer. All animation is driven by the TSL `time` node — it lives ENTIRELY in
+//     the render graph (a per-frame GPU uniform), never in the sim/world-log, so
+//     determinism and replay parity are untouched. Refraction/caustics + a true
+//     scene-depth read remain a later upgrade (a backend depth-texture path); the
+//     shoreline wet-edge/foam is rendered ground-truth on the sand (terrain/render.ts).
 
 import * as THREE from "../build/three.bundle.mjs";
 
@@ -96,45 +101,66 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   });
 
   // View facing: for a flat sea the surface normal is world-up, so the vertical
-  // component of the view direction is the facing ratio (1 = looking straight down →
-  // shallow/turquoise; →0 at the grazing horizon → deep + reflective). No depth buffer.
+  // component of the view direction is the facing ratio (1 = looking straight down,
+  // →0 at the grazing horizon). The Fresnel term off it drives the deep-water blend.
   const facing = T.clamp(T.cameraPosition.sub(T.positionWorld).normalize().y, 0, 1);
   const fresnel = T.oneMinus(facing).pow(4); // grazing → 1
 
-  // Body colour: deep→shallow by facing (biased so most of the plane reads tropical,
-  // deepening only toward the run-out toward the horizon).
-  material.colorNode = T.mix(deepV, shallowV, facing.pow(0.55));
-
-  // Animated micro-shimmer (render-graph only). A 2-D INTERFERENCE of crossing waves at
-  // similar low frequencies — multiplied, so the field is cellular (no single direction →
-  // no candy-cane stripes), scrolled by the `time` node.
+  // ── Animated surface (render-graph only, scrolled by the `time` node) ──────────────
+  // A summed field of FOUR crossing directional waves (non-axis-aligned, different
+  // wavelengths + speeds) → a cellular, travelling surface with no single direction
+  // (no candy-cane stripes). We carry both the HEIGHT and its analytic SLOPE (∂h/∂u,
+  // ∂h/∂v in the plane's local UV) so the same field drives a true bump NORMAL and a
+  // matching vertex displacement — the surface visibly undulates and the sky-IBL
+  // reflection breaks up and travels across it like real water.
   const t = T.time;
-  const wx = T.positionWorld.x;
-  const wz = T.positionWorld.z;
-  const w1 = wx.mul(0.13).add(wz.mul(0.17)).add(t.mul(0.5)).sin();
-  const w2 = wx.mul(0.19).sub(wz.mul(0.11)).sub(t.mul(0.4)).sin();
-  const w3 = wx.mul(0.06).add(wz.mul(0.05)).add(t.mul(0.2)).sin();
-  // product of crossing waves (cellular) plus a broad swell → 0..1, not striped.
-  const shimmer = w1.mul(w2).mul(0.5).add(0.5).mul(0.6).add(w3.mul(0.5).add(0.5).mul(0.4));
+  const lx = T.positionLocal.x; // plane-local U (world X)
+  const ly = T.positionLocal.y; // plane-local V (world Z, before the -90° X rotation)
+  const waves = [
+    { dx: 0.80, dy: 0.60, f: 0.30, s: 0.90, a: 1.00 },
+    { dx: -0.60, dy: 0.80, f: 0.42, s: 1.10, a: 0.80 },
+    { dx: 0.50, dy: -0.85, f: 0.55, s: 0.70, a: 0.60 },
+    { dx: -0.90, dy: -0.40, f: 0.68, s: 1.30, a: 0.45 },
+  ];
+  // deno-lint-ignore no-explicit-any
+  let height: any = null, slopeU: any = null, slopeV: any = null;
+  for (const w of waves) {
+    const phase = lx.mul(w.dx * w.f).add(ly.mul(w.dy * w.f)).add(t.mul(w.s));
+    const sinP = phase.sin();
+    const cosP = phase.cos();
+    height = height === null ? sinP.mul(w.a) : height.add(sinP.mul(w.a));
+    slopeU = slopeU === null ? cosP.mul(w.a * w.f * w.dx) : slopeU.add(cosP.mul(w.a * w.f * w.dx));
+    slopeV = slopeV === null ? cosP.mul(w.a * w.f * w.dy) : slopeV.add(cosP.mul(w.a * w.f * w.dy));
+  }
 
-  // Roughness: near-mirror calm tropical water with a GENTLE 2-D shimmer so the sky IBL
-  // reflection has subtle life without banding. Small range → clean, no stripes.
-  material.roughnessNode = T.float(0.06).add(shimmer.mul(0.06)); // 0.06 .. 0.12
+  // Bump normal: tilt the plane's local +Z face normal by the wave slope, then take it
+  // to view space so MeshStandardNodeMaterial lights + reflects off the rippled surface.
+  // Strength tuned so it reads as water, not chop.
+  const NORMAL_STRENGTH = 0.34;
+  const bumpN = T.vec3(slopeU.mul(-NORMAL_STRENGTH), slopeV.mul(-NORMAL_STRENGTH), 1).normalize();
+  material.normalNode = T.transformNormalToView(bumpN);
 
-  // Opacity: more opaque + reflective at the grazing horizon, clearer top-down.
-  material.opacityNode = T.float(0.72).add(fresnel.mul(0.27)); // 0.72 .. 0.99
+  // Gentle vertex displacement from the SAME height field (local Z → world up after the
+  // -90° X rotation) so the silhouette/grazing edge undulates in step with the normals.
+  material.positionNode = T.positionLocal.add(T.vec3(0, 0, height.mul(0.06)));
 
-  // No stark directional sun-glint (that produced the candy-cane stripes). The sky IBL
-  // reflection + the gentle 2-D roughness shimmer give the water its life on their own.
+  // Roughness: near-mirror calm tropical water with a faint shimmer off the wave height
+  // so the IBL reflection has extra life. Small range → clean.
+  const h01 = T.clamp(height.mul(0.18).add(0.5), 0, 1);
+  material.roughnessNode = T.float(0.05).add(h01.mul(0.07)); // 0.05 .. 0.12
 
-  // Gentle 2-D vertex ripple along the plane's local normal (local Z → world up after the
-  // -90° X rotation). Two crossing components → cellular, never striped; small amplitude.
-  const lx = T.positionLocal.x;
-  const ly = T.positionLocal.y;
-  const ripple = lx.mul(0.12).add(ly.mul(0.16)).add(t.mul(0.8)).sin()
-    .add(lx.mul(0.21).sub(ly.mul(0.13)).sub(t.mul(0.6)).sin())
-    .mul(0.05);
-  material.positionNode = T.positionLocal.add(T.vec3(0, 0, ripple));
+  // ── Depth-based colour + opacity (geometric: the deno_webgpu backend has no usable
+  // scene-DEPTH texture, so we use the water fragment's own view distance as the depth
+  // proxy). Near the camera (the foreground shore) the water is clear turquoise and you
+  // see the wet sand; it darkens to an OPAQUE deep blue with distance + at the grazing
+  // horizon. Result: the finite tile region's hard underwater shelf edge — and the void
+  // beyond the tiles — both dissolve into uniform deep sea ("island in deep water",
+  // not "island on a square tile"). No depth buffer, no terrain coupling, deterministic.
+  const dist = T.positionView.z.mul(-1); // view-forward distance in world units
+  const distFactor = T.smoothstep(6.0, 55.0, dist); // 0 near → 1 far
+  const deepness = T.clamp(distFactor.mul(0.85).add(fresnel.mul(0.5)), 0, 1);
+  material.colorNode = T.mix(shallowV, deepV, deepness);
+  material.opacityNode = T.float(0.55).add(deepness.mul(0.43)); // 0.55 clear → 0.98 opaque
 
   const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
   mesh.rotation.x = -Math.PI / 2;
