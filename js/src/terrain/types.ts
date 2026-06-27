@@ -40,6 +40,32 @@ export const CLIMATE_PRECIP_MM = 1;
 export const CLIMATE_BIOME = 2;
 export const CLIMATE_CHANNELS = 3;
 
+/** THE CANONICAL BIOME ENUM — the single source of truth for the integer a source packs
+ *  into `TerrainTile.climate[CLIMATE_BIOME]` and that content gates (biome-content.ts) read.
+ *  EVERY TerrainSource maps its own climate classification onto THESE values, so a biome
+ *  whitelist (e.g. cacti only in DESERT) means the same thing regardless of which source
+ *  generated the tile. Values are FIXED and load-bearing: they are baked into cached tiles
+ *  and asserted by the procedural-parity tests, so changing one re-bakes every world and
+ *  breaks replay. A coarse 7-class Whittaker partition:
+ *    ICE(0)              — polar / permanent ice (tempC below freezing)
+ *    DESERT(1)           — hot + arid
+ *    STEPPE(2)           — cool/temperate semi-arid grassland
+ *    SAVANNA(3)          — warm semi-arid grassland / tropical dry
+ *    TEMPERATE_FOREST(4) — temperate, moderate-to-wet
+ *    TROPICAL(5)         — warm + wet (tropical rain/seasonal forest)
+ *    BOREAL_WET(6)       — cold + wet (taiga / cool wet forest) */
+export const Biome = {
+  ICE: 0,
+  DESERT: 1,
+  STEPPE: 2,
+  SAVANNA: 3,
+  TEMPERATE_FOREST: 4,
+  TROPICAL: 5,
+  BOREAL_WET: 6,
+} as const;
+/** A canonical biome integer (a value of {@link Biome}). */
+export type BiomeValue = (typeof Biome)[keyof typeof Biome];
+
 /** Request for a single tile at tile-grid coordinate (tx, tz). The fields here are
  *  exactly what the durable log records — the deterministic input. */
 export interface TileRequest {

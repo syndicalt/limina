@@ -8,6 +8,7 @@
 // the same build, which is what makes the cache/replay path reproduce the world.
 
 import {
+  Biome,
   CLIMATE_BIOME, CLIMATE_CHANNELS, CLIMATE_PRECIP_MM, CLIMATE_TEMP_C,
   type ClimateSample, type TerrainSource, type TerrainTile, type TileRequest,
 } from "./types.ts";
@@ -214,13 +215,15 @@ function shapedElevation01(seed: number, x: number, z: number, lod: number, s: S
   return e * s.amp;
 }
 
-/** Quantize (temperature, precipitation) into a small biome enum. Stable integer
- *  boundaries so the mapping is exactly reproducible. */
+/** Quantize (temperature, precipitation) into the CANONICAL biome enum (terrain/types.ts).
+ *  Stable integer boundaries so the mapping is exactly reproducible; the returned values
+ *  ARE the canonical Biome.* integers (the gates in biome-content.ts read these same names),
+ *  so a procedural tile and a content gate never disagree on what "desert" means. */
 function biomeOf(tempC: number, precipMm: number): number {
-  if (tempC < 0) return 0; // 0 polar / ice
-  if (precipMm < 250) return tempC > 22 ? 1 : 2; // 1 desert, 2 steppe
-  if (precipMm < 1200) return tempC > 18 ? 3 : 4; // 3 savanna/temperate-dry, 4 temperate forest
-  return tempC > 20 ? 5 : 6; // 5 tropical rainforest, 6 boreal/wet
+  if (tempC < 0) return Biome.ICE; // polar / ice
+  if (precipMm < 250) return tempC > 22 ? Biome.DESERT : Biome.STEPPE;
+  if (precipMm < 1200) return tempC > 18 ? Biome.SAVANNA : Biome.TEMPERATE_FOREST;
+  return tempC > 20 ? Biome.TROPICAL : Biome.BOREAL_WET;
 }
 
 /** The shippable, deterministic offline terrain source. */

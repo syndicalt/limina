@@ -39,6 +39,7 @@
 
 import { ops } from "../engine.ts";
 import {
+  Biome,
   CLIMATE_BIOME,
   CLIMATE_CHANNELS,
   CLIMATE_PRECIP_MM,
@@ -48,6 +49,10 @@ import {
   type TerrainTile,
   type TileRequest,
 } from "./types.ts";
+
+// Re-export the canonical biome enum so the model source's classifier and its tests share
+// the SAME single source of truth as the procedural source + the content gates.
+export { Biome } from "./types.ts";
 
 /** The IPC seam. `post` sends a JSON body to `url` and resolves the response text.
  *  The default impl is the host `op_http_post`; tests inject a mock. */
@@ -170,35 +175,34 @@ function clamp01(v: number): number {
 
 // ---- biome classification (Whittaker-style, from temp + precip) -------------
 
-/** A coarse biome enum derived from temperature (°C) and annual precip (mm).
- *  Perception input for agents; deterministic from the two climate channels. */
-export const Biome = {
-  Ice: 0,
-  Tundra: 1,
-  BorealForest: 2,
-  TemperateGrassland: 3,
-  TemperateForest: 4,
-  TemperateRainforest: 5,
-  Desert: 6,
-  Savanna: 7,
-  TropicalForest: 8,
-  TropicalRainforest: 9,
-} as const;
-
+/** Classify a cell's CANONICAL biome (terrain/types.ts `Biome`) from temperature (°C) and
+ *  annual precip (mm). The model worker's WorldClim climate has finer real-world classes than
+ *  the canonical 7-class partition, so this folds them onto the canonical values — the SAME
+ *  integers procedural.ts:biomeOf emits and the content gates whitelist — so a model-generated
+ *  desert cell and the biome-content desert gate agree byte-for-byte. The fold:
+ *    tempC < 0                       → ICE              (polar / icecap)
+ *    cold (0..5°C)  & wet>500mm      → BOREAL_WET       (taiga); else STEPPE (cold semi-arid)
+ *    temperate (5..18°C) & <350mm    → STEPPE           (temperate grassland)
+ *    temperate      & 350..1500mm    → TEMPERATE_FOREST
+ *    temperate      & >1500mm        → BOREAL_WET       (cool wet forest / temperate rainforest)
+ *    warm/hot (≥18°C) & <250mm       → DESERT           (hot + arid)
+ *    warm/hot       & 250..1000mm    → SAVANNA          (tropical dry / grassland)
+ *    warm/hot       & >1000mm        → TROPICAL         (tropical rain/seasonal forest)
+ *  Deterministic from the two channels. */
 function classifyBiome(tempC: number, precipMm: number): number {
-  if (tempC < -5) return Biome.Ice;
-  if (tempC < 0) return Biome.Tundra;
-  if (tempC < 5) return precipMm > 500 ? Biome.BorealForest : Biome.Tundra;
+  // Cold provinces.
+  if (tempC < 0) return Biome.ICE;
+  if (tempC < 5) return precipMm > 500 ? Biome.BOREAL_WET : Biome.STEPPE;
+  // Temperate provinces.
   if (tempC < 18) {
-    if (precipMm < 350) return Biome.TemperateGrassland;
-    if (precipMm < 1500) return Biome.TemperateForest;
-    return Biome.TemperateRainforest;
+    if (precipMm < 350) return Biome.STEPPE;
+    if (precipMm < 1500) return Biome.TEMPERATE_FOREST;
+    return Biome.BOREAL_WET;
   }
-  // Warm.
-  if (precipMm < 250) return Biome.Desert;
-  if (precipMm < 1000) return Biome.Savanna;
-  if (precipMm < 2500) return Biome.TropicalForest;
-  return Biome.TropicalRainforest;
+  // Warm / hot provinces.
+  if (precipMm < 250) return Biome.DESERT;
+  if (precipMm < 1000) return Biome.SAVANNA;
+  return Biome.TROPICAL;
 }
 
 // ---- the source -------------------------------------------------------------
@@ -392,8 +396,13 @@ export class ModelTerrainSource implements TerrainSource {
    *  is async + tile-based; a synchronous coordinate query can only read already-generated
    *  tiles — exactly the snapshot/replay path). Reconstructs metres from the tile's [0,1]
    *  heights: y = origin.y + h·scaleY (matching the heightfield collider's surface). Throws
-   *  if the covering tile isn't cached yet, directing the caller to generateTile first. */
-  sampleHeight(seed: number, x: number, z: number, lod: number): number {
+   *  if the covering tile isn't cached yet, directing the caller to generateTile first.
+   *
+   *  `hints` is part of the TerrainSource contract (the opt-in shaping a region was generated
+   *  with) and is accepted to match the interface + callers like surveyRegionRelief; this
+   *  source bakes whole tiles via the worker, so a point query just reads the cached tile and
+   *  the hints are unused here (the shaping rode the generateTile request that baked the tile). */
+  sampleHeight(seed: number, x: number, z: number, lod: number, _hints?: Record<string, number>): number {
     const tx = Math.floor(x / this.extent);
     const tz = Math.floor(z / this.extent);
     const tile = this.cache.get(this.key(seed, lod, tx, tz));
