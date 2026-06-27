@@ -32,7 +32,8 @@ assert(health.ok === true, "worker /health not ok");
 const req: TileRequest = { seed: 4242, tx: 0, tz: 0, lod: 0 };
 const tile = await src.generateTile(req);
 assert(tile.heights.length === tile.nrows * tile.ncols, "heights length mismatch");
-assert(tile.scale[1] === 1, "scaleY must be 1 (heights in metres)");
+assert(tile.scale[1] > 0, "scaleY must be the (positive) metre span");
+assert(tile.heights.every((h) => h >= 0 && h <= 1), "heights must be normalized into [0,1]");
 assert(tile.heights.every(Number.isFinite), "heights must be finite");
 
 // Determinism over real HTTP: a second fetch (fresh source, fresh socket) is identical.
@@ -44,11 +45,14 @@ for (let i = 0; i < tile.heights.length; i++) {
   if (!Object.is(tile.heights[i], tileB.heights[i])) { identical = false; break; }
 }
 
+// Report reconstructed metres (surface = origin.y + h·scaleY), not the [0,1] samples.
 let hMin = Infinity, hMax = -Infinity;
 for (const h of tile.heights) { if (h < hMin) hMin = h; if (h > hMax) hMax = h; }
+const mMin = tile.origin[1] + hMin * tile.scale[1];
+const mMax = tile.origin[1] + hMax * tile.scale[1];
 
 console.log(
   `p9_model_source_http OK: real op_http_post → worker → TerrainTile over HTTP. ` +
-    `dims ${tile.nrows}x${tile.ncols}, elev[min=${hMin} max=${hMax}]m, ` +
+    `dims ${tile.nrows}x${tile.ncols}, elev[min=${mMin.toFixed(1)} max=${mMax.toFixed(1)}]m, ` +
     `climate ${tile.climateChannels ?? 0}ch, two fetches byte-identical=${identical}.`,
 );
