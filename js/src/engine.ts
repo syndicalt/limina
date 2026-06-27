@@ -200,6 +200,9 @@ export interface LoadedResourceMetadata {
   kind: "gltf";
   assetId: string;
   source: string;
+  /** Content address ("sha256:...") of the asset bytes this resource was loaded
+   *  from — the placed asset's portable, verifiable identity (Phase 11). */
+  hash: string;
   bytes: number;
   rootName?: string;
   objectCount: number;

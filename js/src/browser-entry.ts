@@ -21,7 +21,8 @@ import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
 import { LiminaTracer } from "./observability/event.ts";
-import { loadExport, type LoadedExport } from "./export/package.ts";
+import { exportAssetBundle, loadExport, type LoadedExport } from "./export/package.ts";
+import { AssetRegistry } from "./asset-registry.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
 import { ReplayPlayer } from "./browser/player.ts";
 import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terrain/render.ts";
@@ -92,13 +93,14 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
     const res = await fetch(base + name);
     return res.ok ? await res.text() : "";
   };
-  const [manifest, log, keyframes, tiles] = await Promise.all([
+  const [manifest, log, keyframes, tiles, assets] = await Promise.all([
     get("manifest.json"),
     get("log.jsonl"),
     get("keyframes.jsonl"),
     getOptional("tiles.jsonl"),
+    getOptional("assets.jsonl"),
   ]);
-  return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles });
+  return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles, "assets.jsonl": assets });
 }
 
 /** Build the real three renderer + scene + camera for browser playback. The
@@ -195,7 +197,14 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
         mode: "windowed",
       };
     },
-    makeRegistry: (tracer) => { const r = new SkillRegistry(tracer); registerCoreSkills(r); return r; },
+    // Phase 11: a PACKAGE-BACKED asset registry so a replayed asset.place loads the
+    // GLTF bytes carried in the export (assets.jsonl), NOT the (stubbed/absent) host
+    // asset root. The bundle was hash-verified in loadExport.
+    makeRegistry: (tracer) => {
+      const r = new SkillRegistry(tracer);
+      registerCoreSkills(r, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)) });
+      return r;
+    },
     tracer: new LiminaTracer("ses_browser_player"),
     opsOverrides: hostOverrides,
   });

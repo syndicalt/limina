@@ -4,9 +4,25 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { Position, Rotation, Scale, spawnRenderable } from "../ecs/world.ts";
 import type { LoadedResourceMetadata, SceneObject, SceneLike } from "../engine.ts";
+import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+
+/** The shape of a loaded-glTF resource as a skill output (three.loadGLTF +
+ *  asset.place share it). Carries the content `hash` (Phase 11). */
+export const gltfResourceSchema = z.object({
+  kind: z.literal("gltf"),
+  assetId: z.string(),
+  source: z.string(),
+  hash: z.string(),
+  bytes: z.number().int(),
+  rootName: z.string().optional(),
+  objectCount: z.number().int(),
+  meshCount: z.number().int(),
+  materialCount: z.number().int(),
+  textureCount: z.number().int(),
+});
 
 const setTransformInput = z.object({
   entity: z.string(),
@@ -224,7 +240,7 @@ function prepareGltfTextures(root: SceneObject): void {
   else visit(root);
 }
 
-function collectGltfMetadata(assetId: string, bytes: Uint8Array, root: SceneObject): LoadedResourceMetadata {
+function collectGltfMetadata(assetId: string, hash: string, bytes: Uint8Array, root: SceneObject): LoadedResourceMetadata {
   let objectCount = 0;
   let meshCount = 0;
   const materials = new Set<unknown>();
@@ -256,6 +272,7 @@ function collectGltfMetadata(assetId: string, bytes: Uint8Array, root: SceneObje
     kind: "gltf",
     assetId,
     source: `assets/${assetId}`,
+    hash,
     bytes: bytes.byteLength,
     rootName: name,
     objectCount,
@@ -265,62 +282,90 @@ function collectGltfMetadata(assetId: string, bytes: Uint8Array, root: SceneObje
   };
 }
 
-const loadGLTF: SkillDefinition<z.infer<typeof loadGltfInput>, { entity: string; resource: LoadedResourceMetadata }> = {
-  name: "three.loadGLTF",
-  version: "1.0.0",
-  description: "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
-  category: "three",
-  permissions: ["scene.write"],
-  input: loadGltfInput,
-  output: z.object({
-    entity: z.string(),
-    resource: z.object({
-      kind: z.literal("gltf"),
-      assetId: z.string(),
-      source: z.string(),
-      bytes: z.number().int(),
-      rootName: z.string().optional(),
-      objectCount: z.number().int(),
-      meshCount: z.number().int(),
-      materialCount: z.number().int(),
-      textureCount: z.number().int(),
-    }),
-  }),
-  handler: async (input, ctx) => {
-    const bytes = ctx.world.ops.op_read_asset(input.assetId);
-    const manager = new THREE.LoadingManager();
-    const base = input.assetId.includes("/") ? input.assetId.slice(0, input.assetId.lastIndexOf("/") + 1) : "";
-    manager.setURLModifier((url: string) => {
-      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("limina-asset://")) return url;
-      return `limina-asset://${base}${url}`;
-    });
-    const loader = new THREE.GLTFLoader(manager);
-    const payload = input.assetId.endsWith(".gltf")
-      ? new TextDecoder().decode(bytes)
-      : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    const gltf = await new Promise<{ scene: SceneObject }>((resolve, reject) => {
-      loader.parse(
-        payload,
-        `limina-asset://${base}`,
-        (g: { scene: SceneObject }) => resolve(g),
-        (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
-      );
-    });
-    const root = gltf.scene;
-    prepareGltfTextures(root);
-    const [x, y, z] = input.position;
-    ctx.world.scene.add(root);
-    const eid = spawnRenderable(ctx.world.ecs, root, x, y, z);
-    const resource = collectGltfMetadata(input.assetId, bytes, root);
-    const entity = ctx.world.entities.create({ eid, mesh: root, resource });
-    ctx.emit("three.gltf.loaded", { entity, ...resource });
-    return { entity, resource };
-  },
-};
+/** A glTF placement transform: position (required) + optional Euler-radian
+ *  rotation and per-axis scale. Shared by three.loadGLTF and asset.place. */
+export interface GltfPlacement {
+  position: [number, number, number];
+  rotationEuler?: [number, number, number];
+  scale?: [number, number, number];
+}
 
-export function registerThreeSkills(registry: SkillRegistry): void {
+/** THE shared asset->entity pipeline (the ONE place GLTFLoader + the WebGPU
+ *  texture-rehome live). Parses `bytes` as the glTF named `assetId`, re-homes its
+ *  textures, adds it to the scene, spawns a renderable at `placement`, and records
+ *  the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
+ *  asset.place call this — no duplicated loader/rehome code. */
+export async function loadGltfIntoScene(
+  ctx: { world: { scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh: SceneObject; resource: LoadedResourceMetadata }): string } } },
+  assetId: string,
+  bytes: Uint8Array,
+  hash: string,
+  placement: GltfPlacement,
+): Promise<{ entity: string; resource: LoadedResourceMetadata }> {
+  const manager = new THREE.LoadingManager();
+  const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
+  manager.setURLModifier((url: string) => {
+    if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("limina-asset://")) return url;
+    return `limina-asset://${base}${url}`;
+  });
+  const loader = new THREE.GLTFLoader(manager);
+  const payload = assetId.endsWith(".gltf")
+    ? new TextDecoder().decode(bytes)
+    : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const gltf = await new Promise<{ scene: SceneObject }>((resolve, reject) => {
+    loader.parse(
+      payload,
+      `limina-asset://${base}`,
+      (g: { scene: SceneObject }) => resolve(g),
+      (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
+    );
+  });
+  const root = gltf.scene;
+  prepareGltfTextures(root);
+  const [x, y, z] = placement.position;
+  ctx.world.scene.add(root);
+  const eid = spawnRenderable(ctx.world.ecs, root, x, y, z);
+  if (placement.rotationEuler !== undefined) {
+    const q = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(placement.rotationEuler[0], placement.rotationEuler[1], placement.rotationEuler[2]),
+    );
+    Rotation.x[eid] = q.x; Rotation.y[eid] = q.y; Rotation.z[eid] = q.z; Rotation.w[eid] = q.w;
+  }
+  if (placement.scale !== undefined) {
+    Scale.x[eid] = placement.scale[0]; Scale.y[eid] = placement.scale[1]; Scale.z[eid] = placement.scale[2];
+  }
+  const resource = collectGltfMetadata(assetId, hash, bytes, root);
+  const entity = ctx.world.entities.create({ eid, mesh: root, resource });
+  return { entity, resource };
+}
+
+/** three.loadGLTF over a content-addressed AssetRegistry: the id resolves to bytes
+ *  + a CACHED content hash (no re-hash per load), then loads via the shared
+ *  pipeline. */
+function makeLoadGltf(assets: AssetRegistry): SkillDefinition<z.infer<typeof loadGltfInput>, { entity: string; resource: LoadedResourceMetadata }> {
+  return {
+    name: "three.loadGLTF",
+    version: "1.0.0",
+    description: "Load a glTF/glb model from a sandboxed asset id and add it to the scene at a position.",
+    category: "three",
+    permissions: ["scene.write"],
+    input: loadGltfInput,
+    output: z.object({
+      entity: z.string(),
+      resource: gltfResourceSchema,
+    }),
+    handler: async (input, ctx) => {
+      const resolved = assets.resolve(input.assetId);
+      const { entity, resource } = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, { position: input.position });
+      ctx.emit("three.gltf.loaded", { entity, ...resource });
+      return { entity, resource };
+    },
+  };
+}
+
+export function registerThreeSkills(registry: SkillRegistry, assets: AssetRegistry): void {
   registry.register(setTransform);
   registry.register(setMaterial);
   registry.register(setLighting);
-  registry.register(loadGLTF);
+  registry.register(makeLoadGltf(assets));
 }
