@@ -144,18 +144,27 @@ assert(s1.name === "limina:water" && s2.name === "limina:water", "water mesh nam
 const STEPS = 60;
 const DROP: [number, number, number] = [0, 20, 0];
 
-async function runSim(withWater: boolean): Promise<ReturnType<typeof captureWorldState>> {
+// `water`: "none" = no water; "plain" = a bare water plane; "region" = water WITH a
+// `region` descriptor (true depth-aware shading — the path that bakes a depth field from
+// the bound terrain source). All three MUST yield bit-identical SIM state.
+type WaterMode = "none" | "plain" | "region";
+// A real terrain region so the depth bake actually runs (an unknown type would no-op).
+const WATER_REGION = { seed: 0x1d0c, type: "beach", bounds: { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 }, resolution: 48 } as const;
+
+async function runSim(water: WaterMode): Promise<ReturnType<typeof captureWorldState>> {
   const t = new LiminaTracer("ses_p11_parity");
   const r = new SkillRegistry(t);
-  registerCoreSkills(r);
+  registerCoreSkills(r); // binds the default procedural terrain source (depth bake reads it)
   const w = makeHeadlessWorld(ops); // shared native world (reset below)
   const base = { agentId: "limina:builder", sessionId: "ses_p11_parity", permissions: resolveProfile("builder.readWrite"), tick: 0, world: w };
   w.ops.op_physics_create_world(-9.81); // fresh native world -> body ids restart
   // Cosmetic water BEFORE the sim runs — if it leaked into physics, the sphere's
-  // rest state (or body-id allocation) would diverge from the no-water run.
-  if (withWater) {
-    const wr = await r.invoke("world.addWater", { level: 0 }, base);
-    assert(wr.success, "parity: addWater failed");
+  // rest state (or body-id allocation) would diverge from the no-water run. The "region"
+  // mode additionally exercises the depth-field bake (terrainSource.sampleHeight reads).
+  if (water !== "none") {
+    const input = water === "region" ? { level: 0, region: { ...WATER_REGION } } : { level: 0 };
+    const wr = await r.invoke("world.addWater", input, base);
+    assert(wr.success, `parity: addWater(${water}) failed: ${JSON.stringify(wr.error)}`);
   }
   const sphere = await r.invoke("scene.createEntity", {
     shape: "sphere", collider: "sphere", size: 1.0, color: 0x88ccee,
@@ -166,18 +175,30 @@ async function runSim(withWater: boolean): Promise<ReturnType<typeof captureWorl
   return captureWorldState(w);
 }
 
-const noWater = await runSim(false);
-const yesWater = await runSim(true);
+const noWater = await runSim("none");
+const yesWater = await runSim("plain");
 assert(noWater.entities.length === 1 && yesWater.entities.length === 1, "parity: each run should capture exactly the sphere entity (water adds none)");
 const cmp = compareWorldState(noWater, yesWater);
 assert(cmp.identical, `parity: water perturbed sim state (${cmp.comparisons} fields): ${cmp.detail ?? "?"}`);
 const restY = yesWater.entities[0].body![1];
 assert(Number.isFinite(restY) && restY < DROP[1] - 2, `parity: sphere did not fall (y=${restY})`);
 
+// ===========================================================================
+// (6) REGION DEPTH SHADING IS RENDER-ONLY: addWater({ region }) — which bakes a
+//     depth field from the bound terrain source — captures BIT-IDENTICAL sim state
+//     to the no-water run. Proves the `region` descriptor stays purely cosmetic (no
+//     physics/ECS/log determinism impact), even though it reads the terrain source.
+// ===========================================================================
+const regionWater = await runSim("region");
+assert(regionWater.entities.length === 1, "parity(region): run should capture exactly the sphere entity (region water adds none)");
+const cmpRegion = compareWorldState(noWater, regionWater);
+assert(cmpRegion.identical, `parity(region): depth-aware water perturbed sim state (${cmpRegion.comparisons} fields): ${cmpRegion.detail ?? "?"}`);
+
 ops.op_log(
   `p11_water OK: world.addWater registered + Zod-typed + gated by scene.write (player denied, zero effect); ` +
   `adds exactly one RENDER-ONLY mesh at y=level (no physics body — adds=${counter.adds}, no ECS entity); ` +
   `request on trace (world.water.added + skill.executed input level); ` +
   `mesh at requested level ${NON_DEFAULT} (not default 0, falsifiable) + deterministic build; ` +
-  `replay-safe: sim WITH vs WITHOUT water BIT-IDENTICAL over ${cmp.comparisons} fields (sphere rests y=${restY.toFixed(3)}).`,
+  `replay-safe: sim WITH vs WITHOUT water BIT-IDENTICAL over ${cmp.comparisons} fields (sphere rests y=${restY.toFixed(3)}); ` +
+  `region depth-shading is RENDER-ONLY: addWater({region}) bit-identical to no-water over ${cmpRegion.comparisons} fields.`,
 );

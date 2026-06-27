@@ -10,12 +10,18 @@
 // prop scatter), so it can never perturb determinism or replay parity.
 //
 // The optional `region` (seed + tile bounds + terrain type — all pure, log-safe values)
-// turns on TRUE water-column-depth shading: the skill samples the SAME deterministic
-// terrain source the region was generated with to bake a depth field for the water
-// material (clear shallows → opaque deep by actual depth, clean shoreline). This is a
-// RENDER-graph read only — the baked field feeds colour/opacity, never sim state — so
-// the render-only / replay-parity contract is unchanged (and a replay re-derives the
-// identical field from the same seed/type/bounds via the bound source).
+// turns on TRUE water-column-depth shading: the skill samples the deterministic terrain
+// source the region was generated with to bake a depth field for the water material
+// (clear shallows → opaque deep by actual depth, clean shoreline). This is a RENDER-graph
+// read only — the baked field feeds colour/opacity, never sim state — so the render-only /
+// replay-parity contract is unchanged. The depth field is DETERMINISTICALLY re-derived on
+// replay from the same (seed, type, bounds) via the bound source, but it is NOT claimed to
+// be byte-identical across authoring and replay: authoring samples the analytic source at
+// the bake resolution (default 256²) while a replay's CachedTerrainSource bilinearly reads
+// the 33²-per-tile cached heights, so the two depth fields differ at the sub-tile scale
+// (~0.24 m). That is fine because the depth field is RENDER-ONLY and is never captured into
+// the world state or compared by the determinism gate — only the cosmetic shading shifts
+// imperceptibly; sim/ECS/log replay parity is untouched (proven in p11_water).
 //
 // Permission: scene.write (it mutates the render scene). Typed (Zod), permissioned,
 // traced (emits `world.water.added` with the level so the request is on the trace).
@@ -39,8 +45,10 @@ export interface WaterSurfaceState {
 }
 
 /** Optional region descriptor enabling TRUE water-column-depth shading. All pure,
- *  log-safe values: on replay the bound terrain source re-derives the identical depth
- *  field from (seed, type, bounds). `resolution` is the baked grid size (default 256). */
+ *  log-safe values: on replay the bound terrain source DETERMINISTICALLY re-derives the
+ *  depth field from (seed, type, bounds). It is RENDER-ONLY and sub-tile-resolution, so it
+ *  is NOT byte-identical to the authoring bake (and is never captured/compared by the sim
+ *  determinism gate). `resolution` is the baked grid size (default 256). */
 const waterRegionInput = z.object({
   seed: z.number().int(),
   type: z.string(),

@@ -160,16 +160,19 @@ export class CachedTerrainSource implements TerrainSource {
     return undefined;
   }
 
-  sampleHeight(seed: number, x: number, z: number, lod: number): number {
+  sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
     const cached = this.sampleCached(x, z);
     if (cached !== undefined) return cached;
     if (this.pointSource === undefined) throw new Error("CachedTerrainSource.sampleHeight: off-grid and no point source");
-    return this.pointSource.sampleHeight(seed, x, z, lod);
+    // Forward the shaping/erosion `hints` so an OFF-GRID fallback samples the SAME
+    // shaped (and, when requested, eroded) surface the tiles were generated with —
+    // dropping them here returns the flat un-shaped base field (measured ~5 m off).
+    return this.pointSource.sampleHeight(seed, x, z, lod, hints);
   }
 
-  sampleClimate(seed: number, x: number, z: number): ClimateSample {
+  sampleClimate(seed: number, x: number, z: number, hints?: Record<string, number>): ClimateSample {
     if (this.pointSource === undefined) throw new Error("CachedTerrainSource.sampleClimate: no point source");
-    return this.pointSource.sampleClimate(seed, x, z);
+    return this.pointSource.sampleClimate(seed, x, z, hints);
   }
 }
 

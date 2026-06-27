@@ -19,7 +19,11 @@
 //     deep water", not "island on a square tile"). Because the band tracks the real
 //     shoreline contour, there is no camera-distance "surf" ring and no hard square edge.
 //     This is a deterministic geometric read of the SAME heightfield the terrain mesh is
-//     built from — no GPU scene-depth buffer required.
+//     built from — no GPU scene-depth buffer required. RENDER-ONLY: the baked field feeds
+//     colour/opacity only; it is never captured into world state or compared by the sim
+//     determinism gate, so it is deterministically re-derived but NOT required to be
+//     byte-identical across authoring (analytic, bake-resolution) and replay (the cache's
+//     sub-tile bilinear read) — only the cosmetic shading shifts imperceptibly.
 //
 //     WHY NOT a real scene-depth texture: it is feasible at the WebGPU primitive level
 //     here (deno_webgpu 0.218 / wgpu-core 29 accept depth formats with TEXTURE_BINDING,

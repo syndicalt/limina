@@ -46,23 +46,67 @@ const APRON = apronFor(EP);
 const src = new ProceduralTerrainSource();
 
 // ============================================================================
-// (a) DEFAULT BYTE-IDENTICAL — no erode hint ⇒ unchanged field
+// (a) DEFAULT BYTE-IDENTICAL — no erode hint ⇒ the un-eroded field, bit-for-bit
 // ============================================================================
 {
-  const noHint = src.generateTile({ seed: SEED, tx: 3, tz: 2, lod: LOD });
-  const shapeOnly = src.generateTile({ seed: SEED, tx: 3, tz: 2, lod: LOD, hints: { ...SHAPE } });
-  // The shaped tile WITHOUT erode must equal the shaped tile generated the old way: erosion
-  // only engages on `erode>0`, so adding/removing erode hints is the only thing that changes.
-  const shapeAgain = src.generateTile({ seed: SEED, tx: 3, tz: 2, lod: LOD, hints: { ...SHAPE } });
-  for (let i = 0; i < shapeOnly.heights.length; i++) {
-    assert(Object.is(shapeOnly.heights[i], shapeAgain.heights[i]), `shape-only tile not stable at ${i}`);
+  const f32 = new Float32Array(1); // round a float64 field value to the stored Float32
+  const TX = 3, TZ = 2;
+  const x0 = TX * TILE_SIZE, z0 = TZ * TILE_SIZE;
+
+  // A no-hint tile MUST be the pre-erosion BASE field, byte-for-byte. Computed independently
+  // from rawElevationField (no hints ⇒ elevation01) and rounded to Float32 like generateTile.
+  const noHint = src.generateTile({ seed: SEED, tx: TX, tz: TZ, lod: LOD });
+  for (let r = 0; r < RES; r++) {
+    for (let c = 0; c < RES; c++) {
+      f32[0] = rawElevationField(SEED, x0 + c * CELL, z0 + r * CELL, LOD);
+      assert(Object.is(noHint.heights[r * RES + c], f32[0]), `no-hint tile not the base field at (${r},${c})`);
+    }
   }
+
+  // A SHAPE-but-no-erode tile MUST be the pre-erosion SHAPED field, byte-for-bit (erosion only
+  // engages on erode>0, so it cannot have touched this tile). This is the real assertion behind
+  // the "DEFAULT BYTE-IDENTICAL" header: it falsifies if generateTile ever erodes without the hint.
+  const shapeOnly = src.generateTile({ seed: SEED, tx: TX, tz: TZ, lod: LOD, hints: { ...SHAPE } });
+  for (let r = 0; r < RES; r++) {
+    for (let c = 0; c < RES; c++) {
+      f32[0] = rawElevationField(SEED, x0 + c * CELL, z0 + r * CELL, LOD, { ...SHAPE });
+      assert(Object.is(shapeOnly.heights[r * RES + c], f32[0]), `shape-only tile not the pre-erosion shaped field at (${r},${c})`);
+    }
+  }
+
   // And the eroded tile must actually DIFFER from the un-eroded shaped tile (erosion ran).
-  const erodedT = src.generateTile({ seed: SEED, tx: 3, tz: 2, lod: LOD, hints: { ...ERODE } });
+  const erodedT = src.generateTile({ seed: SEED, tx: TX, tz: TZ, lod: LOD, hints: { ...ERODE } });
   let differs = false;
   for (let i = 0; i < shapeOnly.heights.length; i++) if (!Object.is(shapeOnly.heights[i], erodedT.heights[i])) { differs = true; break; }
   assert(differs, "eroded tile identical to un-eroded — erosion did not run");
-  void noHint;
+}
+
+// ============================================================================
+// (a2) EROSION-AWARE sampleHeight — point queries match the eroded tile/collider
+// ============================================================================
+// sampleHeight(…, ERODE) MUST read the SAME eroded macro-bake the tiles/colliders use, so a
+// survey/asset.place doesn't float over the eroded terrain. At a tile sample point the shared
+// macro-interior cell is read exactly, so the gap is ~0; the un-eroded shaped field is far off
+// (the FALSIFIABLE control: reverting sampleHeight to the raw field makes maxGap blow up to maxRawGap).
+{
+  const TX = 2, TZ = 2; // interior of macro-block 0
+  const x0 = TX * TILE_SIZE, z0 = TZ * TILE_SIZE;
+  const tile = src.generateTile({ seed: SEED, tx: TX, tz: TZ, lod: LOD, hints: { ...ERODE } });
+  let maxGap = 0, maxRawGap = 0;
+  for (let r = 0; r < RES; r++) {
+    for (let c = 0; c < RES; c++) {
+      const x = x0 + c * CELL, z = z0 + r * CELL;
+      const tileY = tile.heights[r * RES + c] * HEIGHT_SCALE; // collider surface = origin.y(0) + h*scaleY
+      const erodedY = src.sampleHeight(SEED, x, z, LOD, { ...ERODE });
+      const rawY = src.sampleHeight(SEED, x, z, LOD, { ...SHAPE }); // un-eroded — the revert target
+      maxGap = Math.max(maxGap, Math.abs(erodedY - tileY));
+      maxRawGap = Math.max(maxRawGap, Math.abs(rawY - tileY));
+    }
+  }
+  assert(maxGap < 1e-3, `erosion-aware sampleHeight disagrees with the eroded tile: ${maxGap.toFixed(5)} m`);
+  // Proof the assertion bites: the un-eroded field is far from the eroded tile, so a revert fails (a).
+  assert(maxRawGap > 0.5, `un-eroded vs eroded sampleHeight gap too small (${maxRawGap.toFixed(3)} m) to be a real control`);
+  ops.op_log(`p11_erosion (a2): erosion-aware sampleHeight matches eroded tile within ${maxGap.toFixed(5)} m (un-eroded control ${maxRawGap.toFixed(3)} m off).`);
 }
 
 // ============================================================================
@@ -250,6 +294,25 @@ const cachedReplay = await replayCommands(recorder.commands, {
 });
 const cachedCmp = compareWorldState(nativeFinal, cachedReplay.state);
 assert(cachedCmp.identical, `baked-eroded-tile replay diverged (${cachedCmp.comparisons} fields): ${cachedCmp.detail ?? "?"}`);
+
+// ============================================================================
+// (g) CACHE POINT-FALLBACK FORWARDS HINTS — an OFF-GRID query returns the SHAPED
+//     surface, not the flat un-shaped base field (regression guard for the bug where
+//     CachedTerrainSource.sampleHeight dropped the caller's `hints`).
+// ============================================================================
+{
+  const offX = 500, offZ = 500; // far outside the 4 cached tiles -> the point-source fallback runs
+  assert(Math.floor(offX / TILE_SIZE) > BOUNDS.maxTx && Math.floor(offZ / TILE_SIZE) > BOUNDS.maxTz, "off-grid probe is not actually off-grid");
+  const viaCache = cachedSource.sampleHeight(SEED, offX, offZ, LOD, { ...SHAPE });
+  const shaped = src.sampleHeight(SEED, offX, offZ, LOD, { ...SHAPE }); // the surface the region was shaped with
+  const base = src.sampleHeight(SEED, offX, offZ, LOD);                 // no hints -> flat un-shaped base field
+  assert(Object.is(viaCache, shaped), `cache off-grid query did not forward shaping hints (got ${viaCache}, expected shaped ${shaped})`);
+  // Falsifiable control: shaped vs base differ by metres off-grid, so the pre-fix code
+  // (which delegated WITHOUT hints) would have returned `base` and failed the equality above.
+  const dropGap = Math.abs(shaped - base);
+  assert(dropGap > 1.0, `shaped vs base off-grid gap too small (${dropGap.toFixed(3)} m) to detect the dropped-hints bug`);
+  ops.op_log(`p11_erosion (g): CachedTerrainSource off-grid forwards hints -> shaped ${shaped.toFixed(3)} m (base ${base.toFixed(3)} m, ${dropGap.toFixed(3)} m drop-hints bug delta).`);
+}
 
 ops.op_log(
   `p11_erosion OK: opt-in hydraulic+thermal erosion. default BYTE-IDENTICAL (no erode hint); ` +

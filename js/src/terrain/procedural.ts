@@ -388,12 +388,52 @@ export class ProceduralTerrainSource implements TerrainSource {
     return { nrows, ncols, origin, scale, heights, climate, climateChannels };
   }
 
+  /** Bilinear-sample the ERODED macro-block that contains world (x,z), returning the
+   *  surface world Y (eroded elevation × HEIGHT_SCALE). This reads the SAME memoized
+   *  macro-bake generateTile slices its tiles from, so a point query, the collider, the
+   *  mesh, and asset.scatter all agree on the eroded surface (the un-eroded raw field is
+   *  up to ~4.84 m off). The interior grid shares its cell values bit-for-bit with the
+   *  tiles, so at a tile sample point this returns the tile height exactly; between
+   *  samples it bilinearly interpolates the same cells the heightfield collider does.
+   *  KNOWN TRADEOFF: across an erosion MACRO-block boundary the cross-block seam is
+   *  apron-reconciled, not bit-exact (a ~0.38 m ledge on the deepest channels) — a
+   *  disclosed limit shared with the tiles/colliders, latent until a preset enables
+   *  `erode`; intra-block queries are exact. */
+  private erodedHeightAt(
+    seed: number, x: number, z: number, lod: number,
+    shape: ShapeConfig | undefined, ep: ErosionParams, hintKey: string,
+  ): number {
+    const tx = Math.floor(x / TILE_SIZE);
+    const tz = Math.floor(z / TILE_SIZE);
+    const bake = this.bakeMacro(seed, tx, tz, lod, shape, ep, hintKey);
+    const span = bake.dim;
+    // World (x,z) -> global cell coords -> macro-interior-local coords.
+    let lc = x / CELL_SIZE - bake.gcStart;
+    let lr = z / CELL_SIZE - bake.grStart;
+    if (lc < 0) lc = 0; else if (lc > span - 1) lc = span - 1;
+    if (lr < 0) lr = 0; else if (lr > span - 1) lr = span - 1;
+    const c0 = Math.min(span - 1, Math.floor(lc)), c1 = Math.min(span - 1, c0 + 1);
+    const r0 = Math.min(span - 1, Math.floor(lr)), r1 = Math.min(span - 1, r0 + 1);
+    const tcx = lc - c0, tcz = lr - r0;
+    const g = (r: number, c: number): number => bake.interior[r * span + c];
+    const top = g(r0, c0) * (1 - tcx) + g(r0, c1) * tcx;
+    const bot = g(r1, c0) * (1 - tcx) + g(r1, c1) * tcx;
+    return (top * (1 - tcz) + bot * tcz) * HEIGHT_SCALE;
+  }
+
   /** O(1) world-space elevation query (snapping/placement). Returns the surface
    *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). Passing the SAME
    *  shaping `hints` a region was generated with samples the SHAPED surface (so a
-   *  survey/snap matches the rich tiles); omit them for the byte-identical base field. */
+   *  survey/snap matches the rich tiles); omit them for the byte-identical base field.
+   *  When the `erode` hint is set it is EROSION-AWARE: it samples the same memoized
+   *  eroded macro-bake the tiles/colliders use, so point queries don't float over the
+   *  eroded terrain. */
   sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
     const shape = parseShape(hints);
+    const erosion = parseErosion(hints);
+    if (erosion !== undefined) {
+      return this.erodedHeightAt(seed | 0, x, z, lod | 0, shape, erosion, requestHintKey(hints));
+    }
     const e = shape === undefined ? elevation01(seed | 0, x, z, lod | 0) : shapedElevation01(seed | 0, x, z, lod | 0, shape);
     return e * HEIGHT_SCALE;
   }
