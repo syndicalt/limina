@@ -133,9 +133,12 @@ export function registerCoreSkills(
   // beaches/lakes/oceans read as water. It touches neither physics nor the ECS, so
   // it can never change the deterministic sim/replay — the surface is recomputed
   // from the logged level (like prop scatter).
-  // Bound to the SAME deterministic terrain source so an optional `region` request bakes
-  // the depth field from the field the terrain was generated with (true depth-aware water).
-  const water = registerWaterSkills(registry, terrainSource);
+  // Bound to the SAME deterministic terrain source + the live region table so true
+  // depth-aware water is the DEFAULT: an explicit `region` request bakes the depth field
+  // from the field the terrain was generated with, and absent one the depth is auto-derived
+  // from the regions already generated in this world (the camera-distance proxy is used only
+  // when there is no terrain at all). Read-only — never sim/ECS/log state.
+  const water = registerWaterSkills(registry, terrainSource, terrainRegions);
   // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
   // map is supplied (the worker loop needs real providers); without it the engine
   // behaves exactly as before — no `delegate` skill registered.

@@ -114,8 +114,13 @@ interface BakedDepth {
  *  → identical bytes. Normalisation range = `seaLevel − (region min height)` (clamped to a
  *  small floor), so depth 1.0 is the deepest sampled floor and the shallow→deep gradient
  *  spans the real relief. R8 (256 levels) over a few-metre range is ~1 cm/step — finer than
- *  the wave ripple — and LINEAR filtering smooths it further. */
-function bakeWaterDepth(depth: WaterDepthOptions, seaLevel: number): BakedDepth {
+ *  the wave ripple — and LINEAR filtering smooths it further.
+ *
+ *  EXPORTED for the depth UAT (js/test/p11_water_depth.ts): the returned texture's
+ *  `image.data` is the row-major normalised depth (0 = at/above the waterline → 255 = the
+ *  deepest sampled floor) — a FALSIFIABLE read of TRUE water-column depth, not a
+ *  camera-distance proxy. */
+export function bakeWaterDepth(depth: WaterDepthOptions, seaLevel: number): BakedDepth {
   const res = Math.max(8, Math.min(1024, Math.round(depth.resolution ?? 256)));
   const { minX, minZ, maxX, maxZ } = depth.bounds;
   const spanX = maxX - minX;
@@ -256,17 +261,37 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
     const oob = T.clamp(T.max(outU, outV).mul(40), 0, 1);
     const depth01 = T.mix(sampled, T.float(1.0), oob);
 
-    // Colour: clear turquoise in the shallows → deep blue once the column passes ~30% of
-    // the region's relief. A little grazing-Fresnel deepening (more sky reflection, less
-    // body transmission at the horizon) on top — kept small so the shallows stay bright.
-    const colourDeep = T.smoothstep(0.0, 0.30, depth01);
-    const deepness = T.clamp(colourDeep.add(fresnel.mul(0.30)), 0, 1);
+    // ── Shallow→deep ramp (TUNABLE; render-only). All thresholds are in normalised
+    // water-column depth: 0 at the waterline → 1 at the region's deepest floor. ──────────
+    //   SHADE_SHALLOW : below this depth the body stays clear turquoise — the wet-sand
+    //                   shallows you can see straight through (holds the bright band so the
+    //                   coast doesn't snap to blue right at the line).
+    //   SHADE_DEEP    : by this depth the body is full deep blue. The turquoise→blue
+    //                   transition spans SHADE_SHALLOW..SHADE_DEEP.
+    //   FRESNEL_DEEPEN: extra deepening at the grazing horizon (more sky reflection, less
+    //                   body transmission). Small so the shallows stay bright top-down.
+    //   OPACITY_MIN   : the clear film at the waterline (you read the wet sand through it).
+    //   OPACITY_DEEP_AT / OPACITY_MAX: depth at which — and the value to which — the body
+    //                   becomes essentially opaque over the deep.
+    const SHADE_SHALLOW = 0.05;
+    const SHADE_DEEP = 0.42;
+    const FRESNEL_DEEPEN = 0.25;
+    const OPACITY_MIN = 0.22;
+    const OPACITY_DEEP_AT = 0.55;
+    const OPACITY_MAX = 0.97;
+
+    // Colour: a clear turquoise shallows band (≤ SHADE_SHALLOW) → deep blue by SHADE_DEEP,
+    // with a touch of grazing-Fresnel deepening on top (kept small so the shallows read
+    // bright). Because depth tracks the real shoreline contour, the band hugs the coast.
+    const colourDeep = T.smoothstep(SHADE_SHALLOW, SHADE_DEEP, depth01);
+    const deepness = T.clamp(colourDeep.add(fresnel.mul(FRESNEL_DEEPEN)), 0, 1);
     material.colorNode = T.mix(shallowV, deepV, deepness);
 
-    // Opacity: a clear film at the waterline (you see the wet sand) → opaque over the
-    // deep. The shore reads soft because depth→0 smoothly up the beach slope.
-    const opaque = T.smoothstep(0.0, 0.50, depth01);
-    material.opacityNode = T.float(0.30).add(opaque.mul(0.66)); // 0.30 clear → 0.96 opaque
+    // Opacity: a clear film at the waterline (you see the wet sand) → opaque over the deep.
+    // The shore reads soft+crisp because depth→0 smoothly up the beach slope, so the
+    // transparency tapers along the real contour rather than a camera-distance ring.
+    const opaque = T.smoothstep(0.0, OPACITY_DEEP_AT, depth01);
+    material.opacityNode = T.float(OPACITY_MIN).add(opaque.mul(OPACITY_MAX - OPACITY_MIN));
   } else {
     // FALLBACK (no heightfield supplied, e.g. a bare lake): the legacy geometric proxy —
     // the water fragment's own VIEW DISTANCE stands in for depth. Clear near the camera,

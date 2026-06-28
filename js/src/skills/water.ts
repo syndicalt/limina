@@ -31,6 +31,7 @@ import { buildWaterSurface, DEFAULT_WATER_COLOR, DEFAULT_WATER_SIZE, type WaterD
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { isTerrainType, terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { TerrainSource } from "../terrain/types.ts";
+import type { RegionState } from "./terrain.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 /** One water surface currently in the scene (for inspection / idempotent rebuild on
@@ -79,13 +80,87 @@ const addWaterOutput = z.object({
   color: z.number().int(),
 });
 
+/** Derive a TRUE water-column-depth descriptor from the terrain regions ALREADY generated
+ *  in this world (the live region table the terrain.* skills populate) — used when the
+ *  caller did NOT pass an explicit `region`. This makes terrain-aware true depth the DEFAULT
+ *  whenever the scene has terrain, instead of the camera-distance proxy: the water reads its
+ *  floor from the SAME deterministic source/seed/lod/hints the heightfield colliders were
+ *  built with. RENDER-ONLY: it only feeds the render graph (colour/opacity); it is read at
+ *  invoke time and deterministically re-derived on replay (generateRegion is re-invoked
+ *  before addWater), and is never captured into world state. Returns undefined when there is
+ *  no generated terrain to read (e.g. a bare lake) — then the proxy fallback stands in.
+ *  EXPORTED for the depth UAT (js/test/p11_water_depth.ts). */
+export function deriveDepthFromRegions(
+  source: TerrainSource,
+  regions: Map<string, RegionState>,
+): WaterDepthOptions | undefined {
+  // Each generated region → its world-XZ rectangle (from the applied tiles) + the exact
+  // seed/lod/hints it was generated with, so a height query reproduces the eroded surface.
+  const regs: {
+    minX: number; minZ: number; maxX: number; maxZ: number; cx: number; cz: number;
+    seed: number; lod: number; hints?: Record<string, number>;
+  }[] = [];
+  for (const r of regions.values()) {
+    let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
+    for (const t of r.tiles.values()) {
+      if (t.tx < minTx) minTx = t.tx;
+      if (t.tx > maxTx) maxTx = t.tx;
+      if (t.tz < minTz) minTz = t.tz;
+      if (t.tz > maxTz) maxTz = t.tz;
+    }
+    if (!Number.isFinite(minTx)) continue; // region with no applied tiles → skip
+    const minX = minTx * TILE_SIZE, minZ = minTz * TILE_SIZE;
+    const maxX = (maxTx + 1) * TILE_SIZE, maxZ = (maxTz + 1) * TILE_SIZE;
+    regs.push({ minX, minZ, maxX, maxZ, cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, seed: r.seed, lod: r.lod, hints: r.hints });
+  }
+  if (regs.length === 0) return undefined;
+
+  // Union bounds over all regions (the water samples true depth inside it, deep sea outside).
+  let uMinX = Infinity, uMinZ = Infinity, uMaxX = -Infinity, uMaxZ = -Infinity;
+  for (const g of regs) {
+    if (g.minX < uMinX) uMinX = g.minX;
+    if (g.minZ < uMinZ) uMinZ = g.minZ;
+    if (g.maxX > uMaxX) uMaxX = g.maxX;
+    if (g.maxZ > uMaxZ) uMaxZ = g.maxZ;
+  }
+
+  const sampleHeight = (x: number, z: number): number => {
+    // The region containing (x,z); if none (a gap between disjoint regions), the nearest by
+    // centre. Sample it clamped to its own bounds so every read is a real terrain height
+    // (an out-of-region point reads the coast's edge height — it then dissolves to deep sea
+    // via the shader's boundary feather).
+    let pick = regs[0];
+    let inside = false;
+    for (const g of regs) {
+      if (x >= g.minX && x <= g.maxX && z >= g.minZ && z <= g.maxZ) { pick = g; inside = true; break; }
+    }
+    if (!inside && regs.length > 1) {
+      let best = Infinity;
+      for (const g of regs) {
+        const dx = x - g.cx, dz = z - g.cz;
+        const d = dx * dx + dz * dz;
+        if (d < best) { best = d; pick = g; }
+      }
+    }
+    const sx = Math.min(pick.maxX, Math.max(pick.minX, x));
+    const sz = Math.min(pick.maxZ, Math.max(pick.minZ, z));
+    return source.sampleHeight(pick.seed, sx, sz, pick.lod, pick.hints);
+  };
+
+  return { sampleHeight, bounds: { minX: uMinX, minZ: uMinZ, maxX: uMaxX, maxZ: uMaxZ } };
+}
+
 /** Register the `world.addWater` skill bound to a closure list of placed surfaces
  *  (returned for host/test inspection — the SAME shape terrain skills return). The
  *  `terrainSource` (the SAME deterministic source the terrain.* skills are bound to) is
- *  read — never mutated — to bake the depth field when a `region` is supplied. */
+ *  read — never mutated — to bake the depth field: from an explicit `region` when supplied,
+ *  ELSE auto-derived from the `terrainRegions` already generated in this world (so true
+ *  depth-aware water is the DEFAULT wherever terrain exists; the camera-distance proxy is
+ *  used only when there is no heightfield at all, e.g. a bare lake). */
 export function registerWaterSkills(
   registry: SkillRegistry,
   terrainSource?: TerrainSource,
+  terrainRegions?: Map<string, RegionState>,
 ): { surfaces: WaterSurfaceState[] } {
   const surfaces: WaterSurfaceState[] = [];
 
@@ -119,6 +194,12 @@ export function registerWaterSkills(
           },
           resolution: region.resolution,
         };
+      } else if (region === undefined && terrainSource !== undefined && terrainRegions !== undefined) {
+        // DEFAULT true-depth path: no explicit region descriptor, but the world has generated
+        // terrain — derive the depth field from those regions (their seed/lod/hints), so the
+        // water grades by ACTUAL water-column depth and the shoreline tracks the real coast.
+        // Only when there is no terrain at all does this stay undefined → proxy fallback.
+        depth = deriveDepthFromRegions(terrainSource, terrainRegions);
       }
       const mesh = buildWaterSurface({ level: input.level, size: input.size, color: input.color, depth });
       // Render-only: add to the scene graph ONLY. No spawnRenderable (ECS), no
