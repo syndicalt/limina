@@ -25,6 +25,7 @@ import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { TROPICAL_BEACH_BASELINE } from "../render-baseline.ts";
+import { buildPostPipeline } from "../render/post.ts";
 import { buildCottageBeach, beachShapeHints, BEACH_SEED, BEACH_BOUNDS } from "./cottage_beach.ts";
 
 // Opt into the NAMED warm "golden-hour tropical beach" baseline (warm sun + tropical
@@ -94,6 +95,12 @@ const cz = result.cottage.position[2];
 const cy = result.seaLevel + 1.2; // look at the shoreline band, not the dune tops
 const orbitRadius = (Math.max(BEACH_BOUNDS.maxTx - BEACH_BOUNDS.minTx, BEACH_BOUNDS.maxTz - BEACH_BOUNDS.minTz) + 1) * TILE_SIZE * 1.05;
 
+// POST-PROCESSING STACK (Phase 3 terrain overhaul): real depth+normal pre-pass →
+// GTAO (settles the cottage/palms/driftwood onto the sand with contact AO) → high-
+// threshold bloom (the warm sky + foam/water glints lift) → gentle HDR grade over the
+// warm ACES baseline. Drives the loop in place of renderer.render. Render-only.
+const post = buildPostPipeline(engine.renderer, engine.scene, engine.camera);
+
 let angle = 0;
 const axes = new Float32Array(3);
 function render(_alpha: number): void {
@@ -105,13 +112,14 @@ function render(_alpha: number): void {
   engine.camera.position.set(cx + Math.cos(angle) * r, h, cz + Math.sin(angle) * r);
   engine.camera.lookAt(cx, cy, cz);
   renderSyncSystem(engine.world);
-  engine.renderer.render(engine.scene, engine.camera);
+  post.render();
   ops.op_surface_present(engine.context);
 }
 
 function onResize(w: number, h: number): void {
   ops.op_surface_resize(w, h);
   engine.renderer.setSize(w, h, false);
+  post.setSize(w, h);
   engine.camera.aspect = w / h;
   engine.camera.updateProjectionMatrix();
 }

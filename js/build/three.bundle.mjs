@@ -80902,6 +80902,461 @@ function addPrimitiveAttributes(geometry, primitiveDef, parser) {
     return primitiveDef.targets !== void 0 ? addMorphTargets(geometry, primitiveDef.targets, parser) : geometry;
   });
 }
+
+// node_modules/three/examples/jsm/tsl/display/GTAONode.js
+var _quadMesh2 = /* @__PURE__ */ new QuadMesh();
+var _size2 = /* @__PURE__ */ new Vector2();
+var _temporalRotations = [60, 300, 180, 240, 120, 0];
+var _rendererState2;
+var GTAONode = class extends TempNode {
+  static get type() {
+    return "GTAONode";
+  }
+  /**
+   * Constructs a new GTAO node.
+   *
+   * @param {Node<float>} depthNode - A node that represents the scene's depth.
+   * @param {?Node<vec3>} normalNode - A node that represents the scene's normals.
+   * @param {Camera} camera - The camera the scene is rendered with.
+   */
+  constructor(depthNode, normalNode, camera) {
+    super("float");
+    this.depthNode = depthNode;
+    this.normalNode = normalNode;
+    this.resolutionScale = 1;
+    this.updateBeforeType = NodeUpdateType2.FRAME;
+    this._aoRenderTarget = new RenderTarget(1, 1, { depthBuffer: false, format: RedFormat });
+    this._aoRenderTarget.texture.name = "GTAONode.AO";
+    this.radius = uniform2(0.25);
+    this.resolution = uniform2(new Vector2());
+    this.thickness = uniform2(1);
+    this.distanceExponent = uniform2(1);
+    this.distanceFallOff = uniform2(1);
+    this.scale = uniform2(1);
+    this.samples = uniform2(16);
+    this.useTemporalFiltering = false;
+    this._noiseNode = texture2(generateMagicSquareNoise());
+    this._cameraProjectionMatrix = uniform2(camera.projectionMatrix);
+    this._cameraProjectionMatrixInverse = uniform2(camera.projectionMatrixInverse);
+    this._cameraNear = reference2("near", "float", camera);
+    this._cameraFar = reference2("far", "float", camera);
+    this._temporalDirection = uniform2(0);
+    this._material = new NodeMaterial();
+    this._material.name = "GTAO";
+    this._textureNode = passTexture2(this, this._aoRenderTarget.texture);
+  }
+  /**
+   * Returns the result of the effect as a texture node.
+   *
+   * @return {PassTextureNode} A texture node that represents the result of the effect.
+   */
+  getTextureNode() {
+    return this._textureNode;
+  }
+  /**
+   * Sets the size of the effect.
+   *
+   * @param {number} width - The width of the effect.
+   * @param {number} height - The height of the effect.
+   */
+  setSize(width, height) {
+    width = Math.round(this.resolutionScale * width);
+    height = Math.round(this.resolutionScale * height);
+    this.resolution.value.set(width, height);
+    this._aoRenderTarget.setSize(width, height);
+  }
+  /**
+   * This method is used to render the effect once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore(frame) {
+    const { renderer } = frame;
+    _rendererState2 = RendererUtils.resetRendererState(renderer, _rendererState2);
+    if (this.useTemporalFiltering === true) {
+      const frameId3 = frame.frameId;
+      this._temporalDirection.value = _temporalRotations[frameId3 % 6] / 360;
+    } else {
+      this._temporalDirection.value = 0;
+    }
+    const size = renderer.getDrawingBufferSize(_size2);
+    this.setSize(size.width, size.height);
+    _quadMesh2.material = this._material;
+    _quadMesh2.name = "AO";
+    renderer.setClearColor(16777215, 1);
+    renderer.setRenderTarget(this._aoRenderTarget);
+    _quadMesh2.render(renderer);
+    RendererUtils.restoreRendererState(renderer, _rendererState2);
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {PassTextureNode}
+   */
+  setup(builder) {
+    const uvNode = uv2();
+    const sampleDepth = (uv3) => {
+      const depth3 = this.depthNode.sample(uv3).r;
+      if (builder.renderer.logarithmicDepthBuffer === true) {
+        const viewZ = logarithmicDepthToViewZ2(depth3, this._cameraNear, this._cameraFar);
+        return viewZToPerspectiveDepth2(viewZ, this._cameraNear, this._cameraFar);
+      }
+      return depth3;
+    };
+    const sampleNoise = (uv3) => this._noiseNode.sample(uv3);
+    const sampleNormal = (uv3) => this.normalNode !== null ? this.normalNode.sample(uv3).rgb.normalize() : getNormalFromDepth2(uv3, this.depthNode.value, this._cameraProjectionMatrixInverse);
+    const ao2 = Fn2(() => {
+      const depth3 = sampleDepth(uvNode).toVar();
+      depth3.greaterThanEqual(1).discard();
+      const viewPosition = getViewPosition2(uvNode, depth3, this._cameraProjectionMatrixInverse).toVar();
+      const viewNormal = sampleNormal(uvNode).toVar();
+      const radiusToUse = this.radius;
+      const noiseResolution = textureSize2(this._noiseNode, 0);
+      let noiseUv = vec22(uvNode.x, uvNode.y.oneMinus());
+      noiseUv = noiseUv.mul(this.resolution.div(noiseResolution));
+      const noiseTexel = sampleNoise(noiseUv);
+      const randomVec = noiseTexel.xyz.mul(2).sub(1);
+      const tangent = vec32(randomVec.xy, 0).normalize();
+      const bitangent = vec32(tangent.y.mul(-1), tangent.x, 0);
+      const kernelMatrix = mat32(tangent, bitangent, vec32(0, 0, 1));
+      const DIRECTIONS = this.samples.lessThan(30).select(3, 5).toVar();
+      const STEPS = add2(this.samples, DIRECTIONS.sub(1)).div(DIRECTIONS).toVar();
+      const ao3 = float2(0).toVar();
+      Loop2({ start: int2(0), end: DIRECTIONS, type: "int", condition: "<" }, ({ i }) => {
+        const angle = float2(i).div(float2(DIRECTIONS)).mul(PI3).add(this._temporalDirection).toVar();
+        const sampleDir = vec42(cos2(angle), sin2(angle), 0, add2(0.5, mul2(0.5, noiseTexel.w)));
+        sampleDir.xyz = normalize3(kernelMatrix.mul(sampleDir.xyz));
+        const viewDir = normalize3(viewPosition.xyz.negate()).toVar();
+        const sliceBitangent = normalize3(cross2(sampleDir.xyz, viewDir)).toVar();
+        const sliceTangent = cross2(sliceBitangent, viewDir);
+        const normalInSlice = normalize3(viewNormal.sub(sliceBitangent.mul(dot2(viewNormal, sliceBitangent))));
+        const tangentToNormalInSlice = cross2(normalInSlice, sliceBitangent).toVar();
+        const cosHorizons = vec22(dot2(viewDir, tangentToNormalInSlice), dot2(viewDir, tangentToNormalInSlice.negate())).toVar();
+        Loop2({ end: STEPS, type: "int", name: "j", condition: "<" }, ({ j }) => {
+          const sampleViewOffset = sampleDir.xyz.mul(radiusToUse).mul(sampleDir.w).mul(pow5(div2(float2(j).add(1), float2(STEPS)), this.distanceExponent));
+          const sampleScreenPositionX = getScreenPosition2(viewPosition.add(sampleViewOffset), this._cameraProjectionMatrix).toVar();
+          const sampleDepthX = sampleDepth(sampleScreenPositionX).toVar();
+          const sampleSceneViewPositionX = getViewPosition2(sampleScreenPositionX, sampleDepthX, this._cameraProjectionMatrixInverse).toVar();
+          const viewDeltaX = sampleSceneViewPositionX.sub(viewPosition).toVar();
+          If2(abs2(viewDeltaX.z).lessThan(this.thickness), () => {
+            const sampleCosHorizon = dot2(viewDir, normalize3(viewDeltaX));
+            cosHorizons.x.addAssign(max2(0, mul2(sampleCosHorizon.sub(cosHorizons.x), mix2(1, float2(2).div(float2(j).add(2)), this.distanceFallOff))));
+          });
+          const sampleScreenPositionY = getScreenPosition2(viewPosition.sub(sampleViewOffset), this._cameraProjectionMatrix).toVar();
+          const sampleDepthY = sampleDepth(sampleScreenPositionY).toVar();
+          const sampleSceneViewPositionY = getViewPosition2(sampleScreenPositionY, sampleDepthY, this._cameraProjectionMatrixInverse).toVar();
+          const viewDeltaY = sampleSceneViewPositionY.sub(viewPosition).toVar();
+          If2(abs2(viewDeltaY.z).lessThan(this.thickness), () => {
+            const sampleCosHorizon = dot2(viewDir, normalize3(viewDeltaY));
+            cosHorizons.y.addAssign(max2(0, mul2(sampleCosHorizon.sub(cosHorizons.y), mix2(1, float2(2).div(float2(j).add(2)), this.distanceFallOff))));
+          });
+        });
+        const sinHorizons = sqrt2(sub2(1, cosHorizons.mul(cosHorizons))).toVar();
+        const nx = dot2(normalInSlice, sliceTangent);
+        const ny = dot2(normalInSlice, viewDir);
+        const nxb = mul2(0.5, acos2(cosHorizons.y).sub(acos2(cosHorizons.x)).add(sinHorizons.x.mul(cosHorizons.x).sub(sinHorizons.y.mul(cosHorizons.y))));
+        const nyb = mul2(0.5, sub2(2, cosHorizons.x.mul(cosHorizons.x)).sub(cosHorizons.y.mul(cosHorizons.y)));
+        const occlusion = nx.mul(nxb).add(ny.mul(nyb));
+        ao3.addAssign(occlusion);
+      });
+      ao3.assign(clamp3(ao3.div(DIRECTIONS), 0, 1));
+      ao3.assign(pow5(ao3, this.scale));
+      return ao3;
+    });
+    this._material.fragmentNode = ao2().context(builder.getSharedContext());
+    this._material.needsUpdate = true;
+    return this._textureNode;
+  }
+  /**
+   * Frees internal resources. This method should be called
+   * when the effect is no longer required.
+   */
+  dispose() {
+    this._aoRenderTarget.dispose();
+    this._material.dispose();
+  }
+};
+function generateMagicSquareNoise(size = 5) {
+  const noiseSize = Math.floor(size) % 2 === 0 ? Math.floor(size) + 1 : Math.floor(size);
+  const magicSquare = generateMagicSquare(noiseSize);
+  const noiseSquareSize = magicSquare.length;
+  const data = new Uint8Array(noiseSquareSize * 4);
+  for (let inx = 0; inx < noiseSquareSize; ++inx) {
+    const iAng = magicSquare[inx];
+    const angle = 2 * Math.PI * iAng / noiseSquareSize;
+    const randomVec = new Vector3(
+      Math.cos(angle),
+      Math.sin(angle),
+      0
+    ).normalize();
+    data[inx * 4] = (randomVec.x * 0.5 + 0.5) * 255;
+    data[inx * 4 + 1] = (randomVec.y * 0.5 + 0.5) * 255;
+    data[inx * 4 + 2] = 127;
+    data[inx * 4 + 3] = 255;
+  }
+  const noiseTexture = new DataTexture(data, noiseSize, noiseSize);
+  noiseTexture.wrapS = RepeatWrapping;
+  noiseTexture.wrapT = RepeatWrapping;
+  noiseTexture.needsUpdate = true;
+  return noiseTexture;
+}
+function generateMagicSquare(size) {
+  const noiseSize = Math.floor(size) % 2 === 0 ? Math.floor(size) + 1 : Math.floor(size);
+  const noiseSquareSize = noiseSize * noiseSize;
+  const magicSquare = Array(noiseSquareSize).fill(0);
+  let i = Math.floor(noiseSize / 2);
+  let j = noiseSize - 1;
+  for (let num = 1; num <= noiseSquareSize; ) {
+    if (i === -1 && j === noiseSize) {
+      j = noiseSize - 2;
+      i = 0;
+    } else {
+      if (j === noiseSize) {
+        j = 0;
+      }
+      if (i < 0) {
+        i = noiseSize - 1;
+      }
+    }
+    if (magicSquare[i * noiseSize + j] !== 0) {
+      j -= 2;
+      i++;
+      continue;
+    } else {
+      magicSquare[i * noiseSize + j] = num++;
+    }
+    j++;
+    i--;
+  }
+  return magicSquare;
+}
+var ao = (depthNode, normalNode, camera) => new GTAONode(nodeObject2(depthNode), nodeObject2(normalNode), camera);
+
+// node_modules/three/examples/jsm/tsl/display/BloomNode.js
+var _quadMesh3 = /* @__PURE__ */ new QuadMesh();
+var _size3 = /* @__PURE__ */ new Vector2();
+var _BlurDirectionX = /* @__PURE__ */ new Vector2(1, 0);
+var _BlurDirectionY = /* @__PURE__ */ new Vector2(0, 1);
+var _rendererState3;
+var BloomNode = class extends TempNode {
+  static get type() {
+    return "BloomNode";
+  }
+  /**
+   * Constructs a new bloom node.
+   *
+   * @param {Node<vec4>} inputNode - The node that represents the input of the effect.
+   * @param {number} [strength=1] - The strength of the bloom.
+   * @param {number} [radius=0] - The radius of the bloom.
+   * @param {number} [threshold=0] - The luminance threshold limits which bright areas contribute to the bloom effect.
+   */
+  constructor(inputNode, strength = 1, radius = 0, threshold = 0) {
+    super("vec4");
+    this.inputNode = inputNode;
+    this.strength = uniform2(strength);
+    this.radius = uniform2(radius);
+    this.threshold = uniform2(threshold);
+    this.smoothWidth = uniform2(0.01);
+    this._renderTargetsHorizontal = [];
+    this._renderTargetsVertical = [];
+    this._nMips = 5;
+    this._renderTargetBright = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._renderTargetBright.texture.name = "UnrealBloomPass.bright";
+    this._renderTargetBright.texture.generateMipmaps = false;
+    for (let i = 0; i < this._nMips; i++) {
+      const renderTargetHorizontal = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+      renderTargetHorizontal.texture.name = "UnrealBloomPass.h" + i;
+      renderTargetHorizontal.texture.generateMipmaps = false;
+      this._renderTargetsHorizontal.push(renderTargetHorizontal);
+      const renderTargetVertical = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+      renderTargetVertical.texture.name = "UnrealBloomPass.v" + i;
+      renderTargetVertical.texture.generateMipmaps = false;
+      this._renderTargetsVertical.push(renderTargetVertical);
+    }
+    this._compositeMaterial = null;
+    this._highPassFilterMaterial = null;
+    this._separableBlurMaterials = [];
+    this._textureNodeBright = texture2(this._renderTargetBright.texture);
+    this._textureNodeBlur0 = texture2(this._renderTargetsVertical[0].texture);
+    this._textureNodeBlur1 = texture2(this._renderTargetsVertical[1].texture);
+    this._textureNodeBlur2 = texture2(this._renderTargetsVertical[2].texture);
+    this._textureNodeBlur3 = texture2(this._renderTargetsVertical[3].texture);
+    this._textureNodeBlur4 = texture2(this._renderTargetsVertical[4].texture);
+    this._textureOutput = passTexture2(this, this._renderTargetsHorizontal[0].texture);
+    this.updateBeforeType = NodeUpdateType.FRAME;
+  }
+  /**
+   * Returns the result of the effect as a texture node.
+   *
+   * @return {PassTextureNode} A texture node that represents the result of the effect.
+   */
+  getTextureNode() {
+    return this._textureOutput;
+  }
+  /**
+   * Sets the size of the effect.
+   *
+   * @param {number} width - The width of the effect.
+   * @param {number} height - The height of the effect.
+   */
+  setSize(width, height) {
+    let resx = Math.round(width / 2);
+    let resy = Math.round(height / 2);
+    this._renderTargetBright.setSize(resx, resy);
+    for (let i = 0; i < this._nMips; i++) {
+      this._renderTargetsHorizontal[i].setSize(resx, resy);
+      this._renderTargetsVertical[i].setSize(resx, resy);
+      this._separableBlurMaterials[i].invSize.value.set(1 / resx, 1 / resy);
+      resx = Math.round(resx / 2);
+      resy = Math.round(resy / 2);
+    }
+  }
+  /**
+   * This method is used to render the effect once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore(frame) {
+    const { renderer } = frame;
+    _rendererState3 = RendererUtils.resetRendererState(renderer, _rendererState3);
+    const size = renderer.getDrawingBufferSize(_size3);
+    this.setSize(size.width, size.height);
+    renderer.setRenderTarget(this._renderTargetBright);
+    _quadMesh3.material = this._highPassFilterMaterial;
+    _quadMesh3.name = "Bloom [ High Pass ]";
+    _quadMesh3.render(renderer);
+    let inputRenderTarget = this._renderTargetBright;
+    for (let i = 0; i < this._nMips; i++) {
+      _quadMesh3.material = this._separableBlurMaterials[i];
+      this._separableBlurMaterials[i].colorTexture.value = inputRenderTarget.texture;
+      this._separableBlurMaterials[i].direction.value = _BlurDirectionX;
+      renderer.setRenderTarget(this._renderTargetsHorizontal[i]);
+      _quadMesh3.name = `Bloom [ Blur Horizontal - ${i} ]`;
+      _quadMesh3.render(renderer);
+      this._separableBlurMaterials[i].colorTexture.value = this._renderTargetsHorizontal[i].texture;
+      this._separableBlurMaterials[i].direction.value = _BlurDirectionY;
+      renderer.setRenderTarget(this._renderTargetsVertical[i]);
+      _quadMesh3.name = `Bloom [ Blur Vertical - ${i} ]`;
+      _quadMesh3.render(renderer);
+      inputRenderTarget = this._renderTargetsVertical[i];
+    }
+    renderer.setRenderTarget(this._renderTargetsHorizontal[0]);
+    _quadMesh3.material = this._compositeMaterial;
+    _quadMesh3.name = "Bloom [ Composite ]";
+    _quadMesh3.render(renderer);
+    RendererUtils.restoreRendererState(renderer, _rendererState3);
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {PassTextureNode}
+   */
+  setup(builder) {
+    const luminosityHighPass = Fn2(() => {
+      const texel = this.inputNode;
+      const v = luminance2(texel.rgb);
+      const alpha = smoothstep3(this.threshold, this.threshold.add(this.smoothWidth), v);
+      return mix2(vec42(0), texel, alpha);
+    });
+    this._highPassFilterMaterial = this._highPassFilterMaterial || new NodeMaterial();
+    this._highPassFilterMaterial.fragmentNode = luminosityHighPass().context(builder.getSharedContext());
+    this._highPassFilterMaterial.name = "Bloom_highPass";
+    this._highPassFilterMaterial.needsUpdate = true;
+    const kernelSizeArray = [6, 10, 14, 18, 22];
+    for (let i = 0; i < this._nMips; i++) {
+      this._separableBlurMaterials.push(this._getSeparableBlurMaterial(builder, kernelSizeArray[i]));
+    }
+    const bloomFactors = uniformArray2([1, 0.8, 0.6, 0.4, 0.2]);
+    const bloomTintColors = uniformArray2([new Vector3(1, 1, 1), new Vector3(1, 1, 1), new Vector3(1, 1, 1), new Vector3(1, 1, 1), new Vector3(1, 1, 1)]);
+    const lerpBloomFactor = Fn2(([factor, radius]) => {
+      const mirrorFactor = float2(1.2).sub(factor);
+      return mix2(factor, mirrorFactor, radius);
+    }).setLayout({
+      name: "lerpBloomFactor",
+      type: "float",
+      inputs: [
+        { name: "factor", type: "float" },
+        { name: "radius", type: "float" }
+      ]
+    });
+    const compositePass = Fn2(() => {
+      const color0 = lerpBloomFactor(bloomFactors.element(0), this.radius).mul(vec42(bloomTintColors.element(0), 1)).mul(this._textureNodeBlur0);
+      const color1 = lerpBloomFactor(bloomFactors.element(1), this.radius).mul(vec42(bloomTintColors.element(1), 1)).mul(this._textureNodeBlur1);
+      const color22 = lerpBloomFactor(bloomFactors.element(2), this.radius).mul(vec42(bloomTintColors.element(2), 1)).mul(this._textureNodeBlur2);
+      const color3 = lerpBloomFactor(bloomFactors.element(3), this.radius).mul(vec42(bloomTintColors.element(3), 1)).mul(this._textureNodeBlur3);
+      const color4 = lerpBloomFactor(bloomFactors.element(4), this.radius).mul(vec42(bloomTintColors.element(4), 1)).mul(this._textureNodeBlur4);
+      const sum = color0.add(color1).add(color22).add(color3).add(color4);
+      return sum.mul(this.strength);
+    });
+    this._compositeMaterial = this._compositeMaterial || new NodeMaterial();
+    this._compositeMaterial.fragmentNode = compositePass().context(builder.getSharedContext());
+    this._compositeMaterial.name = "Bloom_comp";
+    this._compositeMaterial.needsUpdate = true;
+    return this._textureOutput;
+  }
+  /**
+   * Frees internal resources. This method should be called
+   * when the effect is no longer required.
+   */
+  dispose() {
+    for (let i = 0; i < this._renderTargetsHorizontal.length; i++) {
+      this._renderTargetsHorizontal[i].dispose();
+    }
+    for (let i = 0; i < this._renderTargetsVertical.length; i++) {
+      this._renderTargetsVertical[i].dispose();
+    }
+    this._renderTargetBright.dispose();
+    if (this._highPassFilterMaterial !== null) this._highPassFilterMaterial.dispose();
+    if (this._compositeMaterial !== null) this._compositeMaterial.dispose();
+    for (let i = 0; i < this._separableBlurMaterials.length; i++) {
+      this._separableBlurMaterials[i].dispose();
+    }
+  }
+  /**
+   * Create a separable blur material for the given kernel radius.
+   *
+   * @private
+   * @param {NodeBuilder} builder - The current node builder.
+   * @param {number} kernelRadius - The kernel radius.
+   * @return {NodeMaterial}
+   */
+  _getSeparableBlurMaterial(builder, kernelRadius) {
+    const coefficients = [];
+    const sigma = kernelRadius / 3;
+    for (let i = 0; i < kernelRadius; i++) {
+      coefficients.push(0.39894 * Math.exp(-0.5 * i * i / (sigma * sigma)) / sigma);
+    }
+    const colorTexture = texture2(null);
+    const gaussianCoefficients = uniformArray2(coefficients);
+    const invSize = uniform2(new Vector2());
+    const direction = uniform2(new Vector2(0.5, 0.5));
+    const uvNode = uv2();
+    const sampleTexel = (uv3) => colorTexture.sample(uv3);
+    const separableBlurPass = Fn2(() => {
+      const diffuseSum = sampleTexel(uvNode).rgb.mul(gaussianCoefficients.element(0)).toVar();
+      Loop2({ start: int2(1), end: int2(kernelRadius), type: "int", condition: "<" }, ({ i }) => {
+        const x = float2(i);
+        const w = gaussianCoefficients.element(i);
+        const uvOffset = direction.mul(invSize).mul(x);
+        const sample1 = sampleTexel(uvNode.add(uvOffset)).rgb;
+        const sample22 = sampleTexel(uvNode.sub(uvOffset)).rgb;
+        diffuseSum.addAssign(add2(sample1, sample22).mul(w));
+      });
+      return vec42(diffuseSum, 1);
+    });
+    const separableBlurMaterial = new NodeMaterial();
+    separableBlurMaterial.fragmentNode = separableBlurPass().context(builder.getSharedContext());
+    separableBlurMaterial.name = "Bloom_separable";
+    separableBlurMaterial.needsUpdate = true;
+    separableBlurMaterial.colorTexture = colorTexture;
+    separableBlurMaterial.direction = direction;
+    separableBlurMaterial.invSize = invSize;
+    return separableBlurMaterial;
+  }
+};
+var bloom = (node, strength, radius, threshold) => new BloomNode(nodeObject2(node), strength, radius, threshold);
 export {
   ACESFilmicToneMapping,
   AONode,
@@ -81521,6 +81976,8 @@ export {
   ZeroFactor,
   ZeroSlopeEnding,
   ZeroStencilOp,
+  ao,
+  bloom,
   createCanvasElement,
   defaultBuildStages,
   defaultShaderStages,
