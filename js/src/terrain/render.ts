@@ -12,6 +12,8 @@ import { terrainTileGeometry } from "./mesh.ts";
 import { scatterProps } from "./scatter.ts";
 import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
+import { applyPbrMaterial, type TerrainPbrOptions } from "./material-pbr.ts";
+export type { TerrainPbrOptions } from "./material-pbr.ts";
 
 export interface TerrainMeshOptions {
   /** Base albedo (hex). Default a muted terrain green/brown. */
@@ -54,6 +56,16 @@ export interface TerrainMeshOptions {
    * material every other world gets (no behaviour change when absent).
    */
   palette?: TerrainPaletteOptions;
+  /**
+   * OPT-IN procedural PBR surface (render-only). When set, the surface is shaded by the SAME
+   * elevation+biome bands as `palette`, but each band is a real MATERIAL LAYER — procedural
+   * albedo + a real detail NORMAL + honest roughness, projected TRIPLANARLY (no UV stretch on
+   * slopes). The detail normals break up the flat "clay" shading so rock reads craggy, grass
+   * grained, snow soft, sand rippled — "Grounded Stylized Realism". Supersedes `palette`/
+   * `shoreline`. Built from a SHARED baked tileable noise texture (deterministic, render-only).
+   * Omit for the plain matte material every other world gets (no behaviour change when absent).
+   */
+  pbr?: TerrainPbrOptions;
   /**
    * OPT-IN render-only vertical exaggeration of the rendered mesh (the geometry only —
    * the collider/source heights are untouched). Scales each vertex's world-Y about
@@ -132,8 +144,9 @@ function applyShoreline(
   material.roughnessNode = T.float(baseRough).sub(wetMask.mul(Math.max(0, baseRough - 0.45)));
 }
 
-/** Default per-band albedo (sRGB hex) for the elevation+biome ramp. */
-const RAMP_DEFAULT_COLORS = {
+/** Default per-band albedo (sRGB hex) for the elevation+biome ramp. Exported so the opt-in
+ *  PBR material reuses the SAME band albedos as the flat ramp (consistent colour families). */
+export const RAMP_DEFAULT_COLORS = {
   subSea: 0x4a4636,   // damp silt/sand under the waterline
   sand: 0xc2a878,     // warm coastal sand just above the sea
   dryGrass: 0xa7a256, // dry grass / savanna where precip is low
@@ -144,8 +157,10 @@ const RAMP_DEFAULT_COLORS = {
 
 /** A baked per-tile climate field: an RGBA DataTexture (R=temp01, G=precip01, B=biome01)
  *  + the world-XZ rectangle it covers, so the ramp shader can read a fragment's climate
- *  at its world (x,z). Mirrors water.ts's depth bake (DataTexture sampled by world XZ). */
-interface BakedClimate {
+ *  at its world (x,z). Mirrors water.ts's depth bake (DataTexture sampled by world XZ).
+ *  Exported so the opt-in PBR material (material-pbr.ts) reuses the SAME climate read as
+ *  the flat ramp — the two shaders band identically, only the surface detail differs. */
+export interface BakedClimate {
   texture: THREE.DataTexture;
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
 }
@@ -153,7 +168,7 @@ interface BakedClimate {
 /** Bake the tile's own per-cell climate grid into an RGBA texture (linear-filtered, so the
  *  bands vary smoothly between cells). Self-contained: reads the tile's `climate` channels
  *  in the canonical CLIMATE_* layout (falls back to a neutral temperate field if absent). */
-function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], precipMax: number): BakedClimate {
+export function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], precipMax: number): BakedClimate {
   const { ncols, nrows } = tile;
   const ch = tile.climateChannels ?? 0;
   const climate = tile.climate;
@@ -305,9 +320,11 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
     metalness: opts.metalness ?? 0.0,
   });
   if (opts.doubleSide === true) material.side = THREE.DoubleSide;
-  // Opt-in elevation+biome ramp (supersedes shoreline) else opt-in tropical shoreline.
-  // Both are no-ops when absent → the material is byte-identical to the flat-colour default.
-  if (opts.palette !== undefined) applyBiomeRamp(material, tile, baseRough, opts.palette);
+  // Opt-in procedural PBR (supersedes the flat ramp/shoreline) else opt-in elevation+biome
+  // ramp (supersedes shoreline) else opt-in tropical shoreline. ALL are no-ops when absent →
+  // the material is byte-identical to the flat-colour default (no regression to default path).
+  if (opts.pbr !== undefined) applyPbrMaterial(material, tile, baseRough, opts.pbr);
+  else if (opts.palette !== undefined) applyBiomeRamp(material, tile, baseRough, opts.palette);
   else if (opts.shoreline !== undefined) applyShoreline(material, baseColor, baseRough, opts.shoreline);
   // Opt-in render-only vertical exaggeration (geometry only; identity when factor === 1).
   if (opts.exaggerateY !== undefined && opts.exaggerateY.factor !== 1) {
