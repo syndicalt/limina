@@ -25,7 +25,7 @@ import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { buildTerrainMesh } from "../terrain/render.ts";
 import { ModelTerrainSource } from "../terrain/model-source.ts";
-import { CLIMATE_BIOME } from "../terrain/types.ts";
+import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
 
 const SEED = 1234;                  // MUST equal the shim's --region-seed (model launch --seed)
 const SHIM_URL = "http://127.0.0.1:8917";
@@ -34,6 +34,15 @@ const NATIVE_M_PER_PX = 30;         // terrain-diffusion-30m native (scale 1)
 const SHIM_SCALE = 1;               // == the shim's --scale
 const METERS_PER_PX = NATIVE_M_PER_PX / SHIM_SCALE; // limina extent = tilePx * this
 const ELEV_MIN = -500, ELEV_MAX = 9000;             // fixed normalization window (metres)
+const SEA_LEVEL = 0;                                 // real-DEM sea level (0 m) → world Y 0
+// Render-only vertical exaggeration of the terrain MESH (geometry only; collider/source
+// heights untouched). 1 = off (default). Bump (e.g. 1.5–2) if the 30 m/px relief reads
+// too gentle — but keep it 1 when scatter is on, since props sit at TRUE heights.
+const VERT_EXAG = 1;
+// The terrain TYPE whose biome CONTENT (vegetation layers) is scattered over the model
+// region. The model isn't a procedural type, so the type only selects which curated assets
+// to place; relief + biome/elevation gating read the MODEL's real surface + climate.
+const CONTENT_TYPE = "hills" as const;
 
 // The model source: a drop-in TerrainSource that marshals each tile to the shim over HTTP.
 // The shim emits the model's FAITHFUL channel-major climate [temp@0, t_season@1, precip@2,
@@ -73,41 +82,50 @@ ops.op_log("model_terrain: shim ready — generating region from the diffusion m
 const bounds = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 };
 const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds, lod: 0 }, base);
 if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
+const regionId = (gen.result as { regionId: string }).regionId;
 
-// Tint each cell by its model-classified biome (the canonical Biome enum the source packed).
-const BIOME_TINT: number[] = [
-  0xeaf2f7, // ICE
-  0xd9b06a, // DESERT
-  0x9bad6a, // STEPPE
-  0xc2b170, // SAVANNA
-  0x4f7a3a, // TEMPERATE_FOREST
-  0x2f6b32, // TROPICAL
-  0x6f8f6a, // BOREAL_WET
-];
+// Survey the model region's true world-Y relief (the tiles are cached after generateRegion)
+// so the ramp's high/rock/snow bands normalise against the ACTUAL relief, not the −500..9000
+// normalization window (which the region rarely fills). The model ignores hints, so {} is fine.
+const relief = surveyRegionRelief(source, SEED, bounds, {});
 
-// Mount the model surface tile-by-tile. generateTile is ASYNC for the model source
-// (HTTP to the shim); generateRegion already baked + cached these, so each await is a hit.
+// THE SEA — a render-only water plane at real sea level (0 m). Sized to span the whole
+// region so the ocean reads as open water around the landmass (the default 400 plane is far
+// too small for a multi-km model region).
+const span = (bounds.maxTx - bounds.minTx + 1) * source.extent;
+const waterRes = await registry.invoke("world.addWater", { level: SEA_LEVEL, size: span * 3 }, base);
+if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
+
+// Mount the model surface tile-by-tile with the ELEVATION + BIOME colour ramp (sandy coast →
+// green/dry lowland by precip → grey rock on the high+steep → white snow on the high+cold →
+// dark silt below the sea), driven by the model's own climate. generateTile is ASYNC for the
+// model source (HTTP); generateRegion already baked + cached these, so each await is a hit.
 for (let tz = bounds.minTz; tz <= bounds.maxTz; tz++) {
   for (let tx = bounds.minTx; tx <= bounds.maxTx; tx++) {
     const tile = await source.generateTile({ seed: SEED, tx, tz, lod: 0 });
-    // Pick a representative biome for the tile's tint (its center cell).
-    let color = 0x8a8f7a;
-    if (tile.climate && tile.climateChannels) {
-      const mid = (Math.floor(tile.nrows / 2) * tile.ncols + Math.floor(tile.ncols / 2)) * tile.climateChannels;
-      const b = tile.climate[mid + CLIMATE_BIOME] | 0;
-      color = BIOME_TINT[b] ?? color;
-    }
-    const mesh = buildTerrainMesh(tile, { color, roughness: 0.95 });
+    const mesh = buildTerrainMesh(tile, {
+      roughness: 0.95,
+      palette: { seaLevel: SEA_LEVEL, minY: relief.minY, maxY: relief.maxY },
+      ...(VERT_EXAG !== 1 ? { exaggerateY: { factor: VERT_EXAG, pivot: SEA_LEVEL } } : {}),
+    });
     engine.scene.add(mesh);
   }
 }
+
+// POPULATE the model surface with biome content via the SAME agent-native seam the procedural
+// worlds use: scatterBiomeContent surveys the region + runs asset.scatter per layer, gated by
+// the MODEL's real relief + climate. NOTE: at 30 m/px (shim --scale 1) a 256-px tile spans
+// ~7.7 km, so the curated trees/rocks read as specks — run the shim at --scale 8 (3.75 m/px,
+// METERS_PER_PX 30/8) to see the vegetation. Count is bounded per tile, so it never blows up.
+const scattered = await scatterBiomeContent({
+  registry, source, regionId, type: CONTENT_TYPE, bounds, seed: SEED, base,
+});
 
 // FREE-FLY camera framed on the generated region (geometry from the source, not procedural).
 const extent = source.extent; // world metres per tile edge
 const cx = ((bounds.minTx + bounds.maxTx + 1) / 2) * extent;
 const cz = ((bounds.minTz + bounds.maxTz + 1) / 2) * extent;
-const span = (bounds.maxTx - bounds.minTx + 1) * extent;
-const cy = ELEV_MIN + (ELEV_MAX - ELEV_MIN) * 0.25;
+const cy = relief.minY + (relief.maxY - relief.minY) * 0.6;
 
 engine.camera.near = 1;
 engine.camera.far = span * 6;
@@ -158,6 +176,8 @@ ops.op_set_frame_callback(render);
 ops.op_set_resize_callback(onResize);
 ops.op_log(
   `model_terrain ready: ${(bounds.maxTx - bounds.minTx + 1)}x${(bounds.maxTz - bounds.minTz + 1)} tiles from terrain-diffusion ` +
-  `via the /tile shim (${SHIM_URL}), seed ${SEED}, ${METERS_PER_PX} m/px, biome-tinted by the model's climate — ` +
+  `via the /tile shim (${SHIM_URL}), seed ${SEED}, ${METERS_PER_PX} m/px — ELEVATION+BIOME colour ramp over the model's ` +
+  `climate (relief ${relief.minY.toFixed(0)}..${relief.maxY.toFixed(0)} m), sea at ${SEA_LEVEL} m, ` +
+  `${scattered.instances} biome props (${CONTENT_TYPE} layers, model-gated) — ` +
   `FREE-FLY: click to capture the mouse, WASD to move, Q/E up·down, mouse to look, Escape to release.`,
 );
