@@ -113,14 +113,25 @@ const pines = scatterRegion(mtn.tiles, pineCfg);
 const rocks = scatterRegion(mtn.tiles, mtnConfigs[1]);
 assert(pines.length > 0 && pines.every((p) => p.assetId === PINE_ASSET), "mountains placed no pines");
 assert(rocks.length > 0 && rocks.every((p) => p.assetId === ROCK_ASSET), "mountains placed no boulders");
-// Every pine is BELOW the tree line (the icy peaks stay bare).
-assert(pines.every((p) => p.y <= treeLine + 1e-6), "a pine sits ABOVE the mountain tree line (ice line not enforced)");
-// FALSIFIABLE SUPERSET: drop the tree line → the high pines reappear, and the capped run
-// is EXACTLY the loosened run filtered to the cap (a pure post-filter on the height field).
-const pinesLoose = scatterRegion(mtn.tiles, { ...pineCfg, elevationMax: undefined });
-assert(pinesLoose.length > pines.length, `tree line excluded nothing (${pines.length} vs loosened ${pinesLoose.length})`);
-assert(pinesLoose.some((p) => p.y > treeLine), "test setup: no pine candidates above the tree line (cap vacuous)");
-assert(sameInstances(pines, pinesLoose.filter((p) => p.y <= treeLine + 1e-6)), "capped pines are not a reproducible subset of the uncapped run");
+// The pine layer carries an embedRadius, which SINKS the recorded y into the slope — so a
+// pine's recorded y is NOT the surface y the tree-line gate compares against (a candidate
+// whose surface sits just above the line can sink to below it, and vice-versa near the line).
+// The tree-line CONTRACT is about the SURFACE seating, so verify it on the un-embedded config
+// (recorded y == surface y): same gate, same RNG stream, no sink. Acceptance is identical to
+// the embedded run (the sink is applied AFTER the gate), which we cross-check below.
+const pineCfgNoEmbed: ScatterConfig = { ...pineCfg, embedRadius: 0, assets: pineCfg.assets.map((a) => ({ id: a.id, ...(a.weight !== undefined ? { weight: a.weight } : {}) })) };
+const pinesSeated = scatterRegion(mtn.tiles, pineCfgNoEmbed);                 // recorded y == surface y
+assert(pinesSeated.length === pines.length, `embed changed the placed pine count (${pines.length} vs seated ${pinesSeated.length}) — the sink leaked into the gate`);
+// Every pine is BELOW the tree line on the true SEATING surface (the icy peaks stay bare).
+assert(pinesSeated.every((p) => p.y <= treeLine + 1e-6), "a pine sits ABOVE the mountain tree line on the seating surface (ice line not enforced)");
+// FALSIFIABLE SUPERSET (bidirectional, on surface y): drop the tree line → the high pines
+// reappear, and the capped run is EXACTLY the loosened run filtered to the cap — nothing extra
+// (subset) AND nothing missing (a sub-sink leak just under the line would break equality).
+const pinesSeatedLoose = scatterRegion(mtn.tiles, { ...pineCfgNoEmbed, elevationMax: undefined });
+assert(pinesSeatedLoose.length > pinesSeated.length, `tree line excluded nothing (${pinesSeated.length} vs loosened ${pinesSeatedLoose.length})`);
+assert(pinesSeatedLoose.some((p) => p.y > treeLine), "test setup: no pine candidates above the tree line (cap vacuous)");
+assert(sameInstances(pinesSeated, pinesSeatedLoose.filter((p) => p.y <= treeLine + 1e-6)),
+  "capped pines are not EXACTLY the uncapped run filtered to the tree line (surface-y gate is not a pure post-filter)");
 
 // ── 4. DESERT CACTI: biome-gated, falsifiably absent outside the desert biome ─────────
 const des = regionTiles("desert", BOUNDS);
@@ -148,11 +159,15 @@ const grass = scatterRegion(plains.tiles, biomeScatterConfigs("plains", plains.s
 assert(grass.length > 0 && grass.every((p) => p.assetId === GRASS_ASSET), "plains placed no grass");
 
 // ── 5. ON-SURFACE (drop parity vs the heightfield collider) + DETERMINISTIC ────────────
+// The pine layer carries an embedRadius, which deliberately SINKS instances into a slope so
+// their downhill base lip stays grounded (the floating-trees fix — verified in p11_prop_tether).
+// Pure surface-SEATING is a property of the base placement, so we drop-parity against the
+// un-embedded config (embedRadius stripped per-asset + layer): recorded y == the surface.
 const t0 = mtn.tiles[0];
 const hId = ops.op_physics_add_heightfield(t0.origin[0], t0.origin[1], t0.origin[2], t0.nrows, t0.ncols, t0.scale[0], t0.scale[1], t0.scale[2], t0.heights);
 ops.op_physics_step();
-const onTile0 = scatterAssets(t0, SEED, pineCfg);
-assert(sameInstances(onTile0, scatterAssets(t0, SEED, pineCfg)), "biome scatter is non-deterministic (same tile+config differ)");
+const onTile0 = scatterAssets(t0, SEED, pineCfgNoEmbed);
+assert(sameInstances(onTile0, scatterAssets(t0, SEED, pineCfgNoEmbed)), "biome scatter is non-deterministic (same tile+config differ)");
 const ray = new Float32Array(6);
 let checked = 0;
 const stride = Math.max(1, Math.floor(onTile0.length / 12));
@@ -211,7 +226,7 @@ assert(!("elevationMax" in resolveLayer({ seed: 1, assets: [{ id: GRASS_ASSET }]
 
 ops.op_log(
   `p11_biome_content OK: 5 curated CC0 assets place as hashed gltf entities (pine/broadleaf/cactus/bush/grass, distinct hashes); ` +
-  `mountains pine tree-line falsifiable (below-line ${pines.length} ⊂ uncapped ${pinesLoose.length}, 0 above, peaks bare to Y${mtn.survey.maxY.toFixed(0)} > line ${treeLine.toFixed(0)}); ` +
+  `mountains pine tree-line falsifiable on the seating surface (capped ${pinesSeated.length} == uncapped ${pinesSeatedLoose.length} filtered to the line, 0 above, peaks bare to Y${mtn.survey.maxY.toFixed(0)} > line ${treeLine.toFixed(0)}); ` +
   `desert cacti biome-gated (${desertCacti.length} in desert, 0 in forest, ${cactiNoGate.length} ungated — gate non-vacuous); ` +
   `forest broadleaf+pine+bush, plains grass; ${checked} pines drop-checked vs collider+sampleHeight, deterministic; ` +
   `scatterBiomeContent surveyed+scattered ${content.instances} mountain instances over ${content.layers.length} layers (hashes pinned, meshes mounted); beach config byte-identical to the original recipe.`,

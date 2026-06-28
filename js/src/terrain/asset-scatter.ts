@@ -21,11 +21,29 @@
 import { CLIMATE_BIOME, CLIMATE_CHANNELS, CLIMATE_TEMP_C, type TerrainTile } from "./types.ts";
 import { hashSeed, mulberry32 } from "./scatter.ts";
 
+// ── EMBED-SINK (slope-aware vertical tether) ────────────────────────────────────
+// A prop is tethered to the surface at its CENTER (x,z). Its flat base is horizontal,
+// so on a slope of gradient `s` (rise/run) the downhill lip of a base of radius `r`
+// hangs ~`r·s` above the surface (the "floating trees" artefact). Sinking the instance
+// by `r·s` plants that downhill lip back ON the surface (the uphill side beds into the
+// rising ground). EMBED_K=1 lands the lip at the surface; the sink is capped so a near-
+// cliff prop can't submerge. Pure geometry from the slope already computed per candidate
+// — deterministic + replay-safe (no new per-instance log state; driven by config radii).
+const EMBED_K = 1.0;          // downhill base lip → at the surface (r·s above → grounded)
+const EMBED_MAX_RADII = 1.5;  // never sink more than 1.5 base radii (~40% of a ~4R-tall prop)
+const EMBED_ABS_MAX = 3.0;    // absolute world-unit cap on the sink
+
 /** One curated asset in the scatter palette: its content-addressed id and an
  *  optional relative weight (default 1) for the deterministic weighted pick. */
 export interface ScatterAsset {
   id: string;
   weight?: number;
+  /** OPT-IN footprint radius (world units at scale 1, the XZ half-extent of the
+   *  asset's flat base). 0 (default) → no change, byte-identical. >0 sinks the
+   *  instance into a slope so its downhill base lip stays grounded instead of
+   *  floating ~`radius·slope` above the surface (see the embed-sink in scatterAssets).
+   *  Per-asset; overrides the layer-default ScatterConfig.embedRadius. */
+  embedRadius?: number;
 }
 
 /** An agent-set scatter recipe. Pure data — recorded verbatim in the world log as
@@ -57,6 +75,10 @@ export interface ScatterConfig {
   cluster?: number;
   /** World-space frequency of the cluster field (smaller = larger clumps). Default 1/26. */
   clusterFreq?: number;
+  /** OPT-IN layer-default footprint radius (world units at scale 1) for the embed-sink,
+   *  applied to any palette asset that doesn't set its own ScatterAsset.embedRadius.
+   *  0 (default) → no sink, byte-identical back-compat. See the embed-sink in scatterAssets. */
+  embedRadius?: number;
   /** Optional biome whitelist (reads the tile climate grid's biome channel). */
   biomes?: number[];
   /** Optional inclusive temperature window (reads the climate grid's tempC channel). */
@@ -222,7 +244,28 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
         if (config.tempMax !== undefined && tempC > config.tempMax) continue;
       }
 
-      out.push({ assetId: palette[pick].id, x, y, z, yaw, scale });
+      // EMBED-SINK — applied to the FINAL instance.y AFTER every gate (the elevation/
+      // water + slope + climate filters above all consult the SURFACE y), so sinking a
+      // prop into the slope NEVER pulls it through the water line or changes which props
+      // place (count + the 0-in-water guarantee are preserved). The sink is the picked
+      // asset's footprint (per-asset radius, else the layer default, else 0) scaled by the
+      // instance scale and the local slope; embedRadius 0 → instY === y (byte-identical).
+      const embedRadius = palette[pick].embedRadius ?? config.embedRadius ?? 0;
+      let instY = y;
+      if (embedRadius > 0 && slope > 0) {
+        const r = embedRadius * scale; // footprint half-extent in world units for THIS instance
+        const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
+        const sink = Math.min(r * slope * EMBED_K, cap);
+        // Clamp the sunk origin to the lower elevation/water floor: the gate accepts a prop on
+        // SURFACE y >= elevationMin, so a prop placed just above the waterline must NOT bed its
+        // origin UNDER the water. Near the floor the sink simply shortens (the downhill lip
+        // floats a touch) instead of submerging — the 0-in-water guarantee is preserved exactly.
+        // elevationMin defaults to -Infinity (no floor) → the full sink applies. For a ZERO-margin
+        // water gate the clamp may seat a base AT the waterline (elevationMin); that's acceptable
+        // (e.g. driftwood at the shore), and any dry margin lifts it clear.
+        instY = Math.max(y - sink, elevationMin);
+      }
+      out.push({ assetId: palette[pick].id, x, y: instY, z, yaw, scale });
     }
   }
   return out;

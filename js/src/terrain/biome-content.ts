@@ -53,6 +53,17 @@ export const GRASS_ASSET = "grass.glb";
 export const ROCK_ASSET = "rock.glb"; //   boulder / desert rock / driftwood (reused)
 export const PALM_ASSET = "palm.glb"; //   tropical palm (the beach set)
 
+// ── EMBED RADII — measured base FOOTPRINT half-extents (world units at scale 1) ──────
+// The XZ half-extent of each asset's flat base, fed to asset.scatter's embed-sink so a
+// prop on a slope beds its downhill base lip into the ground instead of floating ~r·slope
+// above it (the "floating trees" artefact on the coastal island-falloff). Only the
+// tree/boulder assets carry a footprint here; palm/cactus/bush/grass stay 0 (no sink).
+// Per-asset, so a layer's mixed palette (broadleaf+pine) embeds each species by its own
+// base. On flat ground slope≈0 → sink≈0, so existing flat placements are unchanged.
+export const PINE_EMBED = 1.2;       // pine.glb base ≈2.40 m wide → ~1.2 half-extent
+export const BROADLEAF_EMBED = 1.3;  // broadleaf.glb trunk/base footprint ≈1.3
+export const ROCK_EMBED = 0.5;       // rock.glb boulder base ≈0.5
+
 // ───────────────────────── the canonical biome enum (terrain/types.ts) ─────────────
 // The integers the tile climate grid actually carries (asset.scatter's `biomes` gate reads
 // CLIMATE_BIOME). These ALIAS the canonical `Biome` (the single source of truth EVERY source
@@ -84,6 +95,9 @@ export interface BiomeLayer {
   clusterFreq?: number;
   slopeMax?: number;
   sizeRange?: [number, number];
+  /** Layer-default footprint radius for the embed-sink (world units), applied to any
+   *  palette asset that doesn't set its own ScatterAsset.embedRadius. 0/unset → no sink. */
+  embedRadius?: number;
   /** Biome whitelist (procedural biome enum) — e.g. cacti only in BIOME_DESERT. */
   biomes?: number[];
   /** Inclusive temperature window (°C), reads the climate grid. */
@@ -122,19 +136,19 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       // Generous conifer forest on the green base + lower/mid slopes up to a sensible tree-line
       // (~0.58 of the relief). slopeMax 1.15 keeps trees on the steep ERODED flanks (an amp-4.5
       // eroded mountainside is steep; the old 0.85/0.45 cropped pines into a thin band → "only rocks").
-      seed: 31, assets: [{ id: PINE_ASSET }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
+      seed: 31, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
       slopeMax: 1.15, sizeRange: [0.8, 1.5], elevMaxFrac: 0.58, waterGated: true,
     },
     {
       // Boulders as the rock-zone ACCENT (sparse, so they don't dominate the forested slopes).
-      seed: 32, assets: [{ id: ROCK_ASSET }], coverage: 0.08, cluster: 0.35,
+      seed: 32, assets: [{ id: ROCK_ASSET, embedRadius: ROCK_EMBED }], coverage: 0.08, cluster: 0.35,
       slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
   ],
   // Dense temperate woodland: broadleaf + conifer mix over a bush understorey.
   forest: [
     {
-      seed: 41, assets: [{ id: BROADLEAF_ASSET, weight: 3 }, { id: PINE_ASSET, weight: 2 }],
+      seed: 41, assets: [{ id: BROADLEAF_ASSET, weight: 3, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
       coverage: 0.30, cluster: 0.5, clusterFreq: 1 / 30, slopeMax: 0.9, sizeRange: [0.9, 1.6],
     },
     {
@@ -148,7 +162,7 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       coverage: 0.08, cluster: 0.5, clusterFreq: 1 / 32, slopeMax: 0.6, sizeRange: [0.8, 1.8],
     },
     {
-      seed: 52, assets: [{ id: ROCK_ASSET }], coverage: 0.05, cluster: 0.4, sizeRange: [0.8, 2.0],
+      seed: 52, assets: [{ id: ROCK_ASSET, embedRadius: ROCK_EMBED }], coverage: 0.05, cluster: 0.4, sizeRange: [0.8, 2.0],
     },
   ],
   // Open grassland: dense grass tufts with the occasional lone broadleaf.
@@ -157,13 +171,13 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       seed: 61, assets: [{ id: GRASS_ASSET }], coverage: 0.35, cluster: 0.35, slopeMax: 0.7, sizeRange: [0.7, 1.4],
     },
     {
-      seed: 62, assets: [{ id: BROADLEAF_ASSET }], coverage: 0.02, cluster: 0.6, sizeRange: [0.9, 1.5],
+      seed: 62, assets: [{ id: BROADLEAF_ASSET, embedRadius: BROADLEAF_EMBED }], coverage: 0.02, cluster: 0.6, sizeRange: [0.9, 1.5],
     },
   ],
   // Cool rolling uplands: a thinner broadleaf+pine cover over grass and bush.
   hills: [
     {
-      seed: 71, assets: [{ id: BROADLEAF_ASSET, weight: 2 }, { id: PINE_ASSET, weight: 2 }],
+      seed: 71, assets: [{ id: BROADLEAF_ASSET, weight: 2, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
       coverage: 0.12, cluster: 0.5, slopeMax: 0.9, sizeRange: [0.8, 1.5],
     },
     {
@@ -174,11 +188,11 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   // Warm archipelago: palm groves on the shore, a few pines on the higher dry interior.
   islands: [
     {
-      seed: 81, assets: [{ id: PALM_ASSET, weight: 3 }, { id: ROCK_ASSET, weight: 1 }],
+      seed: 81, assets: [{ id: PALM_ASSET, weight: 3 }, { id: ROCK_ASSET, weight: 1, embedRadius: ROCK_EMBED }],
       coverage: 0.07, cluster: 0.7, clusterFreq: 1 / 28, slopeMax: 0.7, sizeRange: [1.0, 2.2], waterGated: true,
     },
     {
-      seed: 82, assets: [{ id: PINE_ASSET }], coverage: 0.06, cluster: 0.5, sizeRange: [0.8, 1.3],
+      seed: 82, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.06, cluster: 0.5, sizeRange: [0.8, 1.3],
       waterGated: true, elevMinFrac: 0.45,
     },
   ],
@@ -218,6 +232,7 @@ export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel
   if (layer.clusterFreq !== undefined) config.clusterFreq = layer.clusterFreq;
   if (layer.slopeMax !== undefined) config.slopeMax = layer.slopeMax;
   if (layer.sizeRange !== undefined) config.sizeRange = layer.sizeRange;
+  if (layer.embedRadius !== undefined) config.embedRadius = layer.embedRadius;
   if (layer.biomes !== undefined) config.biomes = layer.biomes;
   if (layer.tempMin !== undefined) config.tempMin = layer.tempMin;
   if (layer.tempMax !== undefined) config.tempMax = layer.tempMax;
