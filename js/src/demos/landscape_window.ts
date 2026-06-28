@@ -15,6 +15,7 @@
 // on the cold crests, and a dark silt tint where the land dips under the sea — blended smoothly
 // (no hard stripes), with the biome varying spatially across the surface from the baked climate.
 
+import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
@@ -26,6 +27,7 @@ import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
+import { DEFAULT_RENDER_BASELINE } from "../render-baseline.ts";
 
 const SEED = 1234;
 const TYPE: TerrainTypeName = "mountains";
@@ -78,7 +80,21 @@ const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), ...SHAPE };
 
 // Default render baseline (key sun + hemisphere fill + procedural-sky IBL + tonemapping); the
 // generated terrain IS the ground, so suppress the baseline's flat ground plane.
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
+//
+// ATMOSPHERE (Phase-2 terrain overhaul): this is the SHOWCASE for the opt-in HEIGHT-FALLOFF
+// haze — the island reads as VAST because the haze pools in the low ground (the sea + the far
+// shore dissolve into the horizon band) while the summit stays crisp above the haze ceiling.
+// The ceiling is set from the surveyed relief AFTER the region is generated (see below), so it
+// tracks the real peak height; here we just enable the model + tune the density. The haze colour
+// auto-matches sky.horizon (0xcdd9e6) so the terrain edge melts into the sky with no hard band.
+const engine = await createEngine({
+  width: 1280,
+  height: 720,
+  renderBaseline: {
+    ground: { enabled: false },
+    atmosphere: { height: { enabled: true, density: 0.00055 } },
+  },
+});
 
 const tracer = new LiminaTracer("ses_landscape_window");
 const registry = new SkillRegistry(tracer);
@@ -102,6 +118,18 @@ const regionId = (gen.result as { regionId: string }).regionId;
 // Survey the eroded surface (SAME hints) → relief + sea level.
 const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
 const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
+
+// ATMOSPHERE ceiling — now that the real relief is surveyed, retune the height-falloff haze so
+// its ceiling sits just under the summit: the sea + low forested base + far shore pool in the
+// haze (dissolving into the horizon), while the bare rock + snow crest rise crisp ABOVE it.
+// Render-only; rebuilds the node fog the baseline installed (same colour = sky.horizon).
+{
+  const T = (THREE as unknown as { TSL: Record<string, (...a: unknown[]) => unknown> }).TSL;
+  const ceiling = seaLevel + (relief.maxY - seaLevel) * 0.85;
+  const factor = T.exponentialHeightFogFactor(T.float(0.00055), T.float(ceiling));
+  (engine.scene as { fogNode?: unknown }).fogNode = T.fog(T.color(DEFAULT_RENDER_BASELINE.sky.horizon), factor);
+  ops.op_log(`atmosphere: height-falloff haze, ceiling ${ceiling.toFixed(1)} m (peak ${relief.maxY.toFixed(1)} m), tinted to sky horizon`);
+}
 
 // 2. THE SEA — a render-only water plane at sea level, region-aware depth shading. It bakes the
 //    depth field from the SAME terrain source/type AND the SAME shaping hints (SHAPE: amp/erode/

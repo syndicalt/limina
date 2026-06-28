@@ -30,6 +30,38 @@ export interface SkyGradient {
   bottom: number;
 }
 
+/** ATMOSPHERE — distance/height haze + aerial perspective. This is what makes a
+ *  world read as *vast*: distant terrain fades into a haze tinted to the horizon
+ *  band, so the terrain edge dissolves into the sky instead of ending on a hard
+ *  silhouette. Two models (both render-only, both proven on the WebGPU node path):
+ *
+ *   - DEFAULT (height OFF) — a `THREE.FogExp2`: uniform exponential distance haze.
+ *     The renderer auto-converts it to `fog(color, densityFogFactor(density))`,
+ *     the most-travelled + widely-supported fog path. Bulletproof; this is what
+ *     ships on by default.
+ *   - HEIGHT (height ON) — a `scene.fogNode` = `fog(color, exponentialHeightFog-
+ *     Factor(density, ceiling))`: the haze POOLS in the low ground and THINS with
+ *     altitude, so valleys/horizon go hazy while peaks stay crisp. Opt-in.
+ *
+ *  The aerial-perspective tint is the haze `color`: leave it `null` and it auto-
+ *  matches `sky.horizon`, so distant geometry tints toward the exact horizon band
+ *  it dissolves into (no hard colour seam between terrain and sky). */
+export interface AtmospherePreset {
+  /** Master switch for the haze (independent of the rest of the baseline). */
+  enabled: boolean;
+  /** Haze colour (sRGB hex). `null` ⇒ auto-match `sky.horizon` (aerial perspective
+   *  into the horizon band — the recommended cohesive default). */
+  color: number | null;
+  /** Exponential distance-haze density (FogExp2 model, used when `height.enabled`
+   *  is false). Larger = haze thickens closer in. Subtle by default — not soupy. */
+  density: number;
+  /** Optional HEIGHT falloff (node model). When `enabled`, the haze is densest in
+   *  the low ground and clears above `ceiling` (world-Y), keeping peaks crisp.
+   *  `density` here is in different units to the flat `density` above (it scales by
+   *  (ceiling − y)·distance), so it is much smaller. */
+  height: { enabled: boolean; ceiling: number; density: number };
+}
+
 /** The full render-baseline configuration. Every field has a tasteful default
  *  (DEFAULT_RENDER_BASELINE); `applyRenderBaseline` accepts a deep-partial
  *  override so a world can tweak one knob without restating the rest. */
@@ -58,6 +90,8 @@ export interface RenderBaselinePreset {
   environmentIntensity: number;
   /** Paint the sky gradient as `scene.background` (replaces the dark void). */
   background: boolean;
+  /** Distance/height haze + aerial perspective so terrain fades into the horizon. */
+  atmosphere: AtmospherePreset;
   /** Default ground plane so bodies are grounded and catch the sun's shadow. */
   ground: { enabled: boolean; color: number; size: number; y: number; roughness: number };
   /** Default camera framing (a world may override per frame). */
@@ -79,6 +113,18 @@ export const DEFAULT_RENDER_BASELINE: RenderBaselinePreset = {
   environment: true,
   environmentIntensity: 1.0,
   background: true,
+  // GENTLE default haze: a uniform exponential distance fog tinted to the horizon
+  // band (color:null ⇒ sky.horizon = 0xcdd9e6). Subtle density so near geometry stays
+  // crisp and a comparison/row demo isn't washed out, while distant geometry softly
+  // dissolves into the sky — depth + scale for every world, for free. A world that
+  // wants the "vast island, crisp peaks" look opts into `height` (see the landscape
+  // demo) or simply raises `density`.
+  atmosphere: {
+    enabled: true,
+    color: null,
+    density: 0.0011,
+    height: { enabled: false, ceiling: 60, density: 0.00010 },
+  },
   ground: { enabled: true, color: 0x3a4250, size: 80, y: 0, roughness: 0.95 },
   camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 },
 };
@@ -108,6 +154,16 @@ export const TROPICAL_BEACH_BASELINE: RenderBaselinePreset = {
   environment: true,
   environmentIntensity: 1.15,
   background: true,
+  // WARM beach haze: matched to the warm hazy horizon band (color:null ⇒ sky.horizon =
+  // 0xffe7c4) so the distant sea + headland melt into the same golden horizon the water
+  // reflects — a touch lighter density than the default since the open sea reads best with
+  // a long, soft fade rather than a near wall of haze.
+  atmosphere: {
+    enabled: true,
+    color: null,
+    density: 0.0009,
+    height: { enabled: false, ceiling: 40, density: 0.00010 },
+  },
   ground: { enabled: true, color: 0xCBA56B, size: 80, y: 0, roughness: 0.95 },
   camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 },
 };
@@ -121,7 +177,7 @@ export type RenderBaselineOverride = DeepPartial<RenderBaselinePreset>;
 // shape — the full Engine, the browser playback target, or a test stub.
 
 interface BaselineTarget {
-  scene: { add(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number };
+  scene: { add(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number; fog?: unknown; fogNode?: unknown };
   camera?: {
     position?: { set(x: number, y: number, z: number): void };
     lookAt?(x: number, y: number, z: number): void;
@@ -146,6 +202,11 @@ export interface AppliedRenderBaseline {
   ambient?: unknown;
   ground?: unknown;
   environmentMode: "pmrem" | "gradient" | "none";
+  /** WHICH haze model was installed: "exp" (FogExp2 distance fog → scene.fog),
+   *  "height" (node height-falloff fog → scene.fogNode), or "none" (disabled). */
+  atmosphereMode: "exp" | "height" | "none";
+  /** The fog object that was installed (FogExp2) or the fog node (height mode). */
+  fog?: unknown;
 }
 
 // ---- Helpers -------------------------------------------------------------
@@ -164,6 +225,11 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
     environment: over.environment ?? base.environment,
     environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
     background: over.background ?? base.background,
+    atmosphere: {
+      ...base.atmosphere,
+      ...over.atmosphere,
+      height: { ...base.atmosphere.height, ...over.atmosphere?.height },
+    },
     ground: { ...base.ground, ...over.ground },
     camera: { ...base.camera, ...over.camera },
   };
@@ -225,7 +291,7 @@ export function applyRenderBaseline(
   override?: RenderBaselineOverride,
 ): AppliedRenderBaseline {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
-  if (!preset.enabled) return { preset, environmentMode: "none" };
+  if (!preset.enabled) return { preset, environmentMode: "none", atmosphereMode: "none" };
 
   const { scene, renderer, camera } = target;
 
@@ -302,6 +368,37 @@ export function applyRenderBaseline(
     }
   }
 
+  // 3b. ATMOSPHERE — distance/height haze so terrain dissolves into the horizon.
+  //     Render-only; the haze colour defaults to the sky's horizon band, so the
+  //     terrain edge melts into the same colour the sky shows there (no hard seam).
+  //     The sky `background` is NOT a fogged material, so it stays as the sky —
+  //     only the in-scene geometry (terrain/water/props) fades into the haze.
+  let fog: unknown;
+  let atmosphereMode: AppliedRenderBaseline["atmosphereMode"] = "none";
+  const atm = preset.atmosphere;
+  if (atm.enabled && ("fog" in scene || "fogNode" in scene)) {
+    const hazeColor = atm.color ?? preset.sky.horizon;
+    if (atm.height.enabled) {
+      // HEIGHT model — a node fog that pools low and clears above `ceiling`.
+      // deno-lint-ignore no-explicit-any
+      const T = (THREE as any).TSL;
+      const factor = T.exponentialHeightFogFactor(T.float(atm.height.density), T.float(atm.height.ceiling));
+      const node = T.fog(T.color(hazeColor), factor);
+      scene.fogNode = node;
+      scene.fog = null; // node fog supersedes any FogExp2
+      fog = node;
+      atmosphereMode = "height";
+    } else {
+      // DEFAULT model — uniform exponential distance fog (auto-converted by the
+      // renderer to the proven fog(color, densityFogFactor) node path).
+      const exp = new THREE.FogExp2(hazeColor, atm.density);
+      scene.fog = exp;
+      scene.fogNode = null; // ensure no stale node fog wins over the FogExp2
+      fog = exp;
+      atmosphereMode = "exp";
+    }
+  }
+
   // 4. Ground plane (receives the sun's shadow).
   let ground: unknown;
   if (preset.ground.enabled) {
@@ -329,5 +426,5 @@ export function applyRenderBaseline(
     camera.lookAt?.(tx, ty, tz);
   }
 
-  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode };
+  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode, atmosphereMode, fog };
 }
