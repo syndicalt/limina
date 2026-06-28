@@ -189,8 +189,16 @@ function fixedStep(dt: number): void {
   ops.op_physics_step();
 }
 
-// 7. POST stack drives presentation (GTAO + bloom + grade over the atmosphere).
-const post = buildPostPipeline(engine.renderer, engine.scene, engine.camera);
+// 7. PRESENTATION. By DEFAULT we use the bare known-good path
+// (`renderer.render` → `op_surface_present`) so free-fly / character navigation is
+// LIVE — the same path playable_world_window uses. The Phase-3 post stack (GTAO +
+// bloom + grade) is gated behind USE_POST: on this WebGPU windowed backend the
+// PostProcessing composite does not reliably present a fresh frame per move (the
+// view can stick while the camera moves), so post is OPT-IN for static / cinematic
+// shots until that is resolved. The scene LOOK (PBR terrain, atmosphere/fog, water,
+// scatter) is scene/material — unaffected by this toggle. Flip to true to A/B the post stack.
+const USE_POST = false;
+const post = USE_POST ? buildPostPipeline(engine.renderer, engine.scene, engine.camera) : null;
 
 function render(_alpha: number): void {
   ops.op_input_look(look);
@@ -206,14 +214,15 @@ function render(_alpha: number): void {
   camera.pitch = freePitch;
   camera.update(engine.camera, p);
   renderSyncSystem(engine.world);
-  post.render();
+  if (post) post.render();
+  else engine.renderer.render(engine.scene, engine.camera);
   ops.op_surface_present(engine.context);
 }
 
 function onResize(w: number, h: number): void {
   ops.op_surface_resize(w, h);
   engine.renderer.setSize(w, h, false);
-  post.setSize(w, h);
+  post?.setSize(w, h);
   engine.camera.aspect = w / h;
   engine.camera.updateProjectionMatrix();
 }

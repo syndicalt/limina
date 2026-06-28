@@ -95,11 +95,17 @@ const cz = result.cottage.position[2];
 const cy = result.seaLevel + 1.2; // look at the shoreline band, not the dune tops
 const orbitRadius = (Math.max(BEACH_BOUNDS.maxTx - BEACH_BOUNDS.minTx, BEACH_BOUNDS.maxTz - BEACH_BOUNDS.minTz) + 1) * TILE_SIZE * 1.05;
 
-// POST-PROCESSING STACK (Phase 3 terrain overhaul): real depth+normal pre-pass →
-// GTAO (settles the cottage/palms/driftwood onto the sand with contact AO) → high-
-// threshold bloom (the warm sky + foam/water glints lift) → gentle HDR grade over the
-// warm ACES baseline. Drives the loop in place of renderer.render. Render-only.
-const post = buildPostPipeline(engine.renderer, engine.scene, engine.camera);
+// PRESENTATION. By DEFAULT, the bare known-good path (`renderer.render` →
+// `op_surface_present`) so the auto-orbit (and ↑/↓·in/out nudges) stay LIVE. The
+// Phase-3 post stack — real depth+normal pre-pass → GTAO (settles the cottage/palms/
+// driftwood onto the sand with contact AO) → high-threshold bloom (warm sky + foam/
+// water glints) → gentle HDR grade over the warm ACES baseline — is gated behind
+// USE_POST: on this WebGPU windowed backend the composite does not reliably present a
+// fresh frame per move (the view can stick while the camera orbits), so it is OPT-IN
+// for static / cinematic shots. The scene LOOK is scene/material — unaffected by this
+// toggle. Flip to true to A/B the post stack. Render-only either way.
+const USE_POST = false;
+const post = USE_POST ? buildPostPipeline(engine.renderer, engine.scene, engine.camera) : null;
 
 let angle = 0;
 const axes = new Float32Array(3);
@@ -112,18 +118,22 @@ function render(_alpha: number): void {
   engine.camera.position.set(cx + Math.cos(angle) * r, h, cz + Math.sin(angle) * r);
   engine.camera.lookAt(cx, cy, cz);
   renderSyncSystem(engine.world);
-  post.render();
+  if (post) post.render();
+  else engine.renderer.render(engine.scene, engine.camera);
   ops.op_surface_present(engine.context);
 }
 
 function onResize(w: number, h: number): void {
   ops.op_surface_resize(w, h);
   engine.renderer.setSize(w, h, false);
-  post.setSize(w, h);
+  post?.setSize(w, h);
   engine.camera.aspect = w / h;
   engine.camera.updateProjectionMatrix();
 }
 
+// Warm-up render before registering callbacks (compile WebGPU pipelines while the
+// loop is uncontended; otherwise the surface can stay blank — see playable_world_window).
+render(0);
 ops.op_set_frame_callback(render);
 ops.op_set_resize_callback(onResize);
 ops.op_log(
