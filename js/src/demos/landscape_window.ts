@@ -49,14 +49,27 @@ const AMP = 4.5;
 // surface, so every layer's spawn mask shares one dry buffer.
 const WATER_MARGIN = 2.5;
 
-// The shaping OVERRIDES on top of the mountains type: dramatic amplitude + hydraulic/thermal
-// EROSION (`erode`). NO island/coastal falloff — a cliff meeting the sea is a realistic, intended
-// look (sea cliffs), so the mountains shape is left as-is; the waterline is sold by the wet-shore
-// PBR band (terrain/material-pbr.ts) + the depth-shaded water, not by tapering the land. This SAME
-// object is recorded into the region's hints (world.generateRegion below), so the colliders, the
-// relief survey, the scatter spawn mask, and the visible mesh all read the identical shaped+eroded
-// surface (the region-hints survey path).
-const SHAPE = { amp: AMP, erode: 1 };
+// COASTAL / ISLAND FALLOFF — taper the region boundary BELOW sea level so the finite 4×4 grid's
+// raw SCENE-TERMINATION wall (the vertical edge where the demo grid abruptly ends — an untextured
+// single-grid artifact, NOT a real sea cliff) sinks underwater and the coast reads as a clean
+// island. The relief rises in the CENTRE and slopes radially down to the sea floor at the edges.
+// Mirrors the island math in terrainTypeHints (mountains has no built-in island, so we compose it
+// here): a dramatic core (radius ≈ 0.40 of the half-extent) tapering over a long beach (falloff ≈
+// 0.62). Natural cliffs the erosion carves WITHIN the terrain are unaffected (and now texture-
+// terminated at the waterline by the PBR wet-shore band).
+const HALF_EXTENT = (Math.min(BOUNDS.maxTx - BOUNDS.minTx, BOUNDS.maxTz - BOUNDS.minTz) + 1) * TILE_SIZE / 2;
+const ISLAND = {
+  islandCx: ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE,
+  islandCz: ((BOUNDS.minTz + BOUNDS.maxTz + 1) / 2) * TILE_SIZE,
+  islandRadius: HALF_EXTENT * 0.40,
+  islandFalloff: HALF_EXTENT * 0.62,
+};
+// The shaping OVERRIDES on top of the mountains type: dramatic amplitude, hydraulic/thermal EROSION
+// (`erode`), and the coastal falloff. This SAME object is recorded into the region's hints
+// (world.generateRegion below), so the colliders, the relief survey, the scatter spawn mask, the
+// water depth bake, and the visible mesh all read the identical shaped+eroded surface (the
+// region-hints survey path — one config, no test/demo divergence).
+const SHAPE = { amp: AMP, erode: 1, ...ISLAND };
 
 // The full shaping recipe = the mountains type's knobs + SHAPE. Used for the visible mesh + the
 // demo's relief/sea-level survey; it equals the region's stored hints so every read matches the
@@ -91,8 +104,8 @@ const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
 const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
 
 // 2. THE SEA — a render-only water plane at sea level, region-aware depth shading. It bakes the
-//    depth field from the SAME terrain source/type AND the SAME shaping hints (SHAPE: amp/erode),
-//    so the shoreline depth-fade reads against the real eroded surface the cliffs/valleys sit in,
+//    depth field from the SAME terrain source/type AND the SAME shaping hints (SHAPE: amp/erode/
+//    island falloff), so the shoreline depth-fade reads against the real tapered island coast,
 //    sized to cover the region.
 const span = (BOUNDS.maxTx - BOUNDS.minTx + 1) * TILE_SIZE;
 const waterRes = await registry.invoke("world.addWater", {

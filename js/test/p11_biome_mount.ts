@@ -16,10 +16,12 @@
 //   4. THE ROOT CAUSE IS PINNED: surveying with the region's ACTUAL generated hints
 //      (amp/erode) is load-bearing. Re-running WITHOUT the region table (bare type-default
 //      hints) collapses the pine count — the exact divergence that produced the bug.
-//   5. NO PROPS IN WATER: over the demo's real config (sea + a 2.5 m dry margin) ZERO
-//      mounted prop instances (pine AND rock, all layers) sit at/below waterLevel + margin,
-//      via the real mount path. Falsifiable: the ungated palette DOES place below water.
+//   5. NO PROPS IN WATER: over the demo's real config (island falloff + sea + a 2.5 m dry
+//      margin) ZERO mounted prop instances (pine AND rock, all layers) sit at/below waterLevel +
+//      margin — inland lakes included. Via the real mount path. Falsifiable: the ungated palette
+//      DOES place below water. The test config == the demo's SHAPE (no test/demo divergence).
 
+import { TILE_SIZE } from "../src/terrain/procedural.ts";
 import { terrainTypeHints, type RegionBounds } from "../src/terrain/terrain-types.ts";
 import {
   scatterBiomeContent, biomeScatterConfigs, surveyRegionRelief,
@@ -44,17 +46,25 @@ function ok(res: MCPResponse | undefined): Record<string, unknown> {
   return res.result as Record<string, unknown>;
 }
 
-// The EXACT landscape demo config (js/src/demos/landscape_window.ts): mountains, amp 4.5,
-// erosion, sea at 18% of relief, and a 2.5 m dry shoreline margin. NO island falloff — a cliff
-// meeting the sea is the intended look; the waterline is sold by the wet-shore PBR band, not by
-// tapering the land.
+// The EXACT landscape demo config (js/src/demos/landscape_window.ts): mountains, amp 4.5, erosion,
+// a coastal ISLAND falloff (tapers the region boundary below sea level so the grid-termination wall
+// is hidden underwater + the coast reads clean), sea at 18% of relief, and a 2.5 m dry shoreline
+// margin. This MUST mirror the demo's SHAPE — the test/demo divergence is the meta-bug, so the two
+// configs are kept identical (same falloff knobs, same margin), routed through the region-hints path.
 const SEED = 1234;
 const TYPE = "mountains" as const;
 const BOUNDS: RegionBounds = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 };
 const AMP = 4.5;
 const SEA_FRACTION = 0.18;
 const WATER_MARGIN = 2.5;
-const SHAPE = { amp: AMP, erode: 1 };
+const HALF_EXTENT = (Math.min(BOUNDS.maxTx - BOUNDS.minTx, BOUNDS.maxTz - BOUNDS.minTz) + 1) * TILE_SIZE / 2;
+const ISLAND = {
+  islandCx: ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE,
+  islandCz: ((BOUNDS.minTz + BOUNDS.maxTz + 1) / 2) * TILE_SIZE,
+  islandRadius: HALF_EXTENT * 0.40,
+  islandFalloff: HALF_EXTENT * 0.62,
+};
+const SHAPE = { amp: AMP, erode: 1, ...ISLAND };
 const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), ...SHAPE };
 
 // A headless world whose scene.add CAPTURES the mounted objects so we can inspect the
@@ -122,10 +132,11 @@ assert(bad.layers[0].instances < pineLayer.instances,
   `bare type-hint survey did not change the pine count (${bad.layers[0].instances} vs ${pineLayer.instances}) — the region-hints fix is not load-bearing / the test is vacuous`);
 
 // ── 4b. NO PROPS IN / BELOW WATER: the spawn mask keeps every layer above the shoreline ─
-// Over the demo's ACTUAL config (eroded mountains flooded to 18% of relief + a 2.5 m dry
-// margin), assert ZERO mounted prop instances — pine AND rock, across ALL layers — sit at or
-// below waterLevel + margin. The placements come from the REAL mount path
-// (scatterBiomeContent → asset.scatter output), not a re-derived pure scatter.
+// Over the demo's ACTUAL config (island-falloff eroded mountains flooded to 18% of relief + a
+// 2.5 m dry margin — the config the user A/B'd), assert ZERO mounted prop instances — pine AND
+// rock, across ALL layers, inland lakes + the island coast included — sit at or below
+// waterLevel + margin. The placements come from the REAL mount path (scatterBiomeContent →
+// asset.scatter output), not a re-derived pure scatter.
 const dryFloor = seaLevel + WATER_MARGIN;
 const allPlacements = scattered.layers.flatMap((l) => l.placements);
 assert(allPlacements.length === scattered.instances, `placements (${allPlacements.length}) != total instances (${scattered.instances}) — mount path did not return every placement`);
