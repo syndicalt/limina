@@ -304,6 +304,12 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
   material.roughnessNode = T.clamp(rough, 0, 1);
 }
 
+// FOLLOW-UP (engine general case, not built here): a finite region has a hard GRID-TERMINATION
+// edge — a vertical wall where the heightfield abruptly ends. The landscape demo HIDES it with an
+// island falloff (the boundary tapers below sea level), but non-island / continuous terrain that
+// shows a real edge would expose a raw, untextured skirt. A future pass should generate + texture
+// a downward termination skirt (or fog/clip the boundary) so a shown edge reads intentionally.
+// Out of scope for the demo (whose answer is the falloff); logged so it isn't lost.
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
   const { positions, indices, normals } = terrainTileGeometry(tile);
