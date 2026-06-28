@@ -107,7 +107,8 @@ for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
 //    deterministic biome-content seam (gated by the region's surveyed relief). Pass the water
 //    level so the scatter knows the shoreline.
 const scattered = await scatterBiomeContent({
-  registry, source: core.terrain.source, regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base,
+  registry, source: core.terrain.source, regions: core.terrain.regions,
+  regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base,
   waterLevel: seaLevel, waterMargin: WATER_MARGIN,
 });
 
