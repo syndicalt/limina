@@ -178,7 +178,7 @@ let prevJump = false;
 function fixedStep(dt: number): void {
   ops.op_input_axes(axes);       // [0]=A/D, [1]=Q/E (unused), [2]=S/W
   ops.op_input_buttons(buttons); // [0]=jump/Space, [1]=run/Shift
-  heading -= axes[0] * TURN_RATE * dt;
+  heading += axes[0] * TURN_RATE * dt; // A/D turn — inverted left/right per UAT
   const jumpHeld = buttons[0] === 1;
   const jump = jumpHeld && !prevJump; // rising edge
   prevJump = jumpHeld;
