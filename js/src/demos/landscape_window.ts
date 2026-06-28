@@ -43,14 +43,25 @@ const SEA_FRACTION = 0.18;
 // summit rises over a green base — the elevation gradient needs real vertical range to read.
 // Deterministic (a plain hint, recorded verbatim); the colliders/mesh/props all use it.
 const AMP = 4.5;
-// Dry margin (m) above the water line for scattered props, so nothing stands in the lakes.
-const WATER_MARGIN = 1.0;
+// Dry margin (m) above the water line for scattered props, so nothing stands at the shoreline:
+// raised from 1.0 so trees/boulders sit CLEARLY above the waterline (no props at the lake/coast
+// edge). The waterGated layers resolve elevationMin = waterLevel + this margin against the eroded
+// surface, so every layer's spawn mask shares one dry buffer.
+const WATER_MARGIN = 2.5;
 
-// The shaping recipe = the mountains type's knobs, with the amplitude bumped for drama, PLUS
-// hydraulic/thermal erosion (the `erode` hint). Passed to world.generateRegion (the colliders +
-// region the scatter binds to) and to the visible mesh + relief survey, so every read matches
-// the eroded tiles bit-for-bit.
-const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), amp: AMP, erode: 1 };
+// The shaping OVERRIDES on top of the mountains type: dramatic amplitude + hydraulic/thermal
+// EROSION (`erode`). NO island/coastal falloff — a cliff meeting the sea is a realistic, intended
+// look (sea cliffs), so the mountains shape is left as-is; the waterline is sold by the wet-shore
+// PBR band (terrain/material-pbr.ts) + the depth-shaded water, not by tapering the land. This SAME
+// object is recorded into the region's hints (world.generateRegion below), so the colliders, the
+// relief survey, the scatter spawn mask, and the visible mesh all read the identical shaped+eroded
+// surface (the region-hints survey path).
+const SHAPE = { amp: AMP, erode: 1 };
+
+// The full shaping recipe = the mountains type's knobs + SHAPE. Used for the visible mesh + the
+// demo's relief/sea-level survey; it equals the region's stored hints so every read matches the
+// eroded tiles bit-for-bit.
+const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), ...SHAPE };
 
 // Default render baseline (key sun + hemisphere fill + procedural-sky IBL + tonemapping); the
 // generated terrain IS the ground, so suppress the baseline's flat ground plane.
@@ -71,7 +82,7 @@ const base = { agentId: "agt_landscape", sessionId: "ses_landscape_window", perm
 ops.op_physics_create_world(-9.81);
 
 // 1. THE GROUND — generate the eroded mountains region (heightfield colliders + region handle).
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: { amp: AMP, erode: 1 } }, base);
+const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE }, base);
 if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
 const regionId = (gen.result as { regionId: string }).regionId;
 
@@ -79,12 +90,14 @@ const regionId = (gen.result as { regionId: string }).regionId;
 const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
 const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
 
-// 2. THE SEA — a render-only water plane at sea level, region-aware depth shading (it bakes
-//    the depth field from the SAME terrain source/type), sized to cover the region.
+// 2. THE SEA — a render-only water plane at sea level, region-aware depth shading. It bakes the
+//    depth field from the SAME terrain source/type AND the SAME shaping hints (SHAPE: amp/erode),
+//    so the shoreline depth-fade reads against the real eroded surface the cliffs/valleys sit in,
+//    sized to cover the region.
 const span = (BOUNDS.maxTx - BOUNDS.minTx + 1) * TILE_SIZE;
 const waterRes = await registry.invoke("world.addWater", {
   level: seaLevel, color: MATERIALS.water.color, size: span * 3,
-  region: { seed: SEED, type: TYPE, bounds: BOUNDS },
+  region: { seed: SEED, type: TYPE, bounds: BOUNDS, hints: SHAPE },
 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
@@ -96,8 +109,11 @@ for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
   for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
     const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: HINTS });
     const band = { seaLevel, minY: relief.minY, maxY: relief.maxY };
+    // WET-SHORE BAND: texture-terminate the waterline so a cliff or beach meeting the sea reads
+    // as an intentional wet shoreline (darker, glossier contact + a thin foam line), not a raw
+    // clay edge. Render-only; keyed to seaLevel.
     const mesh = buildTerrainMesh(tile, SURFACE === "pbr"
-      ? { roughness: 0.95, pbr: band }
+      ? { roughness: 0.95, pbr: { ...band, waterline: { wetBand: 1.4, foam: 0.5 } } }
       : { roughness: 0.95, palette: band });
     engine.scene.add(mesh);
   }
