@@ -155,6 +155,32 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     },
   });
 
+  const browseInput = z.object({
+    category: z.string().describe("Skill category to browse (player, camera, animation, interaction, inventory, game, trigger, event, quest, stats, damage, status, combat, behavior, dialogue, nav, vfx, save, progression, scene, ecs, three, physics, agent, system, ui, social, audio, terrain, world)."),
+    limit: z.number().int().min(1).max(100).optional(),
+  });
+  registry.register({
+    name: "skills.browse",
+    version: "1.0.0",
+    description: "Browse the AUTHORIZED skills in a specific category — progressive discovery of a large catalog.",
+    category: "system",
+    permissions: [],
+    input: browseInput,
+    output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
+    handler: (input, ctx) => {
+      const limit = input.limit ?? 50;
+      const tools: { name: string; description: string; category: string }[] = [];
+      for (const t of registry.list(ctx.permissions)) {
+        const def = registry.describe(t.name);
+        if (def === undefined) continue;
+        if (def.category !== input.category) continue;
+        tools.push({ name: t.name, description: t.description, category: def.category });
+        if (tools.length >= limit) break;
+      }
+      return { tools };
+    },
+  });
+
   const tracer = (registry as unknown as { tracer: LiminaTracer }).tracer;
   const eventSchema = z.object({
     id: z.string(),

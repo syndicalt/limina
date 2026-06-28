@@ -155,8 +155,10 @@ assert(readyEvents.every((e) => (e.payload as { source?: string }).source === au
 // The world log records the REQUEST (seed/bounds/lod), never the tile bytes.
 const genCmd = recorder.commands.find((c): c is Extract<WorldCommand, { kind: "skill" }> => c.kind === "skill" && c.tool === "world.generateRegion");
 assert(genCmd !== undefined, "generateRegion request not recorded in the world log");
-const genLine = JSON.stringify(genCmd);
-assert(!genLine.includes("heights") && !genLine.includes("elev") && genLine.length < 400, `tile bytes leaked into the log command (${genLine.length} chars)`);
+// Assert on the recorded REQUEST (input), not the whole command — the command also
+// carries the actor's `perms` set, which is legitimately large and unrelated to tile bytes.
+const genLine = JSON.stringify(genCmd.input);
+assert(!genLine.includes("heights") && !genLine.includes("elev") && genLine.length < 400, `tile bytes leaked into the recorded request (${genLine.length} chars)`);
 
 // climate flows through to perception: sampleClimate reads the canonical 3-channel grid.
 const cs = await registry.invoke("terrain.sampleClimate", { seed: TERRAIN_SEED, x: DROP[0], z: DROP[2] }, author);

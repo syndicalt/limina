@@ -31,6 +31,21 @@ import type { TerrainSource } from "../terrain/types.ts";
 import { registerOrchestrationSkills } from "./orchestration.ts";
 import type { ProviderMap } from "../agents/systems.ts";
 import type { AgentRegistry } from "../agents/agent.ts";
+import { registerPlayerSkills, type InputRegistry, type CharacterControllerRegistry } from "./player.ts";
+import { registerCameraSkills, type CameraManager } from "./camera.ts";
+import { registerAnimationSkills, type AnimationManager } from "./animation.ts";
+import { registerInteractionSkills, type InteractionManager } from "./interaction.ts";
+import { registerInventorySkills, type InventoryManager } from "./inventory.ts";
+import { registerGameStateSkills, type GameStateManager } from "./gamestate.ts";
+import { registerTriggerEventSkills, type TriggerManager, type EventManager } from "./triggers.ts";
+import { registerQuestSkills, type QuestManager } from "./quest.ts";
+import { registerCombatSkills, type StatsManager, type CombatManager } from "./combat.ts";
+import { registerBehaviorDialogueSkills, type BehaviorManager, type DialogueManager } from "./behavior.ts";
+import { registerNavmeshSkills, type NavmeshManager } from "./navmesh.ts";
+import { registerVFXSkills, type VFXManager } from "./vfx.ts";
+import { registerSaveSkills, type SaveManager } from "./save.ts";
+import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
+import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMManager, type ReverbManager } from "./worldstate.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -39,27 +54,42 @@ export interface CoreSkills {
   packages: PackageRegistry;
   ui: UiManager;
   audio: AudioManager;
-  /** Walk-to-target system shared with the social skills (and the host's tick). */
   locomotion: Locomotion;
-  /** Inspection surface for the per-speaker speech bubbles social.say authors. */
   social: SocialRuntime;
-  /** Phase 9 terrain source + content-addressed tile cache backing the terrain.*
-   *  / world.* skills (default: the deterministic procedural source). `regions` is
-   *  the live region table the terrain.* skills populate — exposed so callers (e.g.
-   *  scatterBiomeContent) can survey a region with the EXACT hints it was generated
-   *  with, not just the type defaults. */
   terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState> };
-  /** Phase 11 content-addressed asset registry backing the asset.* skills — the
-   *  lookup layer (id -> bytes + content hash) over the host's op_read_asset. */
   assets: AssetRegistry;
-  /** Phase 2b imported texture-pack material registry backing material.import — named
-   *  PBR materials (built from content-addressed images) that createEntity/setMaterial
-   *  resolve by name. Rebuilt on replay from the recorded import requests. */
   materials: MaterialRegistry;
-  /** Render-only sea-level water surfaces added via `world.addWater` (cosmetic;
-   *  never physics/ECS state). The list is rebuilt by re-invoking the recorded
-   *  request on replay. */
   water: { surfaces: WaterSurfaceState[] };
+  /** Phase 12: player input and movement surface. */
+  player: { input: InputRegistry; controllers: CharacterControllerRegistry };
+  /** Phase 12: camera rigs and control. */
+  camera: { cameraManager: CameraManager };
+  /** Phase 12: animation system. */
+  animation: { animationManager: AnimationManager };
+  /** Phase 12: interaction system. */
+  interaction: { interactionManager: InteractionManager };
+  /** Phase 12: inventory and items. */
+  inventory: { inventoryManager: InventoryManager };
+  /** Phase 12: game state and rules. */
+  gamestate: { gameStateManager: GameStateManager };
+  /** Phase 12: triggers and events. */
+  triggers: { triggerManager: TriggerManager; eventManager: EventManager };
+  /** Phase 12: quests and objectives. */
+  quest: { questManager: QuestManager };
+  /** Phase 12: stats, damage, status, combat. */
+  combat: { statsManager: StatsManager; combatManager: CombatManager };
+  /** Phase 12: NPC behavior and dialogue. */
+  behavior: { behaviorManager: BehaviorManager; dialogueManager: DialogueManager };
+  /** Phase 12: navigation and pathfinding. */
+  nav: { navmeshManager: NavmeshManager };
+  /** Phase 12: visual effects and particles. */
+  vfx: { vfxManager: VFXManager };
+  /** Phase 12: save, load, checkpoints. */
+  save: { saveManager: SaveManager };
+  /** Phase 12: progression, XP, skill trees. */
+  progression: { progressionManager: ProgressionManager };
+  /** Phase 12: world dynamics (time, weather, spawn) and audio extensions (BGM, SFX, reverb). */
+  worldstate: { worldStateManager: WorldStateManager; bgmManager: BGMManager; reverbManager: ReverbManager };
 }
 
 export function registerCoreSkills(
@@ -162,5 +192,32 @@ export function registerCoreSkills(
   if (opts?.providers !== undefined) {
     registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions }, assets, materials, water };
+  // Phase 12: playable game skills — player, camera, animation, interaction,
+  // inventory, game state, triggers/events, quests, combat/stats, behavior/dialogue,
+  // navigation, VFX, save/load, progression, world state, and audio extensions.
+  const player = registerPlayerSkills(registry);
+  const camera = registerCameraSkills(registry);
+  const animation = registerAnimationSkills(registry);
+  const inventory = registerInventorySkills(registry);
+  // interaction.pickup/drop reach into the inventory manager, so it must be created
+  // first and passed in (closure-bound cross-dep, like social ← ui/locomotion).
+  const interaction = registerInteractionSkills(registry, { inventoryManager: inventory.inventoryManager });
+  const gamestate = registerGameStateSkills(registry);
+  const triggers = registerTriggerEventSkills(registry);
+  const quest = registerQuestSkills(registry);
+  const combat = registerCombatSkills(registry);
+  const behavior = registerBehaviorDialogueSkills(registry);
+  const nav = registerNavmeshSkills(registry);
+  const vfx = registerVFXSkills(registry);
+  const save = registerSaveSkills(registry);
+  const progression = registerProgressionSkills(registry);
+  const worldstate = registerWorldAudioExtensionSkills(registry);
+  return {
+    packages, ui, locomotion, social, audio,
+    terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions },
+    assets, materials, water,
+    player, camera, animation, interaction, inventory,
+    gamestate, triggers, quest, combat, behavior,
+    nav, vfx, save, progression, worldstate,
+  };
 }

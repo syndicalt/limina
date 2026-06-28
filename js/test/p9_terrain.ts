@@ -107,8 +107,10 @@ const genCmd = recorder.commands.find((c): c is Extract<WorldCommand, { kind: "s
 assert(genCmd !== undefined, "generateRegion request not recorded in the world log");
 const genInput = genCmd.input as Record<string, unknown>;
 assert(genInput.seed === TERRAIN_SEED && genInput.lod === LOD && typeof genInput.bounds === "object", "recorded request missing seed/bounds/lod");
-const genLine = JSON.stringify(genCmd);
-assert(!genLine.includes("heights") && genLine.length < 400, `tile bytes leaked into the log command (${genLine.length} chars)`);
+// Assert on the recorded REQUEST (input), not the whole command — the command also
+// carries the actor's `perms` set, which is legitimately large and unrelated to tile bytes.
+const genLine = JSON.stringify(genCmd.input);
+assert(!genLine.includes("heights") && genLine.length < 400, `tile bytes leaked into the recorded request (${genLine.length} chars)`);
 
 // ============================================================================
 // (b) determinism of point queries + tile generation

@@ -6,42 +6,113 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play", "terrain.read", "terrain.generate",
+    "player.read", "player.write", "player.configure",
+    "camera.write", "animation.read", "animation.write",
+    "interaction.read", "interaction.write", "interaction.configure",
+    "inventory.read", "inventory.write", "inventory.configure",
+    "item.configure",
+    "game.write", "game.configure",
+    "trigger.configure", "event.read", "event.write",
+    "quest.read", "quest.write", "quest.configure",
+    "stats.read", "stats.write", "stats.configure",
+    "damage.write", "status.read", "status.write",
+    "combat.write",
+    "behavior.read", "behavior.write", "behavior.configure",
+    "dialogue.read", "dialogue.write", "dialogue.configure",
+    "nav.read", "nav.write", "nav.configure",
+    "vfx.write",
+    "checkpoint.read", "checkpoint.write",
+    "save.write",
+    "progression.read", "progression.write", "progression.configure",
+    "world.read", "world.write",
+  ],
+  // Full player character control (Part D).
+  "player.full": [
+    "scene.read", "ecs.read", "physics.read", "physics.write", "agent.read",
+    "terrain.read",
+    "player.read", "player.write", "player.configure",
+    "camera.write",
+    "animation.read",
+    "interaction.read", "interaction.write",
+    "inventory.read",
+    "dialogue.read",
   ],
   "player.limited": [
     "scene.read", "ecs.read", "physics.read", "physics.write", "agent.read", "agent.write",
     "terrain.read",
+    "player.read", "player.write",
+    "camera.write",
+    "interaction.read", "interaction.write",
+    "inventory.read", "inventory.write",
+    "game.write",
+    "quest.read",
+    "stats.read",
+    "status.read",
+    "behavior.read",
+    "dialogue.read", "dialogue.write",
+    "nav.read", "nav.write",
+    "checkpoint.read", "checkpoint.write",
+    "progression.read",
+    "world.read",
   ],
-  // Phase 9 terrain authoring: perceive + query terrain and run the HIGH-COST
-  // `world.generateRegion` / `world.streamFollow` generators (gated by
-  // `terrain.generate`), plus the physics needed to drop/roll an agent on it.
+  // NPC behavior agent: perception, behavior, dialogue, navigation, combat
+  "npc.agent": [
+    "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write",
+    "social.act", "audio.play",
+    "behavior.read", "behavior.write",
+    "dialogue.read", "dialogue.write", "dialogue.configure",
+    "nav.read", "nav.write",
+    "stats.read", "stats.write", "stats.configure",
+    "damage.write", "status.read", "status.write",
+    "combat.write",
+    "animation.read", "animation.write",
+    "inventory.read",
+    "interaction.read",
+  ],
+  // Game rules and quest authoring
+  "game.author": [
+    "game.write", "game.configure",
+    "quest.read", "quest.write", "quest.configure",
+    "trigger.configure", "event.read", "event.write",
+    "stats.configure",
+    "scene.read", "ecs.read", "physics.read", "agent.read",
+  ],
+  // Combat and damage systems
+  "combat.writer": [
+    "combat.write", "damage.write", "status.read", "status.write",
+    "stats.read", "stats.write",
+    "scene.read", "ecs.read", "physics.read",
+  ],
+  // Visual effects authoring
+  "vfx.writer": [
+    "vfx.write", "animation.write",
+    "scene.read", "ecs.read",
+  ],
+  // World dynamics (time, weather, spawn)
+  "world.author": [
+    "world.write", "checkpoint.read", "checkpoint.write",
+    "save.write",
+    "scene.read", "ecs.read", "physics.read",
+  ],
+  // Terrain authoring (existing)
   "terrain.author": [
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "terrain.read", "terrain.generate",
   ],
-  // Conversational agents: perceive the world + act SOCIALLY (approach/say). The
-  // `social.act` capability gates the social.* skills; it is deliberately ABSENT
-  // from player.limited so a non-social agent is denied with zero effect.
+  // Conversational agents (existing)
   "social.actor": [
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
-  // `trace.read` gates the cross-agent trace surface (trace.tail / .explainEvent /
-  // .export). Only the OBSERVER profiles below carry it; build/play/social/terrain
-  // actors and a bundle-scoped `delegate.review` worker deliberately do NOT, so a
-  // least-privilege worker cannot read or export the global trace.
+  // Observer profiles (existing)
   "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read"],
-  // Phase 7 human-in-the-loop. `builder.review` is a builder whose MUTATING edits
-  // are held by the review gate (same capabilities as builder.readWrite — it can
-  // PROPOSE; the gate decides when its world-writes apply). `reviewer` is the human
-  // granter: read the world + resolve held actions via the approval.* skills.
+  // Phase 7 human-in-the-loop (existing)
   "builder.review": [
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
   ],
   "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read"],
-  // Phase 10 coordinator/delegate. A coordinator DECOMPOSES a goal and DELEGATES
-  // bounded tasks to least-privilege workers (`orchestrate`), then REVIEWS their
-  // held mutating edits (`approval.review`) — the same gate a human reviewer drives.
+  // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
     "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read",

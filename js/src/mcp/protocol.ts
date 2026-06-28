@@ -6,6 +6,9 @@ export interface MCPTool {
   name: string;
   description: string;
   input_schema: unknown; // JSON Schema (draft-07) from z.toJSONSchema
+  /** Optional category for tool grouping/browse (not part of MCP spec, but used
+   *  internally for skills.browse and visual organization). */
+  category?: string;
 }
 
 export interface MCPRequest {

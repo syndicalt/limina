@@ -20,31 +20,25 @@ scoping means no agent ever sees the whole list at once.
 ECS, physics (+ heightfields), WebGPU render, the agent loop (multi-turn), policy/permissions, durable log
 (= save / replay / export), authoritative multiplayer sync, MCP, browser export, spatial index.
 
-### Content (Phase 9 + 11)
-- **Have:** terrain (generate/sample/stream), prop scatter (trees/rocks/grass).
-- **Next:** assets (GLTF import + `asset.scatter`), water/sky/weather, lighting + time-of-day.
-- **Later:** structures/buildings, particles/VFX, decals, post-processing.
+### Content (Phase 9 + 11 + 12)
+- **Have:** terrain (generate/sample/stream), prop scatter (trees/rocks/grass), assets (GLTF import + `asset.scatter`), water/sky/weather, lighting + time-of-day, structures/buildings.
+- **Next:** particles/VFX, decals, post-processing.
 
 ### Characters & animation
-- **Have:** agent "bodies" (entities the agent loop drives).
-- **Next:** **character controller** (walk/run/jump on the heightfield), **skeletal animation** + blend states.
+- **Have:** agent "bodies", **character controller** (walk/run/jump/crouch/sprint), **skeletal animation** + blend states + state machines + emotes.
 - **Later:** ragdoll, IK, facial/emote, crowds.
 
-### Gameplay logic *(the biggest gap → most of "fully-featured")*
-- **Next:** items/inventory, stats/health/resources, **triggers/events**, **objectives/quests**, **win-lose
-  conditions**, dialogue trees (extend `social.say`), **navmesh/pathfinding**.
-- **Later:** abilities/combat, crafting, economy, save-slot progression, difficulty.
+### Gameplay logic *(shipped Phase 12)*
+- **Have:** items/inventory, stats/health/resources, **triggers/events**, **objectives/quests**, **win-lose conditions**, dialogue trees, **navmesh/pathfinding**, combat (melee/ranged/defend), status effects, game state (flags/counters/timers/conditions), checkpoints/save/load, progression (XP/leveling/skill trees/unlocks).
+- **Later:** crafting, economy, difficulty.
 
 ### Interaction & presentation
-- **Have:** `ui.*` containers, demo cameras (orbit/free-fly).
-- **Next:** input bindings/actions, **camera rigs** (follow / first-person / third-person), pick-up/use/talk
-  interaction, menus + game flow (extend `ui.*`).
+- **Have:** `ui.*` containers, demo cameras (orbit/free-fly), **camera rigs** (follow/first-person/third-person/top-down), **input bindings/actions**, pick-up/use/talk interaction, menus + game flow.
 - **Later:** accessibility, gamepad/touch, in-world UI.
 
 ### Meta
-- **Have:** save / replay / export (the log), multiplayer sync.
-- **Next:** settings, sessions/lobbies, progression.
-- **Later:** analytics, telemetry, anti-cheat (the policy engine is a head start).
+- **Have:** save / replay / export (the log), multiplayer sync, **sessions/lobbies**, **progression**, **world dynamics** (time/weather/timeScale).
+- **Later:** analytics, telemetry, anti-cheat.
 
 ## Sequencing — by leverage (what unlocks the most game types fastest)
 1. **Assets/props** *(Phase 11)* — worlds that look intentional.
