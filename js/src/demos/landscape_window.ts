@@ -29,6 +29,10 @@ import { MATERIALS } from "../materials/palette.ts";
 
 const SEED = 1234;
 const TYPE: TerrainTypeName = "mountains";
+// A/B the terrain SURFACE: "pbr" = the opt-in procedural-PBR material (triplanar layers + detail
+// normals + honest roughness — "Grounded Stylized Realism"); "ramp" = the flat elevation+biome
+// ramp it's compared against. Same bands either way; only the surface detail changes.
+const SURFACE: "pbr" | "ramp" = "pbr";
 // A 4×4 tile region (16 heightfield tiles ≈ 192 m square) — a varied vista that fits inside
 // one erosion macro-block, so the eroded seams are bit-exact and the bake is cheap.
 const BOUNDS = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 } as const;
@@ -91,10 +95,10 @@ if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringif
 for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
   for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
     const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: HINTS });
-    const mesh = buildTerrainMesh(tile, {
-      roughness: 0.95,
-      palette: { seaLevel, minY: relief.minY, maxY: relief.maxY },
-    });
+    const band = { seaLevel, minY: relief.minY, maxY: relief.maxY };
+    const mesh = buildTerrainMesh(tile, SURFACE === "pbr"
+      ? { roughness: 0.95, pbr: band }
+      : { roughness: 0.95, palette: band });
     engine.scene.add(mesh);
   }
 }

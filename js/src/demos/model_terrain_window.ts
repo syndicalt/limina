@@ -93,7 +93,7 @@ const relief = surveyRegionRelief(source, SEED, bounds, {});
 // region so the ocean reads as open water around the landmass (the default 400 plane is far
 // too small for a multi-km model region).
 const span = (bounds.maxTx - bounds.minTx + 1) * source.extent;
-const waterRes = await registry.invoke("world.addWater", { level: SEA_LEVEL, size: span * 3 }, base);
+const waterRes = await registry.invoke("world.addWater", { level: SEA_LEVEL, size: span * 1.3 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
 // Mount the model surface tile-by-tile with the ELEVATION + BIOME colour ramp (sandy coast →
