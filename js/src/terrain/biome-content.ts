@@ -134,10 +134,13 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   mountains: [
     {
       // Generous conifer forest on the green base + lower/mid slopes up to a sensible tree-line
-      // (~0.58 of the relief). slopeMax 1.15 keeps trees on the steep ERODED flanks (an amp-4.5
-      // eroded mountainside is steep; the old 0.85/0.45 cropped pines into a thin band → "only rocks").
+      // (~0.58 of the relief). slopeMax 0.8 keeps the WIDE pine cones off the steepest eroded
+      // flanks, where even the balanced embed-sink (K=0.5) leaves a visible skirt-float / trunk-
+      // bury mismatch (the "sunken trees" the user saw at slopeMax 1.15). 0.8 still yields a
+      // healthy forest on the amp-4.5 eroded mountain (~540 pines on the 4×4, far above boulders)
+      // — it is the gentler tree-line, not the old 0.85/0.45 dual cap that cropped pines to a band.
       seed: 31, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
-      slopeMax: 1.15, sizeRange: [0.8, 1.5], elevMaxFrac: 0.58, waterGated: true,
+      slopeMax: 0.8, sizeRange: [0.8, 1.5], elevMaxFrac: 0.58, waterGated: true,
     },
     {
       // Boulders as the rock-zone ACCENT (sparse, so they don't dominate the forested slopes).
@@ -149,7 +152,7 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   forest: [
     {
       seed: 41, assets: [{ id: BROADLEAF_ASSET, weight: 3, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
-      coverage: 0.30, cluster: 0.5, clusterFreq: 1 / 30, slopeMax: 0.9, sizeRange: [0.9, 1.6],
+      coverage: 0.30, cluster: 0.5, clusterFreq: 1 / 30, slopeMax: 0.8, sizeRange: [0.9, 1.6],
     },
     {
       seed: 42, assets: [{ id: BUSH_ASSET }], coverage: 0.18, cluster: 0.3, sizeRange: [0.8, 1.5],
@@ -171,14 +174,14 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       seed: 61, assets: [{ id: GRASS_ASSET }], coverage: 0.35, cluster: 0.35, slopeMax: 0.7, sizeRange: [0.7, 1.4],
     },
     {
-      seed: 62, assets: [{ id: BROADLEAF_ASSET, embedRadius: BROADLEAF_EMBED }], coverage: 0.02, cluster: 0.6, sizeRange: [0.9, 1.5],
+      seed: 62, assets: [{ id: BROADLEAF_ASSET, embedRadius: BROADLEAF_EMBED }], coverage: 0.02, cluster: 0.6, slopeMax: 0.8, sizeRange: [0.9, 1.5],
     },
   ],
   // Cool rolling uplands: a thinner broadleaf+pine cover over grass and bush.
   hills: [
     {
       seed: 71, assets: [{ id: BROADLEAF_ASSET, weight: 2, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
-      coverage: 0.12, cluster: 0.5, slopeMax: 0.9, sizeRange: [0.8, 1.5],
+      coverage: 0.12, cluster: 0.5, slopeMax: 0.8, sizeRange: [0.8, 1.5],
     },
     {
       seed: 72, assets: [{ id: GRASS_ASSET, weight: 2 }, { id: BUSH_ASSET, weight: 1 }],
@@ -192,7 +195,7 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       coverage: 0.07, cluster: 0.7, clusterFreq: 1 / 28, slopeMax: 0.7, sizeRange: [1.0, 2.2], waterGated: true,
     },
     {
-      seed: 82, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.06, cluster: 0.5, sizeRange: [0.8, 1.3],
+      seed: 82, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.06, cluster: 0.5, slopeMax: 0.8, sizeRange: [0.8, 1.3],
       waterGated: true, elevMinFrac: 0.45,
     },
   ],

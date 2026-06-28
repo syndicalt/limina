@@ -24,12 +24,17 @@ import { hashSeed, mulberry32 } from "./scatter.ts";
 // ── EMBED-SINK (slope-aware vertical tether) ────────────────────────────────────
 // A prop is tethered to the surface at its CENTER (x,z). Its flat base is horizontal,
 // so on a slope of gradient `s` (rise/run) the downhill lip of a base of radius `r`
-// hangs ~`r·s` above the surface (the "floating trees" artefact). Sinking the instance
-// by `r·s` plants that downhill lip back ON the surface (the uphill side beds into the
-// rising ground). EMBED_K=1 lands the lip at the surface; the sink is capped so a near-
-// cliff prop can't submerge. Pure geometry from the slope already computed per candidate
-// — deterministic + replay-safe (no new per-instance log state; driven by config radii).
-const EMBED_K = 1.0;          // downhill base lip → at the surface (r·s above → grounded)
+// hangs ~`r·s` above the surface (the "floating trees" artefact). But the curated trees
+// are WIDE GROUND-TOUCHING CONES (the foliage skirt reaches the ground, base radius ~1.2–1.3),
+// not thin trunks — so fully grounding the downhill lip (sink = r·s) buries the TRUNK by r·s,
+// which reads as "sunken" trees on a slope. There is no perfect Y-only fix for a wide cone, so
+// use the BALANCED sink K=0.5: sinking by r·s/2 makes the downhill-skirt float (r·s − sink) and
+// the trunk bury (sink) EQUAL, each r·s/2 — minimizing the worst-case mismatch instead of
+// trading a floating skirt for a buried trunk. (Trees are also kept off the steepest slopes via
+// the catalog tree slopeMax, where even the balanced sink leaves a visible mismatch.) The sink
+// is capped so a near-cliff prop can't submerge. Pure geometry from the slope already computed
+// per candidate — deterministic + replay-safe (no new per-instance log state; driven by config).
+const EMBED_K = 0.5;          // BALANCED: skirt float (r·s/2) == trunk bury (r·s/2), min worst-case
 const EMBED_MAX_RADII = 1.5;  // never sink more than 1.5 base radii (~40% of a ~4R-tall prop)
 const EMBED_ABS_MAX = 3.0;    // absolute world-unit cap on the sink
 
