@@ -101,11 +101,34 @@ for (const cfg of looseConfigs) {
 }
 assert(looseBelow > 0, "water-exclusion NOT falsifiable: even un-gated configs placed nothing below water (no flooded terrain to test against)");
 
+// (7) HEALTHY PINES on the EXACT landscape config (mountains, amp 4.5, erode, 4×4, sea 18%,
+//     margin 1.0): a forested lower mountain needs pines to dominate boulders, not the reverse.
+//     Before the fix pines were cropped into a thin band (≈222) below the boulders (≈360).
+const lbounds = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 };
+const lhints = { ...terrainTypeHints("mountains", lbounds), amp: 4.5, erode: 1 };
+const lsurvey = surveyRegionRelief(source, SEED, lbounds, lhints);
+const lsea = lsurvey.minY + 0.18 * (lsurvey.maxY - lsurvey.minY);
+const ltiles = [];
+for (let tz = lbounds.minTz; tz <= lbounds.maxTz; tz++) {
+  for (let tx = lbounds.minTx; tx <= lbounds.maxTx; tx++) {
+    ltiles.push(source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: lhints }));
+  }
+}
+const [pineCfg, boulderCfg] = biomeScatterConfigs("mountains", lsurvey, lsea, 1.0);
+let pineN = 0, boulderN = 0, pineBelow = 0;
+for (const t of ltiles) {
+  for (const inst of scatterAssets(t, SEED, pineCfg)) { pineN++; if (inst.y < lsea) pineBelow++; }
+  for (const _ of scatterAssets(t, SEED, boulderCfg)) boulderN++;
+}
+assert(pineN >= boulderN, `pines (${pineN}) must not be outnumbered by boulders (${boulderN}) on the landscape config`);
+assert(pineN >= 300, `pine count ${pineN} is not a HEALTHY forest (expected well above the old ~222)`);
+assert(pineBelow === 0, `landscape config placed ${pineBelow} pines below the water line (must be 0)`);
+
 void TILE_SIZE;
 ops.op_log(
   `p11_terrain_ramp OK: default material keeps flat-colour defaults (no colorNode/roughnessNode); ` +
   `palette builds the elevation+biome ramp colorNode/roughnessNode + climate DataTexture (explicit + ` +
   `default relief + no-climate fallback); render-only exaggerateY scales mesh Y about the pivot; ` +
   `water-exclusion: ${gatedTotal} gated props ALL above the water line (0 below), falsifiable ` +
-  `(un-gated placed ${looseBelow} below water).`,
+  `(un-gated placed ${looseBelow} below water); landscape pines=${pineN} ≥ boulders=${boulderN} (0 pines below water).`,
 );
