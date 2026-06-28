@@ -20,7 +20,6 @@
 //   mouse — look around (camera only)
 //   Shift — run                        Space — jump
 
-import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
@@ -32,6 +31,7 @@ import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { CharacterController } from "../world/character.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
+import { attachCharacterModel } from "../world/character_model.ts";
 
 const SEED = 1234;
 const TYPE = "beach" as const;
@@ -81,13 +81,20 @@ const surfaceY = core.terrain.source.sampleHeight(SEED, spawnX, spawnZ, 0, hints
 const controller = new CharacterController(ops, [spawnX, surfaceY + 0.9, spawnZ], { halfHeight: 0.5, radius: 0.35 });
 ops.op_physics_step(); // build the broad-phase BVH so the first move_character resolves the ground
 
-// Visible capsule for the character (CapsuleGeometry length = 2 * cylindrical half-height).
-const capsule = new THREE.Mesh(
-  new THREE.CapsuleGeometry(controller.radius, controller.halfHeight * 2, 8, 16),
-  new THREE.MeshStandardNodeMaterial({ color: 0xff7a1a, roughness: 0.5, metalness: 0.0 }),
-);
-capsule.castShadow = true;
-engine.scene.add(capsule);
+// VISIBLE CHARACTER — a rigged, animated glTF (robot.glb) replaces the old capsule. The
+// physics body above is unchanged; this is RENDER-ONLY (mesh + AnimationMixer). The model
+// is foot-placed each frame from the controller and crossfades idle/walk/run from input.
+const model = await attachCharacterModel({
+  world, registry, base, animationManager: core.animation.animationManager,
+  position: [spawnX, controller.position[1] - controller.groundOffset, spawnZ],
+});
+{
+  const info = await registry.invoke("animation.getClipInfo", { entity: model.entity }, base);
+  ops.op_log(
+    `character model: entity ${model.entity}, scale ${model.scale.toFixed(3)}, footY ${model.footY.toFixed(3)}, ` +
+    `clips ${JSON.stringify((info.result as { clips: unknown[] }).clips)}`,
+  );
+}
 
 // Third-person follow camera (sits behind the character heading; mouse adds a
 // free-look offset for VIEWING only — it never feeds back into the sim).
@@ -111,6 +118,7 @@ const axes = new Float32Array(3);
 const buttons = new Float32Array(2);
 const look = new Float32Array(2);
 let prevJump = false;
+let dbgFrame = 0;
 
 function fixedStep(dt: number): void {
   ops.op_input_axes(axes);       // [0]=A/D, [1]=Q/E (unused), [2]=S/W
@@ -134,9 +142,16 @@ function render(_alpha: number): void {
   if (freePitch < PITCH_MIN) freePitch = PITCH_MIN;
   if (freePitch > PITCH_MAX) freePitch = PITCH_MAX;
   const p = controller.position;
-  capsule.position.set(p[0], p[1], p[2]);
-  const yaw = controller.facing; // local +Z faces the move dir (engine yaw->quat convention)
-  capsule.quaternion.set(0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2));
+  // Foot-place the model (controller.position is the capsule CENTER) + drive its gait
+  // from the latest sampled input (forward axis -> walk, run button -> run).
+  const moving = Math.abs(axes[2]) > 0.01;
+  model.setPose([p[0], p[1] - controller.groundOffset, p[2]], controller.facing);
+  model.setLocomotion(moving ? (buttons[1] === 1 ? "run" : "walk") : "idle", 1 / 60);
+  if (dbgFrame === 25) {
+    void registry.invoke("animation.getClipInfo", { entity: model.entity }, base).then((r) =>
+      ops.op_log(`character model @frame25: clipInfo ${JSON.stringify((r.result as { clips: unknown[] }).clips)}`));
+  }
+  dbgFrame++;
   // Follow camera = behind the sim heading + the mouse free-look offset.
   camera.yaw = heading + freeYaw;
   camera.pitch = freePitch;

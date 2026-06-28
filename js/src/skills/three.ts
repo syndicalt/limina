@@ -367,16 +367,20 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
   const payload = assetId.endsWith(".gltf")
     ? new TextDecoder().decode(bytes)
     : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const gltf = await new Promise<{ scene: SceneObject }>((resolve, reject) => {
+  const gltf = await new Promise<{ scene: SceneObject; animations?: unknown[] }>((resolve, reject) => {
     loader.parse(
       payload,
       `limina-asset://${base}`,
-      (g: { scene: SceneObject }) => resolve(g),
+      (g: { scene: SceneObject; animations?: unknown[] }) => resolve(g),
       (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
     );
   });
   const root = gltf.scene;
   prepareGltfTextures(root);
+  // Retain the parsed animation clips on the root: three's GLTFLoader hangs them off
+  // gltf.animations, NOT gltf.scene, so without this a rigged character's clips
+  // (idle/walk/run) are silently dropped and animation.play can't find them.
+  (root as unknown as { animations?: unknown[] }).animations = gltf.animations ?? [];
   return root;
 }
 

@@ -33,6 +33,7 @@ import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { CharacterController } from "../world/character.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
+import { attachCharacterModel } from "../world/character_model.ts";
 
 const SEED = 4242;
 const TYPE = "plains" as const;
@@ -94,12 +95,19 @@ const surfaceY = core.terrain.source.sampleHeight(SEED, CENTER_X, CENTER_Z, 0, H
 const controller = new CharacterController(ops, [CENTER_X, surfaceY + 0.9, CENTER_Z], { halfHeight: 0.5, radius: 0.35 });
 ops.op_physics_step(); // build the broad-phase BVH so the first move_character resolves the ground
 
-const capsule = new THREE.Mesh(
-  new THREE.CapsuleGeometry(controller.radius, controller.halfHeight * 2, 8, 16),
-  new THREE.MeshStandardNodeMaterial({ color: 0xff7a1a, roughness: 0.5, metalness: 0.0 }),
-);
-capsule.castShadow = true;
-engine.scene.add(capsule);
+// VISIBLE CHARACTER — a rigged, animated glTF (robot.glb) replaces the old capsule.
+// Physics body unchanged; RENDER-ONLY (mesh + AnimationMixer), foot-placed each frame.
+const model = await attachCharacterModel({
+  world, registry, base, animationManager: core.animation.animationManager,
+  position: [CENTER_X, controller.position[1] - controller.groundOffset, CENTER_Z],
+});
+{
+  const info = await registry.invoke("animation.getClipInfo", { entity: model.entity }, base);
+  ops.op_log(
+    `character model: entity ${model.entity}, scale ${model.scale.toFixed(3)}, footY ${model.footY.toFixed(3)}, ` +
+    `clips ${JSON.stringify((info.result as { clips: unknown[] }).clips)}`,
+  );
+}
 
 engine.camera.near = 0.3;
 engine.camera.far = 1000;
@@ -121,6 +129,7 @@ const buttons = new Float32Array(2);
 const look = new Float32Array(2);
 let prevJump = false;
 let simTick = 0;
+let dbgFrame = 0;
 
 // Win bookkeeping: claim once, run the skill-driven win sequence, log "you win".
 let claiming = false;
@@ -175,9 +184,15 @@ function render(_alpha: number): void {
   if (freePitch < PITCH_MIN) freePitch = PITCH_MIN;
   if (freePitch > PITCH_MAX) freePitch = PITCH_MAX;
   const p = controller.position;
-  capsule.position.set(p[0], p[1], p[2]);
-  const yaw = controller.facing;
-  capsule.quaternion.set(0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2));
+  // Foot-place the rigged model (controller.position is the capsule CENTER) + drive gait.
+  const moving = Math.abs(axes[2]) > 0.01;
+  model.setPose([p[0], p[1] - controller.groundOffset, p[2]], controller.facing);
+  model.setLocomotion(moving ? (buttons[1] === 1 ? "run" : "walk") : "idle", 1 / 60);
+  if (dbgFrame === 25) {
+    void registry.invoke("animation.getClipInfo", { entity: model.entity }, base).then((r) =>
+      ops.op_log(`character model @frame25: clipInfo ${JSON.stringify((r.result as { clips: unknown[] }).clips)}`));
+  }
+  dbgFrame++;
   camera.yaw = heading + freeYaw;
   camera.pitch = freePitch;
   camera.update(engine.camera, p);
