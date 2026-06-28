@@ -1,5 +1,12 @@
 # Phase 12 — FINISH plan (make the playable-game skills real, replay-safe, tested)
 
+> **STATUS: ✅ COMPLETE (2026-06-28).** Waves A/B/C landed (commits fcee4c1, bfad812,
+> 830e970). All 21 `p12_*` tests + full headless suite (110/0) + portability pass.
+> Deferred follow-ups (low priority): `context` tags + decision-system auto-bootstrap
+> (Part A2); `parseGltfScene` retaining `gltf.animations` so rigged glTF clips play
+> through `animation.*`; recorder embedding the full `perms` array in every command
+> (bloats the log as profiles grow — tests now assert on `.input`, not whole command).
+
 > Follows the review of the initial Phase-12 drop. The catalog/vision is right; the
 > execution is an API scaffold with three systemic defects. This plan finishes it to a
 > coherent, working, **deterministic + tested** baseline, built by expert agents under the
