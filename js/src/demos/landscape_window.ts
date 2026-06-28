@@ -35,11 +35,18 @@ const BOUNDS = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 } as const;
 // The sea floods the low ~18 % of the relief, so valleys read as water + sandy shore and the
 // peaks tower dry above — the full ramp range in one shot.
 const SEA_FRACTION = 0.18;
+// DRAMATIC RELIEF: override the mountains amplitude well above the type default (2.4) so a tall
+// summit rises over a green base — the elevation gradient needs real vertical range to read.
+// Deterministic (a plain hint, recorded verbatim); the colliders/mesh/props all use it.
+const AMP = 4.5;
+// Dry margin (m) above the water line for scattered props, so nothing stands in the lakes.
+const WATER_MARGIN = 1.0;
 
-// The shaping recipe = the mountains type's knobs PLUS hydraulic/thermal erosion (the `erode`
-// hint). Passed to world.generateRegion (the colliders + region the scatter binds to) and to
-// the visible mesh + relief survey, so every read matches the eroded tiles bit-for-bit.
-const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), erode: 1 };
+// The shaping recipe = the mountains type's knobs, with the amplitude bumped for drama, PLUS
+// hydraulic/thermal erosion (the `erode` hint). Passed to world.generateRegion (the colliders +
+// region the scatter binds to) and to the visible mesh + relief survey, so every read matches
+// the eroded tiles bit-for-bit.
+const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), amp: AMP, erode: 1 };
 
 // Default render baseline (key sun + hemisphere fill + procedural-sky IBL + tonemapping); the
 // generated terrain IS the ground, so suppress the baseline's flat ground plane.
@@ -60,7 +67,7 @@ const base = { agentId: "agt_landscape", sessionId: "ses_landscape_window", perm
 ops.op_physics_create_world(-9.81);
 
 // 1. THE GROUND — generate the eroded mountains region (heightfield colliders + region handle).
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: { erode: 1 } }, base);
+const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: { amp: AMP, erode: 1 } }, base);
 if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
 const regionId = (gen.result as { regionId: string }).regionId;
 
@@ -77,10 +84,10 @@ const waterRes = await registry.invoke("world.addWater", {
 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
-// 3. THE SURFACE — mount each tile with the ELEVATION + BIOME ramp (sandy coast → green/dry
-//    lowland by precip → grey rock on the high+steep → white snow on the high+cold → dark silt
-//    below the sea), driven by the baked per-cell climate. Built with the SAME eroded hints so
-//    the visible mesh coincides with the colliders the props/water sit on.
+// 3. THE SURFACE — mount each tile with the ELEVATION + BIOME ramp: a stark elevation gradient
+//    (sandy coast → green/dry lowland by precip → grey-brown rock mountainside → white snow
+//    PEAK → dark silt below the sea), elevation-primary with the baked climate only modulating.
+//    Built with the SAME eroded hints so the visible mesh coincides with the colliders.
 for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
   for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
     const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: HINTS });
@@ -96,7 +103,8 @@ for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
 //    deterministic biome-content seam (gated by the region's surveyed relief). Pass the water
 //    level so the scatter knows the shoreline.
 const scattered = await scatterBiomeContent({
-  registry, source: core.terrain.source, regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base, waterLevel: seaLevel,
+  registry, source: core.terrain.source, regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base,
+  waterLevel: seaLevel, waterMargin: WATER_MARGIN,
 });
 
 // FREE-FLY camera framed low across the landscape (a flattering grazing vista).

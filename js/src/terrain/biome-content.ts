@@ -113,14 +113,17 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   ],
   // Pines on the lower slopes; boulders scattered mid-to-high; the icy peaks stay BARE
   // (the pine tree-line is the falsifiable elevation gate — nothing green above the ice).
+  // Both layers are waterGated so that, when a water level is supplied (e.g. valleys flooded
+  // into lakes), nothing places in or below the water (no trees/boulders standing in a lake).
+  // No-op when no waterLevel is supplied — un-flooded mountains stay byte-identical.
   mountains: [
     {
       seed: 31, assets: [{ id: PINE_ASSET }], coverage: 0.20, cluster: 0.45, clusterFreq: 1 / 34,
-      slopeMax: 0.85, sizeRange: [0.8, 1.5], elevMaxFrac: 0.45,
+      slopeMax: 0.85, sizeRange: [0.8, 1.5], elevMaxFrac: 0.45, waterGated: true,
     },
     {
       seed: 32, assets: [{ id: ROCK_ASSET }], coverage: 0.12, cluster: 0.35,
-      slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30,
+      slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
   ],
   // Dense temperate woodland: broadleaf + conifer mix over a bush understorey.
@@ -201,7 +204,7 @@ export function defaultWaterLevel(survey: ReliefSurvey): number {
  * fields the layer actually sets are emitted, so a layer with no gates stays a plain
  * density+coverage scatter (and the beach layer reproduces beachScatterConfig verbatim).
  */
-export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel?: number): ScatterConfig {
+export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig {
   const relief = survey.maxY - survey.minY;
   const config: ScatterConfig = { seed: layer.seed, assets: layer.assets };
   if (layer.density !== undefined) config.density = layer.density;
@@ -214,11 +217,16 @@ export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel
   if (layer.tempMin !== undefined) config.tempMin = layer.tempMin;
   if (layer.tempMax !== undefined) config.tempMax = layer.tempMax;
 
-  // Lower gate: the stricter of a fractional floor and (when water-gated) the water line.
+  // Lower gate: the stricter of a fractional floor and (when water-gated) the water line +
+  // a small DRY MARGIN above it (so nothing places in or right at the waterline). The gate
+  // is compared against the candidate's surface height in scatterAssets, which reads the
+  // SAME (eroded, if enabled) tile heights the lakes sit in — so the exclusion is exact.
+  // `waterMargin` defaults to 0, so an unchanged call (beach/islands) stays byte-identical.
   let elevationMin: number | undefined;
   if (layer.elevMinFrac !== undefined) elevationMin = survey.minY + layer.elevMinFrac * relief;
   if (layer.waterGated && waterLevel !== undefined) {
-    elevationMin = elevationMin === undefined ? waterLevel : Math.max(elevationMin, waterLevel);
+    const dryFloor = waterLevel + waterMargin;
+    elevationMin = elevationMin === undefined ? dryFloor : Math.max(elevationMin, dryFloor);
   }
   if (elevationMin !== undefined) config.elevationMin = elevationMin;
   // Upper gate: the tree line.
@@ -228,9 +236,9 @@ export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel
 
 /** The full set of concrete ScatterConfigs a TYPE places over a region (one per layer).
  *  Pure — for inspection, the demo, and the falsifiable tests without invoking the skill. */
-export function biomeScatterConfigs(type: TerrainTypeName, survey: ReliefSurvey, waterLevel?: number): ScatterConfig[] {
+export function biomeScatterConfigs(type: TerrainTypeName, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig[] {
   const wl = waterLevel ?? (isWaterType(type) ? defaultWaterLevel(survey) : undefined);
-  return BIOME_CONTENT[type].map((layer) => resolveLayer(layer, survey, wl));
+  return BIOME_CONTENT[type].map((layer) => resolveLayer(layer, survey, wl, waterMargin));
 }
 
 /** The deterministic beach palm/driftwood config, reproduced bit-for-bit from the catalog
@@ -275,6 +283,9 @@ export interface ScatterBiomeContentDeps {
   base: InvokeBase;
   /** Override the water level for a water type (default: low 40% of relief floods). */
   waterLevel?: number;
+  /** Dry margin (world Y) added ABOVE the water level for waterGated layers, so props sit
+   *  clear of the shoreline rather than at it. Default 0 (byte-identical to the prior path). */
+  waterMargin?: number;
 }
 
 /** The result of scattering a type's content: one asset.scatter response per layer. */
@@ -307,7 +318,7 @@ export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promis
   const hints = terrainTypeHints(deps.type, deps.bounds);
   const survey = surveyRegionRelief(deps.source, deps.seed, deps.bounds, hints);
   const wl = deps.waterLevel ?? (isWaterType(deps.type) ? defaultWaterLevel(survey) : undefined);
-  const configs = biomeScatterConfigs(deps.type, survey, wl);
+  const configs = biomeScatterConfigs(deps.type, survey, wl, deps.waterMargin ?? 0);
 
   const layers: ScatterBiomeContentResult["layers"] = [];
   let total = 0;
