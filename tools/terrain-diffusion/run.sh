@@ -14,6 +14,11 @@ set -euo pipefail
 
 SEED="${SEED:-1234}"                 # the model world seed (== shim --region-seed == demo SEED)
 SCALE="${SCALE:-1}"                  # model oversample at lod 0 (m/px = 30/SCALE)
+# World-pixel origin: the model world is INFINITE and (0,0) for seed 1234 is open ocean (~-1000 m
+# â†’ flat). Anchor limina tile (0,0) on LAND. (8800,-6300) is the spike's terrain_big hero (coast +
+# mountains). Override for a different locale, e.g. ORIGIN_I=0 ORIGIN_J=0 for the ocean.
+ORIGIN_I="${ORIGIN_I:-8800}"
+ORIGIN_J="${ORIGIN_J:--6300}"
 MODEL="${MODEL:-xandergos/terrain-diffusion-30m}"
 TD_HOST="${TD_HOST:-127.0.0.1}"
 TD_PORT="${TD_PORT:-8000}"           # terrain-diffusion service
@@ -75,6 +80,7 @@ echo "[run] starting shim on $SHIM_HOST:$SHIM_PORT -> http://$TD_HOST:$TD_PORT â
 "$SHIM_PYTHON" "$HERE/shim.py" \
   --target-url "http://$TD_HOST:$TD_PORT" \
   --region-seed "$SEED" --scale "$SCALE" \
+  --origin-i "$ORIGIN_I" --origin-j "$ORIGIN_J" \
   --host "$SHIM_HOST" --port "$SHIM_PORT" &
 pids+=($!)
 wait_health "http://$SHIM_HOST:$SHIM_PORT/health"

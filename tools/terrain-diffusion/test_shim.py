@@ -135,6 +135,11 @@ def test_tile_to_box_mapping():
     a = tile_to_box(0, 0, 0, 256, 1, 8)
     b = tile_to_box(1, 0, 0, 256, 1, 8)
     assert a[3] == b[1], "neighbor tiles must share the j edge (seam-consistent)"
+    # origin offset shifts the whole box (anchor limina (0,0) on land vs ocean), adjacency preserved.
+    assert tile_to_box(2, 3, 0, 256, 1, 8, 8800, -6300) == (9568, -5788, 9824, -5532, 1, 256)
+    oa = tile_to_box(0, 0, 0, 256, 1, 8, 8800, -6300)
+    ob = tile_to_box(1, 0, 0, 256, 1, 8, 8800, -6300)
+    assert oa[3] == ob[1] and oa[0] == 8800 and oa[1] == -6300, "origin shifts both axes, seam intact"
     # lod is an oversample: scale doubles, px doubles, GROUND METRES STAY CONSTANT.
     native = DEFAULT_NATIVE_M_PER_PX
     ground0 = None

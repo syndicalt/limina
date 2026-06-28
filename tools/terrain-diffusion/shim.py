@@ -89,17 +89,20 @@ def log(msg: str) -> None:
     print(f"[td-shim] {msg}", file=sys.stderr, flush=True)
 
 
-def tile_to_box(tx: int, tz: int, lod: int, tile: int, base_scale: int, max_scale: int):
+def tile_to_box(tx: int, tz: int, lod: int, tile: int, base_scale: int, max_scale: int,
+                origin_i: int = 0, origin_j: int = 0):
     """Map a limina tile request to the model's (i1,j1,i2,j2,scale) pixel box.
     See the module docstring for the convention + invariants. Returns
-    (i1, j1, i2, j2, scale, px_per_tile)."""
+    (i1, j1, i2, j2, scale, px_per_tile). origin_i/origin_j shift the world-pixel
+    origin so limina tile (0,0) anchors at a chosen model location — the model world is
+    infinite and (0,0) may be open ocean, so anchoring on LAND is how you get relief."""
     scale = base_scale << lod
     if scale > max_scale:
         scale = max_scale
     factor = scale // base_scale  # >= 1; samples-per-tile multiplier vs lod 0
     px = tile * factor
-    i1 = tz * px  # z -> i (rows / height)
-    j1 = tx * px  # x -> j (cols / width)
+    i1 = origin_i + tz * px  # z -> i (rows / height)
+    j1 = origin_j + tx * px  # x -> j (cols / width)
     return i1, j1, i1 + px, j1 + px, scale, px
 
 
@@ -167,7 +170,8 @@ def translate_terrain(
 # --- the shim service -----------------------------------------------------------
 class Shim:
     def __init__(self, *, target_url, region_seed, base_scale, max_scale,
-                 native_m_per_px, elev_min, elev_max, default_tile, timeout):
+                 native_m_per_px, elev_min, elev_max, default_tile, timeout,
+                 origin_i=0, origin_j=0):
         self.target = target_url.rstrip("/")
         self.region_seed = int(region_seed)
         self.base_scale = int(base_scale)
@@ -177,6 +181,8 @@ class Shim:
         self.elev_max = elev_max
         self.default_tile = int(default_tile)
         self.timeout = float(timeout)
+        self.origin_i = int(origin_i)  # world-pixel origin (anchor limina (0,0); land vs ocean)
+        self.origin_j = int(origin_j)
 
     @property
     def m_per_px(self) -> float:
@@ -227,7 +233,8 @@ class Shim:
                 f"seed {seed} != region seed {self.region_seed}; this shim serves a single fixed-seed "
                 f"world (relaunch the terrain-diffusion service + shim with --seed/--region-seed {seed})"
             )
-        i1, j1, i2, j2, scale, px = tile_to_box(tx, tz, lod, tile, self.base_scale, self.max_scale)
+        i1, j1, i2, j2, scale, px = tile_to_box(tx, tz, lod, tile, self.base_scale, self.max_scale,
+                                                self.origin_i, self.origin_j)
         raw, h, w = self.fetch_terrain(i1, j1, i2, j2, scale)
         return translate_terrain(
             raw, h, w,
@@ -287,6 +294,10 @@ def main():
                     help="model native m/px at scale 1 (default 30; for reporting + the limina metersPerPx)")
     ap.add_argument("--elev-min", type=int, default=None, help="optional clamp floor (metres); default passthrough")
     ap.add_argument("--elev-max", type=int, default=None, help="optional clamp ceiling (metres); default passthrough")
+    ap.add_argument("--origin-i", type=int, default=int(os.environ.get("TD_ORIGIN_I", "0")),
+                    help="world-pixel ROW origin (limina z=0 maps here); anchor on land vs ocean")
+    ap.add_argument("--origin-j", type=int, default=int(os.environ.get("TD_ORIGIN_J", "0")),
+                    help="world-pixel COL origin (limina x=0 maps here)")
     ap.add_argument("--tile", type=int, default=256, help="default tile edge in samples if a request omits it")
     ap.add_argument("--timeout", type=float, default=120.0, help="upstream request timeout (s)")
     ap.add_argument("--host", default="127.0.0.1")
@@ -298,6 +309,7 @@ def main():
         base_scale=args.scale, max_scale=args.max_scale, native_m_per_px=args.native_res,
         elev_min=args.elev_min, elev_max=args.elev_max,
         default_tile=args.tile, timeout=args.timeout,
+        origin_i=args.origin_i, origin_j=args.origin_j,
     )
     srv = ThreadingHTTPServer((args.host, args.port), build_handler(shim))
     log(f"serving limina /tile on http://{args.host}:{args.port}  ->  {shim.target}/terrain")
