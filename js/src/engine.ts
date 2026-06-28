@@ -327,6 +327,9 @@ export interface Engine {
   /** eid -> string tags (the `component` set for ecs.addComponent/removeComponent). */
   tags: Map<number, Set<string>>;
   ops: EngineOps;
+  /** The render-only post-processing pipeline built by `render.enablePost` (opt-in,
+   *  static/cinematic). A PostPipeline from render/post.ts; never sim/log state. */
+  post?: unknown;
   width: number;
   height: number;
   mode?: "windowed" | "headless";

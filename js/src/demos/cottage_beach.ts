@@ -191,12 +191,22 @@ export async function buildCottageBeach(deps: BuildCottageBeachDeps): Promise<Bu
   // deterministically) to the same shaping+climate hints below. The survey/scatter reuse
   // the resolved hints so every read matches the generated tiles bit-for-bit.
   const hints = beachShapeHints(bounds);
-  const gen = ok(await registry.invoke("world.generateRegion", { seed: BEACH_SEED, bounds, lod: 0, type: "beach" }, base), "world.generateRegion");
-  const regionId = gen.regionId as string;
 
-  // Survey the generated surface (deterministic read, SAME hints) → sea level + cottage spot.
+  // Survey the SHAPED surface FIRST (deterministic read, SAME hints) → sea level + cottage spot,
+  // BEFORE generating, so the AUTO-SURFACE builds the visible sand mesh with the right sea level.
   const { minY, maxY, samples } = surveyBeach(source, BEACH_SEED, bounds, hints);
   const seaLevel = minY + SEA_FRACTION * (maxY - minY);
+
+  // 1b. THE GROUND + SURFACE — generate the procedural beach region (real heightfield colliders)
+  //    AND, in the SAME skill call, the VISIBLE sand surface with the tropical wet/foam SHORELINE
+  //    band right where the sand crosses the sea level (the AUTO-SURFACE; render-only, keyed to
+  //    seaLevel). Each tile mesh coincides with the collider, so the cottage/props sit on what
+  //    you see. Seeded by TYPE "beach" — the agent-native way; ZERO hand-authored geometry.
+  const gen = ok(await registry.invoke("world.generateRegion", {
+    seed: BEACH_SEED, bounds, lod: 0, type: "beach",
+    surface: { mode: "shoreline", color: MATERIALS.sand.color, roughness: MATERIALS.sand.roughness, seaLevel },
+  }, base), "world.generateRegion");
+  const regionId = gen.regionId as string;
 
   // 2. THE SEA — a render-only water surface at sea level; the low sand floods. The
   //    surface plane is centred at the origin, so the default (large) size is used so

@@ -15,18 +15,15 @@
 // bundled test GLTFs stand in for the curated CC0 beach pack; swap the ASSET-ID
 // constants in cottage_beach.ts to ship the real look). Camera auto-orbits the beach.
 
-import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
-import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
-import { MATERIALS } from "../materials/palette.ts";
 import { TROPICAL_BEACH_BASELINE } from "../render-baseline.ts";
 import { buildPostPipeline } from "../render/post.ts";
-import { buildCottageBeach, beachShapeHints, BEACH_SEED, BEACH_BOUNDS } from "./cottage_beach.ts";
+import { buildCottageBeach, BEACH_BOUNDS } from "./cottage_beach.ts";
 
 // Opt into the NAMED warm "golden-hour tropical beach" baseline (warm sun + tropical
 // sky IBL + lifted exposure) — additive, it never changes the global default. The
@@ -62,29 +59,12 @@ ops.op_physics_create_world(-9.81);
 // Assemble the beach from intent-level skills (the SAME builder the headless test
 // drives). asset.place adds the cottage GLTF root; asset.scatter mounts the palm/
 // driftwood InstancedMeshes; world.addWater adds the sea plane — all onto engine.scene.
+// buildCottageBeach now builds the VISIBLE sand surface itself via the AUTO-SURFACE
+// (world.generateRegion `surface:{mode:"shoreline"}`) — the tropical wet/foam shoreline band
+// right where the sand crosses the sea level. The cottage GLTF, the palm/driftwood
+// InstancedMeshes (asset.scatter), and the sea plane (world.addWater) are added onto
+// engine.scene by the builder's skills. No hand-rolled terrain mesh loop here anymore.
 const result = await buildCottageBeach({ registry, world, source: core.terrain.source });
-
-// Mount the generated region's surface as visible meshes. This is the HOST render path
-// for terrain (world.generateRegion builds the heightfield COLLIDER + an inert ECS
-// entity; the visible mesh is the host's job). Each tile mesh's vertices coincide with
-// the collider surface, so the cottage/props sit exactly on what you see.
-for (let tz = BEACH_BOUNDS.minTz; tz <= BEACH_BOUNDS.maxTz; tz++) {
-  for (let tx = BEACH_BOUNDS.minTx; tx <= BEACH_BOUNDS.maxTx; tx++) {
-    // OPT IN to the SAME island/dune/beach shaping the builder generated the colliders +
-    // surveyed the sea level with, so the visible mesh matches the surface the cottage/
-    // props/water sit on (without these hints the mesh would be the flat base field and
-    // everything would float). beachShapeHints is the single source of truth for both.
-    const tile = core.terrain.source.generateTile({ seed: BEACH_SEED, tx, tz, lod: 0, hints: beachShapeHints(BEACH_BOUNDS) });
-    // Render-only tropical shoreline: a wet band + an animated foam line right where the
-    // sand crosses the sea level (ground-truth from the sand's own height — no depth buffer).
-    const mesh = buildTerrainMesh(tile, {
-      color: MATERIALS.sand.color,
-      roughness: MATERIALS.sand.roughness,
-      shoreline: { seaLevel: result.seaLevel },
-    });
-    engine.scene.add(mesh);
-  }
-}
 
 // Frame the beach for a HERO shot: orbit the cottage just above the waterline, with a
 // LOW, grazing camera so the eye runs across the sea (the grazing angle is where the

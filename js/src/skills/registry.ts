@@ -44,6 +44,10 @@ export interface WorldContext {
   ops: EngineOps;
   agents?: AgentLookup;
   renderer?: unknown;
+  /** The render-only post-processing pipeline built by `render.enablePost` (a
+   *  PostPipeline from render/post.ts). A render loop drives `post.render()` in place of
+   *  `renderer.render(...)`. Set by the skill; never sim/log state. */
+  post?: unknown;
   width?: number;
   height?: number;
   mode?: "windowed" | "headless";

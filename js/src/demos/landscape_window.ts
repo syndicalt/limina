@@ -22,10 +22,9 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
-import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
-import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
+import { surveyRegionRelief } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { DEFAULT_RENDER_BASELINE } from "../render-baseline.ts";
 import { buildPostPipeline } from "../render/post.ts";
@@ -111,14 +110,25 @@ const base = { agentId: "agt_landscape", sessionId: "ses_landscape_window", perm
 
 ops.op_physics_create_world(-9.81);
 
-// 1. THE GROUND — generate the eroded mountains region (heightfield colliders + region handle).
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE }, base);
-if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
-const regionId = (gen.result as { regionId: string }).regionId;
-
-// Survey the eroded surface (SAME hints) → relief + sea level.
+// Survey the eroded surface (SAME hints) → relief + sea level, BEFORE generating, so the
+// auto-surface (world.generateRegion `surface`) builds the visible PBR mesh with the EXACT
+// band the demo used to build by hand — byte-identical look, no double mesh.
 const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
 const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
+
+// 1. THE GROUND + SURFACE — generate the eroded mountains region (heightfield colliders +
+//    region handle) AND, in the SAME skill call, the VISIBLE procedural-PBR terrain surface
+//    (the AUTO-SURFACE). Each tile mesh's vertices coincide with the collider; the WET-SHORE
+//    band texture-terminates the waterline (darker/glossier contact + a thin foam line).
+//    Render-only; the surface recipe is recorded with the request and rebuilt on replay.
+const gen = await registry.invoke("world.generateRegion", {
+  seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE,
+  surface: SURFACE === "pbr"
+    ? { mode: "pbr", roughness: 0.95, seaLevel, minY: relief.minY, maxY: relief.maxY, waterline: { wetBand: 1.4, foam: 0.5 } }
+    : { mode: "palette", roughness: 0.95, seaLevel, minY: relief.minY, maxY: relief.maxY },
+}, base);
+if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
+const regionId = (gen.result as { regionId: string }).regionId;
 
 // ATMOSPHERE ceiling — now that the real relief is surveyed, retune the height-falloff haze so
 // its ceiling sits just under the summit: the sea + low forested base + far shore pool in the
@@ -143,32 +153,19 @@ const waterRes = await registry.invoke("world.addWater", {
 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
-// 3. THE SURFACE — mount each tile with the ELEVATION + BIOME ramp: a stark elevation gradient
-//    (sandy coast → green/dry lowland by precip → grey-brown rock mountainside → white snow
-//    PEAK → dark silt below the sea), elevation-primary with the baked climate only modulating.
-//    Built with the SAME eroded hints so the visible mesh coincides with the colliders.
-for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
-  for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
-    const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: HINTS });
-    const band = { seaLevel, minY: relief.minY, maxY: relief.maxY };
-    // WET-SHORE BAND: texture-terminate the waterline so a cliff or beach meeting the sea reads
-    // as an intentional wet shoreline (darker, glossier contact + a thin foam line), not a raw
-    // clay edge. Render-only; keyed to seaLevel.
-    const mesh = buildTerrainMesh(tile, SURFACE === "pbr"
-      ? { roughness: 0.95, pbr: { ...band, waterline: { wetBand: 1.4, foam: 0.5 } } }
-      : { roughness: 0.95, palette: band });
-    engine.scene.add(mesh);
-  }
-}
+// 3. THE SURFACE is built by the AUTO-SURFACE above (world.generateRegion `surface`) — the
+//    ELEVATION + BIOME PBR ramp: sandy coast → green/dry lowland by precip → grey-brown rock
+//    mountainside → white snow PEAK → dark silt below the sea, with the wet-shore waterline.
 
 // 4. THE CONTENT — pines below the tree-line + boulders on the high flanks, scattered via the
-//    deterministic biome-content seam (gated by the region's surveyed relief). Pass the water
-//    level so the scatter knows the shoreline.
-const scattered = await scatterBiomeContent({
-  registry, source: core.terrain.source, regions: core.terrain.regions,
-  regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base,
-  waterLevel: seaLevel, waterMargin: WATER_MARGIN,
-});
+//    deterministic world.populateBiome SKILL (gated by the region's surveyed relief; pass the
+//    water level so nothing places at/below the shoreline). It surveys the region with the
+//    hints it was generated with, resolves the mountains content layers, and drives asset.scatter.
+const popRes = await registry.invoke("world.populateBiome", {
+  regionId, type: TYPE, waterLevel: seaLevel, waterMargin: WATER_MARGIN,
+}, base);
+if (!popRes.success) throw new Error("world.populateBiome failed: " + JSON.stringify(popRes.error));
+const scattered = popRes.result as { instances: number };
 
 // FREE-FLY camera framed low across the landscape (a flattering grazing vista).
 const cx = ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE;

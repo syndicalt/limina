@@ -29,10 +29,9 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
-import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
-import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
+import { surveyRegionRelief } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { DEFAULT_RENDER_BASELINE } from "../render-baseline.ts";
 import { buildPostPipeline } from "../render/post.ts";
@@ -81,15 +80,22 @@ const base = { agentId: "agt_playable_landscape", sessionId: "ses_playable_lands
 
 ops.op_physics_create_world(-9.81);
 
-// 1. THE GROUND — generate the eroded mountains region (heightfield colliders the
-//    character walks + region handle). Same hints (SHAPE) as the visible mesh below.
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE }, base);
-if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
-const regionId = (gen.result as { regionId: string }).regionId;
-
-// Survey the eroded surface (SAME hints) → relief + sea level.
+// Survey the eroded surface (SAME hints) → relief + sea level, BEFORE generating, so the
+// auto-surface builds the visible PBR mesh with the EXACT band (byte-identical, no double mesh).
 const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
 const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
+
+// 1. THE GROUND + SURFACE — generate the eroded mountains region (heightfield colliders the
+//    character walks + region handle) AND the VISIBLE procedural-PBR surface in one skill call
+//    (the AUTO-SURFACE). Each tile mesh coincides with the collider; render-only.
+const gen = await registry.invoke("world.generateRegion", {
+  seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE,
+  surface: SURFACE === "pbr"
+    ? { mode: "pbr", roughness: 0.95, seaLevel, minY: relief.minY, maxY: relief.maxY, waterline: { wetBand: 1.4, foam: 0.5 } }
+    : { mode: "palette", roughness: 0.95, seaLevel, minY: relief.minY, maxY: relief.maxY },
+}, base);
+if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
+const regionId = (gen.result as { regionId: string }).regionId;
 
 // ATMOSPHERE ceiling — set the height-falloff haze just under the summit (render-only).
 {
@@ -108,25 +114,14 @@ const waterRes = await registry.invoke("world.addWater", {
 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
-// 3. THE SURFACE — mount each tile with the procedural-PBR material (built with the
-//    SAME eroded hints, so the visible mesh coincides with the colliders).
-for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
-  for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
-    const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: HINTS });
-    const band = { seaLevel, minY: relief.minY, maxY: relief.maxY };
-    const mesh = buildTerrainMesh(tile, SURFACE === "pbr"
-      ? { roughness: 0.95, pbr: { ...band, waterline: { wetBand: 1.4, foam: 0.5 } } }
-      : { roughness: 0.95, palette: band });
-    engine.scene.add(mesh);
-  }
-}
+// 3. THE SURFACE is built by the AUTO-SURFACE above (world.generateRegion `surface`).
 
-// 4. THE CONTENT — pines + boulders scattered via the deterministic biome-content seam.
-const scattered = await scatterBiomeContent({
-  registry, source: core.terrain.source, regions: core.terrain.regions,
-  regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base,
-  waterLevel: seaLevel, waterMargin: WATER_MARGIN,
-});
+// 4. THE CONTENT — pines + boulders scattered via the deterministic world.populateBiome SKILL.
+const popRes = await registry.invoke("world.populateBiome", {
+  regionId, type: TYPE, waterLevel: seaLevel, waterMargin: WATER_MARGIN,
+}, base);
+if (!popRes.success) throw new Error("world.populateBiome failed: " + JSON.stringify(popRes.error));
+const scattered = popRes.result as { instances: number };
 
 // 5. THE CHARACTER — spawn the kinematic capsule on the eroded heightfield. Pick a DRY
 //    spot up on a flank of the island core (offset from the peak so the framing shows
