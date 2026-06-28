@@ -247,14 +247,14 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
   const rEff = T.clamp(r.add(cold.mul(0.06)), 0, 1);       // cold-shifted effective elevation
 
   // THREE STARK ELEVATION ZONES (smoothstep transitions read as distinct bands):
-  //   low  r≲0.35  → GREEN  (grass→forest by precip)
-  //   mid  r≈0.35..0.68 → ROCK   (grey-brown mountainside)
-  //   high r≳0.68  → SNOW   (white) — the PEAK only
+  //   low  r≲0.35    → GREEN  (grass→forest by precip)
+  //   mid  r≈0.35..0.85 → ROCK   (grey-brown mountainside — the big middle band)
+  //   high r≳0.85    → SNOW   (white) — the PEAK only
   const green = T.mix(dryV, forestV, wet);
   let col = green;
   const rockMask = T.smoothstep(0.32, 0.46, rEff);  // entering the mountainside
   col = T.mix(col, rockV, rockMask);
-  const snowMask = T.smoothstep(0.68, 0.82, rEff);  // peak snow only (elevation-gated)
+  const snowMask = T.smoothstep(0.84, 0.95, rEff);  // peak snow only (high elevation-gated)
   col = T.mix(col, snowV, snowMask);
 
   // Steep CLIFFS expose rock even down in the green band (subtle; never over the snow cap).

@@ -118,11 +118,15 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   // No-op when no waterLevel is supplied — un-flooded mountains stay byte-identical.
   mountains: [
     {
-      seed: 31, assets: [{ id: PINE_ASSET }], coverage: 0.20, cluster: 0.45, clusterFreq: 1 / 34,
-      slopeMax: 0.85, sizeRange: [0.8, 1.5], elevMaxFrac: 0.45, waterGated: true,
+      // Generous conifer forest on the green base + lower/mid slopes up to a sensible tree-line
+      // (~0.58 of the relief). slopeMax 1.15 keeps trees on the steep ERODED flanks (an amp-4.5
+      // eroded mountainside is steep; the old 0.85/0.45 cropped pines into a thin band → "only rocks").
+      seed: 31, assets: [{ id: PINE_ASSET }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
+      slopeMax: 1.15, sizeRange: [0.8, 1.5], elevMaxFrac: 0.58, waterGated: true,
     },
     {
-      seed: 32, assets: [{ id: ROCK_ASSET }], coverage: 0.12, cluster: 0.35,
+      // Boulders as the rock-zone ACCENT (sparse, so they don't dominate the forested slopes).
+      seed: 32, assets: [{ id: ROCK_ASSET }], coverage: 0.08, cluster: 0.35,
       slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
   ],
