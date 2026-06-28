@@ -27,10 +27,8 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
-import { buildTerrainMesh } from "../terrain/render.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
-import { scatterBiomeContent } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { CharacterController } from "../world/character.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
@@ -55,19 +53,26 @@ const base = { agentId: "agt_playable", sessionId: "ses_playable", permissions: 
 
 ops.op_physics_create_world(-9.81);
 
-// Terrain: generate the heightfield colliders via the agent-facing skill, then mount
-// the matching surface meshes (vertices coincide with the collider the character walks).
+// Terrain: generate the heightfield colliders AND the visible procedural-PBR surface in ONE
+// skill call (render defaults ON — the auto-surface mesh vertices coincide with the collider the
+// character walks). seaFraction is kept LOW (0.05) so the sea sits near the lowest point and the
+// region center where the character spawns stays well above water (walkable).
 const hints = terrainTypeHints(TYPE, BOUNDS);
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE }, base);
-const regionId = (gen.result as { regionId: string }).regionId;
-for (let tz = BOUNDS.minTz; tz <= BOUNDS.maxTz; tz++) {
-  for (let tx = BOUNDS.minTx; tx <= BOUNDS.maxTx; tx++) {
-    const tile = core.terrain.source.generateTile({ seed: SEED, tx, tz, lod: 0, hints });
-    engine.scene.add(buildTerrainMesh(tile, { color: MATERIALS.sand.color, roughness: 0.95 }));
-  }
-}
-// Populate the beach with its biome content (palms, grass) — same path the gate drives.
-await scatterBiomeContent({ registry, source: core.terrain.source, regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base });
+const gen = await registry.invoke("world.generateRegion", {
+  seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE,
+  surface: { mode: "pbr", seaFraction: 0.05, waterline: { wetBand: 1.2, foam: 0.4 } },
+}, base);
+const { regionId, seaLevel, relief } = gen.result as { regionId: string; seaLevel: number; relief: { minY: number; maxY: number } };
+
+// The sea — a depth-aware water plane at the resolved sea level.
+const span = (BOUNDS.maxTx - BOUNDS.minTx + 1) * TILE_SIZE;
+await registry.invoke("world.addWater", {
+  level: seaLevel, color: MATERIALS.water.color, size: span * 3,
+  region: { seed: SEED, type: TYPE, bounds: BOUNDS, hints },
+}, base);
+
+// Populate the beach with its biome content (palms, grass) — first-class skill, same placements.
+await registry.invoke("world.populateBiome", { regionId, type: TYPE, waterLevel: seaLevel, waterMargin: 1.5 }, base);
 
 // Character: spawn at the region center, resting on the generated surface.
 const spawnX = ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE;
@@ -156,7 +161,7 @@ ops.op_set_fixed_step_callback(fixedStep);
 ops.op_set_frame_callback(render);
 ops.op_set_resize_callback(onResize);
 ops.op_log(
-  `playable world ready: beach region (seed ${SEED}) generated + populated; ` +
+  `playable world ready: beach region (seed ${SEED}) — auto-surface PBR + addWater + populateBiome; ` +
   `walk the character on the Rapier terrain. CLICK to capture the mouse, ` +
   `W/S move, A/D turn, mouse to look, Shift to run, Space to jump, Escape to release.`,
 );

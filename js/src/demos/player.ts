@@ -15,6 +15,7 @@ import { AgentRegistry } from "../agents/agent.ts";
 import { ScriptedProvider, type DecideRequest } from "../agents/llm.ts";
 import { actionSystem, decisionSystem, perceptionSystem, type ProviderMap } from "../agents/systems.ts";
 import type { MCPRequest, MCPResponse } from "../mcp/protocol.ts";
+import { createMaterial } from "../materials/palette.ts";
 
 function entityId(res: MCPResponse): string {
   if (!res.success) throw new Error("call failed: " + JSON.stringify(res.error));
@@ -39,7 +40,8 @@ const world: WorldContext = {
 };
 const setup = { agentId: "engine", sessionId: "ses_player", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
-const ground = new THREE.Mesh(new THREE.BoxGeometry(40, 0.2, 40), new THREE.MeshStandardNodeMaterial({ color: 0x1b2230, roughness: 0.9 }));
+// Large static playfield → procedural-PBR stone grain.
+const ground = new THREE.Mesh(new THREE.BoxGeometry(40, 0.2, 40), createMaterial("stone", { pbr: true }));
 ground.position.y = -0.1;
 engine.scene.add(ground);
 if (!(await registry.invoke("three.setLighting", { directionalIntensity: 4 }, setup)).success) throw new Error("lighting failed");
@@ -47,9 +49,11 @@ if (!(await registry.invoke("three.setLighting", { directionalIntensity: 4 }, se
 ops.op_physics_create_world(0); // no gravity: pure pursuit on the plane
 ops.op_physics_add_ground(-5);
 
-const player = entityId(await registry.invoke("scene.createEntity", { shape: "sphere", color: 0xff8c1a, position: [0, 0.5, 0], dynamic: true }, setup));
+// Pursuing dynamic sphere: palette material, NO pbr (it moves; world-space noise would swim).
+const player = entityId(await registry.invoke("scene.createEntity", { shape: "sphere", material: "plank", position: [0, 0.5, 0], dynamic: true }, setup));
 for (const spot of [[6, 0.5, 4], [-5, 0.5, -3], [3, 0.5, -6]]) {
-  await registry.invoke("scene.createEntity", { shape: "box", color: 0x4ade80, position: spot, dynamic: false }, setup);
+  // Static targets → procedural-PBR greenery.
+  await registry.invoke("scene.createEntity", { shape: "box", material: "leaf", pbr: true, position: spot, dynamic: false }, setup);
 }
 
 const scripted = new ScriptedProvider((req: DecideRequest): MCPRequest[] => {

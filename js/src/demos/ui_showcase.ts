@@ -14,6 +14,7 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
+import { createMaterial } from "../materials/palette.ts";
 
 const engine = await createEngine({ width: 960, height: 640 });
 engine.scene.background = new THREE.Color(0x0a0d13);
@@ -21,7 +22,7 @@ engine.scene.background = new THREE.Color(0x0a0d13);
 // --- scene: ground + marker entities the containers point at ----------------
 const ground = new THREE.Mesh(
   new THREE.BoxGeometry(40, 0.2, 40),
-  new THREE.MeshStandardNodeMaterial({ color: 0x161c28, roughness: 0.95 }),
+  createMaterial("stone", { pbr: true }),
 );
 ground.position.y = -0.1;
 engine.scene.add(ground);

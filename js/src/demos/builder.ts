@@ -52,12 +52,14 @@ if (tools.length < 14) throw new Error(`listTools returned ${tools.length}`);
 ops.op_log(`builder: discovered ${tools.length} tools`);
 
 // 2. Construct a scene.
-const a = field(ok(await builder.callTool({ tool: "scene.createEntity", input: { shape: "box", color: 0xff8c1a, position: [-1.5, 1, 0], dynamic: false } })), "entity");
-const b = field(ok(await builder.callTool({ tool: "scene.createEntity", input: { shape: "sphere", color: 0x4ade80, position: [1.5, 1, 0], dynamic: true } })), "entity");
+// Static box → procedural-PBR plank. Dynamic sphere → palette material, NO pbr (it moves).
+const a = field(ok(await builder.callTool({ tool: "scene.createEntity", input: { shape: "box", material: "plank", pbr: true, position: [-1.5, 1, 0], dynamic: false } })), "entity");
+const b = field(ok(await builder.callTool({ tool: "scene.createEntity", input: { shape: "sphere", material: "leaf", position: [1.5, 1, 0], dynamic: true } })), "entity");
 if (typeof a !== "string" || typeof b !== "string") throw new Error("createEntity failed");
 
 ok(await builder.callTool({ tool: "three.setTransform", input: { entity: a, position: [-1.5, 2, 0], scale: [1.5, 1.5, 1.5] } }));
-ok(await builder.callTool({ tool: "three.setMaterial", input: { entity: b, color: 0x60a5fa, roughness: 0.2, metalness: 0.8 } }));
+// Re-material the dynamic sphere via the palette (no pbr — it moves).
+ok(await builder.callTool({ tool: "three.setMaterial", input: { entity: b, material: "water" } }));
 ok(await builder.callTool({ tool: "three.setLighting", input: { directionalIntensity: 4 } }));
 
 const model = field(ok(await builder.callTool({ tool: "three.loadGLTF", input: { assetId: "triangle.glb", position: [0, 0, 2] } })), "entity");

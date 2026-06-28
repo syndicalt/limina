@@ -13,6 +13,7 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
+import { createMaterial } from "../materials/palette.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { synthesizeDanceLoop } from "../audio/music.ts";
 
@@ -27,7 +28,8 @@ engine.scene.background = new THREE.Color(0x0a0a18); // dark club
 // --- stage: a dark shiny floor + a glowing dance-ring under the hedgehog -------
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(9, 56),
-  new THREE.MeshStandardNodeMaterial({ color: 0x12122a, roughness: 0.45, metalness: 0.35 }),
+  // Large STATIC stage floor → procedural-PBR palette surface (tactile grain).
+  createMaterial("stone", { pbr: true }),
 );
 floor.rotation.x = -Math.PI / 2;
 engine.scene.add(floor);

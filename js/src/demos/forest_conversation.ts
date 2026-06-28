@@ -29,6 +29,7 @@ import { spawnHumanoid } from "../world/humanoid.ts";
 import { TraceHud } from "../ui/hud_feed.ts";
 import { ConversationDirector, type Persona } from "../agents/conversation.ts";
 import { AudioManager } from "../audio/manager.ts";
+import { createMaterial } from "../materials/palette.ts";
 
 const MODEL = "qwen2.5:7b";
 const OLLAMA_URL = "http://localhost:11434/api/chat";
@@ -89,17 +90,17 @@ async function uiCreate(tool: string, input: unknown): Promise<string> {
 
 const ground = new THREE.Mesh(
   new THREE.CircleGeometry(40, 48),
-  new THREE.MeshStandardNodeMaterial({ color: 0x3f6b3a, roughness: 0.98, metalness: 0 }),
+  createMaterial("grass", { pbr: true }),
 );
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 engine.scene.add(ground);
 
-const trunkMat = new THREE.MeshStandardNodeMaterial({ color: 0x6b4a2f, roughness: 0.9 });
+const trunkMat = createMaterial("wood", { pbr: true });
 const foliageMats = [
-  new THREE.MeshStandardNodeMaterial({ color: 0x2f7d3a, roughness: 0.85 }),
-  new THREE.MeshStandardNodeMaterial({ color: 0x3f9a4a, roughness: 0.85 }),
-  new THREE.MeshStandardNodeMaterial({ color: 0x276b34, roughness: 0.85 }),
+  createMaterial("foliage", { pbr: true }),
+  createMaterial("leaf", { pbr: true }),
+  createMaterial("foliage", { pbr: true }),
 ];
 
 /** A tree = a trunk cylinder + two stacked foliage cones. */

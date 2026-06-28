@@ -52,7 +52,9 @@ async function must(reg: SkillRegistry, name: string, input: unknown, base: Invo
 /** Build the fidelity acceptance scene through skills, set the camera, and return
  *  the entity handles plus the world-space sample points a readback uses. */
 export async function buildFidelityScene(reg: SkillRegistry, base: InvokeBase): Promise<FidelityHandles> {
-  const floor = entityId(await must(reg, "scene.createEntity", { shape: "box", size: 30, color: 0x9aa3ad, position: [0, -15, 0] }, base));
+  // Large STATIC ground → procedural-PBR palette surface (tactile grain) that still
+  // RECEIVES the cast shadow. setMaterial keeps receiveShadow on the PBR material.
+  const floor = entityId(await must(reg, "scene.createEntity", { shape: "box", size: 30, material: "stone", pbr: true, position: [0, -15, 0] }, base));
   await must(reg, "three.setMaterial", { entity: floor, roughness: 0.95, metalness: 0.0, receiveShadow: true }, base);
 
   const caster = entityId(await must(reg, "scene.createEntity", { shape: "box", size: 3, color: 0xff8c1a, position: [0, 3, 0] }, base));

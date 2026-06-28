@@ -7,7 +7,8 @@
 // diffusion model's elevation + climate, parsed through the EXACT same seam the headless
 // tests cover (p9/p11_model_source) — zero hand-authored geometry.
 //
-// THIS IS UAT: it needs the model + shim running (no GPU here). Bring them up first:
+// THIS IS UAT: it needs the model + shim running (no GPU here), so it CANNOT be boot-tested
+// offline (the terrain-diffusion shim must be live). Bring them up first:
 //   tools/terrain-diffusion/run.sh            # launches terrain-diffusion + the shim
 // then (the shim listens on 127.0.0.1:8917 = the ModelTerrainSource default baseUrl):
 //   ./target/release/limina --window js/src/demos/model_terrain_window.ts
@@ -23,9 +24,7 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
-import { buildTerrainMesh } from "../terrain/render.ts";
 import { ModelTerrainSource } from "../terrain/model-source.ts";
-import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
 
 const SEED = 1234;                  // MUST equal the shim's --region-seed (model launch --seed)
 const SHIM_URL = "http://127.0.0.1:8917";
@@ -79,15 +78,18 @@ await source.waitForReady(60, 2000);
 ops.op_log("model_terrain: shim ready — generating region from the diffusion model …");
 
 // A small region (the model is expensive). 2x2 tiles at the configured resolution.
+// generateRegion builds the colliders AND the visible auto-surface mesh (render defaults ON):
+// the PALETTE ramp (sandy coast → green/dry lowland by precip → grey rock on the high+steep →
+// white snow on the high+cold → dark silt below the sea) banded against the model's OWN surveyed
+// relief, the sea at real sea level (0 m), and the render-only vertical exaggeration. The skill
+// surveys the model relief itself and returns it, so we no longer survey it by hand.
 const bounds = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 };
-const gen = await registry.invoke("world.generateRegion", { seed: SEED, bounds, lod: 0 }, base);
+const gen = await registry.invoke("world.generateRegion", {
+  seed: SEED, bounds, lod: 0,
+  surface: { mode: "palette", seaLevel: SEA_LEVEL, ...(VERT_EXAG !== 1 ? { exaggerateY: { factor: VERT_EXAG, pivot: SEA_LEVEL } } : {}) },
+}, base);
 if (!gen.success) throw new Error("world.generateRegion failed: " + JSON.stringify(gen.error));
-const regionId = (gen.result as { regionId: string }).regionId;
-
-// Survey the model region's true world-Y relief (the tiles are cached after generateRegion)
-// so the ramp's high/rock/snow bands normalise against the ACTUAL relief, not the −500..9000
-// normalization window (which the region rarely fills). The model ignores hints, so {} is fine.
-const relief = surveyRegionRelief(source, SEED, bounds, {});
+const { regionId, relief } = gen.result as { regionId: string; relief: { minY: number; maxY: number } };
 
 // THE SEA — a render-only water plane at real sea level (0 m). Sized to span the whole
 // region so the ocean reads as open water around the landmass (the default 400 plane is far
@@ -96,30 +98,14 @@ const span = (bounds.maxTx - bounds.minTx + 1) * source.extent;
 const waterRes = await registry.invoke("world.addWater", { level: SEA_LEVEL, size: span * 1.3 }, base);
 if (!waterRes.success) throw new Error("world.addWater failed: " + JSON.stringify(waterRes.error));
 
-// Mount the model surface tile-by-tile with the ELEVATION + BIOME colour ramp (sandy coast →
-// green/dry lowland by precip → grey rock on the high+steep → white snow on the high+cold →
-// dark silt below the sea), driven by the model's own climate. generateTile is ASYNC for the
-// model source (HTTP); generateRegion already baked + cached these, so each await is a hit.
-for (let tz = bounds.minTz; tz <= bounds.maxTz; tz++) {
-  for (let tx = bounds.minTx; tx <= bounds.maxTx; tx++) {
-    const tile = await source.generateTile({ seed: SEED, tx, tz, lod: 0 });
-    const mesh = buildTerrainMesh(tile, {
-      roughness: 0.95,
-      palette: { seaLevel: SEA_LEVEL, minY: relief.minY, maxY: relief.maxY },
-      ...(VERT_EXAG !== 1 ? { exaggerateY: { factor: VERT_EXAG, pivot: SEA_LEVEL } } : {}),
-    });
-    engine.scene.add(mesh);
-  }
-}
-
-// POPULATE the model surface with biome content via the SAME agent-native seam the procedural
-// worlds use: scatterBiomeContent surveys the region + runs asset.scatter per layer, gated by
-// the MODEL's real relief + climate. NOTE: at 30 m/px (shim --scale 1) a 256-px tile spans
-// ~7.7 km, so the curated trees/rocks read as specks — run the shim at --scale 8 (3.75 m/px,
-// METERS_PER_PX 30/8) to see the vegetation. Count is bounded per tile, so it never blows up.
-const scattered = await scatterBiomeContent({
-  registry, source, regionId, type: CONTENT_TYPE, bounds, seed: SEED, base,
-});
+// POPULATE the model surface with biome content via the first-class skill: populateBiome surveys
+// the region + runs asset.scatter per layer, gated by the MODEL's real relief + climate. NOTE: at
+// 30 m/px (shim --scale 1) a 256-px tile spans ~7.7 km, so the curated trees/rocks read as specks
+// — run the shim at --scale 8 (3.75 m/px, METERS_PER_PX 30/8) to see the vegetation. Count is
+// bounded per tile, so it never blows up.
+const popRes = await registry.invoke("world.populateBiome", { regionId, type: CONTENT_TYPE, waterLevel: SEA_LEVEL }, base);
+if (!popRes.success) throw new Error("world.populateBiome failed: " + JSON.stringify(popRes.error));
+const scattered = popRes.result as { instances: number };
 
 // FREE-FLY camera framed on the generated region (geometry from the source, not procedural).
 const extent = source.extent; // world metres per tile edge

@@ -15,6 +15,7 @@ import type { JsonRpcResponse, MCPResponse } from "../mcp/protocol.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { createMaterial } from "../materials/palette.ts";
 import {
   arenaReturnImpulse,
   createShowcaseScheduler,
@@ -91,9 +92,10 @@ ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
 
 engine.scene.background = new THREE.Color(0x081018);
+// Large static arena floor → procedural-PBR stone grain.
 const ground = new THREE.Mesh(
   new THREE.BoxGeometry(42, 0.12, 42),
-  new THREE.MeshStandardNodeMaterial({ color: 0x111827, roughness: 0.95, metalness: 0.05 }),
+  createMaterial("stone", { pbr: true }),
 );
 ground.position.y = -0.06;
 engine.scene.add(ground);
@@ -142,7 +144,9 @@ for (let i = 0; i < targetPositions.length; i++) {
   const entity = entityId(await registry.invoke("scene.createEntity", {
     shape: "box",
     size: 0.8,
-    color: i % 2 === 0 ? 0x22c55e : 0x38bdf8,
+    // Static targets → procedural-PBR palette (alternating greenery / water).
+    material: i % 2 === 0 ? "grass" : "water",
+    pbr: true,
     position: targetPositions[i],
     static: true,
     collider: "box",
@@ -173,9 +177,10 @@ for (const wall of [
   { position: [12, 1.2, 0] as [number, number, number], scale: [0.35, 2.4, 24] as [number, number, number] },
   { position: [-12, 1.2, 0] as [number, number, number], scale: [0.35, 2.4, 24] as [number, number, number] },
 ]) {
+  // Large static perimeter walls → procedural-PBR stone grain.
   const barrier = new THREE.Mesh(
     new THREE.BoxGeometry(wall.scale[0], wall.scale[1], wall.scale[2]),
-    new THREE.MeshStandardNodeMaterial({ color: 0x1e293b, roughness: 0.85, metalness: 0.1 }),
+    createMaterial("stone", { pbr: true }),
   );
   barrier.position.set(wall.position[0], wall.position[1], wall.position[2]);
   engine.scene.add(barrier);

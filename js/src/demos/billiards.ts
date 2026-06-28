@@ -12,6 +12,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
 import { renderSyncSystem, spawnRenderable, syncPhysicsBodyTransform } from "../ecs/world.ts";
+import { createMaterial } from "../materials/palette.ts";
 
 // ---- Table + rack geometry ------------------------------------------------
 const BALL_R = 0.5;
@@ -55,7 +56,8 @@ const surfaceW = 2 * (IX + 2 * RAIL_HALF_T);
 const surfaceD = 2 * (IZ + 2 * RAIL_HALF_T);
 const felt = new THREE.Mesh(
   new THREE.BoxGeometry(surfaceW, 0.2, surfaceD),
-  new THREE.MeshStandardNodeMaterial({ color: 0x0b6e3a, roughness: 0.95, metalness: 0.0 }),
+  // Large static cloth bed → procedural-PBR greenery reads as felt grain.
+  createMaterial("foliage", { pbr: true }),
 );
 felt.position.y = GROUND_Y - 0.1;
 scene.add(felt);
@@ -73,7 +75,8 @@ const railSpecs: [number, number, number, number, number, number][] = [
   [railX, RAIL_CY, 0, RAIL_HALF_T, RAIL_HALF_H, IZ + 2 * RAIL_HALF_T],
   [-railX, RAIL_CY, 0, RAIL_HALF_T, RAIL_HALF_H, IZ + 2 * RAIL_HALF_T],
 ];
-const railMat = new THREE.MeshStandardNodeMaterial({ color: 0x5a3a1a, roughness: 0.8, metalness: 0.05 });
+// Static wooden cushions/rails → procedural-PBR timber grain.
+const railMat = createMaterial("wood", { pbr: true });
 for (const [cx, cy, cz, hx, hy, hz] of railSpecs) {
   ops.op_physics_add_static_box(cx, cy, cz, hx, hy, hz, RAIL_FRICTION, RAIL_RESTITUTION);
   const railMesh = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2), railMat);

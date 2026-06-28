@@ -38,6 +38,7 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
+import { createMaterial } from "../materials/palette.ts";
 import { Position, Rotation, spawnRenderable, type Transformable } from "../ecs/world.ts";
 import { LiminaTracer, type EngineEvent } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
@@ -141,7 +142,8 @@ engine.scene.background = new THREE.Color(0x140a24); // deep dusk-purple club ni
 // Dance floor: a dark tinted slab + a club-toned grid + a glowing centre ring.
 const floor = new THREE.Mesh(
   new THREE.BoxGeometry(FLOOR_HALF * 2, 0.2, FLOOR_HALF * 2),
-  new THREE.MeshStandardNodeMaterial({ color: 0x1c1330, roughness: 0.42, metalness: 0.35 }),
+  // Large STATIC dance floor → procedural-PBR palette surface (tactile grain).
+  createMaterial("stone", { pbr: true }),
 );
 floor.position.y = -0.1;
 engine.scene.add(floor);
