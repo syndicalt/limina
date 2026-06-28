@@ -85,14 +85,16 @@ export function registerSystemSkills(registry: SkillRegistry): void {
   registry.register({
     name: "skills.list",
     version: "1.0.0",
-    description: "List the skills the caller is authorized to invoke (names + descriptions).",
+    description: "List the skills the caller is authorized to invoke (names + descriptions). `mode:\"bootstrap\"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:\"full\"` (default) lists everything authorized.",
     category: "system",
     permissions: [],
-    input: z.object({}),
-    output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string() })) }),
-    handler: (_input, ctx) => ({
-      // Least-privilege: list only what THIS caller could invoke (its grants).
-      tools: registry.list(ctx.permissions).map((t) => ({ name: t.name, description: t.description })),
+    input: z.object({ mode: z.enum(["bootstrap", "full"]).optional().describe("bootstrap = core tools only; full = all authorized (default).") }),
+    output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string().optional(), priority: z.string().optional() })) }),
+    handler: (input, ctx) => ({
+      // Least-privilege: list only what THIS caller could invoke (its grants); bootstrap
+      // narrows further to the core tier so the agent's tool-reasoning window stays small.
+      tools: registry.list(ctx.permissions, { mode: input.mode ?? "full" })
+        .map((t) => ({ name: t.name, description: t.description, category: t.category, priority: t.priority })),
     }),
   });
 

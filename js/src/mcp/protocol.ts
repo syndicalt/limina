@@ -9,6 +9,9 @@ export interface MCPTool {
   /** Optional category for tool grouping/browse (not part of MCP spec, but used
    *  internally for skills.browse and visual organization). */
   category?: string;
+  /** Optional progressive-disclosure tier ("core" | "standard" | "advanced") used
+   *  by the bootstrap surface + skills.browse (not part of the MCP spec). */
+  priority?: string;
 }
 
 export interface MCPRequest {

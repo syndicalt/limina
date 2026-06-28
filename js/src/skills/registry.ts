@@ -90,6 +90,12 @@ export interface SkillDefinition<I = unknown, O = unknown> {
    *  content hash). Each named field must also be an OPTIONAL input field so the
    *  committed value validates on replay. Absent -> nothing committed (default). */
   commitFields?: string[];
+  /** Progressive-disclosure tier for the MCP surface. "core" tools are returned in
+   *  the BOOTSTRAP list an agent starts with (kept small so a large catalog never
+   *  floods the model's tool-reasoning window); "standard"/"advanced" are discovered
+   *  on demand via skills.search/browse. Omitted → "core" if the name is in the
+   *  registry's DEFAULT_CORE set, else "standard". */
+  priority?: "core" | "standard" | "advanced";
   handler(input: I, ctx: ExecutionContext): Promise<O> | O;
   hooks?: {
     before?(input: I, ctx: ExecutionContext): Promise<void> | void;
@@ -210,6 +216,25 @@ export class SkillRegistry {
     return this.skills.get(name);
   }
 
+  /** The default BOOTSTRAP core set — the universal cross-domain verbs an agent
+   *  starts with (plus discovery, so it can always find more). Grant-filtering then
+   *  narrows this to each profile's relevant subset (a builder sees the authoring
+   *  ones, a player the play ones). A skill overrides its tier via the `priority`
+   *  field; this set is the default for skills that don't. */
+  private static readonly DEFAULT_CORE: ReadonlySet<string> = new Set([
+    "skills.list", "skills.search", "skills.browse", "skills.describe",
+    "scene.createEntity", "scene.queryEntities",
+    "world.generateRegion", "world.populateBiome", "asset.place",
+    "player.move", "player.jump", "interaction.interact", "interaction.query", "inventory.add",
+    "social.say", "dialogue.start",
+  ]);
+
+  /** A skill's effective progressive-disclosure tier (explicit `priority` wins,
+   *  else the DEFAULT_CORE membership decides core-vs-standard). */
+  private tierOf(s: SkillDefinition): "core" | "standard" | "advanced" {
+    return s.priority ?? (SkillRegistry.DEFAULT_CORE.has(s.name) ? "core" : "standard");
+  }
+
   /** The FULL tool list. Cached: z.toJSONSchema per skill is ~ms-expensive and
    *  identical until the skill set changes. decisionSystem calls this once per
    *  admitted agent per tick and MCP listTools once per request, so the rebuild
@@ -221,6 +246,7 @@ export class SkillRegistry {
         description: s.description,
         input_schema: z.toJSONSchema(s.input, { target: "draft-07", unrepresentable: "any" }),
         category: s.category,
+        priority: this.tierOf(s),
       }));
     }
     return this.listCache;
@@ -232,13 +258,18 @@ export class SkillRegistry {
    *  or over-exposes an agent. No-arg returns the full catalog (back-compat: the
    *  inspection surface + legacy callers are unchanged). The filter is O(n) over the
    *  memoized list — the expensive schema build stays cached. */
-  list(grants?: ReadonlySet<string>): MCPTool[] {
+  list(grants?: ReadonlySet<string>, opts?: { mode?: "bootstrap" | "full" }): MCPTool[] {
     const full = this.fullList();
-    if (grants === undefined) return full;
-    return full.filter((t) => {
-      const s = this.skills.get(t.name);
-      return s !== undefined && s.permissions.every((p) => grants.has(p));
-    });
+    const granted = grants === undefined
+      ? full
+      : full.filter((t) => {
+        const s = this.skills.get(t.name);
+        return s !== undefined && s.permissions.every((p) => grants.has(p));
+      });
+    // BOOTSTRAP mode: narrow to the core tier so an agent starts with a small,
+    // reasoning-window-sized surface and expands on demand via skills.search/browse.
+    if (opts?.mode === "bootstrap") return granted.filter((t) => t.priority === "core");
+    return granted;
   }
 
   /** Whether a skill is currently registered. */
