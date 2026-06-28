@@ -234,6 +234,18 @@ export function buildPostPipeline(
     bloomNode,
     preset,
     render(): void {
+      // Refresh the camera's world matrix from the LIVE transform BEFORE the scene
+      // pass samples it. The render loop drives the camera with
+      // `camera.position.set(...)` + `camera.lookAt(...)` (which sets position +
+      // quaternion); the view matrix the pass renders from is derived from
+      // `matrixWorld`, so it must be recomposed each frame. The bare
+      // `renderer.render(scene, camera)` this pipeline replaced did this implicitly;
+      // doing it here — ONE place — keeps free-fly / orbit navigation live for every
+      // consumer, independent of three's internal auto-update behaviour. Cheap +
+      // idempotent (a single mat4 compose; the camera has no children to recurse).
+      // deno-lint-ignore no-explicit-any
+      const cam = camera as any;
+      if (cam && typeof cam.updateMatrixWorld === "function") cam.updateMatrixWorld(true);
       post.render();
     },
     // The scene pass, GTAO and bloom nodes ALL re-derive their render-target sizes

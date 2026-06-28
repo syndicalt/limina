@@ -138,11 +138,50 @@ const stubRenderer = {} as unknown;
   assert((off.postProcessing as { outputNode?: unknown }).outputNode !== undefined, "outputNode missing with all stages off");
 }
 
+// ===========================================================================
+// (6) NAVIGATION regression guard — the post path renders from the LIVE camera.
+//     pipeline.render() must refresh camera.matrixWorld from the current transform
+//     BEFORE the scene pass samples it (the bare renderer.render this replaced did
+//     so implicitly). Drive 2 frames with DIFFERENT camera positions and assert the
+//     camera's world matrix tracks frame-to-frame through pipeline.render().
+//
+//     Headless has no GPU, so post.render() (the real RenderPipeline) throws once it
+//     reaches the quad render — but the camera refresh runs FIRST, so we catch the
+//     throw and assert the matrix updated. FALSIFIABLE: drop the refresh from
+//     render() and the matrix stays stale (this section fails).
+// ===========================================================================
+{
+  const { scene, camera } = makeSceneCamera();
+  // deno-lint-ignore no-explicit-any
+  const cam = camera as any;
+  const pipe = buildPostPipeline(stubRenderer, scene, camera);
+
+  function driveFrame(x: number, y: number, z: number): number[] {
+    cam.position.set(x, y, z);
+    // The real loop also calls lookAt; position alone is enough to prove the refresh.
+    try {
+      pipe.render(); // refreshes camera.matrixWorld, then post.render() throws (no GPU)
+    } catch (_e) {
+      // expected: the quad render needs a real renderer. The camera refresh ran first.
+    }
+    return [...cam.matrixWorld.elements];
+  }
+
+  const m1 = driveFrame(5, 0, 0);
+  const m2 = driveFrame(-7, 2, 9);
+  // matrixWorld translation column = the camera world position → it tracked the move.
+  assert(m1[12] === 5 && m1[13] === 0 && m1[14] === 0, `frame 1 camera matrix stale: [${m1[12]},${m1[13]},${m1[14]}]`);
+  assert(m2[12] === -7 && m2[13] === 2 && m2[14] === 9, `frame 2 camera matrix stale: [${m2[12]},${m2[13]},${m2[14]}]`);
+  assert(m1[12] !== m2[12] || m1[14] !== m2[14], "camera matrix did NOT change frame-to-frame (navigation frozen)");
+}
+
 ops.op_log(
   "p11_post OK: post pipeline constructs (PostProcessing + scene pass + outputNode); " +
   "REAL depth+normal pre-pass (sampleable depth/normal texture nodes + MRT); " +
   "GTAO fed the pre-pass depth+normal with preset params on its uniforms; " +
   "bloom present (strength/radius/threshold from preset); " +
-  "grade + preset FALSIFIABLE (overrides change node params; disabled stages drop to null). " +
+  "grade + preset FALSIFIABLE (overrides change node params; disabled stages drop to null); " +
+  "NAVIGATION guard: pipeline.render() refreshes the camera world matrix from the live transform " +
+  "each frame (tracks position frame-to-frame — no frozen view). " +
   "GPU path proven by the windowed demo boot.",
 );
