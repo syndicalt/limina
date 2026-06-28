@@ -10,6 +10,8 @@
 import { buildTerrainMesh } from "../src/terrain/render.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "../src/terrain/procedural.ts";
 import { terrainTypeHints } from "../src/terrain/terrain-types.ts";
+import { biomeScatterConfigs, surveyRegionRelief } from "../src/terrain/biome-content.ts";
+import { scatterAssets } from "../src/terrain/asset-scatter.ts";
 import { ops } from "../src/engine.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -61,9 +63,49 @@ const exagY = exag.geometry.getAttribute("position").getY(0);
 const expected = pivot + (plainGeomY - pivot) * 2;
 assert(Math.abs(exagY - expected) < 1e-3, `exaggerateY must scale Y about the pivot (got ${exagY}, expected ${expected})`);
 
+// (6) FALSIFIABLE NO-PROPS-IN-WATER: scatter the mountains content over an eroded, FLOODED
+//     region and assert ZERO instances sit at/below the water line. The exclusion is the
+//     waterGated layers' elevationMin = waterLevel + margin, evaluated by scatterAssets against
+//     the SAME eroded tile heights the lakes sit in. Falsifiable: the un-gated configs (no
+//     waterLevel) DO place props below the water, proving the gate is what excludes them.
+const rbounds = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 };
+const rhints = { ...terrainTypeHints("mountains", rbounds), amp: 4.5, erode: 1 };
+const rsurvey = surveyRegionRelief(source, SEED, rbounds, rhints);
+// Flood the low 40% so a good chunk of the eroded surface is genuinely under water.
+const waterLevel = rsurvey.minY + 0.4 * (rsurvey.maxY - rsurvey.minY);
+const MARGIN = 1.0;
+const rtiles = [];
+for (let tz = rbounds.minTz; tz <= rbounds.maxTz; tz++) {
+  for (let tx = rbounds.minTx; tx <= rbounds.maxTx; tx++) {
+    rtiles.push(source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: rhints }));
+  }
+}
+
+const gatedConfigs = biomeScatterConfigs("mountains", rsurvey, waterLevel, MARGIN);
+let gatedTotal = 0, gatedBelow = 0;
+for (const cfg of gatedConfigs) {
+  for (const t of rtiles) {
+    for (const inst of scatterAssets(t, SEED, cfg)) { gatedTotal++; if (inst.y < waterLevel) gatedBelow++; }
+  }
+}
+assert(gatedTotal > 0, "water-exclusion: expected SOME gated props to place above the water line");
+assert(gatedBelow === 0, `water-exclusion: ${gatedBelow}/${gatedTotal} gated props are AT/BELOW the water line (must be 0)`);
+
+// Falsifiability: the SAME content with NO water level placed props below the water line.
+const looseConfigs = biomeScatterConfigs("mountains", rsurvey); // no waterLevel → no water floor
+let looseBelow = 0;
+for (const cfg of looseConfigs) {
+  for (const t of rtiles) {
+    for (const inst of scatterAssets(t, SEED, cfg)) { if (inst.y < waterLevel) looseBelow++; }
+  }
+}
+assert(looseBelow > 0, "water-exclusion NOT falsifiable: even un-gated configs placed nothing below water (no flooded terrain to test against)");
+
 void TILE_SIZE;
 ops.op_log(
   `p11_terrain_ramp OK: default material keeps flat-colour defaults (no colorNode/roughnessNode); ` +
   `palette builds the elevation+biome ramp colorNode/roughnessNode + climate DataTexture (explicit + ` +
-  `default relief + no-climate fallback); render-only exaggerateY scales mesh Y about the pivot.`,
+  `default relief + no-climate fallback); render-only exaggerateY scales mesh Y about the pivot; ` +
+  `water-exclusion: ${gatedTotal} gated props ALL above the water line (0 below), falsifiable ` +
+  `(un-gated placed ${looseBelow} below water).`,
 );

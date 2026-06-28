@@ -138,7 +138,7 @@ const RAMP_DEFAULT_COLORS = {
   sand: 0xc2a878,     // warm coastal sand just above the sea
   dryGrass: 0xa7a256, // dry grass / savanna where precip is low
   forest: 0x3f6b34,   // green lowland / forest where precip is high
-  rock: 0x6b6661,     // bare grey rock on the high+steep flanks
+  rock: 0x756657,     // bare grey-brown rock on the mountainside / high+steep flanks
   snow: 0xf2f4f7,     // snow on the high+cold crests
 } as const;
 
@@ -192,10 +192,12 @@ function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], precipM
 }
 
 /** Build the opt-in elevation+biome ramp `colorNode`/`roughnessNode` for a tile's material.
- *  World-Y elevation bands (sub-sea silt → coastal sand → lowland → rock → snow) are blended
- *  smoothly and modulated by the baked climate: precip picks dry-grass vs forest green, the
- *  temperature drives the snow line, slope+altitude drive bare rock. Render-only, no time
- *  node (static surface); reflections still come from `scene.environment`. */
+ *  ELEVATION is the PRIMARY driver — a stark green-base → rock-mountainside → snow-PEAK
+ *  gradient over the normalised relief above the waterline (plus a sandy coast and sub-sea
+ *  silt) — with the baked climate only MODULATING it: precip splits the green band into dry
+ *  grass vs forest, a cold climate lowers the snow line a touch (but never moves snow off the
+ *  high band), and steep slopes expose cliff rock. Render-only, no time node (static surface);
+ *  reflections still come from `scene.environment`. */
 function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainTile, baseRough: number, pal: TerrainPaletteOptions): void {
   const tempRange = pal.tempRange ?? [-30, 40];
   const precipMax = pal.precipMax ?? 3000;
@@ -232,24 +234,32 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
   const precip = clim.g.mul(precipMax);      // mm/yr
 
   const y = T.positionWorld.y;
-  const eAbove = T.clamp(y.sub(sea).div(aboveSpan), 0, 1); // 0 at the shore → 1 at the peak
+  // ELEVATION is the PRIMARY band driver: normalised relief above the waterline, 0 at the
+  // shore → 1 at the highest point. Climate only MODULATES (below) — it never overrides it.
+  const r = T.clamp(y.sub(sea).div(aboveSpan), 0, 1);
   const steep = T.clamp(T.oneMinus(T.normalWorld.y), 0, 1); // 0 flat → 1 vertical
 
-  // Lowland base: dry grass/savanna → forest green by precipitation.
+  // CLIMATE MODULATION (secondary): precip splits the green band into dry grass ↔ forest;
+  // a COLD climate lowers the snow line a touch (≤ 0.06 of the relief) but cannot move snow
+  // off the high band — so a uniformly cold world still reads green-base / rock / snow-peak.
   const wet = T.smoothstep(precipDry, precipWet, precip);
-  let col = T.mix(dryV, forestV, wet);
+  const cold = T.oneMinus(T.smoothstep(-5.0, 6.0, tempC)); // 1 cold → 0 warm
+  const rEff = T.clamp(r.add(cold.mul(0.06)), 0, 1);       // cold-shifted effective elevation
 
-  // Bare rock on the high OR steep flanks (under the snow line).
-  const rockMask = T.clamp(T.max(T.smoothstep(0.40, 0.72, steep), T.smoothstep(0.60, 0.92, eAbove).mul(0.85)), 0, 1);
+  // THREE STARK ELEVATION ZONES (smoothstep transitions read as distinct bands):
+  //   low  r≲0.35  → GREEN  (grass→forest by precip)
+  //   mid  r≈0.35..0.68 → ROCK   (grey-brown mountainside)
+  //   high r≳0.68  → SNOW   (white) — the PEAK only
+  const green = T.mix(dryV, forestV, wet);
+  let col = green;
+  const rockMask = T.smoothstep(0.32, 0.46, rEff);  // entering the mountainside
   col = T.mix(col, rockV, rockMask);
-
-  // Snow where it's cold (the climate temp already carries the elevation lapse) and on the
-  // high+cool crests. Edges are written increasing then inverted (smoothstep wants lo<hi).
-  const tempSnow = T.oneMinus(T.smoothstep(-3.0, 2.0, tempC));     // below ~ -3 °C → full snow
-  const highCool = T.oneMinus(T.smoothstep(2.0, 10.0, tempC));     // cooler → 1
-  const highCold = T.smoothstep(0.72, 0.95, eAbove).mul(highCool); // high AND cool → snow cap
-  const snowMask = T.clamp(T.max(tempSnow, highCold), 0, 1);
+  const snowMask = T.smoothstep(0.68, 0.82, rEff);  // peak snow only (elevation-gated)
   col = T.mix(col, snowV, snowMask);
+
+  // Steep CLIFFS expose rock even down in the green band (subtle; never over the snow cap).
+  const cliff = T.smoothstep(0.55, 0.82, steep).mul(T.oneMinus(snowMask)).mul(0.7);
+  col = T.mix(col, rockV, cliff);
 
   // Sandy coast in the thin band just above the waterline.
   const coastMask = T.oneMinus(T.smoothstep(0.0, coastBand, y.sub(sea)));
@@ -262,7 +272,7 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
   material.colorNode = col;
 
   // Roughness: snow a touch glossier (catches a sky sheen), submerged silt glossier (wet).
-  let rough = T.mix(T.float(baseRough), T.float(0.55), snowMask);
+  let rough = T.mix(T.float(baseRough), T.float(0.6), snowMask);
   rough = T.mix(rough, T.float(0.5), subMask);
   material.roughnessNode = T.clamp(rough, 0, 1);
 }
