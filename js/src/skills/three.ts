@@ -5,7 +5,8 @@ import { z } from "../../build/zod.bundle.mjs";
 import { Position, Rotation, Scale, spawnRenderable } from "../ecs/world.ts";
 import type { LoadedResourceMetadata, SceneObject, SceneLike } from "../engine.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
-import { getMaterialParams } from "../materials/palette.ts";
+import { createMaterial, getMaterialParams, isMaterialName } from "../materials/palette.ts";
+import type { MaterialRegistry } from "../materials/material-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -62,20 +63,27 @@ const setTransform: SkillDefinition<z.infer<typeof setTransformInput>, { ok: boo
 
 const setMaterialInput = z.object({
   entity: z.string(),
-  // Pick a material by intent ("sand", "wood", ...) from the named palette. It
-  // supplies color/roughness/metalness; explicit numeric fields below still win,
-  // so you can start from a preset and tweak a single value.
+  // Pick a material by intent ("sand", "wood", ...) from the named palette, OR an
+  // imported texture-pack material name (material.import). A palette name supplies
+  // color/roughness/metalness; explicit numeric fields below still win, so you can
+  // start from a preset and tweak a single value.
   material: z.string().optional(),
+  // Opt-in: when the `material` is a PALETTE name, REPLACE the entity's material with a
+  // procedural-PBR surface (triplanar noise albedo + detail normal + honest roughness).
+  // Imported materials are always PBR (this flag is ignored for them). Default false →
+  // the legacy in-place preset/numeric update, byte-identical to before.
+  pbr: z.boolean().default(false),
   color: z.number().int().min(0).max(0xffffff).optional(),
   roughness: z.number().min(0).max(1).optional(),
   metalness: z.number().min(0).max(1).optional(),
   castShadow: z.boolean().optional(),
   receiveShadow: z.boolean().optional(),
 });
-const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boolean }> = {
+function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boolean }> {
+ return {
   name: "three.setMaterial",
   version: "1.0.0",
-  description: "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow). Applies across all meshes of a glTF entity.",
+  description: "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow), across all meshes of a glTF entity. `material` accepts a palette name (optionally procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import); a PBR/imported material REPLACES the mesh material.",
   category: "three",
   permissions: ["scene.write"],
   input: setMaterialInput,
@@ -84,9 +92,19 @@ const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boole
     const root = ctx.world.entities.resolve(input.entity)?.mesh;
     if (root === undefined) return { ok: false };
 
-    // A palette `material` name supplies preset color/roughness/metalness (throws
-    // cleanly on an unknown name); explicit numeric fields override the preset.
-    const preset = input.material !== undefined ? getMaterialParams(input.material) : undefined;
+    // REPLACE path: an imported texture-pack material, or a palette material upgraded to
+    // procedural-PBR (`pbr: true`), swaps in a freshly-built node material per mesh. (Throws
+    // cleanly on an unknown name via the registry/createMaterial.)
+    let buildReplacement: (() => THREE.MeshStandardNodeMaterial) | undefined;
+    if (input.material !== undefined && materials?.has(input.material)) {
+      buildReplacement = () => materials.build(input.material!);
+    } else if (input.material !== undefined && input.pbr && isMaterialName(input.material)) {
+      buildReplacement = () => createMaterial(input.material!, { pbr: true });
+    }
+
+    // A palette `material` name supplies preset color/roughness/metalness (throws cleanly on an
+    // unknown name); explicit numeric fields override the preset. Skipped when replacing.
+    const preset = buildReplacement === undefined && input.material !== undefined ? getMaterialParams(input.material) : undefined;
     const color = input.color ?? preset?.color;
     const roughness = input.roughness ?? preset?.roughness;
     const metalness = input.metalness ?? preset?.metalness;
@@ -102,7 +120,14 @@ const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boole
     const visit = (object: SceneObject): void => {
       if (input.castShadow !== undefined) object.castShadow = input.castShadow;
       if (input.receiveShadow !== undefined) object.receiveShadow = input.receiveShadow;
-      if (hasMaterialChange && object.material !== undefined) {
+      if (buildReplacement !== undefined && (object as unknown as { isMesh?: boolean }).isMesh === true) {
+        // Swap in the new material, then let any explicit numeric overrides still apply.
+        const next = buildReplacement() as unknown as { color: { set(v: number): void }; roughness: number; metalness: number };
+        if (color !== undefined) next.color.set(color);
+        if (roughness !== undefined) next.roughness = roughness;
+        if (metalness !== undefined) next.metalness = metalness;
+        (object as unknown as { material: unknown }).material = next;
+      } else if (hasMaterialChange && object.material !== undefined) {
         const material = object.material;
         if (Array.isArray(material)) {
           for (const sub of material) applyMaterialProps(sub);
@@ -118,7 +143,8 @@ const setMaterial: SkillDefinition<z.infer<typeof setMaterialInput>, { ok: boole
     ctx.emit("three.material.updated", { entity: input.entity });
     return { ok: true };
   },
-};
+ };
+}
 
 // Limina-managed lights per scene, so repeated setLighting calls replace them.
 const sceneLights = new Map<SceneLike, { ambient: unknown; directional: unknown }>();
@@ -229,6 +255,30 @@ function rehomeTextureToData(tex: unknown): boolean {
   upload.isDataTexture = true;
   upload.needsUpdate = true;
   return true;
+}
+
+/** Decode raw image BYTES (PNG/JPG/etc.) into a sampleable WebGPU DataTexture. Reuses the
+ *  SAME embedded-image→RGBA bridge the glTF path uses: createImageBitmap decodes the bytes,
+ *  __liminaImageBitmapToRGBA exposes the decoded RGBA8 pixels, and the result is wrapped in a
+ *  THREE.DataTexture (the proven upload path on deno_webgpu — an ImageBitmap-backed texture
+ *  would render black). This is the texture-pack IMPORT decode seam (materials/material-
+ *  registry.ts). `srgb` tags a colour (albedo) map; normal/roughness maps stay linear.
+ *  Returns null when no image decode bridge is present (non-render host). */
+export async function decodeImageToDataTexture(bytes: Uint8Array, srgb: boolean): Promise<THREE.DataTexture | null> {
+  if (typeof createImageBitmap !== "function" || typeof __liminaImageBitmapToRGBA !== "function") return null;
+  const copy = bytes.slice();
+  const bitmap = await createImageBitmap(new Blob([copy]));
+  const rgba = __liminaImageBitmapToRGBA(bitmap);
+  if (rgba === null) return null;
+  const tex = new THREE.DataTexture(rgba.data, rgba.width, rgba.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  if (srgb && THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 function rehomeMaterialTextures(material: unknown): void {
@@ -383,9 +433,9 @@ function makeLoadGltf(assets: AssetRegistry): SkillDefinition<z.infer<typeof loa
   };
 }
 
-export function registerThreeSkills(registry: SkillRegistry, assets: AssetRegistry): void {
+export function registerThreeSkills(registry: SkillRegistry, assets: AssetRegistry, materials?: MaterialRegistry): void {
   registry.register(setTransform);
-  registry.register(setMaterial);
+  registry.register(makeSetMaterial(materials));
   registry.register(setLighting);
   registry.register(makeLoadGltf(assets));
 }

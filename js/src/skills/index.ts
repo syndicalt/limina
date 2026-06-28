@@ -6,7 +6,9 @@ import { registerSceneSkills } from "./scene.ts";
 import { registerEcsSkills } from "./ecs.ts";
 import { registerThreeSkills } from "./three.ts";
 import { registerAssetSkills } from "./asset.ts";
+import { registerMaterialSkills } from "./material.ts";
 import { AssetRegistry } from "../asset-registry.ts";
+import { MaterialRegistry } from "../materials/material-registry.ts";
 import { registerPhysicsSkills } from "./physics.ts";
 import { registerAgentSkills } from "./agent.ts";
 import { registerSystemSkills } from "./system.ts";
@@ -49,6 +51,10 @@ export interface CoreSkills {
   /** Phase 11 content-addressed asset registry backing the asset.* skills — the
    *  lookup layer (id -> bytes + content hash) over the host's op_read_asset. */
   assets: AssetRegistry;
+  /** Phase 2b imported texture-pack material registry backing material.import — named
+   *  PBR materials (built from content-addressed images) that createEntity/setMaterial
+   *  resolve by name. Rebuilt on replay from the recorded import requests. */
+  materials: MaterialRegistry;
   /** Render-only sea-level water surfaces added via `world.addWater` (cosmetic;
    *  never physics/ECS state). The list is rebuilt by re-invoking the recorded
    *  request on replay. */
@@ -87,10 +93,16 @@ export function registerCoreSkills(
   // world.generateRegion) and asset.scatter (which binds a scatter to a region by id,
   // reading its seed/lod + applied tiles — no free-floating scatter seed).
   const terrainRegions = new Map<string, RegionState>();
-  registerSceneSkills(registry);
+  // Phase 2b imported-material registry: the named, built texture-pack materials that
+  // scene.createEntity / three.setMaterial resolve by name. material.import populates it
+  // (resolving + decoding images through the SAME content-addressed asset registry, so the
+  // bytes ride the export); a replay re-runs the recorded import requests to rebuild it.
+  const materials = new MaterialRegistry();
+  registerSceneSkills(registry, materials);
   registerEcsSkills(registry);
-  registerThreeSkills(registry, assets);
+  registerThreeSkills(registry, assets, materials);
   registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
+  registerMaterialSkills(registry, assets, materials);
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
@@ -145,5 +157,5 @@ export function registerCoreSkills(
   if (opts?.providers !== undefined) {
     registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions }, assets, water };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions }, assets, materials, water };
 }

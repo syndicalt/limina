@@ -3,7 +3,8 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
-import { getMaterialParams } from "../materials/palette.ts";
+import { createMaterial, isMaterialName, MATERIAL_NAMES } from "../materials/palette.ts";
+import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -13,10 +14,15 @@ const createEntityInput = z.object({
   shape: z.enum(["box", "sphere"]).default("box"),
   collider: z.enum(["box", "sphere", "capsule"]).optional(),
   size: z.number().positive().max(50).default(1),
-  // Pick a material by intent ("sand", "wood", ...) from the named palette. When
-  // set it supplies color/roughness/metalness; the numeric `color` below is the
-  // back-compat path used when no palette name is given.
+  // Pick a material by intent ("sand", "wood", ...) from the named palette, OR an
+  // imported texture-pack material name (material.import). When set it supplies the
+  // surface; the numeric `color` below is the back-compat path used when no name is given.
   material: z.string().optional(),
+  // Opt-in: upgrade a PALETTE material to a procedural-PBR surface (triplanar noise
+  // albedo + a real detail normal + honest roughness, matching the terrain). Default
+  // false → flat preset, byte-identical to before. Ignored for imported materials
+  // (already PBR) and for the numeric color path.
+  pbr: z.boolean().default(false),
   color: z.number().int().min(0).max(0xffffff).default(0xffffff),
   position: Vec3.default([0, 0, 0]),
   dynamic: z.boolean().default(false),
@@ -24,10 +30,11 @@ const createEntityInput = z.object({
   friction: z.number().min(0).max(10).default(0.5),
   restitution: z.number().min(0).max(2).default(0),
 });
-const createEntity: SkillDefinition<z.infer<typeof createEntityInput>, { entity: string }> = {
+function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer<typeof createEntityInput>, { entity: string }> {
+ return {
   name: "scene.createEntity",
   version: "1.0.0",
-  description: "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. Returns its entity id.",
+  description: "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
   category: "scene",
   permissions: ["scene.write"],
   input: createEntityInput,
@@ -37,14 +44,26 @@ const createEntity: SkillDefinition<z.infer<typeof createEntityInput>, { entity:
     const geometry = input.shape === "sphere"
       ? new THREE.SphereGeometry(input.size / 2, 24, 16)
       : new THREE.BoxGeometry(input.size, input.size, input.size);
-    // Palette path: a `material` name resolves to a named preset (throws cleanly
-    // on an unknown name). Otherwise the existing numeric color path is unchanged.
-    const surface = input.material !== undefined
-      ? getMaterialParams(input.material)
-      : { color: input.color, roughness: 0.6, metalness: 0.1 };
-    const material = new THREE.MeshStandardNodeMaterial({
-      color: surface.color, roughness: surface.roughness, metalness: surface.metalness,
-    });
+    // Material resolution, in order:
+    //   • palette name  → createMaterial (flat by default; procedural-PBR when `pbr`).
+    //   • imported name → the built texture-pack material (material.import).
+    //   • no name       → the legacy numeric color path (byte-identical to before).
+    let material: THREE.MeshStandardNodeMaterial;
+    if (input.material !== undefined) {
+      if (isMaterialName(input.material)) {
+        material = createMaterial(input.material, { pbr: input.pbr });
+      } else if (materials?.has(input.material)) {
+        material = materials.build(input.material);
+      } else {
+        const imported = materials?.names() ?? [];
+        throw new Error(
+          `unknown material "${input.material}"; known palette: ${MATERIAL_NAMES.join(", ")}` +
+          (imported.length > 0 ? `; imported: ${imported.join(", ")}` : ""),
+        );
+      }
+    } else {
+      material = new THREE.MeshStandardNodeMaterial({ color: input.color, roughness: 0.6, metalness: 0.1 });
+    }
     const mesh = new THREE.Mesh(geometry, material);
     ctx.world.scene.add(mesh);
     const eid = spawnRenderable(ctx.world.ecs, mesh, x, y, z);
@@ -80,7 +99,8 @@ const createEntity: SkillDefinition<z.infer<typeof createEntityInput>, { entity:
     ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
     return { entity };
   },
-};
+ };
+}
 
 const destroyEntityInput = z.object({ entity: z.string() });
 const destroyEntity: SkillDefinition<z.infer<typeof destroyEntityInput>, { removed: boolean }> = {
@@ -139,8 +159,8 @@ const queryEntities: SkillDefinition<
   },
 };
 
-export function registerSceneSkills(registry: SkillRegistry): void {
-  registry.register(createEntity);
+export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
+  registry.register(makeCreateEntity(materials));
   registry.register(destroyEntity);
   registry.register(queryEntities);
 }

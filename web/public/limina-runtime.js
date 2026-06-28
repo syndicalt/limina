@@ -8391,6 +8391,42 @@ var Color = class {
 };
 var _color = /* @__PURE__ */ new Color();
 Color.NAMES = _colorKeywords;
+var FogExp2 = class _FogExp2 {
+  /**
+   * Constructs a new fog.
+   *
+   * @param {number|Color} color - The fog's color.
+   * @param {number} [density=0.00025] - Defines how fast the fog will grow dense.
+   */
+  constructor(color3, density = 25e-5) {
+    this.isFogExp2 = true;
+    this.name = "";
+    this.color = new Color(color3);
+    this.density = density;
+  }
+  /**
+   * Returns a new fog with copied values from this instance.
+   *
+   * @return {FogExp2} A clone of this instance.
+   */
+  clone() {
+    return new _FogExp2(this.color, this.density);
+  }
+  /**
+   * Serializes the fog into JSON.
+   *
+   * @param {?(Object|string)} meta - An optional value holding meta information about the serialization.
+   * @return {Object} A JSON object representing the serialized fog
+   */
+  toJSON() {
+    return {
+      type: "FogExp2",
+      name: this.name,
+      color: this.color.getHex(),
+      density: this.density
+    };
+  }
+};
 var Fog = class _Fog {
   /**
    * Constructs a new fog.
@@ -68360,6 +68396,18 @@ var DEFAULT_RENDER_BASELINE = {
   environment: true,
   environmentIntensity: 1,
   background: true,
+  // GENTLE default haze: a uniform exponential distance fog tinted to the horizon
+  // band (color:null ⇒ sky.horizon = 0xcdd9e6). Subtle density so near geometry stays
+  // crisp and a comparison/row demo isn't washed out, while distant geometry softly
+  // dissolves into the sky — depth + scale for every world, for free. A world that
+  // wants the "vast island, crisp peaks" look opts into `height` (see the landscape
+  // demo) or simply raises `density`.
+  atmosphere: {
+    enabled: true,
+    color: null,
+    density: 11e-4,
+    height: { enabled: false, ceiling: 60, density: 1e-4 }
+  },
   ground: { enabled: true, color: 3818064, size: 80, y: 0, roughness: 0.95 },
   camera: { position: [12, 8, 14], target: [0, 1, 0], far: 200 }
 };
@@ -68377,6 +68425,11 @@ function mergePreset(base, over) {
     environment: over.environment ?? base.environment,
     environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
     background: over.background ?? base.background,
+    atmosphere: {
+      ...base.atmosphere,
+      ...over.atmosphere,
+      height: { ...base.atmosphere.height, ...over.atmosphere?.height }
+    },
     ground: { ...base.ground, ...over.ground },
     camera: { ...base.camera, ...over.camera }
   };
@@ -68427,7 +68480,7 @@ function rendererIsUsable(r) {
 }
 function applyRenderBaseline(target, override) {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
-  if (!preset.enabled) return { preset, environmentMode: "none" };
+  if (!preset.enabled) return { preset, environmentMode: "none", atmosphereMode: "none" };
   const { scene, renderer, camera } = target;
   if (renderer !== void 0) {
     renderer.toneMapping = preset.toneMapping;
@@ -68494,6 +68547,27 @@ function applyRenderBaseline(target, override) {
       scene.environmentIntensity = preset.environmentIntensity;
     }
   }
+  let fog3;
+  let atmosphereMode = "none";
+  const atm = preset.atmosphere;
+  if (atm.enabled && ("fog" in scene || "fogNode" in scene)) {
+    const hazeColor = atm.color ?? preset.sky.horizon;
+    if (atm.height.enabled) {
+      const T9 = three_tsl_exports;
+      const factor = T9.exponentialHeightFogFactor(T9.float(atm.height.density), T9.float(atm.height.ceiling));
+      const node = T9.fog(T9.color(hazeColor), factor);
+      scene.fogNode = node;
+      scene.fog = null;
+      fog3 = node;
+      atmosphereMode = "height";
+    } else {
+      const exp4 = new FogExp2(hazeColor, atm.density);
+      scene.fog = exp4;
+      scene.fogNode = null;
+      fog3 = exp4;
+      atmosphereMode = "exp";
+    }
+  }
   let ground;
   if (preset.ground.enabled) {
     const mesh = new Mesh(
@@ -68516,7 +68590,7 @@ function applyRenderBaseline(target, override) {
     const [tx, ty, tz] = preset.camera.target;
     camera.lookAt?.(tx, ty, tz);
   }
-  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode };
+  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode, atmosphereMode, fog: fog3 };
 }
 
 // src/engine.ts
@@ -83374,6 +83448,678 @@ var SkillRegistry = class {
   }
 };
 
+// src/terrain/types.ts
+var CLIMATE_TEMP_C = 0;
+var CLIMATE_PRECIP_MM = 1;
+var CLIMATE_BIOME = 2;
+var CLIMATE_CHANNELS = 3;
+var Biome = {
+  ICE: 0,
+  DESERT: 1,
+  STEPPE: 2,
+  SAVANNA: 3,
+  TEMPERATE_FOREST: 4,
+  TROPICAL: 5,
+  BOREAL_WET: 6
+};
+
+// src/terrain/erosion.ts
+var DROPLET_INERTIA = 0.05;
+var MIN_SLOPE = 5e-4;
+var GRAVITY = 4;
+var EVAPORATION = 0.02;
+var EROSION_RADIUS = 2;
+var INITIAL_WATER = 1;
+var INITIAL_SPEED = 1;
+var DROP_SALT = 2135587861 | 0;
+var JIT_X_SALT = 2654435769 | 0;
+var JIT_Z_SALT = 1779033703 | 0;
+var EXTRA_SALT = 3210233709 | 0;
+var DEFAULT_EROSION = {
+  rain: 1,
+  thermal: 12,
+  talus: 0.012,
+  lifetime: 18,
+  capacity: 6,
+  deposition: 0.3,
+  erosionRate: 0.35
+};
+function clampPos(x2, lo, hi) {
+  return x2 < lo ? lo : x2 > hi ? hi : x2;
+}
+function parseErosion(hints) {
+  if (hints === void 0 || !(hints.erode > 0)) return void 0;
+  const iter = hints.erodeIterations;
+  return {
+    rain: clampPos(hints.erodeRain ?? DEFAULT_EROSION.rain, 0, 8),
+    thermal: Math.round(clampPos(hints.erodeThermal ?? iter ?? DEFAULT_EROSION.thermal, 0, 40)),
+    talus: Math.max(1e-6, hints.erodeTalus ?? DEFAULT_EROSION.talus),
+    lifetime: Math.round(clampPos(hints.erodeLifetime ?? DEFAULT_EROSION.lifetime, 1, 40)),
+    capacity: Math.max(0.01, hints.erodeCapacity ?? DEFAULT_EROSION.capacity),
+    deposition: clampPos(hints.erodeDeposition ?? DEFAULT_EROSION.deposition, 0, 1),
+    erosionRate: clampPos(hints.erodeRate ?? DEFAULT_EROSION.erosionRate, 0, 1)
+  };
+}
+function apronFor(p) {
+  const hydraulic = p.lifetime + EROSION_RADIUS;
+  const thermal = p.thermal;
+  return Math.max(hydraulic, thermal) + 2;
+}
+function simulateDroplet(h, rows, cols, startX, startZ, p) {
+  let px = startX, pz = startZ;
+  let dx = 0, dz = 0;
+  let speed = INITIAL_SPEED;
+  let water = INITIAL_WATER;
+  let sediment = 0;
+  for (let step3 = 0; step3 < p.lifetime; step3++) {
+    const cx = Math.floor(px);
+    const cz = Math.floor(pz);
+    if (cx < 0 || cz < 0 || cx >= cols - 1 || cz >= rows - 1) break;
+    const fx = px - cx;
+    const fz = pz - cz;
+    const i00 = cz * cols + cx;
+    const nw = h[i00];
+    const ne2 = h[i00 + 1];
+    const sw = h[i00 + cols];
+    const se2 = h[i00 + cols + 1];
+    const gradX = (ne2 - nw) * (1 - fz) + (se2 - sw) * fz;
+    const gradZ = (sw - nw) * (1 - fx) + (se2 - ne2) * fx;
+    const oldH = nw * (1 - fx) * (1 - fz) + ne2 * fx * (1 - fz) + sw * (1 - fx) * fz + se2 * fx * fz;
+    dx = dx * DROPLET_INERTIA - gradX * (1 - DROPLET_INERTIA);
+    dz = dz * DROPLET_INERTIA - gradZ * (1 - DROPLET_INERTIA);
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len <= 1e-12) break;
+    dx /= len;
+    dz /= len;
+    px += dx;
+    pz += dz;
+    const ncx = Math.floor(px);
+    const ncz = Math.floor(pz);
+    if (ncx < 0 || ncz < 0 || ncx >= cols - 1 || ncz >= rows - 1) break;
+    const nfx = px - ncx;
+    const nfz = pz - ncz;
+    const j00 = ncz * cols + ncx;
+    const newH = h[j00] * (1 - nfx) * (1 - nfz) + h[j00 + 1] * nfx * (1 - nfz) + h[j00 + cols] * (1 - nfx) * nfz + h[j00 + cols + 1] * nfx * nfz;
+    const dh = newH - oldH;
+    const capacity = Math.max(-dh, MIN_SLOPE) * speed * water * p.capacity;
+    if (dh > 0 || sediment > capacity) {
+      const drop = dh > 0 ? Math.min(dh, sediment) : (sediment - capacity) * p.deposition;
+      sediment -= drop;
+      h[i00] += drop * (1 - fx) * (1 - fz);
+      h[i00 + 1] += drop * fx * (1 - fz);
+      h[i00 + cols] += drop * (1 - fx) * fz;
+      h[i00 + cols + 1] += drop * fx * fz;
+    } else {
+      const carve = Math.min((capacity - sediment) * p.erosionRate, -dh);
+      depositBrush(h, rows, cols, cx, cz, fx, fz, -carve);
+      sediment += carve;
+    }
+    speed = Math.sqrt(Math.max(0, speed * speed + dh * -GRAVITY));
+    water *= 1 - EVAPORATION;
+    if (water <= 1e-4) break;
+  }
+}
+function depositBrush(h, rows, cols, cx, cz, fx, fz, amount) {
+  const ox = cx + fx;
+  const oz = cz + fz;
+  let wsum = 0;
+  for (let rz = -EROSION_RADIUS; rz <= EROSION_RADIUS; rz++) {
+    for (let rx = -EROSION_RADIUS; rx <= EROSION_RADIUS; rx++) {
+      const bx = cx + rx, bz = cz + rz;
+      if (bx < 0 || bz < 0 || bx >= cols || bz >= rows) continue;
+      const ddx = bx - ox, ddz = bz - oz;
+      const dist = Math.sqrt(ddx * ddx + ddz * ddz);
+      if (dist >= EROSION_RADIUS) continue;
+      wsum += EROSION_RADIUS - dist;
+    }
+  }
+  if (wsum <= 0) return;
+  for (let rz = -EROSION_RADIUS; rz <= EROSION_RADIUS; rz++) {
+    for (let rx = -EROSION_RADIUS; rx <= EROSION_RADIUS; rx++) {
+      const bx = cx + rx, bz = cz + rz;
+      if (bx < 0 || bz < 0 || bx >= cols || bz >= rows) continue;
+      const ddx = bx - ox, ddz = bz - oz;
+      const dist = Math.sqrt(ddx * ddx + ddz * ddz);
+      if (dist >= EROSION_RADIUS) continue;
+      h[bz * cols + bx] += amount * (EROSION_RADIUS - dist) / wsum;
+    }
+  }
+}
+function thermalPass(src, dst, rows, cols, talus) {
+  dst.set(src);
+  for (let z3 = 0; z3 < rows; z3++) {
+    for (let x2 = 0; x2 < cols; x2++) {
+      const i = z3 * cols + x2;
+      const hc = src[i];
+      let totalExcess = 0;
+      let d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+      if (x2 > 0) {
+        const d = hc - src[i - 1];
+        if (d > talus) {
+          d0 = d - talus;
+          totalExcess += d0;
+        }
+      }
+      if (x2 < cols - 1) {
+        const d = hc - src[i + 1];
+        if (d > talus) {
+          d1 = d - talus;
+          totalExcess += d1;
+        }
+      }
+      if (z3 > 0) {
+        const d = hc - src[i - cols];
+        if (d > talus) {
+          d2 = d - talus;
+          totalExcess += d2;
+        }
+      }
+      if (z3 < rows - 1) {
+        const d = hc - src[i + cols];
+        if (d > talus) {
+          d3 = d - talus;
+          totalExcess += d3;
+        }
+      }
+      if (totalExcess <= 0) continue;
+      const move = 0.5 * Math.max(d0, d1, d2, d3);
+      const scale2 = move / totalExcess;
+      dst[i] -= move;
+      if (d0 > 0) dst[i - 1] += d0 * scale2;
+      if (d1 > 0) dst[i + 1] += d1 * scale2;
+      if (d2 > 0) dst[i - cols] += d2 * scale2;
+      if (d3 > 0) dst[i + cols] += d3 * scale2;
+    }
+  }
+}
+function erodeBlock(raw, rows, cols, gr0, gc0, seed, p) {
+  const h = new Float32Array(raw);
+  if (p.rain > 0) {
+    const whole = Math.floor(p.rain);
+    const frac = p.rain - whole;
+    for (let r = 0; r < rows; r++) {
+      const gr = gr0 + r;
+      for (let c = 0; c < cols; c++) {
+        const gc = gc0 + c;
+        const count = whole + (frac > 0 && hashLattice(seed ^ EXTRA_SALT | 0, gc, gr) < frac ? 1 : 0);
+        for (let d = 0; d < count; d++) {
+          const salt = DROP_SALT + Math.imul(d, 2654435761) | 0;
+          const jx = hashLattice(salt ^ JIT_X_SALT | 0, gc, gr);
+          const jz = hashLattice(salt ^ JIT_Z_SALT | 0, gc, gr);
+          simulateDroplet(h, rows, cols, c + jx, r + jz, p);
+        }
+      }
+    }
+  }
+  if (p.thermal > 0) {
+    let a = h;
+    let b2 = new Float32Array(h.length);
+    for (let i = 0; i < p.thermal; i++) {
+      thermalPass(a, b2, rows, cols, p.talus);
+      const t = a;
+      a = b2;
+      b2 = t;
+    }
+    if (a !== h) h.set(a);
+  }
+  return h;
+}
+
+// src/terrain/procedural.ts
+var TILE_SIZE = 48;
+var TILE_RES = 33;
+var HEIGHT_SCALE = 12;
+function tilePlacement(tx, tz) {
+  return {
+    origin: [tx * TILE_SIZE + TILE_SIZE / 2, 0, tz * TILE_SIZE + TILE_SIZE / 2],
+    scale: [TILE_SIZE, HEIGHT_SCALE, TILE_SIZE]
+  };
+}
+function hashLattice(seed, ix, iz) {
+  let h = seed | 0;
+  h = Math.imul(h ^ (ix | 0), 668265261);
+  h ^= h >>> 15;
+  h = Math.imul(h ^ (iz | 0), 2246822507);
+  h ^= h >>> 13;
+  h = Math.imul(h, 3266489909);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function smoothstep4(t) {
+  return t * t * (3 - 2 * t);
+}
+function lerp2(a, b2, t) {
+  return a + (b2 - a) * t;
+}
+function valueNoise(seed, x2, z3) {
+  const ix = Math.floor(x2);
+  const iz = Math.floor(z3);
+  const fx = x2 - ix;
+  const fz = z3 - iz;
+  const v00 = hashLattice(seed, ix, iz);
+  const v10 = hashLattice(seed, ix + 1, iz);
+  const v01 = hashLattice(seed, ix, iz + 1);
+  const v11 = hashLattice(seed, ix + 1, iz + 1);
+  const ux = smoothstep4(fx);
+  const uz = smoothstep4(fz);
+  return lerp2(lerp2(v00, v10, ux), lerp2(v01, v11, ux), uz);
+}
+function fbm(seed, x2, z3, octaves, freq) {
+  let amp = 1;
+  let sum = 0;
+  let norm = 0;
+  let f = freq;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * valueNoise(seed + Math.imul(o, 2654435761) | 0, x2 * f, z3 * f);
+    norm += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return sum / norm;
+}
+var ELEV_BASE_FREQ = 1 / 96;
+var WARMTH_FREQ = 1 / 320;
+var PRECIP_FREQ = 1 / 220;
+function elevation01(seed, x2, z3, lod) {
+  const octaves = 3 + Math.max(0, Math.min(4, lod | 0));
+  return fbm(seed | 0, x2, z3, octaves, ELEV_BASE_FREQ);
+}
+var RIDGE_SALT = 1540483477 | 0;
+var WARP_X_SALT = 1757159915 | 0;
+var WARP_Z_SALT = 48610963 | 0;
+function clamp01(t) {
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+function parseShape(hints) {
+  if (hints === void 0 || !(hints.shape > 0)) return void 0;
+  return {
+    warpAmp: hints.warp ?? 0,
+    warpFreq: hints.warpFreq ?? 1 / 130,
+    ridge: clamp01(hints.ridge ?? 0),
+    amp: hints.amp ?? 1,
+    freqScale: hints.freqScale ?? 1,
+    cx: hints.islandCx ?? 0,
+    cz: hints.islandCz ?? 0,
+    radius: hints.islandRadius ?? Infinity,
+    falloff: hints.islandFalloff ?? 1,
+    tempBias: hints.tempBias ?? 0,
+    precipBias: hints.precipBias ?? 0
+  };
+}
+function ridgedFbm(seed, x2, z3, octaves, freq) {
+  let amp = 1;
+  let sum = 0;
+  let norm = 0;
+  let f = freq;
+  for (let o = 0; o < octaves; o++) {
+    const n = valueNoise(seed + Math.imul(o, 2654435761) | 0, x2 * f, z3 * f);
+    let r = 1 - Math.abs(2 * n - 1);
+    r = r * r;
+    sum += amp * r;
+    norm += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return sum / norm;
+}
+function shapedElevation01(seed, x2, z3, lod, s) {
+  const octaves = 3 + Math.max(0, Math.min(4, lod | 0));
+  let wx = x2;
+  let wz = z3;
+  if (s.warpAmp !== 0) {
+    const nx = valueNoise(seed ^ WARP_X_SALT | 0, x2 * s.warpFreq, z3 * s.warpFreq);
+    const nz = valueNoise(seed ^ WARP_Z_SALT | 0, x2 * s.warpFreq, z3 * s.warpFreq);
+    wx = x2 + (nx - 0.5) * 2 * s.warpAmp;
+    wz = z3 + (nz - 0.5) * 2 * s.warpAmp;
+  }
+  const f = ELEV_BASE_FREQ * s.freqScale;
+  const base = fbm(seed | 0, wx, wz, octaves, f);
+  let e = base;
+  if (s.ridge > 0) {
+    const dunes = ridgedFbm(seed ^ RIDGE_SALT | 0, wx, wz, octaves, f * 2);
+    e = base * (1 - s.ridge) + dunes * s.ridge;
+  }
+  if (s.radius !== Infinity) {
+    const dx = x2 - s.cx;
+    const dz = z3 - s.cz;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const t = clamp01((dist - s.radius) / (s.falloff <= 0 ? 1 : s.falloff));
+    e *= 1 - smoothstep4(t);
+  }
+  return e * s.amp;
+}
+function biomeOf(tempC, precipMm) {
+  if (tempC < 0) return Biome.ICE;
+  if (precipMm < 250) return tempC > 22 ? Biome.DESERT : Biome.STEPPE;
+  if (precipMm < 1200) return tempC > 18 ? Biome.SAVANNA : Biome.TEMPERATE_FOREST;
+  return tempC > 20 ? Biome.TROPICAL : Biome.BOREAL_WET;
+}
+var CELL_SIZE = TILE_SIZE / (TILE_RES - 1);
+function rawElevation01(seed, x2, z3, lod, shape) {
+  return shape === void 0 ? elevation01(seed, x2, z3, lod) : shapedElevation01(seed, x2, z3, lod, shape);
+}
+function requestHintKey(hints) {
+  if (hints === void 0) return "";
+  const keys = Object.keys(hints).sort();
+  return JSON.stringify(keys.map((k2) => [k2, hints[k2]]));
+}
+var EROSION_MACRO = 8;
+var ProceduralTerrainSource = class {
+  name;
+  /** Memo of baked erosion macro-blocks (pure results, so memoizing is sound + just amortizes
+   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord. */
+  macroMemo = /* @__PURE__ */ new Map();
+  constructor(name = "procedural") {
+    this.name = name;
+  }
+  /** Bake (or fetch from the memo) the eroded macro-block that contains tile (tx,tz). Pure +
+   *  deterministic in (seed, lod, shape, ep, macro coord); independent of any region bounds. */
+  bakeMacro(seed, tx, tz, lod, shape, ep, hintKey) {
+    const mbx = Math.floor(tx / EROSION_MACRO);
+    const mbz = Math.floor(tz / EROSION_MACRO);
+    const key = `${seed}|${lod}|${hintKey}|${mbx}|${mbz}`;
+    const hit = this.macroMemo.get(key);
+    if (hit !== void 0) return hit;
+    const apron = apronFor(ep);
+    const span = EROSION_MACRO * (TILE_RES - 1) + 1;
+    const dim = span + 2 * apron;
+    const gcStart = mbx * EROSION_MACRO * (TILE_RES - 1);
+    const grStart = mbz * EROSION_MACRO * (TILE_RES - 1);
+    const gc0 = gcStart - apron;
+    const gr0 = grStart - apron;
+    const raw = new Float32Array(dim * dim);
+    for (let r = 0; r < dim; r++) {
+      const z3 = (gr0 + r) * CELL_SIZE;
+      for (let c = 0; c < dim; c++) {
+        const x2 = (gc0 + c) * CELL_SIZE;
+        raw[r * dim + c] = rawElevation01(seed, x2, z3, lod, shape);
+      }
+    }
+    const eroded = erodeBlock(raw, dim, dim, gr0, gc0, seed, ep);
+    const interior = new Float32Array(span * span);
+    for (let r = 0; r < span; r++) {
+      for (let c = 0; c < span; c++) interior[r * span + c] = eroded[(r + apron) * dim + (c + apron)];
+    }
+    const bake = { interior, dim: span, gcStart, grStart };
+    this.macroMemo.set(key, bake);
+    return bake;
+  }
+  /** One tile's eroded heights — a SLICE of its macro-block's shared eroded grid (so tiles
+   *  inside a macro-block share their edges bit-for-bit). */
+  erodedTileHeights(seed, tx, tz, lod, shape, ep, hintKey) {
+    const bake = this.bakeMacro(seed, tx, tz, lod, shape, ep, hintKey);
+    const col0 = tx * (TILE_RES - 1) - bake.gcStart;
+    const row0 = tz * (TILE_RES - 1) - bake.grStart;
+    const out = new Float32Array(TILE_RES * TILE_RES);
+    for (let r = 0; r < TILE_RES; r++) {
+      for (let c = 0; c < TILE_RES; c++) {
+        out[r * TILE_RES + c] = bake.interior[(row0 + r) * bake.dim + (col0 + c)];
+      }
+    }
+    return out;
+  }
+  /** Generate one tile — a byte-identical function of the request. Heights are
+   *  the raw [0,1] elevation field (the collider multiplies by scale[1]); a
+   *  3-channel climate grid (tempC, precipMm, biome) rides along for perception. */
+  generateTile(req) {
+    const seed = req.seed | 0;
+    const lod = req.lod | 0;
+    const shape = parseShape(req.hints);
+    const erosion = parseErosion(req.hints);
+    const eroded = erosion === void 0 ? void 0 : this.erodedTileHeights(seed, req.tx, req.tz, lod, shape, erosion, requestHintKey(req.hints));
+    const { origin, scale: scale2 } = tilePlacement(req.tx, req.tz);
+    const nrows = TILE_RES;
+    const ncols = TILE_RES;
+    const x0 = req.tx * TILE_SIZE;
+    const z0 = req.tz * TILE_SIZE;
+    const heights = new Float32Array(nrows * ncols);
+    const climateChannels = CLIMATE_CHANNELS;
+    const climate = new Float32Array(climateChannels * nrows * ncols);
+    for (let r = 0; r < nrows; r++) {
+      const z3 = z0 + r / (nrows - 1) * TILE_SIZE;
+      for (let c = 0; c < ncols; c++) {
+        const x2 = x0 + c / (ncols - 1) * TILE_SIZE;
+        const idx = r * ncols + c;
+        const e = eroded === void 0 ? shape === void 0 ? elevation01(seed, x2, z3, lod) : shapedElevation01(seed, x2, z3, lod, shape) : eroded[idx];
+        heights[idx] = e;
+        const cl = this.climateAt(seed, x2, z3, e, shape?.tempBias ?? 0, shape?.precipBias ?? 0);
+        const cidx = idx * climateChannels;
+        climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
+        climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
+        climate[cidx + CLIMATE_BIOME] = cl.biome;
+      }
+    }
+    return { nrows, ncols, origin, scale: scale2, heights, climate, climateChannels };
+  }
+  /** Bilinear-sample the ERODED macro-block that contains world (x,z), returning the
+   *  surface world Y (eroded elevation × HEIGHT_SCALE). This reads the SAME memoized
+   *  macro-bake generateTile slices its tiles from, so a point query, the collider, the
+   *  mesh, and asset.scatter all agree on the eroded surface (the un-eroded raw field is
+   *  up to ~4.84 m off). The interior grid shares its cell values bit-for-bit with the
+   *  tiles, so at a tile sample point this returns the tile height exactly; between
+   *  samples it bilinearly interpolates the same cells the heightfield collider does.
+   *  KNOWN TRADEOFF: across an erosion MACRO-block boundary the cross-block seam is
+   *  apron-reconciled, not bit-exact (a ~0.38 m ledge on the deepest channels) — a
+   *  disclosed limit shared with the tiles/colliders, latent until a preset enables
+   *  `erode`; intra-block queries are exact. */
+  erodedHeightAt(seed, x2, z3, lod, shape, ep, hintKey) {
+    const tx = Math.floor(x2 / TILE_SIZE);
+    const tz = Math.floor(z3 / TILE_SIZE);
+    const bake = this.bakeMacro(seed, tx, tz, lod, shape, ep, hintKey);
+    const span = bake.dim;
+    let lc = x2 / CELL_SIZE - bake.gcStart;
+    let lr = z3 / CELL_SIZE - bake.grStart;
+    if (lc < 0) lc = 0;
+    else if (lc > span - 1) lc = span - 1;
+    if (lr < 0) lr = 0;
+    else if (lr > span - 1) lr = span - 1;
+    const c0 = Math.min(span - 1, Math.floor(lc)), c1 = Math.min(span - 1, c0 + 1);
+    const r0 = Math.min(span - 1, Math.floor(lr)), r1 = Math.min(span - 1, r0 + 1);
+    const tcx = lc - c0, tcz = lr - r0;
+    const g2 = (r, c) => bake.interior[r * span + c];
+    const top = g2(r0, c0) * (1 - tcx) + g2(r0, c1) * tcx;
+    const bot = g2(r1, c0) * (1 - tcx) + g2(r1, c1) * tcx;
+    return (top * (1 - tcz) + bot * tcz) * HEIGHT_SCALE;
+  }
+  /** O(1) world-space elevation query (snapping/placement). Returns the surface
+   *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). Passing the SAME
+   *  shaping `hints` a region was generated with samples the SHAPED surface (so a
+   *  survey/snap matches the rich tiles); omit them for the byte-identical base field.
+   *  When the `erode` hint is set it is EROSION-AWARE: it samples the same memoized
+   *  eroded macro-bake the tiles/colliders use, so point queries don't float over the
+   *  eroded terrain. */
+  sampleHeight(seed, x2, z3, lod, hints) {
+    const shape = parseShape(hints);
+    const erosion = parseErosion(hints);
+    if (erosion !== void 0) {
+      return this.erodedHeightAt(seed | 0, x2, z3, lod | 0, shape, erosion, requestHintKey(hints));
+    }
+    const e = shape === void 0 ? elevation01(seed | 0, x2, z3, lod | 0) : shapedElevation01(seed | 0, x2, z3, lod | 0, shape);
+    return e * HEIGHT_SCALE;
+  }
+  /** Per-coordinate climate for agent perception. Deterministic per (seed,x,z). */
+  sampleClimate(seed, x2, z3, hints) {
+    const shape = parseShape(hints);
+    const elev01 = shape === void 0 ? elevation01(seed | 0, x2, z3, 0) : shapedElevation01(seed | 0, x2, z3, 0, shape);
+    return this.climateAt(seed | 0, x2, z3, elev01, shape?.tempBias ?? 0, shape?.precipBias ?? 0);
+  }
+  /** Shared climate model so generateTile and sampleClimate agree exactly. The
+   *  tempBias/precipBias offsets (0 by default → byte-identical) carry the terrain
+   *  type's climate character into biomeOf. */
+  climateAt(seed, x2, z3, elev01, tempBias = 0, precipBias = 0) {
+    const warmth = fbm(seed ^ 522133279 | 0, x2, z3, 3, WARMTH_FREQ);
+    const wet = fbm(seed ^ 741092396 | 0, x2, z3, 3, PRECIP_FREQ);
+    const tempC = 4 + warmth * 30 - elev01 * 22 + tempBias;
+    const precipMm = Math.max(0, wet * 3e3 + precipBias);
+    return { tempC, precipMm, biome: biomeOf(tempC, precipMm) };
+  }
+};
+
+// src/materials/triplanar-noise.ts
+var T3 = three_tsl_exports;
+var DETAIL_RES = 256;
+var DETAIL_CELLS = 8;
+var DETAIL_OCTAVES = 5;
+var DETAIL_SEED = 2654435761 | 0;
+var SHARED_DETAIL = null;
+function smoothstep01(t) {
+  return t * t * (3 - 2 * t);
+}
+function lerp3(a, b2, t) {
+  return a + (b2 - a) * t;
+}
+function periodicValueNoise(seed, x2, z3, period) {
+  const ix = Math.floor(x2), iz = Math.floor(z3);
+  const fx = x2 - ix, fz = z3 - iz;
+  const wrap = (n) => (n % period + period) % period;
+  const x0 = wrap(ix), x1 = wrap(ix + 1), z0 = wrap(iz), z1 = wrap(iz + 1);
+  const v00 = hashLattice(seed, x0, z0), v10 = hashLattice(seed, x1, z0);
+  const v01 = hashLattice(seed, x0, z1), v11 = hashLattice(seed, x1, z1);
+  const ux = smoothstep01(fx), uz = smoothstep01(fz);
+  return lerp3(lerp3(v00, v10, ux), lerp3(v01, v11, ux), uz);
+}
+function periodicFbm(x2, z3, baseCells, octaves) {
+  let amp = 1, sum = 0, norm = 0, cells = baseCells;
+  for (let o = 0; o < octaves; o++) {
+    const s = DETAIL_SEED + Math.imul(o, 2246822507) | 0;
+    sum += amp * periodicValueNoise(s, x2 * cells, z3 * cells, cells);
+    norm += amp;
+    amp *= 0.5;
+    cells *= 2;
+  }
+  return sum / norm;
+}
+function bakeDetailNoise() {
+  const res = DETAIL_RES;
+  const h = new Float32Array(res * res);
+  for (let r = 0; r < res; r++) {
+    const z3 = r / res;
+    for (let c = 0; c < res; c++) {
+      h[r * res + c] = periodicFbm(c / res, z3, DETAIL_CELLS, DETAIL_OCTAVES);
+    }
+  }
+  const gx = new Float32Array(res * res);
+  const gy = new Float32Array(res * res);
+  let maxg = 1e-6;
+  for (let r = 0; r < res; r++) {
+    for (let c = 0; c < res; c++) {
+      const cL = (c - 1 + res) % res, cR = (c + 1) % res;
+      const rU = (r - 1 + res) % res, rD = (r + 1) % res;
+      const dx = (h[r * res + cR] - h[r * res + cL]) * 0.5;
+      const dy = (h[rD * res + c] - h[rU * res + c]) * 0.5;
+      gx[r * res + c] = dx;
+      gy[r * res + c] = dy;
+      const a = Math.abs(dx), b2 = Math.abs(dy);
+      if (a > maxg) maxg = a;
+      if (b2 > maxg) maxg = b2;
+    }
+  }
+  const inv = 1 / maxg;
+  const data = new Uint8Array(res * res * 4);
+  for (let i = 0; i < h.length; i++) {
+    const o = i * 4;
+    data[o] = Math.round(Math.min(1, Math.max(0, gx[i] * inv * 0.5 + 0.5)) * 255);
+    data[o + 1] = Math.round(Math.min(1, Math.max(0, gy[i] * inv * 0.5 + 0.5)) * 255);
+    data[o + 2] = Math.round(Math.min(1, Math.max(0, h[i])) * 255);
+    data[o + 3] = 255;
+  }
+  const tex = new DataTexture(data, res, res, RGBAFormat, UnsignedByteType);
+  tex.wrapS = RepeatWrapping;
+  tex.wrapT = RepeatWrapping;
+  tex.minFilter = LinearFilter;
+  tex.magFilter = LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+function sharedDetailTexture() {
+  if (SHARED_DETAIL === null) SHARED_DETAIL = bakeDetailNoise();
+  return SHARED_DETAIL;
+}
+function triplanarWeights(sharpness) {
+  const N3 = T3.normalWorld;
+  const aN = N3.abs();
+  let w4 = aN.pow(sharpness);
+  const wsum = w4.x.add(w4.y).add(w4.z).add(1e-5);
+  w4 = w4.div(wsum);
+  return { w: w4, sgn: T3.sign(N3) };
+}
+function triplanarLayer(tex, scale2, normalStrength, sharpness) {
+  const { w: w4, sgn } = triplanarWeights(sharpness);
+  const pw = T3.positionWorld.mul(scale2);
+  const sYZ = T3.texture(tex, T3.vec2(pw.z, pw.y));
+  const sXZ = T3.texture(tex, T3.vec2(pw.x, pw.z));
+  const sXY = T3.texture(tex, T3.vec2(pw.x, pw.y));
+  const value = sYZ.b.mul(w4.x).add(sXZ.b.mul(w4.y)).add(sXY.b.mul(w4.z));
+  const g2 = (s) => T3.vec2(s.r.mul(2).sub(1).mul(normalStrength), s.g.mul(2).sub(1).mul(normalStrength));
+  const gYZ = g2(sYZ), gXZ = g2(sXZ), gXY = g2(sXY);
+  const nYZ = T3.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
+  const nXZ = T3.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
+  const nXY = T3.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
+  const normal2 = nYZ.mul(w4.x).add(nXZ.mul(w4.y)).add(nXY.mul(w4.z)).normalize();
+  return { value, normal: normal2 };
+}
+function triplanarMapLayer(albedo, normal2, roughness3, scale2, normalStrength, sharpness) {
+  const { w: w4, sgn } = triplanarWeights(sharpness);
+  const pw = T3.positionWorld.mul(scale2);
+  const sample3 = (tex) => ({
+    yz: T3.texture(tex, T3.vec2(pw.z, pw.y)),
+    xz: T3.texture(tex, T3.vec2(pw.x, pw.z)),
+    xy: T3.texture(tex, T3.vec2(pw.x, pw.y))
+  });
+  let color3;
+  if (albedo !== null) {
+    const s = sample3(albedo);
+    color3 = s.yz.rgb.mul(w4.x).add(s.xz.rgb.mul(w4.y)).add(s.xy.rgb.mul(w4.z));
+  }
+  let rough;
+  if (roughness3 !== null) {
+    const s = sample3(roughness3);
+    rough = s.yz.r.mul(w4.x).add(s.xz.r.mul(w4.y)).add(s.xy.r.mul(w4.z));
+  }
+  let nrm;
+  if (normal2 !== null) {
+    const s = sample3(normal2);
+    const g2 = (t) => T3.vec2(t.r.mul(2).sub(1).mul(normalStrength), t.g.mul(2).sub(1).mul(normalStrength));
+    const gYZ = g2(s.yz), gXZ = g2(s.xz), gXY = g2(s.xy);
+    const nYZ = T3.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
+    const nXZ = T3.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
+    const nXY = T3.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
+    nrm = nYZ.mul(w4.x).add(nXZ.mul(w4.y)).add(nXY.mul(w4.z)).normalize();
+  }
+  return { color: color3, normal: nrm, roughness: rough };
+}
+
+// src/materials/procedural-pbr.ts
+var T4 = three_tsl_exports;
+var DEFAULT_KNOBS = { scale: 0.35, normal: 0.6, mottle: 0.22, roughVar: 0.12, sharpness: 4 };
+var PROCEDURAL_PBR_KNOBS = {
+  sand: { scale: 0.55, normal: 0.7, mottle: 0.2, roughVar: 0.06 },
+  stone: { scale: 0.2, normal: 0.85, mottle: 0.18, roughVar: 0.14 },
+  rock: { scale: 0.14, normal: 1, mottle: 0.26, roughVar: 0.16 },
+  wood: { scale: 0.32, normal: 0.6, mottle: 0.3, roughVar: 0.14 },
+  plank: { scale: 0.28, normal: 0.45, mottle: 0.22, roughVar: 0.1 },
+  foliage: { scale: 0.45, normal: 0.55, mottle: 0.3, roughVar: 0.12 },
+  leaf: { scale: 0.5, normal: 0.5, mottle: 0.28, roughVar: 0.1 },
+  grass: { scale: 0.45, normal: 0.55, mottle: 0.28, roughVar: 0.12 },
+  metal: { scale: 0.25, normal: 0.25, mottle: 0.08, roughVar: 0.06 },
+  water: { scale: 0.3, normal: 0.35, mottle: 0.08, roughVar: 0.05 }
+};
+function proceduralKnobs(name, override) {
+  return { ...DEFAULT_KNOBS, ...PROCEDURAL_PBR_KNOBS[name] ?? {}, ...override ?? {} };
+}
+function applyProceduralPbr(material, base, name, override) {
+  const k2 = proceduralKnobs(name, override);
+  const tex = sharedDetailTexture();
+  const layer = triplanarLayer(tex, k2.scale, k2.normal, k2.sharpness);
+  const c = new Color(base.color);
+  const baseV = T4.vec3(c.r, c.g, c.b);
+  const mod3 = layer.value.sub(0.5).mul(k2.mottle).add(1);
+  material.colorNode = baseV.mul(mod3);
+  material.normalNode = T4.transformNormalToView(layer.normal.normalize());
+  const rough = T4.float(base.roughness).add(layer.value.sub(0.5).mul(k2.roughVar));
+  material.roughnessNode = T4.clamp(rough, 0, 1);
+}
+
 // src/materials/palette.ts
 var MATERIALS = {
   // Granular ground — warm, pale, fully matte.
@@ -83410,6 +84156,18 @@ function getMaterialParams(name) {
   const preset = MATERIALS[name];
   return { color: preset.color, roughness: preset.roughness, metalness: preset.metalness };
 }
+function createMaterial(name, opts) {
+  const params = getMaterialParams(name);
+  const material = new MeshStandardNodeMaterial({
+    color: params.color,
+    roughness: params.roughness,
+    metalness: params.metalness
+  });
+  if (opts?.pbr) {
+    applyProceduralPbr(material, { color: params.color, roughness: params.roughness }, name, opts.pbrKnobs);
+  }
+  return material;
+}
 
 // src/skills/scene.ts
 var Vec3 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
@@ -83417,10 +84175,15 @@ var createEntityInput = external_exports.object({
   shape: external_exports.enum(["box", "sphere"]).default("box"),
   collider: external_exports.enum(["box", "sphere", "capsule"]).optional(),
   size: external_exports.number().positive().max(50).default(1),
-  // Pick a material by intent ("sand", "wood", ...) from the named palette. When
-  // set it supplies color/roughness/metalness; the numeric `color` below is the
-  // back-compat path used when no palette name is given.
+  // Pick a material by intent ("sand", "wood", ...) from the named palette, OR an
+  // imported texture-pack material name (material.import). When set it supplies the
+  // surface; the numeric `color` below is the back-compat path used when no name is given.
   material: external_exports.string().optional(),
+  // Opt-in: upgrade a PALETTE material to a procedural-PBR surface (triplanar noise
+  // albedo + a real detail normal + honest roughness, matching the terrain). Default
+  // false → flat preset, byte-identical to before. Ignored for imported materials
+  // (already PBR) and for the numeric color path.
+  pbr: external_exports.boolean().default(false),
   color: external_exports.number().int().min(0).max(16777215).default(16777215),
   position: Vec3.default([0, 0, 0]),
   dynamic: external_exports.boolean().default(false),
@@ -83428,64 +84191,75 @@ var createEntityInput = external_exports.object({
   friction: external_exports.number().min(0).max(10).default(0.5),
   restitution: external_exports.number().min(0).max(2).default(0)
 });
-var createEntity = {
-  name: "scene.createEntity",
-  version: "1.0.0",
-  description: "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. Returns its entity id.",
-  category: "scene",
-  permissions: ["scene.write"],
-  input: createEntityInput,
-  output: external_exports.object({ entity: external_exports.string() }),
-  handler: (input, ctx) => {
-    const [x2, y2, z3] = input.position;
-    const geometry = input.shape === "sphere" ? new SphereGeometry(input.size / 2, 24, 16) : new BoxGeometry(input.size, input.size, input.size);
-    const surface = input.material !== void 0 ? getMaterialParams(input.material) : { color: input.color, roughness: 0.6, metalness: 0.1 };
-    const material = new MeshStandardNodeMaterial({
-      color: surface.color,
-      roughness: surface.roughness,
-      metalness: surface.metalness
-    });
-    const mesh = new Mesh(geometry, material);
-    ctx.world.scene.add(mesh);
-    const eid = spawnRenderable(ctx.world.ecs, mesh, x2, y2, z3);
-    if (eid >= MAX_ENTITIES) {
-      despawnRenderable(ctx.world.ecs, eid);
-      ctx.world.scene.remove(mesh);
-      throw new Error("entity capacity exceeded (MAX_ENTITIES)");
-    }
-    let bodyId;
-    const collider = input.collider ?? (input.dynamic || input.static ? "box" : void 0);
-    if (input.static) {
-      if (collider === "sphere") {
-        bodyId = ctx.world.ops.op_physics_add_static_sphere(x2, y2, z3, input.size / 2, input.friction, input.restitution);
-      } else if (collider === "capsule") {
-        bodyId = ctx.world.ops.op_physics_add_static_capsule(x2, y2, z3, input.size / 2, input.size / 4, input.friction, input.restitution);
+function makeCreateEntity(materials) {
+  return {
+    name: "scene.createEntity",
+    version: "1.0.0",
+    description: "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
+    category: "scene",
+    permissions: ["scene.write"],
+    input: createEntityInput,
+    output: external_exports.object({ entity: external_exports.string() }),
+    handler: (input, ctx) => {
+      const [x2, y2, z3] = input.position;
+      const geometry = input.shape === "sphere" ? new SphereGeometry(input.size / 2, 24, 16) : new BoxGeometry(input.size, input.size, input.size);
+      let material;
+      if (input.material !== void 0) {
+        if (isMaterialName(input.material)) {
+          material = createMaterial(input.material, { pbr: input.pbr });
+        } else if (materials?.has(input.material)) {
+          material = materials.build(input.material);
+        } else {
+          const imported = materials?.names() ?? [];
+          throw new Error(
+            `unknown material "${input.material}"; known palette: ${MATERIAL_NAMES.join(", ")}` + (imported.length > 0 ? `; imported: ${imported.join(", ")}` : "")
+          );
+        }
       } else {
-        bodyId = ctx.world.ops.op_physics_add_static_box(
-          x2,
-          y2,
-          z3,
-          input.size / 2,
-          input.size / 2,
-          input.size / 2,
-          input.friction,
-          input.restitution
-        );
+        material = new MeshStandardNodeMaterial({ color: input.color, roughness: 0.6, metalness: 0.1 });
       }
-    } else if (input.dynamic) {
-      if (collider === "sphere") {
-        bodyId = ctx.world.ops.op_physics_add_sphere(x2, y2, z3, input.size / 2, input.friction, input.restitution);
-      } else if (collider === "capsule") {
-        bodyId = ctx.world.ops.op_physics_add_capsule(x2, y2, z3, input.size / 2, input.size / 4, input.friction, input.restitution);
-      } else {
-        bodyId = ctx.world.ops.op_physics_add_box_material(x2, y2, z3, input.size / 2, input.friction, input.restitution);
+      const mesh = new Mesh(geometry, material);
+      ctx.world.scene.add(mesh);
+      const eid = spawnRenderable(ctx.world.ecs, mesh, x2, y2, z3);
+      if (eid >= MAX_ENTITIES) {
+        despawnRenderable(ctx.world.ecs, eid);
+        ctx.world.scene.remove(mesh);
+        throw new Error("entity capacity exceeded (MAX_ENTITIES)");
       }
+      let bodyId;
+      const collider = input.collider ?? (input.dynamic || input.static ? "box" : void 0);
+      if (input.static) {
+        if (collider === "sphere") {
+          bodyId = ctx.world.ops.op_physics_add_static_sphere(x2, y2, z3, input.size / 2, input.friction, input.restitution);
+        } else if (collider === "capsule") {
+          bodyId = ctx.world.ops.op_physics_add_static_capsule(x2, y2, z3, input.size / 2, input.size / 4, input.friction, input.restitution);
+        } else {
+          bodyId = ctx.world.ops.op_physics_add_static_box(
+            x2,
+            y2,
+            z3,
+            input.size / 2,
+            input.size / 2,
+            input.size / 2,
+            input.friction,
+            input.restitution
+          );
+        }
+      } else if (input.dynamic) {
+        if (collider === "sphere") {
+          bodyId = ctx.world.ops.op_physics_add_sphere(x2, y2, z3, input.size / 2, input.friction, input.restitution);
+        } else if (collider === "capsule") {
+          bodyId = ctx.world.ops.op_physics_add_capsule(x2, y2, z3, input.size / 2, input.size / 4, input.friction, input.restitution);
+        } else {
+          bodyId = ctx.world.ops.op_physics_add_box_material(x2, y2, z3, input.size / 2, input.friction, input.restitution);
+        }
+      }
+      const entity = ctx.world.entities.create({ eid, mesh, bodyId });
+      ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
+      return { entity };
     }
-    const entity = ctx.world.entities.create({ eid, mesh, bodyId });
-    ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
-    return { entity };
-  }
-};
+  };
+}
 var destroyEntityInput = external_exports.object({ entity: external_exports.string() });
 var destroyEntity = {
   name: "scene.destroyEntity",
@@ -83538,8 +84312,8 @@ var queryEntities = {
     return { entities };
   }
 };
-function registerSceneSkills(registry2) {
-  registry2.register(createEntity);
+function registerSceneSkills(registry2, materials) {
+  registry2.register(makeCreateEntity(materials));
   registry2.register(destroyEntity);
   registry2.register(queryEntities);
 }
@@ -83680,55 +84454,75 @@ var setTransform = {
 };
 var setMaterialInput = external_exports.object({
   entity: external_exports.string(),
-  // Pick a material by intent ("sand", "wood", ...) from the named palette. It
-  // supplies color/roughness/metalness; explicit numeric fields below still win,
-  // so you can start from a preset and tweak a single value.
+  // Pick a material by intent ("sand", "wood", ...) from the named palette, OR an
+  // imported texture-pack material name (material.import). A palette name supplies
+  // color/roughness/metalness; explicit numeric fields below still win, so you can
+  // start from a preset and tweak a single value.
   material: external_exports.string().optional(),
+  // Opt-in: when the `material` is a PALETTE name, REPLACE the entity's material with a
+  // procedural-PBR surface (triplanar noise albedo + detail normal + honest roughness).
+  // Imported materials are always PBR (this flag is ignored for them). Default false →
+  // the legacy in-place preset/numeric update, byte-identical to before.
+  pbr: external_exports.boolean().default(false),
   color: external_exports.number().int().min(0).max(16777215).optional(),
   roughness: external_exports.number().min(0).max(1).optional(),
   metalness: external_exports.number().min(0).max(1).optional(),
   castShadow: external_exports.boolean().optional(),
   receiveShadow: external_exports.boolean().optional()
 });
-var setMaterial = {
-  name: "three.setMaterial",
-  version: "1.0.0",
-  description: "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow). Applies across all meshes of a glTF entity.",
-  category: "three",
-  permissions: ["scene.write"],
-  input: setMaterialInput,
-  output: external_exports.object({ ok: external_exports.boolean() }),
-  handler: (input, ctx) => {
-    const root = ctx.world.entities.resolve(input.entity)?.mesh;
-    if (root === void 0) return { ok: false };
-    const preset = input.material !== void 0 ? getMaterialParams(input.material) : void 0;
-    const color3 = input.color ?? preset?.color;
-    const roughness3 = input.roughness ?? preset?.roughness;
-    const metalness3 = input.metalness ?? preset?.metalness;
-    const hasMaterialChange = color3 !== void 0 || roughness3 !== void 0 || metalness3 !== void 0;
-    const applyMaterialProps = (material) => {
-      if (color3 !== void 0) material.color.set(color3);
-      if (roughness3 !== void 0) material.roughness = roughness3;
-      if (metalness3 !== void 0) material.metalness = metalness3;
-    };
-    const visit = (object2) => {
-      if (input.castShadow !== void 0) object2.castShadow = input.castShadow;
-      if (input.receiveShadow !== void 0) object2.receiveShadow = input.receiveShadow;
-      if (hasMaterialChange && object2.material !== void 0) {
-        const material = object2.material;
-        if (Array.isArray(material)) {
-          for (const sub3 of material) applyMaterialProps(sub3);
-        } else {
-          applyMaterialProps(material);
-        }
+function makeSetMaterial(materials) {
+  return {
+    name: "three.setMaterial",
+    version: "1.0.0",
+    description: "Update an entity's PBR material (color, roughness, metalness) and/or shadow participation (castShadow/receiveShadow), across all meshes of a glTF entity. `material` accepts a palette name (optionally procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import); a PBR/imported material REPLACES the mesh material.",
+    category: "three",
+    permissions: ["scene.write"],
+    input: setMaterialInput,
+    output: external_exports.object({ ok: external_exports.boolean() }),
+    handler: (input, ctx) => {
+      const root = ctx.world.entities.resolve(input.entity)?.mesh;
+      if (root === void 0) return { ok: false };
+      let buildReplacement;
+      if (input.material !== void 0 && materials?.has(input.material)) {
+        buildReplacement = () => materials.build(input.material);
+      } else if (input.material !== void 0 && input.pbr && isMaterialName(input.material)) {
+        buildReplacement = () => createMaterial(input.material, { pbr: true });
       }
-    };
-    if (typeof root.traverse === "function") root.traverse(visit);
-    else visit(root);
-    ctx.emit("three.material.updated", { entity: input.entity });
-    return { ok: true };
-  }
-};
+      const preset = buildReplacement === void 0 && input.material !== void 0 ? getMaterialParams(input.material) : void 0;
+      const color3 = input.color ?? preset?.color;
+      const roughness3 = input.roughness ?? preset?.roughness;
+      const metalness3 = input.metalness ?? preset?.metalness;
+      const hasMaterialChange = color3 !== void 0 || roughness3 !== void 0 || metalness3 !== void 0;
+      const applyMaterialProps = (material) => {
+        if (color3 !== void 0) material.color.set(color3);
+        if (roughness3 !== void 0) material.roughness = roughness3;
+        if (metalness3 !== void 0) material.metalness = metalness3;
+      };
+      const visit = (object2) => {
+        if (input.castShadow !== void 0) object2.castShadow = input.castShadow;
+        if (input.receiveShadow !== void 0) object2.receiveShadow = input.receiveShadow;
+        if (buildReplacement !== void 0 && object2.isMesh === true) {
+          const next = buildReplacement();
+          if (color3 !== void 0) next.color.set(color3);
+          if (roughness3 !== void 0) next.roughness = roughness3;
+          if (metalness3 !== void 0) next.metalness = metalness3;
+          object2.material = next;
+        } else if (hasMaterialChange && object2.material !== void 0) {
+          const material = object2.material;
+          if (Array.isArray(material)) {
+            for (const sub3 of material) applyMaterialProps(sub3);
+          } else {
+            applyMaterialProps(material);
+          }
+        }
+      };
+      if (typeof root.traverse === "function") root.traverse(visit);
+      else visit(root);
+      ctx.emit("three.material.updated", { entity: input.entity });
+      return { ok: true };
+    }
+  };
+}
 var sceneLights = /* @__PURE__ */ new Map();
 var setLightingInput = external_exports.object({
   ambientColor: external_exports.number().int().min(0).max(16777215).default(4210784),
@@ -83821,6 +84615,22 @@ function rehomeTextureToData(tex) {
   upload.isDataTexture = true;
   upload.needsUpdate = true;
   return true;
+}
+async function decodeImageToDataTexture(bytes, srgb) {
+  if (typeof createImageBitmap !== "function" || typeof __liminaImageBitmapToRGBA !== "function") return null;
+  const copy = bytes.slice();
+  const bitmap = await createImageBitmap(new Blob([copy]));
+  const rgba = __liminaImageBitmapToRGBA(bitmap);
+  if (rgba === null) return null;
+  const tex = new DataTexture(rgba.data, rgba.width, rgba.height, RGBAFormat, UnsignedByteType);
+  tex.wrapS = RepeatWrapping;
+  tex.wrapT = RepeatWrapping;
+  tex.minFilter = LinearMipmapLinearFilter;
+  tex.magFilter = LinearFilter;
+  tex.generateMipmaps = true;
+  if (srgb && SRGBColorSpace !== void 0) tex.colorSpace = SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 function rehomeMaterialTextures(material) {
   if (Array.isArray(material)) {
@@ -83942,18 +84752,12 @@ function makeLoadGltf(assets) {
     }
   };
 }
-function registerThreeSkills(registry2, assets) {
+function registerThreeSkills(registry2, assets, materials) {
   registry2.register(setTransform);
-  registry2.register(setMaterial);
+  registry2.register(makeSetMaterial(materials));
   registry2.register(setLighting);
   registry2.register(makeLoadGltf(assets));
 }
-
-// src/terrain/types.ts
-var CLIMATE_TEMP_C = 0;
-var CLIMATE_PRECIP_MM = 1;
-var CLIMATE_BIOME = 2;
-var CLIMATE_CHANNELS = 3;
 
 // src/terrain/scatter.ts
 function hashSeed(seed, a, b2) {
@@ -84038,6 +84842,20 @@ function scatterProps(tile, seed, opts = {}) {
 function baseSeed(seed, configSeed) {
   return (Math.imul((seed | 0) ^ 2654435761, 2246822519) ^ (configSeed | 0)) >>> 0;
 }
+function clusterNoise(seed, x2, z3) {
+  const ix = Math.floor(x2);
+  const iz = Math.floor(z3);
+  const fx = x2 - ix;
+  const fz = z3 - iz;
+  const corner = (cx, cz) => hashSeed(seed, cx, cz) / 4294967296;
+  const v00 = corner(ix, iz), v10 = corner(ix + 1, iz);
+  const v01 = corner(ix, iz + 1), v11 = corner(ix + 1, iz + 1);
+  const ux = fx * fx * (3 - 2 * fx);
+  const uz = fz * fz * (3 - 2 * fz);
+  const top = v00 + (v10 - v00) * ux;
+  const bot = v01 + (v11 - v01) * ux;
+  return top + (bot - top) * uz;
+}
 function scatterAssets(tile, seed, config2) {
   const palette = config2.assets;
   if (palette.length === 0) return [];
@@ -84049,6 +84867,9 @@ function scatterAssets(tile, seed, config2) {
   const elevationMax = config2.elevationMax ?? Infinity;
   const slopeMax = config2.slopeMax ?? Infinity;
   const coverage = config2.coverage ?? 1;
+  const cluster = config2.cluster ?? 0;
+  const clusterFreq = config2.clusterFreq ?? 1 / 26;
+  const clusterSeed = baseSeed(seed, config2.seed) ^ 2135587861 | 0;
   const [sizeLo, sizeHi] = config2.sizeRange ?? [0.8, 1.2];
   const wantClimate = config2.biomes !== void 0 || config2.tempMin !== void 0 || config2.tempMax !== void 0;
   const [ox, oy, oz] = tile.origin;
@@ -84103,7 +84924,13 @@ function scatterAssets(tile, seed, config2) {
         acc -= weights[k2];
       }
       const scale2 = sizeLo + sizeT * (sizeHi - sizeLo);
-      if (coverRoll > coverage) continue;
+      let effCoverage = coverage;
+      if (cluster > 0) {
+        const cm = clusterNoise(clusterSeed, x2 * clusterFreq, z3 * clusterFreq);
+        const hot = cm * cm * (3 - 2 * cm);
+        effCoverage = coverage * (1 - cluster + cluster * hot * 2);
+      }
+      if (coverRoll > effCoverage) continue;
       if (y2 < elevationMin || y2 > elevationMax) continue;
       if (slope > slopeMax) continue;
       if (wantClimate) {
@@ -84306,6 +85133,8 @@ var scatterConfigSchema = external_exports.object({
   slopeMax: external_exports.number().nonnegative().optional(),
   sizeRange: external_exports.tuple([external_exports.number().positive(), external_exports.number().positive()]).optional(),
   coverage: external_exports.number().min(0).max(1).optional(),
+  cluster: external_exports.number().min(0).max(1).optional(),
+  clusterFreq: external_exports.number().positive().optional(),
   biomes: external_exports.array(external_exports.number().int()).optional(),
   tempMin: external_exports.number().optional(),
   tempMax: external_exports.number().optional()
@@ -84453,6 +85282,90 @@ function registerAssetSkills(registry2, assets, terrain) {
   registry2.register(scatter);
 }
 
+// src/skills/material.ts
+var importInput = external_exports.object({
+  /** The name to register the material under (used by createEntity/setMaterial). */
+  name: external_exports.string().min(1),
+  /** Asset id of the base-colour (albedo) image — required. */
+  albedo: external_exports.string().min(1),
+  /** Asset id of the tangent-space normal map (optional). */
+  normal: external_exports.string().optional(),
+  /** Asset id of the roughness map (optional; its R channel is read). */
+  roughness: external_exports.string().optional(),
+  /** TRIPLANAR projection (no UV stretch on arbitrary primitives). Default false → classic
+   *  UV-mapped slots (needs geometry UVs), the proven glTF texture path. */
+  triplanar: external_exports.boolean().default(false),
+  /** Triplanar world tiling (cycles/m) — only used when `triplanar`. */
+  scale: external_exports.number().positive().default(0.5),
+  /** Triplanar normal-map intensity — only used when `triplanar`. */
+  normalStrength: external_exports.number().min(0).default(1),
+  /** Triplanar blend sharpness — only used when `triplanar`. */
+  sharpness: external_exports.number().positive().default(4),
+  /** Metalness of the built material (CC0 packs are usually dielectric). */
+  metalness: external_exports.number().min(0).max(1).default(0),
+  /** Fallback roughness when no roughness map is supplied. */
+  baseRoughness: external_exports.number().min(0).max(1).default(0.85),
+  /** Optional albedo tint (sRGB hex) multiplied over the map. */
+  color: external_exports.number().int().min(0).max(16777215).optional(),
+  /** The COMMITTED content addresses of the pack images (id → "sha256:..."). Absent at
+   *  authoring (resolved + returned, then committed back by the recorder); present on REPLAY,
+   *  where each resolved image is verified against it so a swapped texture is rejected. */
+  hashes: external_exports.record(external_exports.string(), external_exports.string()).optional()
+});
+var importOutput = external_exports.object({
+  name: external_exports.string(),
+  /** The image ids that make up the pack (albedo first). */
+  maps: external_exports.array(external_exports.string()),
+  /** id → resolved content hash (pinned authored identity). */
+  hashes: external_exports.record(external_exports.string(), external_exports.string())
+});
+function registerMaterialSkills(registry2, assets, materials) {
+  const importSkill = {
+    name: "material.import",
+    version: "1.0.0",
+    description: "Import a CC0 texture pack (albedo + optional normal + roughness images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
+    category: "three",
+    permissions: ["scene.write"],
+    // The recorder copies the resolved per-image hashes back into the recorded command's input
+    // so the replay log PINS authored identity for every pack image (mirrors asset.scatter).
+    commitFields: ["hashes"],
+    input: importInput,
+    output: importOutput,
+    handler: async (input, ctx) => {
+      const slots = [
+        { id: input.albedo, srgb: true, key: "albedo" }
+      ];
+      if (input.normal !== void 0) slots.push({ id: input.normal, srgb: false, key: "normal" });
+      if (input.roughness !== void 0) slots.push({ id: input.roughness, srgb: false, key: "roughness" });
+      const textures = { albedo: null, normal: null, roughness: null };
+      const hashes = {};
+      const maps = [];
+      for (const slot of slots) {
+        const resolved = assets.resolve(slot.id);
+        const committed = input.hashes?.[slot.id];
+        if (committed !== void 0 && committed !== resolved.hash) {
+          throw new Error(`material.import: '${slot.id}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) \u2014 authored texture identity changed`);
+        }
+        hashes[slot.id] = resolved.hash;
+        maps.push(slot.id);
+        textures[slot.key] = await decodeImageToDataTexture(resolved.bytes, slot.srgb);
+      }
+      materials.define(input.name, {
+        triplanar: input.triplanar,
+        scale: input.scale,
+        normalStrength: input.normalStrength,
+        sharpness: input.sharpness,
+        metalness: input.metalness,
+        roughness: input.baseRoughness,
+        color: input.color
+      }, textures, hashes);
+      ctx.emit("material.imported", { name: input.name, maps, hashes, triplanar: input.triplanar });
+      return { name: input.name, maps, hashes };
+    }
+  };
+  registry2.register(importSkill);
+}
+
 // src/asset-registry.ts
 var HEX = (() => {
   const t = new Array(256);
@@ -84541,6 +85454,67 @@ var AssetRegistry = class _AssetRegistry {
   }
   get size() {
     return this.cache.size;
+  }
+};
+
+// src/materials/material-registry.ts
+var T5 = three_tsl_exports;
+var MaterialRegistry = class {
+  map = /* @__PURE__ */ new Map();
+  /** True when `name` is a registered imported material. */
+  has(name) {
+    return this.map.has(name);
+  }
+  /** The registered imported-material names (stable order of definition). */
+  names() {
+    return [...this.map.keys()];
+  }
+  /** The content hashes of an imported material's source images (id → "sha256:..."). */
+  hashesOf(name) {
+    const e = this.map.get(name);
+    if (e === void 0) throw new Error(`unknown imported material "${name}"`);
+    return { ...e.hashes };
+  }
+  /**
+   * Register (or replace) an imported material recipe from already-DECODED textures. Builds the
+   * per-material builder once (closing over the textures + spec); `build(name)` returns a fresh
+   * MeshStandardNodeMaterial each call so per-entity tweaks never alias.
+   */
+  define(name, spec, textures, hashes) {
+    const build = () => {
+      const material = new MeshStandardNodeMaterial({
+        roughness: spec.roughness,
+        metalness: spec.metalness,
+        ...spec.color !== void 0 ? { color: spec.color } : {}
+      });
+      if (spec.triplanar) {
+        const layer = triplanarMapLayer(
+          textures.albedo,
+          textures.normal,
+          textures.roughness,
+          spec.scale,
+          spec.normalStrength,
+          spec.sharpness
+        );
+        if (layer.color !== void 0) {
+          material.colorNode = spec.color !== void 0 ? layer.color.mul(new Color(spec.color)) : layer.color;
+        }
+        if (layer.normal !== void 0) material.normalNode = T5.transformNormalToView(layer.normal.normalize());
+        if (layer.roughness !== void 0) material.roughnessNode = T5.clamp(layer.roughness, 0, 1);
+      } else {
+        if (textures.albedo !== null) material.map = textures.albedo;
+        if (textures.normal !== null) material.normalMap = textures.normal;
+        if (textures.roughness !== null) material.roughnessMap = textures.roughness;
+      }
+      return material;
+    };
+    this.map.set(name, { spec, textures, hashes: { ...hashes }, build });
+  }
+  /** Build a fresh material instance for a registered imported name (throws if unknown). */
+  build(name) {
+    const e = this.map.get(name);
+    if (e === void 0) throw new Error(`unknown imported material "${name}"`);
+    return e.build();
   }
 };
 
@@ -86593,7 +87567,7 @@ function toRGBA(color3, alpha = 255) {
   }
   return { r: color3.r, g: color3.g, b: color3.b, a: color3.a };
 }
-function clamp01(v2) {
+function clamp012(v2) {
   return v2 < 0 ? 0 : v2 > 1 ? 1 : v2;
 }
 function toInsets(padding) {
@@ -86654,7 +87628,7 @@ function roundRectCoverage(px, py, x0, y0, x1, y1, rTL, rTR, rBR, rBL) {
   const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
   const inside = Math.min(Math.max(qx, qy), 0);
   const sdf = outside + inside - r;
-  return clamp01(0.5 - sdf);
+  return clamp012(0.5 - sdf);
 }
 function fillRoundedRect(buf, w4, h, x0, y0, x1, y1, r, c, topOnly = false) {
   if (r <= 0) {
@@ -86709,7 +87683,7 @@ function fillGradient(buf, w4, h, x0, y0, x1, y1, r, from, to, dir) {
     for (let x2 = lx; x2 < rx; x2++) {
       const cov = r > 0 ? roundRectCoverage(x2 + 0.5, y2 + 0.5, x0, y0, x1, y1, r, r, r, r) : 1;
       if (cov <= 0) continue;
-      const t = span <= 0 ? 0 : clamp01((dir === "horizontal" ? x2 + 0.5 - x0 : y2 + 0.5 - y0) / span);
+      const t = span <= 0 ? 0 : clamp012((dir === "horizontal" ? x2 + 0.5 - x0 : y2 + 0.5 - y0) / span);
       const cr = Math.round(from.r + (to.r - from.r) * t);
       const cg = Math.round(from.g + (to.g - from.g) * t);
       const cb = Math.round(from.b + (to.b - from.b) * t);
@@ -86725,7 +87699,7 @@ function fillCircle(buf, w4, h, cx, cy, rad, c) {
   const ry = Math.min(h, Math.ceil(cy + rad + 1));
   for (let y2 = ly; y2 < ry; y2++) {
     for (let x2 = lx; x2 < rx; x2++) {
-      const cov = clamp01(rad + 0.5 - Math.hypot(x2 + 0.5 - cx, y2 + 0.5 - cy));
+      const cov = clamp012(rad + 0.5 - Math.hypot(x2 + 0.5 - cx, y2 + 0.5 - cy));
       if (cov <= 0) continue;
       blendPixel(buf, (y2 * w4 + x2) * 4, c.r, c.g, c.b, Math.round(c.a * cov));
     }
@@ -86764,9 +87738,9 @@ function drawLine(buf, w4, h, x0, y0, x1, y1, t, c) {
     for (let x2 = minx; x2 < maxx; x2++) {
       const px = x2 + 0.5 - x0;
       const py = y2 + 0.5 - y0;
-      const proj = clamp01((px * dx + py * dy) / len2);
+      const proj = clamp012((px * dx + py * dy) / len2);
       const dist = Math.hypot(px - proj * dx, py - proj * dy);
-      const cov = clamp01(half + 0.5 - dist);
+      const cov = clamp012(half + 0.5 - dist);
       if (cov <= 0) continue;
       blendPixel(buf, (y2 * w4 + x2) * 4, c.r, c.g, c.b, Math.round(c.a * cov));
     }
@@ -86954,7 +87928,7 @@ function puffGeom(p) {
   return { radii, dist, extent: dist[count - 1] + radii[count - 1] };
 }
 function edgeAnchor(side, offset, boxW, boxH) {
-  const t = clamp01(offset);
+  const t = clamp012(offset);
   if (side === "top") return { x: t * boxW, y: 0 };
   if (side === "bottom") return { x: t * boxW, y: boxH };
   if (side === "left") return { x: 0, y: t * boxH };
@@ -87125,7 +88099,7 @@ function drawShadow(buf, w4, h, x0, y0, x1, y1, radius, sh) {
       const qx = Math.abs(px - ccx) - (hw - rr);
       const qy = Math.abs(py - ccy) - (hh - rr);
       const sdf = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - rr;
-      const cov = blur3 <= 0 ? sdf < 0.5 ? 1 : 0 : clamp01(1 - sdf / blur3);
+      const cov = blur3 <= 0 ? sdf < 0.5 ? 1 : 0 : clamp012(1 - sdf / blur3);
       if (cov <= 0) continue;
       blendPixel(buf, (y2 * w4 + x2) * 4, base.r, base.g, base.b, Math.round(base.a * op * cov));
     }
@@ -87134,7 +88108,7 @@ function drawShadow(buf, w4, h, x0, y0, x1, y1, radius, sh) {
 function drawTail(buf, w4, h, bx0, by0, bx1, by1, t, fill, bw, borderColor) {
   const len = t.length ?? 16;
   const base = t.base ?? 18;
-  const off = clamp01(t.offset ?? 0.5);
+  const off = clamp012(t.offset ?? 0.5);
   const c = t.color !== void 0 ? toRGBA(t.color) : fill;
   const col = { r: c.r, g: c.g, b: c.b, a: Math.round(c.a * (t.opacity ?? 1)) };
   let ax1, ay1, ax2, ay2, apx, apy;
@@ -88684,124 +89658,113 @@ function registerAudioSkills(registry2, audio) {
   registry2.register(setBusVolume);
 }
 
-// src/terrain/procedural.ts
-var TILE_SIZE = 48;
-var TILE_RES = 33;
-var HEIGHT_SCALE = 12;
-function tilePlacement(tx, tz) {
-  return {
-    origin: [tx * TILE_SIZE + TILE_SIZE / 2, 0, tz * TILE_SIZE + TILE_SIZE / 2],
-    scale: [TILE_SIZE, HEIGHT_SCALE, TILE_SIZE]
-  };
-}
-function hashLattice(seed, ix, iz) {
-  let h = seed | 0;
-  h = Math.imul(h ^ (ix | 0), 668265261);
-  h ^= h >>> 15;
-  h = Math.imul(h ^ (iz | 0), 2246822507);
-  h ^= h >>> 13;
-  h = Math.imul(h, 3266489909);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-function smoothstep4(t) {
-  return t * t * (3 - 2 * t);
-}
-function lerp2(a, b2, t) {
-  return a + (b2 - a) * t;
-}
-function valueNoise(seed, x2, z3) {
-  const ix = Math.floor(x2);
-  const iz = Math.floor(z3);
-  const fx = x2 - ix;
-  const fz = z3 - iz;
-  const v00 = hashLattice(seed, ix, iz);
-  const v10 = hashLattice(seed, ix + 1, iz);
-  const v01 = hashLattice(seed, ix, iz + 1);
-  const v11 = hashLattice(seed, ix + 1, iz + 1);
-  const ux = smoothstep4(fx);
-  const uz = smoothstep4(fz);
-  return lerp2(lerp2(v00, v10, ux), lerp2(v01, v11, ux), uz);
-}
-function fbm(seed, x2, z3, octaves, freq) {
-  let amp = 1;
-  let sum = 0;
-  let norm = 0;
-  let f = freq;
-  for (let o = 0; o < octaves; o++) {
-    sum += amp * valueNoise(seed + Math.imul(o, 2654435761) | 0, x2 * f, z3 * f);
-    norm += amp;
-    amp *= 0.5;
-    f *= 2;
-  }
-  return sum / norm;
-}
-var ELEV_BASE_FREQ = 1 / 96;
-var WARMTH_FREQ = 1 / 320;
-var PRECIP_FREQ = 1 / 220;
-function elevation01(seed, x2, z3, lod) {
-  const octaves = 3 + Math.max(0, Math.min(4, lod | 0));
-  return fbm(seed | 0, x2, z3, octaves, ELEV_BASE_FREQ);
-}
-function biomeOf(tempC, precipMm) {
-  if (tempC < 0) return 0;
-  if (precipMm < 250) return tempC > 22 ? 1 : 2;
-  if (precipMm < 1200) return tempC > 18 ? 3 : 4;
-  return tempC > 20 ? 5 : 6;
-}
-var ProceduralTerrainSource = class {
-  name;
-  constructor(name = "procedural") {
-    this.name = name;
-  }
-  /** Generate one tile — a byte-identical function of the request. Heights are
-   *  the raw [0,1] elevation field (the collider multiplies by scale[1]); a
-   *  3-channel climate grid (tempC, precipMm, biome) rides along for perception. */
-  generateTile(req) {
-    const seed = req.seed | 0;
-    const lod = req.lod | 0;
-    const { origin, scale: scale2 } = tilePlacement(req.tx, req.tz);
-    const nrows = TILE_RES;
-    const ncols = TILE_RES;
-    const x0 = req.tx * TILE_SIZE;
-    const z0 = req.tz * TILE_SIZE;
-    const heights = new Float32Array(nrows * ncols);
-    const climateChannels = CLIMATE_CHANNELS;
-    const climate = new Float32Array(climateChannels * nrows * ncols);
-    for (let r = 0; r < nrows; r++) {
-      const z3 = z0 + r / (nrows - 1) * TILE_SIZE;
-      for (let c = 0; c < ncols; c++) {
-        const x2 = x0 + c / (ncols - 1) * TILE_SIZE;
-        const e = elevation01(seed, x2, z3, lod);
-        const idx = r * ncols + c;
-        heights[idx] = e;
-        const cl = this.climateAt(seed, x2, z3, e);
-        const cidx = idx * climateChannels;
-        climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
-        climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
-        climate[cidx + CLIMATE_BIOME] = cl.biome;
-      }
-    }
-    return { nrows, ncols, origin, scale: scale2, heights, climate, climateChannels };
-  }
-  /** O(1) world-space elevation query (snapping/placement). Returns the surface
-   *  world Y = elevation[0,1] * HEIGHT_SCALE (origin Y is 0). */
-  sampleHeight(seed, x2, z3, lod) {
-    return elevation01(seed | 0, x2, z3, lod | 0) * HEIGHT_SCALE;
-  }
-  /** Per-coordinate climate for agent perception. Deterministic per (seed,x,z). */
-  sampleClimate(seed, x2, z3) {
-    return this.climateAt(seed | 0, x2, z3, elevation01(seed | 0, x2, z3, 0));
-  }
-  /** Shared climate model so generateTile and sampleClimate agree exactly. */
-  climateAt(seed, x2, z3, elev01) {
-    const warmth = fbm(seed ^ 522133279 | 0, x2, z3, 3, WARMTH_FREQ);
-    const wet = fbm(seed ^ 741092396 | 0, x2, z3, 3, PRECIP_FREQ);
-    const tempC = 4 + warmth * 30 - elev01 * 22;
-    const precipMm = wet * 3e3;
-    return { tempC, precipMm, biome: biomeOf(tempC, precipMm) };
+// src/terrain/terrain-types.ts
+var TERRAIN_TYPES = {
+  // A warm tropical sand island: the exact shape `beachShapeHints` shipped (warp 22,
+  // ridge 0.45, island core 0.62 / slope 0.70), now with a warm+wet maritime climate.
+  beach: {
+    warp: 22,
+    warpFreq: 1 / 130,
+    ridge: 0.45,
+    amp: 1,
+    freqScale: 1,
+    island: { radiusFrac: 0.62, falloffFrac: 0.7 },
+    tempBias: 14,
+    precipBias: 600
+  },
+  // Tall, sharp, COLD relief: high amplitude + heavy ridged multifractal → snow-capped
+  // peaks (the elevation lapse + the negative bias push the crests below freezing → ice).
+  mountains: {
+    warp: 24,
+    warpFreq: 1 / 160,
+    ridge: 0.7,
+    amp: 2.4,
+    freqScale: 1.25,
+    tempBias: -8,
+    precipBias: 300
+  },
+  // Rolling, well-watered temperate land → a wet forest biome.
+  forest: {
+    warp: 16,
+    warpFreq: 1 / 140,
+    ridge: 0.25,
+    amp: 0.9,
+    freqScale: 1,
+    tempBias: 6,
+    precipBias: 1500
+  },
+  // Hot + bone dry, with crisp wind-ridged dunes (high ridge + high frequency).
+  desert: {
+    warp: 30,
+    warpFreq: 1 / 110,
+    ridge: 0.6,
+    amp: 0.65,
+    freqScale: 1.5,
+    tempBias: 22,
+    precipBias: -2750
+  },
+  // Near-flat, broad, warm-temperate grassland/savanna (low amplitude + frequency, no
+  // ridges; warm + semi-dry so it reads as open grassland, not wet forest).
+  plains: {
+    warp: 8,
+    warpFreq: 1 / 200,
+    ridge: 0,
+    amp: 0.35,
+    freqScale: 0.7,
+    tempBias: 6,
+    precipBias: -1850
+  },
+  // Gentle, cooler, temperate-dry rolling hills (between plains and mountains).
+  hills: {
+    warp: 18,
+    warpFreq: 1 / 150,
+    ridge: 0.2,
+    amp: 0.8,
+    freqScale: 1.1,
+    tempBias: 2,
+    precipBias: -1850
+  },
+  // A warm archipelago: a smaller, busier island core than the beach.
+  islands: {
+    warp: 26,
+    warpFreq: 1 / 120,
+    ridge: 0.35,
+    amp: 1.1,
+    freqScale: 1.1,
+    island: { radiusFrac: 0.5, falloffFrac: 0.8 },
+    tempBias: 6,
+    precipBias: 400
   }
 };
+var TERRAIN_TYPE_NAMES = Object.keys(TERRAIN_TYPES);
+function isTerrainType(name) {
+  return Object.prototype.hasOwnProperty.call(TERRAIN_TYPES, name);
+}
+function terrainTypeHints(type, bounds) {
+  const c = TERRAIN_TYPES[type];
+  const hints = {
+    shape: 1,
+    warp: c.warp,
+    warpFreq: c.warpFreq,
+    ridge: c.ridge,
+    amp: c.amp,
+    freqScale: c.freqScale,
+    tempBias: c.tempBias,
+    precipBias: c.precipBias
+  };
+  if (c.island !== void 0) {
+    const cx = (bounds.minTx + bounds.maxTx + 1) / 2 * TILE_SIZE;
+    const cz = (bounds.minTz + bounds.maxTz + 1) / 2 * TILE_SIZE;
+    const spanX = (bounds.maxTx - bounds.minTx + 1) * TILE_SIZE;
+    const spanZ = (bounds.maxTz - bounds.minTz + 1) * TILE_SIZE;
+    const half = Math.min(spanX, spanZ) / 2;
+    hints.islandCx = cx;
+    hints.islandCz = cz;
+    hints.islandRadius = half * c.island.radiusFrac;
+    hints.islandFalloff = half * c.island.falloffFrac;
+  }
+  return hints;
+}
 
 // src/skills/terrain.ts
 var Vec36 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
@@ -88855,6 +89818,11 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     seed: external_exports.number().int(),
     bounds: boundsSchema,
     lod: external_exports.number().int().min(0).max(4).default(0),
+    // AGENT-NATIVE SEEDING: pick a named terrain TYPE ("beach", "mountains", "desert", …)
+    // and it resolves to the full shaping+climate config for the region (the deterministic
+    // generator builds that world). Mutually composable with raw `hints` (explicit hints
+    // override the type's resolved knobs); omit both for the byte-identical default field.
+    type: external_exports.enum(TERRAIN_TYPE_NAMES).optional(),
     hints: external_exports.record(external_exports.string(), external_exports.number()).optional()
   });
   const generateRegionOutput = external_exports.object({
@@ -88872,10 +89840,12 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     input: generateRegionInput,
     output: generateRegionOutput,
     handler: async (input, ctx) => {
+      const typed = input.type !== void 0 ? terrainTypeHints(input.type, input.bounds) : void 0;
+      const merged = typed !== void 0 || input.hints !== void 0 ? { ...typed ?? {}, ...input.hints ?? {} } : void 0;
       const regionId = regionIdOf(input.seed, input.lod, input.bounds);
       let region = regions.get(regionId);
       if (region === void 0) {
-        region = { seed: input.seed, lod: input.lod, hints: input.hints, tiles: /* @__PURE__ */ new Map() };
+        region = { seed: input.seed, lod: input.lod, hints: merged, tiles: /* @__PURE__ */ new Map() };
         regions.set(regionId, region);
       }
       const bodies = [];
@@ -88956,16 +89926,23 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     output: external_exports.object({ y: external_exports.number() }),
     handler: (input) => ({ y: source.sampleHeight(input.seed, input.x, input.z, input.lod) })
   };
-  const sampleClimateInput = external_exports.object({ seed: external_exports.number().int(), x: external_exports.number(), z: external_exports.number() });
+  const sampleClimateInput = external_exports.object({
+    seed: external_exports.number().int(),
+    x: external_exports.number(),
+    z: external_exports.number(),
+    // SAME opt-in shaping (incl. per-type climate bias) a region was generated with, so
+    // the perceived biome matches the shaped tiles; omit for the byte-identical base.
+    hints: external_exports.record(external_exports.string(), external_exports.number()).optional()
+  });
   const sampleClimate = {
     name: "terrain.sampleClimate",
     version: "1.0.0",
-    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception.",
+    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception. Pass the region's terrain hints to read the per-type biome.",
     category: "terrain",
     permissions: ["terrain.read"],
     input: sampleClimateInput,
     output: external_exports.object({ tempC: external_exports.number(), precipMm: external_exports.number(), biome: external_exports.number().int() }),
-    handler: (input) => source.sampleClimate(input.seed, input.x, input.z)
+    handler: (input) => source.sampleClimate(input.seed, input.x, input.z, input.hints)
   };
   registry2.register(generateRegion);
   registry2.register(streamFollow);
@@ -88975,19 +89952,112 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
 }
 
 // src/water.ts
+var T6 = three_tsl_exports;
 var DEFAULT_WATER_SIZE = 400;
 var DEFAULT_WATER_COLOR = 2841970;
+function bakeWaterDepth(depth3, seaLevel) {
+  const res = Math.max(8, Math.min(1024, Math.round(depth3.resolution ?? 256)));
+  const { minX, minZ, maxX, maxZ } = depth3.bounds;
+  const spanX = maxX - minX;
+  const spanZ = maxZ - minZ;
+  const heights = new Float32Array(res * res);
+  let minH = Infinity;
+  for (let r = 0; r < res; r++) {
+    const z3 = minZ + spanZ * (r / (res - 1));
+    for (let c = 0; c < res; c++) {
+      const x2 = minX + spanX * (c / (res - 1));
+      const h = depth3.sampleHeight(x2, z3);
+      heights[r * res + c] = h;
+      if (h < minH) minH = h;
+    }
+  }
+  const range3 = Math.max(0.5, seaLevel - minH);
+  const data = new Uint8Array(res * res);
+  for (let i = 0; i < heights.length; i++) {
+    const d01 = Math.min(1, Math.max(0, (seaLevel - heights[i]) / range3));
+    data[i] = Math.round(d01 * 255);
+  }
+  const texture3 = new DataTexture(data, res, res, RedFormat, UnsignedByteType);
+  texture3.minFilter = LinearFilter;
+  texture3.magFilter = LinearFilter;
+  texture3.wrapS = ClampToEdgeWrapping;
+  texture3.wrapT = ClampToEdgeWrapping;
+  texture3.needsUpdate = true;
+  return { texture: texture3, bounds: depth3.bounds };
+}
 function buildWaterSurface(opts) {
   const size = opts.size ?? DEFAULT_WATER_SIZE;
   const color3 = opts.color ?? DEFAULT_WATER_COLOR;
-  const geometry = new PlaneGeometry(size, size);
+  const segments = Math.max(8, Math.min(128, Math.round(size / 4)));
+  const geometry = new PlaneGeometry(size, size, segments, segments);
+  const base = new Color(color3);
+  const deepV = T6.vec3(base.r, base.g, base.b);
+  const shallowV = T6.vec3(
+    Math.min(1, base.r * 1.7 + 0.05),
+    Math.min(1, base.g * 1.45 + 0.2),
+    Math.min(1, base.b * 1.15 + 0.1)
+  );
   const material = new MeshStandardNodeMaterial({
     color: color3,
-    roughness: 0.12,
+    roughness: 0.1,
     metalness: 0,
     transparent: true,
-    opacity: 0.82
+    opacity: 0.85
   });
+  const facing = T6.clamp(T6.cameraPosition.sub(T6.positionWorld).normalize().y, 0, 1);
+  const fresnel = T6.oneMinus(facing).pow(4);
+  const t = T6.time;
+  const lx = T6.positionLocal.x;
+  const ly = T6.positionLocal.y;
+  const waves = [
+    { dx: 0.8, dy: 0.6, f: 0.3, s: 0.9, a: 1 },
+    { dx: -0.6, dy: 0.8, f: 0.42, s: 1.1, a: 0.8 },
+    { dx: 0.5, dy: -0.85, f: 0.55, s: 0.7, a: 0.6 },
+    { dx: -0.9, dy: -0.4, f: 0.68, s: 1.3, a: 0.45 }
+  ];
+  let height = null, slopeU = null, slopeV = null;
+  for (const w4 of waves) {
+    const phase = lx.mul(w4.dx * w4.f).add(ly.mul(w4.dy * w4.f)).add(t.mul(w4.s));
+    const sinP = phase.sin();
+    const cosP = phase.cos();
+    height = height === null ? sinP.mul(w4.a) : height.add(sinP.mul(w4.a));
+    slopeU = slopeU === null ? cosP.mul(w4.a * w4.f * w4.dx) : slopeU.add(cosP.mul(w4.a * w4.f * w4.dx));
+    slopeV = slopeV === null ? cosP.mul(w4.a * w4.f * w4.dy) : slopeV.add(cosP.mul(w4.a * w4.f * w4.dy));
+  }
+  const NORMAL_STRENGTH = 0.34;
+  const bumpN = T6.vec3(slopeU.mul(-NORMAL_STRENGTH), slopeV.mul(-NORMAL_STRENGTH), 1).normalize();
+  material.normalNode = T6.transformNormalToView(bumpN);
+  material.positionNode = T6.positionLocal.add(T6.vec3(0, 0, height.mul(0.06)));
+  const h01 = T6.clamp(height.mul(0.18).add(0.5), 0, 1);
+  material.roughnessNode = T6.float(0.05).add(h01.mul(0.07));
+  if (opts.depth !== void 0) {
+    const baked = bakeWaterDepth(opts.depth, opts.level);
+    const { minX, minZ, maxX, maxZ } = baked.bounds;
+    const u2 = T6.positionWorld.x.sub(minX).div(maxX - minX);
+    const v2 = T6.positionWorld.z.sub(minZ).div(maxZ - minZ);
+    const sampled = T6.texture(baked.texture, T6.vec2(u2, v2)).r;
+    const outU = T6.max(u2.mul(-1), u2.sub(1));
+    const outV = T6.max(v2.mul(-1), v2.sub(1));
+    const oob = T6.clamp(T6.max(outU, outV).mul(40), 0, 1);
+    const depth01 = T6.mix(sampled, T6.float(1), oob);
+    const SHADE_SHALLOW = 0.05;
+    const SHADE_DEEP = 0.42;
+    const FRESNEL_DEEPEN = 0.25;
+    const OPACITY_MIN = 0.22;
+    const OPACITY_DEEP_AT = 0.55;
+    const OPACITY_MAX = 0.97;
+    const colourDeep = T6.smoothstep(SHADE_SHALLOW, SHADE_DEEP, depth01);
+    const deepness = T6.clamp(colourDeep.add(fresnel.mul(FRESNEL_DEEPEN)), 0, 1);
+    material.colorNode = T6.mix(shallowV, deepV, deepness);
+    const opaque = T6.smoothstep(0, OPACITY_DEEP_AT, depth01);
+    material.opacityNode = T6.float(OPACITY_MIN).add(opaque.mul(OPACITY_MAX - OPACITY_MIN));
+  } else {
+    const dist = T6.positionView.z.mul(-1);
+    const distFactor = T6.smoothstep(6, 55, dist);
+    const deepness = T6.clamp(distFactor.mul(0.85).add(fresnel.mul(0.5)), 0, 1);
+    material.colorNode = T6.mix(shallowV, deepV, deepness);
+    material.opacityNode = T6.float(0.55).add(deepness.mul(0.43));
+  }
   const mesh = new Mesh(geometry, material);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(0, opts.level, 0);
@@ -88998,28 +90068,114 @@ function buildWaterSurface(opts) {
 }
 
 // src/skills/water.ts
+var waterRegionInput = external_exports.object({
+  seed: external_exports.number().int(),
+  type: external_exports.string(),
+  bounds: external_exports.object({
+    minTx: external_exports.number().int(),
+    minTz: external_exports.number().int(),
+    maxTx: external_exports.number().int(),
+    maxTz: external_exports.number().int()
+  }),
+  /** The SAME shaping-hint OVERRIDES the region was generated with (amp/erode/island/…).
+   *  Merged over the type defaults so the depth field is baked against the ACTUAL surface
+   *  the terrain was built with — without it a region generated with overrides (e.g. an
+   *  island falloff + erosion) bakes its depth against a flat type-default surface, and the
+   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). */
+  hints: external_exports.record(external_exports.string(), external_exports.number()).optional(),
+  resolution: external_exports.number().int().positive().max(1024).optional()
+});
 var addWaterInput = external_exports.object({
   level: external_exports.number().default(0),
   size: external_exports.number().positive().max(1e5).default(DEFAULT_WATER_SIZE),
-  color: external_exports.number().int().min(0).max(16777215).default(DEFAULT_WATER_COLOR)
+  color: external_exports.number().int().min(0).max(16777215).default(DEFAULT_WATER_COLOR),
+  region: waterRegionInput.optional()
 });
 var addWaterOutput = external_exports.object({
   level: external_exports.number(),
   size: external_exports.number(),
   color: external_exports.number().int()
 });
-function registerWaterSkills(registry2) {
+function deriveDepthFromRegions(source, regions) {
+  const regs = [];
+  for (const r of regions.values()) {
+    let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
+    for (const t of r.tiles.values()) {
+      if (t.tx < minTx) minTx = t.tx;
+      if (t.tx > maxTx) maxTx = t.tx;
+      if (t.tz < minTz) minTz = t.tz;
+      if (t.tz > maxTz) maxTz = t.tz;
+    }
+    if (!Number.isFinite(minTx)) continue;
+    const minX = minTx * TILE_SIZE, minZ = minTz * TILE_SIZE;
+    const maxX = (maxTx + 1) * TILE_SIZE, maxZ = (maxTz + 1) * TILE_SIZE;
+    regs.push({ minX, minZ, maxX, maxZ, cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, seed: r.seed, lod: r.lod, hints: r.hints });
+  }
+  if (regs.length === 0) return void 0;
+  let uMinX = Infinity, uMinZ = Infinity, uMaxX = -Infinity, uMaxZ = -Infinity;
+  for (const g2 of regs) {
+    if (g2.minX < uMinX) uMinX = g2.minX;
+    if (g2.minZ < uMinZ) uMinZ = g2.minZ;
+    if (g2.maxX > uMaxX) uMaxX = g2.maxX;
+    if (g2.maxZ > uMaxZ) uMaxZ = g2.maxZ;
+  }
+  const sampleHeight = (x2, z3) => {
+    let pick2 = regs[0];
+    let inside = false;
+    for (const g2 of regs) {
+      if (x2 >= g2.minX && x2 <= g2.maxX && z3 >= g2.minZ && z3 <= g2.maxZ) {
+        pick2 = g2;
+        inside = true;
+        break;
+      }
+    }
+    if (!inside && regs.length > 1) {
+      let best = Infinity;
+      for (const g2 of regs) {
+        const dx = x2 - g2.cx, dz = z3 - g2.cz;
+        const d = dx * dx + dz * dz;
+        if (d < best) {
+          best = d;
+          pick2 = g2;
+        }
+      }
+    }
+    const sx = Math.min(pick2.maxX, Math.max(pick2.minX, x2));
+    const sz = Math.min(pick2.maxZ, Math.max(pick2.minZ, z3));
+    return source.sampleHeight(pick2.seed, sx, sz, pick2.lod, pick2.hints);
+  };
+  return { sampleHeight, bounds: { minX: uMinX, minZ: uMinZ, maxX: uMaxX, maxZ: uMaxZ } };
+}
+function registerWaterSkills(registry2, terrainSource, terrainRegions) {
   const surfaces = [];
   const addWater = {
     name: "world.addWater",
     version: "1.0.0",
-    description: "Add a RENDER-ONLY water surface (a large plane) at a sea-level Y so beaches/lakes/oceans read as water. Cosmetic only: no physics body, no collider, no ECS entity \u2014 it never affects the deterministic sim or replay. The world log records the REQUEST (level/size/color); replay rebuilds the same surface from the logged level.",
+    description: "Add a RENDER-ONLY water surface (a large plane) at a sea-level Y so beaches/lakes/oceans read as water. Cosmetic only: no physics body, no collider, no ECS entity \u2014 it never affects the deterministic sim or replay. The world log records the REQUEST (level/size/color, and an optional region for true depth-aware shading); replay rebuilds the same surface from the logged request.",
     category: "world",
     permissions: ["scene.write"],
     input: addWaterInput,
     output: addWaterOutput,
     handler: (input, ctx) => {
-      const mesh = buildWaterSurface({ level: input.level, size: input.size, color: input.color });
+      let depth3;
+      const region = input.region;
+      if (region !== void 0 && terrainSource !== void 0 && isTerrainType(region.type)) {
+        const hints = { ...terrainTypeHints(region.type, region.bounds), ...region.hints ?? {} };
+        const b2 = region.bounds;
+        depth3 = {
+          sampleHeight: (x2, z3) => terrainSource.sampleHeight(region.seed, x2, z3, 0, hints),
+          bounds: {
+            minX: b2.minTx * TILE_SIZE,
+            minZ: b2.minTz * TILE_SIZE,
+            maxX: (b2.maxTx + 1) * TILE_SIZE,
+            maxZ: (b2.maxTz + 1) * TILE_SIZE
+          },
+          resolution: region.resolution
+        };
+      } else if (region === void 0 && terrainSource !== void 0 && terrainRegions !== void 0) {
+        depth3 = deriveDepthFromRegions(terrainSource, terrainRegions);
+      }
+      const mesh = buildWaterSurface({ level: input.level, size: input.size, color: input.color, depth: depth3 });
       ctx.world.scene.add(mesh);
       const surface = { level: input.level, size: input.size, color: input.color, mesh };
       surfaces.push(surface);
@@ -89502,10 +90658,12 @@ function registerCoreSkills(registry2, opts) {
   const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   const terrainRegions = /* @__PURE__ */ new Map();
-  registerSceneSkills(registry2);
+  const materials = new MaterialRegistry();
+  registerSceneSkills(registry2, materials);
   registerEcsSkills(registry2);
-  registerThreeSkills(registry2, assets);
+  registerThreeSkills(registry2, assets, materials);
   registerAssetSkills(registry2, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
+  registerMaterialSkills(registry2, assets, materials);
   registerPhysicsSkills(registry2);
   registerAgentSkills(registry2);
   registerSystemSkills(registry2);
@@ -89525,11 +90683,11 @@ function registerCoreSkills(registry2, opts) {
   const packages = new PackageRegistry(registry2, host, registry2.tracer);
   registerPackageSkills(registry2, packages);
   registerTerrainSkills(registry2, terrainSource, terrainCache, terrainRegions);
-  const water = registerWaterSkills(registry2);
+  const water = registerWaterSkills(registry2, terrainSource, terrainRegions);
   if (opts?.providers !== void 0) {
     registerOrchestrationSkills(registry2, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache }, assets, water };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions }, assets, materials, water };
 }
 
 // src/observability/event.ts
@@ -89828,6 +90986,8 @@ var PHYSICS_OP_FN = {
   add_static_box: "op_physics_add_static_box",
   add_static_sphere: "op_physics_add_static_sphere",
   add_static_capsule: "op_physics_add_static_capsule",
+  add_character: "op_physics_add_character",
+  move_character: "op_physics_move_character",
   remove_body: "op_physics_remove_body",
   apply_impulse: "op_physics_apply_impulse",
   step: "op_physics_step"
@@ -89842,6 +91002,8 @@ var physicsOpEnum = external_exports.enum([
   "add_static_box",
   "add_static_sphere",
   "add_static_capsule",
+  "add_character",
+  "move_character",
   "remove_body",
   "apply_impulse",
   "step"
@@ -90699,7 +91861,239 @@ var StreamFollower = class {
   }
 };
 
+// src/terrain/material-pbr.ts
+var T7 = three_tsl_exports;
+function applyPbrMaterial(material, tile, baseRough, pbr) {
+  const tempRange = pbr.tempRange ?? [-30, 40];
+  const precipMax = pbr.precipMax ?? 3e3;
+  const [precipDry, precipWet] = pbr.precipBand ?? [300, 1400];
+  const [tMin, tMax] = tempRange;
+  const tSpan = tMax - tMin;
+  const cols = { ...RAMP_DEFAULT_COLORS, ...pbr.colors ?? {} };
+  const C2 = (hex3) => {
+    const c = new Color(hex3);
+    return T7.vec3(c.r, c.g, c.b);
+  };
+  const subSeaV = C2(cols.subSea), sandV = C2(cols.sand), dryV = C2(cols.dryGrass);
+  const forestV = C2(cols.forest), rockV = C2(cols.rock), snowV = C2(cols.snow);
+  const d = pbr.detail ?? {};
+  const sharp = d.triplanarSharpness ?? 4;
+  const mottle = d.mottle ?? 0.22;
+  const tex = sharedDetailTexture();
+  const rockL = triplanarLayer(tex, d.rockScale ?? 0.14, d.rockNormal ?? 1, sharp);
+  const grassL = triplanarLayer(tex, d.grassScale ?? 0.45, d.grassNormal ?? 0.55, sharp);
+  const snowL = triplanarLayer(tex, d.snowScale ?? 0.1, d.snowNormal ?? 0.3, sharp);
+  const sandL = triplanarLayer(tex, d.sandScale ?? 0.55, d.sandNormal ?? 0.7, sharp);
+  const mod3 = (val) => val.sub(0.5).mul(mottle).add(1);
+  const sea = pbr.seaLevel;
+  let minY = pbr.minY, maxY = pbr.maxY;
+  if (minY === void 0 || maxY === void 0) {
+    const oy = tile.origin[1], sy = tile.scale[1];
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < tile.heights.length; i++) {
+      const h = tile.heights[i];
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    minY = pbr.minY ?? oy + lo * sy;
+    maxY = pbr.maxY ?? oy + hi * sy;
+  }
+  const aboveSpan = Math.max(1e-3, maxY - sea);
+  const coastBand = Math.max(1e-3, aboveSpan * (pbr.coastFrac ?? 0.06));
+  const subBand = Math.max(0.5, (sea - minY) * 0.6);
+  const baked = bakeTileClimate(tile, tempRange, precipMax);
+  const { minX, minZ, maxX, maxZ } = baked.bounds;
+  const u2 = T7.positionWorld.x.sub(minX).div(maxX - minX);
+  const v2 = T7.positionWorld.z.sub(minZ).div(maxZ - minZ);
+  const clim = T7.texture(baked.texture, T7.vec2(u2, v2));
+  const tempC = clim.r.mul(tSpan).add(tMin);
+  const precip = clim.g.mul(precipMax);
+  const y2 = T7.positionWorld.y;
+  const r = T7.clamp(y2.sub(sea).div(aboveSpan), 0, 1);
+  const steep = T7.clamp(T7.oneMinus(T7.normalWorld.y), 0, 1);
+  const wet = T7.smoothstep(precipDry, precipWet, precip);
+  const cold = T7.oneMinus(T7.smoothstep(-5, 6, tempC));
+  const rEff = T7.clamp(r.add(cold.mul(0.06)), 0, 1);
+  const rockMask = T7.smoothstep(0.32, 0.46, rEff);
+  const snowMask = T7.smoothstep(0.84, 0.95, rEff);
+  const cliff = T7.smoothstep(0.55, 0.82, steep).mul(T7.oneMinus(snowMask)).mul(0.7);
+  const coastMask = T7.oneMinus(T7.smoothstep(0, coastBand, y2.sub(sea)));
+  const subMask = T7.smoothstep(0, subBand, T7.float(sea).sub(y2));
+  const grassAlbedo = T7.mix(dryV, forestV, wet).mul(mod3(grassL.value));
+  const rockAlbedo = rockV.mul(mod3(rockL.value));
+  const snowAlbedo = snowV.mul(mod3(snowL.value));
+  const sandAlbedo = sandV.mul(mod3(sandL.value));
+  const subAlbedo = subSeaV.mul(mod3(sandL.value));
+  let col = grassAlbedo;
+  col = T7.mix(col, rockAlbedo, rockMask);
+  col = T7.mix(col, snowAlbedo, snowMask);
+  col = T7.mix(col, rockAlbedo, cliff);
+  col = T7.mix(col, sandAlbedo, coastMask);
+  col = T7.mix(col, subAlbedo, subMask);
+  material.colorNode = col;
+  let nrm = grassL.normal;
+  nrm = T7.mix(nrm, rockL.normal, rockMask);
+  nrm = T7.mix(nrm, snowL.normal, snowMask);
+  nrm = T7.mix(nrm, rockL.normal, cliff);
+  nrm = T7.mix(nrm, sandL.normal, coastMask);
+  nrm = T7.mix(nrm, T7.normalWorld, subMask.mul(0.7));
+  material.normalNode = T7.transformNormalToView(nrm.normalize());
+  const lr = pbr.layerRoughness ?? {};
+  let rough = T7.float(lr.grass ?? Math.min(baseRough, 0.85));
+  rough = T7.mix(rough, T7.float(lr.rock ?? 0.92), rockMask);
+  rough = T7.mix(rough, T7.float(lr.snow ?? 0.6), snowMask);
+  rough = T7.mix(rough, T7.float(lr.rock ?? 0.92), cliff);
+  rough = T7.mix(rough, T7.float(lr.sand ?? 0.95), coastMask);
+  rough = T7.mix(rough, T7.float(lr.subSea ?? 0.5), subMask);
+  const wl = pbr.waterline;
+  if (wl !== void 0) {
+    const wlSea = wl.seaLevel ?? sea;
+    const { wetMask, foamMask } = shorelineBandMasks(wlSea, wl.wetBand ?? 1.2, wl.foamBand ?? 0.25);
+    col = T7.mix(col, col.mul(wl.darken ?? 0.55), wetMask);
+    const foamStrength = wl.foam ?? 0.5;
+    if (foamStrength > 0) {
+      const foam = new Color(wl.foamColor ?? 15922932);
+      col = T7.mix(col, T7.vec3(foam.r, foam.g, foam.b), foamMask.mul(foamStrength));
+    }
+    material.colorNode = col;
+    rough = T7.mix(rough, T7.float(wl.wetRoughness ?? 0.32), wetMask);
+  }
+  material.roughnessNode = T7.clamp(rough, 0, 1);
+}
+
 // src/terrain/render.ts
+var T8 = three_tsl_exports;
+function shorelineBandMasks(seaLevel, wetBand, foamBand) {
+  const lap = T8.positionWorld.x.mul(0.6).add(T8.positionWorld.z.mul(0.55)).add(T8.time.mul(1.1)).sin().mul(0.13);
+  const ad = T8.positionWorld.y.sub(seaLevel).add(lap).abs();
+  return {
+    wetMask: T8.oneMinus(T8.smoothstep(0, wetBand, ad)),
+    foamMask: T8.oneMinus(T8.smoothstep(0, foamBand, ad))
+  };
+}
+function applyShoreline(material, dryColor, baseRough, shore) {
+  const dry = new Color(dryColor);
+  const wet = new Color(shore.wetColor ?? 7297860);
+  const foam = new Color(shore.foamColor ?? 15922932);
+  const wetBand = shore.wetBand ?? 0.9;
+  const foamBand = shore.foamBand ?? 0.22;
+  const { wetMask, foamMask } = shorelineBandMasks(shore.seaLevel, wetBand, foamBand);
+  const dryV = T8.vec3(dry.r, dry.g, dry.b);
+  const wetV = T8.vec3(wet.r, wet.g, wet.b);
+  const foamV = T8.vec3(foam.r, foam.g, foam.b);
+  let col = T8.mix(dryV, wetV, wetMask.mul(0.85));
+  col = T8.mix(col, foamV, foamMask);
+  material.colorNode = col;
+  material.roughnessNode = T8.float(baseRough).sub(wetMask.mul(Math.max(0, baseRough - 0.45)));
+}
+var RAMP_DEFAULT_COLORS = {
+  subSea: 4867638,
+  // damp silt/sand under the waterline
+  sand: 12757112,
+  // warm coastal sand just above the sea
+  dryGrass: 10986070,
+  // dry grass / savanna where precip is low
+  forest: 4156212,
+  // green lowland / forest where precip is high
+  rock: 7693911,
+  // bare grey-brown rock on the mountainside / high+steep flanks
+  snow: 15922423
+  // snow on the high+cold crests
+};
+function bakeTileClimate(tile, tempRange, precipMax) {
+  const { ncols, nrows } = tile;
+  const ch = tile.climateChannels ?? 0;
+  const climate = tile.climate;
+  const [tMin, tMax] = tempRange;
+  const tSpan = Math.max(1e-6, tMax - tMin);
+  const data = new Uint8Array(ncols * nrows * 4);
+  for (let r = 0; r < nrows; r++) {
+    for (let c = 0; c < ncols; c++) {
+      const idx = r * ncols + c;
+      let tempC = 14, precipMm = 900, biome = 4;
+      if (climate !== void 0 && ch > 0) {
+        const b2 = idx * ch;
+        tempC = climate[b2 + CLIMATE_TEMP_C];
+        precipMm = climate[b2 + CLIMATE_PRECIP_MM];
+        biome = climate[b2 + CLIMATE_BIOME];
+      }
+      const o = idx * 4;
+      data[o] = Math.round(Math.min(1, Math.max(0, (tempC - tMin) / tSpan)) * 255);
+      data[o + 1] = Math.round(Math.min(1, Math.max(0, precipMm / precipMax)) * 255);
+      data[o + 2] = Math.round(Math.min(1, Math.max(0, biome / 6)) * 255);
+      data[o + 3] = 255;
+    }
+  }
+  const texture3 = new DataTexture(data, ncols, nrows, RGBAFormat, UnsignedByteType);
+  texture3.minFilter = LinearFilter;
+  texture3.magFilter = LinearFilter;
+  texture3.wrapS = ClampToEdgeWrapping;
+  texture3.wrapT = ClampToEdgeWrapping;
+  texture3.needsUpdate = true;
+  const [ox, oy, oz] = tile.origin;
+  const [sx, , sz] = tile.scale;
+  const minX = ox - sx / 2, minZ = oz - sz / 2;
+  return { texture: texture3, bounds: { minX, minZ, maxX: minX + sx, maxZ: minZ + sz } };
+}
+function applyBiomeRamp(material, tile, baseRough, pal) {
+  const tempRange = pal.tempRange ?? [-30, 40];
+  const precipMax = pal.precipMax ?? 3e3;
+  const [precipDry, precipWet] = pal.precipBand ?? [300, 1400];
+  const [tMin, tMax] = tempRange;
+  const tSpan = tMax - tMin;
+  const cols = { ...RAMP_DEFAULT_COLORS, ...pal.colors ?? {} };
+  const C2 = (hex3) => {
+    const c = new Color(hex3);
+    return T8.vec3(c.r, c.g, c.b);
+  };
+  const subSeaV = C2(cols.subSea), sandV = C2(cols.sand), dryV = C2(cols.dryGrass);
+  const forestV = C2(cols.forest), rockV = C2(cols.rock), snowV = C2(cols.snow);
+  const sea = pal.seaLevel;
+  let minY = pal.minY, maxY = pal.maxY;
+  if (minY === void 0 || maxY === void 0) {
+    const oy = tile.origin[1], sy = tile.scale[1];
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < tile.heights.length; i++) {
+      const h = tile.heights[i];
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+    }
+    minY = pal.minY ?? oy + lo * sy;
+    maxY = pal.maxY ?? oy + hi * sy;
+  }
+  const aboveSpan = Math.max(1e-3, maxY - sea);
+  const coastBand = Math.max(1e-3, aboveSpan * (pal.coastFrac ?? 0.06));
+  const subBand = Math.max(0.5, (sea - minY) * 0.6);
+  const baked = bakeTileClimate(tile, tempRange, precipMax);
+  const { minX, minZ, maxX, maxZ } = baked.bounds;
+  const u2 = T8.positionWorld.x.sub(minX).div(maxX - minX);
+  const v2 = T8.positionWorld.z.sub(minZ).div(maxZ - minZ);
+  const clim = T8.texture(baked.texture, T8.vec2(u2, v2));
+  const tempC = clim.r.mul(tSpan).add(tMin);
+  const precip = clim.g.mul(precipMax);
+  const y2 = T8.positionWorld.y;
+  const r = T8.clamp(y2.sub(sea).div(aboveSpan), 0, 1);
+  const steep = T8.clamp(T8.oneMinus(T8.normalWorld.y), 0, 1);
+  const wet = T8.smoothstep(precipDry, precipWet, precip);
+  const cold = T8.oneMinus(T8.smoothstep(-5, 6, tempC));
+  const rEff = T8.clamp(r.add(cold.mul(0.06)), 0, 1);
+  const green = T8.mix(dryV, forestV, wet);
+  let col = green;
+  const rockMask = T8.smoothstep(0.32, 0.46, rEff);
+  col = T8.mix(col, rockV, rockMask);
+  const snowMask = T8.smoothstep(0.84, 0.95, rEff);
+  col = T8.mix(col, snowV, snowMask);
+  const cliff = T8.smoothstep(0.55, 0.82, steep).mul(T8.oneMinus(snowMask)).mul(0.7);
+  col = T8.mix(col, rockV, cliff);
+  const coastMask = T8.oneMinus(T8.smoothstep(0, coastBand, y2.sub(sea)));
+  col = T8.mix(col, sandV, coastMask);
+  const subMask = T8.smoothstep(0, subBand, T8.float(sea).sub(y2));
+  col = T8.mix(col, subSeaV, subMask);
+  material.colorNode = col;
+  let rough = T8.mix(T8.float(baseRough), T8.float(0.6), snowMask);
+  rough = T8.mix(rough, T8.float(0.5), subMask);
+  material.roughnessNode = T8.clamp(rough, 0, 1);
+}
 function terrainTileBufferGeometry(tile) {
   const { positions, indices, normals } = terrainTileGeometry(tile);
   const geom = new BufferGeometry();
@@ -90712,12 +92106,26 @@ function terrainTileBufferGeometry(tile) {
 }
 function buildTerrainMesh(tile, opts = {}) {
   const geom = terrainTileBufferGeometry(tile);
+  const baseColor = opts.color ?? 4877114;
+  const baseRough = opts.roughness ?? 0.95;
   const material = new MeshStandardNodeMaterial({
-    color: opts.color ?? 4877114,
-    roughness: opts.roughness ?? 0.95,
+    color: baseColor,
+    roughness: baseRough,
     metalness: opts.metalness ?? 0
   });
   if (opts.doubleSide === true) material.side = DoubleSide;
+  if (opts.pbr !== void 0) applyPbrMaterial(material, tile, baseRough, opts.pbr);
+  else if (opts.palette !== void 0) applyBiomeRamp(material, tile, baseRough, opts.palette);
+  else if (opts.shoreline !== void 0) applyShoreline(material, baseColor, baseRough, opts.shoreline);
+  if (opts.exaggerateY !== void 0 && opts.exaggerateY.factor !== 1) {
+    const { factor, pivot } = opts.exaggerateY;
+    const posAttr = geom.getAttribute("position");
+    for (let i = 0; i < posAttr.count; i++) posAttr.setY(i, pivot + (posAttr.getY(i) - pivot) * factor);
+    posAttr.needsUpdate = true;
+    geom.computeVertexNormals();
+    geom.computeBoundingSphere();
+    geom.computeBoundingBox();
+  }
   const mesh = new Mesh(geom, material);
   mesh.castShadow = false;
   mesh.receiveShadow = true;

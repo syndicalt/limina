@@ -3,6 +3,7 @@
 // Deno, no scene access. A given name always yields identical params (deterministic).
 
 import * as THREE from "../../build/three.bundle.mjs";
+import { applyProceduralPbr, type ProceduralKnobs } from "./procedural-pbr.ts";
 
 /** A single PBR preset: base color + the two MeshStandard surface params. */
 export interface MaterialParams {
@@ -69,16 +70,35 @@ export function getMaterialParams(name: string): MaterialParams {
   return { color: preset.color, roughness: preset.roughness, metalness: preset.metalness };
 }
 
+/** Opt-in options for createMaterial. */
+export interface CreateMaterialOptions {
+  /** When true, upgrade the flat preset to a procedural-PBR surface — triplanar noise-driven
+   *  albedo mottle + a real detail NORMAL + honest roughness, matching the terrain's "Grounded
+   *  Stylized Realism" grain (materials/procedural-pbr.ts). Default false → flat, byte-identical
+   *  to the legacy material. */
+  pbr?: boolean;
+  /** Per-material procedural knob overrides (only used when `pbr`). */
+  pbrKnobs?: Partial<ProceduralKnobs>;
+}
+
 /**
  * Build a WebGPU-safe MeshStandardNodeMaterial from a palette name. Deterministic:
  * the same name always produces a material with identical color/roughness/metalness.
  * Throws on an unknown name (via getMaterialParams).
+ *
+ * With `{ pbr: true }` the material is upgraded IN PLACE to a procedural-PBR surface
+ * (colorNode/normalNode/roughnessNode set from the shared triplanar detail noise). Without it
+ * the flat-colour behaviour is unchanged (no nodes set) — existing callers/tests are untouched.
  */
-export function createMaterial(name: string): THREE.MeshStandardNodeMaterial {
+export function createMaterial(name: string, opts?: CreateMaterialOptions): THREE.MeshStandardNodeMaterial {
   const params = getMaterialParams(name);
-  return new THREE.MeshStandardNodeMaterial({
+  const material = new THREE.MeshStandardNodeMaterial({
     color: params.color,
     roughness: params.roughness,
     metalness: params.metalness,
   });
+  if (opts?.pbr) {
+    applyProceduralPbr(material, { color: params.color, roughness: params.roughness }, name, opts.pbrKnobs);
+  }
+  return material;
 }
