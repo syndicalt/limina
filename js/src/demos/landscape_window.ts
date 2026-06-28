@@ -28,6 +28,7 @@ import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types
 import { surveyRegionRelief, scatterBiomeContent } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import { DEFAULT_RENDER_BASELINE } from "../render-baseline.ts";
+import { buildPostPipeline } from "../render/post.ts";
 
 const SEED = 1234;
 const TYPE: TerrainTypeName = "mountains";
@@ -186,6 +187,13 @@ const LOOK_SENS = 0.0022;
 const PITCH_LIMIT = Math.PI / 2 - 0.03;
 const DT = 1 / 60;
 
+// POST-PROCESSING STACK (Phase 3 terrain overhaul): a real depth+normal pre-pass →
+// GTAO (subtle contact AO nestling the pines/boulders into the slopes) → high-threshold
+// bloom (lifts the snow crest + sun-glints only) → a gentle HDR grade over ACES. The
+// loop drives the pipeline in place of renderer.render; presentation is unchanged.
+// Render-only — it never touches sim/physics/log.
+const post = buildPostPipeline(engine.renderer, engine.scene, engine.camera);
+
 const axes = new Float32Array(3);
 const look = new Float32Array(2);
 function render(_alpha: number): void {
@@ -210,12 +218,13 @@ function render(_alpha: number): void {
   engine.camera.position.set(pos.x, pos.y, pos.z);
   engine.camera.lookAt(pos.x + fwd.x, pos.y + fwd.y, pos.z + fwd.z);
   renderSyncSystem(engine.world);
-  engine.renderer.render(engine.scene, engine.camera);
+  post.render();
   ops.op_surface_present(engine.context);
 }
 function onResize(w: number, h: number): void {
   ops.op_surface_resize(w, h);
   engine.renderer.setSize(w, h, false);
+  post.setSize(w, h);
   engine.camera.aspect = w / h;
   engine.camera.updateProjectionMatrix();
 }
