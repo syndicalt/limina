@@ -16,6 +16,7 @@ export {
   mulberry32,
   parseWorldLog,
   PHYSICS_OP_FN,
+  PHYSICS_OP_OUT_BUFFER,
   RECORDED_PHYSICS_METHODS,
   serializeWorldLog,
   syncAllBodies,
@@ -52,8 +53,10 @@ export {
 } from "./snapshot.ts";
 export type {
   CaptureSnapshotOptions,
+  CharacterSnapshotEntry,
   EntityIndexSnapshot,
   RecoveryResult,
+  SnapshotableCharacter,
   SnapshotEntity,
   WorldSnapshot,
 } from "./snapshot.ts";
