@@ -26,6 +26,7 @@ import { terrainTypeHints, TERRAIN_TYPES, type TerrainTypeName, type RegionBound
 import type { ScatterAsset, ScatterConfig } from "./asset-scatter.ts";
 import { Biome, type TerrainSource } from "./types.ts";
 import type { SkillRegistry, InvokeBase } from "../skills/registry.ts";
+import type { RegionState } from "../skills/terrain.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
 
 // ───────────────────────── ASSET IDS — THE CURATED CC0 PALETTE ─────────────────────────
@@ -290,6 +291,13 @@ export interface ScatterBiomeContentDeps {
   /** Dry margin (world Y) added ABOVE the water level for waterGated layers, so props sit
    *  clear of the shoreline rather than at it. Default 0 (byte-identical to the prior path). */
   waterMargin?: number;
+  /** The live region table the terrain.* skills populate (core.terrain.regions). When the
+   *  region is found, the relief is surveyed with the EXACT hints it was generated with
+   *  (e.g. an amp/erode override) so fractional gates like the pine tree-line resolve
+   *  against the SAME surface asset.scatter places on. Without it the survey falls back to
+   *  the bare type-default hints — which silently mis-places gated content when the region
+   *  was generated with hint overrides (the "only rocks, no pines" bug). */
+  regions?: Map<string, RegionState>;
 }
 
 /** The result of scattering a type's content: one asset.scatter response per layer. */
@@ -319,7 +327,12 @@ function ok(res: MCPResponse | undefined, what: string): Record<string, unknown>
  * `world.generateRegion(type) → scatterBiomeContent(type)`.
  */
 export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promise<ScatterBiomeContentResult> {
-  const hints = terrainTypeHints(deps.type, deps.bounds);
+  // Survey with the region's ACTUAL generated hints (amp/erode overrides included) when the
+  // region table is supplied — so the fractional elevation gates resolve against the SAME
+  // surface asset.scatter places on. Fall back to the bare type defaults otherwise (matches
+  // a region generated with no hint overrides). region.hints is already the merged map
+  // ({ ...terrainTypeHints, ...overrides }) world.generateRegion stored, so it's complete.
+  const hints = deps.regions?.get(deps.regionId)?.hints ?? terrainTypeHints(deps.type, deps.bounds);
   const survey = surveyRegionRelief(deps.source, deps.seed, deps.bounds, hints);
   const wl = deps.waterLevel ?? (isWaterType(deps.type) ? defaultWaterLevel(survey) : undefined);
   const configs = biomeScatterConfigs(deps.type, survey, wl, deps.waterMargin ?? 0);

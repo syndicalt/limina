@@ -41,8 +41,11 @@ export interface CoreSkills {
   /** Inspection surface for the per-speaker speech bubbles social.say authors. */
   social: SocialRuntime;
   /** Phase 9 terrain source + content-addressed tile cache backing the terrain.*
-   *  / world.* skills (default: the deterministic procedural source). */
-  terrain: { source: TerrainSource; cache: TileCache };
+   *  / world.* skills (default: the deterministic procedural source). `regions` is
+   *  the live region table the terrain.* skills populate — exposed so callers (e.g.
+   *  scatterBiomeContent) can survey a region with the EXACT hints it was generated
+   *  with, not just the type defaults. */
+  terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState> };
   /** Phase 11 content-addressed asset registry backing the asset.* skills — the
    *  lookup layer (id -> bytes + content hash) over the host's op_read_asset. */
   assets: AssetRegistry;
@@ -139,5 +142,5 @@ export function registerCoreSkills(
   if (opts?.providers !== undefined) {
     registerOrchestrationSkills(registry, { providers: opts.providers, agents: opts.agents });
   }
-  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache }, assets, water };
+  return { packages, ui, locomotion, social, audio, terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions }, assets, water };
 }
