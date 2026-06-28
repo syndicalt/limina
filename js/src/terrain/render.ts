@@ -109,6 +109,24 @@ export interface TerrainPaletteOptions {
 // deno-lint-ignore no-explicit-any
 const T = (THREE as any).TSL;
 
+/** The wet + foam BAND MASKS keyed to a fragment's world-Y vs `seaLevel` — the shared
+ *  shoreline-contact math. `wetMask`/`foamMask` are 1 AT the waterline → 0 a band-half-height
+ *  away (the wet band is wider, the foam line tighter), straddling the line via abs(). A small
+ *  time-driven lap makes the edge breathe like a wash. Render-only (TSL, time-driven). Exported
+ *  so BOTH the flat sand shoreline (applyShoreline) and the opt-in PBR waterline (material-pbr.ts)
+ *  build the SAME contact band — one source of truth for "where the land meets the water". */
+// deno-lint-ignore no-explicit-any
+export function shorelineBandMasks(seaLevel: number, wetBand: number, foamBand: number): { wetMask: any; foamMask: any } {
+  // Signed height above the waterline (negative = submerged), plus a small time-driven lap so the
+  // contact edge breathes in/out like a wash. `ad` = absolute distance from the waterline.
+  const lap = T.positionWorld.x.mul(0.6).add(T.positionWorld.z.mul(0.55)).add(T.time.mul(1.1)).sin().mul(0.13);
+  const ad = T.positionWorld.y.sub(seaLevel).add(lap).abs();
+  return {
+    wetMask: T.oneMinus(T.smoothstep(0, wetBand, ad)),
+    foamMask: T.oneMinus(T.smoothstep(0, foamBand, ad)),
+  };
+}
+
 /** Build the opt-in shoreline `colorNode`/`roughnessNode` for the sand material: a wet
  *  band + an animated foam line keyed to world-Y vs sea level. Render-only, time-driven
  *  in the render graph (never the sim/log). */
@@ -124,14 +142,8 @@ function applyShoreline(
   const wetBand = shore.wetBand ?? 0.9;
   const foamBand = shore.foamBand ?? 0.22;
 
-  // Signed height above the waterline (negative = submerged), plus a small time-driven
-  // lap so the foam edge breathes in/out like a wash. `ad` = distance from waterline.
-  const lap = T.positionWorld.x.mul(0.6).add(T.positionWorld.z.mul(0.55)).add(T.time.mul(1.1)).sin().mul(0.13);
-  const ad = T.positionWorld.y.sub(shore.seaLevel).add(lap).abs();
-
-  // Wet band: 1 at the waterline → 0 a `wetBand` away. Foam: a tighter bright band.
-  const wetMask = T.oneMinus(T.smoothstep(0, wetBand, ad));
-  const foamMask = T.oneMinus(T.smoothstep(0, foamBand, ad));
+  // Shared contact band (wet + foam masks) — the SAME math the PBR waterline reuses.
+  const { wetMask, foamMask } = shorelineBandMasks(shore.seaLevel, wetBand, foamBand);
 
   const dryV = T.vec3(dry.r, dry.g, dry.b);
   const wetV = T.vec3(wet.r, wet.g, wet.b);

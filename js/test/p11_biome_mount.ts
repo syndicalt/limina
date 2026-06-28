@@ -16,11 +16,13 @@
 //   4. THE ROOT CAUSE IS PINNED: surveying with the region's ACTUAL generated hints
 //      (amp/erode) is load-bearing. Re-running WITHOUT the region table (bare type-default
 //      hints) collapses the pine count — the exact divergence that produced the bug.
+//   5. NO PROPS IN WATER: over the demo's real config (sea + a 2.5 m dry margin) ZERO
+//      mounted prop instances (pine AND rock, all layers) sit at/below waterLevel + margin,
+//      via the real mount path. Falsifiable: the ungated palette DOES place below water.
 
-import { ProceduralTerrainSource } from "../src/terrain/procedural.ts";
 import { terrainTypeHints, type RegionBounds } from "../src/terrain/terrain-types.ts";
 import {
-  scatterBiomeContent, surveyRegionRelief,
+  scatterBiomeContent, biomeScatterConfigs, surveyRegionRelief,
   PINE_ASSET, BROADLEAF_ASSET, ROCK_ASSET, BIOME_CONTENT,
 } from "../src/terrain/biome-content.ts";
 import * as THREE from "../build/three.bundle.mjs";
@@ -42,14 +44,18 @@ function ok(res: MCPResponse | undefined): Record<string, unknown> {
   return res.result as Record<string, unknown>;
 }
 
-// The EXACT landscape demo config (js/src/demos/landscape_window.ts).
+// The EXACT landscape demo config (js/src/demos/landscape_window.ts): mountains, amp 4.5,
+// erosion, sea at 18% of relief, and a 2.5 m dry shoreline margin. NO island falloff — a cliff
+// meeting the sea is the intended look; the waterline is sold by the wet-shore PBR band, not by
+// tapering the land.
 const SEED = 1234;
 const TYPE = "mountains" as const;
 const BOUNDS: RegionBounds = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 };
 const AMP = 4.5;
 const SEA_FRACTION = 0.18;
-const WATER_MARGIN = 1.0;
-const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), amp: AMP, erode: 1 };
+const WATER_MARGIN = 2.5;
+const SHAPE = { amp: AMP, erode: 1 };
+const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), ...SHAPE };
 
 // A headless world whose scene.add CAPTURES the mounted objects so we can inspect the
 // real InstancedMeshes (geometry + per-mesh instance count), not just the skill's tallies.
@@ -70,7 +76,7 @@ async function runDemoScatter(passRegions: boolean) {
   const core = registerCoreSkills(registry);
   const { world, added } = makeCapturingWorld();
   const base = { agentId: "agt_mount", sessionId: "ses_p11_mount", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
-  const gen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: { amp: AMP, erode: 1 } }, base));
+  const gen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: TYPE, hints: SHAPE }, base));
   const regionId = gen.regionId as string;
   const relief = surveyRegionRelief(core.terrain.source, SEED, BOUNDS, HINTS);
   const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
@@ -78,11 +84,11 @@ async function runDemoScatter(passRegions: boolean) {
     registry, source: core.terrain.source, regions: passRegions ? core.terrain.regions : undefined,
     regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base, waterLevel: seaLevel, waterMargin: WATER_MARGIN,
   });
-  return { scattered, added };
+  return { scattered, added, seaLevel, registry, core, base, regionId, relief };
 }
 
 // ── 1 + 2 + 3. The real mount path over the demo's amp-4.5 eroded mountains config ──────
-const { scattered, added } = await runDemoScatter(true);
+const { scattered, added, seaLevel, registry: reg, base: base0, regionId: rid, relief } = await runDemoScatter(true);
 assert(scattered.layers.length === BIOME_CONTENT.mountains.length, "mountains layer count mismatch");
 const [pineLayer, rockLayer] = scattered.layers;
 
@@ -115,6 +121,30 @@ const { scattered: bad } = await runDemoScatter(false);
 assert(bad.layers[0].instances < pineLayer.instances,
   `bare type-hint survey did not change the pine count (${bad.layers[0].instances} vs ${pineLayer.instances}) — the region-hints fix is not load-bearing / the test is vacuous`);
 
+// ── 4b. NO PROPS IN / BELOW WATER: the spawn mask keeps every layer above the shoreline ─
+// Over the demo's ACTUAL config (eroded mountains flooded to 18% of relief + a 2.5 m dry
+// margin), assert ZERO mounted prop instances — pine AND rock, across ALL layers — sit at or
+// below waterLevel + margin. The placements come from the REAL mount path
+// (scatterBiomeContent → asset.scatter output), not a re-derived pure scatter.
+const dryFloor = seaLevel + WATER_MARGIN;
+const allPlacements = scattered.layers.flatMap((l) => l.placements);
+assert(allPlacements.length === scattered.instances, `placements (${allPlacements.length}) != total instances (${scattered.instances}) — mount path did not return every placement`);
+const inWater = allPlacements.filter((p) => p.y <= dryFloor);
+assert(inWater.length === 0, `${inWater.length} mounted props sit at/below the waterline+margin (dryFloor ${dryFloor.toFixed(2)}; lowest ${Math.min(...allPlacements.map((p) => p.y)).toFixed(2)}) — props standing in water`);
+// Non-vacuous: the region genuinely HAS surface below the dry floor (the flooded valleys are
+// submerged), so the empty result above is the gate doing work, not an empty candidate set.
+assert(relief.minY < dryFloor - 0.5, `relief floor ${relief.minY.toFixed(2)} is not below the dry floor ${dryFloor.toFixed(2)} — the no-props-in-water check would be vacuous`);
+
+// FALSIFIABLE CONTROL: scatter the SAME pine palette through the SAME mount path (asset.scatter)
+// but with the water gate REMOVED (no waterLevel → no elevationMin floor). Pines then DO land
+// at/below the waterline — proving the clean result above is the gate, and the test is non-vacuous.
+const looseCfg = biomeScatterConfigs(TYPE, relief)[0]; // pine layer, no water gate
+assert(looseCfg.elevationMin === undefined, "control setup: ungated pine config still has an elevationMin floor");
+const loose = ok(await reg.invoke("asset.scatter", { regionId: rid, config: looseCfg }, base0));
+const loosePlacements = loose.placements as { y: number }[];
+const looseBelow = loosePlacements.filter((p) => p.y <= dryFloor);
+assert(looseBelow.length > 0, `ungated pine scatter placed nothing at/below the waterline (${loosePlacements.length} total) — the water gate is not load-bearing / the check is vacuous`);
+
 // ── 5. FOREST: the OTHER 2-mesh asset (broadleaf) mounts all its sub-meshes too ─────────
 // Forest layer 0 is a broadleaf(2-mesh)+pine(2-mesh) mix, so it mounts 4 InstancedMeshes
 // (both authored parts of BOTH species reach the GPU — the forest's "only trunks / no
@@ -141,6 +171,8 @@ ops.op_log(
   `p11_biome_mount OK: demo config (mountains amp ${AMP} erode, 4×4, sea ${(SEA_FRACTION * 100) | 0}%, margin ${WATER_MARGIN}) ` +
   `mounts pine ${pineLayer.instances}× across ${pineLayer.mounted} sub-meshes (foliage+trunk) + rock ${rockLayer.instances}× across ${rockLayer.mounted} mesh ` +
   `(pines ≥ boulders); every InstancedMesh count > 0; pine sub-meshes instance distinct geometry. ` +
+  `Water spawn-mask (${WATER_MARGIN} m margin): 0/${scattered.instances} mounted props at/below dryFloor ${dryFloor.toFixed(1)} ` +
+  `(relief ${relief.minY.toFixed(1)}..${relief.maxY.toFixed(1)}, sea ${seaLevel.toFixed(1)}); ungated control placed ${looseBelow.length} below (gate non-vacuous). ` +
   `Root cause pinned: bare type-hint survey collapses pines to ${bad.layers[0].instances} (region-hints survey is load-bearing). ` +
   `[${PINE_ASSET}/${BROADLEAF_ASSET}/${ROCK_ASSET}]`,
 );

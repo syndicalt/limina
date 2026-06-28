@@ -58,6 +58,12 @@ const waterRegionInput = z.object({
     maxTx: z.number().int(),
     maxTz: z.number().int(),
   }),
+  /** The SAME shaping-hint OVERRIDES the region was generated with (amp/erode/island/…).
+   *  Merged over the type defaults so the depth field is baked against the ACTUAL surface
+   *  the terrain was built with — without it a region generated with overrides (e.g. an
+   *  island falloff + erosion) bakes its depth against a flat type-default surface, and the
+   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). */
+  hints: z.record(z.string(), z.number()).optional(),
   resolution: z.number().int().positive().max(1024).optional(),
 });
 
@@ -99,7 +105,9 @@ export function registerWaterSkills(
       let depth: WaterDepthOptions | undefined;
       const region = input.region;
       if (region !== undefined && terrainSource !== undefined && isTerrainType(region.type)) {
-        const hints = terrainTypeHints(region.type, region.bounds);
+        // Type defaults + the region's actual overrides (mirrors world.generateRegion's
+        // merge), so the depth bake samples the SAME shaped+eroded surface as the colliders.
+        const hints = { ...terrainTypeHints(region.type, region.bounds), ...(region.hints ?? {}) };
         const b = region.bounds;
         depth = {
           sampleHeight: (x, z) => terrainSource.sampleHeight(region.seed, x, z, 0, hints),

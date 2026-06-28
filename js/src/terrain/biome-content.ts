@@ -23,7 +23,7 @@
 
 import { TILE_SIZE } from "./procedural.ts";
 import { terrainTypeHints, TERRAIN_TYPES, type TerrainTypeName, type RegionBounds } from "./terrain-types.ts";
-import type { ScatterAsset, ScatterConfig } from "./asset-scatter.ts";
+import type { AssetInstance, ScatterAsset, ScatterConfig } from "./asset-scatter.ts";
 import { Biome, type TerrainSource } from "./types.ts";
 import type { SkillRegistry, InvokeBase } from "../skills/registry.ts";
 import type { RegionState } from "../skills/terrain.ts";
@@ -308,8 +308,12 @@ export interface ScatterBiomeContentResult {
   configs: ScatterConfig[];
   /** Total instances placed across all layers. */
   instances: number;
-  /** Per-layer asset.scatter results (instances + pinned hashes + placements). */
-  layers: { instances: number; mounted: number; assetHashes: Record<string, string> }[];
+  /** Per-layer asset.scatter results (instances + mounted mesh count + pinned hashes +
+   *  the computed placements). `placements` are the REAL transforms the mount path placed
+   *  (asset.scatter's output), so callers/tests can verify the spawn mask — e.g. that no
+   *  waterGated prop sits at/below the waterline — on the actual mounted set, not a
+   *  re-derived pure scatter. */
+  layers: { instances: number; mounted: number; assetHashes: Record<string, string>; placements: AssetInstance[] }[];
 }
 
 function ok(res: MCPResponse | undefined, what: string): Record<string, unknown> {
@@ -343,7 +347,7 @@ export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promis
     const res = ok(await deps.registry.invoke("asset.scatter", { regionId: deps.regionId, config }, deps.base), `asset.scatter ${deps.type}`);
     const instances = res.instances as number;
     total += instances;
-    layers.push({ instances, mounted: res.mounted as number, assetHashes: res.assetHashes as Record<string, string> });
+    layers.push({ instances, mounted: res.mounted as number, assetHashes: res.assetHashes as Record<string, string>, placements: res.placements as AssetInstance[] });
   }
   return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, layers };
 }

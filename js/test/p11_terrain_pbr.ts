@@ -138,10 +138,29 @@ const both = buildTerrainMesh(tile, { palette: { seaLevel: sea }, pbr: { seaLeve
 // deno-lint-ignore no-explicit-any
 assert(isSet((both.material as any).normalNode), "pbr must supersede palette (normalNode set ⇒ PBR path ran)");
 
+// (7) OPT-IN WET-SHORE BAND (falsifiable): with `waterline` set, the wet/foam contact band is
+// folded into colorNode (its wetBand + foamBand + darken consts reachable) and the wet roughness
+// into roughnessNode — and WITHOUT it none of those consts appear (genuinely opt-in, no default
+// regression). Distinctive values so the consts are unambiguous.
+const WL = { wetBand: 1.37, foamBand: 0.29, darken: 0.53, wetRoughness: 0.41 };
+const wlMesh = buildTerrainMesh(tile, { pbr: { seaLevel: sea, minY, maxY, waterline: WL } });
+// deno-lint-ignore no-explicit-any
+const wlm = wlMesh.material as any;
+const wcn = collect(wlm.colorNode);
+const wrn = collect(wlm.roughnessNode);
+assert(hasConst(wcn.consts, WL.wetBand), `waterline colorNode must reference the wet band ${WL.wetBand} (wet band not folded into PBR)`);
+assert(hasConst(wcn.consts, WL.foamBand), `waterline colorNode must reference the foam band ${WL.foamBand} (foam line not folded into PBR)`);
+assert(hasConst(wcn.consts, WL.darken), `waterline colorNode must reference the wet darken ${WL.darken} (wet darkening not applied)`);
+assert(hasConst(wrn.consts, WL.wetRoughness), `waterline roughnessNode must reference the wet roughness ${WL.wetRoughness} (wet gloss not applied)`);
+// FALSIFIABLE control: the no-waterline PBR (section 2) does NOT carry the wet-band consts.
+assert(!hasConst(cn.consts, WL.wetBand) && !hasConst(cn.consts, WL.darken),
+  "non-waterline PBR colorNode carries wet-band consts — the band is not actually opt-in");
+
 ops.op_log(
   "p11_terrain_pbr OK: default keeps flat-colour defaults (no colorNode/normalNode/roughnessNode); " +
   "normalNode is VIEW-SPACE detail — refs the 256² detail texture + root wraps transformNormalToView " +
   "(NOT transformDirection) + all 4 layer normals wired; colorNode is the full band-blend — refs detail+" +
   "climate textures + all 4 layer scales + all 8 band-mask thresholds; default-relief/no-climate/" +
-  "supersede-palette all build.",
+  "supersede-palette all build; opt-in wet-shore band folds wet/foam/darken into colorNode + wet " +
+  "roughness into roughnessNode (absent when not requested).",
 );

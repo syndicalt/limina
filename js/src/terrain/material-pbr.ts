@@ -30,7 +30,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import type { TerrainTile } from "./types.ts";
 import { hashLattice } from "./procedural.ts";
-import { bakeTileClimate, RAMP_DEFAULT_COLORS, type TerrainPaletteOptions } from "./render.ts";
+import { bakeTileClimate, RAMP_DEFAULT_COLORS, shorelineBandMasks, type TerrainPaletteOptions } from "./render.ts";
 
 // TSL handle (loosely typed — the fluent node API is dynamic; the graph is validated by the
 // live WebGPU shader compile / in-tab UAT, and its CONSTRUCTION by js/test/p11_terrain_pbr.ts).
@@ -67,6 +67,28 @@ export interface TerrainPbrOptions extends TerrainPaletteOptions {
   /** Per-layer base roughness (PBR honesty). Defaults: rock 0.92, grass 0.85, snow 0.6,
    *  sand 0.95, subSea 0.5. */
   layerRoughness?: Partial<{ rock: number; grass: number; snow: number; sand: number; subSea: number }>;
+  /** OPT-IN WET-SHORE BAND (render-only). When set, wherever the terrain meets the waterline —
+   *  a steep ROCK cliff OR a gentle sandy slope — a thin band right at/around sea level is
+   *  DARKENED (wet look) over WHATEVER layer is there and made glossier (lower roughness), with
+   *  an optional bright foam line exactly at sea level. Keyed to world-Y vs `seaLevel` (ground-
+   *  truth, no depth buffer) using the SAME contact-band math as the flat ramp's shoreline
+   *  (render.ts shorelineBandMasks). Omit to leave the surface byte-identical (default off). */
+  waterline?: {
+    /** Sea-level world Y the band centres on. Default: the material's `seaLevel`. */
+    seaLevel?: number;
+    /** Half-height (world Y) of the wet band above/below the waterline. Default 1.2. */
+    wetBand?: number;
+    /** Half-height (world Y) of the bright foam line. Default 0.25. */
+    foamBand?: number;
+    /** Albedo multiply at the wettest point (0..1; lower = darker/wetter). Default 0.55. */
+    darken?: number;
+    /** Roughness in the wet band (wet surfaces are glossier). Default 0.32. */
+    wetRoughness?: number;
+    /** Foam-line strength (0 disables the foam line). Default 0.5. */
+    foam?: number;
+    /** Foam colour. Default 0xf2f6f4 (sea-foam white). */
+    foamColor?: number;
+  };
 }
 
 // ── Shared baked tileable detail-noise texture ────────────────────────────────────────────
@@ -312,5 +334,27 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   rough = T.mix(rough, T.float(lr.rock ?? 0.92), cliff);
   rough = T.mix(rough, T.float(lr.sand ?? 0.95), coastMask);
   rough = T.mix(rough, T.float(lr.subSea ?? 0.5), subMask);
+
+  // ── OPT-IN WET-SHORE BAND: texture-terminate the waterline ──────────────────────────────
+  // Wherever the terrain meets the water (cliff OR beach), darken the band colour already there
+  // + drop roughness so the contact reads as an intentional WET shoreline over WHATEVER layer is
+  // present (wet rock on a sea cliff, wet sand on a slope), plus an optional thin foam line right
+  // at sea level. Reuses the flat ramp's contact-band math (render.ts shorelineBandMasks), so the
+  // PBR waterline lands exactly where the ramp's would. Render-only; default off (byte-identical).
+  const wl = pbr.waterline;
+  if (wl !== undefined) {
+    const wlSea = wl.seaLevel ?? sea;
+    const { wetMask, foamMask } = shorelineBandMasks(wlSea, wl.wetBand ?? 1.2, wl.foamBand ?? 0.25);
+    // Wet = darken WHATEVER albedo is here (multiply), so it works over rock/sand/grass alike.
+    col = T.mix(col, col.mul(wl.darken ?? 0.55), wetMask);
+    const foamStrength = wl.foam ?? 0.5;
+    if (foamStrength > 0) {
+      const foam = new THREE.Color(wl.foamColor ?? 0xf2f6f4);
+      col = T.mix(col, T.vec3(foam.r, foam.g, foam.b), foamMask.mul(foamStrength));
+    }
+    material.colorNode = col;
+    // Wet surfaces are glossier: pull roughness down toward wetRoughness across the wet band.
+    rough = T.mix(rough, T.float(wl.wetRoughness ?? 0.32), wetMask);
+  }
   material.roughnessNode = T.clamp(rough, 0, 1);
 }
