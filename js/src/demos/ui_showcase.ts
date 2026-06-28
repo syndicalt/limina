@@ -16,7 +16,7 @@ import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { createMaterial } from "../materials/palette.ts";
 
-const engine = await createEngine({ width: 960, height: 640 });
+const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
 engine.scene.background = new THREE.Color(0x0a0d13);
 
 // --- scene: ground + marker entities the containers point at ----------------

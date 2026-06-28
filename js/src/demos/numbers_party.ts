@@ -136,7 +136,7 @@ const PALETTE = [
 // Engine + festive scene
 // ---------------------------------------------------------------------------
 
-const engine = await createEngine({ width: 1180, height: 740 });
+const engine = await createEngine({ width: 1180, height: 740, renderBaseline: { ground: { enabled: false } } });
 engine.scene.background = new THREE.Color(0x140a24); // deep dusk-purple club night
 
 // Dance floor: a dark tinted slab + a club-toned grid + a glowing centre ring.

@@ -64,7 +64,7 @@ function bindBody(world: WorldContext, entity: string): BodyBinding {
   return { entity, eid: entry.eid, bodyId: entry.bodyId };
 }
 
-const engine = await createEngine({ width: 1120, height: 720 });
+const engine = await createEngine({ width: 1120, height: 720, renderBaseline: { ground: { enabled: false } } });
 const agents = new AgentRegistry();
 const tracer = new LiminaTracer("ses_p3_showcase");
 const registry = new SkillRegistry(tracer);

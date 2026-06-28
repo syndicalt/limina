@@ -16,7 +16,7 @@ import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { buildFidelityScene } from "./fidelity_scene_core.ts";
 
-const engine = await createEngine({ width: 960, height: 640 });
+const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
 const tracer = new LiminaTracer("ses_fidelity");
 const registry = new SkillRegistry(tracer);
 registerCoreSkills(registry);

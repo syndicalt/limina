@@ -27,7 +27,7 @@ function entityId(res: MCPResponse): string {
   throw new Error("no entity id");
 }
 
-const engine = await createEngine({ width: 960, height: 640 });
+const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
 const agents = new AgentRegistry();
 const tracer = new LiminaTracer("ses_player");
 const registry = new SkillRegistry(tracer);

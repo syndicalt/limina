@@ -42,7 +42,7 @@ const RACK_COLORS = [
 ];
 const CUE_COLOR = 0xfafafa;
 
-const engine = await createEngine({ width: 960, height: 640 });
+const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
 const { renderer, scene, camera, world } = engine;
 scene.background = new THREE.Color(0x05080d);
 

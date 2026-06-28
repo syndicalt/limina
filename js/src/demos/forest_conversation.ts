@@ -40,7 +40,7 @@ const DT_MS = 1000 / 60;
 // Engine + world context
 // ---------------------------------------------------------------------------
 
-const engine = await createEngine({ width: 1024, height: 640 });
+const engine = await createEngine({ width: 1024, height: 640, renderBaseline: { ground: { enabled: false } } });
 engine.scene.background = new THREE.Color(0x9ec7e8); // soft dusk-blue sky
 
 const world: WorldContext = {
