@@ -13,8 +13,11 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { applyRenderBaseline } from "../render-baseline.ts";
 
+interface FrameStats { meanLum: number; lumStdev: number; detail: number; width: number; height: number }
+interface SceneSpec { boxes: Array<{ position: [number, number, number]; size: [number, number, number]; color: number }> }
 declare const window: {
-  __renderAt?: (config: Record<string, number>) => Promise<{ meanLum: number; lumStdev: number; detail: number; width: number; height: number }>;
+  __renderAt?: (config: Record<string, number>) => Promise<FrameStats>;
+  __renderScene?: (spec: SceneSpec) => Promise<FrameStats>;
   __ready?: boolean;
 };
 
@@ -94,33 +97,66 @@ function lumStats(px: Uint8Array | Float32Array): { mean: number; stdev: number;
   return { mean, stdev: Math.sqrt(varSum / n), detail: gradSum / Math.max(gradN, 1) };
 }
 
+const renderAsync = (renderer as never as { renderAsync(s: unknown, c: unknown): Promise<void> }).renderAsync.bind(renderer);
+const readPixels = (renderer as never as {
+  readRenderTargetPixelsAsync(rt: unknown, x: number, y: number, w: number, h: number): Promise<Uint8Array | Float32Array>;
+}).readRenderTargetPixelsAsync.bind(renderer);
+
+/** Render into the offscreen target, read it back (render twice first so a just-changed state is
+ *  settled), then draw to the canvas for screenshots. Returns the frame stats. */
+async function renderAndRead(): Promise<FrameStats> {
+  renderer.setRenderTarget(rt as never);
+  await renderAsync(scene, camera);
+  await renderAsync(scene, camera);
+  const px = await readPixels(rt, 0, 0, W, H);
+  renderer.setRenderTarget(null);
+  await renderAsync(scene, camera);
+  const s = lumStats(px);
+  return { meanLum: s.mean, lumStdev: s.stdev, detail: s.detail, width: W, height: H };
+}
+
 window.__renderAt = async (config) => {
   // `flat` (1) renders the naive unlit "before" frame; `fullSky` (1) renders the lit baseline WITH its
   // procedural sky (the "after" for the A side-by-side); otherwise the lit scene on a dark background.
   const flat = (config.flat ?? 0) >= 1;
   const fullSky = (config.fullSky ?? 0) >= 1;
-  for (const s of shapes) s.mesh.material = flat ? s.flat : s.lit;
+  for (const s of shapes) { s.mesh.visible = true; s.mesh.material = flat ? s.flat : s.lit; }
   scene.background = flat ? new THREE.Color(0x222222) : (fullSky ? skyBackground : new THREE.Color(0x0a0d12));
-  // Exposure is the primary knob the critic drives; sun intensity is an optional second axis.
   renderer.toneMappingExposure = config.exposure ?? 1.0;
   if (config.sun !== undefined) {
     scene.traverse((o: THREE.Object3D) => {
       if ((o as THREE.DirectionalLight).isDirectionalLight) (o as THREE.DirectionalLight).intensity = config.sun;
     });
   }
-  // Render into the offscreen target and read it back, then also draw to the canvas for screenshots.
-  // Render twice so a just-changed light/IBL state is fully settled before the readback (the renderer
-  // can lag one frame on state changes).
-  renderer.setRenderTarget(rt as never);
-  const renderAsync = (renderer as never as { renderAsync(s: unknown, c: unknown): Promise<void> }).renderAsync.bind(renderer);
-  await renderAsync(scene, camera);
-  await renderAsync(scene, camera);
-  const px = await (renderer as never as {
-    readRenderTargetPixelsAsync(rt: unknown, x: number, y: number, w: number, h: number): Promise<Uint8Array | Float32Array>;
-  }).readRenderTargetPixelsAsync(rt, 0, 0, W, H);
-  renderer.setRenderTarget(null);
-  await (renderer as never as { renderAsync(s: unknown, c: unknown): Promise<void> }).renderAsync(scene, camera);
-  const stats = lumStats(px);
-  return { meanLum: stats.mean, lumStdev: stats.stdev, detail: stats.detail, width: W, height: H };
+  return renderAndRead();
 };
+
+// Flagship-demo render: build a real archetype scene from a box spec (e.g. the siege keep's actual
+// architecture.building parts + attackers), frame the camera to its bounds, render with the baseline.
+const sceneMeshes: THREE.Mesh[] = [];
+window.__renderScene = async (spec) => {
+  for (const m of shapes) m.mesh.visible = false; // hide the A/B probe spheres
+  for (const m of sceneMeshes) scene.remove(m);
+  sceneMeshes.length = 0;
+  scene.background = skyBackground; // full fidelity for the showcase
+  renderer.toneMappingExposure = 1.0;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const b of spec.boxes) {
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]),
+      new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.75, metalness: 0.04 }),
+    );
+    mesh.position.set(b.position[0], b.position[1], b.position[2]);
+    scene.add(mesh); sceneMeshes.push(mesh);
+    minX = Math.min(minX, b.position[0] - b.size[0]); maxX = Math.max(maxX, b.position[0] + b.size[0]);
+    minY = Math.min(minY, b.position[1] - b.size[1]); maxY = Math.max(maxY, b.position[1] + b.size[1]);
+    minZ = Math.min(minZ, b.position[2] - b.size[2]); maxZ = Math.max(maxZ, b.position[2] + b.size[2]);
+  }
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, cz = (minZ + maxZ) / 2;
+  const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 4);
+  camera.position.set(cx + span * 0.9, cy + span * 0.85, cz + span * 1.25);
+  camera.lookAt(cx, cy, cz);
+  return renderAndRead();
+};
+
 window.__ready = true;
