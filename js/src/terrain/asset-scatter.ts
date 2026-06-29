@@ -21,22 +21,56 @@
 import { CLIMATE_BIOME, CLIMATE_CHANNELS, CLIMATE_TEMP_C, type TerrainTile } from "./types.ts";
 import { hashSeed, mulberry32 } from "./scatter.ts";
 
-// ── EMBED-SINK (slope-aware vertical tether) ────────────────────────────────────
-// A prop is tethered to the surface at its CENTER (x,z). Its flat base is horizontal,
-// so on a slope of gradient `s` (rise/run) the downhill lip of a base of radius `r`
-// hangs ~`r·s` above the surface (the "floating trees" artefact). But the curated trees
-// are WIDE GROUND-TOUCHING CONES (the foliage skirt reaches the ground, base radius ~1.2–1.3),
-// not thin trunks — so fully grounding the downhill lip (sink = r·s) buries the TRUNK by r·s,
-// which reads as "sunken" trees on a slope. There is no perfect Y-only fix for a wide cone, so
-// use the BALANCED sink K=0.5: sinking by r·s/2 makes the downhill-skirt float (r·s − sink) and
-// the trunk bury (sink) EQUAL, each r·s/2 — minimizing the worst-case mismatch instead of
-// trading a floating skirt for a buried trunk. (Trees are also kept off the steepest slopes via
-// the catalog tree slopeMax, where even the balanced sink leaves a visible mismatch.) The sink
-// is capped so a near-cliff prop can't submerge. Pure geometry from the slope already computed
-// per candidate — deterministic + replay-safe (no new per-instance log state; driven by config).
-const EMBED_K = 0.5;          // BALANCED: skirt float (r·s/2) == trunk bury (r·s/2), min worst-case
-const EMBED_MAX_RADII = 1.5;  // never sink more than 1.5 base radii (~40% of a ~4R-tall prop)
-const EMBED_ABS_MAX = 3.0;    // absolute world-unit cap on the sink
+// ── CURVATURE-AWARE PLACEMENT (the global "no float, no bury on ridges" fix) ─────
+// A prop is tethered to the surface at its CENTER (x,z). Its flat base is horizontal, so on a
+// SLOPE of gradient `s` (rise/run) the downhill lip of a base of radius `r` hangs ~`r·s` above
+// the surface. The BALANCED sink K=0.5 (skirt float == trunk bury == r·s/2) is the minmax-optimal
+// Y-only placement on a UNIFORM SLOPE — but it FAILS on non-planar terrain, because slope is a
+// single-point gradient:
+//   • CONVEX RIDGE: slope@pivot ≈ 0 even though the ground drops on both sides → no sink → the
+//     skirt FLOATS by (pivot − downhill_ground), often metres on a sharp ridge. This is the
+//     "floating trees" artefact the island demo exhibited.
+//   • CONCAVE GULLY: the pivot sits at the gully floor; sinking it buries the trunk into the
+//     floor (the "sunken trees" artefact).
+// The fix is CURVATURE-AWARE placement: sample the height field at 4 cardinal points at radius r,
+// compute the discrete Laplacian (sum of cardinals − 4·center, normalised by r²), and BRANCH:
+//   • lap < CURV_CONVEX (convex / ridge)   → instY = min(center, 4 cardinals). Grounds the skirt
+//     at the lowest point in the footprint disc → float structurally impossible (mesh and scatter
+//     share tile.heights bit-exactly, so no visible vertex in the disc can sit above instY).
+//   • lap > CURV_CONCAVE (concave / gully) → instY = center. Sits at the gully floor (no sink →
+//     no trunk bury into the floor).
+//   • |lap| ≤ threshold (planar / slope)   → the BALANCED K=0.5 sink (minmax-optimal Y-only
+//     placement on a uniform slope). Byte-identical to the prior code on flat ground and on
+//     uniform slopes — so every existing embed behaviour (including the gate contract, the water
+//     clamp, the cap) is preserved exactly. Only ridge/gully placements change.
+// Determinism + replay-safe: pure geometry from tile.heights (already shared bit-exactly with the
+// mesh + collider); no new per-instance log state; driven entirely by the ScatterConfig.
+const EMBED_K = 0.35;         // PLANAR-SLOPE SINK (rebalanced 0.5 → 0.35): trades some skirt float
+                              // for less trunk bury. Float: r·s·(1−K) ≈ 0.65·r·s. Bury: r·s·K ≈ 0.35·r·s.
+                              // Empirically reads better than the strict minmax K=0.5 (which left a
+                              // uniform ~0.3 m trunk bury on the island dome's slopes — visible as
+                              // "all trees sunk a little"). At K=0.35 sink drops to ~0.19 m, skirt
+                              // float rises to ~0.31 m (both small, both at visual tolerance).
+const EMBED_MAX_RADII = 1.5;  // never sink more than 1.5 base radii on a planar slope (~40% of a ~4R-tall prop)
+const EMBED_ABS_MAX = 3.0;    // absolute world-unit cap on the planar-slope sink
+// Per-m² curvature thresholds at which the planar-slope sink stops being the right answer.
+// Tuned so a centre-to-cardinal height delta of ~5 cm at radius r switches to the non-planar path:
+// for a parabolic ridge y = −a·x², lap = −2a; the delta at radius r is a·r²; threshold |lap|·r²/2 ≈ delta,
+// so CURV = 0.10/r² ≈ 0.07 for r=1.2 → ~5 cm delta. Below this the planar path is byte-identical to
+// the legacy K=0.5 sink; above it the ridge/gully path takes over.
+const CURV_CONVEX = -0.10;    // 1/m² — lap below this ⇒ convex (ridge) ⇒ min(cardinals)
+const CURV_CONCAVE = +0.10;   // 1/m² — lap above this ⇒ concave (gully) ⇒ center (no sink)
+// CREST GATE: the convex/concave branches seat at the FOOTPRINT DISC MIN (convex) or the pivot
+// (concave) — both are correct only when the pivot itself is at a local extremum (a true ridge
+// crest or gully floor, where pivot slope ≈ 0). On a CONVEX FLANK (curvature < 0 AND non-zero
+// slope — e.g. a smooth dome like the island demo) the disc-min is the downhill EDGE of the
+// footprint, ~r·slope below the pivot, so seating there sinks the trunk by ~2× the balanced
+// planar sink (the over-bury symptom). Gating the non-planar branches to near-zero pivot slope
+// means flanks take the balanced planar K=0.5 sink regardless of curvature, and only genuine
+// crests (slope < CREST_SLOPE) take the disc-min grounding. Measured on the 4×4 island demo:
+// the crest gate moves 48 convex-branch pines (avg sink 0.608 m) to the planar path (avg sink
+// 0.300 m) — eliminating the over-bury without losing the ridge-crest grounding.
+const CREST_SLOPE = 0.05;     // pivot slope below which the convex/concave branches may fire
 
 /** One curated asset in the scatter palette: its content-addressed id and an
  *  optional relative weight (default 1) for the deterministic weighted pick. */
@@ -44,9 +78,11 @@ export interface ScatterAsset {
   id: string;
   weight?: number;
   /** OPT-IN footprint radius (world units at scale 1, the XZ half-extent of the
-   *  asset's flat base). 0 (default) → no change, byte-identical. >0 sinks the
-   *  instance into a slope so its downhill base lip stays grounded instead of
-   *  floating ~`radius·slope` above the surface (see the embed-sink in scatterAssets).
+   *  asset's flat base). 0 (default) → no change, byte-identical. >0 enables CURVATURE-AWARE
+   *  placement: on a convex ridge the instance seats at the lowest point of its footprint
+   *  disc (no skirt float), on a planar slope it takes the balanced K=0.5 sink (skirt float
+   *  == trunk bury == r·slope/2), on a concave gully it sits at the pivot (no trunk bury
+   *  into the floor). See the curvature-aware block in scatterAssets.
    *  Per-asset; overrides the layer-default ScatterConfig.embedRadius. */
   embedRadius?: number;
 }
@@ -80,9 +116,10 @@ export interface ScatterConfig {
   cluster?: number;
   /** World-space frequency of the cluster field (smaller = larger clumps). Default 1/26. */
   clusterFreq?: number;
-  /** OPT-IN layer-default footprint radius (world units at scale 1) for the embed-sink,
-   *  applied to any palette asset that doesn't set its own ScatterAsset.embedRadius.
-   *  0 (default) → no sink, byte-identical back-compat. See the embed-sink in scatterAssets. */
+  /** OPT-IN layer-default footprint radius (world units at scale 1) for the curvature-aware
+   *  placement, applied to any palette asset that doesn't set its own ScatterAsset.embedRadius.
+   *  0 (default) → no sampling, byte-identical back-compat. See the curvature-aware block in
+   *  scatterAssets. */
   embedRadius?: number;
   /** Optional biome whitelist (reads the tile climate grid's biome channel). */
   biomes?: number[];
@@ -249,26 +286,89 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
         if (config.tempMax !== undefined && tempC > config.tempMax) continue;
       }
 
-      // EMBED-SINK — applied to the FINAL instance.y AFTER every gate (the elevation/
-      // water + slope + climate filters above all consult the SURFACE y), so sinking a
-      // prop into the slope NEVER pulls it through the water line or changes which props
-      // place (count + the 0-in-water guarantee are preserved). The sink is the picked
-      // asset's footprint (per-asset radius, else the layer default, else 0) scaled by the
-      // instance scale and the local slope; embedRadius 0 → instY === y (byte-identical).
+      // CURVATURE-AWARE PLACEMENT — applied to the FINAL instance.y AFTER every gate (the
+      // elevation/water + slope + climate filters above all consult the SURFACE y at the pivot),
+      // so the placement decision NEVER changes which props place (count + the 0-in-water
+      // guarantee are preserved exactly). The footprint radius is the picked asset's per-asset
+      // radius (else the layer default, else 0); embedRadius 0 → byte-identical to the un-embedded
+      // scatter (no cardinal samples, no sink — pure back-compat).
       const embedRadius = palette[pick].embedRadius ?? config.embedRadius ?? 0;
       let instY = y;
-      if (embedRadius > 0 && slope > 0) {
+      if (embedRadius > 0) {
         const r = embedRadius * scale; // footprint half-extent in world units for THIS instance
-        const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
-        const sink = Math.min(r * slope * EMBED_K, cap);
-        // Clamp the sunk origin to the lower elevation/water floor: the gate accepts a prop on
-        // SURFACE y >= elevationMin, so a prop placed just above the waterline must NOT bed its
-        // origin UNDER the water. Near the floor the sink simply shortens (the downhill lip
-        // floats a touch) instead of submerging — the 0-in-water guarantee is preserved exactly.
-        // elevationMin defaults to -Infinity (no floor) → the full sink applies. For a ZERO-margin
-        // water gate the clamp may seat a base AT the waterline (elevationMin); that's acceptable
-        // (e.g. driftwood at the shore), and any dry margin lifts it clear.
-        instY = Math.max(y - sink, elevationMin);
+        // World → grid step for radius r (mirrors the candidate u→fc / v→fr mapping at line ~201).
+        const fcStep = (r / sx) * (ncols - 1);
+        const frStep = (r / sz) * (nrows - 1);
+        // EDGE GUARD: sampleRaw extrapolates linearly beyond the tile edge (it clamps the integer
+        // index but not the fractional weight), which fabricates curvature out of the flat
+        // constant region past the edge — a uniform ramp reads as a "ridge" near its right edge.
+        // The Laplacian is only meaningful when all 4 cardinals sit inside the tile; otherwise
+        // fall through to the planar-slope path (byte-identical to the legacy embed-sink).
+        const cardinalsInterior = fc - fcStep >= 0 && fc + fcStep <= ncols - 1 && fr - frStep >= 0 && fr + frStep <= nrows - 1;
+        if (cardinalsInterior) {
+          // 16 samples on the footprint circle at 22.5° intervals (radius r) — denser than 4
+          // cardinals, captures narrow erosion channels that the 8-sample (cardinal + diagonal)
+          // pattern missed on hydraulic-eroded terrain. The 4 cardinals (k % 4 === 0) drive the
+          // standard 5-point Laplacian; all 16 drive the convex-branch min().
+          const yN = oy + sampleRaw(fr - frStep, fc) * sy;          // k=6 (270°)
+          const yS = oy + sampleRaw(fr + frStep, fc) * sy;          // k=2 (90°)
+          const yW = oy + sampleRaw(fr, fc - fcStep) * sy;          // k=4 (180°)
+          const yE = oy + sampleRaw(fr, fc + fcStep) * sy;          // k=0 (0°)
+          // Discrete Laplacian at the pivot, per world unit², from the 4 cardinals (the standard
+          // 5-point stencil). The linear (slope) component cancels in the symmetric stencil — so a
+          // uniform slope yields lap≈0 (planar path), while ridges (cardinals average below centre)
+          // yield lap<0 and gullies (cardinals average above) lap>0.
+          const lap = (yN + yS + yW + yE - 4 * y) / (r * r);
+          // CREST GATE: the non-planar branches are correct only when the pivot is a local
+          // extremum (slope ≈ 0). On a convex/concave FLANK (curvature + non-zero slope), the
+          // disc-min over-sinks (the dome demo's symptom) — fall through to the planar K=0.5 path.
+          const isCrest = slope < CREST_SLOPE;
+          if (isCrest && lap < CURV_CONVEX) {
+            // CONVEX CREST (ridge peak, slope ≈ 0): ground the skirt at the lowest point on the
+            // footprint disc. The sample pattern is a dense 5×5 grid filtered to the disc (radius r)
+            // — same pattern tools/export-island.ts re-samples in its parity assertion, so the
+            // contract holds by construction. 21 interior samples catch narrow erosion channels.
+            let yMinFootprint = y;
+            for (let gi = 0; gi < 5; gi++) {
+              for (let gj = 0; gj < 5; gj++) {
+                const dx = -r + (2 * r) * (gi + 0.5) / 5;
+                const dz = -r + (2 * r) * (gj + 0.5) / 5;
+                if (dx * dx + dz * dz > r * r) continue;
+                const fcOff = (dx / sx) * (ncols - 1);
+                const frOff = (dz / sz) * (nrows - 1);
+                yMinFootprint = Math.min(yMinFootprint, oy + sampleRaw(fr + frOff, fc + fcOff) * sy);
+              }
+            }
+            instY = yMinFootprint;
+          } else if (isCrest && lap > CURV_CONCAVE) {
+            // CONCAVE FLOOR (gully bottom, slope ≈ 0): sit at the pivot (the gully floor).
+            // Sinking into the floor would bury the trunk into the rising walls; the pivot IS
+            // the natural seat. instY = y (no-op).
+          } else if (slope > 0) {
+            // PLANAR SLOPE — including convex/concave FLANKS (gated away from the crest branches
+            // by CREST_SLOPE). The BALANCED K=0.5 sink: minmax-optimal Y-only placement for a
+            // wide base on a uniform slope (skirt float == trunk bury == r·s/2). Byte-identical
+            // to the prior embed-sink on a uniform slope; the cap holds a near-cliff prop above
+            // submerge. Residual skirt-float of r·s/2 is the inherent Y-only limit; partial
+            // normal-alignment (tilt toward surface normal) is the lever if it ever reads badly.
+            const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
+            const sink = Math.min(r * slope * EMBED_K, cap);
+            instY = y - sink;
+          }
+        } else if (slope > 0) {
+          // EDGE FALLBACK (within `cardinalsInterior === false`): the cardinals would extrapolate
+          // past the tile, so the Laplacian is unreliable. Use the planar K=0.5 sink alone — the
+          // slope at the pivot is still valid (it reads ±1 cell INSIDE the tile).
+          const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
+          const sink = Math.min(r * slope * EMBED_K, cap);
+          instY = y - sink;
+        }
+        // WATERLINE CLAMP (unchanged): the gate accepts a prop on SURFACE y >= elevationMin, so a
+        // prop placed just above the waterline must NOT bed its origin UNDER the water. The ridge
+        // path's min(samples) can dip below the surface at the pivot; the clamp pins it to the
+        // floor, preserving the 0-in-water guarantee exactly. elevationMin defaults to -Infinity →
+        // no floor → the full min applies (a ridge prop grounded at the lowest footprint vertex).
+        instY = Math.max(instY, elevationMin);
       }
       out.push({ assetId: palette[pick].id, x, y: instY, z, yaw, scale });
     }

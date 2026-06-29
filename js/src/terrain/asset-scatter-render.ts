@@ -45,6 +45,42 @@ export function buildAssetInstancedMeshes(root: SceneObject, instances: AssetIns
     // the origin): local = root.matrixWorld^-1 * mesh.matrixWorld.
     local.identity();
     if (n.matrixWorld !== undefined) local.multiplyMatrices(rootInv, n.matrixWorld);
+
+    // ── GLB ORIGIN NORMALIZATION ────────────────────────────────────────────────
+    // The curated GLBs are NOT consistently based at Y=0 or centred at XZ=(0,0) in asset-root
+    // space. Measured main-geometry offsets (post node-transform):
+    //   pine.glb      base_Y=+0.720  Z_center=−6.104   (dominant — pines floated 0.72 m AND
+    //                                                   rendered 6 m in -Z of placement)
+    //   broadleaf.glb base_Y=−0.099  Z_center=−0.338
+    //   bush.glb      base_Y=−0.289
+    //   grass.glb                  X_center=+63.231   (63 m off-position!)
+    //   rock/cactus/palm ≈ 0 (clean)
+    // Compute each mesh's world-space bbox (in asset-root coords) and bake a corrective
+    // translation so the asset's geometry is based at Y=0 and centred at XZ=(0,0). This runs
+    // ONCE per asset per load (amortized across all instances) and never touches the asset
+    // bytes (replay hash-pinning is unaffected — only the instance matrices change).
+    if (n.geometry.boundingBox === null) n.geometry.computeBoundingBox();
+    const bb = n.geometry.boundingBox!;
+    let xmin = Infinity, ymin = Infinity, zmin = Infinity;
+    let xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
+    const corner = new THREE.Vector3();
+    for (const cx of [bb.min.x, bb.max.x]) for (const cy of [bb.min.y, bb.max.y]) for (const cz of [bb.min.z, bb.max.z]) {
+      corner.set(cx, cy, cz).applyMatrix4(local);
+      if (corner.x < xmin) xmin = corner.x; if (corner.x > xmax) xmax = corner.x;
+      if (corner.y < ymin) ymin = corner.y; if (corner.y > ymax) ymax = corner.y;
+      if (corner.z < zmin) zmin = corner.z; if (corner.z > zmax) zmax = corner.z;
+    }
+    // Corrective translation: lift so base_Y=0, recenter XZ. The offset is in ASSET-ROOT space
+    // (computed from world-space corners above), so it must be applied AFTER `local` — i.e.
+    // LEFT-multiplied (`premultiply`), so the vertex path is instance × offset × local × vertex.
+    // (Right-multiplying `local.multiply(offset)` would apply the offset in NODE-LOCAL space,
+    // where the asset's scale/rotation would mangle it — pine's ×100 scale sent Y to ~600.)
+    local.premultiply(new THREE.Matrix4().makeTranslation(
+      -(xmin + xmax) / 2,  // X: centre the footprint
+      -ymin,               // Y: base at 0 (the trunk sits ON the placement Y)
+      -(zmin + zmax) / 2,  // Z: centre the footprint (fixes pine's 6 m back-shift)
+    ));
+
     const inst = new THREE.InstancedMesh(n.geometry, n.material, instances.length);
     for (let i = 0; i < instances.length; i++) {
       const p = instances[i];

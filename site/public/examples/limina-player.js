@@ -17,7 +17,7 @@ var LiminaPlayer = (() => {
   };
   var __toCommonJS = (mod3) => __copyProps(__defProp({}, "__esModule", { value: true }), mod3);
 
-  // js/src/browser-entry.ts
+  // src/browser-entry.ts
   var browser_entry_exports = {};
   __export(browser_entry_exports, {
     fetchExport: () => fetchExport,
@@ -25,7 +25,7 @@ var LiminaPlayer = (() => {
     run: () => run
   });
 
-  // js/build/three.bundle.mjs
+  // build/three.bundle.mjs
   var __defProp2 = Object.defineProperty;
   var __export2 = (target, all3) => {
     for (var name in all3)
@@ -69339,7 +69339,7 @@ var<${access}> ${name} : ${structName};`;
   };
   var bloom = (node, strength, radius, threshold) => new BloomNode(nodeObject2(node), strength, radius, threshold);
 
-  // js/build/bitecs.bundle.mjs
+  // build/bitecs.bundle.mjs
   var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
   var pe = (e, t) => t & e.entityMask;
   var fe = (e, t) => t >>> e.versionShift & (1 << e.versionBits) - 1;
@@ -69828,7 +69828,7 @@ var<${access}> ${name} : ${structName};`;
   };
   var N2 = (e, t) => K(e[u].entityIndex, t);
 
-  // js/src/ecs/world.ts
+  // src/ecs/world.ts
   var MAX_ENTITIES = 16384;
   var Position = {
     x: new Float32Array(MAX_ENTITIES),
@@ -69892,7 +69892,7 @@ var<${access}> ${name} : ${structName};`;
     Rotation.w[eid] = scratch[6];
   }
 
-  // js/src/ecs/facade.ts
+  // src/ecs/facade.ts
   var SoaTransformStorage = class {
     storageVersion = 0;
     get version() {
@@ -69922,7 +69922,7 @@ var<${access}> ${name} : ${structName};`;
     return new SoaTransformStorage();
   }
 
-  // js/src/spatial/index.ts
+  // src/spatial/index.ts
   function finiteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
   }
@@ -70115,7 +70115,7 @@ var<${access}> ${name} : ${structName};`;
     };
   }
 
-  // js/src/render-baseline.ts
+  // src/render-baseline.ts
   var DEFAULT_RENDER_BASELINE = {
     enabled: true,
     toneMapping: ACESFilmicToneMapping,
@@ -70325,7 +70325,7 @@ var<${access}> ${name} : ${structName};`;
     return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode, atmosphereMode, fog: fog3 };
   }
 
-  // js/src/engine.ts
+  // src/engine.ts
   var ops = typeof Deno !== "undefined" && Deno?.core?.ops ? Deno.core.ops : void 0;
   function installOps(host) {
     ops = host;
@@ -70380,7 +70380,7 @@ var<${access}> ${name} : ${structName};`;
     }
   };
 
-  // js/build/zod.bundle.mjs
+  // build/zod.bundle.mjs
   var __defProp3 = Object.defineProperty;
   var __export3 = (target, all3) => {
     for (var name in all3)
@@ -84741,7 +84741,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   }
   config(en_default());
 
-  // js/src/skills/permissions.ts
+  // src/skills/permissions.ts
   var PERMISSION_PROFILES = {
     "builder.readWrite": [
       "scene.read",
@@ -84975,7 +84975,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return new Set(PERMISSION_PROFILES[name] ?? []);
   }
 
-  // js/src/policy/engine.ts
+  // src/policy/engine.ts
   function policyEventType(d) {
     return d.allow ? "policy.decision" : "policy.denied";
   }
@@ -84997,7 +84997,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/skills/registry.ts
+  // src/skills/registry.ts
   function stampTick(applyTick, proposeTick) {
     return typeof applyTick === "number" && Number.isFinite(applyTick) && applyTick >= proposeTick ? applyTick : proposeTick;
   }
@@ -85356,7 +85356,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/terrain/types.ts
+  // src/terrain/types.ts
   var CLIMATE_TEMP_C = 0;
   var CLIMATE_PRECIP_MM = 1;
   var CLIMATE_BIOME = 2;
@@ -85371,7 +85371,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     BOREAL_WET: 6
   };
 
-  // js/src/terrain/erosion.ts
+  // src/terrain/erosion.ts
   var DROPLET_INERTIA = 0.05;
   var MIN_SLOPE = 5e-4;
   var GRAVITY = 4;
@@ -85573,7 +85573,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return h;
   }
 
-  // js/src/terrain/procedural.ts
+  // src/terrain/procedural.ts
   var TILE_SIZE = 48;
   var TILE_RES = 33;
   var HEIGHT_SCALE = 12;
@@ -85863,7 +85863,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/materials/triplanar-noise.ts
+  // src/materials/triplanar-noise.ts
   var T3 = three_tsl_exports;
   var DETAIL_RES = 256;
   var DETAIL_CELLS = 8;
@@ -85997,7 +85997,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { color: color3, normal: nrm, roughness: rough };
   }
 
-  // js/src/materials/procedural-pbr.ts
+  // src/materials/procedural-pbr.ts
   var T4 = three_tsl_exports;
   var DEFAULT_KNOBS = { scale: 0.35, normal: 0.6, mottle: 0.22, roughVar: 0.12, sharpness: 4 };
   var PROCEDURAL_PBR_KNOBS = {
@@ -86028,7 +86028,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     material.roughnessNode = T4.clamp(rough, 0, 1);
   }
 
-  // js/src/materials/palette.ts
+  // src/materials/palette.ts
   var MATERIALS = {
     // Granular ground — warm, pale, fully matte.
     sand: { color: 14929312, roughness: 0.92, metalness: 0 },
@@ -86077,7 +86077,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return material;
   }
 
-  // js/src/skills/scene.ts
+  // src/skills/scene.ts
   var Vec3 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var createEntityInput = external_exports.object({
     shape: external_exports.enum(["box", "sphere"]).default("box"),
@@ -86226,7 +86226,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(queryEntities);
   }
 
-  // js/src/skills/ecs.ts
+  // src/skills/ecs.ts
   function eidOf(ctx, entity) {
     return ctx.world.entities.resolve(entity)?.eid;
   }
@@ -86304,7 +86304,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(removeComponent);
   }
 
-  // js/src/skills/three.ts
+  // src/skills/three.ts
   var Vec32 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var gltfResourceSchema = external_exports.object({
     kind: external_exports.literal("gltf"),
@@ -86668,7 +86668,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(makeLoadGltf(assets));
   }
 
-  // js/src/terrain/scatter.ts
+  // src/terrain/scatter.ts
   function hashSeed(seed, a, b2) {
     let h = (seed | 0) >>> 0;
     h = Math.imul(h ^ (a | 0) >>> 0, 2654435761) >>> 0;
@@ -86747,10 +86747,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return props;
   }
 
-  // js/src/terrain/asset-scatter.ts
-  var EMBED_K = 0.5;
+  // src/terrain/asset-scatter.ts
+  var EMBED_K = 0.35;
   var EMBED_MAX_RADII = 1.5;
   var EMBED_ABS_MAX = 3;
+  var CURV_CONVEX = -0.1;
+  var CURV_CONCAVE = 0.1;
+  var CREST_SLOPE = 0.05;
   function baseSeed(seed, configSeed) {
     return (Math.imul((seed | 0) ^ 2654435761, 2246822519) ^ (configSeed | 0)) >>> 0;
   }
@@ -86857,11 +86860,43 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         }
         const embedRadius = palette[pick2].embedRadius ?? config2.embedRadius ?? 0;
         let instY = y2;
-        if (embedRadius > 0 && slope > 0) {
+        if (embedRadius > 0) {
           const r = embedRadius * scale2;
-          const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
-          const sink = Math.min(r * slope * EMBED_K, cap);
-          instY = Math.max(y2 - sink, elevationMin);
+          const fcStep = r / sx * (ncols - 1);
+          const frStep = r / sz * (nrows - 1);
+          const cardinalsInterior = fc - fcStep >= 0 && fc + fcStep <= ncols - 1 && fr - frStep >= 0 && fr + frStep <= nrows - 1;
+          if (cardinalsInterior) {
+            const yN = oy + sampleRaw(fr - frStep, fc) * sy;
+            const yS = oy + sampleRaw(fr + frStep, fc) * sy;
+            const yW = oy + sampleRaw(fr, fc - fcStep) * sy;
+            const yE = oy + sampleRaw(fr, fc + fcStep) * sy;
+            const lap = (yN + yS + yW + yE - 4 * y2) / (r * r);
+            const isCrest = slope < CREST_SLOPE;
+            if (isCrest && lap < CURV_CONVEX) {
+              let yMinFootprint = y2;
+              for (let gi = 0; gi < 5; gi++) {
+                for (let gj = 0; gj < 5; gj++) {
+                  const dx = -r + 2 * r * (gi + 0.5) / 5;
+                  const dz = -r + 2 * r * (gj + 0.5) / 5;
+                  if (dx * dx + dz * dz > r * r) continue;
+                  const fcOff = dx / sx * (ncols - 1);
+                  const frOff = dz / sz * (nrows - 1);
+                  yMinFootprint = Math.min(yMinFootprint, oy + sampleRaw(fr + frOff, fc + fcOff) * sy);
+                }
+              }
+              instY = yMinFootprint;
+            } else if (isCrest && lap > CURV_CONCAVE) {
+            } else if (slope > 0) {
+              const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
+              const sink = Math.min(r * slope * EMBED_K, cap);
+              instY = y2 - sink;
+            }
+          } else if (slope > 0) {
+            const cap = Math.min(r * EMBED_MAX_RADII, EMBED_ABS_MAX);
+            const sink = Math.min(r * slope * EMBED_K, cap);
+            instY = y2 - sink;
+          }
+          instY = Math.max(instY, elevationMin);
         }
         out.push({ assetId: palette[pick2].id, x: x2, y: instY, z: z3, yaw, scale: scale2 });
       }
@@ -86869,7 +86904,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return out;
   }
 
-  // js/src/terrain/asset-scatter-render.ts
+  // src/terrain/asset-scatter-render.ts
   var Y_AXIS = new Vector3(0, 1, 0);
   function buildAssetInstancedMeshes(root, instances) {
     if (instances.length === 0) return [];
@@ -86888,6 +86923,28 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       if (n.isMesh !== true || n.geometry === void 0 || n.material === void 0) return;
       local.identity();
       if (n.matrixWorld !== void 0) local.multiplyMatrices(rootInv, n.matrixWorld);
+      if (n.geometry.boundingBox === null) n.geometry.computeBoundingBox();
+      const bb = n.geometry.boundingBox;
+      let xmin = Infinity, ymin = Infinity, zmin = Infinity;
+      let xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
+      const corner = new Vector3();
+      for (const cx of [bb.min.x, bb.max.x]) for (const cy of [bb.min.y, bb.max.y]) for (const cz of [bb.min.z, bb.max.z]) {
+        corner.set(cx, cy, cz).applyMatrix4(local);
+        if (corner.x < xmin) xmin = corner.x;
+        if (corner.x > xmax) xmax = corner.x;
+        if (corner.y < ymin) ymin = corner.y;
+        if (corner.y > ymax) ymax = corner.y;
+        if (corner.z < zmin) zmin = corner.z;
+        if (corner.z > zmax) zmax = corner.z;
+      }
+      local.premultiply(new Matrix4().makeTranslation(
+        -(xmin + xmax) / 2,
+        // X: centre the footprint
+        -ymin,
+        // Y: base at 0 (the trunk sits ON the placement Y)
+        -(zmin + zmax) / 2
+        // Z: centre the footprint (fixes pine's 6 m back-shift)
+      ));
       const inst = new InstancedMesh(n.geometry, n.material, instances.length);
       for (let i = 0; i < instances.length; i++) {
         const p = instances[i];
@@ -86915,7 +86972,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return meshes;
   }
 
-  // js/src/terrain/tilecache.ts
+  // src/terrain/tilecache.ts
   function requestKey(req) {
     const hints = req.hints;
     let hintStr = "";
@@ -87042,7 +87099,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return out;
   }
 
-  // js/src/skills/asset.ts
+  // src/skills/asset.ts
   var Vec33 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var placeInput = external_exports.object({
     assetId: external_exports.string(),
@@ -87221,7 +87278,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(scatter);
   }
 
-  // js/src/skills/material.ts
+  // src/skills/material.ts
   var importInput = external_exports.object({
     /** The name to register the material under (used by createEntity/setMaterial). */
     name: external_exports.string().min(1),
@@ -87305,7 +87362,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(importSkill);
   }
 
-  // js/src/asset-registry.ts
+  // src/asset-registry.ts
   var HEX = (() => {
     const t = new Array(256);
     for (let i = 0; i < 256; i++) t[i] = i.toString(16).padStart(2, "0");
@@ -87396,7 +87453,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/materials/material-registry.ts
+  // src/materials/material-registry.ts
   var T5 = three_tsl_exports;
   var MaterialRegistry = class {
     map = /* @__PURE__ */ new Map();
@@ -87457,7 +87514,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/skills/physics.ts
+  // src/skills/physics.ts
   var Vec34 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var collisionEventOutput = external_exports.object({
     events: external_exports.array(external_exports.object({
@@ -87575,7 +87632,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(collisionEvents);
   }
 
-  // js/src/skills/agent.ts
+  // src/skills/agent.ts
   var emitEventInput = external_exports.object({
     type: external_exports.string().min(1),
     payload: external_exports.record(external_exports.string(), external_exports.unknown()).default({})
@@ -87609,7 +87666,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(getPerception);
   }
 
-  // js/src/skills/system.ts
+  // src/skills/system.ts
   var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var Quat = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
   function isRecord2(value) {
@@ -88008,7 +88065,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
 
-  // js/src/skills/approval.ts
+  // src/skills/approval.ts
   var REVIEW_PERMISSION = "approval.review";
   function registerApprovalSkills(registry2) {
     registry2.register({
@@ -88077,7 +88134,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/policy/audit.ts
+  // src/policy/audit.ts
   var POLICY_TYPES = { "policy.decision": true, "policy.denied": true };
   var policyPayloadSchema = external_exports.object({
     boundary: external_exports.string(),
@@ -88349,7 +88406,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
 
-  // js/src/skills/ui.ts
+  // src/skills/ui.ts
   var colorSchema = external_exports.union([
     external_exports.number().int().min(0).max(16777215),
     external_exports.object({
@@ -88612,7 +88669,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(remove);
   }
 
-  // js/src/sandbox/host.ts
+  // src/sandbox/host.ts
   var untrustedArgsSchema = external_exports.record(external_exports.string(), external_exports.unknown());
   function parseUntrustedArgs(argsJson) {
     let raw;
@@ -88781,7 +88838,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/packages/semver.ts
+  // src/packages/semver.ts
   var CORE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
   function parseSemver(v2) {
     const m = CORE.exec(v2.trim());
@@ -88891,7 +88948,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return orSets.some((set2) => satisfiesSet(v2, set2));
   }
 
-  // js/src/packages/manifest.ts
+  // src/packages/manifest.ts
   var ENGINE_VERSION = "1.0.0";
   var PACKAGE_KINDS = ["skill", "scene", "agent"];
   var attestationSchema = external_exports.object({
@@ -88920,7 +88977,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return `${m.name}@${m.version}`;
   }
 
-  // js/src/packages/registry.ts
+  // src/packages/registry.ts
   var PackageRegistry = class {
     constructor(registry2, host, tracer, engineVersion = ENGINE_VERSION, policy) {
       this.registry = registry2;
@@ -89102,7 +89159,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/packages/index.ts
+  // src/packages/index.ts
   function registerPackageSkills(registry2, packages) {
     registry2.register({
       name: "package.list",
@@ -89180,7 +89237,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
 
-  // js/src/ui/font.ts
+  // src/ui/font.ts
   var FONT_FIRST_CODE = 32;
   var FONT_LAST_CODE = 126;
   var GLYPH_W = 9;
@@ -89435,7 +89492,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/ui/layout.ts
+  // src/ui/layout.ts
   function measureChars(n, scale2, letterSpacing) {
     if (n <= 0) return 0;
     return n * GLYPH_ADVANCE * scale2 + (n - 1) * letterSpacing;
@@ -89523,7 +89580,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { lines, width: maxLineWidth, height, glyphW, glyphH, advance: glyphW, baseline };
   }
 
-  // js/src/ui/compositor.ts
+  // src/ui/compositor.ts
   var DEFAULT_SCALE = 2;
   var DEFAULT_TEXT = { r: 255, g: 255, b: 255, a: 255 };
   function toRGBA(color3, alpha = 255) {
@@ -90143,7 +90200,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return GLYPH_H * scale2 + 2 * scale2;
   }
 
-  // js/src/ui/surface.ts
+  // src/ui/surface.ts
   var DEFAULT_PIXEL_SCALE = 0.01;
   function makeTexture(c) {
     const tex = new DataTexture(c.data, c.width, c.height, RGBAFormat, UnsignedByteType);
@@ -90286,7 +90343,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/ui/containers.ts
+  // src/ui/containers.ts
   function sideToward(toward) {
     if (Math.abs(toward.y) >= Math.abs(toward.x)) return toward.y < 0 ? "bottom" : "top";
     return toward.x < 0 ? "left" : "right";
@@ -90398,7 +90455,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return new Panel({ style, text, title: opts.title, pixelScale: opts.pixelScale });
   }
 
-  // js/src/ui/anchor.ts
+  // src/ui/anchor.ts
   function cameraWorldPos(camera) {
     camera.updateMatrixWorld(true);
     const e = camera.matrixWorld.elements;
@@ -90511,7 +90568,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/ui/lifecycle.ts
+  // src/ui/lifecycle.ts
   var Fade = class {
     material;
     from;
@@ -90703,7 +90760,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/ui/manager.ts
+  // src/ui/manager.ts
   var DEFAULT_DT_MS = 1e3 / 60;
   function buildPanel(kind, opts) {
     const style = opts.style;
@@ -91119,7 +91176,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/world/locomotion.ts
+  // src/world/locomotion.ts
   var DEFAULT_SPEED = 1.6;
   var DEFAULT_TALK = 1.4;
   var EPS = 1e-6;
@@ -91240,7 +91297,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/skills/social.ts
+  // src/skills/social.ts
   var vec3Schema2 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var approachInput = external_exports.object({
     /** An agent id, an `ent_` entity id, or a world point to approach. */
@@ -91372,7 +91429,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/audio/spatial.ts
+  // src/audio/spatial.ts
   function deriveEars(camPos, camRight, halfHead) {
     const len = Math.hypot(camRight[0], camRight[1], camRight[2]) || 1;
     const rx = camRight[0] / len * halfHead;
@@ -91392,7 +91449,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return base * t;
   }
 
-  // js/src/audio/manager.ts
+  // src/audio/manager.ts
   var BUS = { master: 0, sfx: 1, ambience: 2, voice: 3 };
   var AudioManager = class {
     sounds = /* @__PURE__ */ new Map();
@@ -91474,7 +91531,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/skills/audio.ts
+  // src/skills/audio.ts
   var busEnum = external_exports.enum(["master", "sfx", "ambience", "voice"]);
   var vec3Schema3 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var playInput = external_exports.object({
@@ -91623,7 +91680,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(setBusVolume);
   }
 
-  // js/src/terrain/terrain-types.ts
+  // src/terrain/terrain-types.ts
   var TERRAIN_TYPES = {
     // A warm tropical sand island: the exact shape `beachShapeHints` shipped (warp 22,
     // ridge 0.45, island core 0.62 / slope 0.70), now with a warm+wet maritime climate.
@@ -91731,7 +91788,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return hints;
   }
 
-  // js/src/terrain/mesh.ts
+  // src/terrain/mesh.ts
   function terrainTileGeometry(tile) {
     const { nrows, ncols, heights } = tile;
     if (!Number.isInteger(nrows) || !Number.isInteger(ncols) || nrows < 2 || ncols < 2) {
@@ -91811,7 +91868,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { positions, indices, normals };
   }
 
-  // js/src/terrain/props.ts
+  // src/terrain/props.ts
   function hexRGB(hex3) {
     return [(hex3 >> 16 & 255) / 255, (hex3 >> 8 & 255) / 255, (hex3 & 255) / 255];
   }
@@ -91928,7 +91985,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   }
 
-  // js/src/terrain/props-render.ts
+  // src/terrain/props-render.ts
   var MATERIALS2 = {
     [0 /* Tree */]: { roughness: 0.9, metalness: 0, doubleSide: false },
     [1 /* Rock */]: { roughness: 0.95, metalness: 0, doubleSide: false },
@@ -91998,7 +92055,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     mesh.dispose?.();
   }
 
-  // js/src/terrain/stream.ts
+  // src/terrain/stream.ts
   function tileKey(tx, tz) {
     return `${tx},${tz}`;
   }
@@ -92077,7 +92134,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/terrain/material-pbr.ts
+  // src/terrain/material-pbr.ts
   var T6 = three_tsl_exports;
   function applyPbrMaterial(material, tile, baseRough, pbr) {
     const tempRange = pbr.tempRange ?? [-30, 40];
@@ -92177,7 +92234,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     material.roughnessNode = T6.clamp(rough, 0, 1);
   }
 
-  // js/src/terrain/render.ts
+  // src/terrain/render.ts
   var T7 = three_tsl_exports;
   function shorelineBandMasks(seaLevel, wetBand, foamBand) {
     const lap = T7.positionWorld.x.mul(0.6).add(T7.positionWorld.z.mul(0.55)).add(T7.time.mul(1.1)).sin().mul(0.13);
@@ -92427,7 +92484,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/terrain/biome-content.ts
+  // src/terrain/biome-content.ts
   var PINE_ASSET = "pine.glb";
   var BROADLEAF_ASSET = "broadleaf.glb";
   var CACTUS_ASSET = "cactus.glb";
@@ -92664,7 +92721,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, layers };
   }
 
-  // js/src/skills/terrain.ts
+  // src/skills/terrain.ts
   var Vec36 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   function inertTransform() {
     return { position: { set() {
@@ -93072,7 +93129,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { cache: cache3, regions };
   }
 
-  // js/src/render/post.ts
+  // src/render/post.ts
   var T8 = three_tsl_exports;
   var AO = ao;
   var BLOOM = bloom;
@@ -93171,7 +93228,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/skills/render.ts
+  // src/skills/render.ts
   var aoOverride = external_exports.object({
     enabled: external_exports.boolean().optional(),
     radius: external_exports.number().optional(),
@@ -93253,7 +93310,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     registry2.register(enablePost);
   }
 
-  // js/src/water.ts
+  // src/water.ts
   var T9 = three_tsl_exports;
   var DEFAULT_WATER_SIZE = 400;
   var DEFAULT_WATER_COLOR = 2841970;
@@ -93369,7 +93426,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return mesh;
   }
 
-  // js/src/skills/water.ts
+  // src/skills/water.ts
   var waterRegionInput = external_exports.object({
     seed: external_exports.number().int(),
     type: external_exports.string(),
@@ -93489,7 +93546,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { surfaces };
   }
 
-  // js/src/agents/agent.ts
+  // src/agents/agent.ts
   function agentGrants(agent) {
     return agent.bundle ?? resolveProfile(agent.profile);
   }
@@ -93530,7 +93587,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/agents/scheduler.ts
+  // src/agents/scheduler.ts
   var DEFAULT_AGENT_BUDGET = {
     weight: 1,
     maxQueueDepth: Number.MAX_SAFE_INTEGER,
@@ -93740,7 +93797,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
   };
   var defaultAgentScheduler = new AgentScheduler();
 
-  // js/src/agents/systems.ts
+  // src/agents/systems.ts
   function buildPerception(agent, world, tracer, tick, batched) {
     let selfPos = batched?.selfPos;
     let nearby = batched?.nearby;
@@ -93865,7 +93922,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { steps, toolCalls, tokensUsed, reason: "max_steps" };
   }
 
-  // js/src/skills/orchestration.ts
+  // src/skills/orchestration.ts
   var SELF_APPROVAL_CAP = "approval.review";
   var ORCHESTRATE_PERMISSION = "orchestrate";
   var DELEGATE_REVIEW_PROFILE = "delegate.review";
@@ -93954,7 +94011,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     });
   }
 
-  // js/src/world/character.ts
+  // src/world/character.ts
   var CharacterController = class {
     /** Stable native body id of the kinematic capsule. */
     bodyId;
@@ -94070,7 +94127,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/skills/player.ts
+  // src/skills/player.ts
   var Vec37 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var FIXED_DT = 1 / 60;
@@ -94399,7 +94456,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { input, controllers };
   }
 
-  // js/src/world/third_person_camera.ts
+  // src/world/third_person_camera.ts
   var ThirdPersonCamera = class {
     /** Current orbit yaw (radians). Movement should be made relative to this so
      *  "forward" walks where the camera looks. */
@@ -94442,7 +94499,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/skills/camera.ts
+  // src/skills/camera.ts
   var Vec38 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField2 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var DEFAULT_LOOK_HEIGHT = 1.2;
@@ -94743,7 +94800,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { cameraManager: mgr };
   }
 
-  // js/src/skills/animation.ts
+  // src/skills/animation.ts
   var MetaField3 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   function num2(v2, d) {
     return typeof v2 === "number" && Number.isFinite(v2) ? v2 : d;
@@ -95211,7 +95268,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { animationManager: mgr };
   }
 
-  // js/src/skills/interaction.ts
+  // src/skills/interaction.ts
   var Vec39 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField4 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var InteractionManager = class {
@@ -95479,7 +95536,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { interactionManager: mgr };
   }
 
-  // js/src/skills/inventory.ts
+  // src/skills/inventory.ts
   var MetaField5 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var InventoryManager = class {
     inventories = /* @__PURE__ */ new Map();
@@ -95874,7 +95931,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { inventoryManager: mgr };
   }
 
-  // js/src/skills/gamestate.ts
+  // src/skills/gamestate.ts
   var MetaField6 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   function tokenize(src) {
     const toks = [];
@@ -96383,7 +96440,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { gameStateManager: mgr };
   }
 
-  // js/src/skills/triggers.ts
+  // src/skills/triggers.ts
   var Vec310 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField7 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension data (custom action definitions, parameters, etc.).");
   var TriggerManager = class {
@@ -96665,7 +96722,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { triggerManager, eventManager };
   }
 
-  // js/src/skills/quest.ts
+  // src/skills/quest.ts
   var MetaField8 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var QuestManager = class {
     definitions = /* @__PURE__ */ new Map();
@@ -97016,7 +97073,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { questManager: mgr };
   }
 
-  // js/src/skills/combat.ts
+  // src/skills/combat.ts
   var MetaField9 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var Vec311 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var TICKS_PER_SECOND = 60;
@@ -97474,7 +97531,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { statsManager: statsMgr, combatManager: combatMgr };
   }
 
-  // js/src/skills/behavior.ts
+  // src/skills/behavior.ts
   var Vec312 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField10 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var BehaviorManager = class {
@@ -97968,7 +98025,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { behaviorManager: behaviorMgr, dialogueManager: dialogueMgr };
   }
 
-  // js/src/skills/navmesh.ts
+  // src/skills/navmesh.ts
   var Vec313 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField11 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var DEFAULT_DT = 1 / 60;
@@ -98501,7 +98558,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { navmeshManager: mgr };
   }
 
-  // js/src/skills/vfx.ts
+  // src/skills/vfx.ts
   var Vec314 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var Vec4 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField12 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
@@ -98928,7 +98985,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { vfxManager: mgr };
   }
 
-  // js/src/worldlog/log.ts
+  // src/worldlog/log.ts
   var LOG_VERSION = 1;
   var PHYSICS_OP_FN = {
     create_world: "op_physics_create_world",
@@ -99070,7 +99127,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   }
 
-  // js/src/observability/event.ts
+  // src/observability/event.ts
   var TraceIntegrityError = class extends Error {
     constructor(reason, lineNumber, message) {
       super(message);
@@ -99354,7 +99411,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { threadId, events, byId, parentsById, childrenById };
   }
 
-  // js/src/worldlog/replay.ts
+  // src/worldlog/replay.ts
   async function replayCommands(commands, deps) {
     const tracer = deps.tracer ?? new LiminaTracer("ses_worldlog_replay");
     const registry2 = deps.makeRegistry(tracer);
@@ -99416,7 +99473,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/worldlog/keyframes.ts
+  // src/worldlog/keyframes.ts
   var _f322 = new Float32Array(1);
   var _i322 = new Int32Array(_f322.buffer);
   function floatToBits2(x2) {
@@ -99465,7 +99522,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return out;
   }
 
-  // js/src/worldlog/snapshot.ts
+  // src/worldlog/snapshot.ts
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var B64_INV = (() => {
     const inv = new Array(128).fill(-1);
@@ -99510,7 +99567,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return out;
   }
 
-  // js/src/export/package.ts
+  // src/export/package.ts
   var EXPORT_VERSION = 1;
   function serializeAssets(entries) {
     if (entries.length === 0) return "";
@@ -99601,7 +99658,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return loaded.assets.map((a) => ({ id: a.id, path: `assets/${a.id}`, hash: a.hash, bytes: a.bytes }));
   }
 
-  // js/src/skills/save.ts
+  // src/skills/save.ts
   var MetaField13 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var SAVE_VERSION = 1;
   var SaveManager = class {
@@ -99905,7 +99962,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { saveManager: mgr };
   }
 
-  // js/src/skills/progression.ts
+  // src/skills/progression.ts
   var MetaField14 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var ProgressionManager = class {
     progression = /* @__PURE__ */ new Map();
@@ -100155,7 +100212,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { progressionManager: mgr };
   }
 
-  // js/src/skills/worldstate.ts
+  // src/skills/worldstate.ts
   var Vec315 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
   var MetaField15 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
   var WorldStateManager = class {
@@ -100440,7 +100497,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { worldStateManager: worldMgr, bgmManager: bgmMgr, reverbManager: reverbMgr };
   }
 
-  // js/src/skills/index.ts
+  // src/skills/index.ts
   function registerCoreSkills(registry2, opts) {
     const assets = opts?.assets ?? new AssetRegistry();
     const terrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
@@ -100519,7 +100576,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     };
   }
 
-  // js/src/browser/keyframe-physics.ts
+  // src/browser/keyframe-physics.ts
   var KeyframePhysics = class {
     nextBodyId = 0;
     tick = 0;
@@ -100718,7 +100775,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return { ...base, ...overrides };
   }
 
-  // js/src/browser/player.ts
+  // src/browser/player.ts
   var ReplayPlayer = class {
     world;
     registry;
@@ -100802,7 +100859,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/browser/fly-camera.ts
+  // src/browser/fly-camera.ts
   var FlyCamera = class {
     x;
     y;
@@ -100904,7 +100961,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
-  // js/src/browser/host.ts
+  // src/browser/host.ts
   var BrowserInput = class {
     pressed = /* @__PURE__ */ new Set();
     onDown = (ev) => {
@@ -101092,7 +101149,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     return handle;
   }
 
-  // js/src/browser-entry.ts
+  // src/browser-entry.ts
   async function hasWebGpu() {
     if (typeof navigator === "undefined" || navigator.gpu === void 0) return false;
     try {

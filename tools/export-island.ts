@@ -27,6 +27,9 @@ import { assembleExport, loadExport } from "../js/src/export/package.ts";
 import { TILE_SIZE } from "../js/src/terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../js/src/terrain/terrain-types.ts";
 import { MATERIALS } from "../js/src/materials/palette.ts";
+import { scatterAssets } from "../js/src/terrain/asset-scatter.ts";
+import { biomeScatterConfigs } from "../js/src/terrain/biome-content.ts";
+import type { TerrainTile } from "../js/src/terrain/types.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("export-island FAIL: " + msg);
@@ -123,6 +126,89 @@ assert(loaded.commands.length === recorder.commands.length, "command count lost 
 assert(loaded.keyframes.length === 0, "expected zero keyframes (static island)");
 assert(loaded.tiles.length === tileEntries.length, "tile count lost on round-trip");
 assert(loaded.assets.length === assetBundle.length, "asset count lost on round-trip");
+
+// ── PARITY ASSERTION: the user-visible contract — no tree floats more than X m above ground ─
+// Re-runs the SAME biome-content scatter the live demo replays over the bundle's BAKED tiles.
+// For every placed instance, measures the user-visible float (foliage base ABOVE the lowest mesh
+// vertex in the footprint disc) — the exact symptom the curvature-aware + GLB-normalization
+// fixes target. After both fixes the avg is ~0.25 m, max ~1.0 m (measured). The threshold of
+// 1.5 m admits the inherent Y-only residual on steep slopes (r·slope/2 skirt float) while
+// catching any regression that brings back the multi-metre float the demo exhibited before
+// (1.4–1.8 m avg, 4 m+ max). Hard-fails the export if violated.
+//
+// Note: the GLB-normalization fix (asset-scatter-render.ts) recentres each asset so base_Y=0
+// and XZ=(0,0); this assertion reads the placement Y (inst.y) directly, which after the fix is
+// where the foliage base actually renders. If a future GLB edit re-introduces an asset offset,
+// inst.y no longer reflects the rendered base Y and this assertion will catch it via the
+// resulting large float.
+const PARITY_MAX_FLOAT = 1.5; // m; regression gate (current max ≈ 1.0 m, budget for terrain variance)
+const PARITY_AVG_FLOAT = 0.6; // m; avg gate (current avg ≈ 0.25 m)
+const survey = { minY: relief.minY, maxY: relief.maxY };
+const parityConfigs = biomeScatterConfigs(TYPE, survey, seaLevel, 2.5);
+// Independent bilinear height query (mirrors scatterAssets.sampleRaw in WORLD space — a
+// falsifiable re-sample, not the same call the placement used).
+const bilinear = (tile: TerrainTile, x: number, z: number): number => {
+  const { nrows, ncols, heights, origin, scale } = tile;
+  const [ox, oy, oz] = origin, [sx, sy, sz] = scale;
+  const u = (x - (ox - sx / 2)) / sx;
+  const v = (z - (oz - sz / 2)) / sz;
+  const fc = Math.min(ncols - 1, Math.max(0, u * (ncols - 1)));
+  const fr = Math.min(nrows - 1, Math.max(0, v * (nrows - 1)));
+  const r0 = Math.min(nrows - 1, Math.floor(fr)), c0 = Math.min(ncols - 1, Math.floor(fc));
+  const r1 = Math.min(nrows - 1, r0 + 1), c1 = Math.min(ncols - 1, c0 + 1);
+  const tr = fr - r0, tc = fc - c0;
+  const h = (r: number, c: number): number => heights[r * ncols + c];
+  const top = h(r0, c0) * (1 - tc) + h(r0, c1) * tc;
+  const bot = h(r1, c0) * (1 - tc) + h(r1, c1) * tc;
+  return oy + (top * (1 - tr) + bot * tr) * sy;
+};
+// Min height over a dense k×k grid sampled across a disc of radius `disc` around (x, z).
+const discMin = (tile: TerrainTile, x: number, z: number, disc: number, k = 5): number => {
+  let yMin = Infinity;
+  for (let i = 0; i < k; i++) {
+    for (let j = 0; j < k; j++) {
+      const dx = -disc + (2 * disc) * (i + 0.5) / k;
+      const dz = -disc + (2 * disc) * (j + 0.5) / k;
+      if (dx * dx + dz * dz > disc * disc) continue;
+      const y = bilinear(tile, x + dx, z + dz);
+      if (y < yMin) yMin = y;
+    }
+  }
+  return yMin;
+};
+let parityChecked = 0;
+let maxFloat = 0, sumFloat = 0;
+let maxBury = 0, sumBury = 0;
+for (const { tile } of loaded.tiles) {
+  for (const cfg of parityConfigs) {
+    const layerHasEmbed = (cfg.embedRadius ?? 0) > 0 || cfg.assets.some((a) => (a.embedRadius ?? 0) > 0);
+    if (!layerHasEmbed) continue;
+    const placements = scatterAssets(tile, SEED, cfg);
+    for (const inst of placements) {
+      const picked = cfg.assets.find((a) => a.id === inst.assetId);
+      const r = ((picked?.embedRadius ?? cfg.embedRadius) ?? 0) * inst.scale;
+      if (r === 0) continue;
+      // Post-fix #1 the rendered position equals the nominal (GLB normalized to base_Y=0,
+      // XZ=0), so the user-visible float/bury is what we measure here against the nominal
+      // footprint disc.
+      const dmin = discMin(tile, inst.x, inst.z, r, 5);
+      const dmax = (() => { let y = -Infinity; for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) { const dx = -r + (2*r)*(i+0.5)/5, dz = -r + (2*r)*(j+0.5)/5; if (dx*dx + dz*dz > r*r) continue; const yy = bilinear(tile, inst.x+dx, inst.z+dz); if (yy > y) y = yy; } return y; })();
+      const float = inst.y - dmin;
+      const bury = dmax - inst.y;
+      if (float > maxFloat) maxFloat = float;
+      if (bury > maxBury) maxBury = bury;
+      sumFloat += Math.max(0, float);
+      sumBury += Math.max(0, bury);
+      parityChecked++;
+    }
+  }
+}
+assert(parityChecked > 0, "island parity assertion is vacuous — no embedded placements re-sampled");
+const avgFloat = sumFloat / parityChecked;
+const avgBury = sumBury / parityChecked;
+assert(maxFloat <= PARITY_MAX_FLOAT, `island scatter FLOAT: max ${maxFloat.toFixed(3)} m > ${PARITY_MAX_FLOAT} m threshold (regression — pre-fix demo exhibited 4 m+ max float)`);
+assert(avgFloat <= PARITY_AVG_FLOAT, `island scatter FLOAT: avg ${avgFloat.toFixed(3)} m > ${PARITY_AVG_FLOAT} m threshold (regression — pre-fix demo exhibited 1.4–1.8 m avg float)`);
+console.log(`EXPORT PARITY: ${parityChecked} placements, float avg ${avgFloat.toFixed(3)} m / max ${maxFloat.toFixed(3)} m, bury avg ${avgBury.toFixed(3)} m / max ${maxBury.toFixed(3)} m`);
 
 // Camera framing for the live page (deterministic from the world geometry). The
 // island is centered at (islandCx, _, islandCz); frame it like the windowed demo.

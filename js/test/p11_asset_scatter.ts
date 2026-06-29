@@ -145,14 +145,21 @@ const oneBiome = [...biomeSet][0];
 const biomeScatter = scatterAssets(tile, WORLD_SEED, { ...baseConfig, seed: 9, biomes: [oneBiome] });
 assert(biomeScatter.length > 0 && biomeScatter.length <= uncapped.length, "biome whitelist did not consult the climate grid as a filter");
 
-// 4. RENDER matrices reproduce the scatter (mirror p9_props) ----------------------
+// 4. RENDER matrices reproduce the scatter (mirror p9_props) + GLB ORIGIN NORMALIZATION ─
+// buildAssetInstancedMeshes normalizes each asset's geometry so base_Y=0 and XZ centred at (0,0).
+// (a) For a CLEAN asset (base at Y=0 already) the normalization is a no-op and the instance
+//     matrix translation equals (p.x, p.y, p.z) exactly.
+// (b) For a MIS-AUTHORED asset (base below Y=0 — e.g. an untranslated Box(1,1,1) at Y∈[−0.5,+0.5])
+//     normalization lifts it so the base sits at Y=0; the instance's effective translation gains
+//     that lift. This is the contract that fixes pine.glb's +0.72 m Y offset / −6.1 m Z offset.
 {
-  const geom = new THREE.BoxGeometry(1, 1, 1);
   const mat = new THREE.MeshStandardNodeMaterial({ color: 0x808080 });
-  const root = new THREE.Group();
-  root.add(new THREE.Mesh(geom, mat)); // single mesh at identity -> instance matrix == transform
+  // (a) Clean asset: Box translated so its base sits at Y=0 (bounds Y∈[0,1]).
+  const cleanGeom = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+  const cleanRoot = new THREE.Group();
+  cleanRoot.add(new THREE.Mesh(cleanGeom, mat));
   const sample = r1.slice(0, 12);
-  const meshes = buildAssetInstancedMeshes(root, sample);
+  const meshes = buildAssetInstancedMeshes(cleanRoot, sample);
   assert(meshes.length === 1, `expected one InstancedMesh for a single-mesh asset, got ${meshes.length}`);
   const inst = meshes[0];
   assert(inst.count === sample.length, `InstancedMesh.count ${inst.count} != ${sample.length}`);
@@ -163,13 +170,26 @@ assert(biomeScatter.length > 0 && biomeScatter.length <= uncapped.length, "biome
     const p = sample[i];
     inst.getMatrixAt(i, m);
     m.decompose(pos, quat, scl);
-    assert(close(pos.x, p.x) && close(pos.y, p.y) && close(pos.z, p.z), `instance ${i} translation off`);
+    assert(close(pos.x, p.x) && close(pos.y, p.y) && close(pos.z, p.z), `instance ${i} translation off (clean asset — normalization must be a no-op)`);
     assert(close(scl.x, p.scale) && close(scl.y, p.scale) && close(scl.z, p.scale), `instance ${i} scale not uniform==${p.scale}`);
     vx.set(1, 0, 0).applyQuaternion(quat);
     assert(close(vx.x, Math.cos(p.yaw)) && close(vx.y, 0, 1e-5) && close(vx.z, -Math.sin(p.yaw)), `instance ${i} yaw mismatch`);
     vy.set(0, 1, 0).applyQuaternion(quat);
     assert(close(vy.x, 0, 1e-5) && close(vy.y, 1, 1e-5) && close(vy.z, 0, 1e-5), `instance ${i} rotation not pure-Y`);
   }
+  // (b) Mis-authored asset: Box(1,1,1) at Y∈[−0.5,+0.5] (base below origin). Normalization must
+  // lift it by +0.5 so the base sits at Y=0. Verify by sampling ONE instance at yaw=0 (no
+  // rotation), checking the geometry's transformed bounds put minY at exactly the placement Y.
+  const dirtyGeom = new THREE.BoxGeometry(1, 1, 1); // base at Y=−0.5 pre-normalization
+  const dirtyRoot = new THREE.Group();
+  dirtyRoot.add(new THREE.Mesh(dirtyGeom, mat));
+  const oneInstance: AssetInstance[] = [{ assetId: "box", x: 10, y: 5, z: 7, yaw: 0, scale: 1 }];
+  const dirtyMeshes = buildAssetInstancedMeshes(dirtyRoot, oneInstance);
+  assert(dirtyMeshes.length === 1, "dirty asset should produce one InstancedMesh");
+  const bbox = new THREE.Box3().setFromObject(dirtyMeshes[0]);
+  assert(close(bbox.min.y, 5, 1e-5), `dirty asset base Y ${bbox.min.y.toFixed(3)} != placement Y 5 (GLB normalization lift failed)`);
+  assert(close(bbox.min.x, 10 - 0.5, 1e-5) && close(bbox.max.x, 10 + 0.5, 1e-5), `dirty asset X not centred at placement X=10`);
+  assert(close(bbox.min.z, 7 - 0.5, 1e-5) && close(bbox.max.z, 7 + 0.5, 1e-5), `dirty asset Z not centred at placement Z=7`);
 }
 
 // 5. THE SKILL: generate a region, then asset.scatter BOUND to it (regionId). The log
