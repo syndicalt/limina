@@ -10,6 +10,7 @@
 
 import { McpClient, McpError } from "./mcp-client.js";
 import { buildForest, groupByActor, eventKind } from "./reasoning.js";
+import { createHistoryPanel } from "./history.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -29,6 +30,10 @@ const state = {
   polling: undefined,
   log: [],
 };
+
+// git-for-worlds History panel (branch / time-travel / merge), backed by the tested
+// EditorHistoryController. Ingests observed world-log edits onto the "main" branch.
+const history = createHistoryPanel({ onLog: (m) => logLine(m, "ok") });
 
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
@@ -81,6 +86,7 @@ function disconnect() {
   if (state.agentClient) { state.agentClient.close(); state.agentClient = undefined; }
   state.events.clear();
   state.afterSeq = -1;
+  history.reset();
   setStatus(false);
 }
 
@@ -103,6 +109,7 @@ async function refreshAll() {
     if (tail && Array.isArray(tail.events)) {
       for (const ev of tail.events) state.events.set(ev.id, ev);
       if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
+      history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
     }
     // Approval queue every poll (cheap, must stay fresh).
     const list = await c.callTool("approval.list", {});

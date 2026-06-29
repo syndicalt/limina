@@ -17,7 +17,7 @@
     "bundle:runtime": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/limina-runtime.js --loader:.ts=ts",
     "bundle:worker": "esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/sim-worker-entry.js --loader:.ts=ts",
     "bundle:live": "npm run bundle:runtime && npm run bundle:worker",
-    "bundle:editor": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/limina-runtime.js --loader:.ts=ts && esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/sim-worker-entry.js --loader:.ts=ts",
+    "bundle:editor": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/limina-runtime.js --loader:.ts=ts && esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/sim-worker-entry.js --loader:.ts=ts && esbuild src/editor/history_controller.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/history-controller.js --loader:.ts=ts",
     "export:demo": "cd .. && ./target/release/limina js/scripts/export-demo.ts && mkdir -p web/public/worlds/demo && cp -f traces/demo.manifest.json web/public/worlds/demo/manifest.json && cp -f traces/demo.log.jsonl web/public/worlds/demo/log.jsonl && cp -f traces/demo.keyframes.jsonl web/public/worlds/demo/keyframes.jsonl",
     "check:portability": "node scripts/check-host-portability.mjs",
     "check:live": "node scripts/check-live-composition.mjs",

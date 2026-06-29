@@ -110,3 +110,13 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .log-err .log-msg { color: var(--red); }
 .log-warn .log-msg { color: var(--amber); }
 .log-info .log-msg { color: var(--text); }
+
+/* History panel — git-for-worlds (branch / time-travel / merge) */
+.hist-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+.hist-label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; min-width: 56px; }
+.hist-select { background: var(--card, #11161d); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 2px 6px; font-size: 12px; font-family: var(--mono); }
+.hist-scrub { flex: 1; min-width: 120px; accent-color: var(--green, #5dd39e); }
+.hist-readout { color: var(--muted); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
+.hist-list { margin-top: 6px; max-height: 160px; overflow: auto; border-top: 1px solid var(--border); padding-top: 4px; }
+.hist-cmd { font-family: var(--mono); font-size: 11px; color: var(--text); padding: 1px 0; white-space: pre; }
+.hist-cmd.muted { color: var(--muted); }
