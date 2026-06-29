@@ -62,6 +62,25 @@ export interface RunOptions {
    *  in/out around the camera. Logic (mesh math + stream set) is headless-proven; the
    *  in-tab WebGPU render of the terrain is UAT. */
   terrain?: TerrainStreamRendererOptions;
+  /** Optional framing for the (non-terrain) ORBIT camera. A replayed world whose
+   *  content is NOT at the origin (e.g. an exported island centered far from 0,0,0)
+   *  needs the orbit centered on it; defaults reproduce the legacy origin orbit. */
+  orbit?: {
+    /** Point the orbit circles + looks at (world space). Default [0, 1, 0]. */
+    center?: [number, number, number];
+    /** Initial orbit radius. Default 16. */
+    radius?: number;
+    /** Initial orbit height above the center. Default 8. */
+    height?: number;
+    /** Max radius the scroll-out clamp allows. Default 40. */
+    maxRadius?: number;
+    /** Max height the up clamp allows. Default 25. */
+    maxHeight?: number;
+    /** Camera far plane (large worlds need a pushed-out far). Default unchanged. */
+    far?: number;
+    /** Auto-spin per frame (radians). Default 0.004. */
+    autoSpin?: number;
+  };
 }
 
 export interface RunningPlayer {
@@ -239,10 +258,21 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     (scene as unknown as { fog: unknown }).fog = new THREE.Fog(0xcdd9e6, 140, 380);
   }
 
-  // Camera orbit state (used only when NOT flying).
+  // Camera orbit state (used only when NOT flying). Framing is configurable so a
+  // world centered away from the origin (e.g. an exported island) is framed; the
+  // defaults reproduce the legacy origin orbit.
+  const orbitCenter = opts.orbit?.center ?? [0, 1, 0];
+  const orbitMaxRadius = opts.orbit?.maxRadius ?? 40;
+  const orbitMaxHeight = opts.orbit?.maxHeight ?? 25;
+  const orbitSpin = opts.orbit?.autoSpin ?? 0.004;
   let angle = 0;
-  let radius = 16;
-  let camHeight = 8;
+  let radius = opts.orbit?.radius ?? 16;
+  let camHeight = opts.orbit?.height ?? 8;
+  if (opts.orbit?.far !== undefined) {
+    const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
+    cam.far = opts.orbit.far;
+    cam.updateProjectionMatrix();
+  }
   const axes = new Float32Array(3);
   let announcedDone = false;
   let lastFrame = nowMs();
@@ -267,11 +297,15 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
         terrain?.update(g.x, g.z);
       } else {
         renderOps.op_input_axes(axes);
-        angle += 0.004 + axes[0] * 0.03;
-        radius = Math.min(40, Math.max(5, radius - axes[2] * 0.25));
-        camHeight = Math.min(25, Math.max(1.5, camHeight + axes[1] * 0.25));
-        camera.position.set(Math.cos(angle) * radius, camHeight, Math.sin(angle) * radius);
-        camera.lookAt(0, 1, 0);
+        angle += orbitSpin + axes[0] * 0.03;
+        radius = Math.min(orbitMaxRadius, Math.max(5, radius - axes[2] * (orbitMaxRadius * 0.006)));
+        camHeight = Math.min(orbitMaxHeight, Math.max(1.5, camHeight + axes[1] * (orbitMaxHeight * 0.01)));
+        camera.position.set(
+          orbitCenter[0] + Math.cos(angle) * radius,
+          orbitCenter[1] + camHeight,
+          orbitCenter[2] + Math.sin(angle) * radius,
+        );
+        camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
       }
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);

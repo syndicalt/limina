@@ -137,7 +137,10 @@ export function assembleExport(input: AssembleExportInput): ExportFiles {
     commands: input.commands.length,
     keyframes: input.keyframes.length,
     tiles: tiles.length,
-    assets: input.assets ?? [],
+    // Manifest carries only the content-addressed REFS (id/path/hash); the bytes
+    // ride assets.jsonl, so the manifest stays small (don't serialize Uint8Array
+    // bytes into JSON — that bloats it ~6× and duplicates the payload).
+    assets: (input.assets ?? []).map((a): ExportAsset => ({ id: a.id, path: a.path, hash: a.hash })),
     createdAt: input.createdAt,
   };
   return {

@@ -15,7 +15,7 @@ const base = import.meta.env.BASE_URL;
 // Screenshots are offscreen-RenderTarget readbacks from the same windowed demos.
 const examples = [
   {
-    src: island, wide: true,
+    src: island, wide: true, live: true,
     title: 'A textured island in three skill calls',
     desc: 'world.generateRegion (procedural-PBR auto-surface) + world.addWater + world.populateBiome — eroded terrain, depth-shaded water, biome-gated scatter, atmospheric horizon. No hand-authored geometry.',
     cmd: 'js/src/demos/default_world_window.ts',
@@ -84,8 +84,16 @@ const examples = [
       <div class="examples-grid reveal">
         {examples.map((e) => (
           <figure class={`ex-card${e.wide ? ' wide' : ''}`}>
-            <div class="shot">
+            <div class="shot" data-live-island={e.live ? '' : undefined}>
               <Image src={e.src} alt={e.title} widths={[600, 900, 1280]} sizes="(max-width: 820px) 100vw, 50vw" />
+              {e.live && (
+                <canvas
+                  class="live-canvas"
+                  aria-hidden="true"
+                  data-world={`${base}examples/island/`}
+                  data-player={`${base}examples/limina-player.mjs`}
+                />
+              )}
             </div>
             <figcaption>
               <h3 class="h3">{e.title}</h3>
@@ -115,9 +123,18 @@ const examples = [
       overflow: hidden; background: #0a0e1a;
     }
     .ex-card.wide { grid-column: 1 / -1; }
-    .ex-card .shot { overflow: hidden; background: #060a14; aspect-ratio: 16 / 9; }
+    .ex-card .shot { overflow: hidden; background: #060a14; aspect-ratio: 16 / 9; position: relative; }
     .ex-card img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.6s var(--ease); }
     .ex-card:hover img { transform: scale(1.03); }
+    /* Live playback canvas layered over the poster <img>; hidden until the player
+       signals ready, then cross-faded in. If WebGPU is missing / playback errors,
+       it stays transparent and the poster remains the permanent fallback. */
+    .ex-card .live-canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      display: block; opacity: 0; transition: opacity 0.6s var(--ease);
+      pointer-events: none; z-index: 1;
+    }
+    .ex-card .live-canvas.ready { opacity: 1; }
     .ex-card figcaption { padding: 20px 20px 22px; display: flex; flex-direction: column; gap: 10px; }
     .ex-card .h3 { margin: 0; }
     .ex-card .muted { margin: 0; font-size: 0.92rem; line-height: 1.5; }
@@ -129,4 +146,70 @@ const examples = [
     .foot { margin-top: 26px; text-align: center; }
     @media (max-width: 820px) { .examples-grid { grid-template-columns: 1fr; } }
   </style>
+
+  <script>
+    // LIVE in-browser playback of the flagship island demo over the Phase 8
+    // export-playback path. Progressive enhancement only: the poster <img> is the
+    // permanent fallback — if WebGPU is unavailable, prefers-reduced-motion is set,
+    // or anything throws, we DO NOTHING and the screenshot stays. The canvas only
+    // fades in once the player reports it is ready.
+    const shot = document.querySelector('[data-live-island]');
+    const canvas = shot?.querySelector('canvas.live-canvas');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (canvas instanceof HTMLCanvasElement && !reduceMotion) {
+      const worldUrl = canvas.dataset.world ?? '';
+      const playerUrl = canvas.dataset.player ?? '';
+
+      const start = async () => {
+        try {
+          const player = await import(/* @vite-ignore */ playerUrl);
+          if (typeof player.hasWebGpu !== 'function' || !(await player.hasWebGpu())) {
+            return; // no WebGPU -> keep the poster
+          }
+          // Optional camera framing baked alongside the export.
+          let view = null;
+          try {
+            const res = await fetch(worldUrl + 'view.json');
+            if (res.ok) view = await res.json();
+          } catch { /* framing is optional */ }
+
+          const rect = (shot as HTMLElement).getBoundingClientRect();
+          const width = Math.max(640, Math.round(rect.width));
+          const height = Math.round(width * 9 / 16);
+          canvas.width = width;
+          canvas.height = height;
+
+          await player.run({
+            canvas,
+            worldUrl,
+            width,
+            height,
+            input: window,
+            orbit: view ? {
+              center: view.center, radius: view.radius, height: view.height,
+              maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
+            } : undefined,
+            onStatus: (phase: string) => {
+              if (phase === 'error') { canvas.classList.remove('ready'); }
+              else if (phase === 'ready' || phase === 'playing' || phase === 'done') {
+                canvas.classList.add('ready');
+              }
+            },
+          });
+        } catch {
+          // Any failure -> keep the poster, never blank.
+          canvas.classList.remove('ready');
+        }
+      };
+
+      // Only boot once the card scrolls into view (saves work + GPU on first paint).
+      const io = new IntersectionObserver((entries, obs) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) { obs.disconnect(); void start(); }
+        }
+      }, { rootMargin: '200px' });
+      io.observe(shot as Element);
+    }
+  </script>
 </Landing>
