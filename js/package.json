@@ -4,6 +4,7 @@
   "type": "module",
   "description": "limina engine JS/TS layer (Phase 0)",
   "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3",
     "bitecs": "0.4.0",
     "three": "0.184.0",
     "zod": "^4.4.3"
