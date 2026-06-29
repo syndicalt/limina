@@ -131,6 +131,49 @@ window.__renderAt = async (config) => {
   return renderAndRead();
 };
 
+// A procedural stone/brick texture (albedo + a derived normal map) so flagship surfaces read as
+// textured masonry, not flat-colored boxes — the out-of-box content-quality bar. Drawn once on a
+// canvas and tinted per-building via the material color.
+function makeMasonry(): { map: THREE.Texture; normalMap: THREE.Texture } {
+  const S = 256;
+  const c = document.createElement("canvas"); c.width = S; c.height = S;
+  const g = c.getContext("2d") as CanvasRenderingContext2D;
+  g.fillStyle = "#8c8c8c"; g.fillRect(0, 0, S, S);
+  // brick courses with per-brick tonal variation + mortar lines
+  const bh = 32, bw = 64, mortar = 3;
+  for (let row = 0, y = 0; y < S; y++, row++) {
+    const off = (row % 2) * (bw / 2);
+    for (let x = -bw; x < S; x += bw) {
+      const v = 120 + ((Math.sin((x + row * 37) * 12.9898) * 43758.5) % 1 * 60) | 0;
+      g.fillStyle = `rgb(${v},${v - 8},${v - 16})`;
+      g.fillRect(x + off + mortar, y * bh + mortar, bw - mortar, bh - mortar);
+    }
+  }
+  // grit noise
+  const img = g.getImageData(0, 0, S, S); const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.sin(i * 0.7) * 10000 % 1) * 28 - 14;
+    d[i] += n; d[i + 1] += n; d[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
+  const map = new THREE.CanvasTexture(c);
+  map.wrapS = map.wrapT = THREE.RepeatWrapping; map.repeat.set(2, 2);
+  // crude normal map from the same luminance (emboss the mortar lines)
+  const nc = document.createElement("canvas"); nc.width = S; nc.height = S;
+  const ng = nc.getContext("2d") as CanvasRenderingContext2D;
+  const ni = ng.createImageData(S, S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = (y * S + x) * 4; const l = (xx: number, yy: number) => d[((((yy + S) % S) * S + ((xx + S) % S)) * 4)];
+    const dx = (l(x + 1, y) - l(x - 1, y)) / 255, dy = (l(x, y + 1) - l(x, y - 1)) / 255;
+    ni.data[i] = 128 - dx * 90; ni.data[i + 1] = 128 - dy * 90; ni.data[i + 2] = 255; ni.data[i + 3] = 255;
+  }
+  ng.putImageData(ni, 0, 0);
+  const normalMap = new THREE.CanvasTexture(nc);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping; normalMap.repeat.set(2, 2);
+  return { map, normalMap };
+}
+const masonry = makeMasonry();
+
 // Flagship-demo render: build a real archetype scene from a box spec (e.g. the siege keep's actual
 // architecture.building parts + attackers), frame the camera to its bounds, render with the baseline.
 const sceneMeshes: THREE.Mesh[] = [];
@@ -142,10 +185,11 @@ window.__renderScene = async (spec) => {
   renderer.toneMappingExposure = 1.0;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const b of spec.boxes) {
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]),
-      new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.75, metalness: 0.04 }),
-    );
+    const isAttacker = typeof (b as { kind?: string }).kind === "string" && (b as { kind?: string }).kind!.includes("attacker");
+    const mat = isAttacker
+      ? new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.5, metalness: 0.1 }) // enemies: plain
+      : new THREE.MeshStandardMaterial({ color: b.color, map: masonry.map, normalMap: masonry.normalMap, roughness: 0.85, metalness: 0.02 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(b.size[0], b.size[1], b.size[2]), mat);
     mesh.position.set(b.position[0], b.position[1], b.position[2]);
     scene.add(mesh); sceneMeshes.push(mesh);
     minX = Math.min(minX, b.position[0] - b.size[0]); maxX = Math.max(maxX, b.position[0] + b.size[0]);
