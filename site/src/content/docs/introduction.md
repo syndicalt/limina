@@ -23,7 +23,7 @@ data; the **renderer** reads that same data and presents a frame.
 ┌──────────────────────────────────────────────────────────────┐
 │  Agents & skills                                             │
 │  Agent Builders (over MCP) · Agent Players (in-world)        │
-│  45 typed, permission-checked, traced skills                 │
+│  typed, permission-checked, traced skills                    │
 ├──────────────────────────────────────────────────────────────┤
 │  Rendering                                                   │
 │  Three.js (WebGPURenderer) → WebGPU (deno_webgpu)            │

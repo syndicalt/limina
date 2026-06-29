@@ -1,0 +1,24 @@
+{
+  "kind": "limina.export",
+  "exportVersion": 1,
+  "worldId": "limina-island",
+  "logVersion": 1,
+  "keyframeInterval": 20,
+  "ticks": 0,
+  "commands": 5,
+  "keyframes": 0,
+  "tiles": 16,
+  "assets": [
+    {
+      "id": "pine.glb",
+      "path": "assets/pine.glb",
+      "hash": "sha256:adc413dceb3ee6c6f71e6612095fcbf918f4c036955cba8c309b3baef17cf504"
+    },
+    {
+      "id": "rock.glb",
+      "path": "assets/rock.glb",
+      "hash": "sha256:7d849572a881c4714ece56b0d49a10d9f76c876910a580e5ae0c68a951290497"
+    }
+  ],
+  "createdAt": "2026-01-01T00:00:00Z"
+}

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__APP_NAME__ — a Limina world</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #060a14; color: #e7eef7;
+      font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { display: flex; flex-direction: column; }
+    header { padding: 14px 20px; border-bottom: 1px solid #1b2740; display: flex;
+      align-items: baseline; gap: 12px; }
+    header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+    header .muted { color: #8aa0bd; font-size: 0.85rem; }
+    .stage { position: relative; flex: 1; min-height: 0; }
+    /* Poster fallback: a calm gradient shown until (and unless) the player fades in. */
+    .poster { position: absolute; inset: 0; display: grid; place-items: center;
+      background: radial-gradient(120% 90% at 50% 20%, #182c4a 0%, #0a1220 60%, #060a14 100%);
+      text-align: center; padding: 24px; }
+    .poster p { max-width: 40ch; color: #9fb4d1; }
+    #limina-canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+      display: block; opacity: 0; transition: opacity 0.6s ease; }
+    #limina-canvas.ready { opacity: 1; }
+    .status { position: absolute; left: 12px; bottom: 12px; font-size: 0.78rem;
+      color: #8aa0bd; background: rgba(6,10,20,0.6); padding: 4px 9px; border-radius: 6px;
+      border: 1px solid #1b2740; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>__APP_NAME__</h1>
+    <span class="muted">a Limina world — drag to orbit, scroll to zoom</span>
+  </header>
+  <div class="stage">
+    <div class="poster" id="limina-poster">
+      <p>Loading your world… If it doesn't appear, your browser may lack WebGL2 —
+         this page keeps this poster as a fallback.</p>
+    </div>
+    <!-- data-world is the export dir. public/ ships the prebuilt sample (island/);
+         `npm run export` rewrites this to "./" for the dist/ build. -->
+    <canvas id="limina-canvas" data-world="island/" aria-label="Limina world"></canvas>
+    <div class="status" id="limina-status">starting…</div>
+  </div>
+
+  <script src="./limina-player.js"></script>
+  <script>
+    // Progressive enhancement: the poster is the permanent fallback. We only fade
+    // the canvas in once the player reports ready; any failure keeps the poster.
+    (async () => {
+      const canvas = document.getElementById('limina-canvas');
+      const poster = document.getElementById('limina-poster');
+      const statusEl = document.getElementById('limina-status');
+      const setStatus = (t) => { if (statusEl) statusEl.textContent = t; };
+
+      if (!window.LiminaPlayer || typeof window.LiminaPlayer.run !== 'function') {
+        setStatus('player failed to load'); return;
+      }
+      // The browser path forces the WebGL2 backend, so gate on WebGL2.
+      if (!document.createElement('canvas').getContext('webgl2')) {
+        setStatus('WebGL2 unavailable — showing poster'); return;
+      }
+
+      const worldUrl = canvas.dataset.world || './';
+      let view = null;
+      try {
+        const r = await fetch(worldUrl.replace(/\/?$/, '/') + 'view.json');
+        if (r.ok) view = await r.json();
+      } catch { /* framing is optional */ }
+
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(640, Math.min(1280, Math.round(rect.width || 960)));
+      const height = Math.max(360, Math.round((rect.height || 540)));
+      canvas.width = width;
+      canvas.height = height;
+
+      try {
+        await window.LiminaPlayer.run({
+          canvas, worldUrl, width, height, input: window, forceWebGL: true,
+          orbit: view ? {
+            center: view.center, radius: view.radius, height: view.height,
+            maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
+          } : undefined,
+          onStatus: (phase, detail) => {
+            setStatus(detail ? phase + ': ' + detail : phase);
+            if (phase === 'error') { canvas.classList.remove('ready'); }
+            else if (phase === 'ready' || phase === 'playing' || phase === 'done') {
+              canvas.classList.add('ready');
+              if (poster) poster.style.opacity = '0';
+            }
+          },
+        });
+      } catch (err) {
+        console.error('[limina] playback failed:', err);
+        setStatus('playback failed — showing poster');
+        canvas.classList.remove('ready');
+      }
+    })();
+  </script>
+</body>
+</html>

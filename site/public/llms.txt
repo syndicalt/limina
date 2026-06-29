@@ -26,6 +26,7 @@ Key facts for agents:
 - [Building Agent Players](https://www.liminaengine.com/building-agents/players): Spawn an in-world autonomous agent that perceives, decides, and acts on the fixed loop.
 - [LLM Providers](https://www.liminaengine.com/building-agents/llm-providers): One async provider seam — scripted, local Ollama, or a cloud gateway — behind the agent loop.
 - [Roadmap & status](https://www.liminaengine.com/roadmap): Where Limina is: six phases shipped, the standing principles, and the numbers.
+- [Your first world](https://www.liminaengine.com/first-world): Zero to a playable, agent-authorable world in a browser tab in under a minute with create-limina-app, then connect an agent over MCP.
 
 ## For agents
 

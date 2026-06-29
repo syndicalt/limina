@@ -1,0 +1,24 @@
+{
+  "name": "create-limina-app",
+  "version": "0.1.0",
+  "description": "Scaffold a new Limina world — zero to a running world in a browser tab.",
+  "type": "module",
+  "bin": {
+    "create-limina-app": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "scaffold"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["limina", "scaffold", "create", "world", "game", "agent"],
+  "license": "MIT",
+  "homepage": "https://github.com/syndicalt/limina",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/syndicalt/limina.git",
+    "directory": "tools/create-limina-app"
+  }
+}

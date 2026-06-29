@@ -8,18 +8,26 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const data = JSON.parse(fs.readFileSync(path.join(root, 'src/data/skills.json'), 'utf8'));
 
+// Each group claims a set of name prefixes (the segment before the first dot); a
+// skill lands in the first group whose prefixes include its prefix. The set below
+// covers every prefix the registry emits, so the "Other" bucket stays empty.
+const prefixOf = (n) => n.split('.')[0];
+const group = (prefixes) => (n) => prefixes.includes(prefixOf(n));
 const GROUPS = [
-  { id: 'scene', title: 'Scene & world', blurb: 'Create, destroy, and query renderable entities.', match: (n) => n.startsWith('scene.') },
-  { id: 'ecs', title: 'ECS components', blurb: 'Read and mutate component data on entities.', match: (n) => n.startsWith('ecs.') },
-  { id: 'three', title: 'Rendering · Three.js', blurb: 'Transforms, PBR materials, lighting, and glTF.', match: (n) => n.startsWith('three.') },
-  { id: 'physics', title: 'Physics · Rapier', blurb: 'Impulses, raycasts, and collision events from native Rapier.', match: (n) => n.startsWith('physics.') },
-  { id: 'agent', title: 'Agent / meta', blurb: 'Perception and custom event signals for agents.', match: (n) => n.startsWith('agent.') },
-  { id: 'system', title: 'System & introspection', blurb: 'Discover skills, tail the trace, snapshot the world, hot-reload.', match: (n) => /^(skills|trace|inspector|dev)\./.test(n) },
-  { id: 'audit', title: 'Audit & policy', blurb: 'Query the recorded policy decisions and resource usage.', match: (n) => n.startsWith('audit.') },
-  { id: 'ui', title: 'In-world UI & text', blurb: 'Speech bubbles, labels, callouts, and screen HUD panels.', match: (n) => n.startsWith('ui.') },
-  { id: 'audio', title: 'Spatial audio', blurb: 'Synthesized SFX, ambience, positional sound, and TTS.', match: (n) => n.startsWith('audio.') },
-  { id: 'social', title: 'Embodied social', blurb: 'Walk toward targets and speak as the calling agent.', match: (n) => n.startsWith('social.') },
-  { id: 'package', title: 'Packages', blurb: 'List and load versioned, attested capability packages.', match: (n) => n.startsWith('package.') },
+  { id: 'world', title: 'Scene, terrain & world', blurb: 'Create entities, place and scatter assets, author materials, generate terrain, and drive world dynamics (time, weather, water).', match: group(['scene', 'asset', 'material', 'render', 'terrain', 'world']) },
+  { id: 'ecs', title: 'ECS components', blurb: 'Read and mutate component data on entities.', match: group(['ecs']) },
+  { id: 'three', title: 'Rendering · Three.js', blurb: 'Transforms, PBR materials, lighting, glTF, and visual effects.', match: group(['three', 'vfx']) },
+  { id: 'physics', title: 'Physics · Rapier', blurb: 'Impulses, raycasts, and collision events from native Rapier.', match: group(['physics']) },
+  { id: 'player', title: 'Player & camera', blurb: 'Player input and movement, character controllers, and camera rigs.', match: group(['player', 'input', 'camera']) },
+  { id: 'animation', title: 'Animation', blurb: 'Load, play, blend, and drive skeletal animation and emotes.', match: group(['animation']) },
+  { id: 'interaction', title: 'Interaction & inventory', blurb: 'Interactables, pickups, items, and inventory.', match: group(['interaction', 'inventory', 'item']) },
+  { id: 'combat', title: 'Combat, stats & status', blurb: 'Stats, damage, status effects, and combat.', match: group(['combat', 'damage', 'stats', 'status']) },
+  { id: 'npc', title: 'NPC behavior & dialogue', blurb: 'Behavior trees, dialogue, and navigation/pathfinding for NPCs.', match: group(['behavior', 'dialogue', 'npc', 'navmesh']) },
+  { id: 'game', title: 'Game systems', blurb: 'Game state and rules, quests, triggers and events, and progression.', match: group(['game', 'quest', 'trigger', 'event', 'progression']) },
+  { id: 'save', title: 'Save & checkpoints', blurb: 'Save, load, and checkpoint world state.', match: group(['save', 'checkpoint']) },
+  { id: 'ui', title: 'In-world UI, audio & social', blurb: 'Speech bubbles, labels, HUD panels, spatial audio and TTS, and embodied social acts.', match: group(['ui', 'audio', 'social']) },
+  { id: 'agent', title: 'Agent / meta', blurb: 'Perception and custom event signals for agents.', match: group(['agent']) },
+  { id: 'system', title: 'System, packages & audit', blurb: 'Discover skills, tail the trace, snapshot the world, hot-reload, review approvals, audit policy, and load capability packages.', match: group(['skills', 'trace', 'inspector', 'dev', 'audit', 'package', 'approval']) },
 ];
 
 const esc = (s) => String(s).replace(/\|/g, '\\|');

@@ -1,0 +1,18 @@
+{
+  "name": "__APP_NAME__",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A Limina world — author once in world.ts, export to a browser-playable bundle.",
+  "scripts": {
+    "dev": "node scripts/serve.mjs public 5173",
+    "export": "node scripts/export.mjs",
+    "serve": "node scripts/serve.mjs dist 4173"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

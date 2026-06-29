@@ -9,12 +9,12 @@ const endpoints = [
   { name: 'agents/skills.json', href: `${base}agents/skills.json`, d: `All ${skills.count} skills as structured JSON — names, permissions, and JSON-Schema inputs.` },
   { name: 'sitemap-index.xml', href: `${base}sitemap-index.xml`, d: 'A standard XML sitemap enumerating every page.' },
 ];
-const domains = ['Scene', 'ECS', 'Rendering', 'Physics', 'Agent', 'System', 'Audit', 'UI', 'Audio', 'Social', 'Packages'];
+const domains = ['Scene', 'Terrain', 'World', 'ECS', 'Rendering', 'Physics', 'Player', 'Camera', 'Animation', 'Interaction', 'Inventory', 'Combat', 'Behavior', 'Dialogue', 'Quests', 'Progression', 'Save', 'Agent', 'System', 'UI', 'Audio', 'Social'];
 const profiles = Object.entries(skills.permissionProfiles);
 ---
 <Landing
   title="Limina for agents — MCP tools, a JSON catalog, and plain-text docs"
-  description="Limina exposes its entire capability surface to LLM agents: 45 typed skills as MCP tools, a machine-readable skills.json, and plain-text documentation."
+  description={`Limina exposes its entire capability surface to LLM agents: ${skills.count} typed skills as MCP tools, a machine-readable skills.json, and plain-text documentation.`}
 >
   <section class="section agents-hero">
     <div class="container">
