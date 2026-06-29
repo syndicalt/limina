@@ -44,7 +44,7 @@ Phases 6–12 are **done** (host seams, authoring surface, browser export-playba
 | **Phase 12 capstone** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 First cut done (tiny game ships + passes `p12_capstone`); full Part-F open | `plans/phase-12-playable-game-skills.md` |
 | **bmap pipeline** (real-world geo → limina world) | 🔲 Parked | `plans/bmap-pipeline-spike.md` |
 
-The **immediate next sequence** — the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md). The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
+The **immediate next sequence** — the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md) (strategy), with the milestone-level execution detail (work units, acceptance gates, what's reuse vs gap) in [`plans/implementation-plan.md`](./implementation-plan.md). The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
 
 ## The arc
 

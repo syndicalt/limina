@@ -1,5 +1,9 @@
 # Path to adoption — the next three builds
 
+> **Strategy doc** (the *why* + sequence). The milestone-level **execution** detail — work units,
+> acceptance gates, and what's reuse vs net-new for each build — lives in
+> [`implementation-plan.md`](./implementation-plan.md).
+>
 > Companion to [`ROADMAP.md`](./ROADMAP.md) / [`post-mvp-roadmap.md`](./post-mvp-roadmap.md).
 > Phases 0–12 are done and the catalog/governance/export surface is proven. The strategic
 > gap is **not capability — it's an audience.** A marketplace (Phase 13) presupposes one.
