@@ -26,6 +26,7 @@ import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
+import { applyTurn } from "../world/heading.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { MATERIALS } from "../materials/palette.ts";
@@ -124,7 +125,7 @@ function fixedStep(dt: number): void {
   ops.op_input_axes(axes);       // [0]=A/D, [1]=Q/E (unused), [2]=S/W
   ops.op_input_buttons(buttons); // [0]=jump/Space, [1]=run/Shift
   // A/D turn the sim-owned heading; W/S move along it. (No render state read.)
-  heading -= axes[0] * TURN_RATE * dt;
+  heading = applyTurn(heading, axes[0], TURN_RATE, dt);
   const jumpHeld = buttons[0] === 1;
   const jump = jumpHeld && !prevJump; // rising edge
   prevJump = jumpHeld;

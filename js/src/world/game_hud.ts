@@ -75,6 +75,10 @@ export interface GameHudOptions {
   counters?: string[];
   /** Line shown when there is no tracked/active quest. Default "No active quest". */
   noQuestText?: string;
+  /** Optional hint appended to the quest tracker once EVERY objective is complete but the
+   *  quest is still active (i.e. it needs turning in) — e.g. "Return to the keeper". Makes
+   *  the turn-in step legible instead of an invisible proximity win. Omit = no hint. */
+  turnInHint?: string;
 }
 
 /** Constructor bundle: the UI surface to author against, the world (for its scene),
@@ -109,6 +113,7 @@ interface ResolvedOptions {
   items: GameHudItemSpec[];
   counters: string[];
   noQuestText: string;
+  turnInHint: string | undefined;
 }
 
 /** Format a (possibly fractional / non-finite) stat value for display: integers as-is,
@@ -158,6 +163,7 @@ export class GameHud {
       items: o.items ?? [],
       counters: o.counters ?? [],
       noQuestText: o.noQuestText ?? "No active quest",
+      turnInHint: o.turnInHint,
     };
     this.lastQuestTitle = this.opts.questTitle;
   }
@@ -286,6 +292,15 @@ export class GameHud {
     }
     // A defined quest with no objectives still reads clearly rather than blank.
     if (lines.length === 0) lines.push(this.opts.noQuestText);
+    // Turn-in hint: once every objective is satisfied but the quest is still active, tell
+    // the player to go turn it in (otherwise the win reads as an invisible proximity event).
+    if (
+      this.opts.turnInHint !== undefined &&
+      resolved.objectives.length > 0 &&
+      resolved.objectives.every((o) => o.progress >= o.required)
+    ) {
+      lines.push(this.opts.turnInHint);
+    }
     return { title: resolved.name, lines };
   }
 

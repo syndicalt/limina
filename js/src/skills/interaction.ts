@@ -14,6 +14,7 @@
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Position, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
+import { teardownEntity } from "./entity-teardown.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 import type { InventoryManager } from "./inventory.ts";
@@ -179,21 +180,23 @@ export function registerInteractionSkills(
     slot: z.number().int().min(0).optional().describe("Target inventory slot index. If omitted, auto-assign."),
     meta: MetaField,
   });
-  const pickup: SkillDefinition<z.infer<typeof pickupInput>, { ok: boolean; slot?: number }> = {
+  const pickup: SkillDefinition<z.infer<typeof pickupInput>, { ok: boolean; slot?: number; reason?: string }> = {
     name: "interaction.pickup",
     version: "1.0.0",
-    description: "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor.",
+    description: "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor. On failure returns ok:false with a `reason` the caller can act on.",
     category: "interaction",
     permissions: ["interaction.write"],
     input: pickupInput,
-    output: z.object({ ok: z.boolean(), slot: z.number().optional() }),
+    output: z.object({ ok: z.boolean(), slot: z.number().optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === undefined) return { ok: false };
+      // Structured failure: never a bare {ok:false}. The caller (often an autonomous
+      // agent) gets a machine-readable reason instead of having to guess.
+      if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
       const result = inv.addItem(input.actorEntity, { itemId: input.itemEntity, quantity: 1, slot: input.slot });
-      if (!result.ok) return { ok: false };
-      // Destroy the world entity (free its ECS slot + entity-table identity).
-      const entry = ctx.world.entities.destroy(input.itemEntity);
-      if (entry !== undefined) despawnRenderable(ctx.world.ecs, entry.eid);
+      if (!result.ok) return { ok: false, reason: `actor "${input.actorEntity}" inventory rejected the item (full or invalid slot)` };
+      // Full teardown so the picked-up item's MESH leaves the scene (not just its ECS
+      // slot) — the shared path that also frees any physics body + tags.
+      teardownEntity(ctx.world, input.itemEntity);
       ctx.emit("interaction.pickedUp", { itemEntity: input.itemEntity, actorEntity: input.actorEntity, slot: result.slot, ...input.meta });
       return { ok: true, slot: result.slot };
     },
@@ -208,18 +211,18 @@ export function registerInteractionSkills(
     quantity: z.number().int().min(1).default(1),
     meta: MetaField,
   });
-  const drop: SkillDefinition<z.infer<typeof dropInput>, { ok: boolean; itemEntity?: string }> = {
+  const drop: SkillDefinition<z.infer<typeof dropInput>, { ok: boolean; itemEntity?: string; reason?: string }> = {
     name: "interaction.drop",
     version: "1.0.0",
-    description: "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id.",
+    description: "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id. On failure returns ok:false with a `reason`.",
     category: "interaction",
     permissions: ["interaction.write"],
     input: dropInput,
-    output: z.object({ ok: z.boolean(), itemEntity: z.string().optional() }),
+    output: z.object({ ok: z.boolean(), itemEntity: z.string().optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === undefined) return { ok: false };
+      if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
       const removed = inv.removeItem(input.actorEntity, input.itemId, input.slot, input.quantity);
-      if (!removed) return { ok: false };
+      if (!removed) return { ok: false, reason: `actor "${input.actorEntity}" does not hold "${input.itemId}"` };
       // Spawn a REAL world item entity (the ECS path terrain/scene use): a renderable
       // bound to an inert transform at the drop position, registered in the entity table.
       const pos = input.position ?? entityPosition(ctx.world, input.actorEntity) ?? [0, 0, 0];
@@ -251,11 +254,11 @@ export function registerInteractionSkills(
     category: "interaction",
     permissions: ["interaction.write"],
     input: useInput,
-    output: z.object({ ok: z.boolean(), result: z.unknown().optional() }),
+    output: z.object({ ok: z.boolean(), result: z.unknown().optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === undefined) return { ok: false };
+      if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
       const consumed = inv.removeItem(input.actorEntity, input.itemId, undefined, input.quantity);
-      if (!consumed) return { ok: false };
+      if (!consumed) return { ok: false, reason: `actor "${input.actorEntity}" has no "${input.itemId}" to use` };
       ctx.emit("interaction.used", { actorEntity: input.actorEntity, itemId: input.itemId, quantity: input.quantity, targetEntity: input.targetEntity, data: input.data, ...input.meta });
       return { ok: true, result: { itemId: input.itemId, used: true, quantity: input.quantity } };
     },

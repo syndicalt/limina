@@ -56,6 +56,9 @@ export interface AttachCharacterModelOptions {
   scale?: number;
   /** Auto-fit target height in meters (used only when `scale` is omitted). Default 1.8. */
   targetHeight?: number;
+  /** Optional material tint (0xRRGGBB) copied into the loaded model's albedo so distinct
+   *  NPCs read apart from the player at a glance. Omit = the model's own colors. Render-only. */
+  tintColor?: number;
   /** Extra yaw (radians) added so the model's own forward axis faces the move dir.
    *  The engine convention here is local +Z = forward; robot.glb already faces +Z, so
    *  the default 0 is correct. Use Math.PI if a model faces backward. */
@@ -94,6 +97,21 @@ export interface CharacterModel {
   syncSkinning(): void;
   /** The currently-selected locomotion state. */
   readonly state: LocomotionState;
+}
+
+/** Copy an albedo tint (0xRRGGBB) into every material under `root` that has a `.color`.
+ *  Render-only and idempotent; used to make distinct NPCs read apart from the player.
+ *  Exported so the tint traversal is unit-testable without loading a glTF. */
+export function tintModel(root: SceneObject, tintColor: number): void {
+  const tint = new THREE.Color(tintColor);
+  (root as unknown as THREE.Object3D).traverse((o) => {
+    const mat = (o as unknown as { material?: unknown }).material;
+    const mats = Array.isArray(mat) ? mat : mat !== undefined ? [mat] : [];
+    for (const m of mats) {
+      const col = (m as { color?: { copy(c: THREE.Color): void } }).color;
+      if (col !== undefined) col.copy(tint);
+    }
+  });
 }
 
 /** Y-only quaternion components for a yaw rotation (matches the engine convention
@@ -237,6 +255,10 @@ export async function attachCharacterModel(opts: AttachCharacterModelOptions): P
     const sm = o as unknown as { isSkinnedMesh?: boolean; frustumCulled?: boolean };
     if (sm.isSkinnedMesh === true) sm.frustumCulled = false;
   });
+
+  // Optional tint so distinct NPCs (e.g. the quest-giver) don't render as a clone of the
+  // player. Render-only: copies the tint into each material's albedo color where present.
+  if (opts.tintColor !== undefined) tintModel(root, opts.tintColor);
 
   // Auto-fit scale + foot height from the model's local bounds.
   const { minY, height } = localBounds(root);

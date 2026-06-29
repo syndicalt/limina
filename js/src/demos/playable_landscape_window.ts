@@ -28,6 +28,7 @@ import { renderSyncSystem } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
+import { applyTurn } from "../world/heading.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
@@ -182,7 +183,7 @@ let dbgFrame = 0;
 function fixedStep(dt: number): void {
   ops.op_input_axes(axes);       // [0]=A/D, [1]=Q/E (unused), [2]=S/W
   ops.op_input_buttons(buttons); // [0]=jump/Space, [1]=run/Shift
-  heading += axes[0] * TURN_RATE * dt; // A/D turn — inverted left/right per UAT
+  heading = applyTurn(heading, axes[0], TURN_RATE, dt); // A/D turn — shared sign
   const jumpHeld = buttons[0] === 1;
   const jump = jumpHeld && !prevJump; // rising edge
   prevJump = jumpHeld;

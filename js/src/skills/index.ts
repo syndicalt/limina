@@ -38,6 +38,11 @@ import { registerInteractionSkills, type InteractionManager } from "./interactio
 import { registerInventorySkills, type InventoryManager } from "./inventory.ts";
 import { registerGameStateSkills, type GameStateManager } from "./gamestate.ts";
 import { registerTriggerEventSkills, type TriggerManager, type EventManager } from "./triggers.ts";
+import { registerCutsceneSkills, type CutsceneManager } from "./cutscene.ts";
+import { registerArchitectureSkills } from "./architecture.ts";
+import { registerDirectorSkills, type DirectorManager } from "./director.ts";
+import { registerAbilitySkills, type AbilityManager } from "./ability.ts";
+import { registerClipAuthorSkills, type ClipAuthor } from "./clip_author.ts";
 import { registerQuestSkills, type QuestManager } from "./quest.ts";
 import { registerCombatSkills, type StatsManager, type CombatManager } from "./combat.ts";
 import { registerBehaviorDialogueSkills, type BehaviorManager, type DialogueManager } from "./behavior.ts";
@@ -74,10 +79,18 @@ export interface CoreSkills {
   gamestate: { gameStateManager: GameStateManager };
   /** Phase 12: triggers and events. */
   triggers: { triggerManager: TriggerManager; eventManager: EventManager };
+  /** Track C: scripted timeline / cutscene sequencer. */
+  cutscene: { cutsceneManager: CutsceneManager };
+  /** Track C: AI director (deterministic pacing / orchestration). */
+  director: { directorManager: DirectorManager };
+  /** Track C: procedural animation authoring (keyframe clips + sampling). */
+  clips: { clipAuthor: ClipAuthor };
   /** Phase 12: quests and objectives. */
   quest: { questManager: QuestManager };
   /** Phase 12: stats, damage, status, combat. */
   combat: { statsManager: StatsManager; combatManager: CombatManager };
+  /** Track C: ability system (cooldowns + resource costs) — combat depth. */
+  ability: { abilityManager: AbilityManager };
   /** Phase 12: NPC behavior and dialogue. */
   behavior: { behaviorManager: BehaviorManager; dialogueManager: DialogueManager };
   /** Phase 12: navigation and pathfinding. */
@@ -130,6 +143,7 @@ export function registerCoreSkills(
   // bytes ride the export); a replay re-runs the recorded import requests to rebuild it.
   const materials = new MaterialRegistry();
   registerSceneSkills(registry, materials);
+  registerArchitectureSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry, assets, materials);
   registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
@@ -204,8 +218,13 @@ export function registerCoreSkills(
   const interaction = registerInteractionSkills(registry, { inventoryManager: inventory.inventoryManager });
   const gamestate = registerGameStateSkills(registry);
   const triggers = registerTriggerEventSkills(registry);
+  const cutscene = registerCutsceneSkills(registry);
+  const director = registerDirectorSkills(registry);
+  const clips = registerClipAuthorSkills(registry);
   const quest = registerQuestSkills(registry);
   const combat = registerCombatSkills(registry);
+  // ability.cast spends from a resource stat, so it binds the combat stats manager (closure dep).
+  const ability = registerAbilitySkills(registry, { statsManager: combat.statsManager });
   const behavior = registerBehaviorDialogueSkills(registry);
   const nav = registerNavmeshSkills(registry);
   const vfx = registerVFXSkills(registry);
@@ -217,7 +236,7 @@ export function registerCoreSkills(
     terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions },
     assets, materials, water,
     player, camera, animation, interaction, inventory,
-    gamestate, triggers, quest, combat, behavior,
+    gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
     nav, vfx, save, progression, worldstate,
   };
 }

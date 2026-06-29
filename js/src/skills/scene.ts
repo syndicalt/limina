@@ -3,6 +3,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { teardownEntity } from "./entity-teardown.ts";
 import { createMaterial, isMaterialName, MATERIAL_NAMES } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
@@ -112,15 +113,13 @@ const destroyEntity: SkillDefinition<z.infer<typeof destroyEntityInput>, { remov
   input: destroyEntityInput,
   output: z.object({ removed: z.boolean() }),
   handler: (input, ctx) => {
-    const entry = ctx.world.entities.destroy(input.entity);
+    // Full teardown (entity-table + scene mesh + physics body + ECS binding + tags)
+    // via the single shared path, then emit this skill's domain/resource events.
+    const entry = teardownEntity(ctx.world, input.entity);
     if (entry === undefined) return { removed: false };
-    if (entry.mesh !== undefined) ctx.world.scene.remove(entry.mesh);
-    if (entry.bodyId !== undefined) ctx.world.ops.op_physics_remove_body(entry.bodyId);
     if (entry.resource !== undefined) {
       ctx.emit("resource.unloaded", { entity: input.entity, ...entry.resource });
     }
-    despawnRenderable(ctx.world.ecs, entry.eid);
-    ctx.world.tags.delete(entry.eid);
     ctx.emit("ecs.component.removed", { entity: input.entity, eid: entry.eid });
     return { removed: true };
   },
@@ -159,8 +158,71 @@ const queryEntities: SkillDefinition<
   },
 };
 
+// ---- scene.inspect (the "Eyes" perception substrate) ----------------------------------------
+// A structured, whole-scene summary an agent reads to reason about WHAT IT BUILT before it
+// renders a pixel: how many entities, their world AABB / center / size, a tag census, and a
+// small position sample. This is the perception half of the self-correction loop — it lets an
+// agent sanity-check its world ("200 entities spanning ~96m, tags: relic×3, tree×40") and catch
+// gross authoring mistakes (nothing placed, everything at the origin, runaway bounds) without
+// needing the GPU. Pure read — emits nothing, mutates nothing.
+const inspectInput = z.object({
+  tag: z.string().optional().describe("Summarize only entities carrying this tag (the AABB/sample is over the filtered set; the tag census is always global)."),
+  sampleSize: z.number().int().min(0).max(64).default(8).describe("How many entity positions to include in `sample` (for spot-checking placement)."),
+});
+const inspectScene: SkillDefinition<
+  z.infer<typeof inspectInput>,
+  {
+    entityCount: number;
+    bounds: { min: [number, number, number]; max: [number, number, number] } | null;
+    center: [number, number, number] | null;
+    size: [number, number, number] | null;
+    tagCounts: Record<string, number>;
+    sample: { entity: string; position: [number, number, number] }[];
+  }
+> = {
+  name: "scene.inspect",
+  version: "1.0.0",
+  description: "Summarize the whole scene for an agent to reason about: entity count, world AABB (min/max/center/size), a global tag census, and a small position sample. Pure read — the perception substrate for self-checking an authored world.",
+  category: "scene",
+  permissions: ["scene.read"],
+  input: inspectInput,
+  output: z.object({
+    entityCount: z.number(),
+    bounds: z.object({ min: Vec3, max: Vec3 }).nullable(),
+    center: Vec3.nullable(),
+    size: Vec3.nullable(),
+    tagCounts: z.record(z.string(), z.number()),
+    sample: z.array(z.object({ entity: z.string(), position: Vec3 })),
+  }),
+  handler: (input, ctx) => {
+    const ents = querySpatialEntities(ctx.world, { tag: input.tag, sortBy: "entity" }).entities;
+    let bounds: { min: [number, number, number]; max: [number, number, number] } | null = null;
+    let center: [number, number, number] | null = null;
+    let size: [number, number, number] | null = null;
+    if (ents.length > 0) {
+      let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
+      for (const e of ents) {
+        const [x, y, z] = e.position;
+        if (x < mnx) mnx = x; if (y < mny) mny = y; if (z < mnz) mnz = z;
+        if (x > mxx) mxx = x; if (y > mxy) mxy = y; if (z > mxz) mxz = z;
+      }
+      bounds = { min: [mnx, mny, mnz], max: [mxx, mxy, mxz] };
+      center = [(mnx + mxx) / 2, (mny + mxy) / 2, (mnz + mxz) / 2];
+      size = [mxx - mnx, mxy - mny, mxz - mnz];
+    }
+    // Global tag census (independent of the `tag` filter) — an at-a-glance content inventory.
+    const tagCounts: Record<string, number> = {};
+    for (const set of ctx.world.tags.values()) {
+      for (const t of set) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+    }
+    const sample = ents.slice(0, input.sampleSize).map((e) => ({ entity: e.entity, position: e.position }));
+    return { entityCount: ents.length, bounds, center, size, tagCounts, sample };
+  },
+};
+
 export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
   registry.register(makeCreateEntity(materials));
   registry.register(destroyEntity);
   registry.register(queryEntities);
+  registry.register(inspectScene);
 }

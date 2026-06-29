@@ -25,6 +25,7 @@ import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
 import { attachCharacterModel } from "../world/character_model.ts";
+import { applyTurn } from "../world/heading.ts";
 import { GameHud } from "../world/game_hud.ts";
 import { buildCapstone, type CapstoneInput } from "./capstone_game.ts";
 
@@ -58,6 +59,9 @@ const nPos = capstone.npcPos();
 const npcModel = await attachCharacterModel({
   world, registry, base, animationManager: core.animation.animationManager,
   position: [nPos[0], nPos[1], nPos[2]],
+  // The keeper: a brassy tint + a touch shorter so the quest-giver doesn't render as a
+  // clone of the player. (A dedicated keeper.glb is the eventual full fix.)
+  tintColor: 0xC8A24B, targetHeight: 1.7,
 });
 
 // ── HUD: HP (vitals) + quest progress, reading the live managers. ─────────────────────────────
@@ -69,7 +73,7 @@ const hud = new GameHud({
     inventory: core.inventory.inventoryManager,
     gamestate: core.gamestate.gameStateManager,
   },
-  options: { hpStat: "hp", counters: ["relics"], vitalsTitle: "VITALS", questTitle: "QUEST" },
+  options: { hpStat: "hp", counters: ["relics"], vitalsTitle: "VITALS", questTitle: "QUEST", turnInHint: "Return to the keeper" },
 });
 hud.init();
 hud.setQuest(capstone.questId);
@@ -103,7 +107,7 @@ function fixedStep(dt: number): void {
   if (stepping) return; // skip a tick rather than overlap an in-flight async step
   ops.op_input_axes(axes);       // [0]=A/D, [2]=S/W
   ops.op_input_buttons(buttons); // [0]=Space, [1]=Shift
-  heading -= axes[0] * TURN_RATE * dt;
+  heading = applyTurn(heading, axes[0], TURN_RATE, dt);
 
   const dialogueOpen = capstone.dialogue.isActive();
   const space = buttons[0] === 1;
@@ -122,7 +126,10 @@ function fixedStep(dt: number): void {
   }
   const input: CapstoneInput = {
     forward: axes[2],
-    yaw: heading,
+    // Sim-owned heading (A/D) PLUS the mouse look-yaw, so the mouse steers the player —
+    // not just the camera. Replay-safe: yaw is a recorded player.move input, so replay
+    // re-applies the recorded value (never the raw mouse delta).
+    yaw: heading + freeYaw,
     run: !dialogueOpen && shift,
     jump: !dialogueOpen && spaceEdge,
     choose,

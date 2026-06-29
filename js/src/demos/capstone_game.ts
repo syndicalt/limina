@@ -339,6 +339,10 @@ export async function buildCapstone(deps: BuildCapstoneDeps): Promise<Capstone> 
   const stats = core.combat.statsManager;
   const quests = core.quest.questManager;
   let acceptedFlag = false;
+  // Edge latch so the quest-giver greeting opens ONCE per approach (not every tick):
+  // set when the greeting opens, cleared when the player leaves talk range so a fresh
+  // approach re-arms it. This is what makes DECLINE actually stick.
+  let npcTalkLatch = false;
   let lastPlayerPos: Vec3 = [spawn[0], spawn[1], spawn[2]];
   let lastNpcPos: Vec3 = [npcPosXZ[0], npcY, npcPosXZ[1]];
 
@@ -387,8 +391,14 @@ export async function buildCapstone(deps: BuildCapstoneDeps): Promise<Capstone> 
       }
     }
 
-    // (4) DIALOGUE — proximity-open the quest-giver until the quest is accepted; drive a choice.
-    if (!acceptedFlag && npc.wantsToTalk() && !dialogue.isActive()) {
+    // (4) DIALOGUE — open the quest-giver greeting ONCE per approach (edge-triggered on
+    //     entering talk range), so DECLINING actually sticks instead of the greeting
+    //     re-opening every tick and forcing an eventual accept. Leaving + re-approaching
+    //     re-arms it, so a declined quest can still be accepted later.
+    const wantsTalk = npc.wantsToTalk();
+    if (!wantsTalk) npcTalkLatch = false; // left talk range → re-arm a fresh greet
+    if (!acceptedFlag && wantsTalk && !npcTalkLatch && !dialogue.isActive()) {
+      npcTalkLatch = true;
       await dialogue.open(npcEntity, playerEntity, DIALOGUE_TREE_ID);
     }
     if (dialogue.isActive()) {
