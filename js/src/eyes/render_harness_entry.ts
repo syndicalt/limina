@@ -14,7 +14,7 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { applyRenderBaseline } from "../render-baseline.ts";
 
 declare const window: {
-  __renderAt?: (config: Record<string, number>) => Promise<{ meanLum: number; width: number; height: number }>;
+  __renderAt?: (config: Record<string, number>) => Promise<{ meanLum: number; lumStdev: number; detail: number; width: number; height: number }>;
   __ready?: boolean;
 };
 
@@ -44,35 +44,63 @@ camera.lookAt(0, 1, 0);
 
 // The engine's real baseline: sun + hemisphere lights, procedural-sky IBL, ACES tonemapping, ground.
 applyRenderBaseline({ scene, renderer: renderer as never, camera } as never);
-// Keep the IBL environment for lighting, but draw a dark background so the lit surfaces (not a bright
-// sky) dominate the measured luminance — gives the sun-intensity knob a wide, monotonic range.
+// The baseline's procedural sky (kept for the A fidelity comparison via `fullSky`).
+const skyBackground = scene.background;
+// Default: draw a dark background so the lit surfaces (not a bright sky) dominate the measured
+// luminance — gives the B-loop's sun-intensity knob a wide, monotonic range.
 scene.background = new THREE.Color(0x0a0d12);
 
-// A few PBR shapes for the lighting to shade.
+// A few shapes, each with a lit PBR material AND a flat unlit material, so the harness can render
+// the fidelity baseline ("after") or a naive flat-shaded frame ("before") for a side-by-side.
 const palette = [
   [-2.4, 0x4488ff],
   [0, 0xff8a3d],
   [2.4, 0x55cc88],
 ] as const;
+const shapes: Array<{ mesh: THREE.Mesh; lit: THREE.Material; flat: THREE.Material }> = [];
 for (const [x, color] of palette) {
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(1, 32, 16),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1 }),
-  );
+  const lit = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1 });
+  const flat = new THREE.MeshBasicMaterial({ color }); // unlit, constant color — "before fidelity"
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), lit);
   mesh.position.set(x, 1, 0);
   scene.add(mesh);
+  shapes.push({ mesh, lit, flat });
 }
 
-function meanLuminance(px: Uint8Array | Float32Array): number {
-  let sum = 0;
+/** Per-pixel luminance stats. `detail` is mean local gradient magnitude (|Δ| to the right + down
+ *  neighbour) — the right fidelity proxy: lit shading puts SMOOTH gradients across the whole frame
+ *  (sky gradient, curved-surface shading, ground falloff), while a flat-shaded frame is uniform
+ *  interiors with gradient only at sparse hard edges. (Global stdev is fooled by flat bright colors.) */
+function lumStats(px: Uint8Array | Float32Array): { mean: number; stdev: number; detail: number } {
   const scale = px instanceof Float32Array ? 1 : 1 / 255;
-  for (let i = 0; i < px.length; i += 4) {
-    sum += (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) * scale;
+  const n = W * H;
+  let sum = 0;
+  const lum = new Float64Array(n);
+  for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+    lum[j] = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) * scale;
+    sum += lum[j];
   }
-  return sum / (W * H); // normalized 0..1
+  const mean = sum / n;
+  let varSum = 0;
+  for (let j = 0; j < n; j++) varSum += (lum[j] - mean) * (lum[j] - mean);
+  let gradSum = 0, gradN = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const j = y * W + x;
+      if (x + 1 < W) { gradSum += Math.abs(lum[j + 1] - lum[j]); gradN++; }
+      if (y + 1 < H) { gradSum += Math.abs(lum[j + W] - lum[j]); gradN++; }
+    }
+  }
+  return { mean, stdev: Math.sqrt(varSum / n), detail: gradSum / Math.max(gradN, 1) };
 }
 
 window.__renderAt = async (config) => {
+  // `flat` (1) renders the naive unlit "before" frame; `fullSky` (1) renders the lit baseline WITH its
+  // procedural sky (the "after" for the A side-by-side); otherwise the lit scene on a dark background.
+  const flat = (config.flat ?? 0) >= 1;
+  const fullSky = (config.fullSky ?? 0) >= 1;
+  for (const s of shapes) s.mesh.material = flat ? s.flat : s.lit;
+  scene.background = flat ? new THREE.Color(0x222222) : (fullSky ? skyBackground : new THREE.Color(0x0a0d12));
   // Exposure is the primary knob the critic drives; sun intensity is an optional second axis.
   renderer.toneMappingExposure = config.exposure ?? 1.0;
   if (config.sun !== undefined) {
@@ -92,6 +120,7 @@ window.__renderAt = async (config) => {
   }).readRenderTargetPixelsAsync(rt, 0, 0, W, H);
   renderer.setRenderTarget(null);
   await (renderer as never as { renderAsync(s: unknown, c: unknown): Promise<void> }).renderAsync(scene, camera);
-  return { meanLum: meanLuminance(px), width: W, height: H };
+  const stats = lumStats(px);
+  return { meanLum: stats.mean, lumStdev: stats.stdev, detail: stats.detail, width: W, height: H };
 };
 window.__ready = true;

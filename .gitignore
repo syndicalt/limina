@@ -41,3 +41,5 @@ editor/test/history_browser_render.png
 editor/test/viewport_render.png
 editor/test/viewport_render_full.png
 editor/test/visual_refine.png
+editor/test/fidelity_lit.png
+editor/test/fidelity_flat.png
