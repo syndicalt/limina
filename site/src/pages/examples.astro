@@ -1,0 +1,131 @@
+---
+import Landing from '../layouts/Landing.astro';
+import { Image } from 'astro:assets';
+import island from '../assets/renders/terrain-island.png';
+import robot from '../assets/renders/character-robot.png';
+import materials from '../assets/renders/materials-pbr.png';
+import cottage from '../assets/renders/cottage-beach.png';
+import biomes from '../assets/renders/terrain-biomes.png';
+import billiards from '../assets/renders/physics-billiards.png';
+import crowd from '../assets/renders/agents-crowd.png';
+
+const base = import.meta.env.BASE_URL;
+
+// Every card pairs a REAL captured frame with the exact command that renders it.
+// Screenshots are offscreen-RenderTarget readbacks from the same windowed demos.
+const examples = [
+  {
+    src: island, wide: true,
+    title: 'A textured island in three skill calls',
+    desc: 'world.generateRegion (procedural-PBR auto-surface) + world.addWater + world.populateBiome — eroded terrain, depth-shaded water, biome-gated scatter, atmospheric horizon. No hand-authored geometry.',
+    cmd: 'js/src/demos/default_world_window.ts',
+  },
+  {
+    src: robot,
+    title: 'A rigged, animated player',
+    desc: 'A skinned glTF character with idle / walk / run clips, driven across a generated world by the native character controller. Walk to the orb to win.',
+    cmd: 'js/src/demos/playable_game_window.ts',
+  },
+  {
+    src: materials,
+    title: 'Procedural PBR materials, zero downloads',
+    desc: 'Ten named materials — stone, rock, wood, metal, grass… — as triplanar noise + detail-normal surfaces on spheres and boxes. Swappable for imported texture packs.',
+    cmd: 'js/src/demos/materials_showcase_window.ts',
+  },
+  {
+    src: cottage,
+    title: 'Placed assets on a generated coast',
+    desc: 'A content-addressed cottage + scattered palms on a procedurally generated beach, with a depth-aware sea. asset.place / asset.scatter over world.generateRegion.',
+    cmd: 'js/src/demos/cottage_beach_window.ts',
+  },
+  {
+    src: biomes,
+    title: 'Every biome from one seed',
+    desc: 'Beach, mountains, forest, desert, plains, hills, islands — all the same seed, one knob: the terrain type. The deterministic generator does the rest.',
+    cmd: 'js/src/demos/terrain_types_window.ts',
+  },
+  {
+    src: billiards,
+    title: 'Native Rapier physics',
+    desc: 'A cue break racks of balls coming to rest on the cloth — native Rapier physics → ECS → Three.js, on the fixed-timestep loop.',
+    cmd: 'js/src/demos/billiards.ts',
+  },
+  {
+    src: crowd, wide: true,
+    title: '200 agents, native perception',
+    desc: 'Two hundred numeral-people mingling through the real perception → decision → action pipeline, every action traced — with a live agent-ops HUD.',
+    cmd: 'js/src/demos/numbers_party.ts',
+  },
+];
+---
+<Landing
+  title="Examples — real frames from working Limina demos"
+  description="Every demo here actually runs. Real frames captured from windowed Limina demo runs, each paired with the exact command that renders it."
+>
+  <section class="section examples-hero">
+    <div class="container">
+      <p class="eyebrow reveal">Examples</p>
+      <h1 class="display reveal">Every demo here actually <span class="grad-text">runs</span>.</h1>
+      <p class="lede reveal">
+        No broken embeds, no “coming soon.” Each frame below was captured from a real
+        windowed demo run — the same renderer, physics, and agent systems described in the
+        docs. Clone the repo, run the command under each card, and see the same thing.
+      </p>
+      <div class="hero-cta reveal">
+        <a class="btn btn-primary" href={`${base}getting-started`}>Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/syndicalt/limina" target="_blank" rel="noopener">Source on GitHub →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-tight">
+    <div class="container">
+      <div class="examples-grid reveal">
+        {examples.map((e) => (
+          <figure class={`ex-card${e.wide ? ' wide' : ''}`}>
+            <div class="shot">
+              <Image src={e.src} alt={e.title} widths={[600, 900, 1280]} sizes="(max-width: 820px) 100vw, 50vw" />
+            </div>
+            <figcaption>
+              <h3 class="h3">{e.title}</h3>
+              <p class="muted">{e.desc}</p>
+              <code class="run mono">./target/release/limina --window {e.cmd}</code>
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+      <p class="foot muted small reveal">
+        Frames are offscreen-RenderTarget readbacks from the windowed demos — the engine's real
+        output, not mockups. The full set lives in <code>js/src/demos/</code>.
+      </p>
+    </div>
+  </section>
+
+  <style>
+    .examples-hero { padding-top: clamp(40px, 6vw, 76px); padding-bottom: 8px; }
+    .examples-hero .display { margin-top: 14px; font-size: clamp(2.4rem, 5.5vw, 4.2rem); }
+    .examples-hero .lede { margin-top: 20px; max-width: 60ch; }
+    .hero-cta { display: flex; gap: 14px; margin-top: 28px; flex-wrap: wrap; }
+
+    .examples-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .ex-card {
+      margin: 0; display: flex; flex-direction: column;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      overflow: hidden; background: #0a0e1a;
+    }
+    .ex-card.wide { grid-column: 1 / -1; }
+    .ex-card .shot { overflow: hidden; background: #060a14; aspect-ratio: 16 / 9; }
+    .ex-card img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.6s var(--ease); }
+    .ex-card:hover img { transform: scale(1.03); }
+    .ex-card figcaption { padding: 20px 20px 22px; display: flex; flex-direction: column; gap: 10px; }
+    .ex-card .h3 { margin: 0; }
+    .ex-card .muted { margin: 0; font-size: 0.92rem; line-height: 1.5; }
+    .ex-card .run {
+      margin-top: 4px; padding: 10px 12px; border-radius: 8px;
+      background: rgba(4, 7, 14, 0.6); border: 1px solid var(--line-2);
+      color: var(--teal); font-size: 0.78rem; word-break: break-all;
+    }
+    .foot { margin-top: 26px; text-align: center; }
+    @media (max-width: 820px) { .examples-grid { grid-template-columns: 1fr; } }
+  </style>
+</Landing>
