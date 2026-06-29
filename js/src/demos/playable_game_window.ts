@@ -197,6 +197,7 @@ function render(_alpha: number): void {
   camera.pitch = freePitch;
   camera.update(engine.camera, p);
   renderSyncSystem(engine.world);
+  model.syncSkinning(); // refresh rig bone matrices after the transform (else arms detach)
   engine.renderer.render(engine.scene, engine.camera);
   ops.op_surface_present(engine.context);
 }

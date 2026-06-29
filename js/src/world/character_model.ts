@@ -85,6 +85,13 @@ export interface CharacterModel {
   /** Switch the locomotion clip (crossfading on change) and pump the mixer by `dt`
    *  seconds (when an AnimationManager was supplied). Idempotent per state. */
   setLocomotion(state: LocomotionState, dt: number): void;
+  /** Refresh the skinning AFTER the host applies the ECS transform (renderSyncSystem)
+   *  and BEFORE renderer.render(). Recomputes the model's world matrices + the shared
+   *  skeleton's bone matrices. REQUIRED when the model is driven by an external
+   *  transform: three's WebGPU backend does not re-upload the bone matrices for the
+   *  rig's shared-skeleton sub-meshes on its own, so the arms/limbs would lag the body
+   *  and visibly DETACH as the character translates. Call once per render frame. */
+  syncSkinning(): void;
   /** The currently-selected locomotion state. */
   readonly state: LocomotionState;
 }
@@ -186,6 +193,21 @@ class RiggedCharacterModel implements CharacterModel {
     // Pump the shared mixer (render-only, dt-driven). Host pumps if no mgr supplied.
     this.mgr?.update(dt);
   }
+
+  syncSkinning(): void {
+    const obj = this.root as unknown as THREE.Object3D;
+    // The host already wrote position/rotation/scale into the ECS SoA and
+    // renderSyncSystem applied them to the root's LOCAL transform; propagate to
+    // world matrices now so the bones' matrixWorld is current...
+    obj.updateMatrixWorld(true);
+    // ...then recompute each shared-skeleton bone-matrix texture. three's WebGPU
+    // backend skips this for the rig's secondary skinned meshes when the root is
+    // externally driven, which is what makes the arms detach under translation.
+    obj.traverse((o) => {
+      const sm = o as unknown as { isSkinnedMesh?: boolean; skeleton?: { update(): void } };
+      if (sm.isSkinnedMesh === true && sm.skeleton !== undefined) sm.skeleton.update();
+    });
+  }
 }
 
 /** Load a rigged glTF character and wrap it as a render-only stand-in for a capsule.
@@ -208,6 +230,13 @@ export async function attachCharacterModel(opts: AttachCharacterModelOptions): P
   if (entry === undefined || entry.mesh === undefined) throw new Error("attachCharacterModel: loaded entity has no mesh");
   const root = entry.mesh as SceneObject;
   const eid = entry.eid;
+
+  // A SkinnedMesh's bind-pose bounding sphere is wrong once it animates/moves, so leave
+  // frustum culling off for the rig (it can otherwise vanish when partly off-screen).
+  (root as unknown as THREE.Object3D).traverse((o) => {
+    const sm = o as unknown as { isSkinnedMesh?: boolean; frustumCulled?: boolean };
+    if (sm.isSkinnedMesh === true) sm.frustumCulled = false;
+  });
 
   // Auto-fit scale + foot height from the model's local bounds.
   const { minY, height } = localBounds(root);
