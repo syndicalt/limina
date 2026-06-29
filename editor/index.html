@@ -26,6 +26,16 @@
   </header>
 
   <main class="panels">
+    <section class="panel" id="viewport">
+      <div class="panel-head">
+        <h3>Live viewport</h3>
+        <span class="hint"><span id="viewport-status">idle</span> · runLive (sim-worker + SAB + WebGPU)</span>
+      </div>
+      <div class="panel-body" id="viewport-body">
+        <canvas id="editor-viewport" width="640" height="360" style="width:100%;height:100%;display:block;background:#0b0f14;border-radius:6px"></canvas>
+      </div>
+    </section>
+
     <section class="panel" id="world">
       <div class="panel-head"><h3>World</h3><span class="hint">inspector.snapshot</span></div>
       <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
@@ -51,5 +61,6 @@
   </footer>
 
   <script type="module" src="src/app.js"></script>
+  <script type="module" src="src/viewport.js"></script>
 </body>
 </html>

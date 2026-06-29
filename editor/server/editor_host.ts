@@ -12,6 +12,18 @@
 //
 // Unlike `--mcp-ws` (which uses the host's listener), this binds its OWN loopback
 // port (default 8787) via op_net_listen, so it runs as a plain script.
+//
+// LIVE VIEWPORT (Phase 8 Mode B): the editor's <canvas id="editor-viewport"> runs
+// `runLive` (editor/src/viewport.js → editor/vendor/limina-runtime.js), which spins
+// up a sim-worker + a SharedArrayBuffer transform bridge. SAB requires CROSS-ORIGIN
+// ISOLATION, so the editor's static files must be served with
+//     Cross-Origin-Opener-Policy:   same-origin
+//     Cross-Origin-Embedder-Policy: require-corp
+// Serve them with the on-ramp static server (it already sends both headers):
+//     node tools/scaffold/scripts/serve.mjs editor 5173   →  http://localhost:5173/
+// Opening editor/index.html over file:// works for the MCP panels but NOT the live
+// viewport (file origins are never cross-origin isolated → runLive shows a poster).
+// Build the viewport bundles first:  (cd js && npm run bundle:editor).
 
 import { ops } from "../../js/src/engine.ts";
 import { spawnRenderable } from "../../js/src/ecs/world.ts";

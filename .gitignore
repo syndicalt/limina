@@ -34,3 +34,4 @@ traces/
 .idea/
 .DS_Store
 *.swp
+editor/vendor/

@@ -15,12 +15,25 @@
 
 import * as THREE from "../build/three.bundle.mjs";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
-import { createEcsWorld, renderSyncSystem } from "./ecs/world.ts";
+import { createEcsWorld, Position, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
+import { resolveProfile } from "./skills/permissions.ts";
 import { LiminaTracer } from "./observability/event.ts";
+// ── Phase 8 Mode-B (M5) live runtime: the verified M1–M4 + M3 worker pieces ──
+import { WasmRapierPhysics, type RapierModule } from "./browser/wasm-rapier-physics.ts";
+import { SharedTransformStorage } from "./browser/sab-transforms.ts";
+import { InputRingBuffer } from "./browser/sab-ringbuffer.ts";
+import { FrameInterpolator, type TransformStore } from "./browser/frame-interpolator.ts";
+import type { AuthorCommand } from "./browser/sim-worker.ts";
+import {
+  composeAuthoringOps,
+  crossOriginIsolatedAvailable,
+  LivePlayerInput,
+  SnapshotRing,
+} from "./browser/live-runtime.ts";
 import { exportAssetBundle, loadExport, type LoadedExport } from "./export/package.ts";
 import { AssetRegistry } from "./asset-registry.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
@@ -320,6 +333,260 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
       terrain?.clear();
       fly?.detach();
       if (opts.input !== undefined) input.detach(opts.input as Parameters<BrowserInput["detach"]>[0]);
+    },
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODE B — the LIVE in-browser runtime (Phase 8 M5).
+//
+// `run()` above is Mode A: replay a recorded EXPORT, no live simulation. `runLive`
+// is Mode B: spawn the M3 sim-worker (the authoritative fixed-step wasm-Rapier
+// solver on its own thread) and render its output here on the main thread, so an
+// agent's authoring edits SIMULATE and render live.
+//
+// Composition (all verified M1–M4 + M3 pieces — no stubs in the wiring):
+//   • the worker (sim-worker-entry.js) brings up M1 wasm-Rapier, allocates the M2
+//     transform SAB + M3 input/status SABs, authors the command log, and self-drives
+//     a 60 Hz fixed step, writing each tick's poses into the transform SAB;
+//   • the render-main thread JOINs that SAB (M2 SharedTransformStorage), re-authors
+//     the SAME command log against the REAL three scene (matching eids → meshes),
+//     freezes each consumed tick (SnapshotRing) and tweens prev→curr by `alpha`
+//     (M4 FrameInterpolator) into the render store renderSyncSystem reads, every
+//     animation frame; DOM input is pumped into the M3 input ring (1-frame latency).
+//
+// GRACEFUL DEGRADATION: SharedArrayBuffer needs cross-origin isolation (COOP/COEP);
+// without it, or without WebGPU, there is no live bridge — `runLive` reports
+// `error` via onStatus and returns null WITHOUT throwing (the caller shows a poster,
+// exactly like Mode A). The live Worker+SAB+WebGPU render itself is BROWSER-UAT.
+// ════════════════════════════════════════════════════════════════════════════
+
+interface WorkerLike {
+  postMessage(message: unknown): void;
+  terminate(): void;
+  onmessage: ((ev: { data: unknown }) => void) | null;
+  onerror: ((ev: { message?: string }) => void) | null;
+}
+declare const Worker: { new (url: unknown, opts?: { type?: "module" }): WorkerLike };
+declare const URL: { new (url: string, base?: string): unknown };
+
+export interface RunLiveOptions {
+  /** A real <canvas> element to render into. */
+  canvas: unknown;
+  width: number;
+  height: number;
+  /** The authoring command log (the agent's edits): each command is re-invoked
+   *  through the registry (skill) or calls an engine physics op directly. The worker
+   *  simulates it; the render thread re-authors it for meshes. */
+  commands: AuthorCommand[];
+  /** Optional event target for keyboard input (usually `window`). */
+  input?: unknown;
+  /** The injected rapier-compat module for render-main authoring. Defaults to a
+   *  dynamic `import("@dimforge/rapier3d-compat")` (resolved by the browser bundle). */
+  rapier?: RapierModule;
+  /** Force the WebGL2 backend (set when WebGPU is unavailable but you still want a render). */
+  forceWebGL?: boolean;
+  /** Status sink for the page UI. */
+  onStatus?: (phase: "loading" | "ready" | "playing" | "done" | "error", detail?: string) => void;
+  /** Worker script URL override (tests / custom hosting). Defaults to the sibling
+   *  `sim-worker-entry.js` chunk next to this bundle. */
+  workerUrl?: unknown;
+  /** Authoring permission profile (default "builder.readWrite" — the broad authoring grant). */
+  profile?: string;
+  /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future). */
+  orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number };
+}
+
+export interface RunningLive {
+  worker: WorkerLike;
+  loop: AccumulatorLoopHandle;
+  stop(): void;
+}
+
+interface ReadyMessage { type: "ready"; buffer: SharedArrayBuffer | ArrayBuffer; inputBuffer: SharedArrayBuffer | ArrayBuffer; status: SharedArrayBuffer | ArrayBuffer; }
+
+/** Spawn the live runtime. Returns the running handle, or `null` when the
+ *  environment can't support the live bridge (reported via `onStatus("error")` —
+ *  never throws for an unsupported environment). */
+export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null> {
+  const status = opts.onStatus ?? ((): void => {});
+
+  // ── Gate 1: cross-origin isolation (no COOP/COEP ⇒ no SharedArrayBuffer ⇒ no
+  //    zero-copy worker bridge). Degrade gracefully — the caller shows a poster.
+  if (!crossOriginIsolatedAvailable()) {
+    status("error", "not cross-origin isolated — serve with COOP: same-origin + COEP: require-corp for SharedArrayBuffer");
+    return null;
+  }
+  // ── Gate 2: WebGPU (or an explicit WebGL2 fallback). ──
+  const webgpu = await hasWebGpu();
+  if (!webgpu && !(opts.forceWebGL ?? false)) {
+    status("error", "WebGPU unavailable (no navigator.gpu adapter)");
+    return null;
+  }
+
+  status("loading", "spawning sim worker");
+
+  // ── Spawn the sim-worker + handshake. The worker authors the command log, then
+  //    replies `ready` with the M2/M3 SABs. ──
+  const workerUrl = opts.workerUrl ?? new URL("./sim-worker-entry.js", import.meta.url);
+  let worker: WorkerLike;
+  try {
+    worker = new Worker(workerUrl, { type: "module" });
+  } catch (err) {
+    status("error", "failed to spawn sim worker: " + (err instanceof Error ? err.message : String(err)));
+    return null;
+  }
+
+  const ready = await new Promise<ReadyMessage | null>((resolve) => {
+    worker.onmessage = (ev: { data: unknown }): void => {
+      const msg = ev.data as { type?: string };
+      if (msg.type === "ready") resolve(ev.data as ReadyMessage);
+    };
+    worker.onerror = (ev: { message?: string }): void => {
+      status("error", "sim worker error: " + (ev.message ?? "unknown"));
+      resolve(null);
+    };
+    worker.postMessage({ type: "init", commands: opts.commands });
+  });
+  if (ready === null) { worker.terminate(); return null; }
+  // Further per-tick acks are ignored — the render thread reads progress from the
+  // status SAB via Atomics (cross-thread, allocation-free), not the message channel.
+  worker.onmessage = null;
+
+  // ── JOIN the worker's SABs (M2 transform bridge + M3 input ring + status). ──
+  const joined = new SharedTransformStorage({ buffer: ready.buffer });
+  const inputRing = new InputRingBuffer({ buffer: ready.inputBuffer });
+  const statusShared = typeof SharedArrayBuffer === "function" && ready.status instanceof SharedArrayBuffer;
+  const statusView = new Int32Array(ready.status, 0, 1);
+  const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
+
+  // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
+  status("loading", "starting WebGPU");
+  const { renderer, scene, camera } = await buildRenderTarget(
+    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, {},
+  );
+
+  // ── Re-author the SAME command log on the render-main thread against the REAL
+  //    scene so meshes exist and eids match the worker (deterministic authoring).
+  //    The render-main physics world is built ONLY to author — it is never stepped
+  //    (the worker is authoritative). ──
+  status("loading", "authoring scene meshes");
+  const rapier = opts.rapier ?? (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
+  const physics = await WasmRapierPhysics.create(rapier);
+  const ops = composeAuthoringOps(physics);
+  installOps(ops); // complete global op surface for any engine code reaching module-level `ops`
+
+  const ecs = createEcsWorld();
+  const entities = new EntityTable();
+  const world: WorldContext = {
+    ecs,
+    transforms: createTransformStorage(ecs),
+    spatial: new UniformGridSpatialIndex(),
+    entities,
+    tags: new Map(),
+    scene,
+    camera,
+    ops,
+    renderer,
+    width: opts.width,
+    height: opts.height,
+    mode: "windowed",
+  };
+  const registry = new SkillRegistry(new LiminaTracer("ses_browser_live"));
+  registerCoreSkills(registry);
+  const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
+  for (const cmd of opts.commands) {
+    if (cmd.kind === "physics") {
+      const fn = (ops as unknown as Record<string, (...a: unknown[]) => unknown>)[cmd.op];
+      fn(...cmd.args);
+      continue;
+    }
+    const res = await registry.invoke(cmd.tool, cmd.input, {
+      agentId: cmd.agentId ?? "author",
+      sessionId: "ses_browser_live",
+      permissions: cmd.perms !== undefined ? new Set(cmd.perms) : permissions,
+      tick: 0,
+      world,
+      causedBy: [],
+    });
+    if (!res.success) {
+      status("error", `authoring '${cmd.tool}' failed: ${res.error?.message ?? "unknown"}`);
+      worker.terminate();
+      return null;
+    }
+  }
+
+  // The authored entity eids = the render set; capture their (static) authored scale
+  // so the interpolator keeps meshes at size (the worker syncs position+rotation only).
+  const eids: number[] = [];
+  for (const id of entities.ids()) {
+    const eid = entities.resolve(id)?.eid;
+    if (eid !== undefined) eids.push(eid);
+  }
+  const authoredScale = new SharedTransformStorage();
+  for (const eid of eids) {
+    authoredScale.Scale.x[eid] = Scale.x[eid];
+    authoredScale.Scale.y[eid] = Scale.y[eid];
+    authoredScale.Scale.z[eid] = Scale.z[eid];
+  }
+
+  // ── M4 interpolation: tween the two latest frozen ticks into the render store
+  //    (the world.ts SoA globals renderSyncSystem reads) each frame. ──
+  const renderStore: TransformStore = { Position, Rotation, Scale };
+  const interp = new FrameInterpolator(renderStore);
+  const ring = new SnapshotRing(eids, authoredScale);
+  let lastConsumed = -1;
+
+  // ── Input pump + camera framing. ──
+  const liveInput = new LivePlayerInput();
+  if (opts.input !== undefined) liveInput.attach(opts.input as Parameters<LivePlayerInput["attach"]>[0]);
+  const inFrame = { move: [0, 0, 0] as [number, number, number], look: [0, 0] as [number, number], buttons: [0, 0] as [number, number], tick: 0 };
+
+  const orbitCenter = opts.orbit?.center ?? [0, 1, 0];
+  const orbitSpin = opts.orbit?.autoSpin ?? 0.004;
+  let angle = 0;
+  const radius = opts.orbit?.radius ?? 16;
+  const camHeight = opts.orbit?.height ?? 8;
+
+  status("ready", `${eids.length} entities authored — live sim running`);
+
+  // ── The accumulator rAF loop (host.ts). `step` consumes the worker's latest tick
+  //    (freezing it for interpolation) at the fixed cadence; `frame(alpha)` pumps
+  //    input, interpolates by alpha, syncs the scene, and renders. ──
+  const loop = startAccumulatorLoop({
+    step: (): void => {
+      const t = readWorkerTick();
+      if (t > lastConsumed) {
+        interp.push(ring.freeze(joined));
+        lastConsumed = t;
+        status("playing", `tick ${t}`);
+      }
+    },
+    frame: (alpha: number): void => {
+      // Publish this frame's input into the M3 ring (consumed by the worker next tick).
+      inputRing.writeInput(liveInput.frame(lastConsumed < 0 ? 0 : lastConsumed, inFrame));
+      // Tween prev→curr by alpha into the render store, then drive the scene + render.
+      interp.interpolate(alpha, ring.presentSet);
+      renderSyncSystem(ecs);
+      angle += orbitSpin;
+      camera.position.set(
+        orbitCenter[0] + Math.cos(angle) * radius,
+        orbitCenter[1] + camHeight,
+        orbitCenter[2] + Math.sin(angle) * radius,
+      );
+      camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+      renderer.render(scene, camera);
+    },
+  });
+
+  return {
+    worker,
+    loop,
+    stop: (): void => {
+      loop.stop();
+      try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }
+      worker.terminate();
+      if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
     },
   };
 }
