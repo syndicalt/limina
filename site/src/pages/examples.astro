@@ -91,7 +91,7 @@ const examples = [
                   class="live-canvas"
                   aria-hidden="true"
                   data-world={`${base}examples/island/`}
-                  data-player={`${base}examples/limina-player.mjs`}
+                  data-player={`${base}examples/limina-player.js`}
                 />
               )}
             </div>
@@ -161,11 +161,28 @@ const examples = [
       const worldUrl = canvas.dataset.world ?? '';
       const playerUrl = canvas.dataset.player ?? '';
 
+      // Load the player as a CLASSIC script (served statically) rather than a module
+      // import — Astro/Vite dev rewrites `import()` of a public file to `?import` and
+      // 500s on the prebuilt bundle. A <script src> resource load is untouched.
+      const loadPlayer = (): Promise<any> => new Promise((resolve, reject) => {
+        const w = window as any;
+        if (w.LiminaPlayer) { resolve(w.LiminaPlayer); return; }
+        const s = document.createElement('script');
+        s.src = playerUrl;
+        s.onload = () => w.LiminaPlayer ? resolve(w.LiminaPlayer) : reject(new Error('player global missing'));
+        s.onerror = () => reject(new Error('player failed to load'));
+        document.head.appendChild(s);
+      });
+
       const start = async () => {
         try {
-          const player = await import(/* @vite-ignore */ playerUrl);
-          if (typeof player.hasWebGpu !== 'function' || !(await player.hasWebGpu())) {
-            return; // no WebGPU -> keep the poster
+          const player = await loadPlayer();
+          // run() below forces the WebGL2 backend (the WebGPU/Dawn path OOMs on small
+          // GPUs), so gate on WebGL2 availability — NOT WebGPU.
+          const probe = document.createElement('canvas').getContext('webgl2');
+          if (!probe) {
+            console.warn('[limina demo] no WebGL2 — keeping the poster');
+            return;
           }
           // Optional camera framing baked alongside the export.
           let view = null;
@@ -174,8 +191,10 @@ const examples = [
             if (res.ok) view = await res.json();
           } catch { /* framing is optional */ }
 
+          // Keep the GPU footprint modest — capped internal resolution (the canvas is
+          // CSS-scaled to fill the card) so it fits memory-constrained GPUs.
           const rect = (shot as HTMLElement).getBoundingClientRect();
-          const width = Math.max(640, Math.round(rect.width));
+          const width = Math.min(720, Math.max(480, Math.round(rect.width)));
           const height = Math.round(width * 9 / 16);
           canvas.width = width;
           canvas.height = height;
@@ -186,6 +205,9 @@ const examples = [
             width,
             height,
             input: window,
+            // Use the WebGL2 backend: the WebGPU (Dawn/Vulkan) path OOMs on
+            // memory-constrained GPUs; WebGL2 via ANGLE has a lighter footprint here.
+            forceWebGL: true,
             orbit: view ? {
               center: view.center, radius: view.radius, height: view.height,
               maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
@@ -197,8 +219,9 @@ const examples = [
               }
             },
           });
-        } catch {
+        } catch (err) {
           // Any failure -> keep the poster, never blank.
+          console.error('[limina demo] playback failed:', err);
           canvas.classList.remove('ready');
         }
       };
