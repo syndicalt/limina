@@ -8,7 +8,7 @@
 > were. (The post-MVP work began life as the "production / ecosystem" tier of the original `README`
 > roadmap, preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).)
 >
-> Status of every phase below: **not started.**
+> Status: Phases 6–12 **done**; Phase 13 **not started**; several polish items deferred (see *Remaining & parked* below).
 
 ## North star
 
@@ -38,21 +38,26 @@ durable + replayable world log, single-instance scale (200 agents @ p95 4 ms), s
 sync, QuickJS isolation, a dynamic policy engine, versioned/attested packages, in-scene text/UI, and
 spatial audio. See `ROADMAP.md` for the evidence.
 
+**Phases 6–12 are also done** (host seams + export contract + worldgen S0, the authoring surface with
+approval gate, browser export-playback, terrain generation skills, scoped governance + delegate/coordinator,
+render baseline + asset registry + scatter, and ~85 game-building skills across 17 systems). What remains
+on this roadmap: **Phase 13** (ecosystem & marketplace), plus the deferred polish items listed in
+*Remaining & parked* below.
+
 ## The path — sequencing at a glance
 
-| Phase | Goal in one line | Gating dependency |
-|---|---|---|
-| **6 — Open the door & de-risk** | Cheap enabling seams + the two spikes' cheapest stages | none (current substrate) |
-| **7 — The authoring surface** ✅ | A person and an agent co-author a world, every step visible | Phase 6 seams |
-| **8 — Run anywhere** ✅ | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) |
-| **9 — Worlds worth authoring** ✅ | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 |
-| **10 — Agent governance & orchestration** ✅ | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) |
-| **11 — Content & assets** ✅ | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter |
-| **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) |
-| **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 |
+| Phase | Goal in one line | Gating dependency | Status |
+|---|---|---|---|
+| **6 — Open the door & de-risk** | Cheap enabling seams + the two spikes' cheapest stages | none (current substrate) | ✅ DONE |
+| **7 — The authoring surface** | A person and an agent co-author a world, every step visible | Phase 6 seams | ✅ DONE |
+| **8 — Run anywhere** | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) | ✅ DONE (Mode A playback; **Mode B live authoring deferred**) |
+| **9 — Worlds worth authoring** | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 | ✅ DONE (first cut; **W2/W3 polish deferred**) |
+| **10 — Agent governance & orchestration** | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) | ✅ DONE |
+| **11 — Content & assets** | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter | ✅ DONE |
+| **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) | ✅ DONE (**capstone demo deferred**) |
+| **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 | 🔲 Not started |
 
-Phase 6 is cheap and mostly parallelizable. **Phase 7 is the first real sprint** (agent-native authoring
-is the lead). Phase 8 is the headline. Phases 9–10 follow, with 9 gated on a spike.
+Phase 6 is done and was the foundation for everything that followed. **Phase 13 is the next build** — the ecosystem/marketplace phase that lets third parties publish skills and assets that others discover, install, and run, and richer external memory adapters plug in behind the provider seam. Phases 6–12 each closed with acceptance gates met and tests green; the deferred polish items are sequenced in *Remaining & parked*.
 
 ---
 
@@ -232,7 +237,7 @@ Runs *ongoing*, alongside and after the others.
 
 ---
 
-## Phase 13 — Ecosystem & marketplace  *(the lasting advantage)*
+## Phase 13 — Ecosystem & marketplace  *(the next build; prerequisites met)*
 *Folds in former themes: Ecosystem & community + Advanced external memory adapters.*
 
 **Goal:** other people publish skills that others install and run, and richer external memory plugs in
@@ -251,12 +256,43 @@ cleanly.
 adapter plugs in behind the provider seam without the engine taking a dependency on it.
 
 **Depends on:** the stable skill/package surface (already shipped) **plus a catalog + governance worth trading**
-— so it's downstream of Phases 10–12; benefits from the reach Phase 8 adds.
+— Phases 10–12 are done, so the prerequisites are met. Benefits from the reach Phase 8 adds.
 
 **Productized separately:** Phase 13 delivers the *engine-side* registry mechanism + contribution process.
 The full marketplace product — hybrid monetization, a web UI + agent-consumable API, and a catalog of
 skills/packages/worlds/assets — is its own roadmap: [`skills-exchange-roadmap.md`](./skills-exchange-roadmap.md).
 That product builds on this phase; it is never something the engine depends on at runtime.
+
+---
+
+## Remaining & parked (sequenced after the phases they extend)
+
+These items were identified during phase delivery as follow-ups worth doing but deliberately deferred so each phase closed cleanly. They slot into the phase they extend.
+
+### Phase 8 — Mode B: Live in-browser authoring *(deferred)*
+**What:** the full engine running live in the browser tab with a **wasm-Rapier** `PhysicsOps` adapter (not just keyframe playback), using a **sim-worker / render-main-thread split** over `SharedArrayBuffer` (SAB). The worker is the authoritative fixed-step clock (ECS + physics + agent loop); the main thread reads transforms zero-copy from SAB-backed ECS and interpolates between ticks (`Frame(alpha)`).
+**Why deferred:** Mode A (export-playback) delivers the headline *author-once / export-everywhere* first. Mode B requires COOP/COEP headers for SAB, a full wasm-Rapier build, and input-crossing with a one-frame delay.
+**Plan:** detailed in `plans/phase-8-run-anywhere-plan.md` (Architecture note — the live browser runtime).
+**Gating:** none beyond Mode A being shipped (it is).
+
+### Phase 9 — Worldgen polish *(W2/W3/W5, deferred)*
+| Item | What | Cost | Plan |
+|---|---|---|---|
+| **W2 — Erosion bake pass** | Hydraulic + thermal erosion over the heightmap (carves realistic valleys + drainage); authoring-time only, baked into snapshots | bake-time | `plans/worldgen-roadmap.md` |
+| **W3 — Agent control + coarse→fine** | Steerable coarse continent/biome guide via `generateRegion` hints, detailed by noise + erosion; "agent sketches intent, generator builds it" | low | `plans/worldgen-roadmap.md` |
+| **W5 — Native wgpu model port** | Port the TerrainDiffusion model to native wgpu/burn (removes the Python service dependency) | high | `plans/worldgen-roadmap.md` |
+
+**Water rendering upgrade** *(deferred, companion to worldgen):* proper depth-buffer water with caustics/refraction (current is a camera-distance fade proxy; the surf transition is the visible artifact). Backend has no scene-depth texture yet. Plan: `plans/worldgen-roadmap.md` (Companion thread — liquid / water rendering).
+
+### Phase 12 — Capstone demo *(deferred)*
+**What:** an integrated demo proving an agent can author a **complete playable game** — terrain with biome-appropriate props, player character with movement/camera/animation, NPCs with navigation/dialogue/combat, quest line with objectives/triggers/rewards, inventory with pickup-able items, win/lose conditions, save/load.
+**Why deferred:** the ~85 skills across 17 systems landed as modules; the integrated capstone is the acceptance proof (Phase 12 plan Part F).
+**Plan:** `plans/phase-12-playable-game-skills.md` (Part F — Acceptance Criteria).
+
+### bmap pipeline — Real-world geo → limina world *(parked)*
+**What:** a generation backend that turns a real-world location (bounding box) into a limina region — heightfield terrain from Copernicus DEM + buildings at true footprint/height from OSM/Overture + roads + shoreline + canopy, at 1:1 scale. Behind `world.generateRegion`, baked into the tile/asset cache, deterministic replay.
+**Why parked:** depends on open-data licensing decisions (OSM ODbL share-alike) and tile-seam consistency work. Same posture as the factory-sim spike.
+**Plan:** `plans/bmap-pipeline-spike.md`. Un-park with an S0 (one bbox, stock tools, measure quality + licensing).
 
 ---
 
