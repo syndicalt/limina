@@ -29,18 +29,21 @@ for (let i = 0; i < colors.length; i++) {
 // Build the live post pipeline; fall back to a plain render if the backend rejects it (logged).
 let post: { renderAsync(): Promise<void> } | undefined;
 const T = THREE as unknown as {
-  TSL: { pass(s: unknown, c: unknown): { getTextureNode(): unknown } };
+  TSL: { pass(s: unknown, c: unknown): { getTextureNode(): TslNode } };
   bloom(node: unknown, strength?: number, radius?: number, threshold?: number): unknown;
   PostProcessing: new (r: unknown) => { outputNode: unknown; renderAsync(): Promise<void> };
 };
+type TslNode = { add(n: unknown): TslNode; mul(n: unknown): TslNode; sub(n: unknown): TslNode };
 try {
   const scenePass = T.TSL.pass(scene, camera);
-  const color = scenePass.getTextureNode() as { add(n: unknown): unknown };
-  const bloomPass = T.bloom(color, 0.7, 0.45, 0.2);
+  const color = scenePass.getTextureNode();
+  // Colour grade: mild contrast + a touch of lift/warmth (composited before bloom), then bloom on top.
+  const graded = color.mul(1.12).sub(0.015);
+  const bloomPass = T.bloom(graded, 0.7, 0.45, 0.2);
   const pp = new T.PostProcessing(renderer);
-  pp.outputNode = color.add(bloomPass);
+  pp.outputNode = graded.add(bloomPass);
   post = pp;
-  ops.op_log("r_post: live PostProcessing pipeline built (scene pass + bloom) ✓");
+  ops.op_log("r_post: live post pipeline built (scene pass → grade → bloom) ✓");
 } catch (e) {
   ops.op_log("r_post: post setup FAILED → plain render fallback: " + (e instanceof Error ? e.message : String(e)));
 }
