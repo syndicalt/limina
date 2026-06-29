@@ -1,0 +1,29 @@
+{
+  "kind": "limina.export",
+  "exportVersion": 1,
+  "worldId": "limina-relic-hunt",
+  "logVersion": 1,
+  "keyframeInterval": 20,
+  "ticks": 0,
+  "commands": 26,
+  "keyframes": 0,
+  "tiles": 4,
+  "assets": [
+    {
+      "id": "grass.glb",
+      "path": "assets/grass.glb",
+      "hash": "sha256:350b4ac2d8449109b83bb2ef13c525d447f84b3512526f0a02a3efa9f02f77b0"
+    },
+    {
+      "id": "broadleaf.glb",
+      "path": "assets/broadleaf.glb",
+      "hash": "sha256:cf432f20ee801e0bfc96e3c9021618fe151ec4f4702b2c5b014fc0a7f9b270a1"
+    },
+    {
+      "id": "robot.glb",
+      "path": "assets/robot.glb",
+      "hash": "sha256:83303035ec960da77db50c854c4ef30bc397d8dafb21b189eba4988b6eceaa04"
+    }
+  ],
+  "createdAt": "2026-01-01T00:00:00Z"
+}

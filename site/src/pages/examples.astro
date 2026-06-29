@@ -2,6 +2,7 @@
 import Landing from '../layouts/Landing.astro';
 import { Image } from 'astro:assets';
 import island from '../assets/renders/terrain-island.png';
+import relicHunt from '../assets/renders/relic-hunt.png';
 import robot from '../assets/renders/character-robot.png';
 import materials from '../assets/renders/materials-pbr.png';
 import cottage from '../assets/renders/cottage-beach.png';
@@ -15,10 +16,16 @@ const base = import.meta.env.BASE_URL;
 // Screenshots are offscreen-RenderTarget readbacks from the same windowed demos.
 const examples = [
   {
-    src: island, wide: true, live: true,
+    src: island, wide: true, live: true, world: 'examples/island/',
     title: 'A textured island in three skill calls',
     desc: 'world.generateRegion (procedural-PBR auto-surface) + world.addWater + world.populateBiome — eroded terrain, depth-shaded water, biome-gated scatter, atmospheric horizon. No hand-authored geometry.',
     cmd: 'js/src/demos/default_world_window.ts',
+  },
+  {
+    src: relicHunt, wide: true, live: true, world: 'examples/relic-hunt/',
+    title: 'The Relic Hunt — a complete game, agent-authored',
+    desc: 'A whole playable game from the limina skills alone: a generated island, a rigged player + quest-giver, three relics to gather, a branching dialogue, a scorched-ground hazard, and win/lose state — terrain, navmesh, characters, quest and triggers all authored through typed skills. Exported once, it replays live in your browser.',
+    cmd: 'js/src/demos/capstone_window.ts',
   },
   {
     src: robot,
@@ -84,13 +91,13 @@ const examples = [
       <div class="examples-grid reveal">
         {examples.map((e) => (
           <figure class={`ex-card${e.wide ? ' wide' : ''}`}>
-            <div class="shot" data-live-island={e.live ? '' : undefined}>
+            <div class="shot" data-live={e.live ? '' : undefined}>
               <Image src={e.src} alt={e.title} widths={[600, 900, 1280]} sizes="(max-width: 820px) 100vw, 50vw" />
               {e.live && (
                 <canvas
                   class="live-canvas"
                   aria-hidden="true"
-                  data-world={`${base}examples/island/`}
+                  data-world={`${base}${e.world}`}
                   data-player={`${base}examples/limina-player.js`}
                 />
               )}
@@ -148,91 +155,97 @@ const examples = [
   </style>
 
   <script>
-    // LIVE in-browser playback of the flagship island demo over the Phase 8
-    // export-playback path. Progressive enhancement only: the poster <img> is the
-    // permanent fallback — if WebGPU is unavailable, prefers-reduced-motion is set,
-    // or anything throws, we DO NOTHING and the screenshot stays. The canvas only
-    // fades in once the player reports it is ready.
-    const shot = document.querySelector('[data-live-island]');
-    const canvas = shot?.querySelector('canvas.live-canvas');
+    // LIVE in-browser playback of the live demos (the island + the capstone "Relic
+    // Hunt") over the Phase 8 export-playback path. Progressive enhancement only: each
+    // poster <img> is the permanent fallback — if WebGL2 is unavailable,
+    // prefers-reduced-motion is set, or anything throws, we DO NOTHING and the
+    // screenshot stays. Each canvas only fades in once its player reports ready.
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    if (canvas instanceof HTMLCanvasElement && !reduceMotion) {
-      const worldUrl = canvas.dataset.world ?? '';
-      const playerUrl = canvas.dataset.player ?? '';
+    // The browser player is a CLASSIC script (served statically) rather than a module
+    // import — Astro/Vite dev rewrites `import()` of a public file to `?import` and
+    // 500s on the prebuilt bundle. A <script src> resource load is untouched. Shared
+    // across cards: LiminaPlayer is a global singleton, loaded once.
+    const loadPlayer = (playerUrl: string): Promise<any> => new Promise((resolve, reject) => {
+      const w = window as any;
+      if (w.LiminaPlayer) { resolve(w.LiminaPlayer); return; }
+      const s = document.createElement('script');
+      s.src = playerUrl;
+      s.onload = () => w.LiminaPlayer ? resolve(w.LiminaPlayer) : reject(new Error('player global missing'));
+      s.onerror = () => reject(new Error('player failed to load'));
+      document.head.appendChild(s);
+    });
 
-      // Load the player as a CLASSIC script (served statically) rather than a module
-      // import — Astro/Vite dev rewrites `import()` of a public file to `?import` and
-      // 500s on the prebuilt bundle. A <script src> resource load is untouched.
-      const loadPlayer = (): Promise<any> => new Promise((resolve, reject) => {
-        const w = window as any;
-        if (w.LiminaPlayer) { resolve(w.LiminaPlayer); return; }
-        const s = document.createElement('script');
-        s.src = playerUrl;
-        s.onload = () => w.LiminaPlayer ? resolve(w.LiminaPlayer) : reject(new Error('player global missing'));
-        s.onerror = () => reject(new Error('player failed to load'));
-        document.head.appendChild(s);
-      });
-
-      const start = async () => {
+    // Boot one live card: gate on WebGL2, fetch its baked camera framing, size the
+    // canvas, and run the player against that card's exported world.
+    const bootCard = (shot: HTMLElement, canvas: HTMLCanvasElement) => async () => {
+      try {
+        const worldUrl = canvas.dataset.world ?? '';
+        const playerUrl = canvas.dataset.player ?? '';
+        const player = await loadPlayer(playerUrl);
+        // run() below forces the WebGL2 backend (the WebGPU/Dawn path OOMs on small
+        // GPUs), so gate on WebGL2 availability — NOT WebGPU.
+        const probe = document.createElement('canvas').getContext('webgl2');
+        if (!probe) {
+          console.warn('[limina demo] no WebGL2 — keeping the poster');
+          return;
+        }
+        // Optional camera framing baked alongside the export.
+        let view = null;
         try {
-          const player = await loadPlayer();
-          // run() below forces the WebGL2 backend (the WebGPU/Dawn path OOMs on small
-          // GPUs), so gate on WebGL2 availability — NOT WebGPU.
-          const probe = document.createElement('canvas').getContext('webgl2');
-          if (!probe) {
-            console.warn('[limina demo] no WebGL2 — keeping the poster');
-            return;
+          const res = await fetch(worldUrl + 'view.json');
+          if (res.ok) view = await res.json();
+        } catch { /* framing is optional */ }
+
+        // Keep the GPU footprint modest — capped internal resolution (the canvas is
+        // CSS-scaled to fill the card) so it fits memory-constrained GPUs.
+        const rect = shot.getBoundingClientRect();
+        const width = Math.min(720, Math.max(480, Math.round(rect.width)));
+        const height = Math.round(width * 9 / 16);
+        canvas.width = width;
+        canvas.height = height;
+
+        await player.run({
+          canvas,
+          worldUrl,
+          width,
+          height,
+          input: window,
+          // Use the WebGL2 backend: the WebGPU (Dawn/Vulkan) path OOMs on
+          // memory-constrained GPUs; WebGL2 via ANGLE has a lighter footprint here.
+          forceWebGL: true,
+          orbit: view ? {
+            center: view.center, radius: view.radius, height: view.height,
+            maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
+          } : undefined,
+          onStatus: (phase: string) => {
+            if (phase === 'error') { canvas.classList.remove('ready'); }
+            else if (phase === 'ready' || phase === 'playing' || phase === 'done') {
+              canvas.classList.add('ready');
+            }
+          },
+        });
+      } catch (err) {
+        // Any failure -> keep the poster, never blank.
+        console.error('[limina demo] playback failed:', err);
+        canvas.classList.remove('ready');
+      }
+    };
+
+    if (!reduceMotion) {
+      // Boot every live card independently; each only starts once it scrolls into
+      // view (saves work + GPU on first paint).
+      for (const shot of document.querySelectorAll<HTMLElement>('[data-live]')) {
+        const canvas = shot.querySelector('canvas.live-canvas');
+        if (!(canvas instanceof HTMLCanvasElement)) continue;
+        const start = bootCard(shot, canvas);
+        const io = new IntersectionObserver((entries, obs) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) { obs.disconnect(); void start(); }
           }
-          // Optional camera framing baked alongside the export.
-          let view = null;
-          try {
-            const res = await fetch(worldUrl + 'view.json');
-            if (res.ok) view = await res.json();
-          } catch { /* framing is optional */ }
-
-          // Keep the GPU footprint modest — capped internal resolution (the canvas is
-          // CSS-scaled to fill the card) so it fits memory-constrained GPUs.
-          const rect = (shot as HTMLElement).getBoundingClientRect();
-          const width = Math.min(720, Math.max(480, Math.round(rect.width)));
-          const height = Math.round(width * 9 / 16);
-          canvas.width = width;
-          canvas.height = height;
-
-          await player.run({
-            canvas,
-            worldUrl,
-            width,
-            height,
-            input: window,
-            // Use the WebGL2 backend: the WebGPU (Dawn/Vulkan) path OOMs on
-            // memory-constrained GPUs; WebGL2 via ANGLE has a lighter footprint here.
-            forceWebGL: true,
-            orbit: view ? {
-              center: view.center, radius: view.radius, height: view.height,
-              maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
-            } : undefined,
-            onStatus: (phase: string) => {
-              if (phase === 'error') { canvas.classList.remove('ready'); }
-              else if (phase === 'ready' || phase === 'playing' || phase === 'done') {
-                canvas.classList.add('ready');
-              }
-            },
-          });
-        } catch (err) {
-          // Any failure -> keep the poster, never blank.
-          console.error('[limina demo] playback failed:', err);
-          canvas.classList.remove('ready');
-        }
-      };
-
-      // Only boot once the card scrolls into view (saves work + GPU on first paint).
-      const io = new IntersectionObserver((entries, obs) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) { obs.disconnect(); void start(); }
-        }
-      }, { rootMargin: '200px' });
-      io.observe(shot as Element);
+        }, { rootMargin: '200px' });
+        io.observe(shot);
+      }
     }
   </script>
 </Landing>
