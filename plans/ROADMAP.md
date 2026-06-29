@@ -25,13 +25,13 @@
 | **9 — Worlds Worth Authoring** | `terrain.*`/`world.*` skill seam + native heightfield + model IPC | ✅ **COMPLETE — first cut** (`plans/phase-9-worlds-worth-authoring-plan.md`) — `op_physics_add_heightfield`, `ProceduralTerrainSource` (deterministic noise), 4 typed/permissioned skills, content-addressed tile cache, `ModelTerrainSource` (S1 IPC), browser playback from cached tiles, 61/61 tests green. **W2/W3 polish deferred.** |
 | **10 — Agent Governance & Orchestration** | Scoped exposure + permission bundles + delegate/coordinator | ✅ **COMPLETE** (`plans/phase-10-governance-orchestration.md`, `plans/phase-10-implementation-plan.md`) — filtered `registry.list(grants?)`, `AgentRecord.bundle?`, `skills.search`, `delegate` skill + gate-driven review, 66/66 tests green |
 | **11 — Content & Assets** | Render baseline + material palette + asset registry + scatter + water | ✅ **COMPLETE** (`plans/phase-11-content-assets.md`, `plans/phase-11-implementation-plan.md`) — default PBR lighting/IBL, 10 named materials, content-addressed `asset.place`/`asset.scatter` (elevation-aware), CC0 cottage-on-a-beach gate met, 74/74 tests green. **Generator-richness polish deferred.** |
-| **12 — Game-Building Skill Catalog** | ~85 skills across 17 systems (player, camera, combat, quest, NPC, navmesh, VFX, save, progression…) | ✅ **COMPLETE** (`plans/phase-12-playable-game-skills.md`) — 15 modules (player/camera/animation/interaction/inventory/gamestate/triggers/quest/combat/behavior/navmesh/vfx/save/progression/worldstate), progressive discovery (`skills.browse`/`skills.search`), 8 permission profiles. **Capstone demo deferred.** |
+| **12 — Game-Building Skill Catalog** | ~85 skills across 17 systems (player, camera, combat, quest, NPC, navmesh, VFX, save, progression…) | ✅ **COMPLETE** (`plans/phase-12-playable-game-skills.md`; **finished + made deterministic in waves A/B/C** — `plans/phase-12-finish.md`) — 15 modules (player/camera/animation/interaction/inventory/gamestate/triggers/quest/combat/behavior/navmesh/vfx/save/progression/worldstate), all WIRED + replay-deterministic + tested; progressive discovery (`skills.browse`/`skills.search`) + a bootstrap tool surface, 8 permission profiles. **Capstone — first cut done:** `playable_game_window.ts` + `p12_capstone.ts` (an agent authors *and* plays a tiny complete game — terrain → player → item pickup → trigger → win, deterministic); the full Part-F integrated demo (NPCs/combat/quest/save in one) is still open. |
 
 **Shipped (0+1):** one native binary — Rust host → V8 (`deno_core`) → WebGPU (`deno_webgpu` + Three.js) → native Rapier physics → bitECS, on a fixed-timestep loop. A typed/permissioned/versioned skill registry with hooks, an **in-process** MCP `listTools`/`callTool` surface, EventLoom-shaped traces with a sha256 chain + JSONL export, and an agent ecosystem (perception → decision → action, LLM-agnostic: scripted / local Ollama / cloud gateway). Builder + player demos, all verified.
 
 ## Beyond MVP (post-0.1.0)
 
-Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). The remaining work:
+Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). **Also shipped since (polish + proof):** the default-render skill library (auto-surface terrain + biome scatter + post), the demo suite + materials showcase, a **rigged skinned-glTF player** (skeletal animation confirmed working on deno_webgpu), curvature-aware prop placement (no float/bury), and a public **`/examples` page whose flagship island runs LIVE in-browser** — a concrete proof of the Phase 8 export-playback path in a real browser tab. The remaining work:
 
 | Phase / Item | Status | Plan |
 |---|---|---|
@@ -41,7 +41,7 @@ Phases 6–12 are **done** (host seams, authoring surface, browser export-playba
 | **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
 | **Worldgen W5** (native wgpu model port) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
 | **Water rendering upgrade** (depth-buffer, proper surf transition) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Phase 12 capstone** (integrated playable game demo) | 🔲 Deferred | `plans/phase-12-playable-game-skills.md` |
+| **Phase 12 capstone** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 First cut done (tiny game ships + passes `p12_capstone`); full Part-F open | `plans/phase-12-playable-game-skills.md` |
 | **bmap pipeline** (real-world geo → limina world) | 🔲 Parked | `plans/bmap-pipeline-spike.md` |
 
 The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).

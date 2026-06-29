@@ -2,7 +2,7 @@
 
 > Companion to [`ROADMAP.md`](./ROADMAP.md). `ROADMAP.md` tracks the **MVP and its
 > verified extensions** — Phases 0–5, all complete and shipped in **0.1.0**. This file is the
-> **sequenced path from 0.1.0 to the north star**: Phases 6–10, each continuing the numbering in
+> **sequenced path from 0.1.0 to the north star**: Phases 6–13, each continuing the numbering in
 > `ROADMAP.md`, each with one goal and one acceptance gate. The order and dependencies are
 > deliberate; the detail inside each phase is fixed at its kickoff, the same way the earlier phases
 > were. (The post-MVP work began life as the "production / ecosystem" tier of the original `README`
@@ -50,11 +50,11 @@ on this roadmap: **Phase 13** (ecosystem & marketplace), plus the deferred polis
 |---|---|---|---|
 | **6 — Open the door & de-risk** | Cheap enabling seams + the two spikes' cheapest stages | none (current substrate) | ✅ DONE |
 | **7 — The authoring surface** | A person and an agent co-author a world, every step visible | Phase 6 seams | ✅ DONE |
-| **8 — Run anywhere** | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) | ✅ DONE (Mode A playback; **Mode B live authoring deferred**) |
+| **8 — Run anywhere** | The same world runs in a browser tab and on a phone | Phase 6 (export contract) + Phase 7 (worlds worth exporting) | ✅ DONE (Mode A playback — now **publicly demoed live** on the site `/examples` island; **Mode B live authoring deferred**) |
 | **9 — Worlds worth authoring** | Agents sketch large worlds a learned generator details (+9.1 prop scatter) | Phase 6 worldgen greenlight; rides Phase 8 | ✅ DONE (first cut; **W2/W3 polish deferred**) |
 | **10 — Agent governance & orchestration** | An agent sees only its bundle; a coordinator hands scoped bundles + reviews work | the policy engine + Phase 7 approval gate (shipped) | ✅ DONE |
 | **11 — Content & assets** | Agents place/instance real assets + configure deterministic generation | Phase 10 (scoped skills); Phase 8 export; Phase 9.1 scatter | ✅ DONE |
-| **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) | ✅ DONE (**capstone demo deferred**) |
+| **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) | ✅ DONE (wired + replay-deterministic, `phase-12-finish.md`; **capstone first cut done**, full Part-F open) |
 | **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 | 🔲 Not started |
 
 Phase 6 is done and was the foundation for everything that followed. **Phase 13 is the next build** — the ecosystem/marketplace phase that lets third parties publish skills and assets that others discover, install, and run, and richer external memory adapters plug in behind the provider seam. Phases 6–12 each closed with acceptance gates met and tests green; the deferred polish items are sequenced in *Remaining & parked*.
@@ -284,9 +284,9 @@ These items were identified during phase delivery as follow-ups worth doing but 
 
 **Water rendering upgrade** *(deferred, companion to worldgen):* proper depth-buffer water with caustics/refraction (current is a camera-distance fade proxy; the surf transition is the visible artifact). Backend has no scene-depth texture yet. Plan: `plans/worldgen-roadmap.md` (Companion thread — liquid / water rendering).
 
-### Phase 12 — Capstone demo *(deferred)*
-**What:** an integrated demo proving an agent can author a **complete playable game** — terrain with biome-appropriate props, player character with movement/camera/animation, NPCs with navigation/dialogue/combat, quest line with objectives/triggers/rewards, inventory with pickup-able items, win/lose conditions, save/load.
-**Why deferred:** the ~85 skills across 17 systems landed as modules; the integrated capstone is the acceptance proof (Phase 12 plan Part F).
+### Phase 12 — Capstone demo *(first cut done; full Part-F open)*
+**Done (first cut):** `playable_game_window.ts` + the headless `p12_capstone.ts` prove an agent authors *and* plays a **tiny complete game** through skills only — `world.generateRegion` → `player.spawn` → an item (`scene.createEntity` + `interaction.register` + `inventory.create`) → a `game.condition` win rule → walk + `interaction.pickup` → `game.win` — deterministic (run-twice byte-identical), and it boots as a windowed demo.
+**Still open (full Part-F):** the *fully-featured* integrated demo — NPCs with navigation/dialogue/combat, a multi-objective quest line with triggers/rewards, equip-able inventory, save/load, win/lose — in one playable world. This is the headline adoption proof; see *what's next*.
 **Plan:** `plans/phase-12-playable-game-skills.md` (Part F — Acceptance Criteria).
 
 ### bmap pipeline — Real-world geo → limina world *(parked)*
