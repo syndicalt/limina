@@ -51,6 +51,11 @@ async function boot() {
       input: window,
       onStatus: setStatus,
       orbit: { center: [0, 1, 0], radius: 14, height: 7 },
+      // Use the WebGL2 backend. Some GPUs/drivers lose the WebGPU device mid-render
+      // ("WebGPU Device Lost" → invalid colorAttachments → a black canvas); the live
+      // /examples site forces WebGL2 for the same reason. WebGL2 renders the same scene
+      // reliably across the devices the editor runs on.
+      forceWebGL: true,
     });
     // running === null ⇒ unsupported environment (no COOP/COEP or no WebGPU); the
     // status is already set to `error` by runLive and the canvas shows its poster bg.
