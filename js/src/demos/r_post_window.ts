@@ -36,14 +36,30 @@ const T = THREE as unknown as {
 type TslNode = { add(n: unknown): TslNode; mul(n: unknown): TslNode; sub(n: unknown): TslNode };
 try {
   const scenePass = T.TSL.pass(scene, camera);
-  const color = scenePass.getTextureNode();
-  // Colour grade: mild contrast + a touch of lift/warmth (composited before bloom), then bloom on top.
+  let color: TslNode = scenePass.getTextureNode();
+  // GTAO ambient occlusion (needs the scene pass to also output view-space normals via MRT). Wrapped
+  // so the proven grade→bloom path survives if this backend/three version rejects the normal MRT.
+  let aoNote = "no-AO";
+  try {
+    const TSL = T.TSL as unknown as { mrt(o: Record<string, unknown>): unknown; output: unknown; normalView: unknown };
+    const sp = scenePass as unknown as { setMRT(m: unknown): void; getTextureNode(name?: string): TslNode };
+    sp.setMRT(TSL.mrt({ output: TSL.output, normal: TSL.normalView }));
+    const depth = sp.getTextureNode("depth");
+    const normal = sp.getTextureNode("normal");
+    const aoNode = (T as unknown as { ao(d: unknown, n: unknown, c: unknown): { getTextureNode?(): TslNode } }).ao(depth, normal, camera);
+    const aoTex = aoNode.getTextureNode ? aoNode.getTextureNode() : (aoNode as unknown as TslNode);
+    color = sp.getTextureNode("output").mul(aoTex);
+    aoNote = "GTAO";
+  } catch (ge) {
+    ops.op_log("r_post: GTAO skipped (" + (ge instanceof Error ? ge.message : String(ge)) + ")");
+  }
+  // Colour grade: mild contrast + a touch of lift (composited before bloom), then bloom on top.
   const graded = color.mul(1.12).sub(0.015);
   const bloomPass = T.bloom(graded, 0.7, 0.45, 0.2);
   const pp = new T.PostProcessing(renderer);
   pp.outputNode = graded.add(bloomPass);
   post = pp;
-  ops.op_log("r_post: live post pipeline built (scene pass → grade → bloom) ✓");
+  ops.op_log(`r_post: live post pipeline built (scene pass → ${aoNote} → grade → bloom) ✓`);
 } catch (e) {
   ops.op_log("r_post: post setup FAILED → plain render fallback: " + (e instanceof Error ? e.message : String(e)));
 }
