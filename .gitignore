@@ -25,6 +25,8 @@ traces/
 # --- Spike scratch (large model weights / python envs — never commit) ---
 /spikes/**/.venv/
 /spikes/**/weights/
+# Private competitor-analysis notes — keep out of the public repo.
+/spikes/aperture-dx/
 
 # --- Editor / OS ---
 .claude/
