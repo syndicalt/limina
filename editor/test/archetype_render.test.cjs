@@ -18,10 +18,12 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
   let chromium;
   try { ({ chromium } = require(PWC)); } catch { console.log("SKIP: playwright-core not loadable"); process.exit(2); }
   if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium not found"); process.exit(2); }
-  const specPath = "editor/test/siege_scene.json";
-  if (!fs.existsSync(specPath)) { console.log("SKIP: " + specPath + " missing (run js/test/_dump_siege_scene.ts)"); process.exit(2); }
-  const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
-  if (!Array.isArray(spec.boxes) || spec.boxes.length < 8) fail(`siege spec has too few boxes (${spec.boxes && spec.boxes.length})`);
+  // Render every archetype scene dump present (siege keep, quest village, …).
+  const scenes = [
+    { name: "siege", path: "editor/test/siege_scene.json", shot: "editor/test/archetype_siege.png" },
+    { name: "quest", path: "editor/test/quest_scene.json", shot: "editor/test/archetype_quest.png" },
+  ].filter((s) => fs.existsSync(s.path));
+  if (scenes.length === 0) { console.log("SKIP: no archetype scene dumps present (run js/test/_dump_*_scene.ts)"); process.exit(2); }
 
   let browser;
   try {
@@ -34,19 +36,21 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     if (!resp) { console.log("SKIP: harness not served on :5173"); await browser.close(); process.exit(2); }
     await page.waitForFunction(() => window.__ready === true, { timeout: 10000 });
 
-    // Render the real siege geometry twice (settle), use the settled stats.
-    await page.evaluate((s) => window.__renderScene(s), spec);
-    const r = await page.evaluate((s) => window.__renderScene(s), spec);
-    await page.screenshot({ path: "editor/test/archetype_siege.png" });
+    const results = [];
+    for (const sc of scenes) {
+      const spec = JSON.parse(fs.readFileSync(sc.path, "utf8"));
+      if (!Array.isArray(spec.boxes) || spec.boxes.length < 8) fail(`${sc.name} spec has too few boxes (${spec.boxes && spec.boxes.length})`);
+      await page.evaluate((s) => window.__renderScene(s), spec); // settle
+      const r = await page.evaluate((s) => window.__renderScene(s), spec);
+      await page.screenshot({ path: sc.shot });
+      // A real multi-object scene + sky + ground draws a rich, non-black, structured frame.
+      if (!(r.meanLum > 0.05)) fail(`${sc.name} render is near-black (meanLum ${r.meanLum.toFixed(4)})`);
+      if (!(r.detail > 0.0012)) fail(`${sc.name} render lacks structure (detail ${r.detail.toFixed(5)} ≤ 0.0012) — geometry may not have rendered`);
+      results.push(`${sc.name}: ${spec.boxes.length} boxes, meanLum ${r.meanLum.toFixed(4)}, detail ${r.detail.toFixed(5)} → ${sc.shot}`);
+    }
     await browser.close();
-
-    // A real multi-object keep + sky + ground draws a rich, non-black, structured frame.
-    if (!(r.meanLum > 0.05)) fail(`siege render is near-black (meanLum ${r.meanLum.toFixed(4)})`);
-    if (!(r.detail > 0.0012)) fail(`siege render lacks structure (detail ${r.detail.toFixed(5)} ≤ 0.0012) — geometry may not have rendered`);
-    console.log(`archetype_render.test OK: the SIEGE archetype's real geometry renders as a flagship demo — ` +
-      `${spec.boxes.length} boxes (${spec.partCount} keep parts + ${spec.attackerCount} attackers from the actual ` +
-      `architecture.building output) drawn via SwiftShader: meanLum ${r.meanLum.toFixed(4)}, shading detail ${r.detail.toFixed(5)}. ` +
-      `Screenshot: editor/test/archetype_siege.png. (Integration test p16_archetype_siege already passes headlessly.)`);
+    console.log(`archetype_render.test OK: archetype flagship demos render the REAL skill-authored geometry via SwiftShader ` +
+      `(integration tests p16_archetype_* already pass headlessly):\n  ` + results.join("\n  "));
     process.exit(0);
   } catch (e) { try { await browser.close(); } catch (_) {} fail(e && e.message ? e.message : String(e)); }
 })();
