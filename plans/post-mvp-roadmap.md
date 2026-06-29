@@ -57,7 +57,7 @@ on this roadmap: **Phase 13** (ecosystem & marketplace), plus the deferred polis
 | **12 — Game-building skill catalog** *(living)* | The agent's vocabulary for fully-featured games (characters, gameplay, interaction) | Phase 10 (safe to grow); Phase 11 (content + asset pattern) | ✅ DONE (wired + replay-deterministic, `phase-12-finish.md`; **capstone first cut done**, full Part-F open) |
 | **13 — Ecosystem & marketplace** | Others publish skills + assets others install | needs a catalog + governance to trade — downstream of 10–12 | 🔲 Not started |
 
-Phase 6 is done and was the foundation for everything that followed. **Phase 13 is the next build** — the ecosystem/marketplace phase that lets third parties publish skills and assets that others discover, install, and run, and richer external memory adapters plug in behind the provider seam. Phases 6–12 each closed with acceptance gates met and tests green; the deferred polish items are sequenced in *Remaining & parked*.
+Phase 6 is done and was the foundation for everything that followed. **The immediate next path is adoption-first, not the marketplace yet:** the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 (marketplace) — sequenced in [`plans/path-to-adoption.md`](./path-to-adoption.md), because a marketplace presupposes an audience those three create (a playable proof, a one-minute on-ramp, a live authoring experience). Phases 6–12 each closed with acceptance gates met and tests green; the deferred polish items are sequenced in *Remaining & parked*.
 
 ---
 

@@ -44,7 +44,7 @@ Phases 6–12 are **done** (host seams, authoring surface, browser export-playba
 | **Phase 12 capstone** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 First cut done (tiny game ships + passes `p12_capstone`); full Part-F open | `plans/phase-12-playable-game-skills.md` |
 | **bmap pipeline** (real-world geo → limina world) | 🔲 Parked | `plans/bmap-pipeline-spike.md` |
 
-The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
+The **immediate next sequence** — the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md). The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
 
 ## The arc
 
@@ -84,7 +84,7 @@ flowchart LR
 - **5 is independent.** Presentation & Audio (on-screen text/UI rendering + spatial audio) depend only on
   the Phase 0 render/runtime foundation, not on 2–4, so they can be pulled forward on demand.
 - **6→12 followed the same discipline.** Phase 6 laid the host seams + de-risked export/worldgen; 7 built the authoring surface; 8 proved browser playback; 9 added terrain generation; 10 made multi-agent safe; 11 delivered the asset/content foundation; 12 stocked the game-building catalog. Each built on the prior, each closed with tests green and acceptance gates met.
-- **13 is the next build.** The ecosystem/marketplace phase — now that the skill catalog, governance, and export surface are proven, third parties can publish and install safely.
+- **Next is the path to adoption, not the marketplace yet.** Capability is done; the gap is an *audience* — and a marketplace presupposes one. The sequenced next path is **the Capstone Game (the proof) → the On-Ramp (the funnel) → Live Authoring (the visible experience) → *then* Phase 13 (marketplace)**, detailed in [`plans/path-to-adoption.md`](./path-to-adoption.md). Each makes agent authoring more real, reachable, or visible — the North Star's lead — before opening it to third parties.
 
 ## Maps onto the spec's deferrals
 
