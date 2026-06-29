@@ -27,11 +27,14 @@ for (let i = 0; i < colors.length; i++) {
 }
 
 // Build the live post pipeline; fall back to a plain render if the backend rejects it (logged).
-let post: { renderAsync(): Promise<void> } | undefined;
+type PipelineLike = { outputNode: unknown; render(): void };
+let post: PipelineLike | undefined;
 const T = THREE as unknown as {
   TSL: { pass(s: unknown, c: unknown): { getTextureNode(): TslNode } };
   bloom(node: unknown, strength?: number, radius?: number, threshold?: number): unknown;
-  PostProcessing: new (r: unknown) => { outputNode: unknown; renderAsync(): Promise<void> };
+  // three renamed PostProcessing → RenderPipeline; use the new name, fall back to the alias.
+  RenderPipeline?: new (r: unknown) => PipelineLike;
+  PostProcessing: new (r: unknown) => PipelineLike;
 };
 type TslNode = { add(n: unknown): TslNode; mul(n: unknown): TslNode; sub(n: unknown): TslNode };
 try {
@@ -56,7 +59,8 @@ try {
   // Colour grade: mild contrast + a touch of lift (composited before bloom), then bloom on top.
   const graded = color.mul(1.12).sub(0.015);
   const bloomPass = T.bloom(graded, 0.7, 0.45, 0.2);
-  const pp = new T.PostProcessing(renderer);
+  const Pipeline = T.RenderPipeline ?? T.PostProcessing;
+  const pp = new Pipeline(renderer);
   pp.outputNode = graded.add(bloomPass);
   post = pp;
   ops.op_log(`r_post: live post pipeline built (scene pass → ${aoNote} → grade → bloom) ✓`);
@@ -74,7 +78,7 @@ function render(_alpha: number): void {
     // The RenderPipeline composites + presents to the surface itself; calling op_surface_present
     // again double-presents and errors ("Surface is not configured for presentation"). So present
     // is owned by the pipeline here, by limina's op only for the plain path.
-    void post.renderAsync();
+    post.render();
   } else {
     renderer.render(scene, camera);
     ops.op_surface_present(engine.context);
