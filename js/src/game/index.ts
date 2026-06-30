@@ -20,3 +20,22 @@ export {
 } from "./context.ts";
 
 export { GameLoop, type GameLoopOptions, type FrameSynced } from "./loop.ts";
+
+// The pipeline artifacts + stages (M2–M4): the GDS spine, the functional gate, the planner, and
+// the coordinator. Engine-importable so the gate + coordinator run headless via the limina binary.
+export {
+  GameDesignSpecSchema, validateGDS, gdsJsonSchema,
+  type GameDesignSpec, type DoDAssertion, type Entity, type Mechanic, type ContentItem,
+} from "./gds.ts";
+export {
+  runDoD, runGate, assertGatePasses,
+  type GameUnderTest, type SimInput, type DoDResult, type GateReport, type RunOptions,
+} from "./gate.ts";
+export {
+  planFromGDS, ArchitecturePlanSchema,
+  type ArchitecturePlan, type SystemMapping, type Slice,
+} from "./plan.ts";
+export {
+  coordinate, defaultKnownSkill,
+  type SliceBuilder, type Ledger, type SliceLedgerEntry,
+} from "./coordinator.ts";
