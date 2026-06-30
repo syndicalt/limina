@@ -54,7 +54,7 @@ export const ContentItemSchema = z.object({
 /** One post-condition the M3 runner checks after replaying a drive script. The `check` vocabulary
  *  is closed so the generator can implement each against the live managers. */
 export const AssertionSchema = z.object({
-  check: z.enum(["gameState", "counterAtLeast", "flagTrue", "hpAtLeast", "questStatus", "playerReachedXZ"]),
+  check: z.enum(["gameState", "counterAtLeast", "flagTrue", "flagFalse", "hpAtLeast", "questStatus", "playerReachedXZ"]),
   /** The thing checked: a counter name, flag name, quest id, a state string, or "x,z" target. */
   target: z.string().optional(),
   /** Expected value (state string / numeric threshold / boolean). */

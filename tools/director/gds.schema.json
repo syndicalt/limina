@@ -292,6 +292,7 @@
                         "gameState",
                         "counterAtLeast",
                         "flagTrue",
+                        "flagFalse",
                         "hpAtLeast",
                         "questStatus",
                         "playerReachedXZ"

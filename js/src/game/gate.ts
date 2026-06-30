@@ -94,6 +94,9 @@ function checkAssertion(a: Assertion, gut: GameUnderTest, reach: number): string
     case "flagTrue": {
       return gut.flag(String(a.target)) ? undefined : `flag "${String(a.target)}" expected true`;
     }
+    case "flagFalse": {
+      return !gut.flag(String(a.target)) ? undefined : `flag "${String(a.target)}" expected false (it was true)`;
+    }
     case "hpAtLeast": {
       const got = gut.hp();
       const need = Number(a.value);
