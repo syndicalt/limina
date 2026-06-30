@@ -70,6 +70,10 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no c
 # GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
 if node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no chromium)"; else echo "   design-gate (gds tiers): FAIL"; hostfail=1; fi; fi
+# Packager: a direct-path game is rejected; a record+export world packs into a self-contained release
+# that RENDERS non-blank in the real engine.
+if node packager/check.mjs >/dev/null 2>&1; then echo "   packager: PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo world)"; else echo "   packager: FAIL"; hostfail=1; fi; fi
 
 echo "== summary =="
 echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"
