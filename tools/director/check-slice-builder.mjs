@@ -1,7 +1,6 @@
-// Verify the coordinator's SliceBuilder is wired to a REAL `llmff run`: llmff drives the per-slice
-// build→gate loop, the REAL limina functional gate runs inside it (op:tool), the loop gates on the
-// JSON verdict, and a BROKEN slice is NOT rubber-stamped. Deterministic on the mock backend (no
-// provider key). exit 0 = pass · 1 = fail · 2 = skipped (no llmff).
+// Verify the SliceBuilder uses llmff as a bounded EXECUTOR (NO inference): llmff runs the REAL limina
+// functional gate (op:tool) + validates the JSON verdict, and a BROKEN slice is NOT rubber-stamped.
+// No provider / model / API key — CODEGEN is the agent's job. exit 0 = pass · 1 = fail · 2 = skipped.
 //
 // Run: LLMFF_BIN=/path/to/llmff node tools/director/check-slice-builder.mjs
 //   (or with llmff on PATH)
@@ -42,11 +41,10 @@ const sc = ledger.entries.find((e) => e.sliceId === "slice-content");
 if (!sc || sc.status !== "skipped") fail("the content slice must be skipped");
 
 console.log(
-  "check-slice-builder OK: the coordinator's SliceBuilder is wired to a real `llmff run` — llmff drove " +
-  "the per-slice build->gate loop (status " + ok.llmffStatus + ", manifest " + ok.manifestHash.slice(0, 19) + "…), " +
-  "the REAL limina functional gate ran inside it (" + ok.verdict.automatedPassed + "/" + ok.verdict.automatedTotal +
+  "check-slice-builder OK: the SliceBuilder uses llmff as a bounded EXECUTOR (no inference, no provider) — " +
+  "llmff ran the REAL limina functional gate (op:tool) + validated the verdict (status " + ok.llmffStatus +
+  ", manifest " + ok.manifestHash.slice(0, 19) + "…; " + ok.verdict.automatedPassed + "/" + ok.verdict.automatedTotal +
   " DoDs passed), a BROKEN slice correctly reports passed:false (no rubber-stamp), and coordinateViaLlmff gates a " +
-  "plan's slices (slice-0 green, content skipped). Mock backend = deterministic; swap mock:good for a real " +
-  "provider alias in slice-build.yaml for live codegen.",
+  "plan's slices (slice-0 green, content skipped). CODEGEN is the agent's job — the flow never calls an external model API.",
 );
 process.exit(0);

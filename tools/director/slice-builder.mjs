@@ -4,8 +4,11 @@
 // the coordinator's SliceBuilder: in M4 it was a deterministic injected stand-in; now it is a real
 // llmff subprocess that invokes the real limina functional gate and gates on its result.
 //
-// The mock backend makes the WIRING deterministic with no provider key; a real provider alias swaps
-// in for the codegen `infer` stage in production (replace mock:good in slice-build.yaml).
+// llmff is used PURELY as the bounded executor (run the real limina gate + validate the JSON verdict
+// + trace) — NO inference, no provider, no API key. CODEGEN (writing the slice's game code) is the
+// coordinator AGENT's job: the agent IS the LLM, so the flow never reaches outside the agent to an
+// external model API. The agent writes the game in its turn, calls this to GATE it, and owns the
+// build→revise loop; this returns the verdict + the llmff run status/manifest hash.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
@@ -55,16 +58,14 @@ export function buildSliceViaLlmff(slice, opts = {}) {
   });
 
   const readJson = (p) => { try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null; } catch { return null; } };
-  // The loop output wraps its final value: { final: <gate verdict>, metadata: { iterations_run, ... } }.
-  const loopOut = readJson(join(runDir, "slice-result.json"));
-  const verdict = loopOut && (loopOut.final || loopOut);
+  // The gate verdict is the direct pipeline output (no inference/loop wrapper).
+  const verdict = readJson(join(runDir, "slice-result.json"));
   const runStatus = readJson(join(runDir, "result.json"));
 
   return {
     ok: res.status === 0,
     llmffStatus: runStatus && runStatus.status,
     manifestHash: runStatus && runStatus.manifest && runStatus.manifest.hash,
-    iterations: loopOut && loopOut.metadata && loopOut.metadata.iterations_run,
     verdict,
     passed: !!(verdict && verdict.passed === true),
     runDir,
