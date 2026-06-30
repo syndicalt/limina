@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__TITLE__</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0e14; color: #cdd3df;
+      font: 14px system-ui, sans-serif; display: grid; place-items: center; }
+    canvas { background: #10131a; border-radius: 8px; box-shadow: 0 0 48px #0009; }
+    .cap { position: fixed; top: 12px; left: 0; right: 0; text-align: center; opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <div class="cap">__CAPTION__</div>
+  <canvas id="game" width="640" height="400"></canvas>
+  <!-- The Game Design Spec (subset) injected by tools/director/build-web.ts. -->
+  <script id="gds" type="application/json">__GDS__</script>
+  <script src="./game.js"></script>
+</body>
+</html>

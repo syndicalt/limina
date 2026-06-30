@@ -39,3 +39,4 @@ export {
   coordinate, defaultKnownSkill,
   type SliceBuilder, type Ledger, type SliceLedgerEntry,
 } from "./coordinator.ts";
+export { DIAGNOSTICS_KEY, publishDiagnostics, readDiagnostics, type Diagnostics } from "./diagnostics.ts";
