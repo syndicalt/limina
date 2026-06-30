@@ -18,10 +18,10 @@ import { applyProceduralPbr } from "../materials/procedural-pbr.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
-type V3 = [number, number, number];
+export type V3 = [number, number, number];
 
 /** Darken a packed RGB by a factor (per channel). Deterministic — used for floor/roof tints. */
-function shade(color: number, f: number): number {
+export function shade(color: number, f: number): number {
   const r = Math.min(255, Math.round(((color >> 16) & 0xff) * f));
   const g = Math.min(255, Math.round(((color >> 8) & 0xff) * f));
   const b = Math.min(255, Math.round((color & 0xff) * f));
@@ -30,7 +30,7 @@ function shade(color: number, f: number): number {
 
 /** A procedural-PBR material (triplanar grain, no UVs needed — works on boxes AND custom geometry),
  *  tinted to `color`. `grain` selects the surface style (stone / plank / wood). */
-function pbrMat(grain: string, color: number, roughness: number): THREE.MeshStandardNodeMaterial {
+export function pbrMat(grain: string, color: number, roughness: number): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ color, roughness, metalness: 0.0 });
   applyProceduralPbr(m, { color, roughness }, grain);
   return m;
@@ -38,7 +38,7 @@ function pbrMat(grain: string, color: number, roughness: number): THREE.MeshStan
 
 /** Register a pre-built static mesh as a collidable entity with a box collider of half-extents `half`
  *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity. */
-function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0): string {
+export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0): string {
   const [x, y, z] = pos;
   world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh, x, y, z);
@@ -63,7 +63,7 @@ function spawnStaticBox(world: WorldContext, pos: V3, size: V3, material: THREE.
 /** Build a GABLED roof as a triangular prism (flat-shaded, crisp ridge), centered on the X/Z origin
  *  with its eaves at y=0 and the ridge at y=pitch. The ridge runs along the LONGER footprint axis.
  *  Returns the geometry + the collider half-extents of its bounding box. */
-function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number): { geo: THREE.BufferGeometry; half: V3 } {
+export function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number): { geo: THREE.BufferGeometry; half: V3 } {
   const ridgeAlongX = W >= D;
   const long = (ridgeAlongX ? W : D) / 2 + overhang; // L: half-length along the ridge
   const short = (ridgeAlongX ? D : W) / 2 + overhang; // B: half-span across the slopes
@@ -85,7 +85,7 @@ function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number
   return { geo, half };
 }
 
-interface Part { kind: string; entity: string; position: V3; size: V3; }
+export interface Part { kind: string; entity: string; position: V3; size: V3; }
 
 const buildingInput = z.object({
   position: Vec3.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
