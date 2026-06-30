@@ -37,6 +37,7 @@ import { AssetCache, requestKey, type AssetStore } from "../js/src/asset/cache.t
 import { AssetResolver } from "../js/src/asset/resolver.ts";
 import type { AssetRequest, AssetResult, AssetSource } from "../js/src/asset/types.ts";
 import { objArchiveToGlb } from "./obj-archive-to-glb.ts";
+import { curateResolve, DEFAULT_MAX_ATTEMPTS } from "./curate.ts";
 
 const LIBRARY_NAME = "library:polypizza";
 const GENERATIVE_NAME = "generative:3daistudio";
@@ -98,6 +99,10 @@ interface Args {
   seed: number;
   source?: string;
   reference?: string;
+  /** CURATION: re-roll the seed past asset-selection mistakes (wrong-shape picks). On by default. */
+  curate: boolean;
+  /** Max seed re-rolls the curator tries before falling back to the best candidate. */
+  maxAttempts: number;
 }
 const KINDS = new Set(["prop", "building", "character", "vegetation", "model"]);
 
@@ -117,7 +122,12 @@ function parseArgs(argv: string[]): Args {
   if (!prompt) fail("--prompt is required (the library search query / text-to-3D prompt)");
   const seed = Number(m.get("seed") ?? "0");
   if (!Number.isFinite(seed)) fail(`--seed must be a number (got "${m.get("seed")}")`);
-  return { kind, prompt, seed, source: m.get("source"), reference: m.get("reference") };
+  // Curation is ON by default; --no-curate skips the footprint gate + re-roll. --max-attempts tunes the
+  // re-roll budget (default DEFAULT_MAX_ATTEMPTS).
+  const curate = !m.has("no-curate");
+  const maxAttempts = Number(m.get("max-attempts") ?? String(DEFAULT_MAX_ATTEMPTS));
+  if (!Number.isFinite(maxAttempts) || maxAttempts < 1) fail(`--max-attempts must be a number >= 1 (got "${m.get("max-attempts")}")`);
+  return { kind, prompt, seed, source: m.get("source"), reference: m.get("reference"), curate, maxAttempts };
 }
 
 function fail(msg: string): never {
@@ -162,38 +172,68 @@ async function main(): Promise<void> {
   // pins one backend by name (resolver throws if it names neither).
   const resolver = new AssetResolver([{ name: "library", match: () => true, source: library }], generative);
 
-  const req: AssetRequest = {
+  // Build the request for a given seed (curation re-rolls the seed; everything else is fixed). The seed is
+  // folded into the cache key, so each re-rolled seed is its own cache entry — and the curated seed that
+  // wins is what gets cached, keeping re-rolls deterministic on replay.
+  const reqFor = (seed: number): AssetRequest => ({
     kind: args.kind,
-    seed: args.seed,
+    seed,
     prompt: args.prompt,
     referenceImage: args.reference,
     ...(args.source ? { params: { source: args.source } } : {}),
-  };
+  });
 
   const store = new FsAssetStore(join(process.cwd(), ".asset-cache"));
   const cache = new AssetCache(store);
 
   // Resolve a source through the cache, reporting whether the disk tier already held it.
-  const resolveWith = async (source: AssetSource): Promise<{ result: AssetResult; source: AssetSource; cached: boolean }> => {
+  const resolveWith = async (
+    req: AssetRequest,
+    source: AssetSource,
+  ): Promise<{ result: AssetResult; source: AssetSource; cached: boolean }> => {
     const cached = store.load(requestKey(source.name, req)) !== undefined;
     const result = await cache.resolve(req, source);
     return { result, source, cached };
   };
 
-  let resolved: { result: AssetResult; source: AssetSource; cached: boolean };
-  if (args.source) {
-    // Explicit pin: one backend, no fallback.
-    resolved = await resolveWith(resolver.resolve(req));
-  } else {
-    // Ladder: library first; on failure (no hits / down) fall back to the generative backend.
+  // One full resolve for a given seed: explicit pin (one backend, no fallback) OR the library→generative
+  // ladder. This is the unit the curator re-rolls.
+  const resolveOnce = async (seed: number): Promise<{ result: AssetResult; source: AssetSource; cached: boolean }> => {
+    const req = reqFor(seed);
+    if (args.source) {
+      return resolveWith(req, resolver.resolve(req));
+    }
     const primary = resolver.resolve(req); // = library
     try {
-      resolved = await resolveWith(primary);
+      return await resolveWith(req, primary);
     } catch (e) {
       console.error(`asset-fetch: ${primary.name} failed (${(e as Error).message}); falling back to ${generative.name}`);
       if (!threeKey) keyError(`fallback to ${generative.name} needs THREEDAI_API_KEY`);
-      resolved = await resolveWith(generative);
+      return resolveWith(req, generative);
     }
+  };
+
+  // CURATION: re-roll the seed past asset-selection mistakes (a wide castle for "tower", a cluster for
+  // "house") until a candidate passes the per-kind footprint check, or fall back to the best one seen. The
+  // chosen seed is reported so the (deterministic) pick is visible.
+  let resolved: { result: AssetResult; source: AssetSource; cached: boolean };
+  let usedSeed = args.seed;
+  let bounds: [number, number, number] | undefined;
+  let aspect: number | undefined;
+  if (args.curate) {
+    const { chosen, seed, verdict } = await curateResolve({
+      kind: args.kind,
+      prompt: args.prompt,
+      baseSeed: args.seed,
+      maxAttempts: args.maxAttempts,
+      resolve: resolveOnce,
+    });
+    resolved = chosen;
+    usedSeed = seed;
+    bounds = verdict.dims;
+    aspect = verdict.aspect;
+  } else {
+    resolved = await resolveOnce(args.seed);
   }
 
   const { result, cached } = resolved;
@@ -205,12 +245,17 @@ async function main(): Promise<void> {
   const assetId = `${args.kind}-${slug(args.prompt)}-${args.seed}.${result.format}`;
   writeFileSync(join(assetsDir, assetId), result.bytes);
 
-  // One machine-readable JSON line (bytes = the glb byte length; the raw bytes live on disk).
+  // One machine-readable JSON line (bytes = the glb byte length; the raw bytes live on disk). `seed` is the
+  // CURATED seed actually used (== requested seed unless curation re-rolled); bounds/aspect are the
+  // footprint the curator measured (null when --no-curate).
   console.log(
     JSON.stringify({
       assetId,
       format: result.format,
       bytes: result.bytes.length,
+      seed: usedSeed,
+      bounds: bounds ?? null,
+      aspect: aspect ?? null,
       license: result.meta.license ?? null,
       attribution: result.meta.attribution ?? null,
       sourceUrl: result.meta.sourceUrl ?? null,
