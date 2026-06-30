@@ -75,6 +75,12 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no ch
 if node packager/check.mjs >/dev/null 2>&1; then echo "   packager: PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo world)"; else echo "   packager: FAIL"; hostfail=1; fi; fi
 
+# DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
+# functional gate → design gate → export → package → render-verified release. Heavy (renders +
+# replays), so it's last and SKIPs without chromium/GPU. This is the end-to-end "the machine works" gate.
+if node games/beacon-quest/dogfood.mjs >/dev/null 2>&1; then echo "   dogfood (beacon end-to-end): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   dogfood (beacon end-to-end): SKIP (no chromium/GPU)"; else echo "   dogfood (beacon end-to-end): FAIL"; hostfail=1; fi; fi
+
 echo "== summary =="
 echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"
 [ $fail -eq 0 ] && [ $hostfail -eq 0 ] && { echo "ALL GATES GREEN"; exit 0; } || { echo "GATES RED"; exit 1; }
