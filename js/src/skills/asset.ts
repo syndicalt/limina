@@ -12,8 +12,10 @@
 // verified against that committed hash and a swapped asset fails loudly. The bytes
 // ride the registry/export package (content-addressed assets.jsonl), never the log.
 
+import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { AssetRegistry } from "../asset-registry.ts";
+import { Position, Scale, renderSyncSystem } from "../ecs/world.ts";
 import { gltfResourceSchema, loadGltfIntoScene, parseGltfScene } from "./three.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes } from "../terrain/asset-scatter-render.ts";
@@ -30,6 +32,13 @@ const placeInput = z.object({
   /** Euler radians (x,y,z). */
   rotation: Vec3.optional(),
   scale: Vec3.optional(),
+  /** Sit the asset's BASE at position.y (not its glTF origin, usually centred → half-sunk). Measured
+   *  from the loaded bytes, so it is deterministic + replay-safe. Default on; pass false to keep the
+   *  raw origin. */
+  ground: z.boolean().default(true),
+  /** Uniformly scale the asset so its world height equals this many meters (e.g. a ~0.9 m barrel),
+   *  before grounding. Assets arrive at arbitrary scales; this normalizes them. */
+  normalizeHeight: z.number().positive().max(500).optional(),
   /** Optional PBR overrides applied across the placed glTF's meshes. */
   material: z.object({
     color: z.number().int().min(0).max(0xffffff).optional(),
@@ -104,7 +113,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
     // the replay log COMMITS to the resolved content hash (pins authored identity).
     commitFields: ["hash"],
     input: placeInput,
-    output: z.object({ entity: z.string(), hash: z.string(), resource: gltfResourceSchema }),
+    output: z.object({ entity: z.string(), hash: z.string(), resource: gltfResourceSchema, bounds: Vec3 }),
     handler: async (input, ctx) => {
       // Content-addressed resolve: id -> bytes + stable hash (the asset's portable
       // identity). Same id -> same content address on every resolve/replay.
@@ -119,6 +128,33 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         rotationEuler: input.rotation,
         scale: input.scale,
       });
+      // MEASURE → (normalize) → GROUND. A glTF origin is usually centred, so without this the asset's
+      // base sinks below position.y. We measure the placed world AABB and (a) optionally uniform-scale
+      // to normalizeHeight, then (b) lift so the base sits AT position.y. All deterministic from the
+      // bytes, so a replay re-grounds identically; meta.bounds (the placed world size) is returned.
+      let bounds: [number, number, number] = [0, 0, 0];
+      const rec = ctx.world.entities.resolve(entity) as { eid: number; mesh?: THREE.Object3D } | undefined;
+      if (rec?.mesh !== undefined && rec.eid !== undefined) {
+        const measure = (): THREE.Box3 => {
+          renderSyncSystem(ctx.world.ecs);
+          rec.mesh!.updateMatrixWorld(true);
+          return new THREE.Box3().setFromObject(rec.mesh!);
+        };
+        let box = measure();
+        if (input.normalizeHeight !== undefined) {
+          const h = box.max.y - box.min.y;
+          if (h > 1e-6) {
+            const f = input.normalizeHeight / h;
+            Scale.x[rec.eid] *= f; Scale.y[rec.eid] *= f; Scale.z[rec.eid] *= f;
+            box = measure();
+          }
+        }
+        if (input.ground) {
+          Position.y[rec.eid] += input.position[1] - box.min.y; // base → position.y
+          box = measure();
+        }
+        bounds = [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z];
+      }
       // Optional material override (reuses three.setMaterial's apply, by id). Scoped
       // to asset.place's OWN declared permission, NOT the caller's full grant set.
       if (input.material !== undefined) {
@@ -135,9 +171,11 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         position: input.position,
         rotation: input.rotation ?? null,
         scale: input.scale ?? null,
+        grounded: input.ground,
+        bounds,
         entity,
       });
-      return { entity, hash: resolved.hash, resource };
+      return { entity, hash: resolved.hash, resource, bounds };
     },
   };
 
