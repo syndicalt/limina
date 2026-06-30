@@ -48,3 +48,7 @@ editor/test/archetype_quest.png
 
 # desktop distributables (built by tools/package-desktop.sh)
 /dist/
+
+# host-side asset-fetch disk cache (tools/asset-fetch.ts — generated/retrieved glb bytes)
+.asset-cache/
+assets/prop-*.glb
