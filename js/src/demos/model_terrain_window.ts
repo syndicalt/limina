@@ -18,12 +18,9 @@
 // model's native 30 m/px, so METERS_PER_PX below is 30. Run the shim with --scale 8 for
 // 3.75 m/px detail and set METERS_PER_PX = 30/8 here to keep the geometry consistent.
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { ModelTerrainSource } from "../terrain/model-source.ts";
 
 const SEED = 1234;                  // MUST equal the shim's --region-seed (model launch --seed)
@@ -56,19 +53,18 @@ const source = new ModelTerrainSource({
   timeoutMs: 180_000, // the model is slow (cold load + per-tile diffusion); be patient
 });
 
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-
-const tracer = new LiminaTracer("ses_model_terrain_window");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry, { terrainSource: source });
-
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_model_terrain", sessionId: "ses_model_terrain_window", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({
+  width: 1280,
+  height: 720,
+  renderBaseline: { ground: { enabled: false } },
+  session: "ses_model_terrain_window",
+  agentId: "agt_model_terrain",
+  coreOpts: { terrainSource: source },
+});
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

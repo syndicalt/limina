@@ -21,11 +21,11 @@
 // proving the real engine's denial is what makes (b) load-bearing. Likewise (a),
 // (c), (e), (f) assert real denials that a no-op policy would let through.
 
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { EntityTable, ops } from "../src/engine.ts";
+import { ops } from "../src/engine.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { SkillRegistry } from "../src/skills/registry.ts";
 import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import { PolicyEngine, type PolicyContext, type PolicyDecision } from "../src/policy/engine.ts";
 import { SandboxedSkillHost } from "../src/sandbox/host.ts";
@@ -48,16 +48,14 @@ function field(value: unknown, key: string): unknown {
 }
 
 // ---- Engine wiring (headless: stub scene, real bitECS + Rapier + tracer) ----
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
 ops.op_physics_create_world(0);
 ops.op_physics_add_ground(-50);
 
 const tracer = new LiminaTracer("ses_policy");
 const engine = new PolicyEngine();
-const registry = new SkillRegistry(tracer, engine);
-registerCoreSkills(registry);
+const ctx = createHeadlessContext({ tracer, policy: engine });
+const registry = ctx.registry;
+const world = ctx.world;
 
 function base(agentId: string, sessionId: string, profile: string, tick: number) {
   return { agentId, sessionId, profile, permissions: resolveProfile(profile), tick, world };

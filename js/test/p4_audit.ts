@@ -17,11 +17,9 @@
 // envelope, and the ancestry contains the SPECIFIC recorded parent id; an unknown
 // event id must throw.
 
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { EntityTable, ops } from "../src/engine.ts";
+import { ops } from "../src/engine.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import { PolicyEngine } from "../src/policy/engine.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
@@ -48,17 +46,15 @@ function field(value: unknown, key: string): unknown {
 }
 
 // ---- wiring ---------------------------------------------------------------
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
 ops.op_physics_create_world(0);
 ops.op_physics_add_ground(-50);
 
 const tracer = new LiminaTracer("ses_audit");
 const engine = new PolicyEngine();
 engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 2, windowMs: 60_000 });
-const registry = new SkillRegistry(tracer, engine);
-registerCoreSkills(registry);
+const ctx = createHeadlessContext({ tracer, policy: engine });
+const registry = ctx.registry;
+const world = ctx.world;
 
 function base(agentId: string, sessionId: string, profile: string, tick: number, causedBy?: string[]) {
   return { agentId, sessionId, profile, permissions: resolveProfile(profile), tick, world, causedBy };

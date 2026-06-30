@@ -23,13 +23,11 @@
 // Run (headless): ./target/debug/limina js/test/p5_conversation.ts
 
 import * as THREE from "../build/three.bundle.mjs";
-import { EntityTable, ops, type SceneLike } from "../src/engine.ts";
-import { createEcsWorld, Position } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import type { InvokeBase, WorldContext } from "../src/skills/registry.ts";
-import { SkillRegistry } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops, type SceneLike } from "../src/engine.ts";
+import { Position } from "../src/ecs/world.ts";
+import type { InvokeBase } from "../src/skills/registry.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { ScriptedProvider } from "../src/agents/llm.ts";
 import { actionSystem, decisionSystem, perceptionSystem } from "../src/agents/systems.ts";
@@ -69,11 +67,11 @@ camera.updateMatrixWorld(true);
 
 const SESSION = "ses_p5_convo";
 const agents = new AgentRegistry();
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops, agents };
-
-const tracer = new LiminaTracer(SESSION);
-const registry = new SkillRegistry(tracer);
-const { ui, locomotion, social } = registerCoreSkills(registry);
+const ctx = createHeadlessContext({ session: SESSION, scene, camera, agents });
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const { ui, locomotion, social } = ctx.core;
 
 // ---- forest cast: a player + two NPC humanoids -----------------------------
 

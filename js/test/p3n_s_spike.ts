@@ -8,14 +8,10 @@
 //
 // Run: limina js/test/p3n_s_spike.ts
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld, Position } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops } from "../src/engine.ts";
+import { Position } from "../src/ecs/world.ts";
 import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -41,24 +37,11 @@ const RADIUS = 15;
 const TIE_N = 4; // entities at an identical position -> guaranteed exact distance tie
 const TIE_POS: [number, number, number] = [3, 0, 3];
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const ecs = createEcsWorld();
-const world: WorldContext = {
-  ecs,
-  transforms: createTransformStorage(ecs),
-  spatial: new UniformGridSpatialIndex({ cellSize: CELL }),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
-};
+const ctx = createHeadlessContext({ session: "ses_p3ns", agentId: "agt_spike", spatial: new UniformGridSpatialIndex({ cellSize: CELL }) });
+const world = ctx.world;
+const registry = ctx.registry;
 ops.op_physics_create_world(0);
-const tracer = new LiminaTracer("ses_p3ns");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-const builder = { agentId: "agt_spike", sessionId: "ses_p3ns", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const builder = ctx.base;
 
 let seed = 0x0051a7e5 >>> 0;
 const rnd = (): number => {

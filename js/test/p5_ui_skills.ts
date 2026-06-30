@@ -23,13 +23,9 @@
 // Run (headless): ./target/debug/limina js/test/p5_ui_skills.ts
 
 import * as THREE from "../build/three.bundle.mjs";
-import { EntityTable, ops, type SceneLike } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops, type SceneLike } from "../src/engine.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
-import type { MCPResponse } from "../src/mcp/protocol.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import type { TextStyle } from "../src/ui/compositor.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -50,11 +46,12 @@ const scene: SceneLike = {
   background: null as unknown,
 };
 const camera = new THREE.PerspectiveCamera(60, 960 / 640, 0.1, 200);
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
 
-const tracer = new LiminaTracer("ses_p5_ui");
-const registry = new SkillRegistry(tracer);
-const { ui } = registerCoreSkills(registry);
+const ctx = createHeadlessContext({ session: "ses_p5_ui", scene, camera });
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const { ui } = ctx.core;
 
 const BUILDER = { agentId: "agt_builder", sessionId: "ses_p5_ui", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 const PLAYER = { agentId: "agt_player", sessionId: "ses_p5_ui", permissions: resolveProfile("player.limited"), tick: 0, world };

@@ -10,18 +10,13 @@
 //
 // Run: limina js/test/p3_perf_budget.ts
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { Position, createEcsWorld, syncPhysicsBodyTransform } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
+import { ops } from "../src/engine.ts";
+import { Position, syncPhysicsBodyTransform } from "../src/ecs/world.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem, type ProviderMap } from "../src/agents/systems.ts";
 import { Mcp, StdioMcpTransport } from "../src/mcp/mcp.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import {
   arenaReturnImpulse,
   createShowcaseScheduler,
@@ -48,25 +43,12 @@ function entityId(res: MCPResponse): string {
 }
 
 // ---- World (headless: stub scene/camera; no GPU render) -------------------
-const ecs = createEcsWorld();
 const agents = new AgentRegistry();
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = {
-  ecs,
-  entities: new EntityTable(),
-  tags: new Map(),
-  transforms: createTransformStorage(ecs),
-  spatial: new UniformGridSpatialIndex(),
-  scene,
-  camera,
-  ops,
-  agents,
-};
-const tracer = new LiminaTracer("ses_p3_perf_budget");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-const setup = { agentId: "engine_perf", sessionId: "ses_p3_perf_budget", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = createHeadlessContext({ session: "ses_p3_perf_budget", agentId: "engine_perf", agents });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.tracer;
+const setup = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);

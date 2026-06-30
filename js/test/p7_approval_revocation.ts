@@ -2,11 +2,9 @@
 // REVOKED between propose and grant is denied at apply time (fail-closed), even
 // when the reviewer approves it; a restored capability grants normally.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
+import { ops } from "../src/engine.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { reviewProfileGate } from "../src/skills/approval.ts";
 import { PolicyEngine } from "../src/policy/engine.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
@@ -15,15 +13,13 @@ function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p7_approval_revocation FAIL: " + msg);
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
 ops.op_physics_create_world(0);
 
 const tracer = new LiminaTracer("ses_p7rev");
 const policy = new PolicyEngine();
-const registry = new SkillRegistry(tracer, policy);
-registerCoreSkills(registry);
+const ctx = createHeadlessContext({ tracer, policy });
+const registry = ctx.registry;
+const world = ctx.world;
 registry.setApprovalGate(reviewProfileGate(new Set(["builder.review"])));
 
 const agentBase = (t: number) => ({ agentId: "agt", sessionId: "ses_agent", permissions: resolveProfile("builder.review"), profile: "builder.review", tick: t, world });

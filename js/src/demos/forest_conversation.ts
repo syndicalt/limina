@@ -17,12 +17,10 @@
 // Run: ./target/debug/limina --window --frames 9000 js/src/demos/forest_conversation.ts
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { Position, renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer, type EngineEvent } from "../observability/event.ts";
-import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { type EngineEvent } from "../observability/event.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { OllamaChat } from "../agents/llm.ts";
 import { spawnHumanoid } from "../world/humanoid.ts";
@@ -40,36 +38,21 @@ const DT_MS = 1000 / 60;
 // Engine + world context
 // ---------------------------------------------------------------------------
 
-const engine = await createEngine({ width: 1024, height: 640, renderBaseline: { ground: { enabled: false } } });
-engine.scene.background = new THREE.Color(0x9ec7e8); // soft dusk-blue sky
-
-const world: WorldContext = {
-  ecs: engine.world,
-  entities: engine.entities,
-  tags: engine.tags,
-  transforms: engine.transforms,
-  spatial: engine.spatial,
-  scene: engine.scene,
-  camera: engine.camera,
-  renderer: engine.renderer,
-  ops: engine.ops,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
-};
-
-const tracer = new LiminaTracer(SESSION);
-const registry = new SkillRegistry(tracer);
-const { ui, locomotion, social } = registerCoreSkills(registry);
-
-// Host/builder identity for the scene chrome (name tags, status panel).
-const builder: InvokeBase = {
+const ctx = await createWindowedContext({
+  width: 1024,
+  height: 640,
+  renderBaseline: { ground: { enabled: false } },
+  session: SESSION,
   agentId: "agt_director",
-  sessionId: SESSION,
-  permissions: resolveProfile("builder.readWrite"),
-  tick: 0,
-  world,
-};
+});
+const engine = ctx.engine!;
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const { ui, locomotion, social } = ctx.core;
+// Host/builder identity for the scene chrome (name tags, status panel).
+const builder = ctx.base;
+engine.scene.background = new THREE.Color(0x9ec7e8); // soft dusk-blue sky
 
 /** Read the `{ handle }` of a ui.* create result without an unchecked cast. */
 function handleOf(result: unknown): string {

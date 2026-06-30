@@ -1,16 +1,13 @@
 // Phase 3 scheduler density/backpressure: many agents cannot create unbounded
 // provider starts, queues, or registry invocations in one tick.
 
-import { EntityTable, ops } from "../src/engine.ts";
+import { ops } from "../src/engine.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem } from "../src/agents/systems.ts";
 import { AgentScheduler } from "../src/agents/scheduler.ts";
 import type { DecideRequest, LLMProvider } from "../src/agents/llm.ts";
 import type { MCPRequest } from "../src/mcp/protocol.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 
 function field(value: unknown, key: string): unknown {
   if (typeof value === "object" && value !== null && key in value) return (value as Record<string, unknown>)[key];
@@ -29,13 +26,11 @@ class BurstProvider implements LLMProvider {
   }
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
 const agents = new AgentRegistry();
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops, agents };
-const tracer = new LiminaTracer("ses_p3_scheduler");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
+const ctx = createHeadlessContext({ session: "ses_p3_scheduler", agents });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.tracer;
 
 for (let i = 0; i < 12; i++) {
   agents.add({

@@ -16,14 +16,10 @@
 //
 // Run: limina js/test/p12_vfx.ts   (exit 0 = pass)
 
-import { EntityTable, ops, type EngineOps } from "../src/engine.ts";
-import { createEcsWorld, spawnRenderable, type Transformable } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops } from "../src/engine.ts";
+import { spawnRenderable, type Transformable } from "../src/ecs/world.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
+import { type WorldContext } from "../src/skills/registry.ts";
 import { VFXManager } from "../src/skills/vfx.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
@@ -53,28 +49,17 @@ function inert(): Transformable {
   return { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
 }
 
-function makeWorld(worldOps: EngineOps): { world: WorldContext; scene: ReturnType<typeof makeScene> } {
-  const scene = makeScene();
-  const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-  const ecs = createEcsWorld();
-  const world: WorldContext = {
-    ecs, transforms: createTransformStorage(ecs), spatial: new UniformGridSpatialIndex(),
-    entities: new EntityTable(), tags: new Map(), scene: scene as unknown as WorldContext["scene"],
-    camera: camera as WorldContext["camera"], ops: worldOps, mode: "headless",
-  };
-  return { world, scene };
-}
-
-const PERMS = resolveProfile("builder.readWrite");
 const DT = 0.1;
 
 // ── Setup: core skills + the closure-owned manager via core.vfx.vfxManager ───────
-const reg = new SkillRegistry(new LiminaTracer("ses_p12_vfx"));
-const core = registerCoreSkills(reg);
+const scene = makeScene();
+const ctx = createHeadlessContext({ scene: scene as unknown as WorldContext["scene"], session: "ses_p12_vfx", agentId: "agt_vfx" });
+const reg = ctx.registry;
+const core = ctx.core;
 const mgr = core.vfx.vfxManager;
 assert(mgr instanceof VFXManager, "core.vfx.vfxManager is not a VFXManager");
-const { world, scene } = makeWorld(ops);
-const base = { agentId: "agt_vfx", sessionId: "ses_p12_vfx", permissions: PERMS, tick: 0, world };
+const world = ctx.world;
+const base = ctx.base;
 
 // ── 1. create + play → REAL particles that advance per the integration ───────────
 // shape "point" + spread 0 ⇒ every particle launches straight up (0, speed, 0):

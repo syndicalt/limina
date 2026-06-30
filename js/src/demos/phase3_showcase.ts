@@ -5,16 +5,15 @@
 // Run: limina --window --frames 900 js/src/demos/phase3_showcase.ts
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { Position, renderSyncSystem, Rotation, syncPhysicsBodyTransform } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem, type ProviderMap } from "../agents/systems.ts";
 import { Mcp, StdioMcpTransport } from "../mcp/mcp.ts";
 import type { JsonRpcResponse, MCPResponse } from "../mcp/protocol.ts";
-import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { type WorldContext } from "../skills/registry.ts";
 import { createMaterial } from "../materials/palette.ts";
 import {
   arenaReturnImpulse,
@@ -64,29 +63,21 @@ function bindBody(world: WorldContext, entity: string): BodyBinding {
   return { entity, eid: entry.eid, bodyId: entry.bodyId };
 }
 
-const engine = await createEngine({ width: 1120, height: 720, renderBaseline: { ground: { enabled: false } } });
 const agents = new AgentRegistry();
-const tracer = new LiminaTracer("ses_p3_showcase");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world,
-  entities: engine.entities,
-  tags: engine.tags,
-  transforms: engine.transforms,
-  spatial: engine.spatial,
-  scene: engine.scene,
-  camera: engine.camera,
-  renderer: engine.renderer,
-  ops: engine.ops,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
+const ctx = await createWindowedContext({
+  width: 1120,
+  height: 720,
+  renderBaseline: { ground: { enabled: false } },
+  session: "ses_p3_showcase",
+  agentId: "engine_showcase",
   agents,
-};
-const setup = { agentId: "engine_showcase", sessionId: "ses_p3_showcase", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
-const readonly = { agentId: "inspector_showcase", sessionId: "ses_p3_showcase", permissions: resolveProfile("system.readonly"), tick: 0, world };
+});
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const world = ctx.world;
+const setup = ctx.base;
+const readonly = { agentId: "inspector_showcase", sessionId: "ses_p3_showcase", permissions: resolveProfile("system.readonly"), tick: 0, world: ctx.world };
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);

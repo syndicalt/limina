@@ -1,15 +1,13 @@
 // Phase 3 durable observability: full-history flush, replay verification,
 // deterministic partial-line handling, and bounded trace query skills.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
+import { ops } from "../src/engine.ts";
 import {
   LiminaTracer,
   TraceIntegrityError,
   type EngineEvent,
 } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -88,12 +86,10 @@ function testPartialFinalLineHandling(): void {
 }
 
 async function testTraceQuerySkills(): Promise<void> {
-  const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-  const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-  const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
   const tracer = new LiminaTracer("ses_p3_trace", 10);
-  const registry = new SkillRegistry(tracer);
-  registerCoreSkills(registry);
+  const ctx = createHeadlessContext({ tracer, session: "ses_p3_trace", agentId: "agt_debugger", profile: "system.readonly" });
+  const world = ctx.world;
+  const registry = ctx.registry;
 
   const first = emitTick(tracer, "agt_a", 0);
   const second = emitTick(tracer, "agt_a", 1, [first]);

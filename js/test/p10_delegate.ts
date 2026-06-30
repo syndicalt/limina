@@ -23,6 +23,7 @@ import { createEcsWorld } from "../src/ecs/world.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
 import { registerCoreSkills } from "../src/skills/index.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { reviewProfileGate } from "../src/skills/approval.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import { DELEGATE_REVIEW_PROFILE, ORCHESTRATE_PERMISSION, registerOrchestrationSkills } from "../src/skills/orchestration.ts";
@@ -69,9 +70,6 @@ interface ScenarioResult {
 
 async function runScenario(): Promise<ScenarioResult> {
   const agents = new AgentRegistry();
-  const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene: sceneStub, camera, ops, agents };
-  const tracer = new LiminaTracer("ses_coord");
-  const registry = new SkillRegistry(tracer);
 
   // Worker A: proposes a single mutating scene.createEntity (HELD), then stops.
   const providerA = new ScriptedProvider((req: DecideRequest): MCPRequest[] =>
@@ -87,7 +85,10 @@ async function runScenario(): Promise<ScenarioResult> {
   const providers = { wA: providerA, wB: providerB };
 
   // Wire the delegate skill (Phase 10C) through the core registration path.
-  registerCoreSkills(registry, { providers, agents });
+  const ctx = createHeadlessContext({ scene: sceneStub, agents, coreOpts: { providers, agents }, session: "ses_coord" });
+  const world = ctx.world;
+  const tracer = ctx.tracer;
+  const registry = ctx.registry;
 
   // A pre-existing entity (ent_0) for worker B to (try to) tag.
   const setup = { agentId: "engine", sessionId: "ses_coord", permissions: resolveProfile("builder.readWrite"), tick: 0, world };

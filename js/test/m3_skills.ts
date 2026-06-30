@@ -1,11 +1,9 @@
 // M3/M4/M5 — scene/ecs/three/physics skills over the registry + MCP, with
 // permission profiles. Headless (stub scene; real bitECS + Rapier + materials).
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld, Position } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops } from "../src/engine.ts";
+import { Position } from "../src/ecs/world.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
@@ -16,16 +14,13 @@ const scene = {
   position: { set() {}, x: 0, y: 0, z: 0 },
   background: null as unknown,
 };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
-
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
 
-const registry = new SkillRegistry(new LiminaTracer("ses_m3"));
-registerCoreSkills(registry);
-
-const base = { agentId: "agt_builder", sessionId: "ses_m3", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = createHeadlessContext({ scene, session: "ses_m3", agentId: "agt_builder" });
+const registry = ctx.registry;
+const world = ctx.world;
+const base = ctx.base;
 
 function ok(res: MCPResponse): unknown {
   if (!res.success) throw new Error("call failed: " + JSON.stringify(res.error));

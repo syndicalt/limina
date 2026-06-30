@@ -37,12 +37,11 @@
 // (windowed-only: createEngine throws headless, so it is not in the headless suite.)
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { createMaterial } from "../materials/palette.ts";
 import { Position, Rotation, spawnRenderable, type Transformable } from "../ecs/world.ts";
-import { LiminaTracer, type EngineEvent } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
+import { type EngineEvent } from "../observability/event.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem, type ProviderMap } from "../agents/systems.ts";
 import { AgentScheduler } from "../agents/scheduler.ts";
@@ -136,7 +135,22 @@ const PALETTE = [
 // Engine + festive scene
 // ---------------------------------------------------------------------------
 
-const engine = await createEngine({ width: 1180, height: 740, renderBaseline: { ground: { enabled: false } } });
+// A grid sized to the perception radius keeps the native batch query tight.
+const agents = new AgentRegistry();
+const spatial = new UniformGridSpatialIndex({ cellSize: 7 });
+const ctx = await createWindowedContext({
+  width: 1180,
+  height: 740,
+  renderBaseline: { ground: { enabled: false } },
+  session: SESSION,
+  spatial,
+  agents,
+});
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const world = ctx.world;
+const { ui } = ctx.core;
 engine.scene.background = new THREE.Color(0x140a24); // deep dusk-purple club night
 
 // Dance floor: a dark tinted slab + a club-toned grid + a glowing centre ring.
@@ -177,33 +191,6 @@ const lamps: PartyLamp[] = lampSpecs.map(([color, radius, height, intensity], i)
   engine.scene.add(light);
   return { light, phase: (i / lampSpecs.length) * Math.PI * 2, radius, speed: 0.00018 + i * 0.00006 };
 });
-
-// ---------------------------------------------------------------------------
-// World context + agent pipeline plumbing (mirrors p3n4_capstone exactly)
-// ---------------------------------------------------------------------------
-
-const agents = new AgentRegistry();
-const tracer = new LiminaTracer(SESSION);
-const registry = new SkillRegistry(tracer);
-const { ui } = registerCoreSkills(registry);
-
-// A grid sized to the perception radius keeps the native batch query tight.
-const spatial = new UniformGridSpatialIndex({ cellSize: 7 });
-const world: WorldContext = {
-  ecs: engine.world,
-  entities: engine.entities,
-  tags: engine.tags,
-  transforms: engine.transforms,
-  spatial,
-  scene: engine.scene,
-  camera: engine.camera,
-  renderer: engine.renderer,
-  ops: engine.ops,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
-  agents,
-};
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);

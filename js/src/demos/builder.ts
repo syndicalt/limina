@@ -5,11 +5,8 @@
 //
 // Run: limina js/src/demos/builder.ts
 
-import { EntityTable, ops } from "../engine.ts";
-import { createEcsWorld } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
+import { ops } from "../engine.ts";
+import { createHeadlessContext } from "../game/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { Mcp } from "../mcp/mcp.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
@@ -33,15 +30,13 @@ const scene = {
   position: { set() {}, x: 0, y: 0, z: 0 },
   background: null as unknown,
 };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
+const ctx = createHeadlessContext({ scene, session: "ses_builder" });
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
-
-const tracer = new LiminaTracer("ses_builder");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
 
 const builder = new Mcp(registry, world, { agentId: "agt_builder", sessionId: "ses_builder", permissions: resolveProfile("builder.readWrite") });
 const player = new Mcp(registry, world, { agentId: "agt_player", sessionId: "ses_builder", permissions: resolveProfile("player.limited") });

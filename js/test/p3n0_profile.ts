@@ -12,13 +12,9 @@
 //
 // Run: limina js/test/p3n0_profile.ts
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld, syncPhysicsBodyTransform } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops } from "../src/engine.ts";
+import { syncPhysicsBodyTransform } from "../src/ecs/world.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import type { DecideRequest } from "../src/agents/llm.ts";
 import { actionSystem, decisionSystem, perceptionSystem } from "../src/agents/systems.ts";
@@ -51,28 +47,20 @@ const AREA = 200; // entities spread over AREA x AREA (radius-15 -> ~35 neighbor
 const TICKS = 360;
 const WARMUP = 12; // drop the first ticks (JIT + tick-1 spawn-in)
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
 const agents = new AgentRegistry();
-const ecs = createEcsWorld();
-const world: WorldContext = {
-  ecs,
-  transforms: createTransformStorage(ecs),
+const ctx = createHeadlessContext({
   spatial: new UniformGridSpatialIndex({ cellSize: 10 }),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
   agents,
-};
+  session: "ses_p3n0",
+  agentId: "engine_p3n0",
+});
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
-const tracer = new LiminaTracer("ses_p3n0");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-const builder = { agentId: "engine_p3n0", sessionId: "ses_p3n0", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const builder = ctx.base;
 
 // Deterministic positions via a small LCG (reproducible runs).
 let seed = 0x1234abcd >>> 0;

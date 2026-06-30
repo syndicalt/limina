@@ -32,6 +32,7 @@ import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/reg
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
+import type { PolicyEngine } from "../policy/engine.ts";
 
 /** Opt-in world-log recording. Supply to capture a replay-complete command stream;
  *  omit (or pass `false`) for a zero-cost direct-path game. */
@@ -51,12 +52,29 @@ interface CommonContextOptions {
   profile?: string;
   /** Opt into world-log recording. Omitted/false → zero recorder cost. */
   record?: RecordOptions | false;
+  /** Custom opts forwarded to registerCoreSkills (e.g. terrainSource, providers, a delegate agents
+   *  registry). Omit for the default core set. */
+  coreOpts?: Parameters<typeof registerCoreSkills>[1];
+  /** AgentRegistry exposed on `world.agents` (agent-pipeline demos/tests). */
+  agents?: WorldContext["agents"];
+  /** Custom spatial index (e.g. a non-default cellSize a profiler/spatial test asserts on).
+   *  Default: a fresh UniformGridSpatialIndex (headless) or the engine's (windowed). */
+  spatial?: WorldContext["spatial"];
+  /** Reuse a specific tracer (e.g. a LiminaTracer with a non-default maxAge a durability test
+   *  builds). Default: a fresh LiminaTracer over the session. */
+  tracer?: LiminaTracer;
+  /** Policy engine for the SkillRegistry (M7 governed invocation). */
+  policy?: PolicyEngine;
 }
 
 export interface HeadlessContextOptions extends CommonContextOptions {
   /** Override the host capability ops (tests inject a stub/native surface).
    *  Defaults to the module-bound host ops. */
   ops?: EngineOps;
+  /** Custom scene (e.g. a child-tracking stub a test asserts on). Default: a no-op stub. */
+  scene?: SceneLike;
+  /** Custom camera (e.g. a real PerspectiveCamera used in ui.update / projection asserts). */
+  camera?: CameraLike;
 }
 
 export interface WindowedContextOptions extends CommonContextOptions {
@@ -81,6 +99,8 @@ export interface GameContext {
   ops: EngineOps;
   /** Present iff recording was opted in: the authoritative command stream (+ toJsonl()). */
   recorder?: WorldRecorder;
+  /** The tracer the registry emits through (HUDs / tracer-inspecting code use it). */
+  tracer: LiminaTracer;
   /** Present in windowed mode (createWindowedContext); absent headless. */
   engine?: Engine;
   /** Advance the sim tick: stamps base.tick AND recorder.tick so direct-path physics
@@ -105,14 +125,19 @@ interface AssembleParams {
   agentId: string;
   profile: string;
   record?: RecordOptions | false;
+  coreOpts?: Parameters<typeof registerCoreSkills>[1];
+  agents?: WorldContext["agents"];
+  tracer?: LiminaTracer;
+  policy?: PolicyEngine;
   engine?: Engine;
 }
 
 /** The shared assembly both factories delegate to: registry + core + the opt-in recorder
  *  + the WorldContext + base, wired so the recorder (when present) sees the WHOLE session. */
 function assemble(p: AssembleParams): GameContext {
-  const registry = new SkillRegistry(new LiminaTracer(p.session));
-  const core = registerCoreSkills(registry);
+  const tracer = p.tracer ?? new LiminaTracer(p.session);
+  const registry = new SkillRegistry(tracer, p.policy);
+  const core = registerCoreSkills(registry, p.coreOpts);
 
   let recorder: WorldRecorder | undefined;
   let activeOps = p.baseOps;
@@ -136,6 +161,7 @@ function assemble(p: AssembleParams): GameContext {
     camera: p.camera,
     renderer: p.renderer,
     ops: activeOps,
+    agents: p.agents,
     width: p.width,
     height: p.height,
     mode: p.mode,
@@ -153,7 +179,7 @@ function assemble(p: AssembleParams): GameContext {
     if (recorder) recorder.tick = tick;
   };
 
-  return { world, registry, core, base, ops: activeOps, recorder, engine: p.engine, setTick };
+  return { world, registry, core, base, ops: activeOps, recorder, engine: p.engine, tracer, setTick };
 }
 
 /** Build a HEADLESS context: a real bitECS world + native ops, with no-op stub scene/camera
@@ -161,16 +187,16 @@ function assemble(p: AssembleParams): GameContext {
 export function createHeadlessContext(opts: HeadlessContextOptions = {}): GameContext {
   const baseOps = opts.ops ?? moduleOps;
   const ecs = createEcsWorld();
-  const scene = {
+  const scene = opts.scene ?? ({
     add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown,
-  } as unknown as SceneLike;
-  const camera = {
+  } as unknown as SceneLike);
+  const camera = opts.camera ?? ({
     position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {},
-  } as unknown as CameraLike;
+  } as unknown as CameraLike);
   return assemble({
     ecs,
     transforms: createTransformStorage(ecs),
-    spatial: new UniformGridSpatialIndex(),
+    spatial: opts.spatial ?? new UniformGridSpatialIndex(),
     entities: new EntityTable(),
     tags: new Map(),
     scene,
@@ -181,6 +207,10 @@ export function createHeadlessContext(opts: HeadlessContextOptions = {}): GameCo
     agentId: opts.agentId ?? "agt_game",
     profile: opts.profile ?? "builder.readWrite",
     record: opts.record,
+    coreOpts: opts.coreOpts,
+    agents: opts.agents,
+    tracer: opts.tracer,
+    policy: opts.policy,
   });
 }
 
@@ -195,7 +225,7 @@ export async function createWindowedContext(opts: WindowedContextOptions): Promi
   return assemble({
     ecs: engine.world,
     transforms: engine.transforms,
-    spatial: engine.spatial,
+    spatial: opts.spatial ?? engine.spatial,
     entities: engine.entities,
     tags: engine.tags,
     scene: engine.scene,
@@ -209,6 +239,10 @@ export async function createWindowedContext(opts: WindowedContextOptions): Promi
     agentId: opts.agentId ?? "agt_game",
     profile: opts.profile ?? "builder.readWrite",
     record: opts.record,
+    coreOpts: opts.coreOpts,
+    agents: opts.agents,
+    tracer: opts.tracer,
+    policy: opts.policy,
     engine,
   });
 }

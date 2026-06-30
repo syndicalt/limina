@@ -29,15 +29,14 @@
 //     server), composing with any gate the host already installed.
 
 import { z } from "../../build/zod.bundle.mjs";
-import { EntityTable, ops } from "../engine.ts";
-import { createEcsWorld, despawnRenderable } from "../ecs/world.ts";
+import { createHeadlessContext } from "../game/index.ts";
+import { despawnRenderable } from "../ecs/world.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { ScriptedProvider } from "../agents/llm.ts";
 import type { DecideRequest } from "../agents/llm.ts";
 import type { MCPRequest } from "../mcp/protocol.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { ORCHESTRATE_PERMISSION, registerOrchestrationSkills } from "../skills/orchestration.ts";
 import type { ProviderMap } from "../agents/systems.ts";
@@ -263,16 +262,14 @@ export interface CottageSetup {
  *  op_physics_create_world (the process owns that once); the caller must have. */
 export function setupCoordinatorCottage(sessionId = "ses_cottage"): CottageSetup {
   const agents = new AgentRegistry();
-  const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-  const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-  const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops, agents, mode: "headless" };
-  const tracer = new LiminaTracer(sessionId);
-  const registry = new SkillRegistry(tracer);
-
   const providers = cottageProviders();
-  // registerCoreSkills(providers) wires the delegate skill AND co-installs the
-  // delegate review gate (so workers' edits are held); then add the trigger.
-  registerCoreSkills(registry, { providers, agents });
+  // createHeadlessContext forwards coreOpts to registerCoreSkills, which wires the
+  // delegate skill AND co-installs the delegate review gate (so workers' edits are
+  // held); then add the trigger.
+  const ctx = createHeadlessContext({ session: sessionId, agents, coreOpts: { providers, agents } });
+  const world = ctx.world;
+  const registry = ctx.registry;
+  const tracer = ctx.tracer;
   registerCottageBuildSkill(registry, agents);
 
   const coordPerms = resolveProfile(COORDINATOR_PROFILE);

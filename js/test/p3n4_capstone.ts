@@ -13,17 +13,14 @@
 // the fixed step at 60 steps/s. Prints the per-system breakdown + asserts. Run:
 //   limina js/test/p3n4_capstone.ts   (release recommended for representative numbers)
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld, Position, syncPhysicsBodyTransform } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops } from "../src/engine.ts";
+import { Position, syncPhysicsBodyTransform } from "../src/ecs/world.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem } from "../src/agents/systems.ts";
 import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
 import { createShowcaseScheduler } from "../src/demos/phase3_showcase_core.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import type { DecideRequest } from "../src/agents/llm.ts";
 import type { MCPRequest, MCPResponse } from "../src/mcp/protocol.ts";
 
@@ -56,27 +53,14 @@ const TICKS = 400;
 const WARMUP = 60; // drop ramp-in; measure >= 300 ticks
 const STEP_BUDGET_MS = 8; // sim-step p95 acceptance
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
 const agents = new AgentRegistry();
-const ecs = createEcsWorld();
-const world: WorldContext = {
-  ecs,
-  transforms: createTransformStorage(ecs),
-  spatial: new UniformGridSpatialIndex({ cellSize: 10 }),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
-  agents,
-};
+const ctx = createHeadlessContext({ session: "ses_p3n4", agentId: "engine_p3n4", agents, spatial: new UniformGridSpatialIndex({ cellSize: 10 }) });
+const world = ctx.world;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
-const tracer = new LiminaTracer("ses_p3n4");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-const builder = { agentId: "engine_p3n4", sessionId: "ses_p3n4", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const builder = ctx.base;
 
 let seed = 0x0c0ffee5 >>> 0;
 const rnd = (): number => {

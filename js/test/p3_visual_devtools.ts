@@ -2,15 +2,12 @@
 // state and loaded-resource metadata, reload requests are traceable, and trace
 // query skills can explain an agent decision that led to a denied action.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
+import { ops } from "../src/engine.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { ScriptedProvider } from "../src/agents/llm.ts";
 import { runBoundedMultiTurn } from "../src/agents/systems.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { createHeadlessContext } from "../src/game/context.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -32,25 +29,13 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
 const agents = new AgentRegistry();
-const world: WorldContext = {
-  ecs: createEcsWorld(),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
-  agents,
-  mode: "headless",
-};
+const ctx = createHeadlessContext({ session: "ses_p3_visual", agents });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.tracer;
 
 ops.op_physics_create_world(0);
-
-const tracer = new LiminaTracer("ses_p3_visual");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
 
 // Register a real scene builder so dev.reload(target:"scene") re-runs it (and we
 // can assert it actually ran) instead of emitting a no-op "requested" event.

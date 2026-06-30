@@ -5,12 +5,9 @@
 // Run: limina --window --frames 600 js/src/demos/player.ts
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { Position, renderSyncSystem, syncPhysicsBodyTransform } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { AgentRegistry } from "../agents/agent.ts";
 import { ScriptedProvider, type DecideRequest } from "../agents/llm.ts";
 import { actionSystem, decisionSystem, perceptionSystem, type ProviderMap } from "../agents/systems.ts";
@@ -27,18 +24,20 @@ function entityId(res: MCPResponse): string {
   throw new Error("no entity id");
 }
 
-const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
 const agents = new AgentRegistry();
-const tracer = new LiminaTracer("ses_player");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial,
-  scene: engine.scene, camera: engine.camera, ops: engine.ops, agents,
-};
-const setup = { agentId: "engine", sessionId: "ses_player", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({
+  width: 960,
+  height: 640,
+  renderBaseline: { ground: { enabled: false } },
+  session: "ses_player",
+  agentId: "engine",
+  agents,
+});
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const tracer = ctx.tracer;
+const world = ctx.world;
+const setup = ctx.base;
 
 // Large static playfield → procedural-PBR stone grain.
 const ground = new THREE.Mesh(new THREE.BoxGeometry(40, 0.2, 40), createMaterial("stone", { pbr: true }));

@@ -20,14 +20,10 @@
 //
 // Run: ./target/release/limina js/test/p14_playability.ts   (exit 0 = pass)
 
-import { EntityTable, ops, type EngineOps, type SceneObject } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type InvokeBase, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills, type CoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops, type SceneObject } from "../src/engine.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
+import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { type CoreSkills } from "../src/skills/index.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 import { applyTurn } from "../src/world/heading.ts";
 import { tintModel } from "../src/world/character_model.ts";
@@ -43,14 +39,13 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 const DT = 1 / 60;
-const PERMS = resolveProfile("builder.readWrite");
 const distXZ = (p: readonly number[], xz: readonly [number, number]): number =>
   Math.hypot(p[0] - xz[0], p[2] - xz[1]);
 
 /** A headless WorldContext whose scene RECORDS the objects added/removed, so a test can
  *  assert a mesh actually left the scene graph (the real scene's add/remove are otherwise
  *  invisible to an assertion). */
-function makeRecordingWorld(worldOps: EngineOps): { world: WorldContext; added: Set<unknown>; removed: Set<unknown> } {
+function makeRecordingScene(): { scene: WorldContext["scene"]; added: Set<unknown>; removed: Set<unknown> } {
   const added = new Set<unknown>();
   const removed = new Set<unknown>();
   const scene = {
@@ -58,14 +53,7 @@ function makeRecordingWorld(worldOps: EngineOps): { world: WorldContext; added: 
     remove(o: unknown) { removed.add(o); },
     position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown,
   };
-  const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-  const ecs = createEcsWorld();
-  const world: WorldContext = {
-    ecs, transforms: createTransformStorage(ecs), spatial: new UniformGridSpatialIndex(),
-    entities: new EntityTable(), tags: new Map(), scene: scene as WorldContext["scene"],
-    camera: camera as WorldContext["camera"], ops: worldOps, mode: "headless",
-  };
-  return { world, added, removed };
+  return { scene: scene as WorldContext["scene"], added, removed };
 }
 
 function unwrap(label: string, res: MCPResponse | undefined): Record<string, unknown> {
@@ -77,12 +65,9 @@ function unwrap(label: string, res: MCPResponse | undefined): Record<string, unk
 
 async function freshCapstone(session: string): Promise<{ cap: Capstone; core: CoreSkills; registry: SkillRegistry }> {
   ops.op_physics_create_world(-9.81);
-  const registry = new SkillRegistry(new LiminaTracer(session));
-  const core = registerCoreSkills(registry);
-  const { world } = makeRecordingWorld(ops);
-  const base: InvokeBase = { agentId: "agt_play", sessionId: session, permissions: PERMS, tick: 0, world };
-  const cap = await buildCapstone({ world, registry, core, base });
-  return { cap, core, registry };
+  const ctx = createHeadlessContext({ session, agentId: "agt_play" });
+  const cap = await buildCapstone({ world: ctx.world, registry: ctx.registry, core: ctx.core, base: ctx.base });
+  return { cap, core: ctx.core, registry: ctx.registry };
 }
 
 // ════════════════════════ 1. INPUT SIGN (A/D) ════════════════════════════════════════════════
@@ -103,10 +88,11 @@ async function freshCapstone(session: string): Promise<{ cap: Capstone; core: Co
 // scene — not only free its ECS slot. We assert against a recording scene.
 {
   ops.op_physics_create_world(-9.81);
-  const reg = new SkillRegistry(new LiminaTracer("ses_play_pickup"));
-  registerCoreSkills(reg);
-  const { world, removed } = makeRecordingWorld(ops);
-  const base: InvokeBase = { agentId: "agt_play", sessionId: "ses_play_pickup", permissions: PERMS, tick: 0, world };
+  const { scene, removed } = makeRecordingScene();
+  const ctx = createHeadlessContext({ scene, session: "ses_play_pickup", agentId: "agt_play" });
+  const reg = ctx.registry;
+  const world = ctx.world;
+  const base = ctx.base;
 
   unwrap("inventory.create", await reg.invoke("inventory.create", { entity: "actor1", capacity: 8 }, base));
 
