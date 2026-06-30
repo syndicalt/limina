@@ -63,6 +63,11 @@ if [ -n "${LLMFF_BIN:-}" ] || command -v llmff >/dev/null 2>&1; then
   else rc=$?; if [ $rc -eq 2 ]; then echo "   check-slice-builder: SKIP"; else echo "   check-slice-builder: FAIL"; hostfail=1; fi; fi
 else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 
+# Design-quality gate (gamestack procgen-review, executed): the silhouette gate's own falsifiability —
+# distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium.
+if node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no chromium)"; else echo "   design-gate (silhouette): FAIL"; hostfail=1; fi; fi
+
 echo "== summary =="
 echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"
 [ $fail -eq 0 ] && [ $hostfail -eq 0 ] && { echo "ALL GATES GREEN"; exit 0; } || { echo "GATES RED"; exit 1; }
