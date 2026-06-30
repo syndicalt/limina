@@ -55,7 +55,9 @@ const regionId = (gen.result as { regionId: string }).regionId;
 
 const cx = ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE;
 const cz = ((BOUNDS.minTz + BOUNDS.maxTz + 1) / 2) * TILE_SIZE;
-const groundY = relief.maxY; // build on the high point so floors sit at/above the surface
+// Sample the surface height at a point so each building sits on ITS local ground (not all dropped at
+// the region's high point, which floats buildings over lower terrain). Same fn the biome scatter uses.
+const surf = (x: number, z: number): number => core.terrain.source.sampleHeight(SEED, x, z, 0, HINTS);
 
 // 2. THE VILLAGE — architecture.building ×6 around a commons: a hall in the middle, homes ringed
 //    around it, each a different size + tint (stone hall, timber homes, a pale shrine).
@@ -72,7 +74,7 @@ for (const b of PLAN) {
   // Face each building's door toward the commons centre (yaw = atan2(dx,dz)); the hall keeps yaw 0.
   const rotation = (b.dx === 0 && b.dz === 0) ? 0 : Math.atan2(b.dx, b.dz);
   const res = await registry.invoke("architecture.building", {
-    position: [cx + b.dx, groundY, cz + b.dz], width: b.w, depth: b.d, height: b.h, color: b.color, rotation,
+    position: [cx + b.dx, surf(cx + b.dx, cz + b.dz), cz + b.dz], width: b.w, depth: b.d, height: b.h, color: b.color, rotation,
   }, base);
   if (!res.success) throw new Error("architecture.building failed: " + JSON.stringify(res.error));
   parts += (res.result as { entityCount: number }).entityCount;
@@ -88,9 +90,10 @@ const span = (BOUNDS.maxTx - BOUNDS.minTx + 1) * TILE_SIZE;
 engine.camera.near = 0.5;
 engine.camera.far = span * 8;
 engine.camera.updateProjectionMatrix();
-const center = { x: cx, y: groundY + 3, z: cz };
+const centerY = surf(cx, cz);
+const center = { x: cx, y: centerY + 3, z: cz };
 const radius = span * 0.5;       // closer in — feature the buildings
-const camHeight = groundY + span * 0.2; // lower, hero 3/4 angle
+const camHeight = centerY + span * 0.2; // lower, hero 3/4 angle
 let angle = 0.6;
 const DT = 1 / 60;
 
