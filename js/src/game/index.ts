@@ -40,3 +40,8 @@ export {
   type SliceBuilder, type Ledger, type SliceLedgerEntry,
 } from "./coordinator.ts";
 export { DIAGNOSTICS_KEY, publishDiagnostics, readDiagnostics, type Diagnostics } from "./diagnostics.ts";
+export {
+  parseGdd, interviewPlan, interviewCoverage, synthesizeGds, REQUIRED_GDS_FIELDS,
+  type GddParse, type InterviewPersona, type InterviewQuestion, type InterviewAnswers,
+} from "./intake.ts";
+export { exportGame, canExport, type ExportOptions } from "./publish.ts";
