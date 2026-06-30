@@ -1,0 +1,357 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pitch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "loopSentence": {
+      "type": "string",
+      "minLength": 1
+    },
+    "controls": {
+      "type": "object",
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "keyboard-mouse",
+            "gamepad",
+            "touch"
+          ]
+        },
+        "intents": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "binding": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "binding"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "scheme",
+        "intents"
+      ],
+      "additionalProperties": false
+    },
+    "winCondition": {
+      "type": "string",
+      "minLength": 1
+    },
+    "loseCondition": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artDirection": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetPlatforms": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "desktop",
+          "mobile",
+          "web"
+        ]
+      }
+    },
+    "scopeTier": {
+      "type": "string",
+      "enum": [
+        "prototype",
+        "polished",
+        "premium"
+      ]
+    },
+    "optIn": {
+      "type": "string",
+      "enum": [
+        "direct-path",
+        "record+export",
+        "multiplayer"
+      ]
+    },
+    "entities": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "player",
+              "npc",
+              "hazard",
+              "pickup",
+              "prop"
+            ]
+          },
+          "states": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "states"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "mechanics": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "skill": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "skill"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "content": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "character",
+              "prop",
+              "environment",
+              "audio"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "procedural",
+              "poly-pizza",
+              "3d-ai-studio",
+              "generate"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "prompt",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dod": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "state-transition",
+              "feel"
+            ]
+          },
+          "drives": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "steps": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "forward": {
+                      "type": "number"
+                    },
+                    "strafe": {
+                      "type": "number"
+                    },
+                    "yaw": {
+                      "type": "number"
+                    },
+                    "run": {
+                      "type": "boolean"
+                    },
+                    "jump": {
+                      "type": "boolean"
+                    },
+                    "choose": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "toward": {
+                      "type": "string"
+                    },
+                    "repeat": {
+                      "default": 1,
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "until": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "repeat"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "assert": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "check": {
+                      "type": "string",
+                      "enum": [
+                        "gameState",
+                        "counterAtLeast",
+                        "flagTrue",
+                        "hpAtLeast",
+                        "questStatus",
+                        "playerReachedXZ"
+                      ]
+                    },
+                    "target": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "check"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "steps",
+              "assert"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "statement",
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "id",
+    "pitch",
+    "loopSentence",
+    "controls",
+    "winCondition",
+    "loseCondition",
+    "artDirection",
+    "targetPlatforms",
+    "scopeTier",
+    "optIn",
+    "entities",
+    "mechanics",
+    "content",
+    "dod"
+  ],
+  "additionalProperties": false
+}
