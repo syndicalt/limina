@@ -11,12 +11,9 @@
 // `world.addWater` floods it with depth-aware water; `world.populateBiome` drops biome-correct props.
 // The rest of this file is just a free-fly CAMERA so you can look around.
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { MATERIALS } from "../materials/palette.ts";
@@ -41,18 +38,11 @@ const HINTS = {
 // The engine + skill registry. The render BASELINE (sun + hemisphere fill + procedural-sky IBL +
 // atmosphere/fog + ACES tonemapping) is applied automatically; we only suppress the flat ground
 // plane because the generated terrain IS the ground.
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-
-const tracer = new LiminaTracer("ses_default_world");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_default_world", sessionId: "ses_default_world", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } }, session: "ses_default_world", agentId: "agt_default_world" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const world = ctx.world;
+const base = ctx.base;
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // THE WORLD — everything below is THREE skill calls. This is the entire OOB authoring surface.

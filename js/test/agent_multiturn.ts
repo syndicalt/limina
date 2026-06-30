@@ -1,27 +1,22 @@
 // Phase 3 bounded multi-turn orchestration — provider/tool-result/perception
 // loop with hard limits and causal trace edges across turns.
 
-import { EntityTable, ops } from "../src/engine.ts";
+import { ops } from "../src/engine.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { runBoundedMultiTurn } from "../src/agents/systems.ts";
 import type { DecideRequest, LLMProvider } from "../src/agents/llm.ts";
 import type { MCPRequest } from "../src/mcp/protocol.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
+const ctx = createHeadlessContext({ session: "ses_multi" });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.registry.tracer;
 const agents = new AgentRegistry();
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops, agents };
+world.agents = agents;
 
 ops.op_physics_create_world(0);
-
-const tracer = new LiminaTracer("ses_multi");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
 
 const setup = { agentId: "engine", sessionId: "ses_multi", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 await registry.invoke("scene.createEntity", { position: [0, 0, 0] }, setup);

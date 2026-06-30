@@ -5,12 +5,9 @@
 //
 // Run: ./target/release/limina --window js/src/demos/settlement_assets.ts
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { surveyRegionRelief } from "../terrain/biome-content.ts";
@@ -19,16 +16,12 @@ const SEED = 11;
 const BOUNDS = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 } as const;
 const SHAPE = { amp: 0.2, erode: 0 }; // nearly flat — a buildable commons
 
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-const registry = new SkillRegistry(new LiminaTracer("ses_settlement_assets"));
-const core = registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt", sessionId: "ses_settlement_assets", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+// One factory call replaces the hand-copied engine + registry + core + WorldContext + base block.
+const ctx = await createWindowedContext({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } }, session: "ses_settlement_assets" });
+const engine = ctx.engine!;
+const core = ctx.core;
+const registry = ctx.registry;
+const base = ctx.base;
 ops.op_physics_create_world(-9.81);
 
 // Ground: a grassy plains region (textured PBR), nearly flat.

@@ -10,12 +10,9 @@
 // commons on a grassy plain, ringed by scattered pines and boulders, under the Phase-11 render
 // baseline (sun + hemisphere fill + procedural-sky IBL + ACES) — a slow orbit framing the hamlet.
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { surveyRegionRelief } from "../terrain/biome-content.ts";
@@ -24,22 +21,17 @@ const SEED = 7;
 const BOUNDS = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 } as const; // ~96 m of plains
 const SHAPE = { amp: 0.6, erode: 0 }; // gently rolling, near-flat ground for a buildable commons
 
-const engine = await createEngine({
+const ctx = await createWindowedContext({
   width: 1280,
   height: 720,
   renderBaseline: { ground: { enabled: false } }, // the generated region IS the ground
+  session: "ses_settlement_showcase",
+  agentId: "agt_settlement",
 });
-
-const tracer = new LiminaTracer("ses_settlement_showcase");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_settlement", sessionId: "ses_settlement_showcase", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

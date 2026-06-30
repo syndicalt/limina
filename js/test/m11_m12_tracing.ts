@@ -1,13 +1,10 @@
 // M11/M12 — trace replay window + inspector snapshot; EventLoom JSONL export to
 // disk, re-read, integrity-chain verification, and causal-tree reconstruction.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops } from "../src/engine.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 
 interface ExportedEvent {
   id: string;
@@ -25,14 +22,11 @@ function field(value: unknown, key: string): unknown {
   return undefined;
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
+const ctx = createHeadlessContext({ session: "ses_trace" });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.registry.tracer;
 ops.op_physics_create_world(-9.81);
-
-const tracer = new LiminaTracer("ses_trace");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
 const builderPerms = resolveProfile("builder.readWrite");
 const baseAt = (agentId: string, tick: number, causedBy?: string[]) => ({ agentId, sessionId: "ses_trace", permissions: builderPerms, tick, world, causedBy });
 

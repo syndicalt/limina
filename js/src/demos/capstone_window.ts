@@ -17,12 +17,9 @@
 //   Shift — run                   Space — jump
 //   In dialogue: Space — accept (choice 1)   Shift — decline (choice 2)
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
 import { attachCharacterModel } from "../world/character_model.ts";
 import { applyTurn } from "../world/heading.ts";
@@ -31,17 +28,12 @@ import { buildCapstone, type CapstoneInput } from "./capstone_game.ts";
 
 // ── Engine + skill surface. The render baseline (sun/IBL/sky/tonemap) is automatic; the flat
 //    ground plane is suppressed because the generated terrain IS the ground. ──────────────────
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-
-const registry = new SkillRegistry(new LiminaTracer("ses_capstone"));
-const core = registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_capstone", sessionId: "ses_capstone", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } }, session: "ses_capstone", agentId: "agt_capstone" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const world = ctx.world;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

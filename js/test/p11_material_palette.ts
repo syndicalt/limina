@@ -3,13 +3,9 @@
 // existing numeric color/roughness/metalness path stays exactly as before.
 // Headless (stub scene; real bitECS + Rapier + materials).
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops } from "../src/engine.ts";
 import { MATERIALS, getMaterialParams } from "../src/materials/palette.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -27,22 +23,13 @@ function approx(a: number, b: number): boolean {
   return Math.abs(a - b) < 1e-6;
 }
 
-const sceneChildren: unknown[] = [];
-const scene = {
-  add(c: unknown) { sceneChildren.push(c); },
-  remove(c: unknown) { const i = sceneChildren.indexOf(c); if (i >= 0) sceneChildren.splice(i, 1); },
-  position: { set() {}, x: 0, y: 0, z: 0 },
-  background: null as unknown,
-};
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
+const ctx = createHeadlessContext({ session: "ses_p11_palette", agentId: "agt_builder" });
+const registry = ctx.registry;
+const world = ctx.world;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_ground(0);
-
-const registry = new SkillRegistry(new LiminaTracer("ses_p11_palette"));
-registerCoreSkills(registry);
-const base = { agentId: "agt_builder", sessionId: "ses_p11_palette", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
 // --- 1. getMaterialParams returns the expected preset (deterministic) ---------
 const wood = getMaterialParams("wood");

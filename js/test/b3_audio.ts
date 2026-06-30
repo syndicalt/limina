@@ -1,12 +1,9 @@
 // B3 — audio.* skills: permissioned + traced. Run under LIMINA_AUDIO=null for a
 // deterministic, device-free gate: skills are driven through the registry, a
 // privileged profile succeeds + is traced, and an unprivileged profile is DENIED.
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops } from "../src/engine.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error("B3 FAIL: " + msg);
@@ -17,15 +14,12 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
+const ctx = createHeadlessContext({ session: "ses_b3" });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.registry.tracer;
 
 const mode = ops.op_audio_init(); // forced LIMINA_AUDIO=null in the gate
-
-const tracer = new LiminaTracer("ses_b3");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
 
 // Privileged agent (builder.readWrite has audio.play): every audio.* succeeds.
 const dj = { agentId: "agt_dj", sessionId: "ses_b3", permissions: resolveProfile("builder.readWrite"), tick: 1, world };

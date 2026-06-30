@@ -9,14 +9,12 @@
 // Run: limina --window --frames 120 js/src/demos/ui_showcase.ts
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { createMaterial } from "../materials/palette.ts";
 
-const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
+const ctx = await createWindowedContext({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } }, session: "ses_ui_showcase", agentId: "agt_builder" });
+const engine = ctx.engine!;
 engine.scene.background = new THREE.Color(0x0a0d13);
 
 // --- scene: ground + marker entities the containers point at ----------------
@@ -46,30 +44,9 @@ engine.scene.add(new THREE.HemisphereLight(0x90b0ff, 0x202830, 1.1));
 // --- agent-native skill surface ---------------------------------------------
 // A builder authors every container over the SAME typed/permissioned/traced
 // pipeline it uses for the world; the host drives the returned UiManager.
-const tracer = new LiminaTracer("ses_ui_showcase");
-const registry = new SkillRegistry(tracer);
-const { ui } = registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world,
-  entities: engine.entities,
-  tags: engine.tags,
-  transforms: engine.transforms,
-  spatial: engine.spatial,
-  scene: engine.scene,
-  camera: engine.camera,
-  renderer: engine.renderer,
-  ops: engine.ops,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
-};
-const builder: InvokeBase = {
-  agentId: "agt_builder",
-  sessionId: "ses_ui_showcase",
-  permissions: resolveProfile("builder.readWrite"),
-  tick: 0,
-  world,
-};
+const registry = ctx.registry;
+const { ui } = ctx.core;
+const builder = ctx.base;
 
 /** Read the `{ handle }` of a ui.* create result without an unchecked cast. */
 function handleOf(result: unknown): string {

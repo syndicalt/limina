@@ -2,12 +2,9 @@
 // returns IMMEDIATELY (it only queues a command; synthesis runs on a worker
 // thread), so a slow voice never freezes the frame. Under LIMINA_AUDIO=null it's
 // a clean no-op; live (espeak-ng) it speaks off-thread at the speaker's position.
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
+import { ops } from "../src/engine.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error("B4 FAIL: " + msg);
@@ -26,12 +23,10 @@ const h2 = ops.op_audio_speak("A second spoken line.", 3, 1, 0, 0.95, 0);
 assert(h2 !== h1, "speak handles are distinct");
 
 // audio.speak skill: permissioned (audio.play) + traced.
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
-const tracer = new LiminaTracer("ses_b4");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
+const ctx = createHeadlessContext({ session: "ses_b4" });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.registry.tracer;
 
 const voiceAgent = { agentId: "agt_voice", sessionId: "ses_b4", permissions: resolveProfile("social.actor"), tick: 1, world };
 const r = await registry.invoke("audio.speak", { text: "Spoken through the skill.", position: [1, 1, 1] }, voiceAgent);

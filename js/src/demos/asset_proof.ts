@@ -6,23 +6,15 @@
 //
 // Run: ./target/release/limina --window js/src/demos/asset_proof.ts
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 
-const engine = await createEngine({ width: 1280, height: 720 });
-const registry = new SkillRegistry(new LiminaTracer("ses_asset_proof"));
-registerCoreSkills(registry);
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt", sessionId: "ses_asset_proof", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({ width: 1280, height: 720, session: "ses_asset_proof", agentId: "agt" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const world = ctx.world;
+const base = ctx.base;
 ops.op_physics_create_world(-9.81);
 
 // asset.place now GROUNDS by default (base at position.y) + normalizes scale — both systemic, so the

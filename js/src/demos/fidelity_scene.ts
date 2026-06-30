@@ -8,41 +8,18 @@
 //
 // Run: limina --window --frames 600 js/src/demos/fidelity_scene.ts
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { Rotation, renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { buildFidelityScene } from "./fidelity_scene_core.ts";
 
-const engine = await createEngine({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } } });
-const tracer = new LiminaTracer("ses_fidelity");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
+const ctx = await createWindowedContext({ width: 960, height: 640, renderBaseline: { ground: { enabled: false } }, session: "ses_fidelity", agentId: "engine" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
 ops.op_physics_create_world(0);
 
-const world: WorldContext = {
-  ecs: engine.world,
-  transforms: engine.transforms,
-  spatial: engine.spatial,
-  entities: engine.entities,
-  tags: engine.tags,
-  scene: engine.scene,
-  camera: engine.camera,
-  ops: engine.ops,
-  renderer: engine.renderer,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
-};
-const base: InvokeBase = {
-  agentId: "engine",
-  sessionId: "ses_fidelity",
-  permissions: resolveProfile("builder.readWrite"),
-  tick: 0,
-  world,
-};
+const world = ctx.world;
+const base = ctx.base;
 
 const handles = await buildFidelityScene(registry, base);
 const casterEid = engine.entities.resolve(handles.caster)?.eid ?? -1;

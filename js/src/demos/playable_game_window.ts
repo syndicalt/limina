@@ -23,13 +23,10 @@
 //   Shift — run                   Space — jump
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
 import { applyTurn } from "../world/heading.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
 import { CharacterController } from "../world/character.ts";
@@ -44,19 +41,12 @@ const HINTS = terrainTypeHints(TYPE, BOUNDS);
 // The engine + skill registry. The render baseline (sun + IBL + atmosphere + tonemapping) is
 // applied automatically; we suppress the flat ground plane because the generated terrain IS
 // the ground.
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-
-const tracer = new LiminaTracer("ses_playable_game");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_playable_game", sessionId: "ses_playable_game", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } }, session: "ses_playable_game", agentId: "agt_playable_game" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const world = ctx.world;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

@@ -3,18 +3,15 @@
 // scheduler budgets, inspector snapshots, trace explanation, and real runtime
 // metrics without claiming unresolved textured glTF or third-party-code sandboxing.
 
-import { EntityTable, ops } from "../src/engine.ts";
+import { ops } from "../src/engine.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { actionSystem, decisionSystem, perceptionSystem } from "../src/agents/systems.ts";
 import { AgentScheduler } from "../src/agents/scheduler.ts";
 import type { DecideRequest, LLMProvider } from "../src/agents/llm.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
 import { Mcp, StdioMcpTransport } from "../src/mcp/mcp.ts";
 import type { JsonRpcResponse, MCPRequest, MCPResponse } from "../src/mcp/protocol.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -79,22 +76,12 @@ class AcceptanceProvider implements LLMProvider {
   }
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
+const ctx = createHeadlessContext({ session: "ses_p3_acceptance" });
+const registry = ctx.registry;
+const world = ctx.world;
+const tracer = ctx.registry.tracer;
 const agents = new AgentRegistry();
-const world: WorldContext = {
-  ecs: createEcsWorld(),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
-  agents,
-  mode: "headless",
-};
-const tracer = new LiminaTracer("ses_p3_acceptance");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
+world.agents = agents;
 ops.op_physics_create_world(-9.81);
 
 const mcp = new Mcp(registry, world);

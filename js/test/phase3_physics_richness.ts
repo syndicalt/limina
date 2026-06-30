@@ -1,11 +1,7 @@
 // Phase 3 Worker 1 - richer native Rapier collider ops, transforms, and collisions.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { ops } from "../src/engine.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 interface CollisionRecord {
@@ -15,15 +11,6 @@ interface CollisionRecord {
   point: [number, number, number] | null;
   normal: [number, number, number] | null;
 }
-
-const sceneChildren: unknown[] = [];
-const scene = {
-  add(c: unknown) { sceneChildren.push(c); },
-  remove(c: unknown) { const i = sceneChildren.indexOf(c); if (i >= 0) sceneChildren.splice(i, 1); },
-  position: { set() {}, x: 0, y: 0, z: 0 },
-  background: null as unknown,
-};
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
 
 function ok(res: MCPResponse): unknown {
   if (!res.success) throw new Error("call failed: " + JSON.stringify(res.error));
@@ -95,10 +82,10 @@ if (transform[1] < 0.85 || transform[1] > 1.05) throw new Error(`capsule rest y 
 
 // Skill path: scene.createEntity supports collider/static/material fields and physics.collisionEvents maps body ids to entities.
 ops.op_physics_create_world(0);
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
-const registry = new SkillRegistry(new LiminaTracer("ses_phase3_physics"));
-registerCoreSkills(registry);
-const base = { agentId: "agt_builder", sessionId: "ses_phase3_physics", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = createHeadlessContext({ session: "ses_phase3_physics", agentId: "agt_builder" });
+const registry = ctx.registry;
+const world = ctx.world;
+const base = ctx.base;
 const a = field(ok(await registry.invoke("scene.createEntity", {
   shape: "sphere",
   collider: "sphere",

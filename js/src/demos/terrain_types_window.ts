@@ -13,12 +13,9 @@
 // fed a TYPE; the deterministic generator builds the surface. Camera auto-orbits the row; the
 // arrow keys nudge the orbit (←/→ spin, ↑/↓ height, in/out zoom) for a closer look.
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE, HEIGHT_SCALE } from "../terrain/procedural.ts";
 import { TERRAIN_TYPE_NAMES, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { MATERIALS } from "../materials/palette.ts";
@@ -41,19 +38,10 @@ const TYPE_COLOR: Record<TerrainTypeName, number> = {
 // Disable the baseline's flat ground plane: the generated terrain IS the ground here, and the
 // default 80 m ground only underlies the first strip — a dark slab that reads as broken water.
 // (Each type's surface is its own region; the strips compare SHAPE, so no shared base.)
-const engine = await createEngine({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } } });
-
-const tracer = new LiminaTracer("ses_terrain_types_window");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_types_window", sessionId: "ses_terrain_types_window", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const ctx = await createWindowedContext({ width: 1280, height: 720, renderBaseline: { ground: { enabled: false } }, session: "ses_terrain_types_window", agentId: "agt_types_window" });
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

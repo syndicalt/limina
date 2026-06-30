@@ -18,35 +18,29 @@
 // of the file is just a free-fly CAMERA to walk the lineup.
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { createMaterial, type MaterialName } from "../materials/palette.ts";
 
 // The engine + render baseline. We suppress the default flat ground plane because we lay down our
 // own large PBR stone slab below.
-const engine = await createEngine({
+const ctx = await createWindowedContext({
   width: 1280,
   height: 720,
   renderBaseline: { ground: { enabled: false } },
+  session: "ses_materials_showcase",
+  agentId: "agt_materials_showcase",
 });
 
 // The skill registry — built exactly like default_world_window so scene.createEntity and
 // material.import are available against the live engine world.
-const tracer = new LiminaTracer("ses_materials_showcase");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
 void core;
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_materials_showcase", sessionId: "ses_materials_showcase", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const world = ctx.world;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

@@ -15,11 +15,9 @@
 // bundled test GLTFs stand in for the curated CC0 beach pack; swap the ASSET-ID
 // constants in cottage_beach.ts to ship the real look). Camera auto-orbits the beach.
 
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { TROPICAL_BEACH_BASELINE } from "../render-baseline.ts";
 import { buildPostPipeline } from "../render/post.ts";
@@ -29,30 +27,16 @@ import { buildCottageBeach, BEACH_BOUNDS } from "./cottage_beach.ts";
 // sky IBL + lifted exposure) — additive, it never changes the global default. The
 // terrain IS the ground here, so suppress the baseline's flat ground plane (it would
 // clip through the beach) while keeping the warm sun/IBL/tonemapping/sky.
-const engine = await createEngine({
+const ctx = await createWindowedContext({
   width: 1120,
   height: 720,
   renderBaseline: { ...TROPICAL_BEACH_BASELINE, ground: { ...TROPICAL_BEACH_BASELINE.ground, enabled: false } },
+  session: "ses_cottage_beach_window",
 });
-
-const tracer = new LiminaTracer("ses_cottage_beach_window");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world,
-  entities: engine.entities,
-  tags: engine.tags,
-  transforms: engine.transforms,
-  spatial: engine.spatial,
-  scene: engine.scene,
-  camera: engine.camera,
-  renderer: engine.renderer,
-  ops: engine.ops,
-  width: engine.width,
-  height: engine.height,
-  mode: engine.mode,
-};
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const world = ctx.world;
 
 ops.op_physics_create_world(-9.81);
 

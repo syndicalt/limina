@@ -16,12 +16,9 @@
 // (no hard stripes), with the biome varying spatially across the surface from the baked climate.
 
 import * as THREE from "../../build/three.bundle.mjs";
-import { createEngine, ops } from "../engine.ts";
+import { ops } from "../engine.ts";
+import { createWindowedContext } from "../game/index.ts";
 import { renderSyncSystem } from "../ecs/world.ts";
-import { LiminaTracer } from "../observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
-import { registerCoreSkills } from "../skills/index.ts";
-import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { surveyRegionRelief } from "../terrain/biome-content.ts";
@@ -87,26 +84,20 @@ const HINTS = { ...terrainTypeHints(TYPE, BOUNDS), ...SHAPE };
 // The ceiling is set from the surveyed relief AFTER the region is generated (see below), so it
 // tracks the real peak height; here we just enable the model + tune the density. The haze colour
 // auto-matches sky.horizon (0xcdd9e6) so the terrain edge melts into the sky with no hard band.
-const engine = await createEngine({
+const ctx = await createWindowedContext({
   width: 1280,
   height: 720,
   renderBaseline: {
     ground: { enabled: false },
     atmosphere: { height: { enabled: true, density: 0.00055 } },
   },
+  session: "ses_world_showcase",
+  agentId: "agt_landscape",
 });
-
-const tracer = new LiminaTracer("ses_world_showcase");
-const registry = new SkillRegistry(tracer);
-const core = registerCoreSkills(registry);
-
-const world: WorldContext = {
-  ecs: engine.world, entities: engine.entities, tags: engine.tags,
-  transforms: engine.transforms, spatial: engine.spatial, scene: engine.scene,
-  camera: engine.camera, renderer: engine.renderer, ops: engine.ops,
-  width: engine.width, height: engine.height, mode: engine.mode,
-};
-const base = { agentId: "agt_landscape", sessionId: "ses_world_showcase", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const engine = ctx.engine!;
+const registry = ctx.registry;
+const core = ctx.core;
+const base = ctx.base;
 
 ops.op_physics_create_world(-9.81);
 

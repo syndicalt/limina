@@ -1,14 +1,9 @@
 // Phase 3 textured glTF: load a textured glTF through the actual three.loadGLTF
 // skill path using the embedder's asset-only fetch/blob/createImageBitmap shims.
 
-import { EntityTable, ops } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
+import { ops } from "../src/engine.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
+import { createHeadlessContext } from "../src/game/index.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -25,26 +20,13 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
-const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const ecs = createEcsWorld();
-const world: WorldContext = {
-  ecs,
-  transforms: createTransformStorage(ecs),
-  spatial: new UniformGridSpatialIndex(),
-  entities: new EntityTable(),
-  tags: new Map(),
-  scene,
-  camera,
-  ops,
-  mode: "headless",
-};
+const gctx = createHeadlessContext({ session: "ses_p3_textured_gltf", agentId: "agt_builder" });
+const registry = gctx.registry;
+const world = gctx.world;
+const tracer = gctx.registry.tracer as LiminaTracer;
+const ctx = gctx.base;
 
 ops.op_physics_create_world(0);
-const tracer = new LiminaTracer("ses_p3_textured_gltf");
-const registry = new SkillRegistry(tracer);
-registerCoreSkills(registry);
-const ctx = { agentId: "agt_builder", sessionId: "ses_p3_textured_gltf", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
 const loaded = record(ok(await registry.invoke("three.loadGLTF", { assetId: "textured-triangle.gltf" }, ctx)));
 const resource = record(loaded.resource);
