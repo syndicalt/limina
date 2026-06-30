@@ -6,8 +6,9 @@
 //
 // Run: ./target/release/limina --window js/src/demos/asset_proof.ts
 
+import * as THREE from "../../build/three.bundle.mjs";
 import { createEngine, ops } from "../engine.ts";
-import { renderSyncSystem } from "../ecs/world.ts";
+import { Position, renderSyncSystem } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills } from "../skills/index.ts";
@@ -28,7 +29,16 @@ ops.op_physics_create_world(-9.81);
 async function place(assetId: string, x: number, label: string): Promise<void> {
   const res = await registry.invoke("asset.place", { assetId, position: [x, 0, 0] }, base);
   if (!res.success) { ops.op_log(`asset.place FAILED for ${label} (${assetId}): ${JSON.stringify(res.error)}`); return; }
-  ops.op_log(`placed ${label}: ${assetId} → entity ${(res.result as { entity: string }).entity}`);
+  const id = (res.result as { entity: string }).entity;
+  const rec = world.entities.resolve(id) as { eid: number; mesh: THREE.Object3D };
+  // GROUND BY MEASURED BOUNDS: asset.place puts the glTF origin (usually centred) at position.y, so
+  // the asset half-sinks. Measure the world AABB and lift so its BASE sits on the ground (y=0).
+  renderSyncSystem(engine.world);
+  rec.mesh.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(rec.mesh);
+  const minY = box.min.y, height = box.max.y - box.min.y;
+  Position.y[rec.eid] = -minY; // base → y=0 (applied by renderSyncSystem each frame)
+  ops.op_log(`placed ${label}: ${assetId} → ${id}; MEASURED minY=${minY.toFixed(3)} height=${height.toFixed(3)} → lifted base to y=0`);
 }
 await place("prop-barrel-1.glb", -2.2, "Poly Pizza barrel");
 await place("prop-a-wooden-barrel-2.glb", 2.2, "3D AI Studio barrel");
