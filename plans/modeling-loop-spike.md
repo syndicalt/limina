@@ -83,7 +83,25 @@ way).
 3. **Headless single-building render** (SwiftShader, canonical angles).
 4. **The loop** + the cottage proof.
 
-## Decisions for the user
+## Decisions (locked)
+
+- **Author representation = declarative recipe.** *Does this lock an art style? No.* The recipe
+  describes **structure + parameters** (footprint, roof TYPE, opening grid, proportions, rotation),
+  not look. Style lives in three swappable layers on top: **materials** (PBR stone / flat cartoon /
+  painterly), **detail level** (low-poly ↔ high), and the **part vocabulary** (roof types, wall
+  treatments, opening shapes) — which is an *extensible registry*, not a fixed list. Think HTML vs.
+  CSS: the recipe is the structural grammar; art direction is the styling. A sci-fi outpost and a
+  medieval cottage are *different vocabulary + materials in the same recipe format*. Two guard-rails
+  keep it from ever becoming a ceiling: (a) roof/wall/opening **types are a registry** new styles
+  extend; (b) a recipe part may carry **raw custom geometry** as an escape hatch, so anything the
+  vocabulary can't yet express is still buildable. The modeling LOOP is itself style-agnostic — it
+  converges toward whatever **reference** you give it; the reference defines the style, the recipe +
+  loop just hit it.
+- **Critique = me-in-the-loop** (view render-vs-reference each iteration). Works today; a vision model
+  is a later drop-in, not a prerequisite.
+- **Proof scope = cottage first**, lock the machine, then generalize to longhall / watchtower.
+
+## (superseded) earlier open questions
 
 - **Author representation:** declarative recipe (parts + openings + roof type) — my rec — vs. a
   lower-level mesh-edit DSL. Recipe is simpler + replay-clean; DSL is more expressive but heavier.
