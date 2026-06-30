@@ -51,5 +51,6 @@ editor/test/archetype_quest.png
 
 # host-side asset-fetch disk cache (tools/asset-fetch.ts — generated/retrieved glb bytes)
 .asset-cache/
-assets/prop-*.glb
 tools/node_modules/
+# large throwaway generation-test artifacts (demos commit the assets they actually use)
+assets/prop-a-wooden-barrel-2.glb
