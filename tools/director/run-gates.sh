@@ -67,6 +67,9 @@ else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 # distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium.
 if node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no chromium)"; else echo "   design-gate (silhouette): FAIL"; hostfail=1; fi; fi
+# GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
+if node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no chromium)"; else echo "   design-gate (gds tiers): FAIL"; hostfail=1; fi; fi
 
 echo "== summary =="
 echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"

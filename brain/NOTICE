@@ -1,0 +1,16 @@
+limina-brain vendors gamestack-core.
+
+  Source:  https://github.com/rondorkerin/gamestack
+  License: MIT (see ./gamestack-LICENSE)
+
+Vendored VERBATIM from gamestack (plugins/gamestack/ + docs/):
+  skills/**, shared/**, ETHOS.md, SKILL_TEMPLATE.md, UPSTREAM-architecture.md,
+  overlays/{godot,unity,unreal,threejs}.md, gamestack-LICENSE
+
+limina-ORIGINAL (not from gamestack):
+  README.md, overlays/limina.md, bible/** (per-game design records)
+
+Modification of intent (not of the vendored text): gamestack describes its quality
+gates engine-agnostically and stops at the spec. limina EXECUTES them — the
+procgen-review sameness gate runs as gates/design/ (the silhouette gate). The
+vendored skill text is unchanged; the execution lives outside this directory.
