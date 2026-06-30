@@ -2,11 +2,13 @@
 // Takes ONE real game (Beacon Run) from its GDS through EVERY stage and asserts each produces a real,
 // verified artifact — no stubs, no green-on-void. The stages, in the order the pipeline runs them:
 //
-//   1. FUNCTIONAL gate  — the DoD loop (p28: reaching the beacon wins; the blight drains to a loss).
-//   2. DESIGN gate      — silhouette distinctness over the GDS content tiers (gamestack procgen-review).
-//   3. EXPORT           — record the dressed scene into a replay-complete world (manifest/log/keyframes…).
-//   4. PACKAGE          — wrap that world into a self-contained playable release (packager/pack.mjs).
-//   5. RENDER-VERIFY    — the packaged release must actually render non-blank in the real engine.
+//   1. PLAYABLE SMOKE  — the native playable build loads (imports + game + the SHARED dressed field).
+//   2. FUNCTIONAL gate  — the DoD loop (p28: reaching the beacon wins; the blight drains to a loss).
+//   3. DESIGN gate      — silhouette distinctness over the GDS content tiers (gamestack procgen-review).
+//   4. EXPORT           — record the dressed scene into a replay-complete world (manifest/log/keyframes…).
+//   5. PACKAGE          — wrap that world into a self-contained playable release (packager/pack.mjs).
+//   6. RENDER-VERIFY    — the packaged release must actually render non-blank in the real engine.
+// The export records the SAME shared field the playable build renders, so play and ship can't drift.
 //
 // Any stage that fails to produce a real artifact fails the dogfood (exit 1). A missing chromium/GPU
 // is reported as SKIP (exit 2), never silently passed. Run: node games/beacon-quest/dogfood.mjs
@@ -29,10 +31,22 @@ let ok = true;
 let renderSkipped = false;
 const summary = {};
 
-log("=== BEACON QUEST · end-to-end dogfood (GDS → functional+design gates → export → package → render) ===");
+log("=== BEACON QUEST · end-to-end dogfood (playable smoke → functional+design gates → export → package → render) ===");
 
-// ── 1. Functional gate ─────────────────────────────────────────────────────
-log("[1/5] functional gate  (p28: reach beacon → won · blight → lost)");
+// ── 1. Playable-build smoke (the thing you actually PLAY loads cleanly) ──────
+log("[1/6] playable smoke   (the native playable build loads: imports + game + shared dressed field)");
+try {
+  execFileSync("node", ["games/beacon-quest/smoke-playable.mjs"], { stdio: "pipe", timeout: 90000 });
+  summary.playable = "pass";
+  log("      playable: PASS");
+} catch (e) {
+  summary.playable = "fail";
+  ok = false;
+  log("      playable: FAIL (rc=" + (e.status ?? "?") + ")");
+}
+
+// ── 2. Functional gate ─────────────────────────────────────────────────────
+log("[2/6] functional gate  (p28: reach beacon → won · blight → lost)");
 try {
   execFileSync(LIMINA, ["js/test/p28_beacon_run.ts"], { stdio: "pipe", timeout: 120000 });
   summary.functional = "pass";
@@ -43,8 +57,8 @@ try {
   log("      functional: FAIL (rc=" + (e.status ?? "?") + ")");
 }
 
-// ── 2. Design gate (silhouette tiers over the real GDS content) ─────────────
-log("[2/5] design gate      (silhouette distinctness within each GDS content tier)");
+// ── 3. Design gate (silhouette tiers over the real GDS content) ─────────────
+log("[3/6] design gate      (silhouette distinctness within each GDS content tier)");
 let design = { pass: false, score: 0, tiers: [], failures: [{ detail: "not run" }] };
 try {
   const out = execFileSync(LIMINA, ["games/beacon-quest/emit-gds.ts"], { stdio: ["ignore", "pipe", "pipe"], timeout: 60000 }).toString();
@@ -61,7 +75,7 @@ try {
 }
 
 // ── 3. Export the dressed beacon world (record+export → replay-complete) ─────
-log("[3/5] export           (record the dressed scene into a replay-complete world)");
+log("[4/6] export           (record the dressed scene into a replay-complete world)");
 const worldDir = join(ROOT, "games/beacon-quest/web/public/worlds/beacon");
 try {
   execFileSync(LIMINA, ["games/beacon-quest/build/scene.ts"], { stdio: "pipe", timeout: 180000 });
@@ -84,7 +98,7 @@ try {
 }
 
 // ── 4. Package into a self-contained release ────────────────────────────────
-log("[4/5] package          (wrap the world into a self-contained playable release)");
+log("[5/6] package          (wrap the world into a self-contained playable release)");
 const rel = mkdtempSync(join(tmpdir(), "beacon-release-"));
 let packed = null;
 try {
@@ -106,7 +120,7 @@ try {
 }
 
 // ── 5. Render-verify: the packaged release must render non-blank ─────────────
-log("[5/5] render-verify    (the packaged release plays in the real engine)");
+log("[6/6] render-verify    (the packaged release plays in the real engine)");
 if (summary.package === "pass") {
   let rc = 0;
   try {

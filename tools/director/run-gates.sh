@@ -75,6 +75,11 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no ch
 if node packager/check.mjs >/dev/null 2>&1; then echo "   packager: PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo world)"; else echo "   packager: FAIL"; hostfail=1; fi; fi
 
+# Playable-build smoke: the pipeline gates the thing you actually PLAY (the native window build loads
+# its full graph + game + shared dressed field), not just the headless sim. Display-independent.
+if node games/beacon-quest/smoke-playable.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon window): PASS"
+else echo "   playable-smoke (beacon window): FAIL"; hostfail=1; fi
+
 # DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
 # functional gate → design gate → export → package → render-verified release. Heavy (renders +
 # replays), so it's last and SKIPs without chromium/GPU. This is the end-to-end "the machine works" gate.

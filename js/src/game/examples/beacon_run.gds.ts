@@ -34,21 +34,22 @@ export const BEACON_RUN: GameDesignSpec = {
     { id: "light-beacon", name: "Light the beacon (win)", skill: "game.win" },
     { id: "blight-drain", name: "Lantern drains on the blight (lose)", skill: "game.lose" },
   ],
+  // Every resolved asset below is one the game ACTUALLY places (the shared beaconField in
+  // beacon_run_scene.ts) — the design gate scores the real placed field, not aspirational content.
   content: [
-    // Design intent still being sourced (no resolved glb yet → the silhouette gate skips these):
+    // The watcher (player) — still procedural design intent (no resolved glb yet → the gate skips it).
     { id: "watcher-model", kind: "character", prompt: "lantern-bearing frontier watcher", source: "procedural" },
-    { id: "beacon-prop", kind: "prop", prompt: "tall iron signal brazier, glowing when lit", source: "poly-pizza" },
-    { id: "blight-ground", kind: "environment", prompt: "desaturated cracked blighted ground crust", source: "procedural" },
-    // Resolved placed assets, grouped into silhouette tiers — the design gate scores distinctness WITHIN a tier.
-    { id: "pine", kind: "environment", tier: "vegetation", asset: "pine.glb", prompt: "living pine, healthy west edge", source: "poly-pizza", readContract: "safe living vegetation" },
+    // The BEACON is a signal-fire pile you reach and set roaring — NOT a tower. Placed as the campfire.
+    { id: "beacon-fire", kind: "prop", tier: "beacon", asset: "prop-campfire-1.glb", prompt: "stacked signal-fire pile, dim embers until lit then a roaring blaze", source: "poly-pizza", readContract: "the goal — reach it and set it roaring to win" },
+    { id: "blight-ground", kind: "environment", prompt: "desaturated cracked blight crust, west→east gradient", source: "procedural" },
+    // Vegetation tier — the field's living-vs-blighted read; their silhouettes must differ.
+    { id: "pine", kind: "environment", tier: "vegetation", asset: "vegetation-pine-tree-1.glb", prompt: "living pine, healthy west", source: "poly-pizza", readContract: "safe living vegetation" },
     { id: "dead-tree", kind: "environment", tier: "vegetation", asset: "vegetation-dead-tree-1.glb", prompt: "blighted dead tree, east", source: "poly-pizza", readContract: "blighted vegetation — the hazard direction" },
-    { id: "broadleaf", kind: "environment", tier: "vegetation", asset: "broadleaf.glb", prompt: "broadleaf, the camp grove", source: "poly-pizza" },
+    { id: "broadleaf", kind: "environment", tier: "vegetation", asset: "broadleaf.glb", prompt: "broadleaf, west grove", source: "poly-pizza" },
     { id: "bush", kind: "environment", tier: "vegetation", asset: "bush.glb", prompt: "low brush ground cover", source: "poly-pizza" },
-    { id: "watchtower", kind: "prop", tier: "structure", asset: "building-wooden-watchtower-1.glb", prompt: "the signal watchtower", source: "poly-pizza", readContract: "the goal — climb to light it" },
-    { id: "cottage", kind: "prop", tier: "structure", asset: "cottage.glb", prompt: "the watcher's cottage", source: "poly-pizza" },
-    { id: "well", kind: "prop", tier: "structure", asset: "prop-water-well-1.glb", prompt: "the camp well", source: "poly-pizza" },
-    { id: "rock", kind: "prop", tier: "scatter", asset: "rock.glb", prompt: "scattered rocks", source: "poly-pizza" },
-    { id: "barrel", kind: "prop", tier: "scatter", asset: "prop-barrel-1.glb", prompt: "supply barrels at the camp", source: "poly-pizza" },
+    // Scatter tier — camp + field clutter.
+    { id: "rock", kind: "prop", tier: "scatter", asset: "rock.glb", prompt: "scattered field rocks", source: "poly-pizza" },
+    { id: "barrel", kind: "prop", tier: "scatter", asset: "prop-barrel-1.glb", prompt: "the watcher's supply barrels at camp", source: "poly-pizza" },
   ],
   dod: [
     {

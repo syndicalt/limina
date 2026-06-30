@@ -14,10 +14,12 @@ import type { GameUnderTest, SimInput } from "../gate.ts";
 const HALF = 0.5;
 const RADIUS = 0.35;
 const GROUND_OFFSET = HALF + RADIUS;
-const BEACON_XZ: readonly [number, number] = [0, -12]; // straight ahead (-Z); the clear path
-const BLIGHT_XZ: readonly [number, number] = [10, 0]; // off to the side (+X); only entered on purpose
+// Canonical world positions — exported so the SHARED dressed-scene (beacon_run_scene.ts) places its
+// field around the SAME beacon/blight the sim uses; the playable build and the exported release agree.
+export const BEACON_XZ: readonly [number, number] = [0, -12]; // straight ahead (-Z); the clear path
+export const BLIGHT_XZ: readonly [number, number] = [10, 0]; // off to the side (+X); only entered on purpose
 const BEACON_RADIUS = 1.6; // > the gate's 1.2 reach, so lighting lands by the time "reached" triggers
-const BLIGHT_RADIUS = 3.5;
+export const BLIGHT_RADIUS = 3.5;
 const LANTERN_START = 100;
 const DRAIN = 3; // lantern lost per step on the blight
 
