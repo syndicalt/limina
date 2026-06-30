@@ -13,7 +13,7 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
-import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { MAX_ENTITIES, Rotation, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import { applyProceduralPbr } from "../materials/procedural-pbr.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 
@@ -38,7 +38,7 @@ function pbrMat(grain: string, color: number, roughness: number): THREE.MeshStan
 
 /** Register a pre-built static mesh as a collidable entity with a box collider of half-extents `half`
  *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity. */
-function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3): string {
+function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0): string {
   const [x, y, z] = pos;
   world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh, x, y, z);
@@ -47,6 +47,9 @@ function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V
     world.scene.remove(mesh);
     throw new Error("architecture: entity capacity exceeded (MAX_ENTITIES)");
   }
+  // Store the yaw in the ECS Rotation quaternion — renderSyncSystem applies it each frame (setting
+  // mesh.rotation directly is overwritten). Box collider stays axis-aligned (an AABB approximation).
+  if (yaw !== 0) { Rotation.y[eid] = Math.sin(yaw / 2); Rotation.w[eid] = Math.cos(yaw / 2); }
   const bodyId = world.ops.op_physics_add_static_box(x, y, z, half[0], half[1], half[2], 0.85, 0);
   return world.entities.create({ eid, mesh, bodyId });
 }
@@ -143,9 +146,8 @@ function makeBuilding(): SkillDefinition<z.infer<typeof buildingInput>, Building
         const wz = cz - local[0] * sinY + local[2] * cosY;
         const pos: V3 = [wx, cy + local[1], wz];
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
-        mesh.rotation.y = yaw;
         const half: V3 = [size[0] / 2, size[1] / 2, size[2] / 2];
-        parts.push({ kind, entity: spawnStaticMesh(ctx.world, mesh, pos, half), position: pos, size });
+        parts.push({ kind, entity: spawnStaticMesh(ctx.world, mesh, pos, half, yaw), position: pos, size });
       };
 
       // Floor slab (top surface at cy).
@@ -170,10 +172,9 @@ function makeBuilding(): SkillDefinition<z.infer<typeof buildingInput>, Building
         if (input.roofStyle === "gable") {
           const { geo, half } = gableRoofGeometry(W, D, input.roofPitch, input.roofOverhang);
           const mesh = new THREE.Mesh(geo, roofMat);
-          mesh.rotation.y = yaw;
           const pos: V3 = [cx, cy + H, cz];
           const colHalf: V3 = [half[0], half[1], half[2]];
-          parts.push({ kind: "roof", entity: spawnStaticMesh(ctx.world, mesh, pos, colHalf), position: pos, size: [half[0] * 2, input.roofPitch, half[2] * 2] });
+          parts.push({ kind: "roof", entity: spawnStaticMesh(ctx.world, mesh, pos, colHalf, yaw), position: pos, size: [half[0] * 2, input.roofPitch, half[2] * 2] });
         } else {
           addBox("roof", [0, H + t / 2, 0], [W, t, D], roofMat);
         }
