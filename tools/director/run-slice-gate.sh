@@ -16,8 +16,10 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # Drain stdin (the upstream codegen output) without failing if it's empty/closed.
 cat >/dev/null 2>&1 || true
 
-SCRIPT="${SLICE_GATE_SCRIPT:-js/scripts/slice-gate.ts}"
-OUT="$(cd "$ROOT" && ./target/release/limina "$SCRIPT" 2>/dev/null || true)"
+# Write the slice's target (game + broken flag) into a trace the sandboxed gate reads (op_read_trace).
+mkdir -p "$ROOT/traces"
+printf '{"gameId":"%s","broken":%s}' "${SLICE_GAME_ID:-relic-sprint}" "${SLICE_BROKEN:-false}" > "$ROOT/traces/slice-target"
+OUT="$(cd "$ROOT" && ./target/release/limina js/scripts/slice-gate.ts 2>/dev/null || true)"
 
 # Extract the single sentinel-wrapped verdict line and strip the sentinel → bare JSON.
 echo "$OUT" | grep -o '__SLICE_VERDICT__.*' | sed 's/__SLICE_VERDICT__//' | head -1

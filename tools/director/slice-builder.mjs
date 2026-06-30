@@ -45,7 +45,8 @@ export function buildSliceViaLlmff(slice, opts = {}) {
   writeFileSync(manifestPath, template.replaceAll("__BASH__", bashPath).replaceAll("__GATE_SH__", gateSh));
 
   const env = { ...process.env };
-  if (opts.broken) env.SLICE_GATE_SCRIPT = "js/scripts/slice-gate-broken.ts";
+  if (opts.broken) env.SLICE_BROKEN = "true";
+  if (slice && slice.gameId) env.SLICE_GAME_ID = slice.gameId; // data-driven game selection
 
   // ABSOLUTE manifest + run-dir: llmff sets tool commands' working dir to the manifest's parent
   // directory, so a bare relative manifest name yields an empty cwd (current_dir("") → ENOENT).
@@ -83,7 +84,7 @@ export function coordinateViaLlmff(plan, opts = {}) {
       entries.push({ sliceId: slice.id, name: slice.name, status: "skipped" });
       continue;
     }
-    const r = buildSliceViaLlmff({ sliceId: slice.id, dodIds: slice.dodIds }, opts);
+    const r = buildSliceViaLlmff({ sliceId: slice.id, dodIds: slice.dodIds, gameId: slice.gameId }, opts);
     if (r.skipped) return { passed: false, skipped: true, reason: r.reason, entries };
     const status = r.passed ? "passed" : "failed";
     entries.push({ sliceId: slice.id, name: slice.name, status, llmffStatus: r.llmffStatus, verdict: r.verdict });

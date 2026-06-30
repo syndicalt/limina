@@ -32,7 +32,8 @@ import { LiminaTracer } from "../src/observability/event.ts";
 import { WorldRecorder } from "../src/worldlog/recorder.ts";
 import { syncAllBodies } from "../src/worldlog/log.ts";
 import { KeyframeRecorder } from "../src/worldlog/keyframes.ts";
-import { assembleExport, loadExport } from "../src/export/package.ts";
+import { loadExport } from "../src/export/package.ts";
+import { exportGame } from "../src/game/publish.ts";
 
 const SEED = 0x115a;
 const TICKS = 300;
@@ -109,10 +110,10 @@ for (let tick = 1; tick <= TICKS; tick++) {
 }
 keyframeRec.capture(world, TICKS); // exact end state
 
-const files = assembleExport({
+// Routed through the pipeline's publish.ts exportGame (which wraps assembleExport) so the demo world
+// is a genuine pipeline export — exercising the same publish path a game uses.
+const files = exportGame(recorder, {
   worldId: "demo",
-  meta: recorder.meta(),
-  commands: recorder.commands,
   keyframes: keyframeRec.keyframes,
   keyframeInterval: INTERVAL,
   createdAt: new Date().toISOString(),
