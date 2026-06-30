@@ -1,0 +1,59 @@
+# SLICE-BUILD PIPELINE (llmff manifest) — the per-slice build→gate loop the coordinator delegates
+# to `llmff run`. Each iteration: CODEGEN (infer — a real provider writes/refines the slice's game
+# code in production; the mock backend stands in for the deterministic wiring test) → run the REAL
+# limina functional gate (op:tool → run-slice-gate.sh) → validate its JSON verdict → break when the
+# gate passes. This is llmff acting as the PER-STAGE EXECUTOR; the coordinator owns the spine.
+#
+# __GATE_SH__ is substituted with the absolute path to run-slice-gate.sh by slice-builder.mjs.
+# Run (standalone, mock backend): substitute __GATE_SH__, place a slice.json beside it, then
+#   llmff run slice-build.yaml --run-dir <dir>
+version: 1
+inputs:
+  slice:
+    path: ./slice.json
+graph:
+  - id: load_slice
+    op: load
+    input: slice
+
+  - id: build_loop
+    op: loop
+    from: load_slice
+    max_iterations: 3
+    break_on:
+      type: field_true
+      stage: gate_passed
+      field: passed
+    final:
+      from: gate_result
+      require_status: success
+    body:
+      # CODEGEN — write/refine the slice's game code. Real provider in production; mock here.
+      - id: codegen
+        op: infer
+        from: input
+        model: mock:good
+
+      # BUILD + GATE — run the real limina functional gate for the produced game.
+      - id: run_gate
+        op: tool
+        from: codegen
+        command: ["__BASH__", "__GATE_SH__"]
+
+      # The gate's JSON verdict must be well-formed (llmff validate_json — the same gate llmff
+      # applies to every inter-stage artifact).
+      - id: gate_result
+        op: validate_json
+        from: run_gate
+        schema: '{"type":"object","required":["passed","automatedTotal"],"properties":{"passed":{"type":"boolean"},"automatedPassed":{"type":"integer"},"automatedTotal":{"type":"integer"},"detail":{"type":"string"}}}'
+
+      - id: gate_passed
+        op: predicate
+        from: gate_result
+        field: passed
+        mode: truthy
+
+outputs:
+  result:
+    from: build_loop
+    path: ./slice-result.json
