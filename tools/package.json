@@ -1,0 +1,14 @@
+{
+  "name": "limina-tools",
+  "private": true,
+  "type": "module",
+  "description": "limina HOST-SIDE tooling (asset pipeline converters). Deps here are NEVER imported by the sandboxed limina engine.",
+  "dependencies": {
+    "@gltf-transform/core": "^4.4.0",
+    "@gltf-transform/extensions": "^4.4.0",
+    "@gltf-transform/functions": "^4.4.0",
+    "fflate": "^0.8.3",
+    "obj2gltf": "^3.2.0",
+    "sharp": "^0.35.2"
+  }
+}

@@ -1,24 +1,28 @@
 // GenerativeAssetSource gate (asset-pipeline · the 3D AI Studio authoring backend).
 //
-// Proves the ASYNC generation state machine BY MEASUREMENT against a MOCK HttpClient (canned
-// POST→poll→download JSON) — GREEN with NO key and NO network, so CI never hits the paid API:
-//   1. start: POSTs a job (text-to-3D); the request body carries prompt/seed/model; auth header is set.
-//   2. poll : tolerates pending→processing→completed, sleeping op_sleep_ms between attempts; returns
-//             only on a success state; the GLB locator is extracted from the final payload.
-//   3. dl   : the inline-base64 GLB path decodes to the exact expected bytes (works through op_http_post);
-//             the URL path downloads via the injected client's fetchBinary.
+// Proves the ASYNC generation state machine BY MEASUREMENT against a MOCK HttpClient + a trivial injected
+// archive→glb converter (canned POST→poll→download flow) — GREEN with NO key and NO network, so CI never
+// hits the paid API. It models the REAL 3D AI Studio v1 contract:
+//   1. start: POST /3d-models/tencent/generate/rapid/ with {prompt, enable_pbr:true}; Bearer auth set;
+//             the response carries {task_id}.
+//   2. poll : GET /generation-request/{id}/status/ tolerates IN_PROGRESS, sleeping op_sleep_ms between
+//             attempts. CRITICAL NUANCE: status flips to FINISHED with results[0].asset STILL null — the
+//             source must keep polling until results[0].asset is a non-null URL.
+//   3. dl   : the asset URL is a presigned R2 archive (.zip) — downloaded via fetchBinary WITHOUT the
+//             Bearer header; the injected convertArchive turns the archive bytes into glb bytes.
 //   4. image-to-3D: a referenceImage routes into the job body as `image`.
-//   5. errors: a failure status, a poll timeout, and a missing key each throw a CLEAR error.
+//   5. errors: a FAILED status (with failure_reason), a poll timeout, a missing converter, and a missing
+//              key each throw a CLEAR error.
 //   6. KEY-ABSENT contract: with no THREEDAI_API_KEY and no config.apiKey, generateAsset throws the
 //      "missing API key" error (the documented SKIP-equivalent — the unit suite still runs fully on the
-//      injected mock, so the file is always GREEN; a REAL run is the separate smoke command).
+//      injected mocks, so the file is always GREEN; a REAL run is the separate smoke command).
 //
 // Run: timeout 90 ./target/release/limina js/test/p17d_generative_source.ts   (exit 0 = pass)
 
 import { ops } from "../src/engine.ts";
 import {
-  decodeBase64,
   GenerativeAssetSource,
+  type ArchiveConverter,
   type HttpClient,
   type HttpRequest,
   type HttpResponse,
@@ -42,32 +46,33 @@ async function expectThrow(fn: () => Promise<unknown>, needle: string, label: st
   );
 }
 
-// btoa-encode bytes the SAME way the real API would return inline GLB base64.
-function encodeBase64(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
+// A tiny canned ARCHIVE payload (opaque .zip bytes) and the glb the converter "produces" from them.
+const ARCHIVE_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 7, 7, 7, 7]); // "PK\x03\x04"… (zip magic)
+const GLB_BYTES = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 1, 2, 3, 4, 250, 0, 99]); // "glTF"….
 
-// A tiny canned "GLB" payload (bytes are opaque to the source; we just round-trip them exactly).
-const GLB_BYTES = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 1, 2, 3, 4, 250, 0, 99]); // "glTF"....
-const GLB_B64 = encodeBase64(GLB_BYTES);
+// A trivial injected converter: asserts it received the downloaded archive bytes, returns the canned glb.
+let lastConvertedInput: Uint8Array | undefined;
+const mockConvert: ArchiveConverter = async (zipBytes) => {
+  lastConvertedInput = zipBytes;
+  return { format: "glb", bytes: GLB_BYTES };
+};
 
-/** A scripted HttpClient: records requests, returns a programmable POST→poll→download script. */
+/** A scripted HttpClient modeling the REAL status shape, incl. the FINISHED-but-null-asset nuance. */
 interface MockOpts {
-  /** Number of "processing" polls before a "completed" poll (exercises the wait loop). */
-  processingPolls: number;
-  /** "inline" returns base64 in the final poll; "url" returns a model_url + serves fetchBinary. */
-  delivery: "inline" | "url";
-  /** Force a terminal failure status on the first poll. */
+  /** Number of IN_PROGRESS polls before the status flips to FINISHED (exercises the wait loop). */
+  inProgressPolls: number;
+  /** Number of FINISHED-but-null-asset polls AFTER the flip, before results[0].asset populates (the
+   *  documented late-populate nuance). */
+  finishedNullPolls: number;
+  /** Force a terminal FAILED status on the first poll. */
   failStatus?: boolean;
-  /** Never reach a success state (drives the timeout path). */
+  /** Never populate results[0].asset (drives the timeout path). */
   neverDone?: boolean;
 }
 class MockHttp implements HttpClient {
   posts: HttpRequest[] = [];
   gets: HttpRequest[] = [];
-  binaryFetches: string[] = [];
+  binaryFetches: { url: string; headers?: Record<string, string> }[] = [];
   private polls = 0;
   constructor(private readonly o: MockOpts) {}
 
@@ -75,31 +80,63 @@ class MockHttp implements HttpClient {
   async request(req: HttpRequest): Promise<HttpResponse> {
     if (req.method === "POST") {
       this.posts.push(req);
-      return { status: 200, body: JSON.stringify({ id: "task_abc123", status: "queued" }) };
+      return { status: 200, body: JSON.stringify({ task_id: "abc-123-task", created_at: "2026-06-29T00:00:00Z" }) };
     }
     // GET — the status poll.
     this.gets.push(req);
     if (this.o.failStatus) {
-      return { status: 200, body: JSON.stringify({ status: "failed", error: "unsafe prompt" }) };
+      return {
+        status: 200,
+        body: JSON.stringify({ status: "FAILED", progress: 0, results: [], failure_reason: "unsafe prompt" }),
+      };
     }
     if (this.o.neverDone) {
-      return { status: 200, body: JSON.stringify({ status: "processing", progress: 10 }) };
+      // Always FINISHED but with a null asset → the source must NOT accept this and must time out.
+      return {
+        status: 200,
+        body: JSON.stringify({
+          status: "FINISHED",
+          progress: 100,
+          results: [{ asset: null, asset_type: "ARCHIVE", metadata: null }],
+          failure_reason: null,
+        }),
+      };
     }
-    if (this.polls < this.o.processingPolls) {
-      this.polls++;
-      return { status: 200, body: JSON.stringify({ status: this.polls === 1 ? "pending" : "processing" }) };
+    const i = this.polls++;
+    if (i < this.o.inProgressPolls) {
+      return {
+        status: 200,
+        body: JSON.stringify({ status: "IN_PROGRESS", progress: 10 * (i + 1), results: [], failure_reason: null }),
+      };
     }
-    // Final, completed payload — nested `output` shape, with metadata.
-    const output: Record<string, unknown> = { polycount: 4096, rigged: false };
-    if (this.o.delivery === "inline") output.glb_base64 = GLB_B64;
-    else output.model_url = "https://cdn.3daistudio.com/assets/task_abc123.glb";
-    return { status: 200, body: JSON.stringify({ status: "completed", output }) };
+    if (i < this.o.inProgressPolls + this.o.finishedNullPolls) {
+      // FINISHED but the asset URL has NOT populated yet — the critical nuance.
+      return {
+        status: 200,
+        body: JSON.stringify({
+          status: "FINISHED",
+          progress: 100,
+          results: [{ asset: null, asset_type: "ARCHIVE", metadata: null }],
+          failure_reason: null,
+        }),
+      };
+    }
+    // FINISHED with the presigned R2 archive URL finally populated.
+    return {
+      status: 200,
+      body: JSON.stringify({
+        status: "FINISHED",
+        progress: 100,
+        results: [{ asset: "https://r2.cloudflarestorage.com/3dai/abc-123-task.zip?sig=xyz", asset_type: "ARCHIVE", metadata: null }],
+        failure_reason: null,
+      }),
+    };
   }
 
   // eslint-disable-next-line require-await
-  async fetchBinary(url: string): Promise<Uint8Array> {
-    this.binaryFetches.push(url);
-    return GLB_BYTES;
+  async fetchBinary(url: string, headers?: Record<string, string>): Promise<Uint8Array> {
+    this.binaryFetches.push({ url, headers });
+    return ARCHIVE_BYTES;
   }
 }
 
@@ -111,93 +148,105 @@ const baseReq = (over: Partial<AssetRequest> = {}): AssetRequest => ({
 });
 
 // Fast polling so the timeout case stays well under the 90s harness budget.
-const cfg = (http: HttpClient, over = {}) => ({
+const cfg = (http: HttpClient, over: Record<string, unknown> = {}) => ({
   http,
+  convertArchive: mockConvert,
   apiKey: "test-key-DO-NOT-SHIP",
   endpoint: "https://api.example.test/v1",
-  model: "prism-turbo",
   pollIntervalMs: 5,
-  maxPollAttempts: 8,
+  maxPollAttempts: 12,
   ...over,
 });
 
-// ── 1. Happy path · text-to-3D · inline base64 (works through op_http_post). ─────────────────────
+// ── 1. Happy path · text-to-3D · IN_PROGRESS → FINISHED(null asset) → FINISHED(asset) → convert. ──────
 {
-  const http = new MockHttp({ processingPolls: 2, delivery: "inline" });
+  lastConvertedInput = undefined;
+  const http = new MockHttp({ inProgressPolls: 2, finishedNullPolls: 2 });
   const src = new GenerativeAssetSource(cfg(http));
   assert(src.name === "generative:3daistudio", "provenance name is generative:3daistudio");
 
   const res = await src.generateAsset(baseReq());
   assert(res.format === "glb", "result format is glb");
-  assert(res.bytes.length === GLB_BYTES.length, "decoded byte length matches the canned GLB");
+  assert(res.bytes.length === GLB_BYTES.length, "converted glb byte length matches the canned glb");
   for (let i = 0; i < GLB_BYTES.length; i++) {
-    assert(res.bytes[i] === GLB_BYTES[i], `inline GLB byte[${i}] round-trips exactly`);
+    assert(res.bytes[i] === GLB_BYTES[i], `converted glb byte[${i}] matches`);
   }
   assert(res.meta.source === "generative:3daistudio", "meta.source set");
-  assert(res.meta.polycount === 4096, "polycount carried from the result payload");
-  assert(res.meta.rigged === false, "rigged carried from the result payload");
+  assert(
+    res.meta.sourceUrl === "https://r2.cloudflarestorage.com/3dai/abc-123-task.zip?sig=xyz",
+    "meta.sourceUrl is the presigned R2 archive URL",
+  );
 
-  // start: exactly one POST, auth header + prompt/seed/model in the body.
+  // start: exactly one POST, real endpoint + body + Bearer auth.
   assert(http.posts.length === 1, `start POSTs exactly once (got ${http.posts.length})`);
-  assert(http.posts[0].url === "https://api.example.test/v1/generate", "start hits {endpoint}/generate");
+  assert(
+    http.posts[0].url === "https://api.example.test/v1/3d-models/tencent/generate/rapid/",
+    `start hits the rapid/tencent endpoint (got ${http.posts[0].url})`,
+  );
   assert(http.posts[0].headers?.Authorization === "Bearer test-key-DO-NOT-SHIP", "start sends Bearer auth");
   const sent = JSON.parse(http.posts[0].body!);
   assert(sent.prompt === "a medieval treasure chest", "prompt marshaled into the job body");
-  assert(sent.seed === 42, "seed marshaled into the job body");
-  assert(sent.model === "prism-turbo", "model marshaled into the job body");
-  // poll: visited the status endpoint until completed (1 pending + 1 processing + 1 completed = 3).
-  assert(http.gets.length === 3, `polled until completed (got ${http.gets.length} polls)`);
-  assert(http.gets[0].url === "https://api.example.test/v1/tasks/task_abc123", "poll hits {endpoint}/tasks/{id}");
-  assert(http.binaryFetches.length === 0, "inline delivery does NOT hit the binary download path");
+  assert(sent.enable_pbr === true, "enable_pbr:true marshaled into the job body");
+
+  // poll: 2 IN_PROGRESS + 2 FINISHED-null + 1 FINISHED-with-asset = 5 polls (the late-populate nuance).
+  assert(http.gets.length === 5, `polled until results[0].asset populated (got ${http.gets.length} polls)`);
+  assert(
+    http.gets[0].url === "https://api.example.test/v1/generation-request/abc-123-task/status/",
+    `poll hits /generation-request/{id}/status/ (got ${http.gets[0].url})`,
+  );
+
+  // download: fetchBinary once, on the R2 url, with NO auth header (presigned).
+  assert(http.binaryFetches.length === 1, `archive downloaded once (got ${http.binaryFetches.length})`);
+  assert(
+    http.binaryFetches[0].url === "https://r2.cloudflarestorage.com/3dai/abc-123-task.zip?sig=xyz",
+    "archive download hits the presigned R2 url",
+  );
+  assert(http.binaryFetches[0].headers === undefined, "R2 archive download sends NO auth header (presigned)");
+
+  // convert: the converter received exactly the downloaded archive bytes.
+  assert(!!lastConvertedInput, "convertArchive was invoked");
+  assert(lastConvertedInput!.length === ARCHIVE_BYTES.length, "convertArchive received the downloaded archive bytes");
+  for (let i = 0; i < ARCHIVE_BYTES.length; i++) {
+    assert(lastConvertedInput![i] === ARCHIVE_BYTES[i], `archive byte[${i}] handed to the converter exactly`);
+  }
 }
 
-// ── 2. Happy path · model URL delivery → fetchBinary. ────────────────────────────────────────────
+// ── 2. FINISHED-with-asset on the FIRST poll (no IN_PROGRESS, no null window). ────────────────────────
 {
-  const http = new MockHttp({ processingPolls: 1, delivery: "url" });
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0 });
   const src = new GenerativeAssetSource(cfg(http));
   const res = await src.generateAsset(baseReq());
-  assert(http.binaryFetches.length === 1, "URL delivery downloads via fetchBinary once");
-  assert(
-    http.binaryFetches[0] === "https://cdn.3daistudio.com/assets/task_abc123.glb",
-    "fetchBinary called with the model_url",
-  );
-  assert(res.meta.sourceUrl === "https://cdn.3daistudio.com/assets/task_abc123.glb", "sourceUrl provenance set");
-  assert(res.bytes.length === GLB_BYTES.length, "URL-delivered bytes match");
+  assert(http.gets.length === 1, `single poll when the asset is immediately ready (got ${http.gets.length})`);
+  assert(res.bytes.length === GLB_BYTES.length, "glb bytes returned");
 }
 
-// ── 3. image-to-3D: a referenceImage routes into the job body as `image`. ────────────────────────
+// ── 3. image-to-3D: a referenceImage routes into the job body as `image`. ────────────────────────────
 {
-  const http = new MockHttp({ processingPolls: 0, delivery: "inline" });
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0 });
   const src = new GenerativeAssetSource(cfg(http));
   await src.generateAsset(baseReq({ prompt: undefined, referenceImage: "ref/art-direction.png" }));
   const sent = JSON.parse(http.posts[0].body!);
   assert(sent.image === "ref/art-direction.png", "referenceImage marshaled as `image` (image-to-3D)");
+  assert(sent.enable_pbr === true, "enable_pbr still set for image-to-3D");
 }
 
-// ── 4. base64 decode helper is correct (data: URI tolerated). ────────────────────────────────────
+// ── 4. FAILED status → clear error surfacing failure_reason. ─────────────────────────────────────────
 {
-  const dec = decodeBase64(`data:model/gltf-binary;base64,${GLB_B64}`);
-  assert(dec.length === GLB_BYTES.length, "data: URI base64 decodes to the right length");
-  for (let i = 0; i < GLB_BYTES.length; i++) assert(dec[i] === GLB_BYTES[i], `data: URI byte[${i}] matches`);
-}
-
-// ── 5a. Failure status → clear error. ────────────────────────────────────────────────────────────
-{
-  const http = new MockHttp({ processingPolls: 0, delivery: "inline", failStatus: true });
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0, failStatus: true });
   const src = new GenerativeAssetSource(cfg(http));
-  await expectThrow(() => src.generateAsset(baseReq()), "failed", "failure-status");
+  await expectThrow(() => src.generateAsset(baseReq()), "unsafe prompt", "failure-status");
 }
 
-// ── 5b. Never-done → bounded poll timeout. ───────────────────────────────────────────────────────
+// ── 5. FINISHED-but-forever-null asset → bounded poll timeout. ───────────────────────────────────────
 {
-  const http = new MockHttp({ processingPolls: 0, delivery: "inline", neverDone: true });
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0, neverDone: true });
   const src = new GenerativeAssetSource(cfg(http, { maxPollAttempts: 3 }));
   await expectThrow(() => src.generateAsset(baseReq()), "timed out", "poll-timeout");
 }
 
-// ── 5c. Empty request (no prompt + no referenceImage) → clear error. ─────────────────────────────
+// ── 6. Empty request (no prompt + no referenceImage) → clear error. ──────────────────────────────────
 {
-  const http = new MockHttp({ processingPolls: 0, delivery: "inline" });
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0 });
   const src = new GenerativeAssetSource(cfg(http));
   await expectThrow(
     () => src.generateAsset(baseReq({ prompt: undefined, referenceImage: undefined })),
@@ -206,10 +255,17 @@ const cfg = (http: HttpClient, over = {}) => ({
   );
 }
 
-// ── 6. KEY-ABSENT contract: no env key + no config.apiKey → "missing API key" (the SKIP-equivalent). ─
+// ── 7. Missing converter → clear error (the engine sandbox can't supply one; a host must inject it). ──
 {
-  const http = new MockHttp({ processingPolls: 0, delivery: "inline" });
-  const src = new GenerativeAssetSource({ http, endpoint: "https://api.example.test/v1" }); // NO apiKey
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0 });
+  const src = new GenerativeAssetSource(cfg(http, { convertArchive: undefined }));
+  await expectThrow(() => src.generateAsset(baseReq()), "no archive converter", "missing-converter");
+}
+
+// ── 8. KEY-ABSENT contract: no env key + no config.apiKey → "missing API key" (the SKIP-equivalent). ──
+{
+  const http = new MockHttp({ inProgressPolls: 0, finishedNullPolls: 0 });
+  const src = new GenerativeAssetSource({ http, convertArchive: mockConvert, endpoint: "https://api.example.test/v1" });
   const envKeyPresent = typeof (globalThis as { THREEDAI_API_KEY?: string }).THREEDAI_API_KEY === "string";
   if (envKeyPresent) {
     ops.op_log("p17d_generative_source: THREEDAI_API_KEY present in env — skipping the key-absent assertion.");
@@ -219,8 +275,10 @@ const cfg = (http: HttpClient, over = {}) => ({
 }
 
 ops.op_log(
-  "p17d_generative_source OK: async POST→poll→download state machine verified on a mock client — start " +
-    "marshals prompt/seed/model + Bearer auth; poll tolerates pending→processing→completed (op_sleep_ms " +
-    "between attempts); inline-base64 AND model_url delivery both yield exact GLB bytes; image-to-3D routes " +
-    "the referenceImage; failure-status, poll-timeout, empty-request, and missing-key all throw clearly.",
+  "p17d_generative_source OK: async POST→poll→download→convert state machine verified on mock HTTP + a " +
+    "trivial injected converter — start POSTs the rapid/tencent endpoint with {prompt, enable_pbr:true} + " +
+    "Bearer auth; poll tolerates IN_PROGRESS and the FINISHED-but-null-asset late-populate nuance, returning " +
+    "only once results[0].asset is a non-null R2 url; the archive downloads via fetchBinary with NO auth " +
+    "header and the converter receives the exact archive bytes; image-to-3D routes the referenceImage; " +
+    "FAILED-status, poll-timeout, empty-request, missing-converter, and missing-key all throw clearly.",
 );

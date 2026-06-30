@@ -36,6 +36,7 @@ import {
 import { AssetCache, requestKey, type AssetStore } from "../js/src/asset/cache.ts";
 import { AssetResolver } from "../js/src/asset/resolver.ts";
 import type { AssetRequest, AssetResult, AssetSource } from "../js/src/asset/types.ts";
+import { objArchiveToGlb } from "./obj-archive-to-glb.ts";
 
 const LIBRARY_NAME = "library:polypizza";
 const GENERATIVE_NAME = "generative:3daistudio";
@@ -149,7 +150,13 @@ async function main(): Promise<void> {
 
   // Build the backends with REAL fetch-backed transports/clients + env keys.
   const library = new PolyPizzaAssetSource({ apiKey: polyKey, transport: polyFetchTransport });
-  const generative = new GenerativeAssetSource({ apiKey: threeKey, http: fetchHttpClient });
+  // The generative backend returns an OBJ ARCHIVE; inject the host-only converter (sharp + gltf-transform
+  // + obj2gltf) that packs it into a single glb. This dep lives in tools/ — NEVER imported by the engine.
+  const generative = new GenerativeAssetSource({
+    apiKey: threeKey,
+    http: fetchHttpClient,
+    convertArchive: async (zipBytes) => ({ format: "glb", bytes: await objArchiveToGlb(zipBytes) }),
+  });
 
   // The resolver ladder: library matches by default, generative is the fallback; an explicit --source
   // pins one backend by name (resolver throws if it names neither).
