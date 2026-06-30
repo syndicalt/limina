@@ -69,8 +69,10 @@ const PLAN: Array<{ dx: number; dz: number; w: number; d: number; h: number; col
 ];
 let parts = 0;
 for (const b of PLAN) {
+  // Face each building's door toward the commons centre (yaw = atan2(dx,dz)); the hall keeps yaw 0.
+  const rotation = (b.dx === 0 && b.dz === 0) ? 0 : Math.atan2(b.dx, b.dz);
   const res = await registry.invoke("architecture.building", {
-    position: [cx + b.dx, groundY, cz + b.dz], width: b.w, depth: b.d, height: b.h, color: b.color,
+    position: [cx + b.dx, groundY, cz + b.dz], width: b.w, depth: b.d, height: b.h, color: b.color, rotation,
   }, base);
   if (!res.success) throw new Error("architecture.building failed: " + JSON.stringify(res.error));
   parts += (res.result as { entityCount: number }).entityCount;
