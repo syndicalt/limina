@@ -63,5 +63,7 @@ jobs:
 
       # The aggregate falsifiable gate: determinism lint + js/test replay/logic sweep +
       # host gates. Exits non-zero on any real (non-environmental) failure.
+      # --headless skips ONLY a named allowlist of GPU/window/chromium checks (announced,
+      # not silent); all logic/replay/determinism gates still run and must pass.
       - name: Run gate suite
-        run: bash tools/director/run-gates.sh
+        run: bash tools/director/run-gates.sh --headless

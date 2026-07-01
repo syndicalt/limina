@@ -15,7 +15,19 @@ cd "$ROOT"
 BIN="./target/release/limina"
 [ -x "$BIN" ] || { echo "FATAL: $BIN not built (cargo build --release)"; exit 1; }
 
-QUICK=0; [ "${1:-}" = "--quick" ] && QUICK=1
+QUICK=0; for a in "$@"; do [ "$a" = "--quick" ] && QUICK=1; done
+
+# HEADLESS: on a runner with no GPU/window/chromium (CI), a NAMED allowlist of
+# hardware-requiring checks is skipped — announced, never silent. Every logic /
+# replay / determinism gate still runs and must pass, so a real regression cannot
+# hide here (this is a specific hardware allowlist, not error-text guessing).
+# Triggered by --headless, LIMINA_HEADLESS, or CI (GitHub sets CI=true).
+HEADLESS=0
+for a in "$@"; do [ "$a" = "--headless" ] && HEADLESS=1; done
+[ -n "${LIMINA_HEADLESS:-}" ] && HEADLESS=1
+[ -n "${CI:-}" ] && HEADLESS=1
+# js/test that open a native window or need a real WebGPU adapter / readback:
+HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3_fidelity_readback p3_showcase_window p3_textured_gltf_window p5_text_substrate "
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -31,6 +43,9 @@ run_test() {
   case "$name" in
     *ollama*|mcp_*|*_ws|*_ws_*|p4_multi_client*) record_skip "$name" "needs external service (ollama/mcp/ws)"; return;;
   esac
+  if [ "$HEADLESS" = 1 ] && [[ "$HEADLESS_TESTS" == *" $name "* ]]; then
+    record_skip "$name" "needs GPU/window (headless runner)"; return
+  fi
   out="$(LIMINA_AUDIO=null timeout 240 "$BIN" "$t" 2>&1)"; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); return; fi
   # (c) EXPLICIT opt-in skip: a test that prints a line starting with __LIMINA_SKIP__ self-declares an
@@ -89,10 +104,12 @@ else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 
 # Design-quality gate (gamestack procgen-review, executed): the silhouette gate's own falsifiability —
 # distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium.
-if node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
+if [ "$HEADLESS" = 1 ]; then echo "   design-gate (silhouette): SKIP (headless: needs GPU/chromium)"
+elif node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no chromium)"; else echo "   design-gate (silhouette): FAIL"; hostfail=1; fi; fi
 # GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
-if node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
+if [ "$HEADLESS" = 1 ]; then echo "   design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
+elif node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no chromium)"; else echo "   design-gate (gds tiers): FAIL"; hostfail=1; fi; fi
 # Packager: a direct-path game is rejected; a record+export world packs into a self-contained release
 # that RENDERS non-blank in the real engine.
@@ -101,7 +118,8 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo wor
 
 # Playable-build smoke: the pipeline gates the thing you actually PLAY (the native window build loads
 # its full graph + game + shared dressed field), not just the headless sim. Display-independent.
-if node games/beacon-quest/smoke-playable.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon window): PASS"
+if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon window): SKIP (headless: needs GPU)"
+elif node games/beacon-quest/smoke-playable.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon window): PASS"
 else echo "   playable-smoke (beacon window): FAIL"; hostfail=1; fi
 
 # DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
