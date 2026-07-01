@@ -93,6 +93,10 @@ export interface RunOptions {
     far?: number;
     /** Auto-spin per frame (radians). Default 0.004. */
     autoSpin?: number;
+    /** Initial orbit azimuth (radians). 0 places the camera on +X of the center;
+     *  PI/2 places it on +Z looking toward -Z. Default 0. Lets a world frame a
+     *  specific hero angle (e.g. down a path) instead of the legacy side view. */
+    azimuth?: number;
   };
 }
 
@@ -278,7 +282,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
   const orbitMaxRadius = opts.orbit?.maxRadius ?? 40;
   const orbitMaxHeight = opts.orbit?.maxHeight ?? 25;
   const orbitSpin = opts.orbit?.autoSpin ?? 0.004;
-  let angle = 0;
+  let angle = opts.orbit?.azimuth ?? 0;
   let radius = opts.orbit?.radius ?? 16;
   let camHeight = opts.orbit?.height ?? 8;
   if (opts.orbit?.far !== undefined) {

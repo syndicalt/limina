@@ -17,13 +17,18 @@ const running = await run({
   width: 1280,
   height: 720,
   orbit: {
-    center: [0, 3, 0],
-    radius: 18,
-    height: 6, // low across the field, to judge grass density + height
+    // HERO framing: stand near the camp at eye level and look DOWN the path toward the
+    // beacon (-Z). azimuth=PI/2 puts the camera on +Z of the center looking -Z; a low
+    // height keeps it at ~human eye level so dense foreground reads and the flat ground
+    // edge is below frame + lost in fog.
+    center: [0, 2.4, -5],
+    radius: 15,
+    height: 1.7,
+    azimuth: Math.PI / 2,
     autoSpin: 0,
     maxRadius: 120,
     maxHeight: 90,
-    far: 800,
+    far: 300,
   },
   onStatus: (s, d) => { if (statusEl) statusEl.textContent = d ? `${s} · ${d}` : s; },
 });
@@ -33,7 +38,10 @@ const scene = (running.player as unknown as {
   world?: { scene?: { traverse(cb: (o: unknown) => void): void; fog?: unknown } };
 }).world?.scene;
 if (scene !== undefined) {
-  scene.fog = new THREE.Fog(0xc7d3df, 45, 230);
+  // Exponential distance haze matched to the baseline sky horizon (0xcdd9e6) so the far
+  // scatter + the flat ground edge melt into the sky instead of ending at a hard line.
+  // Tuned to this ~60-unit scene: near hub stays crisp, distance reads as depth.
+  scene.fog = new THREE.FogExp2(0xcdd9e6, 0.024);
   let nMesh = 0, nLight = 0;
   const apply = (): void => {
     nMesh = 0; nLight = 0;
