@@ -71,6 +71,9 @@ export interface RunOptions {
   onStatus?: (phase: "loading" | "ready" | "playing" | "done" | "error", detail?: string) => void;
   /** Override the trace store (tests inject a fake; defaults to IndexedDB). */
   traceStore?: DurableTraceStore;
+  /** Initial fly-camera pose for terrain mode (default is a high aerial). Lets a world
+   *  frame an eye-level hero shot instead of the fly-through default. */
+  flyStart?: { x: number; y: number; z: number; yaw: number; pitch: number };
   /** Optional Phase 9 terrain stream: cached tiles become visible meshes that stream
    *  in/out around the camera. Logic (mesh math + stream set) is headless-proven; the
    *  in-tab WebGPU render of the terrain is UAT. */
@@ -260,14 +263,18 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     const perf = (globalThis as unknown as { performance?: { now(): number } }).performance;
     return perf !== undefined ? perf.now() : Date.now();
   };
-  const fly = terrain !== undefined ? new FlyCamera({ x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : undefined;
+  const fly = terrain !== undefined ? new FlyCamera(opts.flyStart ?? { x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : undefined;
   if (fly !== undefined) {
     const doc = (globalThis as unknown as { document?: unknown }).document;
-    fly.attach(
-      opts.input as Parameters<FlyCamera["attach"]>[0],
-      opts.canvas as Parameters<FlyCamera["attach"]>[1],
-      doc as Parameters<FlyCamera["attach"]>[2],
-    );
+    // Input is optional (a headless render shot has none) — only attach interactive
+    // controls when an input source is provided, so the camera still holds its pose.
+    if (opts.input !== undefined) {
+      fly.attach(
+        opts.input as Parameters<FlyCamera["attach"]>[0],
+        opts.canvas as Parameters<FlyCamera["attach"]>[1],
+        doc as Parameters<FlyCamera["attach"]>[2],
+      );
+    }
     const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
     cam.far = 900;
     cam.updateProjectionMatrix();
