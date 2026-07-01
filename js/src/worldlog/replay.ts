@@ -62,8 +62,9 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
   const registry = deps.makeRegistry(tracer);
   const world = deps.makeWorld();
 
-  // Fresh transform storage: the SoA arrays are module globals, so zero them so
-  // a not-rebuilt entity is detectably wrong rather than carrying stale values.
+  // Fresh transform storage: zero the ACTIVE world's SoA so a not-rebuilt entity
+  // is detectably wrong rather than carrying stale values. (Single-world replay
+  // runs against the default store; a multi-world caller activates first.)
   Position.x.fill(0); Position.y.fill(0); Position.z.fill(0);
   Rotation.x.fill(0); Rotation.y.fill(0); Rotation.z.fill(0); Rotation.w.fill(0);
   Scale.x.fill(0); Scale.y.fill(0); Scale.z.fill(0);

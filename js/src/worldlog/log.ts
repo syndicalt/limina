@@ -316,6 +316,25 @@ export function captureRandomState(): number {
   return installedRng.getState();
 }
 
+/** The seeded RNG currently installed as `Math.random` (undefined before any
+ *  install). Multi-world callers capture a world's generator after seeding it and
+ *  re-install it on activation (see setInstalledRng) so interleaved worlds each
+ *  advance their OWN RNG stream instead of sharing one global generator. */
+export function getInstalledRng(): SeededRng | undefined {
+  return installedRng;
+}
+
+/** Make `rng` the installed seeded generator AND the global `Math.random`, WITHOUT
+ *  reseeding it (unlike installSeededRandom, which starts a fresh stream). This is
+ *  the per-world activation swap: on entering a world's execution, install that
+ *  world's live generator so its randomness continues where it left off. Single-
+ *  world code never calls this; the module singleton stays as installSeededRandom
+ *  left it, so single-world determinism is unchanged. */
+export function setInstalledRng(rng: SeededRng): void {
+  installedRng = rng;
+  Math.random = rng.next;
+}
+
 /** Install a seeded PRNG resumed at a captured internal state (M2 recovery).
  *  The next draw continues the SAME stream the original run produced after the
  *  snapshot point -- the mid-stream RNG resume the delta replay depends on. */
