@@ -20,6 +20,8 @@ export class KeyframePhysics {
   private tick = 0;
   /** bodyId -> ascending keyframe ticks + the body's transform at each. */
   private readonly timelines = new Map<number, { ticks: number[]; xforms: Transform7[] }>();
+  /** Reused scratch for op_physics_body_pos so the playback hot path never allocs. */
+  private readonly scratch7 = new Float32Array(7);
 
   constructor(keyframes: Keyframe[]) {
     for (const kf of [...keyframes].sort((a, b) => a.tick - b.tick)) {
@@ -63,7 +65,8 @@ export class KeyframePhysics {
     const qy = a[4] + (b[4] * s - a[4]) * f;
     const qz = a[5] + (b[5] * s - a[5]) * f;
     const qw = a[6] + (b[6] * s - a[6]) * f;
-    const inv = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+    // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not).
+    const inv = 1 / (Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) || 1);
     out[3] = qx * inv; out[4] = qy * inv; out[5] = qz * inv; out[6] = qw * inv;
   }
 
@@ -85,7 +88,7 @@ export class KeyframePhysics {
   op_physics_step(): void { this.tick++; }
   op_physics_body_transform(id: number, out: Float32Array): void { this.lookup(id, out); }
   op_physics_body_pos(id: number, out: Float32Array): void {
-    const s = new Float32Array(7); this.lookup(id, s); out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
+    const s = this.scratch7; this.lookup(id, s); out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
   }
   op_physics_drain_collisions(): CollisionEventRecord[] { return []; }
   op_physics_raycast(_ox: number, _oy: number, _oz: number, _dx: number, _dy: number, _dz: number, maxToi: number, out: Float32Array): void {

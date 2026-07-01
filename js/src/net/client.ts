@@ -169,6 +169,11 @@ export class NetClient {
       if (params === undefined) return;
       this.deltas.push(params);
       this.applySync(params.changes);
+      // Converge on authoritative removals: entities the server dropped from this
+      // client's relevant set (despawn or AoI-exit) must leave the local view too.
+      if (params.removed !== undefined) {
+        for (const id of params.removed) this.state.delete(id);
+      }
       if (this.onSync !== undefined) this.onSync(msg.method, params);
       return;
     }

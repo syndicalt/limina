@@ -14,6 +14,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
+import { num } from "./_util.ts";
 
 const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-supplied extension metadata.");
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -140,20 +141,6 @@ export class StatsManager {
   listStatusEffects(entity: string): StatusEffect[] {
     return this.entityStats.get(entity)?.statusEffects ?? [];
   }
-
-  tickStatusEffects(dtMs: number): { entity: string; effectId: string; expired: boolean }[] {
-    const results: { entity: string; effectId: string; expired: boolean }[] = [];
-    for (const [entity, es] of this.entityStats) {
-      for (const effect of es.statusEffects) {
-        effect.elapsed += dtMs;
-        if (effect.elapsed >= effect.duration * 1000) {
-          results.push({ entity, effectId: effect.id, expired: true });
-        }
-      }
-      es.statusEffects = es.statusEffects.filter((e) => e.elapsed < e.duration * 1000);
-    }
-    return results;
-  }
 }
 
 /** A live defensive stance (combat.defend): reduces incoming damage until it expires by tick. */
@@ -249,11 +236,6 @@ function hash32(s: string): number {
  *  so replay recomputes identical crits without any RNG. */
 function critRoll(tick: number, attacker: string, target: string): number {
   return hash32(`${tick}|${attacker}|${target}`) / 0x100000000;
-}
-
-/** Read a finite number from agent config, else a default. */
-function num(v: unknown, d: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : d;
 }
 
 // ---- Schemas (closure-free; the SkillDefinitions that use them live in registerCombatSkills) ----

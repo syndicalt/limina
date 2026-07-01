@@ -99,7 +99,7 @@ export class FlyCamera {
     if (k.has("KeyA")) { mx -= right[0]; mz -= right[2]; }
     if (k.has("Space")) my += 1;
     if (k.has("KeyC")) my -= 1;
-    const len = Math.hypot(mx, my, mz);
+    const len = Math.sqrt(mx * mx + my * my + mz * mz); // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
     if (len > 0) {
       const boost = k.has("ShiftLeft") || k.has("ShiftRight") ? 3.5 : 1;
       const s = (this.speed * boost * dt) / len;

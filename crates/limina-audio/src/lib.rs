@@ -24,8 +24,9 @@ use std::f32::consts::PI;
 use std::io::{Cursor, Write};
 use std::num::{NonZeroU16, NonZeroU32};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,6 +40,11 @@ const SAMPLE_RATE: u32 = 44_100;
 /// Bus volumes: index 0 = master, 1 = sfx, 2 = ambience, 3 = voice.
 const N_BUSES: usize = 4;
 const BUS_VOICE: usize = 3;
+/// Bounded command-channel capacity. A stalled audio thread applies backpressure:
+/// once this many commands are queued, further sends are DROPPED (not blocked, not
+/// queued), so a stall can never grow memory without bound. Sized to comfortably
+/// absorb a frame's worth of listener/emitter/volume updates plus a few one-shots.
+const AUDIO_CMD_CAPACITY: usize = 256;
 
 /// Commands sent from the JS-thread ops (and TTS workers) to the audio thread.
 enum AudioCmd {
@@ -110,13 +116,24 @@ enum AudioCmd {
         bus: usize,
         volume: f32,
     },
+    /// Clean-shutdown signal: the audio thread returns, dropping the sink (so the OS
+    /// output closes) and letting the thread be joined. Sent from `AudioHandle`'s
+    /// `Drop`; delivery is best-effort (dropped if the channel is full), with
+    /// sender-drop as the guaranteed fallback that also ends the receive loop.
+    Shutdown,
 }
 
 /// Host-owned audio handle, stored in `OpState`. `tx` is `None` only for the
 /// `Null` backend (forced or no device), so sends no-op; ids still advance so
-/// JS-side handle bookkeeping is identical across backends (deterministic).
+/// JS-side handle bookkeeping is identical across backends (deterministic). The
+/// sender is `Arc`-wrapped: the audio thread holds only a `Weak` for the TTS-back
+/// path, so dropping this (the sole strong sender) lets the receive loop end.
 struct AudioHandle {
-    tx: Option<Sender<AudioCmd>>,
+    tx: Option<Arc<SyncSender<AudioCmd>>>,
+    join: Option<thread::JoinHandle<()>>,
+    /// Count of commands dropped due to a full channel (backpressure); used only to
+    /// throttle the warning log. Not world state (never affects determinism).
+    dropped: AtomicU64,
     next_id: u32,
 }
 
@@ -128,7 +145,37 @@ impl AudioHandle {
     }
     fn send(&self, cmd: AudioCmd) {
         if let Some(tx) = self.tx.as_ref() {
-            let _ = tx.send(cmd);
+            match tx.try_send(cmd) {
+                Ok(()) => {}
+                // Full = the audio thread is behind; DROP rather than block the V8
+                // thread or grow memory. Throttle the warning so a stall can't flood.
+                Err(TrySendError::Full(_)) => {
+                    let n = self.dropped.fetch_add(1, Ordering::Relaxed);
+                    if n.is_multiple_of(256) {
+                        eprintln!(
+                            "[audio] command channel full; dropping commands (audio thread stalled?) [{}]",
+                            n + 1
+                        );
+                    }
+                }
+                // Disconnected = the audio thread has exited; nothing to do.
+                Err(TrySendError::Disconnected(_)) => {}
+            }
+        }
+    }
+}
+
+impl Drop for AudioHandle {
+    /// Clean shutdown: signal the audio thread to return, drop our (sole strong)
+    /// sender so the receive loop can still end if that signal was dropped (channel
+    /// full), then join. Null backend has no thread, so this is a no-op there.
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.try_send(AudioCmd::Shutdown);
+            drop(tx);
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
         }
     }
 }
@@ -230,14 +277,27 @@ fn tts_tmp_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("limina_tts_{}_{}.wav", std::process::id(), nanos))
 }
 
+/// RAII guard that removes the temp WAV on drop, so a synth that fails on ANY path
+/// (non-zero exit, read error, …) never leaks the file.
+struct TmpWav {
+    path: std::path::PathBuf,
+}
+impl Drop for TmpWav {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// espeak-ng: instant formant TTS (`espeak-ng -w <file> <text>`). The dependable
 /// zero-install fallback voice.
 struct EspeakProvider;
 impl VoiceProvider for EspeakProvider {
     fn synth(&self, text: &str, pitch: u8) -> Result<Vec<u8>, String> {
-        let tmp = tts_tmp_path();
+        let tmp = TmpWav {
+            path: tts_tmp_path(),
+        };
         let mut cmd = Command::new("espeak-ng");
-        cmd.arg("-w").arg(&tmp);
+        cmd.arg("-w").arg(&tmp.path);
         if pitch > 0 {
             // Higher pitch + a slightly slower rate -> a cuter, sing-song voice.
             cmd.arg("-p").arg(pitch.min(99).to_string());
@@ -250,9 +310,8 @@ impl VoiceProvider for EspeakProvider {
         if !status.success() {
             return Err("espeak-ng exited non-zero".into());
         }
-        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(bytes)
+        // `tmp` drops on return (any path), removing the file.
+        std::fs::read(&tmp.path).map_err(|e| e.to_string())
     }
 }
 
@@ -263,10 +322,12 @@ struct PiperProvider {
 }
 impl VoiceProvider for PiperProvider {
     fn synth(&self, text: &str, _pitch: u8) -> Result<Vec<u8>, String> {
-        let tmp = tts_tmp_path();
+        let tmp = TmpWav {
+            path: tts_tmp_path(),
+        };
         let mut child = Command::new("piper")
             .args(["--model", &self.model, "--output_file"])
-            .arg(&tmp)
+            .arg(&tmp.path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
@@ -280,9 +341,8 @@ impl VoiceProvider for PiperProvider {
         if !child.wait().map_err(|e| e.to_string())?.success() {
             return Err("piper exited non-zero".into());
         }
-        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(bytes)
+        // `tmp` drops on return (any path), removing the file.
+        std::fs::read(&tmp.path).map_err(|e| e.to_string())
     }
 }
 
@@ -370,13 +430,15 @@ fn open_output() -> Result<MixerDeviceSink, String> {
 // ---- audio thread ----------------------------------------------------------
 
 /// The dedicated audio thread: owns the live sink + mixer + sound registry +
-/// current listener ears, services commands until the channel closes. `back` is
-/// a sender clone TTS workers use to deliver decoded audio; `voice` is the
+/// current listener ears, services commands until the channel closes (or a
+/// `Shutdown` is received). `back` is a WEAK sender the thread upgrades per-`Speak`
+/// to hand a live sender to a TTS worker; holding it weakly (not a self-clone) is
+/// what lets the receive loop end once the JS-side sender drops. `voice` is the
 /// selected provider (None = no voice).
 fn run_audio(
     dev: MixerDeviceSink,
     rx: Receiver<AudioCmd>,
-    back: Sender<AudioCmd>,
+    back: Weak<SyncSender<AudioCmd>>,
     voice: Option<Arc<dyn VoiceProvider>>,
 ) {
     let mixer = dev.mixer();
@@ -478,15 +540,18 @@ fn run_audio(
                 pitch,
             } => {
                 // Fire-and-forget: synth on a throwaway worker; deliver decoded
-                // audio back over the channel. Nothing blocks here or in JS.
-                if let Some(provider) = voice.clone() {
-                    let back = back.clone();
+                // audio back over the channel. Nothing blocks here or in JS. We
+                // upgrade the WEAK sender per line, so a live worker keeps the channel
+                // alive only for its own (bounded) lifetime — never the audio thread.
+                if let (Some(provider), Some(back)) = (voice.clone(), back.upgrade()) {
                     thread::Builder::new()
                         .name("limina-tts".into())
                         .spawn(
                             move || match provider.synth(&text, pitch).and_then(decode_wav) {
                                 Ok((data, channels, rate)) => {
-                                    let _ = back.send(AudioCmd::PlayDecoded {
+                                    // Backpressure applies here too: a full channel
+                                    // drops the decoded line rather than queueing it.
+                                    let _ = back.try_send(AudioCmd::PlayDecoded {
                                         id,
                                         data,
                                         channels,
@@ -571,6 +636,8 @@ fn run_audio(
                     }
                 }
             }
+            // Clean shutdown: return so the sink/sounds drop and the thread joins.
+            AudioCmd::Shutdown => return,
         }
         // Reap finished one-shots (looping ambience never empties).
         sounds.retain(|_, s| !s.empty());
@@ -578,13 +645,18 @@ fn run_audio(
 }
 
 /// Spawn the audio thread, opening the default output on it. Returns the command
-/// sender plus whether a live device was acquired. On no device the thread keeps
+/// sender (the sole strong `Arc`), whether a live device was acquired, and the
+/// join handle. The channel is BOUNDED (`AUDIO_CMD_CAPACITY`) so a stalled thread
+/// applies backpressure instead of growing memory. On no device the thread keeps
 /// draining commands (no-op), so the returned sender is always valid.
-fn spawn_audio() -> (Sender<AudioCmd>, bool) {
-    let (tx, rx) = mpsc::channel::<AudioCmd>();
-    let back = tx.clone();
+fn spawn_audio() -> (Arc<SyncSender<AudioCmd>>, bool, thread::JoinHandle<()>) {
+    let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
+    // The audio thread holds only a `Weak` (for the TTS-back path), so dropping
+    // this strong sender is what lets the receive loop terminate.
+    let tx = Arc::new(raw_tx);
+    let back = Arc::downgrade(&tx);
     let (ready_tx, ready_rx) = mpsc::channel::<bool>();
-    thread::Builder::new()
+    let handle = thread::Builder::new()
         .name("limina-audio".into())
         .spawn(move || match open_output() {
             Ok(mut dev) => {
@@ -601,7 +673,7 @@ fn spawn_audio() -> (Sender<AudioCmd>, bool) {
         })
         .expect("spawn limina-audio thread");
     let live = ready_rx.recv().unwrap_or(false);
-    (tx, live)
+    (tx, live, handle)
 }
 
 // ---- ops -------------------------------------------------------------------
@@ -616,14 +688,18 @@ pub fn op_audio_init(state: &mut OpState) -> u32 {
     if forced_null {
         state.put(AudioHandle {
             tx: None,
+            join: None,
+            dropped: AtomicU64::new(0),
             next_id: 0,
         });
         println!("[audio] backend: null (LIMINA_AUDIO=null)");
         return 0;
     }
-    let (tx, live) = spawn_audio();
+    let (tx, live, join) = spawn_audio();
     state.put(AudioHandle {
         tx: Some(tx),
+        join: Some(join),
+        dropped: AtomicU64::new(0),
         next_id: 0,
     });
     println!(
@@ -828,3 +904,64 @@ extension!(
         op_audio_set_bus_volume,
     ],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A full bounded channel must DROP further sends (not block the V8 thread, not
+    /// grow memory), and draining must release the backpressure.
+    #[test]
+    fn bounded_channel_drops_when_full_without_blocking() {
+        let (tx, rx) = mpsc::sync_channel::<AudioCmd>(2);
+        let h = AudioHandle {
+            tx: Some(Arc::new(tx)),
+            join: None,
+            dropped: AtomicU64::new(0),
+            next_id: 0,
+        };
+        // Fill the capacity (2) — these buffer successfully.
+        h.send(AudioCmd::StopAll);
+        h.send(AudioCmd::StopAll);
+        // Now full: further sends must be dropped (returns immediately, no block)
+        // and bump the dropped counter — never queued.
+        h.send(AudioCmd::StopAll);
+        h.send(AudioCmd::StopAll);
+        assert_eq!(h.dropped.load(Ordering::Relaxed), 2);
+        // Drain one; a subsequent send succeeds again (backpressure released).
+        assert!(matches!(rx.try_recv(), Ok(AudioCmd::StopAll)));
+        h.send(AudioCmd::StopAll);
+        assert_eq!(h.dropped.load(Ordering::Relaxed), 2);
+    }
+
+    /// The receive loop (`for cmd in rx`) must terminate once every sender drops.
+    /// The audio thread holds only a `Weak` for the TTS-back path, so it never keeps
+    /// the loop alive; a transient worker (an upgraded sender) does, but only until
+    /// it finishes.
+    #[test]
+    fn receive_loop_terminates_when_senders_drop() {
+        let (tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
+        let tx = Arc::new(tx);
+        let back = Arc::downgrade(&tx); // what the audio thread holds
+        // A consumer mirroring run_audio's `for cmd in rx { .. }` loop.
+        let consumer = thread::spawn(move || {
+            let mut n = 0usize;
+            for _cmd in rx {
+                n += 1;
+            }
+            n
+        });
+        // A transient TTS worker upgrades the weak sender and delivers one line.
+        let worker_tx = back.upgrade().expect("sender alive");
+        worker_tx.try_send(AudioCmd::StopAll).expect("buffered");
+        // JS-side drops its (strong) sender: the loop must NOT end yet, because the
+        // worker still holds a live clone.
+        drop(tx);
+        assert!(back.upgrade().is_some());
+        // Worker finishes: the last sender drops, so the weak can no longer upgrade
+        // and the receive loop terminates.
+        drop(worker_tx);
+        assert!(back.upgrade().is_none());
+        assert_eq!(consumer.join().expect("consumer joined"), 1);
+    }
+}

@@ -157,7 +157,7 @@ export class CharacterController {
     const cy = Math.cos(cmd.yaw);
     let mx = sy * cmd.forward + cy * cmd.strafe;
     let mz = -cy * cmd.forward + sy * cmd.strafe;
-    const mag = Math.hypot(mx, mz);
+    const mag = Math.sqrt(mx * mx + mz * mz); // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
     if (mag > 1) {
       mx /= mag;
       mz /= mag;

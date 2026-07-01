@@ -64,7 +64,7 @@ function addTri(
   let nx = e1y * e2z - e1z * e2y;
   let ny = e1z * e2x - e1x * e2z;
   let nz = e1x * e2y - e1y * e2x;
-  const len = Math.hypot(nx, ny, nz) || 1;
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1; // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not)
   nx /= len; ny /= len; nz /= len;
   s.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
   s.nrm.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);

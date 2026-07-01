@@ -349,6 +349,10 @@ export class AuthoritativeServer {
         const p = asRecord(params);
         conn.aoi = parseAoi(p?.aoi);
         conn.subscribed = true;
+        // Refresh the authoritative baseline: while no client was subscribed the per-tick
+        // capture is skipped, so `this.prev` may be stale. Re-capture now so this client's
+        // first delta (and any declareAoi that reads `this.prev`) diffs against fresh state.
+        this.prev = this.snapshotMap();
         // Push the AoI-filtered join view (reuses the M2 WorldSnapshot capture).
         await this.sendSnapshot(conn);
         await this.reply(conn.connId, this.success(id, { ok: true, tick: this.tick }));
@@ -356,7 +360,27 @@ export class AuthoritativeServer {
       }
       case SYNC_METHODS.declareAoi: {
         const aoi = parseAoi(params);
+        const prevAoi = conn.aoi;
         conn.aoi = aoi;
+        // A client-driven AoI change (shrink/move) drops entities out of view even
+        // though they never moved. The per-tick delta only derives exits from THIS
+        // tick's `changes` set, so a STATIONARY AoI-exit would linger forever. Push a
+        // `removed` delta now for entities inside the OLD AoI but outside the NEW one,
+        // using the last authoritative capture (`this.prev`) as their positions --
+        // mirroring the snapshot/delta relevance filter so the client view converges.
+        if (conn.subscribed) {
+          const removed: string[] = [];
+          for (const [entId, state] of this.prev) {
+            if (inAoi(prevAoi, state.pos) && !inAoi(aoi, state.pos)) removed.push(entId);
+          }
+          if (removed.length > 0) {
+            await this.sendSafe(conn.connId, JSON.stringify({
+              jsonrpc: "2.0",
+              method: SYNC_METHODS.delta,
+              params: { tick: this.tick, causedBy: [], changes: [], removed },
+            }));
+          }
+        }
         await this.reply(conn.connId, this.success(id, { ok: true }));
         return;
       }
@@ -422,31 +446,65 @@ export class AuthoritativeServer {
     this.recOps.op_physics_step();
     syncAllBodies(this.world);
 
-    // 3. Compute the change-set: entities whose authoritative state differs from
-    //    last tick (O(changed), the shape M5's AoI filter narrows further).
+    // 3. Skip the O(world) capture+diff entirely when nothing will consume a delta:
+    //    broadcasting off, or NO client subscribed. `prev` is refreshed on subscribe,
+    //    so a joining client always diffs against a fresh baseline. (Under active
+    //    subscription the diff is still O(world): captureWorldState walks every entity,
+    //    as there is no cross-boundary dirty signal. TODO(P4.perf): thread an
+    //    entities-touched-this-tick set out of the sim/skill-apply path so the diff
+    //    scans only mutated entities. The AoI filter below already bounds each client's
+    //    OUTPUT to O(relevant).)
+    if (!this.broadcastEnabled) return;
+    let anySubscribed = false;
+    for (const c of this.conns.values()) { if (c.subscribed) { anySubscribed = true; break; } }
+    if (!anySubscribed) return;
+
+    const prev = this.prev;
     const cur = this.snapshotMap();
     const changes: EntityState[] = [];
     for (const [id, state] of cur) {
-      const before = this.prev.get(id);
+      const before = prev.get(id);
       if (before === undefined || !sameState(before, state)) changes.push(state);
+    }
+    // Entities present last tick but gone now = authoritative removals (despawn).
+    const removedIds: string[] = [];
+    for (const id of prev.keys()) {
+      if (!cur.has(id)) removedIds.push(id);
     }
     this.prev = cur;
 
-    if (!this.broadcastEnabled) return;
-    if (changes.length === 0) return;
+    if (changes.length === 0 && removedIds.length === 0) return;
 
-    // 4. Broadcast per subscribed client, filtered by that client's AoI. A
-    //    client only ever sees entities relevant to it -> O(relevant), not O(K).
+    // 4. Broadcast per subscribed client, filtered by that client's AoI. A client
+    //    only ever sees entities relevant to it -> O(relevant), not O(K). Removals
+    //    are per-client: a global despawn OR an entity that moved OUT of this client's
+    //    AoI (was relevant last tick, is not now) both leave the client's view, so
+    //    both are reported as `removed` ids -- without them a client view never
+    //    converges (removed/exited entities would persist forever).
     let broadcast = false;
     for (const conn of this.conns.values()) {
       if (!conn.subscribed) continue;
-      const filtered = changes.filter((e) => inAoi(conn.aoi, e.pos));
-      if (filtered.length === 0) continue;
+      const filtered: EntityState[] = [];
+      const removed: string[] = [];
+      for (const e of changes) {
+        if (inAoi(conn.aoi, e.pos)) {
+          filtered.push(e);
+        } else {
+          // Changed but no longer in AoI: if it was in AoI last tick it EXITED.
+          const before = prev.get(e.id);
+          if (before !== undefined && inAoi(conn.aoi, before.pos)) removed.push(e.id);
+        }
+      }
+      for (const id of removedIds) {
+        const before = prev.get(id);
+        if (before !== undefined && inAoi(conn.aoi, before.pos)) removed.push(id);
+      }
+      if (filtered.length === 0 && removed.length === 0) continue;
       broadcast = true;
       await this.sendSafe(conn.connId, JSON.stringify({
         jsonrpc: "2.0",
         method: SYNC_METHODS.delta,
-        params: { tick: this.tick, causedBy, changes: filtered },
+        params: { tick: this.tick, causedBy, changes: filtered, removed },
       }));
     }
     if (broadcast) this.lastBroadcastTick = this.tick;
@@ -456,7 +514,8 @@ export class AuthoritativeServer {
 
   private snapshotMap(): Map<string, EntityState> {
     const out = new Map<string, EntityState>();
-    for (const e of captureWorldState(this.world).entities) out.set(e.id, e);
+    // sorted=false: the diff keys by id, so the per-tick id sort is pure waste here.
+    for (const e of captureWorldState(this.world, false).entities) out.set(e.id, e);
     return out;
   }
 

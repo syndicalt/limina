@@ -48,6 +48,16 @@ export const ContentItemSchema = z.object({
   kind: z.enum(["character", "prop", "environment", "audio"]),
   prompt: z.string().min(1),
   source: z.enum(["procedural", "poly-pizza", "3d-ai-studio", "generate"]),
+  // ── Design-gate fields (the silhouette/readability gate scores against these). All OPTIONAL so
+  //    existing specs stay valid; the silhouette gate skips items without a resolved `asset`. ──
+  /** The resolved glTF id once the asset pipeline has sourced it (e.g. "pine.glb"). The design gate
+   *  renders this to a silhouette; absent until sourcing runs. */
+  asset: z.string().min(1).optional(),
+  /** Silhouette distinctness group — the gate checks sameness WITHIN a tier. Defaults to `kind`. */
+  tier: z.string().min(1).optional(),
+  /** art-direction-and-readability's per-asset "read contract": the one gameplay question this asset's
+   *  silhouette must let the player answer ("is it cover? a pickup? an enemy?"). */
+  readContract: z.string().min(1).optional(),
 });
 
 // ── DoD assertions (the falsifiable gate, generated into M3 tests) ──────────────────────────────

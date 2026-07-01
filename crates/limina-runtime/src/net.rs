@@ -229,7 +229,14 @@ pub async fn op_net_recv(state: Rc<RefCell<OpState>>, conn_id: u32) -> Result<St
     if conn.closed.load(Ordering::Acquire) {
         return Ok(String::new());
     }
-    let mut rx = conn.rx.lock().await;
+    // Single-reader-per-connection contract: each connection is driven by exactly
+    // one `op_net_recv` read loop at a time. The guard is held across an unbounded
+    // `rx.next()` await, so a second concurrent reader on the same conn would park
+    // on this lock forever (silent starvation). Fail fast instead of hanging.
+    let mut rx = conn
+        .rx
+        .try_lock()
+        .map_err(|_| JsErrorBox::generic("connection already has an active reader"))?;
     loop {
         tokio::select! {
             biased;
@@ -282,6 +289,51 @@ pub async fn op_net_close(state: Rc<RefCell<OpState>>, conn_id: u32) {
         conn.close.notify_one();
         let mut tx = conn.tx.lock().await;
         let _ = tx.close().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `NetConn` whose halves are inert stand-ins: the stream never yields
+    /// (`pending`) and the sink swallows everything (`drain`). Enough to exercise
+    /// the single-reader lock without a live socket peer.
+    fn dummy_conn() -> NetConn {
+        let rx = futures_util::stream::pending::<Result<Message, WsError>>();
+        let tx = futures_util::sink::drain::<Message>()
+            .sink_map_err(|never: std::convert::Infallible| -> WsError { match never {} });
+        NetConn {
+            tx: Mutex::new(Box::pin(tx) as BoxedSink),
+            rx: Mutex::new(Box::pin(rx) as BoxedStream),
+            close: Notify::new(),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// Single-reader-per-connection contract (wave 1). `op_net_recv` holds
+    /// `conn.rx` across an unbounded `rx.next()` await, so a second concurrent
+    /// reader would park on the lock forever; instead it must fail fast with the
+    /// documented error. A full two-reader socket exercise needs a live peer and
+    /// two concurrent `!Send` tasks, so we cover the smallest reachable unit: the
+    /// `try_lock` error branch `op_net_recv` returns while the first reader holds
+    /// the guard.
+    #[test]
+    fn second_reader_fails_fast_instead_of_hanging() {
+        let conn = dummy_conn();
+        // First reader owns the rx lock (stands in for one held across `.next()`).
+        let _first = conn
+            .rx
+            .try_lock()
+            .expect("first reader acquires the single-reader lock");
+        // Second reader takes op_net_recv's exact branch: try_lock -> documented error.
+        let err = conn
+            .rx
+            .try_lock()
+            .map(|_guard| ()) // discard the (non-Debug) guard so `expect_err` can format Ok
+            .map_err(|_| JsErrorBox::generic("connection already has an active reader"))
+            .expect_err("second reader must fail while the first holds the lock");
+        assert!(err.to_string().contains("active reader"), "got: {err}");
     }
 }
 

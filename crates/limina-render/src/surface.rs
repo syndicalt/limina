@@ -91,8 +91,16 @@ pub fn op_create_window_context<'s>(
         )
     };
 
-    // SAFETY: the host owns the window for the whole program; the raw handles
-    // stay valid until shutdown, well past any surface use.
+    // SAFETY: `instance_create_surface` requires the raw window/display handles
+    // to stay valid for the entire lifetime of the surface it returns. That holds
+    // here ONLY because the host creates its winit window exactly once at startup
+    // and never recreates, replaces, or drops it before shutdown: the
+    // `WindowTarget` handles are Copy snapshots that are detached from the Window
+    // yet the Window outlives the surface (and the whole program).
+    // INVARIANT — guard for future changes: if the host is ever made to recreate
+    // or resize-by-replace the window at runtime, this surface AND its
+    // `SurfacePresenter` must be torn down and rebuilt from the fresh handles
+    // first; otherwise these detached handles dangle and this call is unsound.
     let surface_id =
         unsafe { instance.instance_create_surface(Some(display_handle), window_handle, None) }
             .map_err(|e| JsErrorBox::generic(format!("create surface: {e}")))?;

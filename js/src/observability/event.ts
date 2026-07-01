@@ -116,10 +116,14 @@ function stableStringify(value: unknown): string {
 }
 
 function canonicalEvent(ev: EngineEvent): string {
+  // NB: `timestamp` is intentionally EXCLUDED so the sha256 integrity chain is
+  // reproducible across runs of the same command stream (wall-clock must not
+  // leak into the hash). The human-readable `timestamp` still rides on the
+  // emitted/exported event object for display; it is just not hashed.
   return stableStringify({
     id: ev.id, type: ev.type, actorId: ev.actorId, threadId: ev.threadId,
     parentEventId: ev.parentEventId, causedBy: ev.causedBy,
-    timestamp: ev.timestamp, payload: ev.payload,
+    payload: ev.payload,
   });
 }
 

@@ -53,6 +53,23 @@ def log(msg: str) -> None:
     print(f"[terrain-worker] {msg}", file=sys.stderr, flush=True)
 
 
+def bounded_int(req: dict, key: str, lo: int, hi: int, default=None) -> int:
+    """Parse req[key] as an int and enforce [lo, hi]. Raises ValueError on a missing
+    required field / non-int / out-of-range value so the /tile handler can return a 4xx
+    instead of letting an unbounded tile/tx/tz drive a huge (tile*tile) allocation -> OOM."""
+    if key not in req:
+        if default is None:
+            raise ValueError(f"missing required field '{key}'")
+        return default
+    try:
+        v = int(req[key])
+    except (TypeError, ValueError):
+        raise ValueError(f"field '{key}' must be an integer (got {req[key]!r})")
+    if v < lo or v > hi:
+        raise ValueError(f"field '{key}' out of range [{lo}, {hi}] (got {v})")
+    return v
+
+
 class TileGenerator:
     """Loads + caches one WorldPipeline per world seed (different seeds = different
     worlds). Mirrors run.py's load path. Each pipeline is ~1.16 GB VRAM at fp16, so a
@@ -158,13 +175,26 @@ def build_app(gen: TileGenerator):
 
     @app.route("/tile", methods=["POST"])
     def tile():
+        # Parse + BOUND the request first: reject junk / out-of-range coords with a 400 (client error)
+        # before they can drive an unbounded (tile*tile) allocation. Bounds are generous but sane.
         try:
             req = request.get_json(force=True, silent=False) or {}
-            seed = int(req["seed"]); tx = int(req["tx"]); tz = int(req["tz"])
-            t = int(req.get("tile", 256))
+            # Seed spans the full u32 domain (limina's canonical seed range; the
+            # recorder stores `seed >>> 0` and shim.py accepts full-range seeds).
+            # Seed is NOT an allocation driver (tile/tx/tz are) — this bound only
+            # rejects non-integers / negatives, not large valid worlds.
+            seed = bounded_int(req, "seed", 0, 2**32 - 1)
+            tx = bounded_int(req, "tx", -1_000_000, 1_000_000)
+            tz = bounded_int(req, "tz", -1_000_000, 1_000_000)
+            t = bounded_int(req, "tile", 1, 2048, default=256)
+            lod = bounded_int(req, "lod", 0, 32, default=0)
+        except Exception as e:  # malformed JSON or out-of-range coord -> client error, keep {error} envelope
+            log(f"ERROR: bad /tile request: {e}")
+            return jsonify({"error": str(e)}), 400
+        try:
             t0 = time.time()
             env = gen.generate(seed, tx, tz, t)
-            env["lod"] = int(req.get("lod", 0))
+            env["lod"] = lod
             log(f"tile (seed={seed} tx={tx} tz={tz}) in {(time.time() - t0) * 1000:.0f} ms")
             return jsonify(env)
         except Exception as e:  # the source surfaces {error} verbatim

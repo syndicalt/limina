@@ -16,11 +16,14 @@
 //                                                       server pushes a snapshot now
 //                                                       + a per-tick delta thereafter
 //   aoi/declare {center:[x,y,z], radius}             -> update the area-of-interest
+//                                                       (pushes a `removed` delta for
+//                                                       entities the new AoI drops)
 //   shutdown {}                                      -> close
 //
 // Server -> Client notifications (no `id`, only to SUBSCRIBED clients):
 //   state/snapshot {tick, entities[]}                -> AoI-filtered join view
-//   state/delta    {tick, causedBy[], changes[]}     -> AoI-filtered changed set
+//   state/delta    {tick, causedBy[], changes[], removed[]} -> AoI-filtered changed
+//                                                       set + ids no longer relevant
 //
 // A client that never subscribes (e.g. a plain MCP tool caller) receives no
 // pushes -- the existing single-client tools/call path is unchanged.
@@ -44,11 +47,15 @@ export interface SnapshotParams {
 
 /** Pushed each tick to a subscriber: only the entities that changed this tick AND
  *  fall inside the client's AoI. `causedBy` lists the server-assigned ids of the
- *  intents applied on this tick (intent -> applied -> synced correlation). */
+ *  intents applied on this tick (intent -> applied -> synced correlation).
+ *  `removed` lists entity ids that left the client's relevant set (world removal, an
+ *  entity moving out of AoI, or the client shrinking/moving its AoI via aoi/declare)
+ *  so the client view converges; absent/[] on old streams. */
 export interface DeltaParams {
   tick: number;
   causedBy: number[];
   changes: EntityState[];
+  removed?: string[];
 }
 
 export const SYNC_METHODS = {
@@ -110,7 +117,7 @@ const entityStateSchema = z.object({
   body: z.tuple([num, num, num, num, num, num, num]).optional(),
 });
 const snapshotParamsSchema = z.object({ tick: z.number(), entities: z.array(entityStateSchema) });
-const deltaParamsSchema = z.object({ tick: z.number(), causedBy: z.array(z.number()), changes: z.array(entityStateSchema) });
+const deltaParamsSchema = z.object({ tick: z.number(), causedBy: z.array(z.number()), changes: z.array(entityStateSchema), removed: z.array(z.string()).optional() });
 
 /** Validate a pushed `state/snapshot` payload; undefined if malformed. */
 export function parseSnapshotParams(value: unknown): SnapshotParams | undefined {

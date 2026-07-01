@@ -280,8 +280,25 @@ let installedRng: SeededRng | undefined;
 /** Install a seeded PRNG AS the global `Math.random`, so ALL randomness in any
  *  skill handler (and any library it calls) becomes deterministic and replayable
  *  from the recorded seed. Returns the generator (also reachable via Math.random).
- *  Replay re-installs the SAME seed before re-applying commands. */
-export function installSeededRandom(seed: number): () => number {
+ *  Replay re-installs the SAME seed before re-applying commands.
+ *
+ *  SINGLE-WORLD-PER-PROCESS INVARIANT: `Math.random` and `installedRng` are a
+ *  MODULE SINGLETON, so exactly ONE seeded world may drive randomness in a process
+ *  at a time. Standing up a second live world in the same process would clobber the
+ *  first world's RNG stream. Re-installing is legitimate ONLY when the previous
+ *  world is being torn down and replaced (e.g. a fresh replay/recovery run): pass
+ *  `force: true` to declare that intent. An UNFORCED re-install (a generator is
+ *  already installed) is a probable multi-world bug and is warned about rather than
+ *  silently clobbering. (A full multi-world refactor -- an RNG owned by the world,
+ *  not the module -- is intentionally out of scope here.) The FIRST install in a
+ *  process is unaffected (identical to before). */
+export function installSeededRandom(seed: number, force = false): () => number {
+  if (installedRng !== undefined && !force && typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. " +
+        "The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery).",
+    );
+  }
   const gen = statefulMulberry32(seed >>> 0);
   installedRng = gen;
   // Math.random is a writable method slot in V8; replace it with the seeded gen.
@@ -297,6 +314,25 @@ export function captureRandomState(): number {
     throw new Error("worldlog: captureRandomState called with no seeded RNG installed");
   }
   return installedRng.getState();
+}
+
+/** The seeded RNG currently installed as `Math.random` (undefined before any
+ *  install). Multi-world callers capture a world's generator after seeding it and
+ *  re-install it on activation (see setInstalledRng) so interleaved worlds each
+ *  advance their OWN RNG stream instead of sharing one global generator. */
+export function getInstalledRng(): SeededRng | undefined {
+  return installedRng;
+}
+
+/** Make `rng` the installed seeded generator AND the global `Math.random`, WITHOUT
+ *  reseeding it (unlike installSeededRandom, which starts a fresh stream). This is
+ *  the per-world activation swap: on entering a world's execution, install that
+ *  world's live generator so its randomness continues where it left off. Single-
+ *  world code never calls this; the module singleton stays as installSeededRandom
+ *  left it, so single-world determinism is unchanged. */
+export function setInstalledRng(rng: SeededRng): void {
+  installedRng = rng;
+  Math.random = rng.next;
 }
 
 /** Install a seeded PRNG resumed at a captured internal state (M2 recovery).
@@ -330,9 +366,12 @@ export interface WorldStateSnapshot {
  *  Position/Rotation/Scale (JS-owned SoA) plus its native Rapier body transform
  *  (read fresh from the native world) when it has a body. Entities are returned
  *  sorted by their stable `ent_` id so two snapshots line up by identity. */
-export function captureWorldState(world: WorldLike): WorldStateSnapshot {
+export function captureWorldState(world: WorldLike, sorted = true): WorldStateSnapshot {
   const scratch = new Float32Array(7);
-  const ids = [...world.entities.ids()].sort();
+  // Determinism/snapshot callers need a stable id order (default). The net server
+  // builds a Map keyed by id and doesn't care about order, so it passes sorted=false
+  // to drop the per-tick O(n log n) sort + sorted-array allocation on the hot path.
+  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities: EntityState[] = [];
   for (const id of ids) {
     const entry = world.entities.resolve(id);

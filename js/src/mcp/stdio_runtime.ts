@@ -11,7 +11,7 @@ import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { Mcp, StdioMcpTransport } from "./mcp.ts";
 
 declare const Deno: { core: { ops: typeof ops & {
-  op_mcp_read_stdin_line(): string;
+  op_mcp_read_stdin_line(): Promise<string>;
   op_mcp_write_stdout_line(line: string): void;
 } } };
 
@@ -30,7 +30,7 @@ const transport = new StdioMcpTransport(
 );
 
 while (true) {
-  const line = Deno.core.ops.op_mcp_read_stdin_line();
+  const line = await Deno.core.ops.op_mcp_read_stdin_line();
   if (line.length === 0) break;
   const trimmed = line.trim();
   if (trimmed.length === 0) continue;

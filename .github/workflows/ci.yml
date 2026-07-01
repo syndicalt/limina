@@ -1,0 +1,69 @@
+# Gate CI — builds the native engine and runs the FULL falsifiable gate suite on every
+# push/PR, so the determinism lint, replay/parity tests, and convergence gates can't
+# silently rot. (deploy.yml only publishes the Astro site; it does not test the engine.)
+#
+# Headless-safe by design: run-gates.sh classifies GPU/window tests ("no WebGPU adapter"
+# / "no WindowTarget") as environmental SKIPs, and the browser/GPU host gates
+# (engine-browser-gate, design-gate, packager, dogfood) self-SKIP via exit-code 2 when
+# chromium/GPU are absent. The determinism lint, the js/test logic+replay sweep, cargo
+# tests, and the display-independent playable smoke are the load-bearing checks here.
+name: CI (gates)
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['site/**', 'docs/**', 'art-direction/**', '**/*.md']
+  pull_request:
+    paths-ignore: ['site/**', 'docs/**', 'art-direction/**', '**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Native build deps: alsa (rodio/cpal), winit (X11 + wayland + xkb), pkg-config/cmake.
+      # v8 is a prebuilt static lib fetched by rusty_v8 — no v8 source build here.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev pkg-config cmake ninja-build \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Install JS deps (rapier-compat wasm, three, zod, bitecs)
+        working-directory: js
+        run: npm ci
+
+      # Build the release binary the gate runner drives (./target/release/limina).
+      - name: Build engine (release)
+        run: cargo build --release --workspace
+
+      # Rust unit + integration tests (ecs/physics/audio/ops/net units; ws + multi-client
+      # integration tests spawn the just-built binary over loopback).
+      - name: Cargo test
+        run: cargo test --workspace --release
+
+      # The aggregate falsifiable gate: determinism lint + js/test replay/logic sweep +
+      # host gates. Exits non-zero on any real (non-environmental) failure.
+      # --headless skips ONLY a named allowlist of GPU/window/chromium checks (announced,
+      # not silent); all logic/replay/determinism gates still run and must pass.
+      - name: Run gate suite
+        run: bash tools/director/run-gates.sh --headless

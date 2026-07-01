@@ -267,8 +267,10 @@ def build_handler(shim: Shim):
                     return self._send(200, env)
                 return self._send(404, {"error": "unknown route " + self.path})
             except Exception as e:  # model-source surfaces {error} verbatim
+                # Per the wire contract (errors -> HTTP 500) so a consumer keying on status doesn't
+                # mistake a failure for success. The {error} body is still returned for the message.
                 log(f"ERROR {self.path}: {e}")
-                return self._send(200, {"error": str(e)})
+                return self._send(500, {"error": str(e)})
 
         # /health is also reachable via GET for curl/readiness probes.
         def do_GET(self):

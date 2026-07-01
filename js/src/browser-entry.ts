@@ -449,9 +449,34 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     worker.postMessage({ type: "init", commands: opts.commands });
   });
   if (ready === null) { worker.terminate(); return null; }
-  // Further per-tick acks are ignored — the render thread reads progress from the
-  // status SAB via Atomics (cross-thread, allocation-free), not the message channel.
-  worker.onmessage = null;
+  // The loop is created far below; the error handler installed here (which can fire
+  // any time after `ready`) tears it down via this forward reference.
+  let liveLoop: AccumulatorLoopHandle | null = null;
+  // A worker throw can arrive DURING startup (the worker self-drives at 60Hz the moment
+  // it posts `ready`, while this thread is still building WebGPU/scene). `aborted` records
+  // that so the startup path below bails instead of overwriting status back to
+  // ready/playing over a dead worker — otherwise an early solver throw looks like a
+  // frozen sim reporting "playing".
+  let aborted = false;
+  const failLive = (message: string): void => {
+    aborted = true;
+    status("error", message);
+    liveLoop?.stop();
+    worker.terminate();
+  };
+  // Per-tick acks are ignored — the render thread reads progress from the status SAB
+  // via Atomics (cross-thread, allocation-free), not the message channel. But a
+  // solver throw inside the worker's step arrives as {type:"error"} on THIS channel;
+  // keep handling messages after `ready` (instead of nulling onmessage) so that throw
+  // is surfaced and the now-broken sim is torn down rather than dying silently.
+  worker.onmessage = (ev: { data: unknown }): void => {
+    const msg = ev.data as { type?: string; phase?: string; message?: string };
+    if (msg.type !== "error") return; // tick acks (and anything else) are ignored
+    failLive(`sim worker ${msg.phase ?? "tick"}: ${msg.message ?? "unknown"}`);
+  };
+  // Reassign onerror too: post-`ready`, a hard worker error must converge on the SAME
+  // teardown as the message-channel path (the handshake handler above only resolved).
+  worker.onerror = (ev: { message?: string }): void => failLive("sim worker error: " + (ev.message ?? "unknown"));
 
   // ── JOIN the worker's SABs (M2 transform bridge + M3 input ring + status). ──
   const joined = new SharedTransformStorage({ buffer: ready.buffer });
@@ -548,6 +573,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const radius = opts.orbit?.radius ?? 16;
   const camHeight = opts.orbit?.height ?? 8;
 
+  // If the worker already threw during the WebGPU/scene build above, bail now instead
+  // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
+  if (aborted) { worker.terminate(); return null; }
+
   status("ready", `${eids.length} entities authored — live sim running`);
 
   // ── The accumulator rAF loop (host.ts). `step` consumes the worker's latest tick
@@ -578,6 +607,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       renderer.render(scene, camera);
     },
   });
+  liveLoop = loop; // let the error handler above stop the loop on a worker throw
 
   return {
     worker,
