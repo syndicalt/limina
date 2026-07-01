@@ -13,11 +13,21 @@
 // strictly additive on top (see the compile plan) and intentionally out of scope here.
 
 import type { GameDesignSpec, Placement } from "./gds.ts";
-import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
+import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
 import { applyAuthorCommand, applyAuthorCommands, type ApplyOptions } from "../kernel/authoring.ts";
 import { translateManipulation } from "../kernel/manipulation.ts";
 import { eulerToQuaternion } from "../kernel/math.ts";
+import { EntityTable, ops, type EngineOps } from "../engine.ts";
+import { createEcsWorld } from "../ecs/world.ts";
+import { createTransformStorage } from "../ecs/facade.ts";
+import { UniformGridSpatialIndex } from "../spatial/index.ts";
+import { LiminaTracer } from "../observability/event.ts";
+import { registerCoreSkills } from "../skills/index.ts";
+import { WorldRecorder } from "../worldlog/recorder.ts";
+import { captureWorldState, type WorldStateSnapshot } from "../worldlog/log.ts";
+import { exportGame, canExport } from "./publish.ts";
+import type { ExportFiles } from "../export/package.ts";
 
 export interface WorldCompileResult {
   /** placement.id -> the live `ent_` id it produced. The mapping capture + undo need. */
@@ -140,4 +150,68 @@ async function applyManipulationLike(
 ): Promise<boolean> {
   const responses = await applyAuthorCommands(registry, world, translateManipulation(m), opts);
   return responses.some((r) => !r.success);
+}
+
+// ── Compile the doc into a portable, runnable EXPORT bundle (the "Compile" verb) ─────────────────
+
+export interface CompileToExportOptions {
+  worldId: string;
+  seed?: number;
+  sessionId?: string;
+  gravity?: number;
+  /** Export creation marker; omit for the recorder's deterministic default. */
+  createdAt?: string;
+  agentId?: string;
+  permissions?: ReadonlySet<string>;
+}
+
+export interface CompiledExport {
+  files: ExportFiles;
+  result: WorldCompileResult;
+  /** State of the compiled world — the reference for a record-vs-replay bit-identity check. */
+  recordedState: WorldStateSnapshot;
+  /** Total recorded commands (world setup + authoring), for a loadExport round-trip assertion. */
+  commandCount: number;
+}
+
+/** Compile a GDS `world` slice into a portable, runnable export bundle. Authors the slice into a
+ *  fresh recorder-backed headless world, then assembles the recorded command stream into the 5-file
+ *  export the browser plays back. The bundle is command-stream replay-complete (all authoring is
+ *  skill-routed), so a fresh engine re-invokes the log to rebuild the world — no keyframes needed.
+ *  Requires `canExport(gds)` (a direct-path game is not replay-complete).
+ *
+ *  Determinism note: when the SAME process will also REPLAY this bundle (a headless gate), warm THREE
+ *  before calling so first-mesh lazy-init doesn't consume the seeded rng on the record pass only; a
+ *  browser caller is already warm. */
+export async function compileWorldToExport(gds: GameDesignSpec, opts: CompileToExportOptions): Promise<CompiledExport> {
+  if (!canExport(gds)) {
+    throw new Error(`compileWorldToExport: GDS '${gds.id}' opted into direct-path — not replay-complete/exportable`);
+  }
+  const session = opts.sessionId ?? `ses_compile_${opts.worldId}`;
+  const registry = new SkillRegistry(new LiminaTracer(session));
+  const core = registerCoreSkills(registry);
+  const recorder = new WorldRecorder(session);
+  recorder.attach(registry);                       // record top-level authoring commands
+  recorder.seed(opts.seed ?? 0);
+  const recOps = recorder.wrapOps(ops);
+  const world = makeHeadlessWorld(recOps);
+  recOps.op_physics_create_world(opts.gravity ?? -9.81); // recorded world setup so replay rebuilds it
+  const result = await authorWorldSlice(registry, world, gds, {
+    sessionId: session, tick: 0, defaultAgentId: opts.agentId ?? "human_editor", defaultPerms: opts.permissions,
+  });
+  const files = exportGame(recorder, { worldId: opts.worldId, createdAt: opts.createdAt, assets: core.assets.bundle() });
+  return { files, result, recordedState: captureWorldState(world), commandCount: recorder.commands.length };
+}
+
+/** A headless authoring world with a stub scene (compile records a command stream + no render;
+ *  the browser re-renders on playback). Mirrors the headless world the export/parity paths build. */
+export function makeHeadlessWorld(worldOps: EngineOps): WorldContext {
+  const ecs = createEcsWorld();
+  const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
+  const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
+  return {
+    ecs, transforms: createTransformStorage(ecs), spatial: new UniformGridSpatialIndex(),
+    entities: new EntityTable(), tags: new Map(), scene: scene as WorldContext["scene"],
+    camera: camera as WorldContext["camera"], ops: worldOps, mode: "headless",
+  };
 }
