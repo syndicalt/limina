@@ -101,6 +101,66 @@ export const DoDAssertionSchema = z.object({
   drives: InputScriptSchema.optional(),
 });
 
+// ── World slice (the spatial layout the World Designer edits) ───────────────────────────────────
+// The design-level `entities`/`content` above say WHAT exists; the world slice says WHERE each
+// instance sits and how it looks. Every placement references a design entity OR a content item by id
+// (referential integrity checked in `validateGDS`). The whole slice is OPTIONAL on the spec so
+// pre-world specs stay valid — the World Designer fills it and Compile assembles it into a runnable
+// world. Kept JSON-Schema-representable (only built-in constraints), like the rest of the structural
+// schema; the xor/reference invariants are semantic checks, not refinements here.
+
+/** A 3-number vector [x, y, z]. Exact length so the emitted JSON Schema stays a clean fixed array. */
+export const Vec3Schema = z.array(z.number()).length(3);
+
+export const TransformSchema = z.object({
+  /** World-space position [x, y, z]. */
+  position: Vec3Schema,
+  /** Euler rotation in RADIANS [x, y, z] (yaw is y). The quaternion is derived at build time; Euler
+   *  keeps the GDS human- and diff-readable. */
+  rotation: Vec3Schema.default([0, 0, 0]),
+  /** Per-axis scale [x, y, z]; [1, 1, 1] is unscaled. */
+  scale: Vec3Schema.default([1, 1, 1]),
+});
+
+/** A per-placement look override applied over the asset's own material (via the `three.setMaterial`
+ *  skill on build). All fields optional — absent means the asset's default. */
+export const MaterialOverrideSchema = z.object({
+  /** Named material id resolved by `three.setMaterial`, or a base-color token. */
+  material: z.string().min(1).optional(),
+  roughness: z.number().min(0).max(1).optional(),
+  metalness: z.number().min(0).max(1).optional(),
+});
+
+/** One placed instance in the world. Instances EXACTLY ONE of a design entity (a game entity like the
+ *  player or an npc) or a content item (set dressing / props) — enforced in `validateGDS`. */
+export const PlacementSchema = z.object({
+  id: z.string().min(1),
+  /** The design entity this instances (`EntitySchema.id`), when it's a game entity. */
+  entity: z.string().min(1).optional(),
+  /** The content/asset this instances (`ContentItemSchema.id`), when it's set dressing. */
+  content: z.string().min(1).optional(),
+  transform: TransformSchema,
+  material: MaterialOverrideSchema.optional(),
+});
+
+/** Terrain generation inputs the World Designer picks; the terrain source builds the ground from these. */
+export const TerrainSliceSchema = z.object({
+  seed: z.number().int().optional(),
+  /** Named biome/region preset the terrain source builds from (e.g. "eastern-watch"). */
+  region: z.string().min(1).optional(),
+});
+
+/** Lighting/mood inputs; a named preset the render baseline installs. */
+export const LightingSliceSchema = z.object({
+  preset: z.string().min(1).optional(),
+});
+
+export const WorldSliceSchema = z.object({
+  terrain: TerrainSliceSchema.optional(),
+  lighting: LightingSliceSchema.optional(),
+  placements: z.array(PlacementSchema).default([]),
+});
+
 // ── The spec ────────────────────────────────────────────────────────────────────────────────────
 export const GameDesignSpecSchema = z.object({
   id: z.string().min(1),
@@ -118,6 +178,9 @@ export const GameDesignSpecSchema = z.object({
   entities: z.array(EntitySchema).min(1),
   mechanics: z.array(MechanicSchema).default([]),
   content: z.array(ContentItemSchema).default([]),
+  /** The spatial layout the World Designer authors: where each entity/content instance sits and how
+   *  it looks. OPTIONAL so pre-world specs stay valid; Compile assembles it into a runnable world. */
+  world: WorldSliceSchema.optional(),
   dod: z.array(DoDAssertionSchema).min(1),
 });
 
@@ -126,6 +189,12 @@ export type ControlScheme = z.infer<typeof ControlSchemeSchema>;
 export type Entity = z.infer<typeof EntitySchema>;
 export type Mechanic = z.infer<typeof MechanicSchema>;
 export type ContentItem = z.infer<typeof ContentItemSchema>;
+export type Transform = z.infer<typeof TransformSchema>;
+export type MaterialOverride = z.infer<typeof MaterialOverrideSchema>;
+export type Placement = z.infer<typeof PlacementSchema>;
+export type TerrainSlice = z.infer<typeof TerrainSliceSchema>;
+export type LightingSlice = z.infer<typeof LightingSliceSchema>;
+export type WorldSlice = z.infer<typeof WorldSliceSchema>;
 export type Assertion = z.infer<typeof AssertionSchema>;
 export type InputScript = z.infer<typeof InputScriptSchema>;
 export type DoDAssertion = z.infer<typeof DoDAssertionSchema>;
@@ -166,6 +235,31 @@ export function validateGDS(input: unknown): GdsValidation {
   for (const e of spec.entities) {
     if (seen.has(e.id)) issues.push({ path: `entities.${e.id}`, message: `duplicate entity id "${e.id}"` });
     seen.add(e.id);
+  }
+
+  // ── World-slice referential integrity (only when the spec carries a world) ──
+  if (spec.world) {
+    const entityIds = new Set(spec.entities.map((e) => e.id));
+    const contentIds = new Set(spec.content.map((c) => c.id));
+    const placementIds = new Set<string>();
+    for (const p of spec.world.placements) {
+      if (placementIds.has(p.id)) {
+        issues.push({ path: `world.placements.${p.id}`, message: `duplicate placement id "${p.id}"` });
+      }
+      placementIds.add(p.id);
+      // A placement instances a game entity OR a content asset — exactly one.
+      const refs = [p.entity, p.content].filter((r) => r !== undefined);
+      if (refs.length !== 1) {
+        issues.push({ path: `world.placements.${p.id}`, message: `placement "${p.id}" must reference exactly one of entity/content (found ${refs.length})` });
+        continue;
+      }
+      if (p.entity !== undefined && !entityIds.has(p.entity)) {
+        issues.push({ path: `world.placements.${p.id}`, message: `placement "${p.id}" references unknown entity "${p.entity}"` });
+      }
+      if (p.content !== undefined && !contentIds.has(p.content)) {
+        issues.push({ path: `world.placements.${p.id}`, message: `placement "${p.id}" references unknown content "${p.content}"` });
+      }
+    }
   }
 
   // Every state-transition DoD MUST carry a runnable drive script (tier-1 automatability).

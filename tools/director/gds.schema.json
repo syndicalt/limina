@@ -197,6 +197,18 @@
               "3d-ai-studio",
               "generate"
             ]
+          },
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "readContract": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -207,6 +219,131 @@
         ],
         "additionalProperties": false
       }
+    },
+    "world": {
+      "type": "object",
+      "properties": {
+        "terrain": {
+          "type": "object",
+          "properties": {
+            "seed": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "region": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "lighting": {
+          "type": "object",
+          "properties": {
+            "preset": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "placements": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "entity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1
+              },
+              "transform": {
+                "type": "object",
+                "properties": {
+                  "position": {
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  },
+                  "rotation": {
+                    "default": [
+                      0,
+                      0,
+                      0
+                    ],
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  },
+                  "scale": {
+                    "default": [
+                      1,
+                      1,
+                      1
+                    ],
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "position",
+                  "rotation",
+                  "scale"
+                ],
+                "additionalProperties": false
+              },
+              "material": {
+                "type": "object",
+                "properties": {
+                  "material": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "roughness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "metalness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "transform"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "placements"
+      ],
+      "additionalProperties": false
     },
     "dod": {
       "minItems": 1,
