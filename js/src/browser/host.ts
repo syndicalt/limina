@@ -134,7 +134,17 @@ export interface AsyncKvStore {
 export class DurableTraceStore implements TraceOps {
   private readonly mem = new Map<string, string>();
   private readonly inflight = new Set<Promise<void>>();
+  private persistFailures = 0;
+  private lastPersistError: unknown = undefined;
   constructor(private readonly kv: AsyncKvStore) {}
+
+  /** Write-behind persistence health (observability). The in-memory mirror is
+   *  always authoritative, so a nonzero `failures` means the durable IndexedDB
+   *  copy has silently fallen behind (durability loss) — surfaced here for
+   *  diagnostics rather than swallowed. `lastError` is the most recent failure. */
+  get persistStatus(): { readonly failures: number; readonly lastError: unknown } {
+    return { failures: this.persistFailures, lastError: this.lastPersistError };
+  }
 
   /** Load prior traces from the backing store into the mirror. */
   async hydrate(): Promise<void> {
@@ -160,8 +170,13 @@ export class DurableTraceStore implements TraceOps {
   }
 
   private persist(name: string, value: string): void {
-    const p = this.kv.put(name, value).catch(() => { /* write-behind: a failed
-      persist must not crash playback; the mirror remains authoritative */ });
+    const p = this.kv.put(name, value).catch((err: unknown) => {
+      // Write-behind: a failed persist must NOT crash playback — the in-memory
+      // mirror stays authoritative. But a silent swallow hides durability loss, so
+      // record the failure (count + last error) for diagnostics via `persistStatus`.
+      this.persistFailures++;
+      this.lastPersistError = err;
+    });
     this.inflight.add(p);
     void p.finally(() => this.inflight.delete(p));
   }

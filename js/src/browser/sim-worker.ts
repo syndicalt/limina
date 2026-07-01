@@ -198,6 +198,7 @@ export class SimWorkerController {
   private readonly sessionId = "ses_sim_worker";
 
   private tickCount = 0;
+  private disposed = false;
   private readonly scratch7 = new Float32Array(7);
   private readonly inFrame: InputFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
   private lastInputFrame: InputFrame | null = null;
@@ -307,6 +308,7 @@ export class SimWorkerController {
    *    5. bump the Atomics tick counter.
    *  Returns the new tick number. */
   tick(): number {
+    if (this.disposed) return this.tickCount; // torn down — never step a released world
     const frame = this.inputRing.readLatest(this.inFrame);
     this.lastInputFrame = frame;
 
@@ -340,6 +342,18 @@ export class SimWorkerController {
     if (this.statusShared) Atomics.store(this.status, TICK_INDEX, this.tickCount);
     else this.status[TICK_INDEX] = this.tickCount;
     return this.tickCount;
+  }
+
+  /** Tear the controller down (shell `stop`): mark it disposed so no later `tick()`
+   *  steps the released world, and drop the retained input frame. Idempotent.
+   *  Releasing the controller reference afterward lets the joined SABs be collected.
+   *  NOTE: the live wasm-Rapier world's solver state lives in wasm linear memory the
+   *  JS GC does not reclaim; freeing it needs a public `dispose()`/`free()` on
+   *  WasmRapierPhysics (not owned here) that `this.physics` would forward to. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.lastInputFrame = null;
   }
 
   /** Copy every live body/entity transform from the physics solver into the
@@ -418,6 +432,26 @@ type ShellMessage = InitMessage | StepMessage | StopMessage;
 export function installSimWorker(scope: WorkerScopeLike): void {
   let controller: SimWorkerController | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
+
+  /** Post a structured error to the main thread so a throw is observable rather
+   *  than a silent unhandledrejection (which would stop stepping unseen). */
+  const postError = (phase: string, err: unknown): void => {
+    const e = err as { message?: unknown; stack?: unknown } | null;
+    scope.postMessage({
+      type: "error",
+      phase,
+      message: typeof e?.message === "string" ? e.message : String(err),
+      stack: typeof e?.stack === "string" ? e.stack : undefined,
+    });
+  };
+
+  /** Fully tear down what `init` brought up: stop the self-drive interval and
+   *  dispose + release the controller (so its joined SABs can be collected). */
+  const teardown = (): void => {
+    if (timer !== undefined) { clearInterval(timer); timer = undefined; }
+    if (controller !== null) { controller.dispose(); controller = null; }
+  };
+
   scope.onmessage = (ev: { data: unknown }): void => {
     const msg = ev.data as ShellMessage;
     void (async (): Promise<void> => {
@@ -430,14 +464,21 @@ export function installSimWorker(scope: WorkerScopeLike): void {
         const hz = msg.hz ?? 60;
         timer = setInterval((): void => {
           if (controller === null) return;
-          scope.postMessage({ type: "tick", tick: controller.tick() });
+          try {
+            scope.postMessage({ type: "tick", tick: controller.tick() });
+          } catch (err) {
+            // A solver throw inside the timer would otherwise silently kill stepping —
+            // stop the now-broken sim and surface it to the main thread.
+            teardown();
+            postError("tick", err);
+          }
         }, 1000 / hz);
       } else if (msg.type === "step") {
         if (controller !== null) scope.postMessage({ type: "tick", tick: controller.tick() });
       } else if (msg.type === "stop") {
-        if (timer !== undefined) clearInterval(timer);
+        teardown();
       }
-    })();
+    })().catch((err) => postError((msg as { type?: string } | null)?.type ?? "message", err));
   };
 }
 

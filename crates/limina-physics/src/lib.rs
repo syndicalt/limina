@@ -742,6 +742,21 @@ pub fn op_physics_raycast(
     }
 }
 
+/// Gravity for the default world installed at extension load, before JS calls
+/// `op_physics_create_world`. Immaterial to behavior: this world holds no bodies,
+/// and `op_physics_create_world`/`op_physics_restore` replace it wholesale.
+const DEFAULT_GRAVITY_Y: f32 = -9.81;
+
+/// Install a default `PhysicsWorld` in `OpState` at extension load so every
+/// physics op finds one even when invoked before `op_physics_create_world`.
+/// deno_core panics on `borrow_mut::<T>()` of an absent type, so without this a
+/// stray physics op would take down the whole engine (audio/sandbox guard the
+/// same hazard with `try_borrow`). Replaced wholesale once JS creates/restores a
+/// world, so live behavior is unchanged and determinism is unaffected.
+fn init_physics_state(state: &mut OpState) {
+    state.put(PhysicsWorld::new(DEFAULT_GRAVITY_Y));
+}
+
 extension!(
     limina_physics,
     ops = [
@@ -767,4 +782,54 @@ extension!(
         op_physics_drain_collisions,
         op_physics_raycast,
     ],
+    state = |state| {
+        init_physics_state(state);
+    },
 );
+
+#[cfg(test)]
+mod tests {
+    use super::{init_physics_state, PhysicsWorld, DEFAULT_GRAVITY_Y};
+    use deno_core::OpState;
+    use rapier3d::prelude::*;
+
+    /// Every physics op begins with `state.borrow_mut::<PhysicsWorld>()`. Because
+    /// the extension installs a default world at load (`init_physics_state`), that
+    /// borrow succeeds — and stepping it — even before `op_physics_create_world`.
+    /// Before the fix the borrow of an absent type panicked the engine.
+    #[test]
+    fn ops_do_not_panic_before_create_world() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        // Mirror `op_physics_step`: borrow the world and step it. Must not panic.
+        state.borrow_mut::<PhysicsWorld>().step();
+        assert!(state.try_borrow::<PhysicsWorld>().is_some());
+    }
+
+    /// create_world -> add_body -> step -> read-transform, exercised through the
+    /// same `OpState` + `PhysicsWorld` internals the ops drive. A dynamic box with
+    /// no support falls under gravity, so its y strictly decreases.
+    #[test]
+    fn create_add_step_read_transform() {
+        let mut state = OpState::new(None);
+        // == op_physics_create_world
+        state.put(PhysicsWorld::new(DEFAULT_GRAVITY_Y));
+
+        let world = state.borrow_mut::<PhysicsWorld>();
+        // == op_physics_add_box at (0, 10, 0), half-extent 0.5.
+        let body = RigidBodyBuilder::dynamic()
+            .translation(Vector::new(0.0, 10.0, 0.0))
+            .build();
+        let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
+        let id = world.insert_body(body, collider);
+
+        for _ in 0..30 {
+            world.step();
+        }
+
+        // == op_physics_body_transform: resolve id -> handle -> translation.
+        let handle = world.handle(id).expect("body id resolves to a handle");
+        let t = world.bodies.get(handle).expect("handle resolves").translation();
+        assert!(t.y < 10.0, "box should fall under gravity (y = {})", t.y);
+    }
+}

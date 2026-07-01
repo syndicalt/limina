@@ -116,7 +116,7 @@ export class Locomotion {
     if (tgt === undefined) return undefined;
     const dx = tgt[0] - Position.x[actor.eid];
     const dz = tgt[2] - Position.z[actor.eid];
-    return Math.hypot(dx, dz);
+    return Math.sqrt(dx * dx + dz * dz); // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
   }
 
   /** The actor's current facing (unit forward on the XZ plane), from its yaw. */
@@ -145,7 +145,7 @@ export class Locomotion {
       const pz = Position.z[actor.eid];
       const dx = tgt[0] - px;
       const dz = tgt[2] - pz;
-      const dist = Math.hypot(dx, dz);
+      const dist = Math.sqrt(dx * dx + dz * dz);
 
       // Face the target even when standing still, so conversation partners turn
       // toward each other on arrival.
@@ -165,7 +165,7 @@ export class Locomotion {
         moving = advance > EPS;
         const ndx = tgt[0] - Position.x[actor.eid];
         const ndz = tgt[2] - Position.z[actor.eid];
-        actor.arrived = Math.hypot(ndx, ndz) <= actor.talkDistance + EPS;
+        actor.arrived = Math.sqrt(ndx * ndx + ndz * ndz) <= actor.talkDistance + EPS;
       }
       actor.humanoid.update(dtMs, moving);
     }

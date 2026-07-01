@@ -280,8 +280,25 @@ let installedRng: SeededRng | undefined;
 /** Install a seeded PRNG AS the global `Math.random`, so ALL randomness in any
  *  skill handler (and any library it calls) becomes deterministic and replayable
  *  from the recorded seed. Returns the generator (also reachable via Math.random).
- *  Replay re-installs the SAME seed before re-applying commands. */
-export function installSeededRandom(seed: number): () => number {
+ *  Replay re-installs the SAME seed before re-applying commands.
+ *
+ *  SINGLE-WORLD-PER-PROCESS INVARIANT: `Math.random` and `installedRng` are a
+ *  MODULE SINGLETON, so exactly ONE seeded world may drive randomness in a process
+ *  at a time. Standing up a second live world in the same process would clobber the
+ *  first world's RNG stream. Re-installing is legitimate ONLY when the previous
+ *  world is being torn down and replaced (e.g. a fresh replay/recovery run): pass
+ *  `force: true` to declare that intent. An UNFORCED re-install (a generator is
+ *  already installed) is a probable multi-world bug and is warned about rather than
+ *  silently clobbering. (A full multi-world refactor -- an RNG owned by the world,
+ *  not the module -- is intentionally out of scope here.) The FIRST install in a
+ *  process is unaffected (identical to before). */
+export function installSeededRandom(seed: number, force = false): () => number {
+  if (installedRng !== undefined && !force && typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. " +
+        "The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery).",
+    );
+  }
   const gen = statefulMulberry32(seed >>> 0);
   installedRng = gen;
   // Math.random is a writable method slot in V8; replace it with the seeded gen.

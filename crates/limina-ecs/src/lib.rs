@@ -20,6 +20,7 @@
 //! independent of the rayon thread count.
 
 use deno_core::{extension, op2};
+use deno_error::JsErrorBox;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -45,10 +46,61 @@ pub fn op_ecs_spatial_query_batch(
     #[buffer] queries: &[f64],
     max_hits: u32,
     #[buffer] out: &mut [u32],
-) {
+) -> Result<(), JsErrorBox> {
+    // Thin op wrapper: the `#[op2]` macro scopes the op type inside a generated
+    // `const fn`, so the pure logic lives in a module-level fn that unit tests can
+    // call directly (no JS runtime needed).
+    spatial_query_batch(
+        px,
+        py,
+        pz,
+        ordered_eids,
+        cell_size,
+        queries,
+        max_hits,
+        out,
+    )
+}
+
+/// Pure implementation of the batched uniform-grid radius query (see the op doc
+/// above). Kept separate from the op so it is directly unit-testable.
+#[allow(clippy::too_many_arguments)]
+fn spatial_query_batch(
+    px: &[f32],
+    py: &[f32],
+    pz: &[f32],
+    ordered_eids: &[u32],
+    cell_size: f64,
+    queries: &[f64],
+    max_hits: u32,
+    out: &mut [u32],
+) -> Result<(), JsErrorBox> {
     let n = ordered_eids.len();
     let max_hits = max_hits as usize;
     let stride = 1 + max_hits;
+
+    // Validate the array-length invariants ONCE, here at the op boundary, before
+    // the sequential build and the parallel query region. A desync between
+    // `ordered_eids` and the Position SoA (a short/stale array handed over from
+    // JS) would otherwise be an out-of-bounds panic mid-frame; instead surface a
+    // clean error to JS. After these checks every `ordered_eids[..]` index into
+    // px/py/pz is in bounds, so the hot loops can index unchecked.
+    if px.len() != py.len() || px.len() != pz.len() {
+        return Err(JsErrorBox::type_error(format!(
+            "spatial_query_batch: position SoA arrays must be equal length (px={}, py={}, pz={})",
+            px.len(),
+            py.len(),
+            pz.len(),
+        )));
+    }
+    let pos_len = px.len();
+    for &eid in ordered_eids {
+        if eid as usize >= pos_len {
+            return Err(JsErrorBox::type_error(format!(
+                "spatial_query_batch: eid {eid} out of bounds for position SoA of length {pos_len}"
+            )));
+        }
+    }
 
     // Record coords (f32 -> f64, matching JS reads) and the dense cell index of
     // each record. `cell_map` densifies the distinct cells actually occupied.
@@ -96,6 +148,15 @@ pub fn op_ecs_spatial_query_batch(
     }
 
     let k = queries.len() / 5;
+    // `out` must hold one `stride`-wide chunk per query; a mis-sized buffer would
+    // otherwise silently truncate (`take(k)`) or write past the end. Check up front.
+    if out.len() < k * stride {
+        return Err(JsErrorBox::type_error(format!(
+            "spatial_query_batch: out buffer too small (need {} u32 for {k} queries, got {})",
+            k * stride,
+            out.len(),
+        )));
+    }
     // One query per output chunk; chunks are disjoint, so parallelism never
     // affects the result (each query is an independent pure function).
     out.par_chunks_mut(stride)
@@ -149,12 +210,16 @@ pub fn op_ecs_spatial_query_batch(
                 hits.push((distance, order, eid));
             }
             // (distance asc, then order asc) == V8 stable sort by distance over an
-            // order-ascending input.
-            hits.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.1.cmp(&b.1))
-            });
+            // order-ascending input. `f64::total_cmp` is a TOTAL order, so this is
+            // well-defined even for pathological non-finite distances: a NaN distance
+            // (e.g. from a NaN coordinate — the `distance > radius` cutoff lets it
+            // through, exactly as the JS oracle's `distance > maxDistance` does) sorts
+            // deterministically AFTER every finite distance, then ties break by
+            // `order` ascending. For finite distances this is bit-identical to the
+            // previous `partial_cmp` ordering; only the ordering of non-finite
+            // distances (where V8's `a.distance - b.distance` comparator is itself
+            // unspecified) is pinned to this documented, thread-count-independent rule.
+            hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
 
             let count = hits.len();
             slot[0] = count as u32;
@@ -163,6 +228,104 @@ pub fn op_ecs_spatial_query_batch(
                 slot[1 + i] = hit.2;
             }
         });
+
+    Ok(())
 }
 
 extension!(limina_ecs, ops = [op_ecs_spatial_query_batch],);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests drive the module-level pure fn directly (the op itself is a thin
+    // wrapper around it; the `#[op2]` op type is not reachable outside its macro).
+    fn run(
+        px: &[f32],
+        py: &[f32],
+        pz: &[f32],
+        ordered_eids: &[u32],
+        cell_size: f64,
+        queries: &[f64],
+        max_hits: u32,
+        out: &mut [u32],
+    ) -> Result<(), JsErrorBox> {
+        spatial_query_batch(
+            px,
+            py,
+            pz,
+            ordered_eids,
+            cell_size,
+            queries,
+            max_hits,
+            out,
+        )
+    }
+
+    #[test]
+    fn oob_or_mismatched_input_errors_without_panicking() {
+        // An eid past the end of the Position SoA must error, not OOB-panic.
+        let px = [0.0f32];
+        let py = [0.0f32];
+        let pz = [0.0f32];
+        let ordered_eids = [0u32, 5u32]; // 5 is out of bounds for len-1 arrays
+        let queries = [0.0f64, 0.0, 0.0, 10.0, -1.0];
+        let mut out = vec![0u32; 1 * (1 + 4)];
+        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+
+        // A short/stale (mismatched-length) SoA must error too.
+        let px = [0.0f32, 1.0];
+        let py = [0.0f32];
+        let pz = [0.0f32, 1.0];
+        let ordered_eids = [0u32];
+        let mut out = vec![0u32; 5];
+        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+
+        // An undersized `out` buffer must error rather than truncate/overrun.
+        let px = [0.0f32];
+        let py = [0.0f32];
+        let pz = [0.0f32];
+        let ordered_eids = [0u32];
+        let mut out = vec![0u32; 3]; // need 1 * (1 + 4) = 5
+        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+    }
+
+    #[test]
+    fn small_query_returns_expected_sorted_neighbors() {
+        // Three entities; only the two within radius 5 of the origin should hit,
+        // ordered by ascending distance (eid 0 at d=0, then eid 1 at d=1).
+        let px = [0.0f32, 1.0, 100.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let queries = [0.0f64, 0.0, 0.0, 5.0, -1.0];
+        let mut out = vec![0u32; 1 * (1 + 4)];
+        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).unwrap();
+        assert_eq!(out[0], 2); // true hit count
+        assert_eq!(&out[1..3], &[0u32, 1u32]); // nearest-first eids
+    }
+
+    #[test]
+    fn nan_coordinate_produces_deterministic_ordering() {
+        // A NaN coordinate yields a NaN distance, which (like the JS oracle) is
+        // NOT excluded by the `distance > radius` cutoff. It must land in a
+        // deterministic, documented position: after every finite distance.
+        let px = [0.0f32, f32::NAN, 1.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let queries = [0.0f64, 0.0, 0.0, 100.0, -1.0];
+
+        let mut out_a = vec![0u32; 1 * (1 + 4)];
+        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out_a).unwrap();
+        // Determinism: an identical call yields an identical result.
+        let mut out_b = vec![0u32; 1 * (1 + 4)];
+        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out_b).unwrap();
+        assert_eq!(out_a, out_b);
+
+        assert_eq!(out_a[0], 3); // all three included (NaN not excluded)
+        // Finite distances first, ascending (eid 0 at d=0, then eid 2 at d=1),
+        // and the NaN-distance eid 1 pinned last.
+        assert_eq!(&out_a[1..4], &[0u32, 2u32, 1u32]);
+    }
+}

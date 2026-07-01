@@ -223,7 +223,7 @@ export async function actionSystem(
   scheduler: AgentScheduler = defaultAgentScheduler,
 ): Promise<void> {
   let globalExecuted = 0;
-  const orderedAgents = agents.all().sort((a, b) => a.id.localeCompare(b.id));
+  const orderedAgents = agents.ordered();
   for (const agent of orderedAgents) {
     while (agent.queue.length > 0 && scheduler.canExecuteAction(agent, tick, globalExecuted, registry.tracer)) {
       const action = agent.queue.shift();

@@ -33,12 +33,74 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+// Deep-clone a skill input for the recorded command (a defensive snapshot, so a
+// later mutation of the caller's object cannot rewrite an already-recorded call).
+//
+// This REPLACES `JSON.parse(JSON.stringify(input))`, which silently CORRUPTS
+// replay determinism: it coerces NaN / +-Infinity to `null`, collapses -0 to 0,
+// and DROPS `undefined`-valued properties. Here numbers are copied by value, so
+// finite floats are byte-identical to before (existing recordings are unchanged)
+// AND non-finite floats / -0 / explicit `undefined` survive exactly. Values that
+// cannot be faithfully recorded/replayed (BigInt, functions, symbols) and circular
+// references THROW a clear error instead of being silently mangled.
+//
+// NOTE: this preserves values in the IN-MEMORY command (the in-process replay
+// path). On-wire (toJsonl) non-finite numbers remain a JSON limitation; finite
+// values -- the only shape validated skill inputs carry -- round-trip unchanged.
+// `undefined`-valued OBJECT KEYS are dropped (as JSON.stringify would), so the
+// in-memory command and its serialized-then-parsed on-disk twin carry the SAME
+// key set -- memory-replay and disk-replay stay byte-consistent.
+function cloneInput(value: unknown, seen: Set<object> = new Set()): unknown {
+  if (value === null) return null;
+  const t = typeof value;
+  if (t === "number" || t === "string" || t === "boolean" || t === "undefined") return value;
+  if (t === "bigint") throw new Error("WorldRecorder: cannot record a BigInt skill input (not replay-serializable)");
+  if (t === "function" || t === "symbol") throw new Error(`WorldRecorder: cannot record a ${t} skill input`);
+  const obj = value as object;
+  if (seen.has(obj)) throw new Error("WorldRecorder: cannot record a circular skill input");
+  seen.add(obj);
+  // Mirror JSON.stringify: a value exposing toJSON() serializes as that result, so
+  // clone the toJSON() output -- otherwise a Date/custom-serializer input would be an
+  // empty object {} in memory yet its toJSON string on disk, diverging the two replay
+  // paths. Cloning the toJSON result keeps the in-memory command and its on-disk twin
+  // identical.
+  const toJSON = (obj as { toJSON?: unknown }).toJSON;
+  if (typeof toJSON === "function") {
+    seen.delete(obj);
+    return cloneInput((toJSON as () => unknown).call(obj), seen);
+  }
+  let out: unknown;
+  if (Array.isArray(obj)) {
+    const arr = new Array<unknown>(obj.length);
+    for (let i = 0; i < obj.length; i++) arr[i] = cloneInput((obj as unknown[])[i], seen);
+    out = arr;
+  } else {
+    const rec: Record<string, unknown> = {};
+    for (const k of Object.keys(obj)) {
+      const cv = cloneInput((obj as Record<string, unknown>)[k], seen);
+      // Drop `undefined`-valued keys so the clone matches JSON's on-disk key set
+      // (JSON.stringify omits them) -- otherwise memory-replay would carry a key
+      // that disk-replay does not, diverging the two replay paths.
+      if (cv !== undefined) rec[k] = cv;
+    }
+    out = rec;
+  }
+  seen.delete(obj);
+  return out;
+}
+
 export class WorldRecorder {
   readonly commands: WorldCommand[] = [];
   /** Current simulation tick; the scenario updates it each loop iteration. */
   tick = 0;
   private seq = 0;
   private depth = 0;
+  /** Set while a TOP-LEVEL invoke chain is in flight (from the invoke that starts
+   *  at depth 0 until it and every concurrent sibling/child has settled). Recording
+   *  is classified by THIS flag -- not the raw depth counter, which fire-and-forget
+   *  sibling invokes inflate -- so exactly one command is recorded per top-level
+   *  chain and never mis-attributed. */
+  private topInFlight = false;
   private maxTick = 0;
   private seeded = false;
 
@@ -89,10 +151,18 @@ export class WorldRecorder {
     const rec = this;
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
-      // Hold a reference to the command we record at depth 0 so the post-invoke
-      // commit-back (below) can pin resolved identity into it.
+      // Classify by the top-level-in-flight flag, NOT the raw depth counter:
+      // fire-and-forget sibling invokes (e.g. character_model's `void invoke("animation.stop"); void invoke("animation.play")`)
+      // are issued back-to-back without awaiting, so the second enters at depth > 0
+      // even though it is not nested inside the first. The flag records exactly the
+      // invoke that OPENS a top-level chain and treats every later entrant while the
+      // chain is live as nested (reproduced by re-invoking the recorded top-level).
+      const topLevel = !rec.topInFlight;
+      // Hold a reference to the command we record for the top-level invoke so the
+      // post-invoke commit-back (below) can pin resolved identity into it.
       let cmd: SkillCommand | undefined;
-      if (rec.depth === 0) {
+      if (topLevel) {
+        rec.topInFlight = true;
         const tick = base.tick;
         if (tick > rec.maxTick) rec.maxTick = tick;
         cmd = {
@@ -100,15 +170,25 @@ export class WorldRecorder {
           seq: rec.seq++,
           tick,
           tool: name,
-          input: input === undefined ? undefined : JSON.parse(JSON.stringify(input)),
+          input: input === undefined ? undefined : cloneInput(input),
           actorId: base.agentId,
           sessionId: base.sessionId,
           perms: [...base.permissions].sort(),
         };
         rec.commands.push(cmd);
       }
-      rec.depth++;
-      // depth must drop whether the invoke resolves or rejects (re-entrancy guard).
+      // Under the single-threaded server loop every top-level invoke is awaited to
+      // completion before the next, so `topInFlight` is false on entry for each and it
+      // is recorded. Any invoke arriving while a chain is live -- a fire-and-forget
+      // nested sibling (character_model's `void invoke(...)` pair) or a re-entrant child
+      // -- is folded into that chain and not separately recorded, reproduced by
+      // re-invoking the recorded top-level. Truly-CONCURRENT top-level invocations do
+      // not occur under this driver and are not detected here: distinguishing them from
+      // legitimate nesting needs async-context tracking (an explicit token / AsyncLocal),
+      // not the depth counter, so callers must not overlap top-level invokes.
+      // depth must drop whether the invoke resolves or rejects (re-entrancy guard);
+      // the flag clears only once the whole chain has drained back to depth 0.
+      ++rec.depth;
       return original(name, input, base)
         .then((res) => {
           // COMMIT-BACK: copy the skill's declared commitFields from its OUTPUT into
@@ -128,7 +208,11 @@ export class WorldRecorder {
           return res;
         })
         .finally(() => {
-          rec.depth--;
+          // Never throw here: a depth mismatch just means a concurrent sibling/child
+          // is still in flight (legitimate for fire-and-forget nested invokes), which
+          // must behave exactly as before. The flag clears only when the last frame of
+          // the chain drains back to depth 0.
+          if (--rec.depth === 0) rec.topInFlight = false;
         });
     };
   }

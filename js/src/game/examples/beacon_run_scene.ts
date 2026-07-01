@@ -36,7 +36,8 @@ export function beaconField(b: BeaconLayoutInput): ContentPlacement[] {
   let _s = 20260630;
   const rnd = (): number => { _s = (_s * 1664525 + 1013904223) >>> 0; return _s / 4294967296; };
   const onPath = (x: number, z: number): boolean => Math.abs(x) < 3 && z < 1.5 && z > -13.5; // the run to the beacon
-  const inBlight = (x: number, z: number): boolean => Math.hypot(x - gx, z - gz) < b.blightRadius + 1.5;
+  // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
+  const inBlight = (x: number, z: number): boolean => Math.sqrt((x - gx) * (x - gx) + (z - gz) * (z - gz)) < b.blightRadius + 1.5;
 
   const out: ContentPlacement[] = [
     // The CAMP (start, west healthy): a campfire + the watcher's barrels.

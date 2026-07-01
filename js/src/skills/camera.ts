@@ -17,6 +17,7 @@ import { z } from "../../build/zod.bundle.mjs";
 import { Position } from "../ecs/world.ts";
 import { ThirdPersonCamera } from "../world/third_person_camera.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import { num } from "./_util.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-supplied extension metadata.");
@@ -189,11 +190,6 @@ function resolveTargetPos(world: WorldContext, id: string): [number, number, num
   const entry = world.entities.resolve(id);
   if (entry === undefined) return undefined;
   return [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]];
-}
-
-/** Read a finite number from agent config, else a default. */
-function num(v: unknown, d: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : d;
 }
 
 // ---- Schemas (closure-free; the SkillDefinitions that use them live in registerCameraSkills) ----

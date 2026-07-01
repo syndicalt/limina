@@ -14,7 +14,7 @@ export function deriveEars(
   camRight: Vec3,
   halfHead: number,
 ): { left: [number, number, number]; right: [number, number, number] } {
-  const len = Math.hypot(camRight[0], camRight[1], camRight[2]) || 1;
+  const len = Math.sqrt(camRight[0] * camRight[0] + camRight[1] * camRight[1] + camRight[2] * camRight[2]) || 1; // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
   const rx = (camRight[0] / len) * halfHead;
   const ry = (camRight[1] / len) * halfHead;
   const rz = (camRight[2] / len) * halfHead;
@@ -26,7 +26,8 @@ export function deriveEars(
 
 /** Distance between two world points. */
 export function distance(a: Vec3, b: Vec3): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 /** Optional max-distance cutoff gain on top of rodio's 1/d²: full `base` until

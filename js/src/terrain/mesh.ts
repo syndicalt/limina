@@ -98,7 +98,7 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
   for (let v = 0; v < vertCount; v++) {
     const o = v * 3;
     const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
-    const len = Math.hypot(nx, ny, nz);
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz); // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not)
     if (len > 0) {
       normals[o] = nx / len;
       normals[o + 1] = ny / len;

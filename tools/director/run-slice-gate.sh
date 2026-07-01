@@ -16,10 +16,37 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # Drain stdin (the upstream codegen output) without failing if it's empty/closed.
 cat >/dev/null 2>&1 || true
 
-# Write the slice's target (game + broken flag) into a trace the sandboxed gate reads (op_read_trace).
+# Per-run nonce: the gate stamps its verdict line with this unpredictable value so a STATICALLY
+# pre-printed sentinel (one baked into game text, which can't know the nonce) is NOT mistaken for the
+# gate's real result. NOTE: the nonce is carried in traces/slice-target, which in-VM game code can
+# also read via op_read_trace (a sandbox-readable op) — so untrusted code CAN learn the nonce and
+# forge a matching line. That path is closed only partially here (see the tail -1 note below); full
+# unforgeability needs a host-only verdict channel not exposed as a general op — tracked as follow-up.
+# Exported for env-capable hosts; also carried in the target trace for the native runtime, which
+# exposes no env API.
+NONCE="$(openssl rand -hex 8 2>/dev/null || echo $RANDOM$RANDOM$$)"
+export SLICE_VERDICT_NONCE="$NONCE"
+
+# Validate the slice game id BEFORE interpolating it into the JSON trace below: reject anything with a
+# character outside [A-Za-z0-9._-] so a crafted value can't inject extra JSON fields. Normalize the
+# broken flag to a strict boolean for the same reason.
+GAME_ID="${SLICE_GAME_ID:-relic-sprint}"
+case "$GAME_ID" in
+  ""|*[!A-Za-z0-9._-]*) echo "run-slice-gate: refusing invalid SLICE_GAME_ID '$GAME_ID'" >&2; exit 1;;
+esac
+case "${SLICE_BROKEN:-false}" in
+  true) BROKEN=true;;
+  *)    BROKEN=false;;
+esac
+
+# Write the slice's target (game + broken flag + nonce) into a trace the sandboxed gate reads (op_read_trace).
 mkdir -p "$ROOT/traces"
-printf '{"gameId":"%s","broken":%s}' "${SLICE_GAME_ID:-relic-sprint}" "${SLICE_BROKEN:-false}" > "$ROOT/traces/slice-target"
+printf '{"gameId":"%s","broken":%s,"nonce":"%s"}' "$GAME_ID" "$BROKEN" "$NONCE" > "$ROOT/traces/slice-target"
 OUT="$(cd "$ROOT" && ./target/release/limina js/scripts/slice-gate.ts 2>/dev/null || true)"
 
-# Extract the single sentinel-wrapped verdict line and strip the sentinel → bare JSON.
-echo "$OUT" | grep -o '__SLICE_VERDICT__.*' | sed 's/__SLICE_VERDICT__//' | head -1
+# Accept ONLY the verdict lines carrying THIS run's nonce, then strip the nonced sentinel → bare JSON.
+# A statically pre-printed sentinel can't match the unpredictable nonce. In-VM code that read the
+# nonce from the target trace COULD emit a matching line, but the gate emits its own verdict LAST, so
+# tail -1 selects the gate's final emit over any earlier forged line. (This is a mitigation, not a
+# guarantee — see the nonce note above for the honest limitation.)
+echo "$OUT" | grep -o "__SLICE_VERDICT__${NONCE}__.*" | sed "s/__SLICE_VERDICT__${NONCE}__//" | tail -1

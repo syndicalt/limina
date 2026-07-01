@@ -62,7 +62,8 @@ export function buildBeaconRunGame(ctx: GameContext, opts: BeaconRunOptions = {}
 
   const onBlight = (): boolean => {
     const p = player.position;
-    return Math.hypot(p[0] - BLIGHT_XZ[0], p[2] - BLIGHT_XZ[1]) <= BLIGHT_RADIUS;
+    const dx = p[0] - BLIGHT_XZ[0], dz = p[2] - BLIGHT_XZ[1];
+    return Math.sqrt(dx * dx + dz * dz) <= BLIGHT_RADIUS; // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
   };
 
   return {
@@ -84,7 +85,8 @@ export function buildBeaconRunGame(ctx: GameContext, opts: BeaconRunOptions = {}
         // Lighting the beacon wins (re-read state in case the lose just fired this step).
         if (gs.getState().state === "running" && !lit) {
           const p = player.position;
-          if (Math.hypot(p[0] - BEACON_XZ[0], p[2] - BEACON_XZ[1]) <= BEACON_RADIUS) {
+          const bdx = p[0] - BEACON_XZ[0], bdz = p[2] - BEACON_XZ[1];
+          if (Math.sqrt(bdx * bdx + bdz * bdz) <= BEACON_RADIUS) {
             lit = true;
             gs.setFlag("beacon-lit", true);
             if (!broken) gs.win(tick); // the transition the broken build omits

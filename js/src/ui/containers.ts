@@ -36,7 +36,7 @@ export function sideToward(toward: Toward): Side {
 function offsetToward(side: Side, toward: Toward): number {
   const horizontalEdge = side === "top" || side === "bottom";
   const perp = horizontalEdge ? toward.x : -toward.y; // texture x right / y down
-  const mag = Math.hypot(toward.x, toward.y) || 1;
+  const mag = Math.sqrt(toward.x * toward.x + toward.y * toward.y) || 1; // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
   const t = 0.5 + 0.4 * (perp / mag);
   return t < 0.08 ? 0.08 : t > 0.92 ? 0.92 : t;
 }

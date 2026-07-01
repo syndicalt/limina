@@ -30,6 +30,7 @@ import {
   type WorldCommand,
   type WorldStateSnapshot,
 } from "./log.ts";
+import { assertReplayable } from "./verify.ts";
 
 export interface ReplayDeps {
   /** Build a fresh, empty world (new bitECS world + entity table + stub or real
@@ -75,7 +76,9 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
 
   for (const cmd of commands) {
     if (cmd.kind === "seed") {
-      installSeededRandom(cmd.seed);
+      // Each replay stands up a FRESH world, so re-seeding the module-singleton RNG
+      // is intentional here -- force=true declares that (see installSeededRandom).
+      installSeededRandom(cmd.seed, true);
       seeds++;
       continue;
     }
@@ -121,7 +124,18 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
   };
 }
 
-/** Replay from a persisted JSONL world log -- the disk-only recovery path. */
+/** Replay from a persisted JSONL world log -- the disk-only recovery path.
+ *
+ *  A persisted log is UNTRUSTED input (it may be truncated, reordered, or corrupted
+ *  on disk), so before replaying we assert it is well-formed: unique + contiguous
+ *  seqs and a well-positioned seed (see assertReplayable), throwing a clear error
+ *  rather than silently reconstructing a wrong world. The guard lives HERE, at the
+ *  persisted-log boundary -- NOT in replayCommands -- so the low-level in-memory
+ *  primitive stays usable for controlled tamper/falsifiability probes (which feed it
+ *  deliberately-perturbed streams and assert DIVERGENCE), and so parseWorldLog stays
+ *  a lenient parser the structural verifier (verifyWorldLog) can report on. */
 export async function replayWorldLog(jsonl: string, deps: ReplayDeps): Promise<ReplayResult> {
-  return replayCommands(parseWorldLog(jsonl).commands, deps);
+  const commands = parseWorldLog(jsonl).commands;
+  assertReplayable(commands);
+  return replayCommands(commands, deps);
 }

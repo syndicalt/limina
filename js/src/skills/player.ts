@@ -29,7 +29,8 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
-import { MAX_ENTITIES, despawnRenderable, spawnRenderable, type Transformable } from "../ecs/world.ts";
+import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { inertTransform } from "./_util.ts";
 import { CharacterController } from "../world/character.ts";
 import type { PhysicsOps } from "../engine.ts";
 
@@ -39,13 +40,6 @@ const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-s
 /** The fixed sim step (seconds) every player.move / player.jump advances. A CONSTANT
  *  (not wall-clock) so a command sequence is deterministic + replay-faithful. */
 const FIXED_DT = 1 / 60;
-
-/** Inert transform binding for the headless character entity (the visible capsule mesh
- *  is mounted by the host/demo render path; the ECS entity exists so the character is a
- *  first-class, snapshot/replay-comparable entity even headless). */
-function inertTransform(): Transformable {
-  return { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
-}
 
 // ---- Input binding system -------------------------------------------------
 

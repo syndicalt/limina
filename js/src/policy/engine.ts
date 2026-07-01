@@ -145,7 +145,7 @@ interface BudgetLedger {
 export class PolicyEngine {
   private readonly profiles = new Map<string, Set<string>>();
   private readonly quotaRules: QuotaSpec[] = [];
-  /** sliding-window hit timestamps, keyed `${cap}::${scope}`. */
+  /** sliding-window hit TICKS (deterministic sim time), keyed `${cap}::${scope}`. */
   private readonly quotaHits = new Map<string, number[]>();
   /** revoked single capabilities, keyed `${sessionId}::${cap}`. */
   private readonly revokedCaps = new Set<string>();
@@ -245,7 +245,7 @@ export class PolicyEngine {
     // 4. quota (peek; commit only if the whole decision allows).
     const quota = this.quotaPeek(ctx);
     if (quota !== undefined && quota.remaining <= 0) {
-      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowMs}ms)`, quota };
+      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowMs} ticks)`, quota };
     }
     // 5. resource budget (peek).
     const ledger = this.budgets.get(ctx.sessionId);
@@ -391,22 +391,24 @@ export class PolicyEngine {
   private quotaPeek(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
-    const used = this.windowHits(match.key, match.spec.windowMs).length;
+    const used = this.windowHits(match.key, match.spec.windowMs, ctx.tick ?? 0).length;
     return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used, remaining: Math.max(0, match.spec.limit - used) };
   }
 
   private quotaCommit(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
-    const hits = this.windowHits(match.key, match.spec.windowMs);
-    hits.push(Date.now());
+    const now = ctx.tick ?? 0;
+    const hits = this.windowHits(match.key, match.spec.windowMs, now);
+    hits.push(now);
     this.quotaHits.set(match.key, hits);
     return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used: hits.length, remaining: Math.max(0, match.spec.limit - hits.length) };
   }
 
-  /** Prune hits older than the window and return the live (in-window) hits. */
-  private windowHits(key: string, windowMs: number): number[] {
-    const cutoff = Date.now() - windowMs;
+  /** Prune hits older than the window (measured in deterministic TICKS) and return
+   *  the live (in-window) hits. `nowTick` is the current simulation tick. */
+  private windowHits(key: string, windowMs: number, nowTick: number): number[] {
+    const cutoff = nowTick - windowMs;
     const hits = (this.quotaHits.get(key) ?? []).filter((t) => t > cutoff);
     this.quotaHits.set(key, hits);
     return hits;

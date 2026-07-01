@@ -356,7 +356,27 @@ export class AuthoritativeServer {
       }
       case SYNC_METHODS.declareAoi: {
         const aoi = parseAoi(params);
+        const prevAoi = conn.aoi;
         conn.aoi = aoi;
+        // A client-driven AoI change (shrink/move) drops entities out of view even
+        // though they never moved. The per-tick delta only derives exits from THIS
+        // tick's `changes` set, so a STATIONARY AoI-exit would linger forever. Push a
+        // `removed` delta now for entities inside the OLD AoI but outside the NEW one,
+        // using the last authoritative capture (`this.prev`) as their positions --
+        // mirroring the snapshot/delta relevance filter so the client view converges.
+        if (conn.subscribed) {
+          const removed: string[] = [];
+          for (const [entId, state] of this.prev) {
+            if (inAoi(prevAoi, state.pos) && !inAoi(aoi, state.pos)) removed.push(entId);
+          }
+          if (removed.length > 0) {
+            await this.sendSafe(conn.connId, JSON.stringify({
+              jsonrpc: "2.0",
+              method: SYNC_METHODS.delta,
+              params: { tick: this.tick, causedBy: [], changes: [], removed },
+            }));
+          }
+        }
         await this.reply(conn.connId, this.success(id, { ok: true }));
         return;
       }
@@ -422,31 +442,59 @@ export class AuthoritativeServer {
     this.recOps.op_physics_step();
     syncAllBodies(this.world);
 
-    // 3. Compute the change-set: entities whose authoritative state differs from
-    //    last tick (O(changed), the shape M5's AoI filter narrows further).
+    // 3. Compute the change-set by diffing this tick's full capture against the
+    //    previous one. NOTE: this is O(world size), not O(changed) -- captureWorldState
+    //    walks every entity each tick and there is no cross-boundary dirty signal to
+    //    narrow it here. TODO(P4.perf): thread an entities-touched-this-tick set out of
+    //    the sim/skill-apply path so the diff scans only mutated entities. The AoI
+    //    filter below still bounds each client's OUTPUT to O(relevant).
+    const prev = this.prev;
     const cur = this.snapshotMap();
     const changes: EntityState[] = [];
     for (const [id, state] of cur) {
-      const before = this.prev.get(id);
+      const before = prev.get(id);
       if (before === undefined || !sameState(before, state)) changes.push(state);
+    }
+    // Entities present last tick but gone now = authoritative removals (despawn).
+    const removedIds: string[] = [];
+    for (const id of prev.keys()) {
+      if (!cur.has(id)) removedIds.push(id);
     }
     this.prev = cur;
 
     if (!this.broadcastEnabled) return;
-    if (changes.length === 0) return;
+    if (changes.length === 0 && removedIds.length === 0) return;
 
-    // 4. Broadcast per subscribed client, filtered by that client's AoI. A
-    //    client only ever sees entities relevant to it -> O(relevant), not O(K).
+    // 4. Broadcast per subscribed client, filtered by that client's AoI. A client
+    //    only ever sees entities relevant to it -> O(relevant), not O(K). Removals
+    //    are per-client: a global despawn OR an entity that moved OUT of this client's
+    //    AoI (was relevant last tick, is not now) both leave the client's view, so
+    //    both are reported as `removed` ids -- without them a client view never
+    //    converges (removed/exited entities would persist forever).
     let broadcast = false;
     for (const conn of this.conns.values()) {
       if (!conn.subscribed) continue;
-      const filtered = changes.filter((e) => inAoi(conn.aoi, e.pos));
-      if (filtered.length === 0) continue;
+      const filtered: EntityState[] = [];
+      const removed: string[] = [];
+      for (const e of changes) {
+        if (inAoi(conn.aoi, e.pos)) {
+          filtered.push(e);
+        } else {
+          // Changed but no longer in AoI: if it was in AoI last tick it EXITED.
+          const before = prev.get(e.id);
+          if (before !== undefined && inAoi(conn.aoi, before.pos)) removed.push(e.id);
+        }
+      }
+      for (const id of removedIds) {
+        const before = prev.get(id);
+        if (before !== undefined && inAoi(conn.aoi, before.pos)) removed.push(id);
+      }
+      if (filtered.length === 0 && removed.length === 0) continue;
       broadcast = true;
       await this.sendSafe(conn.connId, JSON.stringify({
         jsonrpc: "2.0",
         method: SYNC_METHODS.delta,
-        params: { tick: this.tick, causedBy, changes: filtered },
+        params: { tick: this.tick, causedBy, changes: filtered, removed },
       }));
     }
     if (broadcast) this.lastBroadcastTick = this.tick;

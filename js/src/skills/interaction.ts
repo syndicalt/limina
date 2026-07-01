@@ -13,7 +13,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Position, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
-import type { Transformable } from "../ecs/world.ts";
+import { inertTransform } from "./_util.ts";
 import { teardownEntity } from "./entity-teardown.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
@@ -62,13 +62,6 @@ export class InteractionManager {
     def.state.lastInteractTick = tick;
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
-}
-
-/** Inert transform binding for a dropped world item (the render mesh, if any, is
- *  attached by the host's render path; the ECS entity exists headless so the item is
- *  a first-class, snapshot/replay-comparable entity). Mirrors terrain.ts. */
-function inertTransform(): Transformable {
-  return { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
 }
 
 /** Resolve a live entity's world position from the ECS transform SoA. Undefined when

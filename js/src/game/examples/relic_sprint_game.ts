@@ -53,7 +53,8 @@ export function buildRelicSprintGame(ctx: GameContext, opts: RelicSprintOptions 
       ctx.ops.op_physics_step();
       if (!collected) {
         const p = player.position;
-        if (Math.hypot(p[0] - RELIC_XZ[0], p[2] - RELIC_XZ[1]) <= PICKUP_RADIUS) {
+        const dx = p[0] - RELIC_XZ[0], dz = p[2] - RELIC_XZ[1];
+        if (Math.sqrt(dx * dx + dz * dz) <= PICKUP_RADIUS) { // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
           collected = true;
           gamestate.setCounter("relics", 1);
           if (!broken) gamestate.win(tick); // the transition the broken build omits
