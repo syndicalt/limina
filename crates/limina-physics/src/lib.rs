@@ -12,6 +12,7 @@ use deno_error::JsErrorBox;
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::geometry::Array2;
 use rapier3d::prelude::*;
+use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 struct PhysicsWorld {
@@ -747,14 +748,111 @@ pub fn op_physics_raycast(
 /// and `op_physics_create_world`/`op_physics_restore` replace it wholesale.
 const DEFAULT_GRAVITY_Y: f32 = -9.81;
 
+/// Registry of INACTIVE physics worlds. The ACTIVE world lives directly in `OpState`
+/// as `PhysicsWorld`, so every one of the 22 physics ops keeps operating on it
+/// unchanged; activation SWAPS the active world out into this map and the requested
+/// one in (an O(1) move, no world data copied). Single-world use keeps `inactive`
+/// empty and `active_id` 0, so behavior is byte-identical to before — the native
+/// half of the per-world model (mirrors the JS per-world transform store). NOTE: the
+/// active binding is process-global; at most one world is ACTIVE at a time, so a
+/// multi-world caller activates a world before driving it.
+struct PhysicsRegistry {
+    inactive: HashMap<u32, PhysicsWorld>,
+    active_id: u32,
+    next_id: u32,
+}
+
+impl PhysicsRegistry {
+    fn new() -> Self {
+        Self { inactive: HashMap::new(), active_id: 0, next_id: 1 }
+    }
+}
+
+/// Create a new world (not activated) and return its id. Plain helper so the op and
+/// the tests share one implementation.
+fn registry_new_world(state: &mut OpState, gravity_y: f32) -> u32 {
+    let reg = state.borrow_mut::<PhysicsRegistry>();
+    let id = reg.next_id;
+    reg.next_id += 1;
+    reg.inactive.insert(id, PhysicsWorld::new(gravity_y));
+    id
+}
+
+/// Swap world `id` in as the ACTIVE world (the target of every other physics op).
+/// Returns false if `id` is unknown; already-active returns true. The current active
+/// world is moved back into the registry under its id — no state is lost.
+fn registry_activate(state: &mut OpState, id: u32) -> bool {
+    {
+        let reg = state.borrow::<PhysicsRegistry>();
+        if reg.active_id == id {
+            return true;
+        }
+        if !reg.inactive.contains_key(&id) {
+            return false;
+        }
+    }
+    let incoming = match state.borrow_mut::<PhysicsRegistry>().inactive.remove(&id) {
+        Some(world) => world,
+        None => return false,
+    };
+    let outgoing = state.take::<PhysicsWorld>();
+    {
+        let reg = state.borrow_mut::<PhysicsRegistry>();
+        let prev = reg.active_id;
+        reg.inactive.insert(prev, outgoing);
+        reg.active_id = id;
+    }
+    state.put(incoming);
+    true
+}
+
+/// Drop an INACTIVE world (frees its bodies/colliders). Returns false if `id` is the
+/// active world (activate another first) or is unknown.
+fn registry_drop(state: &mut OpState, id: u32) -> bool {
+    let reg = state.borrow_mut::<PhysicsRegistry>();
+    if reg.active_id == id {
+        return false;
+    }
+    reg.inactive.remove(&id).is_some()
+}
+
+/// Create a NEW physics world with gravity `gravity_y` WITHOUT activating it; returns
+/// its id. Pair with `op_physics_activate_world` to drive it. This is what lets more
+/// than one independent physics world exist in a single process.
+#[op2(fast)]
+pub fn op_physics_new_world(state: &mut OpState, gravity_y: f32) -> u32 {
+    registry_new_world(state, gravity_y)
+}
+
+/// Make world `id` the ACTIVE world every other physics op operates on. Returns false
+/// if `id` is unknown (already active returns true).
+#[op2(fast)]
+pub fn op_physics_activate_world(state: &mut OpState, id: u32) -> bool {
+    registry_activate(state, id)
+}
+
+/// The currently active world id (0 is the default world installed at load).
+#[op2(fast)]
+pub fn op_physics_active_world(state: &mut OpState) -> u32 {
+    state.borrow::<PhysicsRegistry>().active_id
+}
+
+/// Drop an inactive world. Returns false if `id` is active or unknown.
+#[op2(fast)]
+pub fn op_physics_drop_world(state: &mut OpState, id: u32) -> bool {
+    registry_drop(state, id)
+}
+
 /// Install a default `PhysicsWorld` in `OpState` at extension load so every
 /// physics op finds one even when invoked before `op_physics_create_world`.
 /// deno_core panics on `borrow_mut::<T>()` of an absent type, so without this a
 /// stray physics op would take down the whole engine (audio/sandbox guard the
 /// same hazard with `try_borrow`). Replaced wholesale once JS creates/restores a
-/// world, so live behavior is unchanged and determinism is unaffected.
+/// world, so live behavior is unchanged and determinism is unaffected. Also installs
+/// the (initially empty) multi-world registry.
 fn init_physics_state(state: &mut OpState) {
     state.put(PhysicsWorld::new(DEFAULT_GRAVITY_Y));
+    state.put(PhysicsRegistry::new());
 }
 
 extension!(
@@ -781,6 +879,10 @@ extension!(
         op_physics_body_transform,
         op_physics_drain_collisions,
         op_physics_raycast,
+        op_physics_new_world,
+        op_physics_activate_world,
+        op_physics_active_world,
+        op_physics_drop_world,
     ],
     state = |state| {
         init_physics_state(state);
@@ -789,9 +891,70 @@ extension!(
 
 #[cfg(test)]
 mod tests {
-    use super::{init_physics_state, PhysicsWorld, DEFAULT_GRAVITY_Y};
+    use super::{
+        init_physics_state, registry_activate, registry_drop, registry_new_world, PhysicsRegistry,
+        PhysicsWorld, DEFAULT_GRAVITY_Y,
+    };
     use deno_core::OpState;
     use rapier3d::prelude::*;
+
+    /// Drop a dynamic unit box from y=10 into the active world and step it `n` times,
+    /// returning the resulting y. Mirrors add_box → step → read on whatever world is
+    /// currently in `OpState`.
+    fn drop_box_steps(state: &mut OpState, n: usize) -> f32 {
+        let world = state.borrow_mut::<PhysicsWorld>();
+        let body = world.bodies.insert(
+            RigidBodyBuilder::dynamic()
+                .translation(Vector::new(0.0, 10.0, 0.0))
+                .build(),
+        );
+        let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
+        world.colliders.insert_with_parent(collider, body, &mut world.bodies);
+        for _ in 0..n {
+            world.step();
+        }
+        world.bodies[body].translation().y
+    }
+
+    /// Two worlds stepped via activation are INDEPENDENT and each is preserved across
+    /// being swapped out and back — the native half of finding #8. Swapping to world 1,
+    /// running it, and swapping back must leave world 0 exactly where it was.
+    #[test]
+    fn worlds_are_independent_across_activation() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        assert_eq!(state.borrow::<PhysicsRegistry>().active_id, 0);
+
+        // World 0: 30 steps of free fall.
+        let y0_after30 = drop_box_steps(&mut state, 30);
+
+        // A second, independent world; activate it and step it 5 times only.
+        let id1 = registry_new_world(&mut state, DEFAULT_GRAVITY_Y);
+        assert!(registry_activate(&mut state, id1));
+        assert_eq!(state.borrow::<PhysicsRegistry>().active_id, id1);
+        let y1_after5 = drop_box_steps(&mut state, 5);
+        assert!(y1_after5 > y0_after30, "world 1 (5 steps) should have fallen less than world 0 (30 steps)");
+
+        // Swap back to world 0: its body must be exactly where 30 steps left it — the
+        // registry preserved it untouched while world 1 ran.
+        assert!(registry_activate(&mut state, 0));
+        let y0_reread = state
+            .borrow::<PhysicsWorld>()
+            .bodies
+            .iter()
+            .next()
+            .expect("world 0 kept its body")
+            .1
+            .translation()
+            .y;
+        assert_eq!(y0_reread, y0_after30, "world 0 changed while world 1 was active — worlds not isolated");
+
+        // Cannot drop the active world; can drop an inactive one.
+        assert!(!registry_drop(&mut state, 0), "must refuse to drop the active world");
+        assert!(registry_activate(&mut state, id1));
+        assert!(registry_drop(&mut state, 0), "world 0 is now inactive and droppable");
+        assert!(!registry_activate(&mut state, 0), "dropped world is gone");
+    }
 
     /// Every physics op begins with `state.borrow_mut::<PhysicsWorld>()`. Because
     /// the extension installs a default world at load (`init_physics_state`), that
