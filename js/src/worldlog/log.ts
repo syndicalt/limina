@@ -366,9 +366,12 @@ export interface WorldStateSnapshot {
  *  Position/Rotation/Scale (JS-owned SoA) plus its native Rapier body transform
  *  (read fresh from the native world) when it has a body. Entities are returned
  *  sorted by their stable `ent_` id so two snapshots line up by identity. */
-export function captureWorldState(world: WorldLike): WorldStateSnapshot {
+export function captureWorldState(world: WorldLike, sorted = true): WorldStateSnapshot {
   const scratch = new Float32Array(7);
-  const ids = [...world.entities.ids()].sort();
+  // Determinism/snapshot callers need a stable id order (default). The net server
+  // builds a Map keyed by id and doesn't care about order, so it passes sorted=false
+  // to drop the per-tick O(n log n) sort + sorted-array allocation on the hot path.
+  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities: EntityState[] = [];
   for (const id of ids) {
     const entry = world.entities.resolve(id);

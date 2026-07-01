@@ -349,6 +349,10 @@ export class AuthoritativeServer {
         const p = asRecord(params);
         conn.aoi = parseAoi(p?.aoi);
         conn.subscribed = true;
+        // Refresh the authoritative baseline: while no client was subscribed the per-tick
+        // capture is skipped, so `this.prev` may be stale. Re-capture now so this client's
+        // first delta (and any declareAoi that reads `this.prev`) diffs against fresh state.
+        this.prev = this.snapshotMap();
         // Push the AoI-filtered join view (reuses the M2 WorldSnapshot capture).
         await this.sendSnapshot(conn);
         await this.reply(conn.connId, this.success(id, { ok: true, tick: this.tick }));
@@ -442,12 +446,19 @@ export class AuthoritativeServer {
     this.recOps.op_physics_step();
     syncAllBodies(this.world);
 
-    // 3. Compute the change-set by diffing this tick's full capture against the
-    //    previous one. NOTE: this is O(world size), not O(changed) -- captureWorldState
-    //    walks every entity each tick and there is no cross-boundary dirty signal to
-    //    narrow it here. TODO(P4.perf): thread an entities-touched-this-tick set out of
-    //    the sim/skill-apply path so the diff scans only mutated entities. The AoI
-    //    filter below still bounds each client's OUTPUT to O(relevant).
+    // 3. Skip the O(world) capture+diff entirely when nothing will consume a delta:
+    //    broadcasting off, or NO client subscribed. `prev` is refreshed on subscribe,
+    //    so a joining client always diffs against a fresh baseline. (Under active
+    //    subscription the diff is still O(world): captureWorldState walks every entity,
+    //    as there is no cross-boundary dirty signal. TODO(P4.perf): thread an
+    //    entities-touched-this-tick set out of the sim/skill-apply path so the diff
+    //    scans only mutated entities. The AoI filter below already bounds each client's
+    //    OUTPUT to O(relevant).)
+    if (!this.broadcastEnabled) return;
+    let anySubscribed = false;
+    for (const c of this.conns.values()) { if (c.subscribed) { anySubscribed = true; break; } }
+    if (!anySubscribed) return;
+
     const prev = this.prev;
     const cur = this.snapshotMap();
     const changes: EntityState[] = [];
@@ -462,7 +473,6 @@ export class AuthoritativeServer {
     }
     this.prev = cur;
 
-    if (!this.broadcastEnabled) return;
     if (changes.length === 0 && removedIds.length === 0) return;
 
     // 4. Broadcast per subscribed client, filtered by that client's AoI. A client
@@ -504,7 +514,8 @@ export class AuthoritativeServer {
 
   private snapshotMap(): Map<string, EntityState> {
     const out = new Map<string, EntityState>();
-    for (const e of captureWorldState(this.world).entities) out.set(e.id, e);
+    // sorted=false: the diff keys by id, so the per-tick id sort is pure waste here.
+    for (const e of captureWorldState(this.world, false).entities) out.set(e.id, e);
     return out;
   }
 
