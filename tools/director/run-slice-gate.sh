@@ -20,8 +20,16 @@ cat >/dev/null 2>&1 || true
 # pre-printed sentinel (one baked into game text, which can't know the nonce) is NOT mistaken for the
 # gate's real result. NOTE: the nonce is carried in traces/slice-target, which in-VM game code can
 # also read via op_read_trace (a sandbox-readable op) — so untrusted code CAN learn the nonce and
-# forge a matching line. That path is closed only partially here (see the tail -1 note below); full
-# unforgeability needs a host-only verdict channel not exposed as a general op — tracked as follow-up.
+# forge a matching line. That path is closed only partially here (see the tail -1 note below).
+#
+# DECISION (resolved-as-designed): full unforgeability is NOT pursued via a transport trick, because
+# the game code and this gate share ONE VM and ONE op surface — any channel the gate can write (stdout,
+# op_write_trace, a host-only op, a hard-exit op), in-VM game code can write too, so no transport is
+# host-only. The real fix is TRUST-DOMAIN SEPARATION: run game.build() without the verdict ops (the
+# engine's QuickJS-isolation model). That is deliberately deferred to WHEN untrusted, agent-generated
+# game code is actually executed through this gate — TODAY the codegen on stdin is discarded (above) and
+# the gate runs a TRUSTED first-party reference game, so nonce + tail-1 is proportionate to the real
+# threat (buggy, not adversarial, codegen). Do not add a transport-layer "fix" — it would be theater.
 # Exported for env-capable hosts; also carried in the target trace for the native runtime, which
 # exposes no env API.
 NONCE="$(openssl rand -hex 8 2>/dev/null || echo $RANDOM$RANDOM$$)"
