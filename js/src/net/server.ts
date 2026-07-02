@@ -33,6 +33,11 @@ import { inAoi, parseAoi, SYNC_METHODS, type AreaOfInterest, type NetOps } from 
 /** op_net_accept returns this when its listener is closed (Rust u32::MAX). */
 export const ACCEPT_CLOSED = 0xffffffff;
 
+/** How many WebSocket handshakes may be in flight at once. Each transport.accept()
+ *  awaits a full per-connection handshake, so this is the number of stalled/half-open
+ *  peers the accept path tolerates before a legitimate new client has to wait. */
+const ACCEPT_CONCURRENCY = 16;
+
 /** The socket primitives the server drives. ws_runtime supplies `accept` over the
  *  host listener; a headless test supplies it over a self-bound listener. */
 export interface NetServerTransport {
@@ -273,19 +278,37 @@ export class AuthoritativeServer {
 
   // ---- accept / per-connection read loops ---------------------------------
 
+  // Run several accepts CONCURRENTLY. transport.accept() performs the per-connection
+  // WebSocket UPGRADE handshake before it resolves, so doing them one-at-a-time means a
+  // single stalled / half-open peer (a browser mid-reconnect, a probe) blocks EVERY
+  // subsequent connection for the whole handshake timeout -- the accept loop wedges and
+  // new clients (a coordinator bridge, the chat channel) can't get in. A pool decouples
+  // them: a stalled handshake only occupies ONE slot; other clients keep connecting.
   private async acceptLoop(): Promise<void> {
-    while (this.running) {
-      let connId: number;
-      try {
-        connId = await this.transport.accept();
-      } catch {
-        break;
+    let inFlight = 0;
+    const pump = (): void => {
+      while (this.running && inFlight < ACCEPT_CONCURRENCY) {
+        inFlight += 1;
+        void this.acceptOne().finally(() => {
+          inFlight -= 1;
+          if (this.running) pump();
+        });
       }
-      if (connId === ACCEPT_CLOSED || !this.running) break;
-      const conn: ClientConn = { connId, subscribed: false, closing: false };
-      this.conns.set(connId, conn);
-      this.bgLoops.push(this.connLoop(conn));
+    };
+    pump();
+  }
+
+  private async acceptOne(): Promise<void> {
+    let connId: number;
+    try {
+      connId = await this.transport.accept();
+    } catch {
+      return; // transport/handshake error on this slot -- the pool replenishes it
     }
+    if (connId === ACCEPT_CLOSED || !this.running) return;
+    const conn: ClientConn = { connId, subscribed: false, closing: false };
+    this.conns.set(connId, conn);
+    this.bgLoops.push(this.connLoop(conn));
   }
 
   private async connLoop(conn: ClientConn): Promise<void> {

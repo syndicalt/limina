@@ -77,6 +77,12 @@ struct ListenerEntry {
     port: u16,
     close: Notify,
     closed: AtomicBool,
+    /// Serializes ONLY the `accept()` syscall across the pool of concurrent accept
+    /// tasks (tokio does not distribute one `TcpListener`'s connections across many
+    /// concurrent `accept()` callers). Each task holds this just long enough to take
+    /// the next TCP connection, then RELEASES it before the WebSocket handshake — so a
+    /// stalled/half-open handshake never blocks the accept of other clients.
+    accept_lock: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -162,6 +168,7 @@ async fn net_listen_impl(state: Rc<RefCell<OpState>>, port: u16) -> Result<u32, 
                 port: resolved,
                 close: Notify::new(),
                 closed: AtomicBool::new(false),
+                accept_lock: Mutex::new(()),
             }),
         );
         id
@@ -260,18 +267,32 @@ async fn net_accept_impl_with_origins(
         if entry.closed.load(Ordering::Acquire) {
             return Ok(ACCEPT_CLOSED);
         }
-        let tcp = tokio::select! {
-            biased;
-            _ = entry.close.notified() => return Ok(ACCEPT_CLOSED),
-            res = entry.listener.accept() => {
-                let (tcp, _peer) = res.map_err(JsErrorBox::from_err)?;
-                tcp
+        // Hold accept_lock ONLY across the accept() syscall (tokio can't fan one
+        // listener's connections out to many concurrent accept() callers). The guard
+        // drops at the end of this block -- BEFORE the handshake -- so the pool's other
+        // tasks handshake in parallel and a single stalled peer can't block new accepts.
+        let tcp = {
+            let _accept_guard = entry.accept_lock.lock().await;
+            // Re-check under the lock: at shutdown `notify_waiters` wakes only the ONE task
+            // parked in the select below; the other pool tasks queued on this lock must see
+            // `closed` as they acquire it, or they would re-park in the select forever and
+            // the accept pool would never drain (a hung process at teardown).
+            if entry.closed.load(Ordering::Acquire) {
+                return Ok(ACCEPT_CLOSED);
+            }
+            tokio::select! {
+                biased;
+                _ = entry.close.notified() => return Ok(ACCEPT_CLOSED),
+                res = entry.listener.accept() => {
+                    let (tcp, _peer) = res.map_err(JsErrorBox::from_err)?;
+                    tcp
+                }
             }
         };
         tcp.set_nodelay(true).ok();
-        // Bound the handshake so a stalled/half-open peer cannot wedge the accept loop
-        // (and thereby starve EVERY subsequent connection, e.g. a coordinator bridge
-        // that connects while a browser is churning reconnects). Drop + keep accepting.
+        // Bound the handshake so a stalled/half-open peer is dropped rather than holding
+        // its pool slot forever; combined with the released accept_lock, other clients
+        // keep connecting throughout.
         match timeout(WS_HANDSHAKE_TIMEOUT, accept_ws_with_origins(tcp, allowed_origins.clone())).await {
             Ok(Ok(ws)) => return Ok(with_net(&state, |net| net.register(ws))),
             Ok(Err(_)) => continue,
@@ -286,7 +307,10 @@ pub fn op_net_close_listener(state: &mut OpState, listener_id: u32) {
     if let Some(net) = state.try_borrow_mut::<NetState>() {
         if let Some(entry) = net.listeners.remove(&listener_id) {
             entry.closed.store(true, Ordering::Release);
-            entry.close.notify_one();
+            // Wake EVERY pending accept, not just one: the server now runs a POOL of
+            // concurrent accepts (each parked in a `select!` on this Notify), and all of
+            // them must observe the close to drain cleanly at shutdown.
+            entry.close.notify_waiters();
         }
     }
 }
