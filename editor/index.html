@@ -47,6 +47,7 @@
       <button data-target="reasoning">Reasoning</button>
       <button data-target="history">History</button>
       <button data-target="approval">Approval</button>
+      <button data-target="chat">Chat</button>
     </nav>
 
     <section class="panel window" id="world" hidden>
@@ -73,6 +74,11 @@
       <div class="panel-head" data-drag><h3>Approval <span id="approval-count" class="count">0</span></h3><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button><button class="win-close" data-close="approval" aria-label="Close">×</button></div>
       <div class="panel-body" id="approval-body"><div class="muted">connect to begin</div></div>
     </section>
+
+    <section class="panel window chat-window" id="chat" hidden>
+      <div class="panel-head" data-drag><h3>Chat</h3><span class="hint">co-author · Cmd/Ctrl+K</span><button class="win-close" data-close="chat" aria-label="Close">×</button></div>
+      <div class="panel-body chat-body" id="chat-body"></div>
+    </section>
   </main>
 
   <footer class="logbar">
@@ -84,5 +90,6 @@
   <script type="module" src="src/take-control.js"></script>
   <script type="module" src="src/app.js"></script>
   <script type="module" src="src/viewport.js"></script>
+  <script type="module" src="src/chat.js"></script>
 </body>
 </html>

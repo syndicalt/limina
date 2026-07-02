@@ -16,6 +16,7 @@ if (menuBtn && menu && stage) {
     inspector: { left: 768, top: 60 },
     history: { left: 16, top: 384 },
     approval: { left: 392, top: 384 },
+    chat: { left: 768, top: 384 },
   };
   const placed = new Set();
   let z = 10;
@@ -39,9 +40,11 @@ if (menuBtn && menu && stage) {
     }
     w.hidden = false;
     w.style.zIndex = String(nextZ());
+    w.dispatchEvent(new CustomEvent("limina:window-open", { bubbles: true, detail: { id } }));
     syncMenu();
   }
   function close(id) { const w = winOf(id); if (w) { w.hidden = true; syncMenu(); } }
+  window.liminaWindows = { open, close, isOpen };
 
   // ☰ opens the menu; a click elsewhere closes it.
   menuBtn.addEventListener("click", (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; });

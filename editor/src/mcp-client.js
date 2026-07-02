@@ -49,6 +49,8 @@ export class McpClient {
     this.entityState = new Map();
     /** @type {undefined | (() => void)} */
     this.onSync = undefined;
+    /** @type {undefined | ((msg:any)=>void)} */
+    this.onChatMessage = undefined;
     /** @type {undefined | ((connected:boolean)=>void)} */
     this.onConnectionChange = undefined;
     this.session = undefined;
@@ -99,6 +101,10 @@ export class McpClient {
         for (const e of entities) this.entityState.set(e.id, e);
         if (this.onSync) this.onSync();
       }
+      return;
+    }
+    if (typeof msg.method === "string" && msg.method.startsWith("chat/")) {
+      if (this.onChatMessage) this.onChatMessage(msg.params);
       return;
     }
     if (typeof msg.id === "number") {
@@ -156,5 +162,10 @@ export class McpClient {
     if (mcp && mcp.success) return mcp.result;
     const err = mcp && mcp.error ? mcp.error : { code: "unknown", message: "tool call failed" };
     throw new McpError(0, err.message, mcp);
+  }
+
+  /** Register a callback for `chat/*` server notifications. */
+  onChat(cb) {
+    this.onChatMessage = cb;
   }
 }
