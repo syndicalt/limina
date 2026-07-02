@@ -90,12 +90,67 @@ echo "== host gates =="
 # performance.now in js/src/skills/*.ts). Pure lexical scan — always runnable, no display needed.
 if node js/scripts/check-determinism.mjs >/dev/null 2>&1; then echo "   check-determinism: PASS"; else echo "   check-determinism: FAIL"; hostfail=1; fi
 
+# Nested-invoke chainId guard: a skill handler that builds a registry invoke base from its
+# ctx.* MUST thread `chainId: ctx.chainId`, or the WorldRecorder double-records the nested
+# call (replay would apply it twice). Pure lexical scan — always runnable, no display needed.
+if node js/scripts/check-nested-invoke.mjs >/dev/null 2>&1; then echo "   check-nested-invoke: PASS"; else echo "   check-nested-invoke: FAIL"; hostfail=1; fi
+
+if npm --prefix js run check:portability --silent >/dev/null 2>&1; then echo "   check-portability: PASS"; else echo "   check-portability: FAIL"; hostfail=1; fi
+if npm --prefix js run check:live --silent >/dev/null 2>&1; then echo "   check-live-composition: PASS"; else echo "   check-live-composition: FAIL"; hostfail=1; fi
+if npm --prefix js run check:coordinator-demo --silent >/dev/null 2>&1; then echo "   check-coordinator-demo: PASS"; else echo "   check-coordinator-demo: FAIL"; hostfail=1; fi
+
 if command -v bun >/dev/null 2>&1; then
   if bun run tools/director/check-gds.ts >/dev/null 2>&1; then echo "   check-gds: PASS"; else echo "   check-gds: FAIL"; hostfail=1; fi
 else echo "   check-gds: SKIP (no bun)"; fi
 
 if node tools/director/engine-browser-gate.mjs >/dev/null 2>&1; then echo "   engine-browser-gate: PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   engine-browser-gate: SKIP (no chromium)"; else echo "   engine-browser-gate: FAIL"; hostfail=1; fi; fi
+
+# Editor gates: the DOM binding is display-independent; live/browser tests run against
+# a real editor host and static editor server. Browser tests self-SKIP with exit 2 when
+# playwright/chromium is unavailable, but the headless history data-path test still runs.
+if node editor/test/history_panel.test.mjs >/dev/null 2>&1; then echo "   editor history panel: PASS"; else echo "   editor history panel: FAIL"; hostfail=1; fi
+if node editor/test/app_event_retention.test.mjs >/dev/null 2>&1; then echo "   editor event retention: PASS"; else echo "   editor event retention: FAIL"; hostfail=1; fi
+if node editor/test/artifacts.test.cjs >/dev/null 2>&1; then echo "   editor artifacts: PASS"; else echo "   editor artifacts: FAIL"; hostfail=1; fi
+editor_host_log="$(mktemp)"
+editor_static_log="$(mktemp)"
+editor_host_pid=""
+editor_static_pid=""
+cleanup_editor_gates() {
+  [ -n "$editor_host_pid" ] && kill "$editor_host_pid" >/dev/null 2>&1 || true
+  [ -n "$editor_static_pid" ] && kill "$editor_static_pid" >/dev/null 2>&1 || true
+  rm -f "$editor_host_log" "$editor_static_log"
+}
+node tools/scaffold/scripts/serve.mjs editor 5173 >"$editor_static_log" 2>&1 &
+editor_static_pid=$!
+"$BIN" editor/server/editor_host.ts >"$editor_host_log" 2>&1 &
+editor_host_pid=$!
+editor_token=""
+for _ in $(seq 1 50); do
+  editor_token="$(sed -n 's/.*Paste token \([0-9a-f][0-9a-f]*\) into.*/\1/p' "$editor_host_log" | tail -n 1)"
+  [ -n "$editor_token" ] && break
+  if ! kill -0 "$editor_host_pid" >/dev/null 2>&1; then break; fi
+  sleep 0.1
+done
+if [ -z "$editor_token" ]; then
+  echo "   editor live/browser gates: FAIL (editor host did not publish an auth token)"
+  hostfail=1
+else
+  if EDITOR_AUTH_TOKEN="$editor_token" node editor/test/history_live.test.mjs >/dev/null 2>&1; then echo "   editor history live: PASS"
+  else rc=$?; if [ $rc -eq 2 ]; then echo "   editor history live: SKIP"; else echo "   editor history live: FAIL"; hostfail=1; fi; fi
+  for et in \
+    editor/test/fidelity_frame.test.cjs \
+    editor/test/viewport_render.test.cjs \
+    editor/test/archetype_render.test.cjs \
+    editor/test/visual_refine.test.cjs \
+    editor/test/history_browser.test.cjs
+  do
+    ename="$(basename "$et" .test.cjs)"
+    if EDITOR_AUTH_TOKEN="$editor_token" node "$et" >/dev/null 2>&1; then echo "   editor $ename: PASS"
+    else rc=$?; if [ $rc -eq 2 ]; then echo "   editor $ename: SKIP"; else echo "   editor $ename: FAIL"; hostfail=1; fi; fi
+  done
+fi
+cleanup_editor_gates
 
 if [ -n "${LLMFF_BIN:-}" ] || command -v llmff >/dev/null 2>&1; then
   if node tools/director/check-slice-builder.mjs >/dev/null 2>&1; then echo "   check-slice-builder: PASS"
@@ -115,6 +170,11 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no ch
 # that RENDERS non-blank in the real engine.
 if node packager/check.mjs >/dev/null 2>&1; then echo "   packager: PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo world)"; else echo "   packager: FAIL"; hostfail=1; fi; fi
+
+# Compile & Run (World Designer): a GDS `world` slice compiles → packages → RENDERS non-blank in the
+# real engine (compileWorldToExport → packRelease → engine-browser-gate).
+if node tools/director/check-compile-run.mjs >/dev/null 2>&1; then echo "   check-compile-run: PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   check-compile-run: SKIP (no chromium)"; else echo "   check-compile-run: FAIL"; hostfail=1; fi; fi
 
 # Playable-build smoke: the pipeline gates the thing you actually PLAY (the native window build loads
 # its full graph + game + shared dressed field), not just the headless sim. Display-independent.

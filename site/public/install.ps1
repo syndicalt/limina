@@ -16,6 +16,7 @@
     .\install.ps1 -Yes       skip the confirm prompt
 
   Env: LIMINA_DIR (clone target, default %USERPROFILE%\.limina)
+       LIMINA_GIT_REF (git commit/tag/branch to install, default pinned release commit)
        LIMINA_HARNESSES (non-interactive selection: all | detected | comma,list)
 #>
 [CmdletBinding()]
@@ -31,6 +32,7 @@ $APPDATA   = $env:APPDATA
 $USER      = $env:USERPROFILE
 $Repo      = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { "" }
 $RepoUrl   = if ($env:LIMINA_REPO_URL) { $env:LIMINA_REPO_URL } else { "https://github.com/syndicalt/limina.git" }
+$GitRef    = if ($env:LIMINA_GIT_REF) { $env:LIMINA_GIT_REF } else { "41e9de4e574932bd11762efb24d25094c866fb1b" }
 $LiminaDir = if ($env:LIMINA_DIR) { $env:LIMINA_DIR } else { Join-Path $USER ".limina" }
 $Bootstrap = $false
 
@@ -39,14 +41,23 @@ if (-not $Repo -or -not (Test-Path (Join-Path $Repo "js\src\mcp\stdio_runtime.ts
   $Bootstrap = $true
   $Repo = $LiminaDir
   if ($DryRun) {
-    Warn "(dry-run) would clone $RepoUrl -> $LiminaDir and build"
+    Warn "(dry-run) would fetch $RepoUrl@$GitRef -> $LiminaDir and build"
   } else {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git is required to bootstrap limina." }
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw "Rust/cargo is required to build limina - see https://rustup.rs" }
     if (Test-Path (Join-Path $Repo "js\src\mcp\stdio_runtime.ts")) {
-      Bold "Updating limina checkout in $Repo"; Push-Location $Repo; git pull --ff-only; Pop-Location
+      Bold "Updating limina checkout in $Repo to $GitRef"
+      Push-Location $Repo
+      git fetch --depth 1 origin $GitRef
+      git checkout --detach FETCH_HEAD
+      Pop-Location
     } else {
-      Bold "Cloning limina into $Repo"; git clone --depth 1 $RepoUrl $Repo
+      Bold "Cloning limina into $Repo at $GitRef"
+      git clone --no-checkout --filter=blob:none $RepoUrl $Repo
+      Push-Location $Repo
+      git fetch --depth 1 origin $GitRef
+      git checkout --detach FETCH_HEAD
+      Pop-Location
     }
   }
 }

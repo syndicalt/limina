@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>asset contact sheet</title>
+<style>html,body{margin:0;background:#5a6b52;overflow:hidden}#c{display:block;width:100vw;height:100vh}</style>
+<script type="importmap">
+{ "imports": { "three": "/js/node_modules/three/build/three.module.js" } }
+</script></head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// Lit contact sheet: load ?assets=a.glb,b.glb,… in a grid with the models' OWN materials + a sky/sun,
+// so the agent can SEE what each fetched asset actually is (quality, not just silhouette). Each model is
+// normalized to unit height and centered in its cell; a label plane sits under it.
+import * as THREE from "three";
+import { GLTFLoader } from "/js/node_modules/three/examples/jsm/loaders/GLTFLoader.js";
+
+const params = new URLSearchParams(location.search);
+const assets = (params.get("assets") || "").split(",").map(s => s.trim()).filter(Boolean);
+const cols = Number(params.get("cols") || Math.ceil(Math.sqrt(assets.length)) || 1);
+const W = Number(params.get("w") || 1400), H = Number(params.get("h") || 1000);
+const cellsN = assets.length, rows = Math.ceil(cellsN / cols);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: true });
+renderer.setSize(W, H, true); renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8ea3b0);
+const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(4, 8, 5); scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbfd4e0, 0x55503a, 1.1));
+
+const CELL = 3;
+function cellPos(i) { const cx = i % cols, cy = Math.floor(i / cols); return [ (cx - (cols - 1) / 2) * CELL, -(cy - (rows - 1) / 2) * CELL ]; }
+
+const loader = new GLTFLoader();
+let done = 0; window.__contactErr = [];
+async function load(asset, i) {
+  const [gx, gz] = cellPos(i);
+  try {
+    const res = await fetch(`/assets/${asset}`); if (!res.ok) throw new Error("HTTP " + res.status);
+    const buf = await res.arrayBuffer();
+    const gltf = await new Promise((ok, no) => loader.parse(buf, "", ok, no));
+    const root = gltf.scene;
+    const box = new THREE.Box3().setFromObject(root); const size = new THREE.Vector3(); box.getSize(size);
+    const s = 2.0 / Math.max(size.x, size.y, size.z, 1e-3); root.scale.setScalar(s);
+    const box2 = new THREE.Box3().setFromObject(root); const c = new THREE.Vector3(); box2.getCenter(c);
+    root.position.set(gx - c.x, -box2.min.y, gz - c.z); // feet on the grid plane
+    scene.add(root);
+  } catch (e) { window.__contactErr.push(`${asset}: ${e.message}`);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.4,0.4,0.4), new THREE.MeshStandardMaterial({color:0xff0000}));
+    m.position.set(gx, 0.2, gz); scene.add(m);
+  } finally { done++; }
+}
+
+// ground grid plane
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(cols*CELL+2, rows*CELL+2), new THREE.MeshStandardMaterial({ color: 0x6f7d63 }));
+ground.rotation.x = -Math.PI/2; ground.position.y = -0.01; scene.add(ground);
+
+await Promise.all(assets.map((a,i) => load(a,i)));
+window.__contactLoaded = assets.length - window.__contactErr.length;
+
+const camera = new THREE.PerspectiveCamera(42, W/H, 0.1, 200);
+const span = Math.max(cols*CELL, rows*CELL);
+camera.position.set(0, span*0.7, span*1.0); camera.lookAt(0, 0.6, 0);
+renderer.render(scene, camera);
+window.__contactDone = true;
+</script>
+</body></html>

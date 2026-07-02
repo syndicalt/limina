@@ -83,10 +83,36 @@ import numpy as np
 # terrain-diffusion-30m: native resolution is 30 m/px at scale 1 (the "30m" in the model
 # name; matches model-source.ts metersPerPx default + worker.py + the S0 spike).
 DEFAULT_NATIVE_M_PER_PX = 30.0
+AUTH_HEADER = "X-Limina-Terrain-Token"
 
 
 def log(msg: str) -> None:
     print(f"[td-shim] {msg}", file=sys.stderr, flush=True)
+
+
+def is_loopback_host(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def bounded_int(req: dict, key: str, lo: int, hi: int, default=None) -> int:
+    if key not in req:
+        if default is None:
+            raise ValueError(f"missing required field '{key}'")
+        return default
+    try:
+        v = int(req[key])
+    except (TypeError, ValueError):
+        raise ValueError(f"field '{key}' must be an integer (got {req[key]!r})")
+    if v < lo or v > hi:
+        raise ValueError(f"field '{key}' out of range [{lo}, {hi}] (got {v})")
+    return v
+
+
+def require_auth_header(headers, auth_token):
+    if auth_token is None:
+        return
+    if headers.get(AUTH_HEADER) != auth_token:
+        raise PermissionError("missing or invalid terrain service token")
 
 
 def tile_to_box(tx: int, tz: int, lod: int, tile: int, base_scale: int, max_scale: int,
@@ -171,7 +197,7 @@ def translate_terrain(
 class Shim:
     def __init__(self, *, target_url, region_seed, base_scale, max_scale,
                  native_m_per_px, elev_min, elev_max, default_tile, timeout,
-                 origin_i=0, origin_j=0):
+                 origin_i=0, origin_j=0, auth_token=None):
         self.target = target_url.rstrip("/")
         self.region_seed = int(region_seed)
         self.base_scale = int(base_scale)
@@ -183,6 +209,7 @@ class Shim:
         self.timeout = float(timeout)
         self.origin_i = int(origin_i)  # world-pixel origin (anchor limina (0,0); land vs ocean)
         self.origin_j = int(origin_j)
+        self.auth_token = auth_token
 
     @property
     def m_per_px(self) -> float:
@@ -221,11 +248,11 @@ class Shim:
         }
 
     def handle_tile(self, req: dict) -> dict:
-        seed = int(req.get("seed", self.region_seed))
-        tx = int(req["tx"])
-        tz = int(req["tz"])
-        lod = int(req.get("lod", 0))
-        tile = int(req.get("tile", self.default_tile))
+        seed = bounded_int(req, "seed", 0, 2**32 - 1, default=self.region_seed)
+        tx = bounded_int(req, "tx", -1_000_000, 1_000_000)
+        tz = bounded_int(req, "tz", -1_000_000, 1_000_000)
+        lod = bounded_int(req, "lod", 0, 32, default=0)
+        tile = bounded_int(req, "tile", 1, 2048, default=self.default_tile)
         # SEED GATE: the model's world is fixed at launch. A mismatched seed is a NO-OP
         # (never forwarded upstream -> never triggers a model rebuild) and is rejected.
         if seed != self.region_seed:
@@ -260,6 +287,7 @@ def build_handler(shim: Shim):
 
         def do_POST(self):
             try:
+                require_auth_header(self.headers, shim.auth_token)
                 if self.path.rstrip("/").endswith("/health"):
                     return self._send(200, shim.handle_health())
                 if self.path.rstrip("/").endswith("/tile"):
@@ -270,13 +298,19 @@ def build_handler(shim: Shim):
                 # Per the wire contract (errors -> HTTP 500) so a consumer keying on status doesn't
                 # mistake a failure for success. The {error} body is still returned for the message.
                 log(f"ERROR {self.path}: {e}")
-                return self._send(500, {"error": str(e)})
+                status = 401 if isinstance(e, PermissionError) else 500
+                return self._send(status, {"error": str(e)})
 
         # /health is also reachable via GET for curl/readiness probes.
         def do_GET(self):
-            if self.path.rstrip("/").endswith("/health"):
-                return self._send(200, shim.handle_health())
-            return self._send(404, {"error": "unknown route " + self.path})
+            try:
+                require_auth_header(self.headers, shim.auth_token)
+                if self.path.rstrip("/").endswith("/health"):
+                    return self._send(200, shim.handle_health())
+                return self._send(404, {"error": "unknown route " + self.path})
+            except Exception as e:
+                status = 401 if isinstance(e, PermissionError) else 500
+                return self._send(status, {"error": str(e)})
 
         def log_message(self, *a):
             pass  # quiet
@@ -304,7 +338,13 @@ def main():
     ap.add_argument("--timeout", type=float, default=120.0, help="upstream request timeout (s)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8917, help="shim listen port (limina default baseUrl)")
+    ap.add_argument("--auth-token", default=os.environ.get("LIMINA_TERRAIN_TOKEN"),
+                    help=f"shared secret required in {AUTH_HEADER}; required when binding outside loopback")
     args = ap.parse_args()
+
+    if not is_loopback_host(args.host) and not args.auth_token:
+        log(f"ERROR: refusing to bind {args.host} without --auth-token or LIMINA_TERRAIN_TOKEN")
+        sys.exit(2)
 
     shim = Shim(
         target_url=args.target_url, region_seed=args.region_seed,
@@ -312,6 +352,7 @@ def main():
         elev_min=args.elev_min, elev_max=args.elev_max,
         default_tile=args.tile, timeout=args.timeout,
         origin_i=args.origin_i, origin_j=args.origin_j,
+        auth_token=args.auth_token,
     )
     srv = ThreadingHTTPServer((args.host, args.port), build_handler(shim))
     log(f"serving limina /tile on http://{args.host}:{args.port}  ->  {shim.target}/terrain")

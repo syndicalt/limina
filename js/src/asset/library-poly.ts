@@ -96,17 +96,16 @@ export const polyFetchTransport: PolyHttpTransport = {
  *  exposes no env API (Deno.env is undefined there — only Deno.core), so this safely returns undefined; a
  *  real author-side bun/Node/Deno host returns the key. Never reads a hardcoded secret. */
 function readEnvKey(name: string): string | undefined {
-  const g = globalThis as {
-    Deno?: { env?: { get(k: string): string | undefined } };
-    process?: { env?: Record<string, string | undefined> };
-  };
+  const g = globalThis as Record<string, unknown>;
   try {
-    const v = g.Deno?.env?.get?.(name);
+    const denoEnv = ((g["Deno"] as { env?: { get?: (k: string) => string | undefined } } | undefined)?.env);
+    const v = denoEnv?.get?.(name);
     if (v) return v;
   } catch {
     // Deno env permission denied — fall through.
   }
-  return g.process?.env?.[name] ?? undefined;
+  const processEnv = ((g["process"] as { env?: Record<string, string | undefined> } | undefined)?.env);
+  return processEnv?.[name] ?? undefined;
 }
 
 // ---- wire shapes (Poly Pizza v1.1 search result) ----------------------------

@@ -46,6 +46,7 @@ import {
 } from "./log.ts";
 import type { ReplayDeps } from "./replay.ts";
 import { LiminaTracer } from "../observability/event.ts";
+import { z } from "../../build/zod.bundle.mjs";
 
 export const SNAPSHOT_VERSION = 2;
 
@@ -145,6 +146,11 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export function base64ToBytes(b64: string): Uint8Array {
+  if (b64.length % 4 !== 0) throw new Error("world snapshot: invalid base64 length");
+  const firstPad = b64.indexOf("=");
+  if (firstPad !== -1 && !/^=+$/.test(b64.slice(firstPad))) {
+    throw new Error("world snapshot: invalid base64 padding");
+  }
   let len = b64.length;
   while (len > 0 && b64[len - 1] === "=") len--;
   const outLen = (len * 3) >> 2;
@@ -153,8 +159,9 @@ export function base64ToBytes(b64: string): Uint8Array {
   let acc = 0;
   let bits = 0;
   for (let i = 0; i < len; i++) {
-    const v = B64_INV[b64.charCodeAt(i)];
-    if (v < 0) throw new Error("world snapshot: invalid base64 character");
+    const code = b64.charCodeAt(i);
+    const v = code < B64_INV.length ? B64_INV[code] : -1;
+    if (v === undefined || v < 0) throw new Error("world snapshot: invalid base64 character");
     acc = (acc << 6) | v;
     bits += 6;
     if (bits >= 8) {
@@ -266,16 +273,67 @@ export function serializeSnapshot(snapshot: WorldSnapshot): string {
   return JSON.stringify(snapshot);
 }
 
+const finite = z.number().refine(Number.isFinite, "expected finite number");
+const int = finite.refine(Number.isInteger, "expected integer");
+const sparseIndexValue = z.union([int, z.null()]);
+const vec3 = z.tuple([finite, finite, finite]);
+const vec4 = z.tuple([finite, finite, finite, finite]);
+const entityIndexSchema = z.object({
+  aliveCount: int,
+  maxId: int,
+  versioning: z.boolean(),
+  versionBits: int,
+  entityMask: int,
+  versionShift: int,
+  versionMask: int,
+  dense: z.array(sparseIndexValue),
+  sparse: z.array(sparseIndexValue),
+});
+const snapshotEntitySchema = z.object({
+  id: z.string(),
+  eid: int,
+  bodyId: int.optional(),
+  generation: int,
+  pos: vec3,
+  rot: vec4,
+  scale: vec3,
+});
+const characterSnapshotSchema = z.object({
+  bodyId: int,
+  vy: finite,
+  grounded: z.boolean(),
+  heading: finite,
+});
+const worldSnapshotSchema = z.object({
+  snapshotVersion: z.literal(SNAPSHOT_VERSION),
+  sessionId: z.string(),
+  tick: int,
+  snapshotSeq: int,
+  rngState: int,
+  entitySeq: int,
+  entityVersion: int,
+  entityIndex: entityIndexSchema,
+  entities: z.array(snapshotEntitySchema),
+  characters: z.array(characterSnapshotSchema).optional().default([]),
+  physics: z.string(),
+});
+
 export function parseSnapshot(json: string): WorldSnapshot {
-  const snap = JSON.parse(json) as WorldSnapshot;
-  if (snap.snapshotVersion !== SNAPSHOT_VERSION) {
-    throw new Error(`world snapshot: version ${snap.snapshotVersion} != ${SNAPSHOT_VERSION}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(`world snapshot: invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!Array.isArray(snap.entities) || typeof snap.physics !== "string" || snap.entityIndex === undefined) {
-    throw new Error("world snapshot: malformed snapshot");
+  const snap = worldSnapshotSchema.safeParse(parsed);
+  if (!snap.success) {
+    const record = typeof parsed === "object" && parsed !== null ? parsed as { snapshotVersion?: unknown } : {};
+    if (record.snapshotVersion !== undefined && record.snapshotVersion !== SNAPSHOT_VERSION) {
+      throw new Error(`world snapshot: version ${record.snapshotVersion} != ${SNAPSHOT_VERSION}`);
+    }
+    throw new Error(`world snapshot: malformed snapshot: ${snap.error.message}`);
   }
-  if (snap.characters === undefined) snap.characters = [];
-  return snap;
+  return snap.data as WorldSnapshot;
 }
 
 // ---- recovery -------------------------------------------------------------
@@ -385,7 +443,7 @@ export async function recoverWorld(
       }
       continue;
     }
-    await registry.invoke(cmd.tool, cmd.input, {
+    const response = await registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
@@ -393,6 +451,11 @@ export async function recoverWorld(
       world,
       causedBy: [],
     });
+    if (!response.success) {
+      const code = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`world recovery: delta command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+    }
     deltaSkillInvokes++;
   }
 

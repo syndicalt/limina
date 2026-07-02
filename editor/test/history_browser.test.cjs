@@ -8,16 +8,17 @@
 // Prereqs: editor host on :8787 and the static server on :5173.
 // Run: node editor/test/history_browser.test.cjs   (exit 0 = pass; exit 2 = no browser/servers → skip)
 
-const fs = require("fs");
-const PWC = fs.readFileSync("/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/ec66f3aa-28e5-4be6-af39-c803b3c96622/scratchpad/pwc_path.txt", "utf8").trim();
-const CHROME = process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
+const { artifactPath } = require("./artifacts.cjs");
+const CHROME = chromeExecutable();
 
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
-  let chromium;
-  try { ({ chromium } = require(PWC)); } catch (e) { console.log("SKIP: playwright-core not loadable (" + e.message + ")"); process.exit(2); }
-  if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium binary not found at " + CHROME); process.exit(2); }
+  const loaded = loadChromium();
+  if (!loaded.chromium) skip(loaded.error);
+  const chromium = loaded.chromium;
+  requireChromeBinary(CHROME);
 
   let browser;
   try {
@@ -39,6 +40,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     if (!/no edits yet|connect to begin/.test(emptyText || "")) fail("History panel did not render its initial state (got: " + emptyText + ")");
 
     // Connect, then drive the co-authoring loop: propose a held edit, then grant it.
+    if (process.env.EDITOR_AUTH_TOKEN) await page.fill("#auth-token", process.env.EDITOR_AUTH_TOKEN);
     await page.click("#connect");
     await page.waitForTimeout(1800);
     await page.click("#propose");
@@ -63,7 +65,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
       return { hasScrub: !!scrub, scrubMax: scrub ? parseInt(scrub.max, 10) : -1, hasBranch: !!branchSel, text: (body.textContent || "").slice(0, 60) };
     });
 
-    const shot = "editor/test/history_browser_render.png";
+    const shot = artifactPath("history_browser_render.png");
     await page.screenshot({ path: shot, fullPage: true });
     await browser.close();
 

@@ -225,6 +225,14 @@ pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) {
         .try_borrow::<InputState>()
         .copied()
         .unwrap_or_default();
-    out[0] = if input.buttons & BUTTON_JUMP != 0 { 1.0 } else { 0.0 };
-    out[1] = if input.buttons & BUTTON_RUN != 0 { 1.0 } else { 0.0 };
+    out[0] = if input.buttons & BUTTON_JUMP != 0 {
+        1.0
+    } else {
+        0.0
+    };
+    out[1] = if input.buttons & BUTTON_RUN != 0 {
+        1.0
+    } else {
+        0.0
+    };
 }

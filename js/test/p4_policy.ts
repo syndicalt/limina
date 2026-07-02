@@ -131,6 +131,41 @@ assert(budgetDeny !== undefined, "the budget denial must be audited with rule bu
 ops.op_log("  (c2) resource budget: 2 calls allowed, the next DENIED (budget.calls) + audited");
 
 // ===========================================================================
+// (c3) SESSION RELEASE: duplicate admits are ref-counted and final release
+//      clears per-session quota/budget/revocation state without freeing early.
+// ===========================================================================
+{
+  const e = new PolicyEngine();
+  const sid = "ses_release";
+  const admitCtx = { boundary: "session" as const, agentId: "agt_release", sessionId: sid, cap: "", profile: "player.limited" };
+  assert(e.admitSession(admitCtx).allow, "first session admit should be allowed");
+  assert(e.admitSession(admitCtx).allow, "second session admit for the same id should be allowed");
+  assert(e.isAdmitted(sid), "session should be admitted after two admits");
+
+  e.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 1, windowMs: 60_000 });
+  e.setBudget(sid, { calls: 1 });
+  e.revoke(sid, "ecs.updateComponent");
+  const cross = (cap: string, requiredPermissions: string[]) =>
+    e.evaluate({ boundary: "registry", agentId: "agt_release", sessionId: sid, cap, profile: "builder.readWrite", permissions: resolveProfile("builder.readWrite"), requiredPermissions, tick: 99 });
+
+  assert(cross("physics.applyImpulse", ["physics.write"]).allow, "first quota/budgeted call should be allowed");
+  const quotaOrBudgetDeny = cross("physics.applyImpulse", ["physics.write"]);
+  assert(!quotaOrBudgetDeny.allow, "session quota/budget should be exhausted before release");
+  assert(!cross("ecs.updateComponent", ["ecs.modify"]).allow, "revoked session cap should be denied before release");
+
+  e.releaseSession(sid);
+  assert(e.isAdmitted(sid), "first release must not free a duplicate-admitted session");
+  assert(!cross("physics.applyImpulse", ["physics.write"]).allow, "partial release must not clear quota/budget state");
+  assert(!cross("ecs.updateComponent", ["ecs.modify"]).allow, "partial release must not clear capability revocation");
+
+  e.releaseSession(sid);
+  assert(!e.isAdmitted(sid), "final release should free the session");
+  assert(cross("physics.applyImpulse", ["physics.write"]).allow, "final release should clear per-session quota/budget counters");
+  assert(cross("ecs.updateComponent", ["ecs.modify"]).allow, "final release should clear per-session capability revocations");
+}
+ops.op_log("  (c3) session release: duplicate admits are ref-counted; final release clears per-session quota/budget/revocation state");
+
+// ===========================================================================
 // (d) BYPASS: the ONLY path to a mutating cap is the policy-checked boundary.
 // ===========================================================================
 const host = new SandboxedSkillHost(registry, tracer, engine);

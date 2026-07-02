@@ -152,11 +152,10 @@ const FAILURE_STATES = new Set(["failed", "error", "errored", "canceled", "cance
  *  the caller raises a clear error only when a key is actually required. */
 function readApiKeyFromEnv(): string | undefined {
   try {
-    const g = globalThis as unknown as {
-      Deno?: { env?: { get?: (k: string) => string | undefined } };
-      process?: { env?: Record<string, string | undefined> };
-    };
-    return g.Deno?.env?.get?.("THREEDAI_API_KEY") ?? g.process?.env?.THREEDAI_API_KEY ?? undefined;
+    const g = globalThis as unknown as Record<string, unknown>;
+    const denoEnv = ((g["Deno"] as { env?: { get?: (k: string) => string | undefined } } | undefined)?.env);
+    const processEnv = ((g["process"] as { env?: Record<string, string | undefined> } | undefined)?.env);
+    return denoEnv?.get?.("THREEDAI_API_KEY") ?? processEnv?.THREEDAI_API_KEY ?? undefined;
   } catch {
     return undefined;
   }

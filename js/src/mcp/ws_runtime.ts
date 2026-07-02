@@ -17,11 +17,15 @@ import type { NetOps } from "../net/protocol.ts";
 
 declare const Deno: { core: { ops: NetOps } };
 const net = Deno.core.ops;
+const hostPort = net.op_net_host_port();
+const tracePrefix = hostPort === 8787 ? "mcp_ws" : `mcp_ws_${hostPort}`;
 
 const server = new AuthoritativeServer(hostTransport(net), {
   sessionId: "mcp_ws",
   seed: 0x10ca1ed,
   tickMs: 8,
+  trace: { name: `${tracePrefix}_trace.jsonl`, maxInMemory: 8192 },
+  worldLog: { name: `${tracePrefix}_worldlog.jsonl`, compactFlushed: true },
 });
 server.start();
 

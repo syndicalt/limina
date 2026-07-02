@@ -51,9 +51,10 @@ const SPAN = ELEV_MAX - ELEV_MIN; // → tile scaleY (9500 m)
 //   ch0 (temp °C) = 12.5, ch2 (precip mm) = 800  → biome = canonical TEMPERATE_FOREST.
 function buildSyntheticEnvelope(req: TileRequest): string {
   const nrows = TILE, ncols = TILE;
+  const hintLift = req.hints?.lift ?? 0;
   const elev = new Int16Array(nrows * ncols);
   for (let r = 0; r < nrows; r++) {
-    for (let c = 0; c < ncols; c++) elev[r * ncols + c] = r * 10 + c;
+    for (let c = 0; c < ncols; c++) elev[r * ncols + c] = r * 10 + c + hintLift;
   }
   const climate = new Float32Array(CHANNELS * nrows * ncols);
   const chValues = [12.5, 4.0, 800.0, 15.0, 1.0]; // temp, tempSeason, precip, precipCV, +1
@@ -94,6 +95,19 @@ function makeSource(transport: TileTransport = mockTransport) {
     elevMinM: ELEV_MIN,
     elevMaxM: ELEV_MAX,
     timeoutMs: 2000,
+  });
+}
+
+function makeBoundedSource(maxCachedTiles: number, transport: TileTransport = mockTransport) {
+  return new ModelTerrainSource({
+    transport,
+    tilePx: TILE,
+    metersPerPx: M_PER_PX,
+    climateChannels: CHANNELS,
+    elevMinM: ELEV_MIN,
+    elevMaxM: ELEV_MAX,
+    timeoutMs: 2000,
+    maxCachedTiles,
   });
 }
 
@@ -174,6 +188,26 @@ assert(src.has(1234, px + 100 * extent, pz, 0) === false, "has() false for ungen
 let threw = false;
 try { src.sampleHeight(1234, px + 100 * extent, pz, 0); } catch { threw = true; }
 assert(threw, "sampleHeight on an ungenerated tile must throw (no silent default)");
+
+// === 5b. cache identity + bounds: hints are load-bearing and hot cache is LRU-bounded ===
+const hintedSrc = makeSource();
+const baseTile = await hintedSrc.generateTile({ seed: 77, tx: 0, tz: 0, lod: 0 });
+const liftedTile = await hintedSrc.generateTile({ seed: 77, tx: 0, tz: 0, lod: 0, hints: { lift: 20 } });
+assert(baseTile !== liftedTile, "same coordinate with different hints must not alias to one cached tile");
+const originX = baseTile.origin[0] - baseTile.scale[0] / 2;
+const originZ = baseTile.origin[2] - baseTile.scale[2] / 2;
+const baseY = hintedSrc.sampleHeight(77, originX, originZ, 0);
+const liftedY = hintedSrc.sampleHeight(77, originX, originZ, 0, { lift: 20 });
+assert(Math.abs(baseY - 0) < 0.05, `base hinted sampleHeight = ${baseY}, expected ~0`);
+assert(Math.abs(liftedY - 20) < 0.05, `lifted hinted sampleHeight = ${liftedY}, expected ~20`);
+
+const boundedSrc = makeBoundedSource(2);
+await boundedSrc.generateTile({ seed: 88, tx: 0, tz: 0, lod: 0 });
+await boundedSrc.generateTile({ seed: 88, tx: 1, tz: 0, lod: 0 });
+await boundedSrc.generateTile({ seed: 88, tx: 2, tz: 0, lod: 0 });
+assert(boundedSrc.cachedTileCount === 2, `bounded model cache should hold 2 tiles, got ${boundedSrc.cachedTileCount}`);
+assert(!boundedSrc.has(88, 0, 0, 0), "oldest model tile should be evicted from hot cache");
+assert(boundedSrc.has(88, 2 * extent, 0, 0), "newest model tile should remain in hot cache");
 
 // === 6. lifecycle: timeout + worker error ===
 // timeout: a transport that never resolves must reject within timeoutMs.

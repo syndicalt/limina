@@ -104,6 +104,6 @@ This is what makes density possible. The Phase 3 capstone runs **200 agents + 25
 | typical profile | `builder.readWrite` | `player.limited` / `social.actor` |
 | driven by | external agent's own loop | engine DecisionSystem |
 | decision trigger | the builder sends `callTool` | due by `decisionIntervalTicks` |
-| transport | stdio / WebSocket MCP | in-process `callToolInternal` |
+| transport | stdio / WebSocket MCP | in-process `callTool(req, session)` |
 
 Both flow through the same skill registry, the same permission model, and the same trace. The difference is only *who drives the loop* — the safety and observability are identical, by design.

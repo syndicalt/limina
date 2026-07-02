@@ -28,7 +28,11 @@ export class DurableWorldLog {
   private flushed = 0;
   private opened = false;
 
-  constructor(readonly recorder: WorldRecorder, readonly name: string) {}
+  constructor(
+    readonly recorder: WorldRecorder,
+    readonly name: string,
+    private readonly opts: { compactFlushed?: boolean } = {},
+  ) {}
 
   /** Truncate/create the on-disk segment. Call once before streaming. */
   open(): void {
@@ -41,13 +45,20 @@ export class DurableWorldLog {
    *  fsync'd append. Returns how many commands were flushed this call. */
   flush(): number {
     if (!this.opened) throw new Error("DurableWorldLog: open() before flush()");
-    const cmds = this.recorder.commands;
-    if (cmds.length <= this.flushed) return 0;
+    const limit = this.recorder.flushableCount();
+    if (limit <= this.flushed) return 0;
     let chunk = "";
-    for (let i = this.flushed; i < cmds.length; i++) chunk += JSON.stringify(cmds[i]) + "\n";
+    for (let i = this.flushed; i < limit; i++) {
+      const cmd = this.recorder.commandAt(i);
+      if (cmd === undefined) {
+        throw new Error(`DurableWorldLog: command ${i} was compacted before it was flushed`);
+      }
+      chunk += JSON.stringify(cmd) + "\n";
+    }
     ops.op_append_trace(this.name, chunk);
-    const n = cmds.length - this.flushed;
-    this.flushed = cmds.length;
+    const n = limit - this.flushed;
+    this.flushed = limit;
+    if (this.opts.compactFlushed === true) this.recorder.compactFinalizedPrefix(this.flushed);
     return n;
   }
 
@@ -55,13 +66,16 @@ export class DurableWorldLog {
    *  a complete, replayable world log. */
   close(): { name: string; commands: number; segments: number } {
     const tail = this.flush();
+    if (this.recorder.flushableCount() !== this.recorder.commandCount) {
+      throw new Error("DurableWorldLog: cannot close while recorder commands are still pending");
+    }
     ops.op_append_trace(this.name, JSON.stringify(this.recorder.meta()) + "\n");
-    return { name: this.name, commands: this.recorder.commands.length, segments: tail };
+    return { name: this.name, commands: this.recorder.commandCount, segments: tail };
   }
 
   /** Commands recorded but not yet flushed to disk. */
   get pending(): number {
-    return this.recorder.commands.length - this.flushed;
+    return this.recorder.commandCount - this.flushed;
   }
 
   /** Commands already persisted to disk. */

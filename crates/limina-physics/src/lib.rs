@@ -15,6 +15,8 @@ use rapier3d::prelude::*;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+const MAX_HEIGHTFIELD_SAMPLES: usize = 1_048_576;
+
 struct PhysicsWorld {
     gravity: Vector,
     integration_parameters: IntegrationParameters,
@@ -31,6 +33,9 @@ struct PhysicsWorld {
     collision_recv: Receiver<CollisionEvent>,
     /// `bodyId` -> handle; `None` is a tombstone for a removed body (ids never shift).
     handles: Vec<Option<RigidBodyHandle>>,
+    /// Rapier handle -> stable `bodyId`, maintained alongside `handles` so collision
+    /// and raycast hot paths do not scan every tombstoned slot.
+    body_ids_by_handle: HashMap<RigidBodyHandle, u32>,
 }
 
 /// Narrow-phase contact geometry for a `Started` event, resolved against the real
@@ -60,6 +65,7 @@ impl PhysicsWorld {
             collision_send,
             collision_recv,
             handles: Vec::new(),
+            body_ids_by_handle: HashMap::new(),
         }
     }
 
@@ -92,14 +98,12 @@ impl PhysicsWorld {
             .insert_with_parent(collider, handle, &mut self.bodies);
         let id = self.handles.len() as u32;
         self.handles.push(Some(handle));
+        self.body_ids_by_handle.insert(handle, id);
         id
     }
 
     fn body_id_for_handle(&self, handle: RigidBodyHandle) -> Option<u32> {
-        self.handles
-            .iter()
-            .position(|slot| *slot == Some(handle))
-            .map(|id| id as u32)
+        self.body_ids_by_handle.get(&handle).copied()
     }
 
     fn body_id_for_collider(&self, handle: ColliderHandle) -> Option<u32> {
@@ -152,6 +156,57 @@ impl PhysicsWorld {
             normal: None,
         })
     }
+
+    fn remove_body(&mut self, id: u32) {
+        if let Some(handle) = self.handle(id) {
+            self.bodies.remove(
+                handle,
+                &mut self.islands,
+                &mut self.colliders,
+                &mut self.impulse_joints,
+                &mut self.multibody_joints,
+                true,
+            );
+            self.handles[id as usize] = None;
+            self.body_ids_by_handle.remove(&handle);
+        }
+    }
+
+    fn from_snapshot(snapshot: PhysicsSnapshot) -> Self {
+        let (collision_send, collision_recv) = channel();
+        let mut world = Self {
+            gravity: Vector::new(
+                snapshot.gravity[0],
+                snapshot.gravity[1],
+                snapshot.gravity[2],
+            ),
+            integration_parameters: snapshot.integration_parameters,
+            pipeline: PhysicsPipeline::new(),
+            islands: snapshot.islands,
+            broad_phase: snapshot.broad_phase,
+            narrow_phase: snapshot.narrow_phase,
+            bodies: snapshot.bodies,
+            colliders: snapshot.colliders,
+            impulse_joints: snapshot.impulse_joints,
+            multibody_joints: snapshot.multibody_joints,
+            ccd_solver: CCDSolver::new(),
+            collision_send,
+            collision_recv,
+            handles: snapshot.handles,
+            body_ids_by_handle: HashMap::new(),
+        };
+        world.rebuild_body_id_index();
+        world
+    }
+
+    fn rebuild_body_id_index(&mut self) {
+        self.body_ids_by_handle.clear();
+        for (id, handle) in self.handles.iter().enumerate() {
+            if let Some(handle) = handle {
+                self.body_ids_by_handle.insert(*handle, id as u32);
+            }
+        }
+    }
 }
 
 fn material(builder: ColliderBuilder, friction: f32, restitution: f32) -> ColliderBuilder {
@@ -159,6 +214,81 @@ fn material(builder: ColliderBuilder, friction: f32, restitution: f32) -> Collid
         .friction(friction)
         .restitution(restitution)
         .active_events(ActiveEvents::COLLISION_EVENTS)
+}
+
+fn validate_finite(label: &str, values: &[f32]) -> Result<(), JsErrorBox> {
+    if values.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(JsErrorBox::generic(format!(
+            "{label} values must be finite"
+        )))
+    }
+}
+
+fn validate_positive(label: &str, values: &[f32]) -> Result<(), JsErrorBox> {
+    validate_finite(label, values)?;
+    if values.iter().all(|v| *v > 0.0) {
+        Ok(())
+    } else {
+        Err(JsErrorBox::generic(format!(
+            "{label} values must be positive"
+        )))
+    }
+}
+
+fn validate_material(friction: f32, restitution: f32) -> Result<(), JsErrorBox> {
+    validate_finite("physics material", &[friction, restitution])?;
+    if friction < 0.0 || restitution < 0.0 {
+        return Err(JsErrorBox::generic(
+            "physics material friction/restitution must be non-negative",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_heightfield(
+    origin: [f32; 3],
+    nrows: u32,
+    ncols: u32,
+    scale: [f32; 3],
+    heights: &[f32],
+) -> Result<(usize, usize), JsErrorBox> {
+    if !origin.iter().all(|v| v.is_finite()) {
+        return Err(JsErrorBox::generic(
+            "heightfield origin values must be finite",
+        ));
+    }
+    if !scale.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return Err(JsErrorBox::generic(
+            "heightfield scale values must be finite and positive",
+        ));
+    }
+    if nrows < 2 || ncols < 2 {
+        return Err(JsErrorBox::generic(
+            "heightfield dimensions must be at least 2x2",
+        ));
+    }
+    let nr = nrows as usize;
+    let nc = ncols as usize;
+    let expected = nr
+        .checked_mul(nc)
+        .ok_or_else(|| JsErrorBox::generic("heightfield dimensions overflow"))?;
+    if expected > MAX_HEIGHTFIELD_SAMPLES {
+        return Err(JsErrorBox::generic(format!(
+            "heightfield sample count {expected} exceeds cap {MAX_HEIGHTFIELD_SAMPLES}"
+        )));
+    }
+    if heights.len() != expected {
+        return Err(JsErrorBox::generic(format!(
+            "heightfield heights length {} does not match nrows*ncols {expected}",
+            heights.len()
+        )));
+    }
+    if heights.iter().any(|h| !h.is_finite()) {
+        return Err(JsErrorBox::generic("heightfield heights must be finite"));
+    }
+    Ok((nr, nc))
 }
 
 /// Serializable, replay-complete capture of the dynamics state. Bundles every
@@ -185,23 +315,35 @@ struct PhysicsSnapshot {
 
 /// (Re)create the physics world with the given gravity (replaces any existing).
 #[op2(fast)]
-pub fn op_physics_create_world(state: &mut OpState, gravity_y: f32) {
+pub fn op_physics_create_world(state: &mut OpState, gravity_y: f32) -> Result<(), JsErrorBox> {
+    validate_finite("physics gravity", &[gravity_y])?;
     state.put(PhysicsWorld::new(gravity_y));
+    Ok(())
 }
 
 /// Add a large static ground whose top surface sits at `y`.
 #[op2(fast)]
-pub fn op_physics_add_ground(state: &mut OpState, y: f32) {
+pub fn op_physics_add_ground(state: &mut OpState, y: f32) -> Result<(), JsErrorBox> {
+    validate_finite("ground position", &[y])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let collider = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
         .translation(Vector::new(0.0, y - 0.5, 0.0))
         .build();
     world.colliders.insert(collider);
+    Ok(())
 }
 
 /// Add a dynamic cube of the given half-extent at (x, y, z). Returns its id.
 #[op2(fast)]
-pub fn op_physics_add_box(state: &mut OpState, x: f32, y: f32, z: f32, half: f32) -> u32 {
+pub fn op_physics_add_box(
+    state: &mut OpState,
+    x: f32,
+    y: f32,
+    z: f32,
+    half: f32,
+) -> Result<u32, JsErrorBox> {
+    validate_finite("box origin", &[x, y, z])?;
+    validate_positive("box half extent", &[half])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::dynamic()
         .translation(Vector::new(x, y, z))
@@ -209,7 +351,7 @@ pub fn op_physics_add_box(state: &mut OpState, x: f32, y: f32, z: f32, half: f32
     let collider = ColliderBuilder::cuboid(half, half, half)
         .active_events(ActiveEvents::COLLISION_EVENTS)
         .build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a dynamic cube with material parameters. Keeps `op_physics_add_box` arity stable.
@@ -223,7 +365,10 @@ pub fn op_physics_add_box_material(
     half: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("box origin", &[x, y, z])?;
+    validate_positive("box half extent", &[half])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::dynamic()
         .translation(Vector::new(x, y, z))
@@ -234,7 +379,7 @@ pub fn op_physics_add_box_material(
         restitution,
     )
     .build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a dynamic sphere with material parameters. Returns its stable body id.
@@ -247,13 +392,16 @@ pub fn op_physics_add_sphere(
     radius: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("sphere origin", &[x, y, z])?;
+    validate_positive("sphere radius", &[radius])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::dynamic()
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::ball(radius), friction, restitution).build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a dynamic Y-axis capsule. `half_height` is the cylindrical half-height.
@@ -268,7 +416,10 @@ pub fn op_physics_add_capsule(
     radius: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("capsule origin", &[x, y, z])?;
+    validate_positive("capsule dimensions", &[half_height, radius])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::dynamic()
         .translation(Vector::new(x, y, z))
@@ -279,7 +430,7 @@ pub fn op_physics_add_capsule(
         restitution,
     )
     .build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a fixed cuboid rigid body with material parameters. Returns its stable body id.
@@ -295,13 +446,16 @@ pub fn op_physics_add_static_box(
     hz: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("static box origin", &[x, y, z])?;
+    validate_positive("static box half extents", &[hx, hy, hz])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::fixed()
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::cuboid(hx, hy, hz), friction, restitution).build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a fixed sphere rigid body with material parameters. Returns its stable body id.
@@ -314,13 +468,16 @@ pub fn op_physics_add_static_sphere(
     radius: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("static sphere origin", &[x, y, z])?;
+    validate_positive("static sphere radius", &[radius])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::fixed()
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::ball(radius), friction, restitution).build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a fixed Y-axis capsule rigid body. `half_height` is the cylindrical half-height.
@@ -335,7 +492,10 @@ pub fn op_physics_add_static_capsule(
     radius: f32,
     friction: f32,
     restitution: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("static capsule origin", &[x, y, z])?;
+    validate_positive("static capsule dimensions", &[half_height, radius])?;
+    validate_material(friction, restitution)?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::fixed()
         .translation(Vector::new(x, y, z))
@@ -346,7 +506,7 @@ pub fn op_physics_add_static_capsule(
         restitution,
     )
     .build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a fixed HEIGHTFIELD collider (Phase 9 terrain). `heights` is an
@@ -369,18 +529,24 @@ pub fn op_physics_add_heightfield(
     scale_y: f32,
     scale_z: f32,
     #[buffer] heights: &[f32],
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    let (nr, nc) = validate_heightfield(
+        [x, y, z],
+        nrows,
+        ncols,
+        [scale_x, scale_y, scale_z],
+        heights,
+    )?;
     let world = state.borrow_mut::<PhysicsWorld>();
-    let nr = nrows as usize;
-    let nc = ncols as usize;
     // Rapier's heightfield matrix is `heights_zx` (rows -> local z, cols -> local x);
-    // JS sends row-major `index = row*ncols + col` (out-of-range samples read 0).
-    let mat = Array2::from_fn(nr, nc, |r, c| heights.get(r * nc + c).copied().unwrap_or(0.0));
+    // JS sends row-major `index = row*ncols + col`.
+    let mat = Array2::from_fn(nr, nc, |r, c| heights[r * nc + c]);
     let body = RigidBodyBuilder::fixed()
         .translation(Vector::new(x, y, z))
         .build();
-    let collider = ColliderBuilder::heightfield(mat, Vector::new(scale_x, scale_y, scale_z)).build();
-    world.insert_body(body, collider)
+    let collider =
+        ColliderBuilder::heightfield(mat, Vector::new(scale_x, scale_y, scale_z)).build();
+    Ok(world.insert_body(body, collider))
 }
 
 /// Add a KINEMATIC position-based Y-axis capsule for use as a character controller
@@ -396,7 +562,9 @@ pub fn op_physics_add_character(
     z: f32,
     half_height: f32,
     radius: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_finite("character origin", &[x, y, z])?;
+    validate_positive("character dimensions", &[half_height, radius])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let body = RigidBodyBuilder::kinematic_position_based()
         .translation(Vector::new(x, y, z))
@@ -404,7 +572,7 @@ pub fn op_physics_add_character(
     let collider = ColliderBuilder::capsule_y(half_height, radius)
         .active_events(ActiveEvents::COLLISION_EVENTS)
         .build();
-    world.insert_body(body, collider)
+    Ok(world.insert_body(body, collider))
 }
 
 /// Move a character body (created by `op_physics_add_character`) by a desired
@@ -427,28 +595,41 @@ pub fn op_physics_move_character(
     dy: f32,
     dz: f32,
     #[buffer] out: &mut [f32],
-) {
+) -> Result<(), JsErrorBox> {
     if out.len() < 4 {
-        return;
+        return Ok(());
     }
+    validate_finite("character movement", &[dx, dy, dz])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let handle = match world.handle(id) {
         Some(h) => h,
-        None => return,
+        None => {
+            out[0..4].fill(0.0);
+            return Ok(());
+        }
     };
     // Phase 1: immutable scene query to compute the collision-free correction.
     let computed = {
         let body = match world.bodies.get(handle) {
             Some(b) => b,
-            None => return,
+            None => {
+                out[0..4].fill(0.0);
+                return Ok(());
+            }
         };
         let collider_handle = match body.colliders().first() {
             Some(c) => *c,
-            None => return,
+            None => {
+                out[0..4].fill(0.0);
+                return Ok(());
+            }
         };
         let collider = match world.colliders.get(collider_handle) {
             Some(c) => c,
-            None => return,
+            None => {
+                out[0..4].fill(0.0);
+                return Ok(());
+            }
         };
         let shape = collider.shape();
         let char_pos = *collider.position();
@@ -495,34 +676,33 @@ pub fn op_physics_move_character(
     out[1] = computed.0.y;
     out[2] = computed.0.z;
     out[3] = if computed.1 { 1.0 } else { 0.0 };
+    Ok(())
 }
 
 /// Remove a body (and its colliders), tombstoning its id slot.
 #[op2(fast)]
 pub fn op_physics_remove_body(state: &mut OpState, id: u32) {
     let world = state.borrow_mut::<PhysicsWorld>();
-    if let Some(handle) = world.handle(id) {
-        world.bodies.remove(
-            handle,
-            &mut world.islands,
-            &mut world.colliders,
-            &mut world.impulse_joints,
-            &mut world.multibody_joints,
-            true,
-        );
-        world.handles[id as usize] = None;
-    }
+    world.remove_body(id);
 }
 
 /// Apply an impulse to a body, waking it (resting bodies sleep, so wake is required).
 #[op2(fast)]
-pub fn op_physics_apply_impulse(state: &mut OpState, id: u32, ix: f32, iy: f32, iz: f32) {
+pub fn op_physics_apply_impulse(
+    state: &mut OpState,
+    id: u32,
+    ix: f32,
+    iy: f32,
+    iz: f32,
+) -> Result<(), JsErrorBox> {
+    validate_finite("physics impulse", &[ix, iy, iz])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     if let Some(handle) = world.handle(id) {
         if let Some(body) = world.bodies.get_mut(handle) {
             body.apply_impulse(Vector::new(ix, iy, iz), true);
         }
     }
+    Ok(())
 }
 
 /// Advance the simulation by one fixed step (dt = 1/60 by default).
@@ -565,27 +745,7 @@ pub fn op_physics_snapshot(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
 pub fn op_physics_restore(state: &mut OpState, #[buffer] bytes: &[u8]) -> Result<(), JsErrorBox> {
     let snapshot: PhysicsSnapshot = bincode::deserialize(bytes)
         .map_err(|e| JsErrorBox::generic(format!("physics restore: {e}")))?;
-    let (collision_send, collision_recv) = channel();
-    state.put(PhysicsWorld {
-        gravity: Vector::new(
-            snapshot.gravity[0],
-            snapshot.gravity[1],
-            snapshot.gravity[2],
-        ),
-        integration_parameters: snapshot.integration_parameters,
-        pipeline: PhysicsPipeline::new(),
-        islands: snapshot.islands,
-        broad_phase: snapshot.broad_phase,
-        narrow_phase: snapshot.narrow_phase,
-        bodies: snapshot.bodies,
-        colliders: snapshot.colliders,
-        impulse_joints: snapshot.impulse_joints,
-        multibody_joints: snapshot.multibody_joints,
-        ccd_solver: CCDSolver::new(),
-        collision_send,
-        collision_recv,
-        handles: snapshot.handles,
-    });
+    state.put(PhysicsWorld::from_snapshot(snapshot));
     Ok(())
 }
 
@@ -602,8 +762,10 @@ pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f3
             out[0] = t.x;
             out[1] = t.y;
             out[2] = t.z;
+            return;
         }
     }
+    out[0..3].fill(0.0);
 }
 
 /// Write `out = [pos.x, pos.y, pos.z, quat.x, quat.y, quat.z, quat.w]`.
@@ -624,8 +786,10 @@ pub fn op_physics_body_transform(state: &mut OpState, id: u32, #[buffer] out: &m
             out[4] = r.y;
             out[5] = r.z;
             out[6] = r.w;
+            return;
         }
     }
+    out[0..7].fill(0.0);
 }
 
 /// A drained collision event. `kind` is 1 for `Started`, 0 for `Stopped`. `point`
@@ -708,10 +872,13 @@ pub fn op_physics_raycast(
     dz: f32,
     max_toi: f32,
     #[buffer] out: &mut [f32],
-) {
+) -> Result<(), JsErrorBox> {
     if out.len() < 6 {
-        return;
+        return Ok(());
     }
+    validate_finite("raycast origin", &[ox, oy, oz])?;
+    validate_finite("raycast direction", &[dx, dy, dz])?;
+    validate_positive("raycast max_toi", &[max_toi])?;
     let world = state.borrow::<PhysicsWorld>();
     let query = world.broad_phase.as_query_pipeline(
         world.narrow_phase.query_dispatcher(),
@@ -741,12 +908,14 @@ pub fn op_physics_raycast(
             out[0] = 0.0;
         }
     }
+    Ok(())
 }
 
 /// Gravity for the default world installed at extension load, before JS calls
 /// `op_physics_create_world`. Immaterial to behavior: this world holds no bodies,
 /// and `op_physics_create_world`/`op_physics_restore` replace it wholesale.
 const DEFAULT_GRAVITY_Y: f32 = -9.81;
+const MAX_INACTIVE_PHYSICS_WORLDS: usize = 1024;
 
 /// Registry of INACTIVE physics worlds. The ACTIVE world lives directly in `OpState`
 /// as `PhysicsWorld`, so every one of the 22 physics ops keeps operating on it
@@ -764,18 +933,35 @@ struct PhysicsRegistry {
 
 impl PhysicsRegistry {
     fn new() -> Self {
-        Self { inactive: HashMap::new(), active_id: 0, next_id: 1 }
+        Self {
+            inactive: HashMap::new(),
+            active_id: 0,
+            next_id: 1,
+        }
     }
 }
 
 /// Create a new world (not activated) and return its id. Plain helper so the op and
 /// the tests share one implementation.
-fn registry_new_world(state: &mut OpState, gravity_y: f32) -> u32 {
+fn registry_new_world(state: &mut OpState, gravity_y: f32) -> Result<u32, JsErrorBox> {
     let reg = state.borrow_mut::<PhysicsRegistry>();
+    if reg.inactive.len() >= MAX_INACTIVE_PHYSICS_WORLDS {
+        return Err(JsErrorBox::generic(format!(
+            "physics registry inactive world cap exceeded ({MAX_INACTIVE_PHYSICS_WORLDS})"
+        )));
+    }
     let id = reg.next_id;
-    reg.next_id += 1;
+    reg.next_id = reg
+        .next_id
+        .checked_add(1)
+        .ok_or_else(|| JsErrorBox::generic("physics registry world id overflow"))?;
     reg.inactive.insert(id, PhysicsWorld::new(gravity_y));
-    id
+    Ok(id)
+}
+
+fn registry_new_world_validated(state: &mut OpState, gravity_y: f32) -> Result<u32, JsErrorBox> {
+    validate_finite("physics gravity", &[gravity_y])?;
+    registry_new_world(state, gravity_y)
 }
 
 /// Swap world `id` in as the ACTIVE world (the target of every other physics op).
@@ -820,8 +1006,8 @@ fn registry_drop(state: &mut OpState, id: u32) -> bool {
 /// its id. Pair with `op_physics_activate_world` to drive it. This is what lets more
 /// than one independent physics world exist in a single process.
 #[op2(fast)]
-pub fn op_physics_new_world(state: &mut OpState, gravity_y: f32) -> u32 {
-    registry_new_world(state, gravity_y)
+pub fn op_physics_new_world(state: &mut OpState, gravity_y: f32) -> Result<u32, JsErrorBox> {
+    registry_new_world_validated(state, gravity_y)
 }
 
 /// Make world `id` the ACTIVE world every other physics op operates on. Returns false
@@ -892,8 +1078,9 @@ extension!(
 #[cfg(test)]
 mod tests {
     use super::{
-        init_physics_state, registry_activate, registry_drop, registry_new_world, PhysicsRegistry,
-        PhysicsWorld, DEFAULT_GRAVITY_Y,
+        init_physics_state, registry_activate, registry_drop, registry_new_world,
+        registry_new_world_validated, validate_heightfield, PhysicsRegistry, PhysicsSnapshot,
+        PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES,
     };
     use deno_core::OpState;
     use rapier3d::prelude::*;
@@ -909,7 +1096,9 @@ mod tests {
                 .build(),
         );
         let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
-        world.colliders.insert_with_parent(collider, body, &mut world.bodies);
+        world
+            .colliders
+            .insert_with_parent(collider, body, &mut world.bodies);
         for _ in 0..n {
             world.step();
         }
@@ -929,11 +1118,14 @@ mod tests {
         let y0_after30 = drop_box_steps(&mut state, 30);
 
         // A second, independent world; activate it and step it 5 times only.
-        let id1 = registry_new_world(&mut state, DEFAULT_GRAVITY_Y);
+        let id1 = registry_new_world(&mut state, DEFAULT_GRAVITY_Y).expect("new world");
         assert!(registry_activate(&mut state, id1));
         assert_eq!(state.borrow::<PhysicsRegistry>().active_id, id1);
         let y1_after5 = drop_box_steps(&mut state, 5);
-        assert!(y1_after5 > y0_after30, "world 1 (5 steps) should have fallen less than world 0 (30 steps)");
+        assert!(
+            y1_after5 > y0_after30,
+            "world 1 (5 steps) should have fallen less than world 0 (30 steps)"
+        );
 
         // Swap back to world 0: its body must be exactly where 30 steps left it — the
         // registry preserved it untouched while world 1 ran.
@@ -947,12 +1139,21 @@ mod tests {
             .1
             .translation()
             .y;
-        assert_eq!(y0_reread, y0_after30, "world 0 changed while world 1 was active — worlds not isolated");
+        assert_eq!(
+            y0_reread, y0_after30,
+            "world 0 changed while world 1 was active — worlds not isolated"
+        );
 
         // Cannot drop the active world; can drop an inactive one.
-        assert!(!registry_drop(&mut state, 0), "must refuse to drop the active world");
+        assert!(
+            !registry_drop(&mut state, 0),
+            "must refuse to drop the active world"
+        );
         assert!(registry_activate(&mut state, id1));
-        assert!(registry_drop(&mut state, 0), "world 0 is now inactive and droppable");
+        assert!(
+            registry_drop(&mut state, 0),
+            "world 0 is now inactive and droppable"
+        );
         assert!(!registry_activate(&mut state, 0), "dropped world is gone");
     }
 
@@ -967,6 +1168,19 @@ mod tests {
         // Mirror `op_physics_step`: borrow the world and step it. Must not panic.
         state.borrow_mut::<PhysicsWorld>().step();
         assert!(state.try_borrow::<PhysicsWorld>().is_some());
+    }
+
+    #[test]
+    fn new_world_rejects_non_finite_gravity() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+
+        assert!(registry_new_world_validated(&mut state, f32::NAN).is_err());
+        assert!(registry_new_world_validated(&mut state, f32::INFINITY).is_err());
+        assert_eq!(
+            registry_new_world_validated(&mut state, DEFAULT_GRAVITY_Y).unwrap(),
+            1
+        );
     }
 
     /// create_world -> add_body -> step -> read-transform, exercised through the
@@ -992,7 +1206,99 @@ mod tests {
 
         // == op_physics_body_transform: resolve id -> handle -> translation.
         let handle = world.handle(id).expect("body id resolves to a handle");
-        let t = world.bodies.get(handle).expect("handle resolves").translation();
+        let t = world
+            .bodies
+            .get(handle)
+            .expect("handle resolves")
+            .translation();
         assert!(t.y < 10.0, "box should fall under gravity (y = {})", t.y);
+    }
+
+    #[test]
+    fn reverse_body_lookup_survives_tombstones_and_restore() {
+        let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
+        let mut ids = Vec::new();
+        for x in 0..4 {
+            let body = RigidBodyBuilder::dynamic()
+                .translation(Vector::new(x as f32, 1.0, 0.0))
+                .build();
+            let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
+            ids.push(world.insert_body(body, collider));
+        }
+
+        for &id in &ids {
+            let handle = world.handle(id).expect("body id resolves");
+            assert_eq!(world.body_ids_by_handle.get(&handle), Some(&id));
+            assert_eq!(world.body_id_for_handle(handle), Some(id));
+        }
+
+        let removed = ids[1];
+        let removed_handle = world
+            .handle(removed)
+            .expect("body id resolves before removal");
+        world.remove_body(removed);
+        assert_eq!(world.handles[removed as usize], None);
+        assert_eq!(world.body_ids_by_handle.get(&removed_handle), None);
+
+        let snapshot = PhysicsSnapshot {
+            gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+            integration_parameters: world.integration_parameters,
+            islands: world.islands.clone(),
+            broad_phase: world.broad_phase.clone(),
+            narrow_phase: world.narrow_phase.clone(),
+            bodies: world.bodies.clone(),
+            colliders: world.colliders.clone(),
+            impulse_joints: world.impulse_joints.clone(),
+            multibody_joints: world.multibody_joints.clone(),
+            handles: world.handles.clone(),
+        };
+        let restored = PhysicsWorld::from_snapshot(snapshot);
+        for &id in &[ids[0], ids[2], ids[3]] {
+            let handle = restored
+                .handle(id)
+                .expect("live body id resolves after restore");
+            assert_eq!(restored.body_ids_by_handle.get(&handle), Some(&id));
+            assert_eq!(restored.body_id_for_handle(handle), Some(id));
+        }
+        assert_eq!(restored.handle(removed), None);
+    }
+
+    #[test]
+    fn heightfield_validation_rejects_oversize_or_malformed_inputs() {
+        let heights = vec![0.0; 4];
+        assert!(validate_heightfield([0.0, 0.0, 0.0], 2, 2, [1.0, 1.0, 1.0], &heights).is_ok());
+        assert!(validate_heightfield([0.0, 0.0, 0.0], 1, 2, [1.0, 1.0, 1.0], &heights).is_err());
+        assert!(validate_heightfield([0.0, 0.0, 0.0], 2, 2, [1.0, -1.0, 1.0], &heights).is_err());
+        assert!(
+            validate_heightfield([0.0, f32::NAN, 0.0], 2, 2, [1.0, 1.0, 1.0], &heights).is_err()
+        );
+        assert!(validate_heightfield([0.0, 0.0, 0.0], 2, 2, [1.0, 1.0, 1.0], &[0.0, 1.0]).is_err());
+        assert!(validate_heightfield(
+            [0.0, 0.0, 0.0],
+            2,
+            2,
+            [1.0, 1.0, 1.0],
+            &[0.0, f32::INFINITY, 0.0, 1.0]
+        )
+        .is_err());
+
+        let rows = (MAX_HEIGHTFIELD_SAMPLES as u32 / 2) + 1;
+        assert!(validate_heightfield([0.0, 0.0, 0.0], rows, 3, [1.0, 1.0, 1.0], &[]).is_err());
+    }
+
+    #[test]
+    fn physics_registry_rejects_unbounded_inactive_world_growth() {
+        let mut state = OpState::new(None);
+        state.put(PhysicsRegistry::new());
+        state.put(PhysicsWorld::new(DEFAULT_GRAVITY_Y));
+
+        for _ in 0..1024 {
+            assert!(registry_new_world_validated(&mut state, DEFAULT_GRAVITY_Y).is_ok());
+        }
+        let over = registry_new_world_validated(&mut state, DEFAULT_GRAVITY_Y);
+        assert!(
+            over.is_err(),
+            "physics registry must reject unbounded inactive world growth"
+        );
     }
 }

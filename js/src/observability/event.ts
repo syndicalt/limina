@@ -112,7 +112,10 @@ function stableStringify(value: unknown): string {
   // value is a non-null, non-array object here; read it as a string-keyed record.
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
-  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") + "}";
+  return "{" + keys
+    .filter((k) => obj[k] !== undefined)
+    .map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k]))
+    .join(",") + "}";
 }
 
 function canonicalEvent(ev: EngineEvent): string {
@@ -172,9 +175,11 @@ export class LiminaTracer implements Tracer {
   private readonly durableEvents: EngineEvent[] = [];
   private appendTraceName: string | undefined;
   private lastIntegrityHash: string | null = null;
+  private replayCache: TraceReplayResult | undefined;
   constructor(
     private readonly threadId: string,
     private readonly maxInMemory = 8192,
+    private readonly retainDurableInMemory = true,
   ) {}
 
   private enableAppend(name: string): LiminaTracer {
@@ -197,7 +202,8 @@ export class LiminaTracer implements Tracer {
     }
     this.seq++;
     this.events.push(event);
-    this.durableEvents.push(event);
+    if (this.appendTraceName === undefined && this.retainDurableInMemory) this.durableEvents.push(event);
+    this.replayCache = undefined;
     // Bounded tail: keep the most recent maxInMemory (full history -> export/flush).
     if (this.events.length > this.maxInMemory) this.events.shift();
     return id;
@@ -218,31 +224,30 @@ export class LiminaTracer implements Tracer {
   /** Serialize to EventLoom-shaped JSONL, computing the sha256 integrity chain
    *  here (genesis previousHash=null; previousHash(N)=hash(N-1)). */
   exportJsonl(): string {
-    let previousHash: string | null = null;
-    const lines: string[] = [];
-    for (const ev of this.durableEvents) {
-      const hash = hashEvent(ev, previousHash);
-      const withIntegrity: EngineEvent = { ...ev, integrity: { hash, previousHash } };
-      lines.push(JSON.stringify(withIntegrity));
-      previousHash = hash;
-    }
-    return lines.length > 0 ? lines.join("\n") + "\n" : "";
+    if (this.appendTraceName !== undefined) return ops.op_read_trace(this.appendTraceName);
+    if (!this.retainDurableInMemory) return serializeEvents(this.events);
+    return serializeEvents(this.durableEvents);
   }
 
   durableEventCount(): number {
+    if (this.appendTraceName !== undefined) return this.replay().events.length;
+    if (!this.retainDurableInMemory) return this.events.length;
     return this.durableEvents.length;
   }
 
   flush(name: string): { name: string; events: number; bytes: number } {
     const content = this.exportJsonl();
     ops.op_write_trace(name, content);
-    return { name, events: this.durableEvents.length, bytes: content.length };
+    return { name, events: this.durableEventCount(), bytes: content.length };
   }
 
   tail(opts: TraceTailOptions = {}): TraceTailResult {
     const afterSeq = opts.afterSeq ?? -1;
     const limit = Math.max(0, Math.min(opts.limit ?? 100, 1000));
-    const events = this.durableEvents.filter((ev) => {
+    const source = this.appendTraceName !== undefined
+      ? this.replay().events
+      : this.retainDurableInMemory ? this.durableEvents : this.events;
+    const events = source.filter((ev) => {
       const seq = eventSeq(ev.id);
       if (seq === null || seq <= afterSeq) return false;
       if (opts.actorId !== undefined && ev.actorId !== opts.actorId) return false;
@@ -254,7 +259,7 @@ export class LiminaTracer implements Tracer {
   }
 
   explainEvent(eventId: string): TraceExplanation | undefined {
-    const replay = buildReplay(this.durableEvents);
+    const replay = this.replay();
     const event = replay.byId.get(eventId);
     if (event === undefined) return undefined;
     return {
@@ -268,7 +273,11 @@ export class LiminaTracer implements Tracer {
    *  childrenById) — the M8 audit surface walks this to answer "why was X
    *  allowed/denied" from the real recorded events. */
   replay(): TraceReplayResult {
-    return buildReplay(this.durableEvents);
+    if (this.appendTraceName !== undefined) return LiminaTracer.replayTrace(this.appendTraceName);
+    if (this.replayCache === undefined) {
+      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events);
+    }
+    return this.replayCache;
   }
 
   inspect(): InspectorSnapshot {
@@ -301,32 +310,49 @@ export class LiminaTracer implements Tracer {
       ...opts,
       onPartialFinalLine: recoverPartialFinalLine ? "ignore" : opts.onPartialFinalLine,
     };
-    const tracer = LiminaTracer.fromJsonl(jsonl, maxInMemory, replayOpts);
+    let replay: TraceReplayResult;
+    try {
+      replay = LiminaTracer.replayJsonl(jsonl, replayOpts);
+    } catch (err) {
+      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError)) throw err;
+      const lines = jsonl.split("\n");
+      const prefixLineCount = Math.max(0, err.lineNumber - 1);
+      const prefix = prefixLineCount === 0 ? "" : lines.slice(0, prefixLineCount).join("\n") + "\n";
+      replay = LiminaTracer.replayJsonl(prefix, { ...opts, onPartialFinalLine: "error" });
+      ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
+    }
+    const tracer = LiminaTracer.fromReplay(replay, maxInMemory, false);
     tracer.appendTraceName = name;
-    if (tracer.threadId !== threadId && tracer.durableEvents.length === 0) {
+    if (tracer.threadId !== threadId && replay.events.length === 0) {
       return new LiminaTracer(threadId, maxInMemory).enableAppend(name);
     }
-    tracer.lastIntegrityHash = lastIntegrityHash(tracer.durableEvents);
-    if (recoverPartialFinalLine && LiminaTracer.replayJsonl(jsonl, replayOpts).partialFinalLine !== undefined) {
-      ops.op_write_trace(name, tracer.exportJsonl());
-    }
+    tracer.lastIntegrityHash = integrityTail(replay.events);
+    if (recoverPartialFinalLine && replay.partialFinalLine !== undefined) ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
     return tracer;
+  }
+
+  static ephemeral(threadId: string, maxInMemory = 8192): LiminaTracer {
+    return new LiminaTracer(threadId, maxInMemory, false);
   }
 
   static fromJsonl(jsonl: string, maxInMemory = 8192, opts: TraceReplayOptions = {}): LiminaTracer {
     const replay = LiminaTracer.replayJsonl(jsonl, opts);
+    return LiminaTracer.fromReplay(replay, maxInMemory, true);
+  }
+
+  private static fromReplay(replay: TraceReplayResult, maxInMemory: number, keepDurable: boolean): LiminaTracer {
     const tracer = new LiminaTracer(replay.threadId ?? "trace_replay", maxInMemory);
     let maxSeq = -1;
     for (const ev of replay.events) {
       const clean = withoutIntegrity(ev);
-      tracer.durableEvents.push(clean);
+      if (keepDurable) tracer.durableEvents.push(clean);
       tracer.events.push(clean);
       const seq = eventSeq(ev.id);
       if (seq !== null && seq > maxSeq) maxSeq = seq;
     }
     while (tracer.events.length > maxInMemory) tracer.events.shift();
     tracer.seq = maxSeq + 1;
-    tracer.lastIntegrityHash = lastIntegrityHash(tracer.durableEvents);
+    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail(replay.events);
     return tracer;
   }
 
@@ -368,6 +394,25 @@ function lastIntegrityHash(events: EngineEvent[]): string | null {
     previousHash = hashEvent(ev, previousHash);
   }
   return previousHash;
+}
+
+function integrityTail(events: EngineEvent[]): string | null {
+  if (events.length === 0) return null;
+  const last = events[events.length - 1];
+  return last.integrity?.hash ?? lastIntegrityHash(events.map(withoutIntegrity));
+}
+
+function serializeEvents(events: EngineEvent[]): string {
+  let previousHash: string | null = null;
+  const lines: string[] = [];
+  for (const ev of events) {
+    const clean = withoutIntegrity(ev);
+    const hash = hashEvent(clean, previousHash);
+    const withIntegrity: EngineEvent = { ...clean, integrity: { hash, previousHash } };
+    lines.push(JSON.stringify(withIntegrity));
+    previousHash = hash;
+  }
+  return lines.length > 0 ? lines.join("\n") + "\n" : "";
 }
 
 function buildReplay(events: EngineEvent[]): TraceReplayResult {

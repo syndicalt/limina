@@ -70,6 +70,10 @@ export interface RegionState {
    *  every tile — and any later streamed-in tile — bands consistently). Undefined when
    *  the region was generated with `render:false` (colliders/data only, no visible mesh). */
   meshOpts?: TerrainMeshOptions;
+  /** Render-only resources mounted for this whole region (for example asset.scatter
+   *  InstancedMeshes). These are not sim/log state; they must be removed/disposed
+   *  when the region's applied tile set is replaced or streamed away. */
+  renderDisposables?: (() => void)[];
 }
 
 /** A stable region handle derived from the request (deterministic across runs). */
@@ -194,6 +198,13 @@ function unmountTileMesh(applied: AppliedTile, scene: unknown): void {
   applied.mesh = undefined;
 }
 
+function clearRegionRenderDisposables(region: RegionState): void {
+  const disposables = region.renderDisposables;
+  if (disposables === undefined || disposables.length === 0) return;
+  region.renderDisposables = [];
+  for (const dispose of disposables) dispose();
+}
+
 /** Register the terrain.* / world.* skills bound to a source + cache. The default
  *  core wiring passes a ProceduralTerrainSource; a runtime can pass the cached
  *  source (replay) or the model-backed source (authoring) instead. */
@@ -300,6 +311,7 @@ export function registerTerrainSkills(
       } else if (region.type === undefined && input.type !== undefined) {
         region.type = input.type as TerrainTypeName;
       }
+      clearRegionRenderDisposables(region);
       const bodies: number[] = [];
       const keys: string[] = [];
       // Deterministic apply order (tz outer, tx inner) so body-id allocation is
@@ -417,8 +429,13 @@ export function registerTerrainSkills(
       }
       // Remove tiles outside the keep-margin (and dispose their visible mesh).
       const removed: string[] = [];
+      let clearedRegionRender = false;
       for (const [key, t] of [...region.tiles]) {
         if (Math.abs(t.tx - atx) > keep || Math.abs(t.tz - atz) > keep) {
+          if (!clearedRegionRender) {
+            clearRegionRenderDisposables(region);
+            clearedRegionRender = true;
+          }
           unmountTileMesh(t, ctx.world.scene);
           ctx.world.ops.op_physics_remove_body(t.bodyId);
           despawnRenderable(ctx.world.ecs, t.eid);
@@ -528,6 +545,7 @@ export function registerTerrainSkills(
       if (region.tiles.size === 0) {
         throw new Error(`world.populateBiome: region '${input.regionId}' has no applied tiles`);
       }
+      clearRegionRenderDisposables(region);
       // Derive the region's tile-grid bounds from its applied tiles (single source of truth).
       let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
       for (const t of region.tiles.values()) {
@@ -539,10 +557,11 @@ export function registerTerrainSkills(
       const bounds: RegionBounds = { minTx, minTz, maxTx, maxTz };
       const seed = input.seed ?? region.seed;
       // Build the nested-invoke base from this skill's execution context (the SAME registry
-      // the terrain skills were registered on — the recorder's patched invoke, so the nested
-      // asset.scatter calls run at depth > 0 and are not separately recorded).
+      // the terrain skills were registered on — the recorder's patched invoke). Thread
+      // `ctx.chainId` so the nested asset.scatter calls are FOLDED into this populateBiome
+      // command (reproduced on replay), NOT recorded as separate top-level commands.
       const base: InvokeBase = {
-        agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions, tick: ctx.tick, world: ctx.world,
+        agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions, tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
       };
       const res = await scatterBiomeContent({
         registry, source, regions, regionId: input.regionId, type, bounds, seed, base,

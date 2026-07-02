@@ -95,12 +95,17 @@ export class WorldRecorder {
   tick = 0;
   private seq = 0;
   private depth = 0;
-  /** Set while a TOP-LEVEL invoke chain is in flight (from the invoke that starts
-   *  at depth 0 until it and every concurrent sibling/child has settled). Recording
-   *  is classified by THIS flag -- not the raw depth counter, which fire-and-forget
-   *  sibling invokes inflate -- so exactly one command is recorded per top-level
-   *  chain and never mis-attributed. */
-  private topInFlight = false;
+  /** Chain-id minted per TOP-LEVEL invocation; a nested re-invoke inherits its
+   *  parent's id via `ExecutionContext.chainId`. Classification is by this id, NOT
+   *  by a global depth/flag counter: a flag cannot tell an INDEPENDENT concurrent
+   *  top-level chain (a second agent acting while the first awaits) from a genuine
+   *  child (a skill handler re-invoking), so under concurrency it silently dropped
+   *  the second agent's command. The id travels in the data, so it is immune to
+   *  single-thread interleaving. */
+  private chainSeq = 0;
+  private readonly finalizedSeqs = new Set<number>();
+  private finalizedPrefix = 0;
+  private compactedPrefix = 0;
   private maxTick = 0;
   private seeded = false;
 
@@ -111,7 +116,9 @@ export class WorldRecorder {
   seed(seed: number): () => number {
     if (this.seeded) throw new Error("WorldRecorder: seed already recorded");
     this.seeded = true;
-    this.commands.push({ kind: "seed", seq: this.seq++, seed: seed >>> 0 });
+    const seq = this.seq++;
+    this.commands.push({ kind: "seed", seq, seed: seed >>> 0 });
+    this.markFinalized(seq);
     return installSeededRandom(seed);
   }
 
@@ -119,15 +126,21 @@ export class WorldRecorder {
    *  Reads and host services pass straight through. */
   wrapOps(ops: EngineOps): EngineOps {
     const rec = this;
+    const methods = new Map<PropertyKey, unknown>();
     return new Proxy(ops, {
       get(target, prop, receiver) {
+        if (methods.has(prop)) return methods.get(prop);
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== "function") return value;
         // `value` is a verified EngineOps method; give it a callable signature.
         const method = value as (...a: number[]) => unknown;
         const opName = typeof prop === "string" ? RECORDED_PHYSICS_METHODS[prop] : undefined;
-        if (opName === undefined) return method.bind(target);
-        return (...args: number[]): unknown => {
+        if (opName === undefined) {
+          const bound = method.bind(target);
+          methods.set(prop, bound);
+          return bound;
+        }
+        const wrapped = (...args: number[]): unknown => {
           if (rec.depth === 0) {
             const tick = rec.tick;
             if (tick > rec.maxTick) rec.maxTick = tick;
@@ -136,38 +149,49 @@ export class WorldRecorder {
             // stay `number[]` (replay re-supplies a fresh scratch buffer).
             const args2 =
               PHYSICS_OP_OUT_BUFFER[opName] === undefined ? args.slice() : args.slice(0, args.length - 1);
-            rec.commands.push({ kind: "physics", seq: rec.seq++, tick, op: opName, args: args2 });
+            const seq = rec.seq++;
+            rec.commands.push({ kind: "physics", seq, tick, op: opName, args: args2 });
+            rec.markFinalized(seq);
           }
           return method.apply(target, args);
         };
+        methods.set(prop, wrapped);
+        return wrapped;
       },
     });
   }
 
   /** Patch a registry instance's invoke() to record each top-level invocation.
-   *  Nested invokes (depth > 0) are NOT recorded -- re-invoking the outer skill
-   *  reproduces them. */
+   *  Nested invokes (a skill handler re-invoking with the inherited `ctx.chainId`)
+   *  are NOT recorded -- re-invoking the outer skill reproduces them.
+   *
+   *  Classification is by CHAIN ID, not a depth/flag counter. A top-level caller
+   *  (an agent action loop, an MCP callTool, scenario code) passes NO `chainId`;
+   *  we mint one and record the command. A skill handler that re-invokes passes
+   *  `ctx.chainId`, so that nested call is folded into the already-recorded parent.
+   *  Because the id is carried in the data rather than in ambient async state, this
+   *  stays correct when independent top-level chains INTERLEAVE on this single
+   *  thread (a coordinated agent team): each agent's chain has its own id, so each
+   *  records exactly one command and none is silently dropped. (The embedded
+   *  deno_core host does not wire AsyncLocalStorage, so ambient context is not an
+   *  option.) `depth` is retained solely for the ops proxy (a physics op is recorded
+   *  only when issued outside any skill chain). */
   attach(registry: SkillRegistry): void {
     const rec = this;
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
-      // Classify by the top-level-in-flight flag, NOT the raw depth counter:
-      // fire-and-forget sibling invokes (e.g. character_model's `void invoke("animation.stop"); void invoke("animation.play")`)
-      // are issued back-to-back without awaiting, so the second enters at depth > 0
-      // even though it is not nested inside the first. The flag records exactly the
-      // invoke that OPENS a top-level chain and treats every later entrant while the
-      // chain is live as nested (reproduced by re-invoking the recorded top-level).
-      const topLevel = !rec.topInFlight;
+      const isHead = base.chainId === undefined;
+      const chainId = base.chainId ?? `chain_${rec.chainSeq++}`;
       // Hold a reference to the command we record for the top-level invoke so the
       // post-invoke commit-back (below) can pin resolved identity into it.
       let cmd: SkillCommand | undefined;
-      if (topLevel) {
-        rec.topInFlight = true;
+      if (isHead) {
         const tick = base.tick;
         if (tick > rec.maxTick) rec.maxTick = tick;
+        const seq = rec.seq++;
         cmd = {
           kind: "skill",
-          seq: rec.seq++,
+          seq,
           tick,
           tool: name,
           input: input === undefined ? undefined : cloneInput(input),
@@ -177,20 +201,17 @@ export class WorldRecorder {
         };
         rec.commands.push(cmd);
       }
-      // Under the single-threaded server loop every top-level invoke is awaited to
-      // completion before the next, so `topInFlight` is false on entry for each and it
-      // is recorded. Any invoke arriving while a chain is live -- a fire-and-forget
-      // nested sibling (character_model's `void invoke(...)` pair) or a re-entrant child
-      // -- is folded into that chain and not separately recorded, reproduced by
-      // re-invoking the recorded top-level. Truly-CONCURRENT top-level invocations do
-      // not occur under this driver and are not detected here: distinguishing them from
-      // legitimate nesting needs async-context tracking (an explicit token / AsyncLocal),
-      // not the depth counter, so callers must not overlap top-level invokes.
-      // depth must drop whether the invoke resolves or rejects (re-entrancy guard);
-      // the flag clears only once the whole chain has drained back to depth 0.
+      // `depth` governs the OPS proxy (a physics op is recorded iff issued OUTSIDE
+      // any skill chain); increment it around the whole chain, decrement on settle.
       ++rec.depth;
-      return original(name, input, base)
+      const childBase: InvokeBase = { ...base, chainId };
+      return original(name, input, childBase)
         .then((res) => {
+          if (cmd !== undefined && !res.success) {
+            rec.discardCommand(cmd.seq);
+            cmd = undefined;
+            return res;
+          }
           // COMMIT-BACK: copy the skill's declared commitFields from its OUTPUT into
           // the recorded command's input, so the replay log PINS authored-resolved
           // identity (e.g. asset.place's content hash). Author-supplied input wins;
@@ -206,15 +227,88 @@ export class WorldRecorder {
             }
           }
           return res;
+        }, (err) => {
+          if (cmd !== undefined) {
+            rec.discardCommand(cmd.seq);
+            cmd = undefined;
+          }
+          throw err;
         })
         .finally(() => {
           // Never throw here: a depth mismatch just means a concurrent sibling/child
-          // is still in flight (legitimate for fire-and-forget nested invokes), which
-          // must behave exactly as before. The flag clears only when the last frame of
-          // the chain drains back to depth 0.
-          if (--rec.depth === 0) rec.topInFlight = false;
+          // is still in flight, which must behave exactly as before. Each HEAD removes
+          // only its OWN chain id; a nested call (not a head) leaves the set untouched.
+          --rec.depth;
+          if (isHead) {
+            if (cmd !== undefined) rec.markFinalized(cmd.seq);
+          }
         });
     };
+  }
+
+  private markFinalized(seq: number): void {
+    this.finalizedSeqs.add(seq);
+    while (this.finalizedPrefix < this.commands.length) {
+      const cmd = this.commands[this.finalizedPrefix];
+      if (cmd === undefined || !this.finalizedSeqs.has(cmd.seq)) break;
+      this.finalizedSeqs.delete(cmd.seq);
+      this.finalizedPrefix += 1;
+    }
+  }
+
+  private discardCommand(seq: number): void {
+    const idx = this.commands.findIndex((cmd) => cmd.seq === seq);
+    if (idx >= this.finalizedPrefix && idx !== -1) {
+      this.commands.splice(idx, 1);
+      const renumbered = new Set<number>();
+      for (let i = idx; i < this.commands.length; i++) {
+        const before = this.commands[i].seq;
+        this.commands[i].seq = before - 1;
+        if (this.finalizedSeqs.has(before)) {
+          this.finalizedSeqs.delete(before);
+          renumbered.add(before - 1);
+        }
+      }
+      for (const n of renumbered) this.finalizedSeqs.add(n);
+      this.seq -= 1;
+    }
+    this.finalizedSeqs.delete(seq);
+  }
+
+  /** Contiguous command prefix whose async handlers and commit-back have settled. */
+  flushableCount(): number {
+    return this.compactedPrefix + this.finalizedPrefix;
+  }
+
+  /** Total commands recorded in this session, including commands compacted out of
+   *  the hot in-memory buffer after durable persistence. */
+  get commandCount(): number {
+    return this.compactedPrefix + this.commands.length;
+  }
+
+  /** Return a command by absolute log index (seq-order position), or undefined
+   *  when it has already been compacted from memory. */
+  commandAt(index: number): WorldCommand | undefined {
+    if (!Number.isSafeInteger(index) || index < this.compactedPrefix) return undefined;
+    return this.commands[index - this.compactedPrefix];
+  }
+
+  /** Drop a durable-flushed finalized prefix from hot memory. The durable sink must
+   *  already have persisted every removed command; after compaction, toJsonl() is no
+   *  longer available because full history lives in the durable segment. */
+  compactFinalizedPrefix(upTo: number): number {
+    const limit = Math.min(upTo, this.flushableCount());
+    if (limit <= this.compactedPrefix) return 0;
+    const drop = limit - this.compactedPrefix;
+    this.commands.splice(0, drop);
+    this.compactedPrefix += drop;
+    this.finalizedPrefix -= drop;
+    if (this.finalizedPrefix < 0) this.finalizedPrefix = 0;
+    return drop;
+  }
+
+  get compactedCommandCount(): number {
+    return this.compactedPrefix;
   }
 
   meta(): WorldLogMeta {
@@ -222,8 +316,8 @@ export class WorldRecorder {
       kind: "meta",
       logVersion: LOG_VERSION,
       sessionId: this.sessionId,
-      createdAt: new Date().toISOString(),
-      commands: this.commands.length,
+      createdAt: `tick:${this.maxTick}`,
+      commands: this.commandCount,
       ticks: this.maxTick,
     };
   }
@@ -236,6 +330,9 @@ export class WorldRecorder {
   }
 
   toJsonl(): string {
+    if (this.compactedPrefix > 0) {
+      throw new Error("WorldRecorder.toJsonl: command prefix was compacted; read the durable world log segment for full history");
+    }
     return serializeWorldLog(this.meta(), this.commands);
   }
 }

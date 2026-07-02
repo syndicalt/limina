@@ -62,8 +62,10 @@ export class NetClient {
     return client;
   }
 
-  async initialize(agentId: string, sessionId: string, profile: string): Promise<JsonRpcMsg> {
-    return this.request("initialize", { agentId, sessionId, profile });
+  async initialize(agentId: string, sessionId: string, profile: string, authToken?: string): Promise<JsonRpcMsg> {
+    return this.request("initialize", authToken === undefined
+      ? { agentId, sessionId, profile }
+      : { agentId, sessionId, profile, authToken });
   }
 
   async listTools(): Promise<JsonRpcMsg> {
@@ -115,8 +117,7 @@ export class NetClient {
     } catch {
       // already gone
     }
-    for (const [, p] of this.pending) p.reject(new Error("client closed"));
-    this.pending.clear();
+    this.failAllPending(new Error("client closed"));
   }
 
   private request(method: string, params: unknown): Promise<JsonRpcMsg> {
@@ -135,11 +136,14 @@ export class NetClient {
   }
 
   private async recvLoop(): Promise<void> {
+    let terminalError = new Error("connection closed");
     while (this.running) {
       let line: string;
       try {
         line = await this.net.op_net_recv(this.connId);
-      } catch {
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        terminalError = new Error(`connection receive failed: ${detail}`);
         break;
       }
       if (line.length === 0) break;
@@ -147,12 +151,18 @@ export class NetClient {
       try {
         msg = JSON.parse(line) as JsonRpcMsg;
       } catch {
-        continue;
+        terminalError = new Error("protocol error: malformed JSON-RPC message");
+        this.running = false;
+        try {
+          await this.net.op_net_close(this.connId);
+        } catch {
+          // already gone
+        }
+        break;
       }
       this.handleMessage(msg);
     }
-    for (const [, p] of this.pending) p.reject(new Error("connection closed"));
-    this.pending.clear();
+    this.failAllPending(terminalError);
   }
 
   private handleMessage(msg: JsonRpcMsg): void {
@@ -204,5 +214,10 @@ export class NetClient {
         waiter.resolve(state);
       }
     }
+  }
+
+  private failAllPending(err: Error): void {
+    for (const [, pending] of this.pending) pending.reject(err);
+    this.pending.clear();
   }
 }

@@ -91,6 +91,19 @@ assert(phys !== null, "rapier-compat could not be instantiated in this binary �
   assert(p.op_physics_add_character(0, 2, 0, 0.5, 0.3) === 2, "character should consume id 2");
 }
 
+{
+  const p = await WasmRapierPhysics.create(RAPIER);
+  p.op_physics_create_world(-9.81);
+  p.dispose();
+  let threw = false;
+  try {
+    p.op_physics_create_world(-9.81);
+  } catch (err) {
+    threw = err instanceof Error && err.message.includes("disposed");
+  }
+  assert(threw, "disposed WasmRapierPhysics must release native resources and reject later ops");
+}
+
 // ── 2. REAL PHYSICS (only when rapier instantiated) ────────────────────────────
 if (realPhysics) {
   const p = phys;

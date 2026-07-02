@@ -56,6 +56,12 @@ function percentile(values: number[], p: number): number {
   return sorted[idx];
 }
 
+function field(value: unknown, key: string): unknown {
+  if (value === null || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  return key in record ? record[key] : undefined;
+}
+
 // ===========================================================================
 // PHASE 0 -- stand up the authoritative server + two real client connections.
 // ===========================================================================
@@ -155,15 +161,22 @@ await agent.waitForEntityValue(markerE, (s) => s.pos[0] === 1234, 3000);
 const ecsCmds = server.recorder.commands.filter(isSkill).filter((c) => c.tool === "ecs.updateComponent");
 const humanEcs = ecsCmds.filter((c) => c.actorId === "human_A").length;
 const agentEcs = ecsCmds.filter((c) => c.actorId === "agent_B").length;
+const agentDenied = server.registry.tracer.trace("agent_B").filter((e) =>
+  e.type === "security.permission.denied" && field(e.payload, "skill") === "ecs.updateComponent"
+).length;
 // Every human intent -- INCLUDING the one carrying a spoofed payload context --
-// is attributed to the human's bound session; the agent's (forbidden) attempt is
-// attributed to the agent's session; the spoofed "root_admin" never appears.
+// is attributed to the human's bound session in the replayable world log. The
+// agent's forbidden attempt is not replayable state, so it is attributed to the
+// agent's bound session in the audit trace; the spoofed "root_admin" never appears.
 assert(humanEcs === ROUNDS + 1, `expected ${ROUNDS + 1} ecs intents attributed to the human session, got ${humanEcs}`);
-assert(agentEcs === 1, `expected the agent's single (forbidden) ecs intent attributed to its session, got ${agentEcs}`);
+assert(agentEcs === 0, `the agent's forbidden/no-op ecs intent leaked into the replay world log (${agentEcs})`);
+assert(agentDenied === 1, `expected the agent's single forbidden ecs intent attributed to its trace session, got ${agentDenied}`);
 assert(ecsCmds.every((c) => c.actorId === "human_A" || c.actorId === "agent_B"),
   `attribution used an identity outside the bound sessions: ${JSON.stringify([...new Set(ecsCmds.map((c) => c.actorId))])}`);
 assert(!server.recorder.commands.some((c) => isSkill(c) && c.actorId === "root_admin"),
   "a spoofed actorId entered the authoritative world log");
+assert(server.registry.tracer.trace("root_admin").length === 0,
+  "a spoofed actorId entered the authoritative trace");
 
 const appliedIntents = server.appliedIntents;
 const loggedCommands = server.loggedCommands;

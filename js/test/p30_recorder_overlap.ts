@@ -1,25 +1,32 @@
-// P30 -- WorldRecorder fire-and-forget OVERLAP contract (headless, deterministic).
-// Locks in the wave-2 fix in recorder.ts: a skill that issues back-to-back
-// FIRE-AND-FORGET nested invokes -- `void invoke(a); void invoke(b)` (character_model's
-// `void invoke("animation.stop"); void invoke("animation.play")`) -- issues the second
-// while the first's chain is still in flight, so it enters at depth > 0 even though it
-// is NOT nested inside the first. Recording is classified by the `topInFlight` FLAG,
-// not the raw depth counter, so the pair collapses to EXACTLY ONE recorded top-level
-// command; and the `.finally()` depth-drop never throws, so neither fire-and-forget
-// promise rejects (the regression produced an unhandled rejection / a spurious reject).
+// P30 -- WorldRecorder concurrent-invoke RECORDING contract (headless, deterministic).
+//
+// A coordinated agent team drives MULTIPLE top-level invokes that INTERLEAVE on the
+// engine's single thread (one agent's invoke awaits inside its handler while another
+// agent's invoke is entered). Recording must classify each invoke correctly:
+//   * a TOP-LEVEL invoke (agent action loop / MCP callTool / scenario code) passes NO
+//     chainId and is RECORDED as its own command;
+//   * a NESTED invoke (a skill handler re-invoking the registry with the inherited
+//     `ctx.chainId`) is FOLDED into the already-recorded parent -- never re-recorded --
+//     because re-invoking the parent reproduces it on replay.
+//
+// The old classifier used a global `topInFlight` flag, which could not tell an
+// INDEPENDENT concurrent top-level chain from a genuine child: while chain A was
+// suspended at an await, chain B entered, saw the flag set, and was silently folded
+// into A -- DROPPING B's command from the world log. That broke replay for any
+// multi-agent driver. The fix classifies by an explicit chain id carried in the data
+// (the embedded host exposes no AsyncLocalStorage), so it is immune to interleaving.
 //
 // What this pins:
-//   A. SERIAL-AWAITED top-level invokes each record one command (the flag is clear on
-//      entry for each, so the ordinary path is unchanged).
-//   B. A FIRE-AND-FORGET pair (issued synchronously, unawaited) records EXACTLY ONE
-//      top-level command -- the second is folded into the first's live chain.
-//   C. NO unhandled rejection AND neither pair-promise rejects: both settle FULFILLED
-//      with a successful skill result (the `.finally` never throws).
-//   D. After the pair drains, the flag is clear again, so a further serial top-level
-//      invoke records normally (the chain-liveness window closed correctly).
-//   E. REPLAY of the recorded stream rebuilds the world BIT-IDENTICALLY (compareWorldState):
-//      the collapsed fire-and-forget siblings touch no captured transform, so the
-//      transform world replays exactly from the recorded top-level commands.
+//   A. SERIAL-AWAITED top-level invokes each record one command.
+//   B. CONCURRENT (fire-and-forget, unawaited) INDEPENDENT top-level invokes each
+//      record their OWN command -- the second agent's mutation is NOT dropped.
+//   C. NO unhandled rejection and every pair-promise settles FULFILLED (the recorder's
+//      `.finally` never throws).
+//   D. After the pair drains, a further serial top-level invoke records normally.
+//   E. REPLAY of the recorded stream rebuilds the world BIT-IDENTICALLY.
+//   F. A TRUE nested invoke (a handler re-invoking with `ctx.chainId`) FOLDS into its
+//      parent: invoking the parent records exactly ONE command, and the nested call is
+//      NOT recorded separately -- while still EXECUTING (so replay reproduces it).
 //
 // Run: limina js/test/p30_recorder_overlap.ts   (exit 0 = pass)
 
@@ -34,6 +41,7 @@ import { resolveProfile } from "../src/skills/permissions.ts";
 import { WorldRecorder } from "../src/worldlog/recorder.ts";
 import { replayCommands } from "../src/worldlog/replay.ts";
 import { captureWorldState, compareWorldState } from "../src/worldlog/log.ts";
+import { z } from "../build/zod.bundle.mjs";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -69,8 +77,30 @@ if (typeof g.addEventListener === "function") {
 }
 
 // ---- record a session through the choke point ------------------------------
+// A skill that genuinely NESTS: its handler re-invokes the registry, threading the
+// inherited chainId so the nested call folds into the parent's recorded command.
+function registerParentSkill(registry: SkillRegistry): void {
+  registry.register({
+    name: "p30.parent",
+    version: "1.0.0",
+    description: "test: re-invokes a nested skill (must fold into one recorded command)",
+    category: "system",
+    permissions: [],
+    input: z.object({ flagName: z.string() }),
+    output: z.object({ ok: z.boolean() }),
+    async handler(input, ctx) {
+      const res = await registry.invoke("game.flag", { name: input.flagName, value: true }, {
+        agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions,
+        tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+      });
+      return { ok: res.success };
+    },
+  });
+}
+
 const recReg = new SkillRegistry(new LiminaTracer(SESSION));
 registerCoreSkills(recReg);
+registerParentSkill(recReg);
 const recorder = new WorldRecorder(SESSION);
 recorder.attach(recReg);          // patch invoke -> record top-level commands
 recorder.seed(SEED);
@@ -79,6 +109,8 @@ const world = makeWorld(recOps);
 const base = { agentId: "agt_p30", sessionId: SESSION, permissions: BUILDER, tick: 1, world };
 
 const topCount = () => recorder.commands.filter((c) => c.kind === "skill").length;
+const hasSkillCmd = (tool: string, match?: (input: unknown) => boolean): boolean =>
+  recorder.commands.some((c) => c.kind === "skill" && c.tool === tool && (match === undefined || match(c.input)));
 
 // A. SERIAL-AWAITED top-level invokes: each records exactly one command. These
 //    also build REAL captured world state (body-less entities + transform writes).
@@ -91,30 +123,46 @@ ok(await recReg.invoke("ecs.updateComponent", { entity: e1, component: "position
 ok(await recReg.invoke("ecs.updateComponent", { entity: e2, component: "scale", value: [2, 3, 4] }, base));
 assert(topCount() === before1 + 4, "A: two serial ecs.updateComponent must record two more top-level commands");
 
-// B + C. FIRE-AND-FORGET pair: issue two DIFFERENT invokes synchronously, unawaited.
-//   The second enters while the first's chain is live -> folded in -> ONE command.
+// B + C. CONCURRENT INDEPENDENT fire-and-forget top-level invokes: the second is
+//   issued while the first's chain is live, but it is NOT nested inside it -- it is
+//   an independent agent's action. Each MUST record its own command (the old flag
+//   classifier folded them, dropping the second mutation from the world log).
 const beforePair = topCount();
 const pa = recReg.invoke("game.flag", { name: "doorOpen", value: true }, base);
 const pb = recReg.invoke("game.counter", { name: "coins", action: "increment", value: 1 }, base);
-// The collapse is observable synchronously, at issue time (the command is pushed
-// synchronously inside the patched invoke, before either promise settles).
-assert(topCount() === beforePair + 1,
-  `B: a fire-and-forget invoke pair must record EXACTLY ONE top-level command, recorded ${topCount() - beforePair}`);
+assert(topCount() === beforePair + 2,
+  `B: two concurrent INDEPENDENT top-level invokes must each record (expected +2, recorded ${topCount() - beforePair})`);
+assert(hasSkillCmd("game.flag", (i) => (i as { name?: string }).name === "doorOpen"),
+  "B: the independent game.flag invoke must be present as its own recorded command");
+assert(hasSkillCmd("game.counter", (i) => (i as { name?: string }).name === "coins"),
+  "B: the independent game.counter invoke must be present as its own recorded command");
 
 // Let any (mis)handled rejection surface as a macrotask before we settle the pair.
 await ops.op_sleep_ms(1);
 const settled = await Promise.allSettled([pa, pb]);
 assert(settled.every((s) => s.status === "fulfilled"),
-  "C: a fire-and-forget pair-promise REJECTED -- the recorder's `.finally` depth-drop must never throw");
+  "C: a fire-and-forget pair-promise REJECTED -- the recorder's `.finally` must never throw");
 for (const s of settled) {
   assert(s.status === "fulfilled" && (s.value as MCPResponse).success === true, "C: both fire-and-forget invokes must succeed");
 }
-assert(unhandled === 0, "C: a fire-and-forget invoke produced an UNHANDLED REJECTION (the wave-2 regression)");
+assert(unhandled === 0, "C: a fire-and-forget invoke produced an UNHANDLED REJECTION");
 
-// D. After the pair drained, the flag cleared -> a further serial top-level records.
+// D. After the pair drained, a further serial top-level records.
 const beforeD = topCount();
 ok(await recReg.invoke("game.state", { action: "set", name: "level", value: "cave" }, base));
-assert(topCount() === beforeD + 1, "D: after the pair drains, a serial top-level invoke must record again (flag reset)");
+assert(topCount() === beforeD + 1, "D: after the pair drains, a serial top-level invoke must record again");
+
+// F. TRUE NESTING folds: invoking p30.parent records exactly ONE top-level command
+//    (the parent); the nested game.flag it drives is NOT recorded separately, because
+//    re-invoking p30.parent on replay reproduces it. The nested call still EXECUTED
+//    (the parent returns ok === true), so replay reproduces its effect.
+const beforeF = topCount();
+const parentRes = ok(await recReg.invoke("p30.parent", { flagName: "nestedFlag" }, base));
+assert(parentRes.ok === true, "F: the nested game.flag must EXECUTE (parent reports success)");
+assert(topCount() === beforeF + 1, "F: a TRUE nested invoke must fold -- the parent records exactly ONE command");
+assert(hasSkillCmd("p30.parent"), "F: the parent command must be recorded");
+assert(!hasSkillCmd("game.flag", (i) => (i as { name?: string }).name === "nestedFlag"),
+  "F: the nested game.flag must NOT be recorded as a separate top-level command");
 
 // ---- E. REPLAY bit-identical ----------------------------------------------
 const recordedState = captureWorldState(world);
@@ -125,6 +173,7 @@ const replay = await replayCommands(recorder.commands, {
   makeRegistry: (tr) => {
     const r = new SkillRegistry(tr as LiminaTracer);
     registerCoreSkills(r);
+    registerParentSkill(r);
     return r;
   },
   tracer: new LiminaTracer(SESSION + "_replay"),
@@ -133,8 +182,7 @@ const cmp = compareWorldState(recordedState, replay.state);
 assert(cmp.identical, `E: replay diverged from the recorded world (${cmp.comparisons} fields): ${cmp.detail ?? "?"}`);
 
 ops.op_log(
-  `p30_recorder_overlap OK: serial top-level invokes each record (${before1 + 4 - before1} commands); ` +
-    `a fire-and-forget pair collapses to EXACTLY ONE recorded command with NO unhandled rejection and both promises FULFILLED; ` +
-    `the flag resets so a later serial invoke records again; replay of ${recorder.commands.length} commands is BIT-IDENTICAL ` +
-    `(${cmp.comparisons} fields, ${replay.state.entities.length} entities).`,
+  `p30_recorder_overlap OK: serial top-level invokes each record; concurrent INDEPENDENT top-level invokes ` +
+    `each record (no dropped mutation); a TRUE nested invoke folds into its parent; NO unhandled rejection; ` +
+    `replay of ${recorder.commands.length} commands is BIT-IDENTICAL (${cmp.comparisons} fields, ${replay.state.entities.length} entities).`,
 );

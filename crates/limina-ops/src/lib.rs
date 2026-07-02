@@ -7,14 +7,14 @@
 //!   * structured errors surfaced as catchable JS exceptions,
 //!   * host-owned resources held in `OpState`, fetched per call.
 
-use std::cell::RefCell;
 use std::io::Write;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::rc::Rc;
 use std::time::Duration;
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
+use reqwest::Url;
 
 /// String logging op. The `#[string]` arg forces the non-fast path; fine here.
 #[op2(fast)]
@@ -170,24 +170,191 @@ pub fn op_read_trace(#[string] name: String) -> Result<String, JsErrorBox> {
 
 /// Provider-agnostic HTTP POST (JSON). Async: returns a Promise resolved when the
 /// host pumps the event loop. The only HTTP need (LLM providers) goes through here.
+const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[op2]
 #[string]
 pub async fn op_http_post(
-    state: Rc<RefCell<OpState>>,
     #[string] url: String,
     #[string] body: String,
 ) -> Result<String, JsErrorBox> {
-    let client = state.borrow().borrow::<reqwest::Client>().clone();
-    let resp = client
-        .post(&url)
+    if body.len() > MAX_HTTP_REQUEST_BYTES {
+        return Err(JsErrorBox::generic(
+            "http post: request body exceeds size cap",
+        ));
+    }
+    let url = validate_http_post_url(&url)?;
+    let addrs = resolve_http_post_targets(&url).await?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| JsErrorBox::generic("http post: URL host is required"))?;
+    let client = build_http_post_client(host, &addrs)?;
+    let mut resp = client
+        .post(url)
         .header("content-type", "application/json")
         .body(body)
         .send()
         .await
         .map_err(|e| JsErrorBox::generic(format!("http post: {e}")))?;
-    resp.text()
+    read_limited_text_response(&mut resp, MAX_HTTP_RESPONSE_BYTES).await
+}
+
+fn validate_http_post_url(raw: &str) -> Result<Url, JsErrorBox> {
+    let url =
+        Url::parse(raw).map_err(|e| JsErrorBox::generic(format!("http post: invalid URL: {e}")))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => {
+            return Err(JsErrorBox::generic(
+                "http post: URL scheme must be http or https",
+            ))
+        }
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(JsErrorBox::generic(
+            "http post: URL credentials are not allowed",
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| JsErrorBox::generic("http post: URL host is required"))?;
+    if !is_http_post_host_allowed(host, url.port_or_known_default()) {
+        return Err(JsErrorBox::generic(format!(
+            "http post: host '{host}' is not allowed"
+        )));
+    }
+    Ok(url)
+}
+
+fn is_http_post_host_allowed(host: &str, port: Option<u16>) -> bool {
+    let host_lc = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host_lc == "localhost" {
+        return true;
+    }
+    if let Ok(ip) = host_lc.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    let host_port = port.map(|p| format!("{host_lc}:{p}"));
+    std::env::var("LIMINA_HTTP_POST_ALLOW")
+        .ok()
+        .map(|allow| {
+            allow.split(',').any(|entry| {
+                let entry = entry.trim().to_ascii_lowercase();
+                !entry.is_empty() && (entry == host_lc || Some(entry) == host_port)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn is_http_post_target_ip_allowed(host: &str, ip: &IpAddr) -> bool {
+    let host_lc = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    let host_is_loopback = host_lc == "localhost"
+        || host_lc
+            .parse::<IpAddr>()
+            .map(|host_ip| host_ip.is_loopback())
+            .unwrap_or(false);
+    if host_is_loopback {
+        return ip.is_loopback();
+    }
+    is_public_http_target_ip(ip)
+}
+
+fn is_public_http_target_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, _, _] = ip.octets();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || a == 0
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 192 && b == 0)
+                || (a == 198 && (18..=19).contains(&b))
+                || a >= 240)
+        }
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_multicast()
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+        }
+    }
+}
+
+async fn resolve_http_post_targets(url: &Url) -> Result<Vec<SocketAddr>, JsErrorBox> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| JsErrorBox::generic("http post: URL host is required"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| JsErrorBox::generic("http post: URL port is required"))?;
+    let host_lc = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    let addrs: Vec<SocketAddr> = if let Ok(ip) = host_lc.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|e| JsErrorBox::generic(format!("http post: DNS resolution failed: {e}")))?
+            .collect()
+    };
+    if addrs.is_empty() {
+        return Err(JsErrorBox::generic("http post: DNS returned no addresses"));
+    }
+    if let Some(addr) = addrs
+        .iter()
+        .find(|addr| !is_http_post_target_ip_allowed(host, &addr.ip()))
+    {
+        return Err(JsErrorBox::generic(format!(
+            "http post: resolved address {} for host '{host}' is not allowed",
+            addr.ip()
+        )));
+    }
+    Ok(addrs)
+}
+
+fn build_http_post_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, JsErrorBox> {
+    // A bounded client: without timeouts, a half-open peer leaves `op_http_post`'s
+    // future pending forever. Pinning `host` to the pre-vetted `addrs` prevents a
+    // second DNS lookup from rebinding an allowlisted name to metadata/LAN targets.
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, addrs)
+        .build()
+        .map_err(|e| JsErrorBox::generic(format!("http client: {e}")))
+}
+
+async fn read_limited_text_response(
+    resp: &mut reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, JsErrorBox> {
+    if let Some(len) = resp.content_length() {
+        if len > max_bytes as u64 {
+            return Err(JsErrorBox::generic("http body: response exceeds size cap"));
+        }
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .map_err(|e| JsErrorBox::generic(format!("http body: {e}")))
+        .map_err(|e| JsErrorBox::generic(format!("http body: {e}")))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(JsErrorBox::generic("http body: response exceeds size cap"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes)
+        .map_err(|e| JsErrorBox::generic(format!("http body: non-UTF-8 response: {e}")))
 }
 
 /// Async sleep primitive for JS-side bounded orchestration. The embedded
@@ -221,7 +388,10 @@ fn sha256_hex(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_asset_bytes, sha256_hex};
+    use super::{
+        is_http_post_host_allowed, is_http_post_target_ip_allowed, read_asset_bytes, sha256_hex,
+        validate_http_post_url,
+    };
 
     /// A fresh, unique scratch directory under the OS temp dir. Canonicalizable
     /// (it exists on disk), so it works as a real asset root for `read_asset_bytes`.
@@ -231,7 +401,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut dir = std::env::temp_dir();
-        dir.push(format!("limina_ops_test_{tag}_{}_{stamp}", std::process::id()));
+        dir.push(format!(
+            "limina_ops_test_{tag}_{}_{stamp}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -286,6 +459,85 @@ mod tests {
         assert!(err.to_string().contains("size cap"), "got: {err}");
         std::fs::remove_dir_all(&root).ok();
     }
+
+    #[test]
+    fn op_http_post_url_policy_allows_loopback_only_by_default() {
+        assert!(validate_http_post_url("http://localhost:11434/api/chat").is_ok());
+        assert!(validate_http_post_url("http://127.0.0.1:11434/api/chat").is_ok());
+        assert!(validate_http_post_url("http://[::1]:11434/api/chat").is_ok());
+        assert!(validate_http_post_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_http_post_url("http://example.com/api").is_err());
+    }
+
+    #[test]
+    fn op_http_post_url_policy_rejects_unsafe_url_shapes() {
+        assert!(validate_http_post_url("file:///etc/passwd").is_err());
+        assert!(validate_http_post_url("http://user:pass@localhost:11434/api/chat").is_err());
+        assert!(validate_http_post_url("http:///missing-host").is_err());
+    }
+
+    #[test]
+    fn op_http_post_allowlist_accepts_exact_host_or_host_port() {
+        assert!(!is_http_post_host_allowed("api.example.test", Some(443)));
+        // SAFETY: this test does not run concurrent assertions over the same env var.
+        std::env::set_var(
+            "LIMINA_HTTP_POST_ALLOW",
+            "api.example.test, other.test:8443",
+        );
+        assert!(is_http_post_host_allowed("api.example.test", Some(443)));
+        assert!(is_http_post_host_allowed("other.test", Some(8443)));
+        assert!(!is_http_post_host_allowed("other.test", Some(443)));
+        std::env::remove_var("LIMINA_HTTP_POST_ALLOW");
+    }
+
+    #[test]
+    fn op_http_post_rejects_unsafe_resolved_ips_for_allowlisted_hosts() {
+        assert!(!is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"169.254.169.254".parse().unwrap()
+        ));
+        assert!(!is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"10.0.0.5".parse().unwrap()
+        ));
+        assert!(!is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"127.0.0.1".parse().unwrap()
+        ));
+        assert!(!is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"100.64.0.1".parse().unwrap()
+        ));
+        assert!(!is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"198.18.0.1".parse().unwrap()
+        ));
+        assert!(is_http_post_target_ip_allowed(
+            "localhost",
+            &"127.0.0.1".parse().unwrap()
+        ));
+        assert!(is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"93.184.216.34".parse().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn op_http_post_resolver_rejects_private_ip_targets() {
+        let url = reqwest::Url::parse("http://10.0.0.5/api").unwrap();
+        let err = super::resolve_http_post_targets(&url).await.unwrap_err();
+        assert!(
+            err.to_string().contains("not allowed"),
+            "unexpected error: {err}"
+        );
+
+        let loopback = reqwest::Url::parse("http://127.0.0.1:11434/api").unwrap();
+        let addrs = super::resolve_http_post_targets(&loopback).await.unwrap();
+        assert_eq!(
+            addrs[0].ip(),
+            "127.0.0.1".parse::<std::net::IpAddr>().unwrap()
+        );
+    }
 }
 
 extension!(
@@ -305,7 +557,6 @@ extension!(
         op_read_trace,
     ],
     state = |state| {
-        state.put(reqwest::Client::new());
         let root = std::env::current_dir().unwrap_or_default().join("assets");
         state.put(AssetRoot(root));
     },

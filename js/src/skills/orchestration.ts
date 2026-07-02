@@ -117,6 +117,11 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
       if (input.bundle.includes(ORCHESTRATE_PERMISSION) && !(childDepth < maxDepth)) {
         throw new Error(`delegate: a worker at depth ${childDepth} may not be granted '${ORCHESTRATE_PERMISSION}' — delegation depth cap is ${maxDepth} (a depth-${childDepth} worker would spawn at depth ${childDepth + 1})`);
       }
+      for (const cap of new Set(input.bundle)) {
+        if (!ctx.permissions.has(cap)) {
+          throw new Error(`delegate: worker bundle cap '${cap}' is not held by coordinator session`);
+        }
+      }
       const providerName = input.provider ?? deps.defaultProvider;
       if (providerName === undefined || deps.providers[providerName] === undefined) {
         throw new Error(`delegate: no provider '${providerName ?? "(unset)"}' available`);

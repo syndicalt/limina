@@ -9,7 +9,15 @@
 // model is never re-run off the author's machine.
 
 import { ops } from "../engine.ts";
-import type { ClimateSample, TerrainSource, TerrainTile, TileRequest } from "./types.ts";
+import {
+  CLIMATE_BIOME,
+  CLIMATE_PRECIP_MM,
+  CLIMATE_TEMP_C,
+  type ClimateSample,
+  type TerrainSource,
+  type TerrainTile,
+  type TileRequest,
+} from "./types.ts";
 
 /** Canonical, stable string key for a tile request — the cache/content address.
  *  Hints are emitted in sorted-key order so logically-equal requests collide. */
@@ -73,42 +81,116 @@ export function tileContentHash(tile: TerrainTile): string {
 /** A content-addressed tile store: request -> generated tile. The same key resolves
  *  the same bytes for the life of the session; on a miss it generates (and caches)
  *  via the supplied source. */
+export interface TileCacheOptions {
+  /** Maximum export/replay-retained tiles before generation fails closed. */
+  maxRetainedEntries?: number;
+  /** Maximum transient, non-exported tiles held in memory with LRU eviction. */
+  maxEvictableEntries?: number;
+}
+
+export interface TileCachePutOptions {
+  /** True means the tile is part of the export/replay artifact. Default: true. */
+  retainForExport?: boolean;
+}
+
+const DEFAULT_MAX_RETAINED_TILES = 8192;
+const DEFAULT_MAX_EVICTABLE_TILES = 512;
+
+function cacheLimit(name: string, value: number | undefined, fallback: number): number {
+  const n = value ?? fallback;
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error(`TileCache: ${name} must be a non-negative safe integer`);
+  return n;
+}
+
 export class TileCache {
-  private readonly tiles = new Map<string, TerrainTile>();
+  private readonly retained = new Map<string, TerrainTile>();
+  private readonly evictable = new Map<string, TerrainTile>();
+  private readonly maxRetainedEntries: number;
+  private readonly maxEvictableEntries: number;
+
+  constructor(opts: TileCacheOptions = {}) {
+    this.maxRetainedEntries = cacheLimit("maxRetainedEntries", opts.maxRetainedEntries, DEFAULT_MAX_RETAINED_TILES);
+    this.maxEvictableEntries = cacheLimit("maxEvictableEntries", opts.maxEvictableEntries, DEFAULT_MAX_EVICTABLE_TILES);
+  }
 
   has(req: TileRequest): boolean {
-    return this.tiles.has(requestKey(req));
+    const key = requestKey(req);
+    return this.retained.has(key) || this.evictable.has(key);
   }
 
   get(req: TileRequest): TerrainTile | undefined {
-    return this.tiles.get(requestKey(req));
+    const key = requestKey(req);
+    const retained = this.retained.get(key);
+    if (retained !== undefined) return retained;
+    const evictable = this.evictable.get(key);
+    if (evictable === undefined) return undefined;
+    this.evictable.delete(key);
+    this.evictable.set(key, evictable);
+    return evictable;
   }
 
-  put(req: TileRequest, tile: TerrainTile): void {
-    this.tiles.set(requestKey(req), tile);
+  put(req: TileRequest, tile: TerrainTile, opts: TileCachePutOptions = {}): void {
+    this.store(requestKey(req), tile, opts.retainForExport !== false);
   }
 
   /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
    *  via `source`, caches it, and returns it. The single seam where "model at
    *  authoring / cache at replay / procedural offline" all flow through. */
-  async resolve(req: TileRequest, source: TerrainSource): Promise<TerrainTile> {
+  async resolve(req: TileRequest, source: TerrainSource, opts: TileCachePutOptions = {}): Promise<TerrainTile> {
     const key = requestKey(req);
-    const hit = this.tiles.get(key);
-    if (hit !== undefined) return hit;
+    const hit = this.get(req);
+    if (hit !== undefined) {
+      if (opts.retainForExport !== false && !this.retained.has(key)) this.store(key, hit, true);
+      return hit;
+    }
+    if (opts.retainForExport !== false) this.ensureRetainedCapacity(key);
     const tile = await source.generateTile(req);
-    this.tiles.set(key, tile);
+    this.store(key, tile, opts.retainForExport !== false);
     return tile;
   }
 
   /** All cached tiles with their keys + content hashes, for the export artifact. */
   entries(): { key: string; hash: string; tile: TerrainTile }[] {
     const out: { key: string; hash: string; tile: TerrainTile }[] = [];
-    for (const [key, tile] of this.tiles) out.push({ key, hash: tileContentHash(tile), tile });
+    for (const [key, tile] of this.retained) out.push({ key, hash: tileContentHash(tile), tile });
     return out;
   }
 
   get size(): number {
-    return this.tiles.size;
+    return this.retained.size + this.evictable.size;
+  }
+
+  get retainedSize(): number {
+    return this.retained.size;
+  }
+
+  get evictableSize(): number {
+    return this.evictable.size;
+  }
+
+  private store(key: string, tile: TerrainTile, retainForExport: boolean): void {
+    if (retainForExport) {
+      this.ensureRetainedCapacity(key);
+      this.evictable.delete(key);
+      this.retained.set(key, tile);
+      return;
+    }
+    if (this.retained.has(key) || this.maxEvictableEntries === 0) return;
+    this.evictable.delete(key);
+    this.evictable.set(key, tile);
+    while (this.evictable.size > this.maxEvictableEntries) {
+      const oldest = this.evictable.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.evictable.delete(oldest);
+    }
+  }
+
+  private ensureRetainedCapacity(key: string): void {
+    if (!this.retained.has(key) && this.retained.size >= this.maxRetainedEntries) {
+      throw new Error(
+        `TileCache: retained tile limit exceeded (${this.maxRetainedEntries}); export/replay requires every recorded tile, so generation was refused instead of evicting it`,
+      );
+    }
   }
 }
 
@@ -160,6 +242,26 @@ export class CachedTerrainSource implements TerrainSource {
     return undefined;
   }
 
+  private sampleCachedClimate(x: number, z: number): ClimateSample | undefined {
+    for (const tile of this.byKey.values()) {
+      if (tile.climate === undefined || tile.climateChannels === undefined) continue;
+      const [ox, , oz] = tile.origin;
+      const [sx, , sz] = tile.scale;
+      const u = (x - (ox - sx / 2)) / sx;
+      const v = (z - (oz - sz / 2)) / sz;
+      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const col = Math.min(tile.ncols - 1, Math.max(0, Math.round(u * (tile.ncols - 1))));
+      const row = Math.min(tile.nrows - 1, Math.max(0, Math.round(v * (tile.nrows - 1))));
+      const base = (row * tile.ncols + col) * tile.climateChannels;
+      return {
+        tempC: tile.climate[base + CLIMATE_TEMP_C],
+        precipMm: tile.climate[base + CLIMATE_PRECIP_MM],
+        biome: tile.climate[base + CLIMATE_BIOME],
+      };
+    }
+    return undefined;
+  }
+
   sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
     const cached = this.sampleCached(x, z);
     if (cached !== undefined) return cached;
@@ -171,6 +273,8 @@ export class CachedTerrainSource implements TerrainSource {
   }
 
   sampleClimate(seed: number, x: number, z: number, hints?: Record<string, number>): ClimateSample {
+    const cached = this.sampleCachedClimate(x, z);
+    if (cached !== undefined) return cached;
     if (this.pointSource === undefined) throw new Error("CachedTerrainSource.sampleClimate: no point source");
     return this.pointSource.sampleClimate(seed, x, z, hints);
   }

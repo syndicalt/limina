@@ -7,15 +7,16 @@
 //
 // Run: node editor/test/viewport_render.test.cjs   (exit 0 = pass; exit 2 = no browser/servers → skip)
 
-const fs = require("fs");
-const PWC = fs.readFileSync("/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/ec66f3aa-28e5-4be6-af39-c803b3c96622/scratchpad/pwc_path.txt", "utf8").trim();
-const CHROME = process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
+const { artifactPath } = require("./artifacts.cjs");
+const CHROME = chromeExecutable();
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
-  let chromium;
-  try { ({ chromium } = require(PWC)); } catch (e) { console.log("SKIP: playwright-core not loadable"); process.exit(2); }
-  if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium not found"); process.exit(2); }
+  const loaded = loadChromium();
+  if (!loaded.chromium) skip(loaded.error);
+  const chromium = loaded.chromium;
+  requireChromeBinary(CHROME);
 
   let browser;
   try {
@@ -41,9 +42,10 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     // Reliable readback: an ELEMENT screenshot of the canvas captures the browser-composited frame
     // (drawImage/toDataURL on a WebGL canvas return black without preserveDrawingBuffer). A rendered
     // scene (sky gradient + ground + lit shapes) yields a much larger PNG than a flat-black frame.
-    const canvasShot = "editor/test/viewport_render.png";
+    const canvasShot = artifactPath("viewport_render.png");
+    const fullShot = artifactPath("viewport_render_full.png");
     const buf = await page.locator("#editor-viewport").screenshot({ path: canvasShot });
-    await page.screenshot({ path: "editor/test/viewport_render_full.png", fullPage: true });
+    await page.screenshot({ path: fullShot, fullPage: true });
     await browser.close();
 
     const BLACK_PNG_CEILING = 6000; // a flat ~400x510 black PNG compresses to ~1-3KB; a scene is far larger
@@ -54,7 +56,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     }
     console.log(`viewport_render.test OK: the editor's live 3D viewport renders a non-flat scene via WebGL2/SwiftShader ` +
       `(canvas PNG ${buf.length}B ≫ ${BLACK_PNG_CEILING}B black-frame ceiling), status "${vstatus}". ` +
-      `forceWebGL2 fixes the WebGPU-device-loss black screen. Screenshots: ${canvasShot}, viewport_render_full.png.`);
+      `forceWebGL2 fixes the WebGPU-device-loss black screen. Screenshots: ${canvasShot}, ${fullShot}.`);
     process.exit(0);
   } catch (e) { try { await browser.close(); } catch (_) {} fail(e && e.message ? e.message : String(e)); }
 })();

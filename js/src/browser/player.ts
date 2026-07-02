@@ -66,10 +66,15 @@ export class ReplayPlayer {
       if (cmd.op === "step") { this.tickCount = cmd.tick; syncAllBodies(this.world); return true; }
       return false;
     }
-    await this.registry.invoke(cmd.tool, cmd.input, {
+    const response = await this.registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId, sessionId: cmd.sessionId, permissions: new Set(cmd.perms),
       tick: cmd.tick, world: this.world, causedBy: [],
     });
+    if (!response.success) {
+      const code = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`ReplayPlayer: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+    }
     return false;
   }
 

@@ -24,6 +24,7 @@ import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
+import { DurableWorldLog } from "../worldlog/durable.ts";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
 import { captureWorldState, syncAllBodies, type EntityState } from "../worldlog/log.ts";
 import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type MCPResponse } from "../mcp/protocol.ts";
@@ -65,6 +66,26 @@ export interface AuthoritativeServerOptions {
    *  is policy-checked and every intent crossing is governed at SkillRegistry.invoke;
    *  when omitted, the legacy static-profile admission + permission check apply. */
   policy?: PolicyEngine;
+  /** Optional shared secret required on initialize as params.authToken. This is
+   *  for browser-facing localhost authoring servers: without it, any webpage can
+   *  attempt a cross-site WebSocket connection to ws://localhost and choose a
+   *  privileged profile. */
+  initializeAuthToken?: string;
+  /** Optional profile allowlist for this listener. Use this to keep editor
+   *  hosts from accepting broad production profiles such as builder.readWrite. */
+  allowedProfiles?: ReadonlySet<string>;
+  /** Append-backed audit trace for long-lived servers. When omitted, the server
+   *  keeps the historical in-memory tracer semantics used by tests/one-shot runs. */
+  trace?: {
+    name: string;
+    maxInMemory?: number;
+    recoverPartialFinalLine?: boolean;
+  };
+  /** Optional append-backed authoritative world log for long-lived servers. */
+  worldLog?: {
+    name: string;
+    compactFlushed?: boolean;
+  };
 }
 
 interface ClientSession {
@@ -109,6 +130,8 @@ export class AuthoritativeServer {
   readonly world: WorldContext;
   readonly registry: SkillRegistry;
   readonly recorder: WorldRecorder;
+  private readonly durableLog?: DurableWorldLog;
+  private durableLogClosed = false;
   private readonly recOps: EngineOps;
   private readonly transport: NetServerTransport;
   private readonly tickMs: number;
@@ -117,6 +140,8 @@ export class AuthoritativeServer {
   private readonly tracer: LiminaTracer;
   /** The dynamic policy engine (M7); undefined => legacy static-profile admission. */
   private readonly policy?: PolicyEngine;
+  private readonly initializeAuthToken?: string;
+  private readonly allowedProfiles?: ReadonlySet<string>;
 
   private readonly conns = new Map<number, ClientConn>();
   private intentQueue: QueuedIntent[] = [];
@@ -137,13 +162,23 @@ export class AuthoritativeServer {
     this.broadcastEnabled = opts.broadcastEnabled ?? true;
     const baseOps = opts.ops ?? defaultOps;
 
-    const tracer = new LiminaTracer(opts.sessionId);
+    const tracer = opts.trace === undefined
+      ? new LiminaTracer(opts.sessionId)
+      : LiminaTracer.appendOnEmit(opts.sessionId, opts.trace.name, opts.trace.maxInMemory, {
+        recoverPartialFinalLine: opts.trace.recoverPartialFinalLine,
+      });
     this.tracer = tracer;
     this.policy = opts.policy;
+    this.initializeAuthToken = opts.initializeAuthToken;
+    this.allowedProfiles = opts.allowedProfiles;
     this.registry = new SkillRegistry(tracer, opts.policy);
     registerCoreSkills(this.registry);
 
     this.recorder = new WorldRecorder(opts.sessionId);
+    if (opts.worldLog !== undefined) {
+      this.durableLog = new DurableWorldLog(this.recorder, opts.worldLog.name, { compactFlushed: opts.worldLog.compactFlushed });
+      this.durableLog.open();
+    }
     this.recorder.attach(this.registry);
     this.recorder.seed(opts.seed ?? 0x10ca1ed);
     this.recOps = this.recorder.wrapOps(baseOps);
@@ -168,6 +203,7 @@ export class AuthoritativeServer {
     if (opts.bootstrap !== undefined) {
       opts.bootstrap({ world: this.world, recordedOps: this.recOps, registry: this.registry });
     }
+    this.flushDurableLog();
     // Seed the change baseline so tick 1 deltas are computed against bootstrap.
     this.prev = this.snapshotMap();
   }
@@ -179,7 +215,7 @@ export class AuthoritativeServer {
 
   /** Total world-log commands recorded so far (seed + physics + skill). */
   get loggedCommands(): number {
-    return this.recorder.commands.length;
+    return this.recorder.commandCount;
   }
 
   get connectionCount(): number {
@@ -216,6 +252,7 @@ export class AuthoritativeServer {
     this.conns.clear();
     await Promise.allSettled(this.bgLoops);
     this.bgLoops = [];
+    this.closeDurableLog();
   }
 
   // ---- accept / per-connection read loops ---------------------------------
@@ -236,22 +273,27 @@ export class AuthoritativeServer {
   }
 
   private async connLoop(conn: ClientConn): Promise<void> {
-    try {
-      while (this.running && !conn.closing) {
-        const line = await this.transport.recv(conn.connId);
+    while (this.running && !conn.closing) {
+      let line: string;
+      try {
+        line = await this.transport.recv(conn.connId);
+      } catch {
+        // transport error -> drop the client
+        break;
+      }
+      try {
         if (line.length === 0) break;
         const trimmed = line.trim();
         if (trimmed.length === 0) continue;
         await this.handleLine(conn, trimmed);
+      } catch {
+        await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.internalError, "Internal error"));
       }
-    } catch {
-      // transport error -> drop the client
-    } finally {
-      // Free the session's admission slot so the M7 session-admission quota stays
-      // accurate across reconnects.
-      if (conn.session !== undefined) this.policy?.releaseSession(conn.session.sessionId);
-      this.conns.delete(conn.connId);
     }
+    // Free the session's admission slot so the M7 session-admission quota stays
+    // accurate across reconnects.
+    if (conn.session !== undefined) this.policy?.releaseSession(conn.session.sessionId);
+    this.conns.delete(conn.connId);
   }
 
   // ---- dispatch ------------------------------------------------------------
@@ -272,11 +314,20 @@ export class AuthoritativeServer {
     const id = (rec.id ?? null) as string | number | null;
     const params = rec.params;
 
-    switch (rec.method) {
+    try {
+      switch (rec.method) {
       case "initialize": {
         const p = asRecord(params);
         if (p === undefined || typeof p.agentId !== "string" || typeof p.sessionId !== "string" || typeof p.profile !== "string") {
           await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidParams, "initialize requires agentId, sessionId, and profile"));
+          return;
+        }
+        if (this.initializeAuthToken !== undefined && p.authToken !== this.initializeAuthToken) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("forbidden"), "initialize denied: missing or invalid auth token"));
+          return;
+        }
+        if (this.allowedProfiles !== undefined && !this.allowedProfiles.has(p.profile)) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("forbidden"), `initialize denied: profile '${p.profile}' is not allowed on this listener`));
           return;
         }
         // SESSION ADMISSION (M7): the policy engine decides whether this session
@@ -321,7 +372,11 @@ export class AuthoritativeServer {
       }
       case "tools/list":
       case "listTools":
-        await this.reply(conn.connId, this.success(id, { tools: this.registry.list() }));
+        if (conn.session === undefined) {
+          await this.reply(conn.connId, this.error(id, -32000, "MCP session is not initialized"));
+          return;
+        }
+        await this.reply(conn.connId, this.success(id, { tools: this.registry.list(conn.session.permissions) }));
         return;
       case "tools/call":
       case "callTool": {
@@ -395,6 +450,9 @@ export class AuthoritativeServer {
         // state write attempt included) is rejected; state is untouched.
         await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${rec.method}`));
         return;
+      }
+    } catch {
+      await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.internalError, "Internal error"));
     }
   }
 
@@ -444,6 +502,7 @@ export class AuthoritativeServer {
     // 2. Advance the authoritative sim one fixed step (recorded), then sync
     //    native body transforms into ECS storage (the per-tick engine rule).
     this.recOps.op_physics_step();
+    this.flushDurableLog();
     syncAllBodies(this.world);
 
     // 3. Skip the O(world) capture+diff entirely when nothing will consume a delta:
@@ -481,9 +540,20 @@ export class AuthoritativeServer {
     //    AoI (was relevant last tick, is not now) both leave the client's view, so
     //    both are reported as `removed` ids -- without them a client view never
     //    converges (removed/exited entities would persist forever).
+    const fullInterestDeltaLine = JSON.stringify({
+      jsonrpc: "2.0",
+      method: SYNC_METHODS.delta,
+      params: { tick: this.tick, causedBy, changes, removed: removedIds },
+    });
     let broadcast = false;
+    const sends: Promise<void>[] = [];
     for (const conn of this.conns.values()) {
       if (!conn.subscribed) continue;
+      if (conn.aoi === undefined) {
+        broadcast = true;
+        sends.push(this.sendSafe(conn.connId, fullInterestDeltaLine));
+        continue;
+      }
       const filtered: EntityState[] = [];
       const removed: string[] = [];
       for (const e of changes) {
@@ -501,12 +571,13 @@ export class AuthoritativeServer {
       }
       if (filtered.length === 0 && removed.length === 0) continue;
       broadcast = true;
-      await this.sendSafe(conn.connId, JSON.stringify({
+      sends.push(this.sendSafe(conn.connId, JSON.stringify({
         jsonrpc: "2.0",
         method: SYNC_METHODS.delta,
         params: { tick: this.tick, causedBy, changes: filtered, removed },
-      }));
+      })));
     }
+    await Promise.allSettled(sends);
     if (broadcast) this.lastBroadcastTick = this.tick;
   }
 
@@ -519,6 +590,17 @@ export class AuthoritativeServer {
     return out;
   }
 
+  private flushDurableLog(): void {
+    if (this.durableLogClosed) return;
+    this.durableLog?.flush();
+  }
+
+  private closeDurableLog(): void {
+    if (this.durableLog === undefined || this.durableLogClosed) return;
+    this.durableLog.close();
+    this.durableLogClosed = true;
+  }
+
   private async sendSnapshot(conn: ClientConn): Promise<void> {
     // Reuse the M2 capture for the authoritative join view, then project it to
     // the wire + filter to the client's AoI (the snapshot is part of the stream,
@@ -526,7 +608,7 @@ export class AuthoritativeServer {
     const snap = captureWorldSnapshot(this.world, {
       sessionId: this.sessionId,
       tick: this.tick,
-      snapshotSeq: this.recorder.commands.length,
+      snapshotSeq: this.recorder.commandCount,
     });
     const entities: EntityState[] = [];
     for (const e of snap.entities) {

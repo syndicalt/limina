@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>forest preview</title>
+<style>html,body{margin:0;overflow:hidden}#c{display:block;width:100vw;height:100vh}</style>
+<script type="importmap">{ "imports": { "three": "/js/node_modules/three/build/three.module.js" } }</script></head>
+<body>
+<canvas id="c"></canvas>
+<script type="module">
+// FOREST PREVIEW — the technique test: dense instanced scatter + fog + eye-level camera, using the REAL
+// fetched assets, so the agent can SEE whether this engine+palette can approach a Valenfield-style forest.
+// Canopy = tall trees (sparse, big); ground = grass/plants/detail (very dense, small). Fog hides the
+// world edge and unifies the palette; the camera stands INSIDE the trees at ~1.7m.
+import * as THREE from "three";
+import { GLTFLoader } from "/js/node_modules/three/examples/jsm/loaders/GLTFLoader.js";
+
+const q = new URLSearchParams(location.search);
+const canopy = (q.get("canopy") || "").split(",").map(s=>s.trim()).filter(Boolean);
+const ground = (q.get("ground") || "").split(",").map(s=>s.trim()).filter(Boolean);
+const W = Number(q.get("w")||1400), H = Number(q.get("h")||900);
+const SKY = 0xd7dfd8;
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: true });
+renderer.setSize(W, H, true); renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.FogExp2(SKY, Number(q.get("fog")||0.028));
+
+const sun = new THREE.DirectionalLight(0xfff3e0, 2.6); sun.position.set(20, 34, 12); sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048); sun.shadow.camera.left=-40; sun.shadow.camera.right=40; sun.shadow.camera.top=40; sun.shadow.camera.bottom=-40; sun.shadow.camera.far=120;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xdfe8e0, 0x3a4030, 1.3));
+
+// Mossy ground with gentle vertex color variation (no texture needed).
+const gGeo = new THREE.PlaneGeometry(300,300,60,60); gGeo.rotateX(-Math.PI/2);
+const base = new THREE.Color(0x6f7e52), dark = new THREE.Color(0x55613f);
+const cols=[]; let sd=99173;
+const rr=()=>{sd=(sd*1664525+1013904223)>>>0;return sd/4294967296;};
+for(let i=0;i<gGeo.attributes.position.count;i++){const c=base.clone().lerp(dark, rr()*0.6); cols.push(c.r,c.g,c.b);}
+gGeo.setAttribute("color", new THREE.Float32BufferAttribute(cols,3));
+const groundMesh = new THREE.Mesh(gGeo, new THREE.MeshStandardMaterial({vertexColors:true, roughness:1}));
+groundMesh.receiveShadow = true; scene.add(groundMesh);
+
+const loader = new GLTFLoader(); window.__err=[];
+async function loadModel(asset){
+  const res = await fetch(`/assets/${asset}`); if(!res.ok) throw new Error(asset+" HTTP "+res.status);
+  const buf = await res.arrayBuffer();
+  const gltf = await new Promise((ok,no)=>loader.parse(buf,"",ok,no));
+  return gltf.scene;
+}
+function fit(root, targetH){ const b=new THREE.Box3().setFromObject(root); const s=new THREE.Vector3(); b.getSize(s); const k=targetH/Math.max(s.y,1e-3); root.scale.setScalar(k); return root; }
+
+let seed=1337; const rnd=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
+const CAM=[0,16]; // camera XZ — keep a clearing around it so no trunk blocks the lens
+function scatter(proto, count, area, hMin, hMax, clear){
+  let made=0, guard=0;
+  while(made<count && guard++<count*8){
+    const x=(rnd()-0.5)*area, z=(rnd()-0.5)*area;
+    if(clear && Math.hypot(x-CAM[0], z-CAM[1]) < clear) continue; // keep the lens clear
+    const m = proto.clone(true);
+    fit(m, hMin+rnd()*(hMax-hMin));
+    const b=new THREE.Box3().setFromObject(m); m.position.set(x, -b.min.y, z);
+    m.rotation.y = rnd()*Math.PI*2;
+    m.traverse(o=>{ if(o.isMesh){o.castShadow=true;o.receiveShadow=true;} });
+    scene.add(m); made++;
+  }
+}
+// Per-asset real-world height range (m) by name — a mushroom is NOT a shrub.
+function groundSize(asset){
+  const a=asset.toLowerCase();
+  if(a.includes("mushroom")) return [0.18,0.32];
+  if(a.includes("flower")||a.includes("wildflower")) return [0.25,0.5];
+  if(a.includes("grass")) return [0.3,0.7];
+  if(a.includes("rock")) return [0.25,0.9];
+  if(a.includes("shrub")||a.includes("bush")) return [0.6,1.4];
+  return [0.4,1.0];
+}
+
+// Load protos, then scatter: canopy sparse+tall, ground dense+small.
+const canopyProtos = []; for(const a of canopy){ try{ canopyProtos.push(await loadModel(a)); }catch(e){ window.__err.push(e.message);} }
+const groundProtos = []; for(const a of ground){ try{ groundProtos.push(await loadModel(a)); }catch(e){ window.__err.push(e.message);} }
+
+canopyProtos.forEach((p)=> scatter(p, 16, 74, 6, 12, 5.5));     // tall trees, sparse, clearing around lens
+ground.forEach((asset,i)=>{ const p=groundProtos[i]; if(!p) return; const [lo,hi]=groundSize(asset); scatter(p, 150, 42, lo, hi, 1.2); }); // dense carpet, correct scale
+window.__loaded = {canopy:canopyProtos.length, ground:groundProtos.length};
+
+const camera = new THREE.PerspectiveCamera(60, W/H, 0.05, 300);
+camera.position.set(0, 1.7, 16); camera.lookAt(6, 3.2, -14);   // eye-level, looking through the trunks
+renderer.render(scene, camera);
+window.__forestDone = true;
+</script>
+</body></html>

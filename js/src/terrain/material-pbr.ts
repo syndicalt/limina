@@ -34,7 +34,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import type { TerrainTile } from "./types.ts";
 import { sharedDetailTexture, triplanarLayer } from "../materials/triplanar-noise.ts";
-import { bakeTileClimate, RAMP_DEFAULT_COLORS, shorelineBandMasks, type TerrainPaletteOptions } from "./render.ts";
+import { bakeTileClimate, RAMP_DEFAULT_COLORS, shorelineBandMasks, trackMaterialTexture, type TerrainPaletteOptions } from "./render.ts";
 
 // TSL handle (loosely typed — the fluent node API is dynamic; the graph is validated by the
 // live WebGPU shader compile / in-tab UAT, and its CONSTRUCTION by js/test/p11_terrain_pbr.ts).
@@ -147,6 +147,7 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   const subBand = Math.max(0.5, (sea - minY) * 0.6);
 
   const baked = bakeTileClimate(tile, tempRange, precipMax);
+  trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
   const u = T.positionWorld.x.sub(minX).div(maxX - minX);
   const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);

@@ -63,6 +63,21 @@ const DEFAULT_BUDGETS: Required<SandboxBudgets> = {
   readCaps: ["perception", "agent.getPerception", "ecs.getSelfPosition"],
 };
 
+const LOAD_DEADLINE_MS = 1_000;
+
+function finitePositive(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function normalizeBudgets(budgets: SandboxBudgets): Required<SandboxBudgets> {
+  return {
+    memLimitBytes: finitePositive(budgets.memLimitBytes, DEFAULT_BUDGETS.memLimitBytes),
+    cpuDeadlineMs: finitePositive(budgets.cpuDeadlineMs, DEFAULT_BUDGETS.cpuDeadlineMs),
+    maxStackBytes: finitePositive(budgets.maxStackBytes, DEFAULT_BUDGETS.maxStackBytes),
+    readCaps: Array.isArray(budgets.readCaps) ? budgets.readCaps : DEFAULT_BUDGETS.readCaps,
+  };
+}
+
 /** A mutating-capability intent the untrusted decision recorded via host.invoke. */
 export interface CapabilityCall {
   cap: string;
@@ -157,7 +172,7 @@ export class SandboxedSkillHost {
     if (this.entries.has(spec.agentId)) {
       throw new Error(`sandbox already exists for agent ${spec.agentId}`);
     }
-    const b = { ...DEFAULT_BUDGETS, ...budgets };
+    const b = normalizeBudgets(budgets);
     const handle = ops.op_sandbox_create(b.memLimitBytes, b.maxStackBytes, JSON.stringify(b.readCaps));
     this.entries.set(spec.agentId, {
       handle,
@@ -167,11 +182,14 @@ export class SandboxedSkillHost {
       cpuDeadlineMs: b.cpuDeadlineMs,
       memLimitBytes: b.memLimitBytes,
     });
-    // Load with no deadline (defining decide() is trusted setup, not a decision).
-    const loaded = this.evalRaw(spec.agentId, spec.code, { deadlineMs: 0 });
-    if (!loaded.ok) {
+    try {
+      const loaded = this.evalRaw(spec.agentId, spec.code, { deadlineMs: LOAD_DEADLINE_MS });
+      if (!loaded.ok) {
+        throw new Error(`sandbox decision code failed to load for ${spec.agentId}: ${loaded.error ?? "unknown"}`);
+      }
+    } catch (err) {
       this.destroy(spec.agentId);
-      throw new Error(`sandbox decision code failed to load for ${spec.agentId}: ${loaded.error ?? "unknown"}`);
+      throw err;
     }
   }
 

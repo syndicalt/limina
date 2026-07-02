@@ -18,13 +18,23 @@ mod windowed;
 
 use std::rc::Rc;
 
+use anyhow::bail;
 use deno_core::{resolve_path, JsRuntime, RuntimeOptions};
 
 use module_loader::TypescriptModuleLoader;
 
-fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+#[derive(Debug, PartialEq, Eq)]
+struct CliOptions {
+    windowed: bool,
+    fullscreen: bool,
+    mcp_stdio: bool,
+    mcp_ws: bool,
+    port: u16,
+    max_frames: Option<u64>,
+    module: String,
+}
 
+fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
     let mut windowed = false;
     let mut fullscreen = false;
     let mut mcp_stdio = false;
@@ -41,15 +51,28 @@ fn main() -> anyhow::Result<()> {
             "--mcp-ws" => mcp_ws = true,
             "--port" => {
                 i += 1;
-                if let Some(p) = args.get(i).and_then(|s| s.parse::<u16>().ok()) {
-                    port = p;
-                }
+                let raw = args
+                    .get(i)
+                    .ok_or_else(|| anyhow::anyhow!("--port requires a value"))?;
+                port = raw.parse::<u16>().map_err(|_| {
+                    anyhow::anyhow!("--port requires an integer in [0, 65535], got '{raw}'")
+                })?;
             }
             "--frames" => {
                 i += 1;
-                max_frames = args.get(i).and_then(|s| s.parse().ok());
+                let raw = args
+                    .get(i)
+                    .ok_or_else(|| anyhow::anyhow!("--frames requires a value"))?;
+                max_frames = Some(raw.parse::<u64>().map_err(|_| {
+                    anyhow::anyhow!("--frames requires a non-negative integer, got '{raw}'")
+                })?);
             }
-            other => module = Some(other.to_string()),
+            other if other.starts_with("--") => bail!("unknown option '{other}'"),
+            other => {
+                if module.replace(other.to_string()).is_some() {
+                    bail!("multiple module paths supplied; pass exactly one module");
+                }
+            }
         }
         i += 1;
     }
@@ -62,15 +85,29 @@ fn main() -> anyhow::Result<()> {
             "js/src/bootstrap.ts".to_string()
         }
     });
+    Ok(CliOptions {
+        windowed,
+        fullscreen,
+        mcp_stdio,
+        mcp_ws,
+        port,
+        max_frames,
+        module,
+    })
+}
 
-    if windowed {
-        windowed::run_windowed(&module, max_frames, fullscreen)
-    } else if mcp_stdio {
-        run_mcp_stdio(&module)
-    } else if mcp_ws {
-        run_mcp_ws(&module, port)
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let opts = parse_cli_args(&args)?;
+
+    if opts.windowed {
+        windowed::run_windowed(&opts.module, opts.max_frames, opts.fullscreen)
+    } else if opts.mcp_stdio {
+        run_mcp_stdio(&opts.module)
+    } else if opts.mcp_ws {
+        run_mcp_ws(&opts.module, opts.port)
     } else {
-        run_headless(&module)
+        run_headless(&opts.module)
     }
 }
 
@@ -105,6 +142,52 @@ fn run_headless(main_path: &str) -> anyhow::Result<()> {
         .build()?
         .block_on(fut)
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        std::iter::once("limina")
+            .chain(items.iter().copied())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn cli_rejects_invalid_port_instead_of_swallowing_module_path() {
+        let err = parse_cli_args(&args(&["--port", "foo.ts"]))
+            .expect_err("invalid --port value must be rejected");
+        assert!(err.to_string().contains("--port"), "{err}");
+    }
+
+    #[test]
+    fn cli_rejects_missing_flag_values() {
+        assert!(parse_cli_args(&args(&["--port"])).is_err());
+        assert!(parse_cli_args(&args(&["--frames"])).is_err());
+    }
+
+    #[test]
+    fn cli_rejects_unknown_flags_and_multiple_modules() {
+        assert!(parse_cli_args(&args(&["--wat"])).is_err());
+        assert!(parse_cli_args(&args(&["a.ts", "b.ts"])).is_err());
+    }
+
+    #[test]
+    fn cli_preserves_defaults_and_valid_options() {
+        let opts =
+            parse_cli_args(&args(&["--mcp-ws", "--port", "9999"])).expect("valid mcp ws args");
+        assert_eq!(opts.port, 9999);
+        assert_eq!(opts.module, "js/src/mcp/ws_runtime.ts");
+        assert!(opts.mcp_ws);
+
+        let opts = parse_cli_args(&args(&["--window", "--frames", "12", "demo.ts"]))
+            .expect("valid window args");
+        assert!(opts.windowed);
+        assert_eq!(opts.max_frames, Some(12));
+        assert_eq!(opts.module, "demo.ts");
+    }
 }
 
 /// MCP stdio: load a JS module that owns the SkillRegistry and transport,

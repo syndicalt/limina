@@ -31,7 +31,7 @@ ATTEMPTS=${ATTEMPTS:-3}
 for i in $(seq 1 "$ATTEMPTS"); do
   claude -p "Generate the next batch of <content> per ./.gamestack/bible/constraints.md"
   VERDICT=$(claude -p "Run procgen-review on the batch just generated. Output only the verdict." \
-            | awk '/```json/{f=1;next}/```/{f=0}f')          # last-fenced-json extraction
+            | awk 'BEGIN{inside=0;block=""}/^```json[[:space:]]*$/{inside=1;cur="";next}/^```[[:space:]]*$/{if(inside){block=cur;inside=0};next}inside{cur=cur $0 ORS}END{printf "%s", block}') # last-fenced-json extraction
   PASS=$(printf '%s' "$VERDICT" | jq -r '.pass')
   if [ "$PASS" = "true" ]; then
     echo "PASS on attempt $i"

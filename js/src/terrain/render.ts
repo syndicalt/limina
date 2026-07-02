@@ -177,6 +177,17 @@ export interface BakedClimate {
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
 }
 
+const OWNED_TEXTURES_KEY = "liminaOwnedTextures";
+
+/** Track render-only textures captured by node graphs so mesh disposal can release them. */
+export function trackMaterialTexture(material: THREE.Material, texture: THREE.Texture): void {
+  const userData = material.userData as Record<string, unknown>;
+  const current = userData[OWNED_TEXTURES_KEY];
+  const textures = Array.isArray(current) ? current as THREE.Texture[] : [];
+  if (!textures.includes(texture)) textures.push(texture);
+  userData[OWNED_TEXTURES_KEY] = textures;
+}
+
 /** Bake the tile's own per-cell climate grid into an RGBA texture (linear-filtered, so the
  *  bands vary smoothly between cells). Self-contained: reads the tile's `climate` channels
  *  in the canonical CLIMATE_* layout (falls back to a neutral temperate field if absent). */
@@ -253,6 +264,7 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
 
   // Climate sampled at the fragment's world (x,z) (mirrors water.ts's world-XZ read).
   const baked = bakeTileClimate(tile, tempRange, precipMax);
+  trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
   const u = T.positionWorld.x.sub(minX).div(maxX - minX);
   const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);
@@ -363,8 +375,16 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
 /** Dispose a terrain mesh's GPU resources after it's removed from the scene. */
 export function disposeTerrainMesh(mesh: THREE.Mesh): void {
   mesh.geometry?.dispose?.();
-  const mat = mesh.material as { dispose?: () => void } | undefined;
-  mat?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const userData = (material as THREE.Material | undefined)?.userData as Record<string, unknown> | undefined;
+    const textures = userData?.[OWNED_TEXTURES_KEY];
+    if (Array.isArray(textures)) {
+      for (const texture of textures) (texture as { dispose?: () => void }).dispose?.();
+      userData![OWNED_TEXTURES_KEY] = [];
+    }
+    (material as { dispose?: () => void } | undefined)?.dispose?.();
+  }
 }
 
 /** Minimal scene surface this renderer needs (matches THREE.Scene / Object3DLike). */

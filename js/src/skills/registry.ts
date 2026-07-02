@@ -59,6 +59,11 @@ export interface ExecutionContext {
   permissions: ReadonlySet<string>;
   tick: number;
   world: WorldContext;
+  /** The recording chain this invocation belongs to (set by the WorldRecorder;
+   *  undefined when not recording). A skill handler that RE-INVOKES the registry
+   *  MUST pass `chainId: ctx.chainId` so the nested call is folded into the
+   *  already-recorded top-level command instead of recorded again. */
+  chainId?: string;
   emit(type: string, payload: unknown, causedBy?: string[]): string;
 }
 
@@ -75,6 +80,13 @@ export interface InvokeBase {
   profile?: string;
   /** Package provenance, when the call originates from a loaded package (M9). */
   pkg?: string;
+  /** Recording-chain id (set by the WorldRecorder on the base it forwards). A
+   *  TOP-LEVEL caller leaves this undefined -- the recorder mints one and records
+   *  the command. A skill handler that re-invokes passes `ctx.chainId` so the
+   *  nested call is classified as part of the same chain (not re-recorded). This
+   *  is robust to concurrent top-level chains interleaving on a single thread,
+   *  which a depth/flag counter cannot be. */
+  chainId?: string;
 }
 
 export interface SkillDefinition<I = unknown, O = unknown> {
@@ -365,6 +377,7 @@ export class SkillRegistry {
   // when a reviewer grants it via resolveApproval (the approval.* skills).
   private reviewGate?: ApprovalGate;
   private readonly pending = new Map<string, PendingApproval>();
+  private maxPendingApprovals = 1024;
 
   /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate: ApprovalGate): void {
@@ -382,6 +395,13 @@ export class SkillRegistry {
   /** Remove the review gate — calls apply directly again. */
   clearApprovalGate(): void {
     this.reviewGate = undefined;
+  }
+  /** Bound the held-action store for long-lived editor/coordinator hosts. */
+  setApprovalQueueLimit(limit: number): void {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new Error("approval queue limit must be a positive safe integer");
+    }
+    this.maxPendingApprovals = limit;
   }
   /** Snapshot of the actions currently held for approval (for a reviewer/editor). */
   pendingApprovals(): PendingApprovalView[] {
@@ -407,6 +427,7 @@ export class SkillRegistry {
       permissions: base.permissions,
       tick: base.tick,
       world: base.world,
+      chainId: base.chainId,
       emit: (type, payload, causedBy) => {
         const id = this.tracer.emit({
           type,
@@ -507,6 +528,18 @@ export class SkillRegistry {
     //     intent for human review instead of applying it — no world change until
     //     a reviewer grants it.
     if (this.reviewGate !== undefined && this.reviewGate(name, base, skill)) {
+      if (this.pending.size >= this.maxPendingApprovals) {
+        ctx.emit("skill.approval.denied", {
+          skill: name,
+          version: skill.version,
+          agentId: base.agentId,
+          profile: base.profile,
+          reason: "approval queue full",
+          pending: this.pending.size,
+          limit: this.maxPendingApprovals,
+        }, execCausedBy);
+        return { success: false, error: { code: "resource_exhausted", message: `approval queue full (${this.pending.size}/${this.maxPendingApprovals})` }, metadata: meta() };
+      }
       const approvalId = ctx.emit(
         "skill.approval.pending",
         { skill: name, version: skill.version, input: parsed.data, agentId: base.agentId, profile: base.profile, tick: base.tick },

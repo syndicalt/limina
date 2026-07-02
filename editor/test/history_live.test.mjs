@@ -10,6 +10,7 @@
 // Run:    node editor/test/history_live.test.mjs   (exit 0 = pass; exit 2 = host not running → skip)
 
 const HOST = "ws://localhost:8787/";
+const AUTH_TOKEN = process.env.EDITOR_AUTH_TOKEN || undefined;
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function pollUntil(fn, { tries = 30, gap = 150 } = {}) {
@@ -49,9 +50,9 @@ try {
     console.log("SKIP: editor host not running on " + HOST + " (start it: ./target/release/limina editor/server/editor_host.ts)");
     clearTimeout(overall); process.exit(2);
   }
-  await reviewer.initialize("reviewer_test", "ses_rev_" + Math.random().toString(36).slice(2, 7), "reviewer");
+  await reviewer.initialize("reviewer_test", "ses_rev_" + Math.random().toString(36).slice(2, 7), "reviewer", AUTH_TOKEN);
   await agent.connect();
-  await agent.initialize("agt_test", "ses_agt_" + Math.random().toString(36).slice(2, 7), "builder.review");
+  await agent.initialize("agt_test", "ses_agt_" + Math.random().toString(36).slice(2, 7), "builder.review", AUTH_TOKEN);
 
   const panel = createHistoryPanel({ onLog: () => {} });
   const ctrl = panel.controller();

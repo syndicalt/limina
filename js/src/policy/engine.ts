@@ -155,6 +155,7 @@ export class PolicyEngine {
   private readonly revokedPackages = new Set<string>();
   private readonly budgets = new Map<string, BudgetLedger>();
   private readonly admittedSessions = new Set<string>();
+  private readonly admittedSessionRefs = new Map<string, number>();
   private readonly maxSessions: number;
 
   constructor(opts: PolicyEngineOptions = {}) {
@@ -287,16 +288,31 @@ export class PolicyEngine {
     if (ctx.profile !== undefined && !this.profiles.has(ctx.profile)) {
       return { ...base, allow: false, rule: "profile.unknown", reason: `unknown profile '${ctx.profile}'`, permissionDenial: true };
     }
-    if (!this.admittedSessions.has(ctx.sessionId) && this.admittedSessions.size >= this.maxSessions) {
+    const alreadyAdmitted = this.admittedSessions.has(ctx.sessionId);
+    if (!alreadyAdmitted && this.admittedSessions.size >= this.maxSessions) {
       return { ...base, allow: false, rule: "quota.exceeded", reason: `session admission quota full (${this.admittedSessions.size}/${this.maxSessions})` };
     }
     this.admittedSessions.add(ctx.sessionId);
+    this.admittedSessionRefs.set(ctx.sessionId, (this.admittedSessionRefs.get(ctx.sessionId) ?? 0) + 1);
     return { ...base, allow: true, rule: "session.admitted", reason: `session admitted under profile '${ctx.profile ?? "(none)"}'` };
   }
 
-  /** Release an admitted session (frees a session-quota slot on disconnect). */
+  /** Release an admitted session (frees a session-quota slot on final disconnect). */
   releaseSession(sessionId: string): void {
+    const refs = this.admittedSessionRefs.get(sessionId) ?? 0;
+    if (refs > 1) {
+      this.admittedSessionRefs.set(sessionId, refs - 1);
+      return;
+    }
+    this.admittedSessionRefs.delete(sessionId);
     this.admittedSessions.delete(sessionId);
+    this.budgets.delete(sessionId);
+    for (const capKey of [...this.revokedCaps]) {
+      if (capKey.startsWith(`${sessionId}::`)) this.revokedCaps.delete(capKey);
+    }
+    for (const quotaKey of [...this.quotaHits.keys()]) {
+      if (quotaKey.endsWith(`::${sessionId}`)) this.quotaHits.delete(quotaKey);
+    }
   }
 
   // ---- package load (the M9 hook) ------------------------------------------

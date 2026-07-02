@@ -64,12 +64,7 @@ const raycast: SkillDefinition<
     );
     if (out[0] !== 1) return { hit: false };
     const bodyId = out[5];
-    let entity: string | undefined;
-    if (bodyId >= 0) {
-      for (const id of ctx.world.entities.ids()) {
-        if (ctx.world.entities.resolve(id)?.bodyId === bodyId) { entity = id; break; }
-      }
-    }
+    const entity = bodyId >= 0 ? ctx.world.entities.entityByBody(bodyId) : undefined;
     return { hit: true, distance: out[1], point: [out[2], out[3], out[4]], entity };
   },
 };
@@ -83,14 +78,9 @@ const collisionEvents: SkillDefinition<unknown, z.infer<typeof collisionEventOut
   input: z.object({}).default({}),
   output: collisionEventOutput,
   handler: (_input, ctx) => {
-    const bodyToEntity = new Map<number, string>();
-    for (const id of ctx.world.entities.ids()) {
-      const bodyId = ctx.world.entities.resolve(id)?.bodyId;
-      if (bodyId !== undefined) bodyToEntity.set(bodyId, id);
-    }
     const events = ctx.world.ops.op_physics_drain_collisions().map((rec) => {
-      const entityA = bodyToEntity.get(rec.a);
-      const entityB = bodyToEntity.get(rec.b);
+      const entityA = ctx.world.entities.entityByBody(rec.a);
+      const entityB = ctx.world.entities.entityByBody(rec.b);
       const phase = rec.kind === 1 ? "started" : "stopped";
       // Publish the agent-facing envelope (entity ids when resolvable) carrying the
       // real world-space contact point + normal from the Rapier manifold.

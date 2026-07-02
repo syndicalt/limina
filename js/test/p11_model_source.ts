@@ -267,20 +267,32 @@ const corrupted: WorldCommand[] = recorder.commands.map((c) =>
   (c.kind === "skill" && c.tool === "world.generateRegion")
     ? { ...c, input: { ...(c.input as object), seed: TERRAIN_SEED ^ 0x1 } }
     : c);
-const badReplay = await replayCommands(corrupted, {
-  makeWorld: () => makeHeadlessWorld(ops),
-  makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached()),
-  tracer: new LiminaTracer("ses_p11model_badseed"),
-});
-assert(!compareWorldState(nativeFinal, badReplay.state).identical, "corrupting the generateRegion seed did NOT diverge — replay isn't bound to the baked tiles");
+let badSeedRejectedOrDiverged = false;
+try {
+  const badReplay = await replayCommands(corrupted, {
+    makeWorld: () => makeHeadlessWorld(ops),
+    makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached()),
+    tracer: new LiminaTracer("ses_p11model_badseed"),
+  });
+  badSeedRejectedOrDiverged = !compareWorldState(nativeFinal, badReplay.state).identical;
+} catch (err) {
+  badSeedRejectedOrDiverged = /no cached tile|world replay/.test((err as Error).message);
+}
+assert(badSeedRejectedOrDiverged, "corrupting the generateRegion seed did NOT reject/diverge — replay isn't bound to the baked tiles");
 
 // Drop one baked tile from the package: the region can't fully rebuild → divergence.
-const droppedReplay = await replayCommands(recorder.commands, {
-  makeWorld: () => makeHeadlessWorld(ops),
-  makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached(pkg.tiles.slice(1))),
-  tracer: new LiminaTracer("ses_p11model_droptile"),
-});
-assert(!compareWorldState(nativeFinal, droppedReplay.state).identical, "dropping a baked tile did NOT diverge — replay silently regenerated a missing tile");
+let droppedTileRejectedOrDiverged = false;
+try {
+  const droppedReplay = await replayCommands(recorder.commands, {
+    makeWorld: () => makeHeadlessWorld(ops),
+    makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached(pkg.tiles.slice(1))),
+    tracer: new LiminaTracer("ses_p11model_droptile"),
+  });
+  droppedTileRejectedOrDiverged = !compareWorldState(nativeFinal, droppedReplay.state).identical;
+} catch (err) {
+  droppedTileRejectedOrDiverged = /no cached tile|world replay/.test((err as Error).message);
+}
+assert(droppedTileRejectedOrDiverged, "dropping a baked tile did NOT reject/diverge — replay silently regenerated a missing tile");
 
 // ============================================================================
 // (e) BIOME INTEGRATION GUARD — the model source's biome CLASSIFIER and the

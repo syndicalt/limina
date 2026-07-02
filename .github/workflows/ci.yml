@@ -17,6 +17,9 @@ on:
     paths-ignore: ['site/**', 'docs/**', 'art-direction/**', '**/*.md']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -41,6 +44,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+
+      # Dependency CVE gate (reqwest/tokio/tungstenite/rapier3d are in the tree).
+      # A vulnerability advisory fails the build before any artifact ships.
+      - name: Cargo audit (RustSec advisories)
+        run: cargo install --locked cargo-audit && cargo audit --deny warnings
 
       - uses: actions/setup-node@v4
         with:

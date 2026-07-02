@@ -37,8 +37,12 @@ async fn connect(port: u16) -> WsStream {
     panic!("could not establish a WebSocket connection to {url}");
 }
 
-/// Send one JSON-RPC request and read the single correlated response back.
+/// Send one JSON-RPC request and read its correlated response back.
 async fn send_recv(ws: &mut WsStream, req: serde_json::Value) -> serde_json::Value {
+    let expected_id = req
+        .get("id")
+        .and_then(|id| id.as_i64())
+        .expect("test request must carry a numeric JSON-RPC id");
     ws.send(Message::text(req.to_string()))
         .await
         .expect("send request frame");
@@ -50,10 +54,18 @@ async fn send_recv(ws: &mut WsStream, req: serde_json::Value) -> serde_json::Val
             .expect("websocket error");
         match msg {
             Message::Text(text) => {
-                return serde_json::from_str(text.as_str()).expect("parse JSON-RPC response");
+                let msg: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("parse JSON-RPC response");
+                if msg.get("id").and_then(|id| id.as_i64()) == Some(expected_id) {
+                    return msg;
+                }
             }
             Message::Binary(bytes) => {
-                return serde_json::from_slice(&bytes).expect("parse JSON-RPC response");
+                let msg: serde_json::Value =
+                    serde_json::from_slice(&bytes).expect("parse JSON-RPC response");
+                if msg.get("id").and_then(|id| id.as_i64()) == Some(expected_id) {
+                    return msg;
+                }
             }
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => panic!("server closed the connection unexpectedly"),

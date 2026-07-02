@@ -74317,7 +74317,7 @@ function generateMagicSquare(size) {
   const magicSquare = Array(noiseSquareSize).fill(0);
   let i2 = Math.floor(noiseSize / 2);
   let j3 = noiseSize - 1;
-  for (let num4 = 1; num4 <= noiseSquareSize; ) {
+  for (let num2 = 1; num2 <= noiseSquareSize; ) {
     if (i2 === -1 && j3 === noiseSize) {
       j3 = noiseSize - 2;
       i2 = 0;
@@ -74334,7 +74334,7 @@ function generateMagicSquare(size) {
       i2++;
       continue;
     } else {
-      magicSquare[i2 * noiseSize + j3] = num4++;
+      magicSquare[i2 * noiseSize + j3] = num2++;
     }
     j3++;
     i2--;
@@ -75057,28 +75057,54 @@ var N2 = (e2, t2) => K(e2[u].entityIndex, t2);
 
 // src/ecs/world.ts
 var MAX_ENTITIES = 16384;
+function createTransformStore() {
+  return {
+    position: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES)
+    },
+    rotation: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES),
+      w: new Float32Array(MAX_ENTITIES)
+    },
+    scale: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES)
+    }
+  };
+}
+var defaultTransformStore = createTransformStore();
 var Position = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES)
+  x: defaultTransformStore.position.x,
+  y: defaultTransformStore.position.y,
+  z: defaultTransformStore.position.z
 };
 var Rotation = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES),
-  w: new Float32Array(MAX_ENTITIES)
+  x: defaultTransformStore.rotation.x,
+  y: defaultTransformStore.rotation.y,
+  z: defaultTransformStore.rotation.z,
+  w: defaultTransformStore.rotation.w
 };
 var Scale = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES)
+  x: defaultTransformStore.scale.x,
+  y: defaultTransformStore.scale.y,
+  z: defaultTransformStore.scale.z
 };
+var defaultPhysicsTransformScratch = new Float32Array(7);
 var renderables = [];
 function createEcsWorld() {
   return Je();
 }
 function spawnRenderable(world, object2, x3, y3, z4) {
   const eid = Ne(world);
+  if (eid < 0 || eid >= MAX_ENTITIES) {
+    Le(world, eid);
+    throw new Error(`spawnRenderable: eid ${eid} exceeds MAX_ENTITIES ${MAX_ENTITIES}`);
+  }
   j(world, eid, Position);
   j(world, eid, Rotation);
   j(world, eid, Scale);
@@ -75108,7 +75134,7 @@ function renderSyncSystem(world) {
     object2.scale.set(Scale.x[eid], Scale.y[eid], Scale.z[eid]);
   }
 }
-function syncPhysicsBodyTransform(eid, bodyId, ops2, scratch = new Float32Array(7)) {
+function syncPhysicsBodyTransform(eid, bodyId, ops2, scratch = defaultPhysicsTransformScratch) {
   ops2.op_physics_body_transform(bodyId, scratch);
   Position.x[eid] = scratch[0];
   Position.y[eid] = scratch[1];
@@ -75559,6 +75585,11 @@ function installOps(host) {
 }
 var EntityTable = class {
   map = /* @__PURE__ */ new Map();
+  /** Reverse index `bodyId -> ent_ id`, maintained alongside `map` so a physics
+   *  body can be resolved to its entity in O(1) (collision events, raycasts)
+   *  instead of a linear scan of every entry. `bodyId` is set once at `create`
+   *  and never mutated on a live entry, so this stays consistent with `map`. */
+  byBody = /* @__PURE__ */ new Map();
   seq = 0;
   tableVersion = 0;
   get version() {
@@ -75567,16 +75598,24 @@ var EntityTable = class {
   create(entry) {
     const id = `ent_${this.seq++}`;
     this.map.set(id, { generation: 0, ...entry });
+    if (entry.bodyId !== void 0) this.byBody.set(entry.bodyId, id);
     this.tableVersion++;
     return id;
   }
   resolve(id) {
     return this.map.get(id);
   }
+  /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
+   *  when no live entity owns that body. Replaces the per-call linear scan the
+   *  collision/raycast skills used at scale. */
+  entityByBody(bodyId) {
+    return this.byBody.get(bodyId);
+  }
   destroy(id) {
     const entry = this.map.get(id);
     if (entry !== void 0) {
       this.map.delete(id);
+      if (entry.bodyId !== void 0) this.byBody.delete(entry.bodyId);
       this.tableVersion++;
     }
     return entry;
@@ -75599,8 +75638,10 @@ var EntityTable = class {
    *  bindings are runtime-only and left unbound (rebound on demand). */
   restore(snapshot) {
     this.map.clear();
+    this.byBody.clear();
     for (const entry of snapshot.entries) {
       this.map.set(entry.id, { eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
+      if (entry.bodyId !== void 0) this.byBody.set(entry.bodyId, entry.id);
     }
     this.seq = snapshot.seq;
     this.tableVersion = snapshot.version;
@@ -87608,13 +87649,13 @@ var recordProcessor = (schema, ctx, _json, params) => {
   const keyBag = keyType._zod.bag;
   const patterns = keyBag?.patterns;
   if (def.mode === "loose" && patterns && patterns.size > 0) {
-    const valueSchema = process(def.valueType, ctx, {
+    const valueSchema2 = process(def.valueType, ctx, {
       ...params,
       path: [...params.path, "patternProperties", "*"]
     });
     json2.patternProperties = {};
     for (const pattern of patterns) {
-      json2.patternProperties[pattern.source] = valueSchema;
+      json2.patternProperties[pattern.source] = valueSchema2;
     }
   } else {
     if (ctx.target === "draft-07" || ctx.target === "draft-2020-12") {
@@ -89760,13 +89801,13 @@ function convertBaseSchema(schema, ctx) {
       }
       if (schema.propertyNames) {
         const keySchema = convertSchema(schema.propertyNames, ctx);
-        const valueSchema = schema.additionalProperties && typeof schema.additionalProperties === "object" ? convertSchema(schema.additionalProperties, ctx) : z2.any();
+        const valueSchema2 = schema.additionalProperties && typeof schema.additionalProperties === "object" ? convertSchema(schema.additionalProperties, ctx) : z2.any();
         if (Object.keys(shape).length === 0) {
-          zodSchema = z2.record(keySchema, valueSchema);
+          zodSchema = z2.record(keySchema, valueSchema2);
           break;
         }
         const objectSchema2 = z2.object(shape).passthrough();
-        const recordSchema = z2.looseRecord(keySchema, valueSchema);
+        const recordSchema = z2.looseRecord(keySchema, valueSchema2);
         zodSchema = z2.intersection(objectSchema2, recordSchema);
         break;
       }
@@ -90428,6 +90469,7 @@ var SkillRegistry = class _SkillRegistry {
   // when a reviewer grants it via resolveApproval (the approval.* skills).
   reviewGate;
   pending = /* @__PURE__ */ new Map();
+  maxPendingApprovals = 1024;
   /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate) {
     this.reviewGate = gate;
@@ -90442,6 +90484,13 @@ var SkillRegistry = class _SkillRegistry {
   /** Remove the review gate — calls apply directly again. */
   clearApprovalGate() {
     this.reviewGate = void 0;
+  }
+  /** Bound the held-action store for long-lived editor/coordinator hosts. */
+  setApprovalQueueLimit(limit) {
+    if (!Number.isSafeInteger(limit) || limit <= 0) {
+      throw new Error("approval queue limit must be a positive safe integer");
+    }
+    this.maxPendingApprovals = limit;
   }
   /** Snapshot of the actions currently held for approval (for a reviewer/editor). */
   pendingApprovals() {
@@ -90466,6 +90515,7 @@ var SkillRegistry = class _SkillRegistry {
       permissions: base.permissions,
       tick: base.tick,
       world: base.world,
+      chainId: base.chainId,
       emit: (type, payload, causedBy) => {
         const id = this.tracer.emit({
           type,
@@ -90543,6 +90593,18 @@ var SkillRegistry = class _SkillRegistry {
     }
     const execCausedBy = policyEventId !== void 0 ? [...base.causedBy ?? [], policyEventId] : base.causedBy;
     if (this.reviewGate !== void 0 && this.reviewGate(name, base, skill)) {
+      if (this.pending.size >= this.maxPendingApprovals) {
+        ctx.emit("skill.approval.denied", {
+          skill: name,
+          version: skill.version,
+          agentId: base.agentId,
+          profile: base.profile,
+          reason: "approval queue full",
+          pending: this.pending.size,
+          limit: this.maxPendingApprovals
+        }, execCausedBy);
+        return { success: false, error: { code: "resource_exhausted", message: `approval queue full (${this.pending.size}/${this.maxPendingApprovals})` }, metadata: meta3() };
+      }
       const approvalId = ctx.emit(
         "skill.approval.pending",
         { skill: name, version: skill.version, input: parsed.data, agentId: base.agentId, profile: base.profile, tick: base.tick },
@@ -90582,6 +90644,17 @@ var SkillRegistry = class _SkillRegistry {
     return this.applyHandler(skill, parked.input, parked.base, ctx, meta3, [approvalId, grantedId], applyTick);
   }
 };
+
+// src/skills/entity-teardown.ts
+function teardownEntity(world, entity) {
+  const entry = world.entities.destroy(entity);
+  if (entry === void 0) return void 0;
+  if (entry.mesh !== void 0) world.scene.remove(entry.mesh);
+  if (entry.bodyId !== void 0) world.ops.op_physics_remove_body(entry.bodyId);
+  despawnRenderable(world.ecs, entry.eid);
+  world.tags.delete(entry.eid);
+  return entry;
+}
 
 // src/terrain/types.ts
 var CLIMATE_TEMP_C = 0;
@@ -90942,10 +91015,18 @@ var EROSION_MACRO = 8;
 var ProceduralTerrainSource = class {
   name;
   /** Memo of baked erosion macro-blocks (pure results, so memoizing is sound + just amortizes
-   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord. */
+   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord.
+   *  Insertion order is the LRU order: `get` reinserts a hit so it becomes most-recently-used,
+   *  and `bakeMacro` evicts from the front once `macroMemoCap` is exceeded. */
   macroMemo = /* @__PURE__ */ new Map();
-  constructor(name = "procedural") {
+  /** Max baked macro-blocks kept resident (LRU cap). Each bake is ~0.26 MB, so this bounds
+   *  memory instead of letting the memo grow without limit. Eviction is a pure memory concern:
+   *  an evicted block re-bakes BYTE-IDENTICALLY on next request (the bake is a pure function of
+   *  seed/lod/shape/erosion/macro coord), so generated output is unchanged — only recomputed. */
+  macroMemoCap;
+  constructor(name = "procedural", macroMemoCap = 16) {
     this.name = name;
+    this.macroMemoCap = macroMemoCap > 0 ? macroMemoCap : 1;
   }
   /** Bake (or fetch from the memo) the eroded macro-block that contains tile (tx,tz). Pure +
    *  deterministic in (seed, lod, shape, ep, macro coord); independent of any region bounds. */
@@ -90954,7 +91035,11 @@ var ProceduralTerrainSource = class {
     const mbz = Math.floor(tz / EROSION_MACRO);
     const key = `${seed}|${lod}|${hintKey}|${mbx}|${mbz}`;
     const hit = this.macroMemo.get(key);
-    if (hit !== void 0) return hit;
+    if (hit !== void 0) {
+      this.macroMemo.delete(key);
+      this.macroMemo.set(key, hit);
+      return hit;
+    }
     const apron = apronFor(ep);
     const span = EROSION_MACRO * (TILE_RES - 1) + 1;
     const dim = span + 2 * apron;
@@ -90977,6 +91062,10 @@ var ProceduralTerrainSource = class {
     }
     const bake = { interior, dim: span, gcStart, grStart };
     this.macroMemo.set(key, bake);
+    while (this.macroMemo.size > this.macroMemoCap) {
+      const lru = this.macroMemo.keys().next().value;
+      this.macroMemo.delete(lru);
+    }
     return bake;
   }
   /** One tile's eroded heights — a SLICE of its macro-block's shared eroded grid (so tiles
@@ -91405,15 +91494,11 @@ var destroyEntity = {
   input: destroyEntityInput,
   output: external_exports.object({ removed: external_exports.boolean() }),
   handler: (input, ctx) => {
-    const entry = ctx.world.entities.destroy(input.entity);
+    const entry = teardownEntity(ctx.world, input.entity);
     if (entry === void 0) return { removed: false };
-    if (entry.mesh !== void 0) ctx.world.scene.remove(entry.mesh);
-    if (entry.bodyId !== void 0) ctx.world.ops.op_physics_remove_body(entry.bodyId);
     if (entry.resource !== void 0) {
       ctx.emit("resource.unloaded", { entity: input.entity, ...entry.resource });
     }
-    despawnRenderable(ctx.world.ecs, entry.eid);
-    ctx.world.tags.delete(entry.eid);
     ctx.emit("ecs.component.removed", { entity: input.entity, eid: entry.eid });
     return { removed: true };
   }
@@ -91447,10 +91532,58 @@ var queryEntities = {
     return { entities };
   }
 };
+var inspectInput = external_exports.object({
+  tag: external_exports.string().optional().describe("Summarize only entities carrying this tag (the AABB/sample is over the filtered set; the tag census is always global)."),
+  sampleSize: external_exports.number().int().min(0).max(64).default(8).describe("How many entity positions to include in `sample` (for spot-checking placement).")
+});
+var inspectScene = {
+  name: "scene.inspect",
+  version: "1.0.0",
+  description: "Summarize the whole scene for an agent to reason about: entity count, world AABB (min/max/center/size), a global tag census, and a small position sample. Pure read \u2014 the perception substrate for self-checking an authored world.",
+  category: "scene",
+  permissions: ["scene.read"],
+  input: inspectInput,
+  output: external_exports.object({
+    entityCount: external_exports.number(),
+    bounds: external_exports.object({ min: Vec3, max: Vec3 }).nullable(),
+    center: Vec3.nullable(),
+    size: Vec3.nullable(),
+    tagCounts: external_exports.record(external_exports.string(), external_exports.number()),
+    sample: external_exports.array(external_exports.object({ entity: external_exports.string(), position: Vec3 }))
+  }),
+  handler: (input, ctx) => {
+    const ents = querySpatialEntities(ctx.world, { tag: input.tag, sortBy: "entity" }).entities;
+    let bounds = null;
+    let center = null;
+    let size = null;
+    if (ents.length > 0) {
+      let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
+      for (const e2 of ents) {
+        const [x3, y3, z4] = e2.position;
+        if (x3 < mnx) mnx = x3;
+        if (y3 < mny) mny = y3;
+        if (z4 < mnz) mnz = z4;
+        if (x3 > mxx) mxx = x3;
+        if (y3 > mxy) mxy = y3;
+        if (z4 > mxz) mxz = z4;
+      }
+      bounds = { min: [mnx, mny, mnz], max: [mxx, mxy, mxz] };
+      center = [(mnx + mxx) / 2, (mny + mxy) / 2, (mnz + mxz) / 2];
+      size = [mxx - mnx, mxy - mny, mxz - mnz];
+    }
+    const tagCounts = {};
+    for (const set2 of ctx.world.tags.values()) {
+      for (const t2 of set2) tagCounts[t2] = (tagCounts[t2] ?? 0) + 1;
+    }
+    const sample3 = ents.slice(0, input.sampleSize).map((e2) => ({ entity: e2.entity, position: e2.position }));
+    return { entityCount: ents.length, bounds, center, size, tagCounts, sample: sample3 };
+  }
+};
 function registerSceneSkills(registry2, materials) {
   registry2.register(makeCreateEntity(materials));
   registry2.register(destroyEntity);
   registry2.register(queryEntities);
+  registry2.register(inspectScene);
 }
 
 // src/skills/ecs.ts
@@ -92198,6 +92331,12 @@ function buildAssetInstancedMeshes(root, instances) {
   }
   return meshes;
 }
+function disposeAssetInstancedMesh(mesh) {
+  mesh.dispose?.();
+  mesh.geometry.dispose();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of new Set(materials)) material.dispose();
+}
 
 // src/terrain/tilecache.ts
 function requestKey(req) {
@@ -92239,36 +92378,91 @@ function tileContentHash(tile) {
   ];
   return "sha256:" + ops.op_sha256(parts.join("|"));
 }
+var DEFAULT_MAX_RETAINED_TILES = 8192;
+var DEFAULT_MAX_EVICTABLE_TILES = 512;
+function cacheLimit(name, value, fallback) {
+  const n2 = value ?? fallback;
+  if (!Number.isSafeInteger(n2) || n2 < 0) throw new Error(`TileCache: ${name} must be a non-negative safe integer`);
+  return n2;
+}
 var TileCache = class {
-  tiles = /* @__PURE__ */ new Map();
+  retained = /* @__PURE__ */ new Map();
+  evictable = /* @__PURE__ */ new Map();
+  maxRetainedEntries;
+  maxEvictableEntries;
+  constructor(opts = {}) {
+    this.maxRetainedEntries = cacheLimit("maxRetainedEntries", opts.maxRetainedEntries, DEFAULT_MAX_RETAINED_TILES);
+    this.maxEvictableEntries = cacheLimit("maxEvictableEntries", opts.maxEvictableEntries, DEFAULT_MAX_EVICTABLE_TILES);
+  }
   has(req) {
-    return this.tiles.has(requestKey(req));
+    const key = requestKey(req);
+    return this.retained.has(key) || this.evictable.has(key);
   }
   get(req) {
-    return this.tiles.get(requestKey(req));
+    const key = requestKey(req);
+    const retained = this.retained.get(key);
+    if (retained !== void 0) return retained;
+    const evictable = this.evictable.get(key);
+    if (evictable === void 0) return void 0;
+    this.evictable.delete(key);
+    this.evictable.set(key, evictable);
+    return evictable;
   }
-  put(req, tile) {
-    this.tiles.set(requestKey(req), tile);
+  put(req, tile, opts = {}) {
+    this.store(requestKey(req), tile, opts.retainForExport !== false);
   }
   /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
    *  via `source`, caches it, and returns it. The single seam where "model at
    *  authoring / cache at replay / procedural offline" all flow through. */
-  async resolve(req, source) {
+  async resolve(req, source, opts = {}) {
     const key = requestKey(req);
-    const hit = this.tiles.get(key);
-    if (hit !== void 0) return hit;
+    const hit = this.get(req);
+    if (hit !== void 0) {
+      if (opts.retainForExport !== false && !this.retained.has(key)) this.store(key, hit, true);
+      return hit;
+    }
+    if (opts.retainForExport !== false) this.ensureRetainedCapacity(key);
     const tile = await source.generateTile(req);
-    this.tiles.set(key, tile);
+    this.store(key, tile, opts.retainForExport !== false);
     return tile;
   }
   /** All cached tiles with their keys + content hashes, for the export artifact. */
   entries() {
     const out = [];
-    for (const [key, tile] of this.tiles) out.push({ key, hash: tileContentHash(tile), tile });
+    for (const [key, tile] of this.retained) out.push({ key, hash: tileContentHash(tile), tile });
     return out;
   }
   get size() {
-    return this.tiles.size;
+    return this.retained.size + this.evictable.size;
+  }
+  get retainedSize() {
+    return this.retained.size;
+  }
+  get evictableSize() {
+    return this.evictable.size;
+  }
+  store(key, tile, retainForExport) {
+    if (retainForExport) {
+      this.ensureRetainedCapacity(key);
+      this.evictable.delete(key);
+      this.retained.set(key, tile);
+      return;
+    }
+    if (this.retained.has(key) || this.maxEvictableEntries === 0) return;
+    this.evictable.delete(key);
+    this.evictable.set(key, tile);
+    while (this.evictable.size > this.maxEvictableEntries) {
+      const oldest = this.evictable.keys().next().value;
+      if (oldest === void 0) break;
+      this.evictable.delete(oldest);
+    }
+  }
+  ensureRetainedCapacity(key) {
+    if (!this.retained.has(key) && this.retained.size >= this.maxRetainedEntries) {
+      throw new Error(
+        `TileCache: retained tile limit exceeded (${this.maxRetainedEntries}); export/replay requires every recorded tile, so generation was refused instead of evicting it`
+      );
+    }
   }
 };
 function serializeTiles(entries) {
@@ -92334,6 +92528,13 @@ var placeInput = external_exports.object({
   /** Euler radians (x,y,z). */
   rotation: Vec33.optional(),
   scale: Vec33.optional(),
+  /** Sit the asset's BASE at position.y (not its glTF origin, usually centred → half-sunk). Measured
+   *  from the loaded bytes, so it is deterministic + replay-safe. Default on; pass false to keep the
+   *  raw origin. */
+  ground: external_exports.boolean().default(true),
+  /** Uniformly scale the asset so its world height equals this many meters (e.g. a ~0.9 m barrel),
+   *  before grounding. Assets arrive at arbitrary scales; this normalizes them. */
+  normalizeHeight: external_exports.number().positive().max(500).optional(),
   /** Optional PBR overrides applied across the placed glTF's meshes. */
   material: external_exports.object({
     color: external_exports.number().int().min(0).max(16777215).optional(),
@@ -92386,7 +92587,7 @@ function registerAssetSkills(registry2, assets, terrain) {
     // the replay log COMMITS to the resolved content hash (pins authored identity).
     commitFields: ["hash"],
     input: placeInput,
-    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), resource: gltfResourceSchema }),
+    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), resource: gltfResourceSchema, bounds: Vec33 }),
     handler: async (input, ctx) => {
       const resolved = assets.resolve(input.assetId);
       if (input.hash !== void 0 && input.hash !== resolved.hash) {
@@ -92397,13 +92598,39 @@ function registerAssetSkills(registry2, assets, terrain) {
         rotationEuler: input.rotation,
         scale: input.scale
       });
+      let bounds = [0, 0, 0];
+      const rec = ctx.world.entities.resolve(entity);
+      if (rec?.mesh !== void 0 && rec.eid !== void 0) {
+        const measure = () => {
+          renderSyncSystem(ctx.world.ecs);
+          rec.mesh.updateMatrixWorld(true);
+          return new Box3().setFromObject(rec.mesh);
+        };
+        let box = measure();
+        if (input.normalizeHeight !== void 0) {
+          const h2 = box.max.y - box.min.y;
+          if (h2 > 1e-6) {
+            const f2 = input.normalizeHeight / h2;
+            Scale.x[rec.eid] *= f2;
+            Scale.y[rec.eid] *= f2;
+            Scale.z[rec.eid] *= f2;
+            box = measure();
+          }
+        }
+        if (input.ground) {
+          Position.y[rec.eid] += input.position[1] - box.min.y;
+          box = measure();
+        }
+        bounds = [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z];
+      }
       if (input.material !== void 0) {
         const res = await registry2.invoke("three.setMaterial", { entity, ...input.material }, {
           agentId: ctx.agentId,
           sessionId: ctx.sessionId,
           permissions: new Set(PLACE_PERMS),
           tick: ctx.tick,
-          world: ctx.world
+          world: ctx.world,
+          chainId: ctx.chainId
         });
         if (!res.success) throw new Error(`asset.place: material override failed: ${JSON.stringify(res.error)}`);
       }
@@ -92413,9 +92640,11 @@ function registerAssetSkills(registry2, assets, terrain) {
         position: input.position,
         rotation: input.rotation ?? null,
         scale: input.scale ?? null,
+        grounded: input.ground,
+        bounds,
         entity
       });
-      return { entity, hash: resolved.hash, resource };
+      return { entity, hash: resolved.hash, resource, bounds };
     }
   };
   registry2.register(place);
@@ -92482,12 +92711,22 @@ function registerAssetSkills(registry2, assets, terrain) {
           }
           list.push(inst);
         }
+        const mountedMeshes = [];
         for (const [id, list] of byId) {
           const root = await parseGltfScene(id, assets.resolve(id).bytes);
           for (const mesh of buildAssetInstancedMeshes(root, list)) {
             scene.add(mesh);
+            mountedMeshes.push(mesh);
             mounted++;
           }
+        }
+        if (mountedMeshes.length > 0) {
+          (region.renderDisposables ??= []).push(() => {
+            for (const mesh of mountedMeshes) {
+              if (typeof scene.remove === "function") scene.remove(mesh);
+              disposeAssetInstancedMesh(mesh);
+            }
+          });
         }
       }
       ctx.emit("asset.scattered", {
@@ -92803,15 +93042,7 @@ var raycast = {
     );
     if (out[0] !== 1) return { hit: false };
     const bodyId = out[5];
-    let entity;
-    if (bodyId >= 0) {
-      for (const id of ctx.world.entities.ids()) {
-        if (ctx.world.entities.resolve(id)?.bodyId === bodyId) {
-          entity = id;
-          break;
-        }
-      }
-    }
+    const entity = bodyId >= 0 ? ctx.world.entities.entityByBody(bodyId) : void 0;
     return { hit: true, distance: out[1], point: [out[2], out[3], out[4]], entity };
   }
 };
@@ -92824,14 +93055,9 @@ var collisionEvents = {
   input: external_exports.object({}).default({}),
   output: collisionEventOutput,
   handler: (_input, ctx) => {
-    const bodyToEntity = /* @__PURE__ */ new Map();
-    for (const id of ctx.world.entities.ids()) {
-      const bodyId = ctx.world.entities.resolve(id)?.bodyId;
-      if (bodyId !== void 0) bodyToEntity.set(bodyId, id);
-    }
     const events = ctx.world.ops.op_physics_drain_collisions().map((rec) => {
-      const entityA = bodyToEntity.get(rec.a);
-      const entityB = bodyToEntity.get(rec.b);
+      const entityA = ctx.world.entities.entityByBody(rec.a);
+      const entityB = ctx.world.entities.entityByBody(rec.b);
       const phase = rec.kind === 1 ? "started" : "stopped";
       ctx.emit("physics.collision", {
         a: entityA ?? rec.a,
@@ -93353,16 +93579,17 @@ function registerApprovalSkills(registry2) {
   });
 }
 function reviewProfileGate(reviewProfiles) {
-  const READ_ONLY = /* @__PURE__ */ new Set(["scene.read", "ecs.read", "physics.read", "agent.read", "terrain.read"]);
+  const readOnly = (permission) => permission.endsWith(".read");
   return (name, base, skill) => {
     if (base.profile === void 0 || !reviewProfiles.has(base.profile)) return false;
     if (name.startsWith("approval.")) return false;
-    return skill.permissions.some((p2) => !READ_ONLY.has(p2));
+    return skill.permissions.some((p2) => !readOnly(p2));
   };
 }
 
 // src/policy/audit.ts
 var POLICY_TYPES = { "policy.decision": true, "policy.denied": true };
+var AUDIT_READ_PERMS = ["trace.read"];
 var policyPayloadSchema = external_exports.object({
   boundary: external_exports.string(),
   cap: external_exports.string(),
@@ -93429,7 +93656,7 @@ function registerAuditSkills(registry2) {
     version: "1.0.0",
     description: "Answer 'why was action X allowed/denied': the governing policy decision (rule + reason + context + quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain \u2014 all from the real recorded trace.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: external_exports.object({ eventId: external_exports.string() }),
     output: external_exports.object({
       eventId: external_exports.string(),
@@ -93511,7 +93738,7 @@ function registerAuditSkills(registry2) {
     version: "1.0.0",
     description: "Query recorded policy decisions: filter by allow/deny, cap, rule, agent, session, or package (package provenance). Returns matching decision events plus an allow/deny + by-rule + by-cap summary.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: external_exports.object({
       decision: external_exports.enum(["allow", "deny", "all"]).default("all"),
       cap: external_exports.string().optional(),
@@ -93595,7 +93822,7 @@ function registerAuditSkills(registry2) {
     version: "1.0.0",
     description: "Resource usage from recorded decisions: allowed/denied call counts per session+cap, plus the latest quota and budget snapshots seen for each session \u2014 derived from the real policy events.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: external_exports.object({ sessionId: external_exports.string().optional() }),
     output: external_exports.object({
       perSessionCap: external_exports.array(external_exports.object({
@@ -93916,6 +94143,18 @@ var DEFAULT_BUDGETS = {
   maxStackBytes: 256 * 1024,
   readCaps: ["perception", "agent.getPerception", "ecs.getSelfPosition"]
 };
+var LOAD_DEADLINE_MS = 1e3;
+function finitePositive(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+function normalizeBudgets(budgets) {
+  return {
+    memLimitBytes: finitePositive(budgets.memLimitBytes, DEFAULT_BUDGETS.memLimitBytes),
+    cpuDeadlineMs: finitePositive(budgets.cpuDeadlineMs, DEFAULT_BUDGETS.cpuDeadlineMs),
+    maxStackBytes: finitePositive(budgets.maxStackBytes, DEFAULT_BUDGETS.maxStackBytes),
+    readCaps: Array.isArray(budgets.readCaps) ? budgets.readCaps : DEFAULT_BUDGETS.readCaps
+  };
+}
 var SandboxedSkillHost = class {
   constructor(registry2, tracer, policy) {
     this.registry = registry2;
@@ -93941,7 +94180,7 @@ var SandboxedSkillHost = class {
     if (this.entries.has(spec.agentId)) {
       throw new Error(`sandbox already exists for agent ${spec.agentId}`);
     }
-    const b3 = { ...DEFAULT_BUDGETS, ...budgets };
+    const b3 = normalizeBudgets(budgets);
     const handle = ops.op_sandbox_create(b3.memLimitBytes, b3.maxStackBytes, JSON.stringify(b3.readCaps));
     this.entries.set(spec.agentId, {
       handle,
@@ -93951,10 +94190,14 @@ var SandboxedSkillHost = class {
       cpuDeadlineMs: b3.cpuDeadlineMs,
       memLimitBytes: b3.memLimitBytes
     });
-    const loaded = this.evalRaw(spec.agentId, spec.code, { deadlineMs: 0 });
-    if (!loaded.ok) {
+    try {
+      const loaded = this.evalRaw(spec.agentId, spec.code, { deadlineMs: LOAD_DEADLINE_MS });
+      if (!loaded.ok) {
+        throw new Error(`sandbox decision code failed to load for ${spec.agentId}: ${loaded.error ?? "unknown"}`);
+      }
+    } catch (err) {
       this.destroy(spec.agentId);
-      throw new Error(`sandbox decision code failed to load for ${spec.agentId}: ${loaded.error ?? "unknown"}`);
+      throw err;
     }
   }
   /** Destroy a sandbox and free its QuickJS context. Returns whether one existed. */
@@ -94222,7 +94465,8 @@ var PackageRegistry = class {
     const manifest = parsed.manifest;
     const ref = packageRef(manifest);
     const contentHash = "sha256:" + ops.op_sha256(manifest.entry);
-    this.installed.set(ref, { ref, manifest, contentHash, installedAt: (/* @__PURE__ */ new Date()).toISOString() });
+    const installedAt = `content:${ref}:${contentHash}`;
+    this.installed.set(ref, { ref, manifest, contentHash, installedAt });
     this.tracer.emit({
       type: "package.installed",
       actorId: manifest.name,
@@ -95578,7 +95822,7 @@ function sideToward(toward) {
 function offsetToward(side, toward) {
   const horizontalEdge = side === "top" || side === "bottom";
   const perp = horizontalEdge ? toward.x : -toward.y;
-  const mag = Math.hypot(toward.x, toward.y) || 1;
+  const mag = Math.sqrt(toward.x * toward.x + toward.y * toward.y) || 1;
   const t2 = 0.5 + 0.4 * (perp / mag);
   return t2 < 0.08 ? 0.08 : t2 > 0.92 ? 0.92 : t2;
 }
@@ -96462,7 +96706,7 @@ var Locomotion = class {
     if (tgt === void 0) return void 0;
     const dx = tgt[0] - Position.x[actor.eid];
     const dz = tgt[2] - Position.z[actor.eid];
-    return Math.hypot(dx, dz);
+    return Math.sqrt(dx * dx + dz * dz);
   }
   /** The actor's current facing (unit forward on the XZ plane), from its yaw. */
   facing(agentId) {
@@ -96489,7 +96733,7 @@ var Locomotion = class {
       const pz = Position.z[actor.eid];
       const dx = tgt[0] - px;
       const dz = tgt[2] - pz;
-      const dist = Math.hypot(dx, dz);
+      const dist = Math.sqrt(dx * dx + dz * dz);
       if (dist > EPS) {
         actor.yaw = Math.atan2(dx, dz);
         this.writeYaw(actor.eid, actor.yaw);
@@ -96505,7 +96749,7 @@ var Locomotion = class {
         moving = advance > EPS;
         const ndx = tgt[0] - Position.x[actor.eid];
         const ndz = tgt[2] - Position.z[actor.eid];
-        actor.arrived = Math.hypot(ndx, ndz) <= actor.talkDistance + EPS;
+        actor.arrived = Math.sqrt(ndx * ndx + ndz * ndz) <= actor.talkDistance + EPS;
       }
       actor.humanoid.update(dtMs, moving);
     }
@@ -96658,7 +96902,7 @@ function registerSocialSkills(registry2, deps) {
 
 // src/audio/spatial.ts
 function deriveEars(camPos, camRight, halfHead) {
-  const len = Math.hypot(camRight[0], camRight[1], camRight[2]) || 1;
+  const len = Math.sqrt(camRight[0] * camRight[0] + camRight[1] * camRight[1] + camRight[2] * camRight[2]) || 1;
   const rx = camRight[0] / len * halfHead;
   const ry = camRight[1] / len * halfHead;
   const rz = camRight[2] / len * halfHead;
@@ -96668,7 +96912,8 @@ function deriveEars(camPos, camRight, halfHead) {
   };
 }
 function distance3(a2, b3) {
-  return Math.hypot(a2[0] - b3[0], a2[1] - b3[1], a2[2] - b3[2]);
+  const dx = a2[0] - b3[0], dy = a2[1] - b3[1], dz = a2[2] - b3[2];
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 function maxDistanceGain(dist, maxDist, base) {
   if (maxDist <= 0) return base;
@@ -96678,17 +96923,30 @@ function maxDistanceGain(dist, maxDist, base) {
 
 // src/audio/manager.ts
 var BUS = { master: 0, sfx: 1, ambience: 2, voice: 3 };
+var SPEECH_MIN_MS = 3e3;
+var SPEECH_MAX_MS = 7e4;
+var SPEECH_PADDING_MS = 1500;
+var SPEECH_CHARS_PER_SECOND = 9;
+function estimateSpeechDurationMs(text) {
+  const spokenChars = Math.max(1, text.trim().length);
+  const estimated = spokenChars / SPEECH_CHARS_PER_SECOND * 1e3 + SPEECH_PADDING_MS;
+  return Math.min(SPEECH_MAX_MS, Math.max(SPEECH_MIN_MS, estimated));
+}
 var AudioManager = class {
   sounds = /* @__PURE__ */ new Map();
   seq = 0;
   listenerCenter = [0, 0, 0];
   next() {
+    this.pruneFinished();
     return `snd_${this.seq++}`;
+  }
+  finiteExpiry(secs, nowMs = Date.now()) {
+    return Number.isFinite(secs) && secs > 0 ? nowMs + secs * 1e3 : void 0;
   }
   play(freq, secs, bus, volume) {
     const handle = this.next();
     const id = ops.op_audio_play(freq, secs, BUS[bus], volume);
-    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0 });
+    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   ambient(bus, volume) {
@@ -96700,10 +96958,11 @@ var AudioManager = class {
   playAt(freq, secs, pos, bus, volume, maxDistance = 0, entityId) {
     const handle = this.next();
     const id = ops.op_audio_play_spatial(freq, secs, pos[0], pos[1], pos[2], BUS[bus], volume);
-    this.sounds.set(handle, { id, spatial: true, entityId, volume, maxDistance });
+    this.sounds.set(handle, { id, spatial: true, entityId, volume, maxDistance, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   stop(handle) {
+    this.pruneFinished();
     const t2 = this.sounds.get(handle);
     if (t2 === void 0) return false;
     ops.op_audio_stop(t2.id);
@@ -96711,6 +96970,7 @@ var AudioManager = class {
     return true;
   }
   setVolume(handle, volume) {
+    this.pruneFinished();
     const t2 = this.sounds.get(handle);
     if (t2 === void 0) return false;
     t2.volume = volume;
@@ -96725,7 +96985,8 @@ var AudioManager = class {
   playBuffer(data, sampleRate, channels, bus, volume, loop) {
     const handle = this.next();
     const id = ops.op_audio_play_buffer(data, sampleRate, channels, BUS[bus], volume, loop);
-    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0 });
+    const secs = !loop && sampleRate > 0 && channels > 0 ? data.length / channels / sampleRate : 0;
+    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   /** Speak a line at a world position on the voice bus (fire-and-forget TTS).
@@ -96733,11 +96994,12 @@ var AudioManager = class {
   speak(text, pos, volume = 0.95, pitch = 0) {
     const handle = this.next();
     const id = ops.op_audio_speak(text, pos[0], pos[1], pos[2], volume, pitch);
-    this.sounds.set(handle, { id, spatial: true, volume, maxDistance: 0 });
+    this.sounds.set(handle, { id, spatial: true, volume, maxDistance: 0, expiresAtMs: Date.now() + estimateSpeechDurationMs(text) });
     return handle;
   }
   /** The entity a spatial handle should follow (host updates its emitter each frame). */
   entityOf(handle) {
+    this.pruneFinished();
     return this.sounds.get(handle)?.entityId;
   }
   /** Host per-frame: set the listener from the camera (derives two ear positions). */
@@ -96748,6 +97010,7 @@ var AudioManager = class {
   }
   /** Host per-frame: move a spatial sound's emitter + apply the max-distance cutoff. */
   follow(handle, pos) {
+    this.pruneFinished();
     const t2 = this.sounds.get(handle);
     if (t2 === void 0 || !t2.spatial) return;
     ops.op_audio_set_emitter(t2.id, pos[0], pos[1], pos[2]);
@@ -96755,6 +97018,25 @@ var AudioManager = class {
       const g3 = maxDistanceGain(distance3(this.listenerCenter, pos), t2.maxDistance, t2.volume);
       ops.op_audio_set_volume(t2.id, g3);
     }
+  }
+  /** Drop JS handles for one-shot sounds the native mixer has already finished. */
+  pruneFinished(nowMs = Date.now()) {
+    let removed = 0;
+    for (const [handle, sound] of this.sounds) {
+      if (sound.expiresAtMs !== void 0 && sound.expiresAtMs <= nowMs) {
+        this.sounds.delete(handle);
+        removed++;
+      }
+    }
+    return removed;
+  }
+  /** Stop all tracked live sounds and release JS handles. Safe to call more than once. */
+  dispose() {
+    this.pruneFinished();
+    for (const sound of this.sounds.values()) {
+      ops.op_audio_stop(sound.id);
+    }
+    this.sounds.clear();
   }
 };
 
@@ -97081,7 +97363,7 @@ function terrainTileGeometry(tile) {
   for (let v3 = 0; v3 < vertCount; v3++) {
     const o2 = v3 * 3;
     const nx = normals[o2], ny = normals[o2 + 1], nz = normals[o2 + 2];
-    const len = Math.hypot(nx, ny, nz);
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
     if (len > 0) {
       normals[o2] = nx / len;
       normals[o2 + 1] = ny / len;
@@ -97109,7 +97391,7 @@ function addTri(s2, color3, ax, ay, az, bx, by, bz, cx, cy, cz) {
   let nx = e1y * e2z - e1z * e2y;
   let ny = e1z * e2x - e1x * e2z;
   let nz = e1x * e2y - e1y * e2x;
-  const len = Math.hypot(nx, ny, nz) || 1;
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
   nx /= len;
   ny /= len;
   nz /= len;
@@ -97402,6 +97684,7 @@ function applyPbrMaterial(material, tile, baseRough, pbr) {
   const coastBand = Math.max(1e-3, aboveSpan * (pbr.coastFrac ?? 0.06));
   const subBand = Math.max(0.5, (sea - minY) * 0.6);
   const baked = bakeTileClimate(tile, tempRange, precipMax);
+  trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
   const u3 = T6.positionWorld.x.sub(minX).div(maxX - minX);
   const v3 = T6.positionWorld.z.sub(minZ).div(maxZ - minZ);
@@ -97500,6 +97783,14 @@ var RAMP_DEFAULT_COLORS = {
   snow: 15922423
   // snow on the high+cold crests
 };
+var OWNED_TEXTURES_KEY = "liminaOwnedTextures";
+function trackMaterialTexture(material, texture3) {
+  const userData3 = material.userData;
+  const current = userData3[OWNED_TEXTURES_KEY];
+  const textures = Array.isArray(current) ? current : [];
+  if (!textures.includes(texture3)) textures.push(texture3);
+  userData3[OWNED_TEXTURES_KEY] = textures;
+}
 function bakeTileClimate(tile, tempRange, precipMax) {
   const { ncols, nrows } = tile;
   const ch = tile.climateChannels ?? 0;
@@ -97565,6 +97856,7 @@ function applyBiomeRamp(material, tile, baseRough, pal) {
   const coastBand = Math.max(1e-3, aboveSpan * (pal.coastFrac ?? 0.06));
   const subBand = Math.max(0.5, (sea - minY) * 0.6);
   const baked = bakeTileClimate(tile, tempRange, precipMax);
+  trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
   const u3 = T7.positionWorld.x.sub(minX).div(maxX - minX);
   const v3 = T7.positionWorld.z.sub(minZ).div(maxZ - minZ);
@@ -97633,8 +97925,16 @@ function buildTerrainMesh(tile, opts = {}) {
 }
 function disposeTerrainMesh(mesh) {
   mesh.geometry?.dispose?.();
-  const mat = mesh.material;
-  mat?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const userData3 = material?.userData;
+    const textures = userData3?.[OWNED_TEXTURES_KEY];
+    if (Array.isArray(textures)) {
+      for (const texture3 of textures) texture3.dispose?.();
+      userData3[OWNED_TEXTURES_KEY] = [];
+    }
+    material?.dispose?.();
+  }
 }
 var TerrainStreamRenderer = class {
   constructor(scene, opts) {
@@ -98039,6 +98339,12 @@ function unmountTileMesh(applied, scene) {
   disposeTerrainMesh(applied.mesh);
   applied.mesh = void 0;
 }
+function clearRegionRenderDisposables(region) {
+  const disposables = region.renderDisposables;
+  if (disposables === void 0 || disposables.length === 0) return;
+  region.renderDisposables = [];
+  for (const dispose of disposables) dispose();
+}
 function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regions = /* @__PURE__ */ new Map()) {
   async function applyTile(region, regionId, tx, tz, ctx) {
     const req = { seed: region.seed, tx, tz, lod: region.lod, hints: region.hints };
@@ -98127,6 +98433,7 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
       } else if (region.type === void 0 && input.type !== void 0) {
         region.type = input.type;
       }
+      clearRegionRenderDisposables(region);
       const bodies = [];
       const keys = [];
       const applied = [];
@@ -98213,8 +98520,13 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         }
       }
       const removed = [];
+      let clearedRegionRender = false;
       for (const [key, t2] of [...region.tiles]) {
         if (Math.abs(t2.tx - atx) > keep || Math.abs(t2.tz - atz) > keep) {
+          if (!clearedRegionRender) {
+            clearRegionRenderDisposables(region);
+            clearedRegionRender = true;
+          }
           unmountTileMesh(t2, ctx.world.scene);
           ctx.world.ops.op_physics_remove_body(t2.bodyId);
           despawnRenderable(ctx.world.ecs, t2.eid);
@@ -98305,6 +98617,7 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
       if (region.tiles.size === 0) {
         throw new Error(`world.populateBiome: region '${input.regionId}' has no applied tiles`);
       }
+      clearRegionRenderDisposables(region);
       let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
       for (const t2 of region.tiles.values()) {
         if (t2.tx < minTx) minTx = t2.tx;
@@ -98319,7 +98632,8 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         sessionId: ctx.sessionId,
         permissions: ctx.permissions,
         tick: ctx.tick,
-        world: ctx.world
+        world: ctx.world,
+        chainId: ctx.chainId
       };
       const res = await scatterBiomeContent({
         registry: registry2,
@@ -98774,11 +99088,27 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions) {
 }
 
 // src/agents/agent.ts
+var profileGrants = /* @__PURE__ */ new Map();
 function agentGrants(agent) {
-  return agent.bundle ?? resolveProfile(agent.profile);
+  if (agent.bundle != null) return agent.bundle;
+  let grants = profileGrants.get(agent.profile);
+  if (grants === void 0) {
+    grants = resolveProfile(agent.profile);
+    profileGrants.set(agent.profile, grants);
+  }
+  return grants;
 }
 var AgentRegistry = class {
   agents = /* @__PURE__ */ new Map();
+  /** Cached snapshots of the agent set. `all()` is called several times per tick
+   *  and `ordered()` feeds the action sweep's deterministic id-sort; membership
+   *  only changes on `add`/`clear`, so both snapshots stay valid until then. */
+  allCache;
+  orderedCache;
+  invalidate() {
+    this.allCache = void 0;
+    this.orderedCache = void 0;
+  }
   add(spec) {
     const record2 = {
       id: spec.id,
@@ -98796,18 +99126,34 @@ var AgentRegistry = class {
       queue: []
     };
     this.agents.set(record2.id, record2);
+    this.invalidate();
     return record2;
   }
   get(id) {
     return this.agents.get(id);
   }
+  /** All registered agents, memoized per membership change. Callers must treat the
+   *  result as read-only: never sort/splice/push it, as that would poison the shared
+   *  per-tick cache (mirrors `ordered()`). Copy first if you need to mutate. */
   all() {
-    return [...this.agents.values()];
+    if (this.allCache === void 0) this.allCache = [...this.agents.values()];
+    return this.allCache;
+  }
+  /** Agents in the deterministic id-sorted order the action sweep drains, cached
+   *  alongside `all()` so the per-tick sort is recomputed only on membership change.
+   *  Same comparator as the previous inline `all().sort(...)`, so ordering is
+   *  byte-identical. Callers must treat the result as read-only. */
+  ordered() {
+    if (this.orderedCache === void 0) {
+      this.orderedCache = [...this.agents.values()].sort((a2, b3) => a2.id.localeCompare(b3.id));
+    }
+    return this.orderedCache;
   }
   /** Forget every registered agent. Used by demo coordinators that reset their
    *  world between runs so a fresh build does not inherit prior workers. */
   clear() {
     this.agents.clear();
+    this.invalidate();
   }
   getPerception(agentId) {
     return this.agents.get(agentId)?.perception ?? null;
@@ -98836,6 +99182,11 @@ function ordered(agents) {
 var AgentScheduler = class {
   budget;
   states = /* @__PURE__ */ new Map();
+  /** Memoized per-agent budgets. `agentBudget` is called per candidate, per sweep
+   *  and per action, each time double-spreading a fresh object; the budget config
+   *  (`this.budget`) is fixed at construction, so a given agent id's budget is
+   *  static and cached here indefinitely. */
+  budgets = /* @__PURE__ */ new Map();
   decisionCursor = 0;
   constructor(budget = {}) {
     this.budget = {
@@ -98846,7 +99197,12 @@ var AgentScheduler = class {
     };
   }
   agentBudget(agent) {
-    return { ...this.budget.defaultAgentBudget, ...this.budget.agents?.[agent.id] ?? {} };
+    let budget = this.budgets.get(agent.id);
+    if (budget === void 0) {
+      budget = { ...this.budget.defaultAgentBudget, ...this.budget.agents?.[agent.id] ?? {} };
+      this.budgets.set(agent.id, budget);
+    }
+    return budget;
   }
   runtimeState(agent) {
     let state = this.states.get(agent.id);
@@ -99195,6 +99551,11 @@ function registerOrchestrationSkills(registry2, deps) {
       if (input.bundle.includes(ORCHESTRATE_PERMISSION) && !(childDepth < maxDepth)) {
         throw new Error(`delegate: a worker at depth ${childDepth} may not be granted '${ORCHESTRATE_PERMISSION}' \u2014 delegation depth cap is ${maxDepth} (a depth-${childDepth} worker would spawn at depth ${childDepth + 1})`);
       }
+      for (const cap of new Set(input.bundle)) {
+        if (!ctx.permissions.has(cap)) {
+          throw new Error(`delegate: worker bundle cap '${cap}' is not held by coordinator session`);
+        }
+      }
       const providerName = input.provider ?? deps.defaultProvider;
       if (providerName === void 0 || deps.providers[providerName] === void 0) {
         throw new Error(`delegate: no provider '${providerName ?? "(unset)"}' available`);
@@ -99236,6 +99597,17 @@ function registerOrchestrationSkills(registry2, deps) {
       return { workerId, steps: result.steps, toolCalls: result.toolCalls, reason: result.reason };
     }
   });
+}
+
+// src/skills/_util.ts
+function num(v3, d2) {
+  return typeof v3 === "number" && Number.isFinite(v3) ? v3 : d2;
+}
+function inertTransform2() {
+  return { position: { set() {
+  } }, quaternion: { set() {
+  } }, scale: { set() {
+  } } };
 }
 
 // src/world/character.ts
@@ -99307,7 +99679,7 @@ var CharacterController = class {
     const cy = Math.cos(cmd.yaw);
     let mx = sy * cmd.forward + cy * cmd.strafe;
     let mz = -cy * cmd.forward + sy * cmd.strafe;
-    const mag = Math.hypot(mx, mz);
+    const mag = Math.sqrt(mx * mx + mz * mz);
     if (mag > 1) {
       mx /= mag;
       mz /= mag;
@@ -99358,12 +99730,6 @@ var CharacterController = class {
 var Vec37 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var FIXED_DT = 1 / 60;
-function inertTransform2() {
-  return { position: { set() {
-  } }, quaternion: { set() {
-  } }, scale: { set() {
-  } } };
-}
 var InputRegistry = class {
   bindings = /* @__PURE__ */ new Map();
   states = /* @__PURE__ */ new Map();
@@ -99844,9 +100210,6 @@ function resolveTargetPos(world, id) {
   if (entry === void 0) return void 0;
   return [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]];
 }
-function num(v3, d2) {
-  return typeof v3 === "number" && Number.isFinite(v3) ? v3 : d2;
-}
 var followCameraInput = external_exports.object({
   target: external_exports.string().describe("Entity id to follow."),
   distance: external_exports.number().positive().max(100).default(5).describe("Camera distance from target."),
@@ -100029,9 +100392,6 @@ function registerCameraSkills(registry2, opts) {
 
 // src/skills/animation.ts
 var MetaField3 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
-function num2(v3, d2) {
-  return typeof v3 === "number" && Number.isFinite(v3) ? v3 : d2;
-}
 var AnimationManager = class {
   /** Registered clips (animation.load / programmatic), resolvable by id across entities. */
   clips = /* @__PURE__ */ new Map();
@@ -100209,10 +100569,10 @@ var AnimationManager = class {
           if (v3 !== c2.value) return false;
           break;
         case "greater":
-          if (!(typeof v3 === "number" && v3 > num2(c2.value, 0))) return false;
+          if (!(typeof v3 === "number" && v3 > num(c2.value, 0))) return false;
           break;
         case "less":
-          if (!(typeof v3 === "number" && v3 < num2(c2.value, 0))) return false;
+          if (!(typeof v3 === "number" && v3 < num(c2.value, 0))) return false;
           break;
       }
     }
@@ -100523,12 +100883,6 @@ var InteractionManager = class {
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
 };
-function inertTransform3() {
-  return { position: { set() {
-  } }, quaternion: { set() {
-  } }, scale: { set() {
-  } } };
-}
 function entityPosition(world, entity) {
   const entry = world.entities.resolve(entity);
   if (entry === void 0) return void 0;
@@ -100620,17 +100974,16 @@ function registerInteractionSkills(registry2, opts) {
   const pickup = {
     name: "interaction.pickup",
     version: "1.0.0",
-    description: "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor.",
+    description: "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor. On failure returns ok:false with a `reason` the caller can act on.",
     category: "interaction",
     permissions: ["interaction.write"],
     input: pickupInput,
-    output: external_exports.object({ ok: external_exports.boolean(), slot: external_exports.number().optional() }),
+    output: external_exports.object({ ok: external_exports.boolean(), slot: external_exports.number().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === void 0) return { ok: false };
+      if (inv === void 0) return { ok: false, reason: "no inventory system on this world" };
       const result = inv.addItem(input.actorEntity, { itemId: input.itemEntity, quantity: 1, slot: input.slot });
-      if (!result.ok) return { ok: false };
-      const entry = ctx.world.entities.destroy(input.itemEntity);
-      if (entry !== void 0) despawnRenderable(ctx.world.ecs, entry.eid);
+      if (!result.ok) return { ok: false, reason: `actor "${input.actorEntity}" inventory rejected the item (full or invalid slot)` };
+      teardownEntity(ctx.world, input.itemEntity);
       ctx.emit("interaction.pickedUp", { itemEntity: input.itemEntity, actorEntity: input.actorEntity, slot: result.slot, ...input.meta });
       return { ok: true, slot: result.slot };
     }
@@ -100646,18 +100999,18 @@ function registerInteractionSkills(registry2, opts) {
   const drop = {
     name: "interaction.drop",
     version: "1.0.0",
-    description: "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id.",
+    description: "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id. On failure returns ok:false with a `reason`.",
     category: "interaction",
     permissions: ["interaction.write"],
     input: dropInput,
-    output: external_exports.object({ ok: external_exports.boolean(), itemEntity: external_exports.string().optional() }),
+    output: external_exports.object({ ok: external_exports.boolean(), itemEntity: external_exports.string().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === void 0) return { ok: false };
+      if (inv === void 0) return { ok: false, reason: "no inventory system on this world" };
       const removed = inv.removeItem(input.actorEntity, input.itemId, input.slot, input.quantity);
-      if (!removed) return { ok: false };
+      if (!removed) return { ok: false, reason: `actor "${input.actorEntity}" does not hold "${input.itemId}"` };
       const pos = input.position ?? entityPosition(ctx.world, input.actorEntity) ?? [0, 0, 0];
       const [x3, y3, z4] = pos;
-      const eid = spawnRenderable(ctx.world.ecs, inertTransform3(), x3, y3, z4);
+      const eid = spawnRenderable(ctx.world.ecs, inertTransform2(), x3, y3, z4);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
         return { ok: false };
@@ -100682,11 +101035,11 @@ function registerInteractionSkills(registry2, opts) {
     category: "interaction",
     permissions: ["interaction.write"],
     input: useInput,
-    output: external_exports.object({ ok: external_exports.boolean(), result: external_exports.unknown().optional() }),
+    output: external_exports.object({ ok: external_exports.boolean(), result: external_exports.unknown().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
-      if (inv === void 0) return { ok: false };
+      if (inv === void 0) return { ok: false, reason: "no inventory system on this world" };
       const consumed = inv.removeItem(input.actorEntity, input.itemId, void 0, input.quantity);
-      if (!consumed) return { ok: false };
+      if (!consumed) return { ok: false, reason: `actor "${input.actorEntity}" has no "${input.itemId}" to use` };
       ctx.emit("interaction.used", { actorEntity: input.actorEntity, itemId: input.itemId, quantity: input.quantity, targetEntity: input.targetEntity, data: input.data, ...input.meta });
       return { ok: true, result: { itemId: input.itemId, used: true, quantity: input.quantity } };
     }
@@ -101949,6 +102302,715 @@ function registerTriggerEventSkills(registry2, opts) {
   return { triggerManager, eventManager };
 }
 
+// src/skills/cutscene.ts
+var CutsceneManager = class {
+  defs = /* @__PURE__ */ new Map();
+  active;
+  /** Register (or replace) a cutscene definition. Keyframes are sorted ascending by atTick so the
+   *  pump can fire them in deterministic order regardless of authoring order. */
+  define(id, keyframes, loop) {
+    const sorted = [...keyframes].sort((a2, b3) => a2.atTick - b3.atTick || 0);
+    const durationTicks = sorted.length > 0 ? sorted[sorted.length - 1].atTick : 0;
+    this.defs.set(id, { keyframes: sorted, durationTicks, loop });
+    return { keyframes: sorted.length, durationTicks };
+  }
+  has(id) {
+    return this.defs.has(id);
+  }
+  /** Start playing `id` with its timeline anchored at `startTick`. Returns false if unknown. A new
+   *  play supersedes any in-progress playback. */
+  play(id, startTick) {
+    if (!this.defs.has(id)) return false;
+    this.active = { id, startTick, firedThrough: 0 };
+    return true;
+  }
+  /** Stop the active playback. Returns whether something was playing. */
+  stop() {
+    const was = this.active !== void 0;
+    this.active = void 0;
+    return was;
+  }
+  isPlaying() {
+    return this.active !== void 0;
+  }
+  status() {
+    if (this.active === void 0) return { playing: false };
+    const def = this.defs.get(this.active.id);
+    return {
+      playing: true,
+      id: this.active.id,
+      startTick: this.active.startTick,
+      firedThrough: this.active.firedThrough,
+      total: def?.keyframes.length ?? 0,
+      loop: def?.loop ?? false
+    };
+  }
+  /** Deterministic pump: fire every not-yet-fired keyframe whose relative tick has arrived
+   *  (atTick <= simTick - startTick), in order, and return their action descriptors. When the
+   *  last keyframe has fired, the playback ENDS (or, if `loop`, re-anchors to `simTick` and
+   *  repeats). Pure over (defs, active, simTick) — safe to call every fixed step. */
+  tick(simTick) {
+    if (this.active === void 0) return [];
+    const def = this.defs.get(this.active.id);
+    if (def === void 0) {
+      this.active = void 0;
+      return [];
+    }
+    const elapsed2 = simTick - this.active.startTick;
+    const fired = [];
+    while (this.active.firedThrough < def.keyframes.length && def.keyframes[this.active.firedThrough].atTick <= elapsed2) {
+      const kf = def.keyframes[this.active.firedThrough];
+      fired.push({ cutsceneId: this.active.id, atTick: kf.atTick, action: kf.action });
+      this.active.firedThrough++;
+    }
+    if (this.active.firedThrough >= def.keyframes.length) {
+      if (def.loop) {
+        this.active.startTick = simTick;
+        this.active.firedThrough = 0;
+      } else {
+        this.active = void 0;
+      }
+    }
+    return fired;
+  }
+};
+var actionSchema = external_exports.object({
+  type: external_exports.string().min(1).describe('Action type the host maps to a skill, e.g. "camera.cut".'),
+  data: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Action payload passed through to the host's dispatch.")
+});
+var keyframeSchema = external_exports.object({
+  atTick: external_exports.number().int().min(0).describe("Relative tick (0-based from the cutscene start) at/after which the action fires once."),
+  action: actionSchema
+});
+function registerCutsceneSkills(registry2) {
+  const mgr = new CutsceneManager();
+  const defineInput = external_exports.object({
+    id: external_exports.string().min(1).describe("Cutscene id (stable across runs)."),
+    keyframes: external_exports.array(keyframeSchema).min(1).max(512).describe("Timeline keyframes; sorted by atTick internally."),
+    loop: external_exports.boolean().default(false).describe("Restart from the top after the last keyframe."),
+    meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  });
+  const define = {
+    name: "cutscene.define",
+    version: "1.0.0",
+    description: "Author a scripted timeline as keyframes ({atTick, action}). The host pumps it and dispatches each fired action through its other skills. Deterministic (tick-driven).",
+    category: "game",
+    permissions: ["game.configure"],
+    input: defineInput,
+    output: external_exports.object({ ok: external_exports.boolean(), keyframes: external_exports.number(), durationTicks: external_exports.number() }),
+    handler: (input, ctx) => {
+      const { keyframes, durationTicks } = mgr.define(input.id, input.keyframes, input.loop);
+      ctx.emit("cutscene.defined", { id: input.id, keyframes, durationTicks, loop: input.loop, ...input.meta });
+      return { ok: true, keyframes, durationTicks };
+    }
+  };
+  const playInput3 = external_exports.object({
+    id: external_exports.string().min(1).describe("Cutscene id to play."),
+    startTick: external_exports.number().int().min(0).optional().describe("Tick to anchor the timeline at. Defaults to the current sim tick (replay-deterministic)."),
+    meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  });
+  const play = {
+    name: "cutscene.play",
+    version: "1.0.0",
+    description: "Start playing a defined cutscene, anchoring its timeline at startTick (default: the current sim tick). Supersedes any in-progress playback. On failure returns ok:false with a reason.",
+    category: "game",
+    permissions: ["game.write"],
+    input: playInput3,
+    output: external_exports.object({ ok: external_exports.boolean(), reason: external_exports.string().optional() }),
+    handler: (input, ctx) => {
+      const startTick = input.startTick ?? ctx.tick;
+      if (!mgr.play(input.id, startTick)) return { ok: false, reason: `unknown cutscene "${input.id}" (define it first)` };
+      ctx.emit("cutscene.started", { id: input.id, startTick, ...input.meta });
+      return { ok: true };
+    }
+  };
+  const stopInput3 = external_exports.object({ meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional() });
+  const stop = {
+    name: "cutscene.stop",
+    version: "1.0.0",
+    description: "Stop the active cutscene playback (no-op if none is playing).",
+    category: "game",
+    permissions: ["game.write"],
+    input: stopInput3,
+    output: external_exports.object({ ok: external_exports.boolean(), wasPlaying: external_exports.boolean() }),
+    handler: (input, ctx) => {
+      const wasPlaying = mgr.stop();
+      if (wasPlaying) ctx.emit("cutscene.stopped", { ...input.meta });
+      return { ok: true, wasPlaying };
+    }
+  };
+  const statusSkill = {
+    name: "cutscene.status",
+    version: "1.0.0",
+    description: "Read the current cutscene playback state (playing, id, progress). Pure read.",
+    category: "game",
+    permissions: ["scene.read"],
+    input: external_exports.object({}),
+    output: external_exports.object({
+      playing: external_exports.boolean(),
+      id: external_exports.string().optional(),
+      startTick: external_exports.number().optional(),
+      firedThrough: external_exports.number().optional(),
+      total: external_exports.number().optional(),
+      loop: external_exports.boolean().optional()
+    }),
+    handler: () => mgr.status()
+  };
+  registry2.register(define);
+  registry2.register(play);
+  registry2.register(stop);
+  registry2.register(statusSkill);
+  return { cutsceneManager: mgr };
+}
+
+// src/skills/architecture.ts
+var Vec311 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+function shade(color3, f2) {
+  const r2 = Math.min(255, Math.round((color3 >> 16 & 255) * f2));
+  const g3 = Math.min(255, Math.round((color3 >> 8 & 255) * f2));
+  const b3 = Math.min(255, Math.round((color3 & 255) * f2));
+  return r2 << 16 | g3 << 8 | b3;
+}
+function pbrMat(grain, color3, roughness3) {
+  const m2 = new MeshStandardNodeMaterial({ color: color3, roughness: roughness3, metalness: 0 });
+  applyProceduralPbr(m2, { color: color3, roughness: roughness3 }, grain);
+  return m2;
+}
+function spawnStaticMesh(world, mesh, pos, half, yaw = 0) {
+  const [x3, y3, z4] = pos;
+  world.scene.add(mesh);
+  const eid = spawnRenderable(world.ecs, mesh, x3, y3, z4);
+  if (eid >= MAX_ENTITIES) {
+    despawnRenderable(world.ecs, eid);
+    world.scene.remove(mesh);
+    throw new Error("architecture: entity capacity exceeded (MAX_ENTITIES)");
+  }
+  if (yaw !== 0) {
+    Rotation.y[eid] = Math.sin(yaw / 2);
+    Rotation.w[eid] = Math.cos(yaw / 2);
+  }
+  const bodyId = world.ops.op_physics_add_static_box(x3, y3, z4, half[0], half[1], half[2], 0.85, 0);
+  return world.entities.create({ eid, mesh, bodyId });
+}
+function gableRoofGeometry(W2, D3, pitch, overhang) {
+  const ridgeAlongX = W2 >= D3;
+  const long = (ridgeAlongX ? W2 : D3) / 2 + overhang;
+  const short = (ridgeAlongX ? D3 : W2) / 2 + overhang;
+  const bNL = [-long, 0, -short], bFL = [-long, 0, short], aL = [-long, pitch, 0];
+  const bNR = [long, 0, -short], bFR = [long, 0, short], aR = [long, pitch, 0];
+  const tri2 = (...vs) => vs.flat();
+  const pos = new Float32Array([
+    ...tri2(bNL, bNR, aR),
+    ...tri2(bNL, aR, aL),
+    // -Z slope
+    ...tri2(bFL, aL, aR),
+    ...tri2(bFL, aR, bFR),
+    // +Z slope
+    ...tri2(bNL, aL, bFL),
+    // -X gable end
+    ...tri2(bNR, bFR, aR)
+    // +X gable end
+  ]);
+  const geo = new BufferGeometry();
+  geo.setAttribute("position", new BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  if (!ridgeAlongX) geo.rotateY(Math.PI / 2);
+  const half = ridgeAlongX ? [long, pitch / 2, short] : [short, pitch / 2, long];
+  return { geo, half };
+}
+var buildingInput = external_exports.object({
+  position: Vec311.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
+  width: external_exports.number().positive().max(200).default(8).describe("Footprint extent along X (meters)."),
+  depth: external_exports.number().positive().max(200).default(6).describe("Footprint extent along Z (meters)."),
+  height: external_exports.number().positive().max(80).default(3.2).describe("Wall height (meters)."),
+  rotation: external_exports.number().default(0).describe("Yaw in radians about the building centre \u2014 face the door toward a path/commons. Applied to all parts."),
+  wallThickness: external_exports.number().positive().max(5).default(0.25).describe("Wall/floor/roof slab thickness."),
+  doorWidth: external_exports.number().positive().max(50).default(1.4).describe("Doorway opening width (centered on the -Z wall)."),
+  doorHeight: external_exports.number().positive().max(70).default(2.2).describe("Doorway opening height (lintel sits above it)."),
+  withRoof: external_exports.boolean().default(true).describe("Cap the structure with a roof."),
+  roofStyle: external_exports.enum(["gable", "flat"]).default("gable").describe("'gable' = a pitched prism roof (custom geometry); 'flat' = a slab (legacy)."),
+  roofPitch: external_exports.number().positive().max(40).default(2.4).describe("Ridge height above the eaves for a gable roof (meters)."),
+  roofOverhang: external_exports.number().min(0).max(5).default(0.5).describe("Eave overhang beyond the walls (meters)."),
+  color: external_exports.number().int().min(0).max(16777215).default(10128506).describe("Wall albedo tint (the procedural-PBR stone is tinted to this; floor + roof derive from it)."),
+  meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+function makeBuilding() {
+  return {
+    name: "architecture.building",
+    version: "1.1.0",
+    description: "Procedurally generate an enterable building (floor, 4 walls, a doorway with lintel, a pitched gabled roof) as real collidable entities with procedural-PBR surfaces. Rotatable; deterministic + replay-safe. Compose repeatedly to build settlements.",
+    category: "scene",
+    permissions: ["scene.write"],
+    input: buildingInput,
+    output: external_exports.object({
+      entities: external_exports.array(external_exports.string()),
+      parts: external_exports.array(external_exports.object({ kind: external_exports.string(), entity: external_exports.string(), position: Vec311, size: Vec311 })),
+      bounds: external_exports.object({ min: Vec311, max: Vec311 }),
+      entityCount: external_exports.number()
+    }),
+    handler: (input, ctx) => {
+      const [cx, cy, cz] = input.position;
+      const W2 = input.width, D3 = input.depth, H3 = input.height, t2 = input.wallThickness;
+      const dw = Math.min(input.doorWidth, W2 - 2 * t2);
+      const dh = Math.min(input.doorHeight, H3 - t2);
+      const yaw = input.rotation;
+      const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+      const wallMat = pbrMat("stone", input.color, 0.85);
+      const floorMat = pbrMat("stone", shade(input.color, 0.55), 0.92);
+      const roofMat = pbrMat("plank", 7031344, 0.7);
+      const parts = [];
+      const addBox = (kind, local, size, mat) => {
+        const wx = cx + local[0] * cosY + local[2] * sinY;
+        const wz = cz - local[0] * sinY + local[2] * cosY;
+        const pos = [wx, cy + local[1], wz];
+        const mesh = new Mesh(new BoxGeometry(size[0], size[1], size[2]), mat);
+        const half = [size[0] / 2, size[1] / 2, size[2] / 2];
+        parts.push({ kind, entity: spawnStaticMesh(ctx.world, mesh, pos, half, yaw), position: pos, size });
+      };
+      addBox("floor", [0, -t2 / 2, 0], [W2, t2, D3], floorMat);
+      const wy = H3 / 2;
+      const zPos = D3 / 2 - t2 / 2, zNeg = -D3 / 2 + t2 / 2;
+      addBox("wall_north", [0, wy, zPos], [W2, H3, t2], wallMat);
+      const sideD = D3 - 2 * t2;
+      addBox("wall_east", [W2 / 2 - t2 / 2, wy, 0], [t2, H3, sideD], wallMat);
+      addBox("wall_west", [-W2 / 2 + t2 / 2, wy, 0], [t2, H3, sideD], wallMat);
+      const jambW = (W2 - dw) / 2;
+      if (jambW > 1e-3) {
+        addBox("wall_south_left", [-(dw / 2 + jambW / 2), wy, zNeg], [jambW, H3, t2], wallMat);
+        addBox("wall_south_right", [dw / 2 + jambW / 2, wy, zNeg], [jambW, H3, t2], wallMat);
+      }
+      const lintelH = H3 - dh;
+      if (lintelH > 1e-3) addBox("lintel", [0, dh + lintelH / 2, zNeg], [dw, lintelH, t2], wallMat);
+      if (input.withRoof) {
+        if (input.roofStyle === "gable") {
+          const { geo, half } = gableRoofGeometry(W2, D3, input.roofPitch, input.roofOverhang);
+          const mesh = new Mesh(geo, roofMat);
+          const pos = [cx, cy + H3, cz];
+          const colHalf = [half[0], half[1], half[2]];
+          parts.push({ kind: "roof", entity: spawnStaticMesh(ctx.world, mesh, pos, colHalf, yaw), position: pos, size: [half[0] * 2, input.roofPitch, half[2] * 2] });
+        } else {
+          addBox("roof", [0, H3 + t2 / 2, 0], [W2, t2, D3], roofMat);
+        }
+      }
+      const entities = parts.map((p2) => p2.entity);
+      const roofTop = input.withRoof ? input.roofStyle === "gable" ? input.roofPitch : t2 : 0;
+      const bounds = {
+        min: [cx - W2 / 2, cy - t2, cz - D3 / 2],
+        max: [cx + W2 / 2, cy + H3 + roofTop, cz + D3 / 2]
+      };
+      ctx.emit("architecture.built", {
+        kind: "building",
+        center: input.position,
+        width: W2,
+        depth: D3,
+        height: H3,
+        rotation: yaw,
+        roofStyle: input.withRoof ? input.roofStyle : "none",
+        entityCount: entities.length,
+        hasDoor: jambW > 1e-3,
+        hasRoof: input.withRoof,
+        ...input.meta
+      });
+      return { entities, parts, bounds, entityCount: entities.length };
+    }
+  };
+}
+function registerArchitectureSkills(registry2) {
+  registry2.register(makeBuilding());
+}
+
+// src/skills/director.ts
+var DEFAULTS = {
+  buildRate: 0.02,
+  fadeRate: 0.03,
+  sustainTicks: 180,
+  restTicks: 240,
+  peakLevel: 1,
+  restLevel: 0.1,
+  pressureDamping: 0.9
+};
+var DirectorManager = class {
+  cfg = { ...DEFAULTS };
+  running = false;
+  phase = "build_up";
+  tension = 0;
+  phaseTicksLeft = 0;
+  /** Set config (merged over current) and RESET the state machine to a fresh build_up. */
+  configure(partial2) {
+    this.cfg = { ...this.cfg, ...partial2 };
+    this.phase = "build_up";
+    this.tension = 0;
+    this.phaseTicksLeft = 0;
+    return { ...this.cfg };
+  }
+  start() {
+    this.running = true;
+    this.phase = "build_up";
+    this.tension = 0;
+    this.phaseTicksLeft = 0;
+  }
+  stop() {
+    const was = this.running;
+    this.running = false;
+    return was;
+  }
+  isRunning() {
+    return this.running;
+  }
+  status() {
+    if (!this.running) return { running: false };
+    return { running: true, phase: this.phase, tension: this.tension, phaseTicksLeft: this.phaseTicksLeft };
+  }
+  /** Advance one tick. `pressure` (0..1, clamped) damps build_up. Returns the directive emitted on a
+   *  phase transition this tick, or null. Deterministic over (config, state, tick, pressure). */
+  tick(tick, pressure = 0) {
+    if (!this.running) return null;
+    const p2 = pressure < 0 ? 0 : pressure > 1 ? 1 : pressure;
+    const c2 = this.cfg;
+    switch (this.phase) {
+      case "build_up": {
+        const rate = c2.buildRate * (1 - p2 * c2.pressureDamping);
+        this.tension += rate;
+        if (this.tension >= c2.peakLevel) {
+          this.tension = c2.peakLevel;
+          this.phase = "sustain";
+          this.phaseTicksLeft = c2.sustainTicks;
+          return { type: "peak", phase: this.phase, tension: this.tension, tick };
+        }
+        return null;
+      }
+      case "sustain": {
+        this.phaseTicksLeft -= 1;
+        if (this.phaseTicksLeft <= 0) {
+          this.phase = "fade";
+          return { type: "sustain_end", phase: this.phase, tension: this.tension, tick };
+        }
+        return null;
+      }
+      case "fade": {
+        this.tension -= c2.fadeRate;
+        if (this.tension <= c2.restLevel) {
+          this.tension = c2.restLevel;
+          this.phase = "rest";
+          this.phaseTicksLeft = c2.restTicks;
+          return { type: "lull", phase: this.phase, tension: this.tension, tick };
+        }
+        return null;
+      }
+      case "rest": {
+        this.phaseTicksLeft -= 1;
+        if (this.phaseTicksLeft <= 0) {
+          this.phase = "build_up";
+          return { type: "build", phase: this.phase, tension: this.tension, tick };
+        }
+        return null;
+      }
+    }
+  }
+};
+var configInput = external_exports.object({
+  buildRate: external_exports.number().positive().max(1).optional(),
+  fadeRate: external_exports.number().positive().max(1).optional(),
+  sustainTicks: external_exports.number().int().min(0).max(1e5).optional(),
+  restTicks: external_exports.number().int().min(0).max(1e5).optional(),
+  peakLevel: external_exports.number().positive().max(1).optional(),
+  restLevel: external_exports.number().min(0).max(1).optional(),
+  pressureDamping: external_exports.number().min(0).max(1).optional(),
+  meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+function registerDirectorSkills(registry2) {
+  const mgr = new DirectorManager();
+  const configure = {
+    name: "director.configure",
+    version: "1.0.0",
+    description: "Configure the AI director's pacing model (build/fade rates, sustain/rest durations, peak/rest levels, pressure damping) and reset its state. Deterministic, tick-driven.",
+    category: "agent",
+    permissions: ["agent.write"],
+    input: configInput,
+    output: external_exports.object({
+      ok: external_exports.boolean(),
+      config: external_exports.object({
+        buildRate: external_exports.number(),
+        fadeRate: external_exports.number(),
+        sustainTicks: external_exports.number(),
+        restTicks: external_exports.number(),
+        peakLevel: external_exports.number(),
+        restLevel: external_exports.number(),
+        pressureDamping: external_exports.number()
+      })
+    }),
+    handler: (input, ctx) => {
+      const { meta: meta3, ...partial2 } = input;
+      const config2 = mgr.configure(partial2);
+      ctx.emit("director.configured", { ...config2, ...meta3 });
+      return { ok: true, config: config2 };
+    }
+  };
+  const startStop = external_exports.object({ meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional() });
+  const start = {
+    name: "director.start",
+    version: "1.0.0",
+    description: "Start (or restart) the AI director from a fresh build_up. The host pumps director tick(simTick, pressure) each step and dispatches the returned directives.",
+    category: "agent",
+    permissions: ["agent.write"],
+    input: startStop,
+    output: external_exports.object({ ok: external_exports.boolean() }),
+    handler: (input, ctx) => {
+      mgr.start();
+      ctx.emit("director.started", { ...input.meta });
+      return { ok: true };
+    }
+  };
+  const stop = {
+    name: "director.stop",
+    version: "1.0.0",
+    description: "Stop the AI director (no-op if not running).",
+    category: "agent",
+    permissions: ["agent.write"],
+    input: startStop,
+    output: external_exports.object({ ok: external_exports.boolean(), wasRunning: external_exports.boolean() }),
+    handler: (input, ctx) => {
+      const wasRunning = mgr.stop();
+      if (wasRunning) ctx.emit("director.stopped", { ...input.meta });
+      return { ok: true, wasRunning };
+    }
+  };
+  const statusSkill = {
+    name: "director.status",
+    version: "1.0.0",
+    description: "Read the director's current phase, tension, and ticks left in the phase. Pure read.",
+    category: "agent",
+    permissions: ["agent.read"],
+    input: external_exports.object({}),
+    output: external_exports.object({
+      running: external_exports.boolean(),
+      phase: external_exports.enum(["build_up", "sustain", "fade", "rest"]).optional(),
+      tension: external_exports.number().optional(),
+      phaseTicksLeft: external_exports.number().optional()
+    }),
+    handler: () => mgr.status()
+  };
+  registry2.register(configure);
+  registry2.register(start);
+  registry2.register(stop);
+  registry2.register(statusSkill);
+  return { directorManager: mgr };
+}
+
+// src/skills/ability.ts
+var castKey = (entity, id) => `${entity}\0${id}`;
+var AbilityManager = class {
+  constructor(stats) {
+    this.stats = stats;
+  }
+  defs = /* @__PURE__ */ new Map();
+  lastCast = /* @__PURE__ */ new Map();
+  define(id, def) {
+    this.defs.set(id, def);
+  }
+  has(id) {
+    return this.defs.has(id);
+  }
+  /** Ticks remaining before `entity` can cast `id` again at `tick` (0 = ready / never cast). */
+  cooldownRemaining(entity, id, tick) {
+    const def = this.defs.get(id);
+    if (def === void 0) return 0;
+    const last = this.lastCast.get(castKey(entity, id));
+    if (last === void 0) return 0;
+    const rem = def.cooldownTicks - (tick - last);
+    return rem > 0 ? rem : 0;
+  }
+  /** True iff the cooldown is elapsed (resource is NOT considered here — see cast). */
+  isReady(entity, id, tick) {
+    return this.has(id) && this.cooldownRemaining(entity, id, tick) === 0;
+  }
+  /** Attempt a cast. Checks cooldown FIRST, then the resource cost; on success stamps the cast
+   *  tick and deducts the resource. Returns a structured reason on every failure mode. */
+  cast(entity, id, tick) {
+    const def = this.defs.get(id);
+    if (def === void 0) return { ok: false, reason: `unknown ability "${id}" (define it first)` };
+    const rem = this.cooldownRemaining(entity, id, tick);
+    if (rem > 0) return { ok: false, reason: `"${id}" is on cooldown`, cooldownRemaining: rem };
+    let spent = 0;
+    if (def.resourceStat !== void 0 && def.cost !== void 0 && def.cost > 0) {
+      const stat = this.stats?.getStat(entity, def.resourceStat);
+      if (stat === void 0) return { ok: false, reason: `"${entity}" has no "${def.resourceStat}" stat to spend` };
+      if (stat.value < def.cost) return { ok: false, reason: `insufficient ${def.resourceStat} (${stat.value}/${def.cost})` };
+      this.stats?.modifyStat(entity, def.resourceStat, -def.cost);
+      spent = def.cost;
+    }
+    this.lastCast.set(castKey(entity, id), tick);
+    return { ok: true, spent };
+  }
+};
+function registerAbilitySkills(registry2, opts) {
+  const mgr = new AbilityManager(opts?.statsManager);
+  const defineInput = external_exports.object({
+    id: external_exports.string().min(1).describe("Ability id (stable across runs)."),
+    cooldownTicks: external_exports.number().int().min(0).max(1e6).describe("Ticks before the same entity can recast."),
+    resourceStat: external_exports.string().optional().describe('Stat name the cast spends from (e.g. "mana"). Omit for no cost.'),
+    cost: external_exports.number().min(0).optional().describe("Amount of the resource stat a cast spends."),
+    meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  });
+  const define = {
+    name: "ability.define",
+    version: "1.0.0",
+    description: "Define an ability with a cooldown and an optional resource cost (a stat the cast spends). What the ability DOES is dispatched by the host on a successful cast.",
+    category: "combat",
+    permissions: ["combat.write"],
+    input: defineInput,
+    output: external_exports.object({ ok: external_exports.boolean() }),
+    handler: (input, ctx) => {
+      mgr.define(input.id, { cooldownTicks: input.cooldownTicks, resourceStat: input.resourceStat, cost: input.cost });
+      ctx.emit("ability.defined", { id: input.id, cooldownTicks: input.cooldownTicks, resourceStat: input.resourceStat, cost: input.cost, ...input.meta });
+      return { ok: true };
+    }
+  };
+  const castInput = external_exports.object({
+    entity: external_exports.string().describe("Caster entity."),
+    id: external_exports.string().describe("Ability id to cast."),
+    meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  });
+  const cast = {
+    name: "ability.cast",
+    version: "1.0.0",
+    description: "Attempt to cast an ability: gated by cooldown (from the sim tick) and resource cost. On success stamps the cooldown and spends the resource; on failure returns ok:false with a reason (on cooldown / insufficient resource / unknown). The host performs the effect.",
+    category: "combat",
+    permissions: ["combat.write"],
+    input: castInput,
+    output: external_exports.object({ ok: external_exports.boolean(), reason: external_exports.string().optional(), cooldownRemaining: external_exports.number().optional(), spent: external_exports.number().optional() }),
+    handler: (input, ctx) => {
+      const res = mgr.cast(input.entity, input.id, ctx.tick);
+      if (res.ok) ctx.emit("ability.cast", { entity: input.entity, id: input.id, tick: ctx.tick, spent: res.spent ?? 0, ...input.meta });
+      return res;
+    }
+  };
+  const statusInput = external_exports.object({ entity: external_exports.string(), id: external_exports.string() });
+  const status = {
+    name: "ability.status",
+    version: "1.0.0",
+    description: "Read whether an ability is defined, off cooldown (ready), and how many ticks remain on its cooldown for an entity, at the current sim tick. Pure read.",
+    category: "combat",
+    permissions: ["stats.read"],
+    input: statusInput,
+    output: external_exports.object({ defined: external_exports.boolean(), ready: external_exports.boolean(), cooldownRemaining: external_exports.number() }),
+    handler: (input, ctx) => ({
+      defined: mgr.has(input.id),
+      ready: mgr.isReady(input.entity, input.id, ctx.tick),
+      cooldownRemaining: mgr.cooldownRemaining(input.entity, input.id, ctx.tick)
+    })
+  };
+  registry2.register(define);
+  registry2.register(cast);
+  registry2.register(status);
+  return { abilityManager: mgr };
+}
+
+// src/skills/clip_author.ts
+function lerp4(a2, b3, f2) {
+  if (Array.isArray(a2) && Array.isArray(b3)) {
+    const n2 = Math.min(a2.length, b3.length);
+    const out = new Array(n2);
+    for (let i2 = 0; i2 < n2; i2++) out[i2] = a2[i2] + (b3[i2] - a2[i2]) * f2;
+    return out;
+  }
+  if (typeof a2 === "number" && typeof b3 === "number") return a2 + (b3 - a2) * f2;
+  return a2;
+}
+var ClipAuthor = class {
+  clips = /* @__PURE__ */ new Map();
+  /** Register (or replace) a clip. Each track's keys are sorted ascending by time so sampling is
+   *  order-independent for the author. */
+  define(id, duration3, loop, tracks) {
+    let keys = 0;
+    const norm = tracks.map((tr) => {
+      const sorted = [...tr.keys].sort((a2, b3) => a2.t - b3.t);
+      keys += sorted.length;
+      return { property: tr.property, interp: tr.interp, keys: sorted };
+    });
+    this.clips.set(id, { duration: duration3, loop, tracks: norm });
+    return { tracks: norm.length, keys };
+  }
+  has(id) {
+    return this.clips.has(id);
+  }
+  /** Map a raw time onto the clip's playable range: wrap when looping, else clamp to [0,duration]. */
+  effectiveTime(clip, t2) {
+    if (clip.loop && clip.duration > 0) return (t2 % clip.duration + clip.duration) % clip.duration;
+    return t2 < 0 ? 0 : t2 > clip.duration ? clip.duration : t2;
+  }
+  sampleTrack(tr, tt) {
+    const keys = tr.keys;
+    if (keys.length === 0) return 0;
+    if (tt <= keys[0].t) return keys[0].v;
+    if (tt >= keys[keys.length - 1].t) return keys[keys.length - 1].v;
+    let i2 = 0;
+    while (i2 < keys.length - 1 && keys[i2 + 1].t <= tt) i2++;
+    const k0 = keys[i2], k1 = keys[i2 + 1];
+    if (tr.interp === "step") return k0.v;
+    const span = k1.t - k0.t;
+    const f2 = span > 0 ? (tt - k0.t) / span : 0;
+    return lerp4(k0.v, k1.v, f2);
+  }
+  /** Sample every track at time `t`, returning property → value. null if the clip is unknown. */
+  sample(id, t2) {
+    const clip = this.clips.get(id);
+    if (clip === void 0) return null;
+    const tt = this.effectiveTime(clip, t2);
+    const out = {};
+    for (const tr of clip.tracks) out[tr.property] = this.sampleTrack(tr, tt);
+    return out;
+  }
+};
+var valueSchema = external_exports.union([external_exports.number(), external_exports.array(external_exports.number())]);
+var trackSchema = external_exports.object({
+  property: external_exports.string().min(1).describe('What this track drives (e.g. "position", "angle", "color").'),
+  interp: external_exports.enum(["step", "linear"]).default("linear"),
+  keys: external_exports.array(external_exports.object({ t: external_exports.number().min(0), value: valueSchema })).min(1).describe("Keyframes {t, value}; sorted by t internally.")
+});
+function registerClipAuthorSkills(registry2) {
+  const mgr = new ClipAuthor();
+  const authorInput = external_exports.object({
+    id: external_exports.string().min(1),
+    duration: external_exports.number().positive().max(1e5).describe("Clip length in the same time unit as sample t."),
+    loop: external_exports.boolean().default(false),
+    tracks: external_exports.array(trackSchema).min(1).max(256),
+    meta: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  });
+  const author = {
+    name: "animation.authorClip",
+    version: "1.0.0",
+    description: "Author a procedural animation clip from keyframe tracks (property \u2192 {t,value} keys, step/linear). Sample it with animation.sampleClip; the host applies the values. Deterministic + replay-safe.",
+    category: "animation",
+    permissions: ["animation.write"],
+    input: authorInput,
+    output: external_exports.object({ ok: external_exports.boolean(), tracks: external_exports.number(), keys: external_exports.number() }),
+    handler: (input, ctx) => {
+      const tracks = input.tracks.map((tr) => ({ property: tr.property, interp: tr.interp, keys: tr.keys.map((k3) => ({ t: k3.t, v: k3.value })) }));
+      const r2 = mgr.define(input.id, input.duration, input.loop, tracks);
+      ctx.emit("animation.clipAuthored", { id: input.id, duration: input.duration, loop: input.loop, ...r2, ...input.meta });
+      return { ok: true, ...r2 };
+    }
+  };
+  const sampleInput = external_exports.object({ id: external_exports.string(), t: external_exports.number() });
+  const sample3 = {
+    name: "animation.sampleClip",
+    version: "1.0.0",
+    description: "Sample an authored clip at time t \u2014 returns each track's interpolated value (looped/clamped per the clip). Pure read; the host applies the values to entities.",
+    category: "animation",
+    permissions: ["animation.read"],
+    input: sampleInput,
+    output: external_exports.object({ found: external_exports.boolean(), values: external_exports.record(external_exports.string(), valueSchema).optional() }),
+    handler: (input) => {
+      const values = mgr.sample(input.id, input.t);
+      return values === null ? { found: false } : { found: true, values };
+    }
+  };
+  registry2.register(author);
+  registry2.register(sample3);
+  return { clipAuthor: mgr };
+}
+
 // src/skills/quest.ts
 var MetaField8 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var QuestManager = class {
@@ -102302,7 +103364,7 @@ function registerQuestSkills(registry2, opts) {
 
 // src/skills/combat.ts
 var MetaField9 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
-var Vec311 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec312 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var TICKS_PER_SECOND = 60;
 var StatsManager = class {
   entityStats = /* @__PURE__ */ new Map();
@@ -102368,19 +103430,6 @@ var StatsManager = class {
   listStatusEffects(entity) {
     return this.entityStats.get(entity)?.statusEffects ?? [];
   }
-  tickStatusEffects(dtMs) {
-    const results = [];
-    for (const [entity, es] of this.entityStats) {
-      for (const effect of es.statusEffects) {
-        effect.elapsed += dtMs;
-        if (effect.elapsed >= effect.duration * 1e3) {
-          results.push({ entity, effectId: effect.id, expired: true });
-        }
-      }
-      es.statusEffects = es.statusEffects.filter((e2) => e2.elapsed < e2.duration * 1e3);
-    }
-    return results;
-  }
 };
 var CombatManager = class {
   statsManager;
@@ -102442,9 +103491,6 @@ function hash32(s2) {
 }
 function critRoll(tick, attacker, target) {
   return hash32(`${tick}|${attacker}|${target}`) / 4294967296;
-}
-function num3(v3, d2) {
-  return typeof v3 === "number" && Number.isFinite(v3) ? v3 : d2;
 }
 var createStatsInput = external_exports.object({
   entity: external_exports.string(),
@@ -102526,7 +103572,7 @@ var meleeInput = external_exports.object({
 var rangedInput = external_exports.object({
   attackerEntity: external_exports.string(),
   targetEntity: external_exports.string().optional(),
-  direction: Vec311.optional().describe("Projectile direction. If omitted, fires toward targetEntity."),
+  direction: Vec312.optional().describe("Projectile direction. If omitted, fires toward targetEntity."),
   damage: external_exports.number().positive().describe("Base projectile damage."),
   speed: external_exports.number().positive().default(20).describe("Projectile speed (world units/second)."),
   config: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Custom projectile data (critChance 0-1, critMultiplier, visual effect, etc.)."),
@@ -102695,8 +103741,8 @@ function registerCombatSkills(registry2, opts) {
         ctx.emit("combat.melee", { attacker: input.attackerEntity, target: null, hit: false, ...input.meta });
         return { hit: false };
       }
-      const critChance = num3(input.config?.critChance, 0);
-      const critMult = num3(input.config?.critMultiplier, 2);
+      const critChance = num(input.config?.critChance, 0);
+      const critMult = num(input.config?.critMultiplier, 2);
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
@@ -102718,8 +103764,8 @@ function registerCombatSkills(registry2, opts) {
         ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: null, direction: input.direction, damage: input.damage, speed: input.speed, hit: false, ...input.meta });
         return { fired: true, hit: false };
       }
-      const critChance = num3(input.config?.critChance, 0);
-      const critMult = num3(input.config?.critMultiplier, 2);
+      const critChance = num(input.config?.critChance, 0);
+      const critMult = num(input.config?.critMultiplier, 2);
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
@@ -102759,7 +103805,7 @@ function registerCombatSkills(registry2, opts) {
 }
 
 // src/skills/behavior.ts
-var Vec312 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec313 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField10 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var BehaviorManager = class {
   profiles = /* @__PURE__ */ new Map();
@@ -102884,7 +103930,7 @@ var defineBehaviorInput = external_exports.object({
       hour: external_exports.number().min(0).max(23),
       action: external_exports.string().describe("Action name (patrol, work, sleep, socialize, etc.)."),
       target: external_exports.string().optional(),
-      position: Vec312.optional()
+      position: Vec313.optional()
     })),
     config: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
   })).default([]),
@@ -102899,7 +103945,7 @@ var defineBehaviorInput = external_exports.object({
     id: external_exports.string(),
     type: external_exports.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
     target: external_exports.string().optional(),
-    position: Vec312.optional(),
+    position: Vec313.optional(),
     priority: external_exports.number().int().default(0),
     config: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
   })).default([]),
@@ -102915,7 +103961,7 @@ var setGoalInput = external_exports.object({
   entity: external_exports.string(),
   type: external_exports.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
   target: external_exports.string().optional(),
-  position: Vec312.optional(),
+  position: Vec313.optional(),
   priority: external_exports.number().int().default(0),
   config: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   meta: MetaField10
@@ -103253,7 +104299,7 @@ function registerBehaviorDialogueSkills(registry2, opts) {
 }
 
 // src/skills/navmesh.ts
-var Vec313 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec314 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField11 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var DEFAULT_DT = 1 / 60;
 var DEFAULT_SPEED2 = 3;
@@ -103632,16 +104678,16 @@ var buildNavmeshInput = external_exports.object({
   meta: MetaField11
 });
 var findPathInput = external_exports.object({
-  from: Vec313.describe("Start position."),
-  to: Vec313.describe("Target position."),
+  from: Vec314.describe("Start position."),
+  to: Vec314.describe("Target position."),
   meta: MetaField11
 });
 var moveToInput = external_exports.object({
   entity: external_exports.string(),
-  target: Vec313.describe("Target position to navigate to."),
+  target: Vec314.describe("Target position to navigate to."),
   speed: external_exports.number().positive().optional().describe("Movement speed (world units/second)."),
   dt: external_exports.number().positive().optional().describe("Integration timestep in seconds (default 1/60). Deterministic \u2014 never wall-clock."),
-  from: Vec313.optional().describe("Seed position for the FIRST step (when the entity has no body and no tracked position)."),
+  from: Vec314.optional().describe("Seed position for the FIRST step (when the entity has no body and no tracked position)."),
   meta: MetaField11
 });
 var setNavSpeedInput = external_exports.object({
@@ -103651,8 +104697,8 @@ var setNavSpeedInput = external_exports.object({
 });
 var isReachableInput = external_exports.object({
   entity: external_exports.string().optional().describe("Entity to check from (uses its body/tracked position). Ignored if `from` is given."),
-  from: Vec313.optional(),
-  to: Vec313,
+  from: Vec314.optional(),
+  to: Vec314,
   meta: MetaField11
 });
 function registerNavmeshSkills(registry2, opts) {
@@ -103699,7 +104745,7 @@ function registerNavmeshSkills(registry2, opts) {
     category: "nav",
     permissions: ["nav.read"],
     input: findPathInput,
-    output: external_exports.object({ path: external_exports.array(Vec313), reachable: external_exports.boolean() }),
+    output: external_exports.object({ path: external_exports.array(Vec314), reachable: external_exports.boolean() }),
     handler: (input, ctx) => {
       const path = mgr.findPath(input.from, input.to);
       ctx.emit("navmesh.pathFound", { from: input.from, to: input.to, waypoints: path.length, reachable: path.length > 0, ...input.meta });
@@ -103713,7 +104759,7 @@ function registerNavmeshSkills(registry2, opts) {
     category: "nav",
     permissions: ["nav.write"],
     input: moveToInput,
-    output: external_exports.object({ ok: external_exports.boolean(), arrived: external_exports.boolean(), position: Vec313.optional(), remaining: external_exports.number().optional() }),
+    output: external_exports.object({ ok: external_exports.boolean(), arrived: external_exports.boolean(), position: Vec314.optional(), remaining: external_exports.number().optional() }),
     handler: (input, ctx) => {
       if (!mgr.isBuilt()) return { ok: false, arrived: false };
       const entry = ctx.world.entities.resolve(input.entity);
@@ -103786,7 +104832,7 @@ function registerNavmeshSkills(registry2, opts) {
 }
 
 // src/skills/vfx.ts
-var Vec314 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec315 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Vec4 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField12 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var TWO_PI3 = Math.PI * 2;
@@ -104094,7 +105140,7 @@ var playVFXInput = external_exports.object({
   meta: MetaField12
 });
 var atPositionInput = external_exports.object({
-  position: Vec314,
+  position: Vec315,
   color: Vec4.default([1, 1, 1, 1]).describe("Particle color (RGBA 0-1)."),
   size: external_exports.number().positive().default(0.2).describe("Particle size."),
   lifetime: external_exports.number().positive().default(0.5).describe("Particle lifetime in seconds."),
@@ -104106,7 +105152,7 @@ var atPositionInput = external_exports.object({
 var attachVFXInput = external_exports.object({
   vfxId: external_exports.string(),
   entity: external_exports.string(),
-  offset: Vec314.default([0, 0, 0]).describe("Offset from entity position."),
+  offset: Vec315.default([0, 0, 0]).describe("Offset from entity position."),
   meta: MetaField12
 });
 function registerVFXSkills(registry2, opts) {
@@ -104316,15 +105362,20 @@ function statefulMulberry32(seed) {
   } };
 }
 var installedRng;
-function installSeededRandom(seed) {
+function installSeededRandom(seed, force = false) {
+  if (installedRng !== void 0 && !force && typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery)."
+    );
+  }
   const gen = statefulMulberry32(seed >>> 0);
   installedRng = gen;
   Math.random = gen.next;
   return gen.next;
 }
-function captureWorldState(world) {
+function captureWorldState(world, sorted = true) {
   const scratch = new Float32Array(7);
-  const ids = [...world.entities.ids()].sort();
+  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities = [];
   for (const id of ids) {
     const entry = world.entities.resolve(id);
@@ -104378,7 +105429,7 @@ function stableStringify(value) {
   if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
   const obj = value;
   const keys = Object.keys(obj).sort();
-  return "{" + keys.map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
+  return "{" + keys.filter((k3) => obj[k3] !== void 0).map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
 }
 function canonicalEvent(ev) {
   return stableStringify({
@@ -104388,7 +105439,6 @@ function canonicalEvent(ev) {
     threadId: ev.threadId,
     parentEventId: ev.parentEventId,
     causedBy: ev.causedBy,
-    timestamp: ev.timestamp,
     payload: ev.payload
   });
 }
@@ -104427,15 +105477,17 @@ function completeJsonlLines(jsonl, policy) {
   throw new TraceIntegrityError("partial_final_line", raw.length, "trace has an incomplete final JSONL line");
 }
 var LiminaTracer = class _LiminaTracer {
-  constructor(threadId, maxInMemory = 8192) {
+  constructor(threadId, maxInMemory = 8192, retainDurableInMemory = true) {
     this.threadId = threadId;
     this.maxInMemory = maxInMemory;
+    this.retainDurableInMemory = retainDurableInMemory;
   }
   seq = 0;
   events = [];
   durableEvents = [];
   appendTraceName;
   lastIntegrityHash = null;
+  replayCache;
   enableAppend(name) {
     this.appendTraceName = name;
     this.lastIntegrityHash = lastIntegrityHash(this.durableEvents);
@@ -104455,7 +105507,8 @@ var LiminaTracer = class _LiminaTracer {
     }
     this.seq++;
     this.events.push(event);
-    this.durableEvents.push(event);
+    if (this.appendTraceName === void 0 && this.retainDurableInMemory) this.durableEvents.push(event);
+    this.replayCache = void 0;
     if (this.events.length > this.maxInMemory) this.events.shift();
     return id;
   }
@@ -104474,28 +105527,25 @@ var LiminaTracer = class _LiminaTracer {
   /** Serialize to EventLoom-shaped JSONL, computing the sha256 integrity chain
    *  here (genesis previousHash=null; previousHash(N)=hash(N-1)). */
   exportJsonl() {
-    let previousHash = null;
-    const lines = [];
-    for (const ev of this.durableEvents) {
-      const hash4 = hashEvent(ev, previousHash);
-      const withIntegrity = { ...ev, integrity: { hash: hash4, previousHash } };
-      lines.push(JSON.stringify(withIntegrity));
-      previousHash = hash4;
-    }
-    return lines.length > 0 ? lines.join("\n") + "\n" : "";
+    if (this.appendTraceName !== void 0) return ops.op_read_trace(this.appendTraceName);
+    if (!this.retainDurableInMemory) return serializeEvents(this.events);
+    return serializeEvents(this.durableEvents);
   }
   durableEventCount() {
+    if (this.appendTraceName !== void 0) return this.replay().events.length;
+    if (!this.retainDurableInMemory) return this.events.length;
     return this.durableEvents.length;
   }
   flush(name) {
     const content = this.exportJsonl();
     ops.op_write_trace(name, content);
-    return { name, events: this.durableEvents.length, bytes: content.length };
+    return { name, events: this.durableEventCount(), bytes: content.length };
   }
   tail(opts = {}) {
     const afterSeq = opts.afterSeq ?? -1;
     const limit = Math.max(0, Math.min(opts.limit ?? 100, 1e3));
-    const events = this.durableEvents.filter((ev) => {
+    const source = this.appendTraceName !== void 0 ? this.replay().events : this.retainDurableInMemory ? this.durableEvents : this.events;
+    const events = source.filter((ev) => {
       const seq = eventSeq(ev.id);
       if (seq === null || seq <= afterSeq) return false;
       if (opts.actorId !== void 0 && ev.actorId !== opts.actorId) return false;
@@ -104506,7 +105556,7 @@ var LiminaTracer = class _LiminaTracer {
     return { events, nextAfterSeq: last };
   }
   explainEvent(eventId) {
-    const replay = buildReplay(this.durableEvents);
+    const replay = this.replay();
     const event = replay.byId.get(eventId);
     if (event === void 0) return void 0;
     return {
@@ -104519,7 +105569,11 @@ var LiminaTracer = class _LiminaTracer {
    *  childrenById) — the M8 audit surface walks this to answer "why was X
    *  allowed/denied" from the real recorded events. */
   replay() {
-    return buildReplay(this.durableEvents);
+    if (this.appendTraceName !== void 0) return _LiminaTracer.replayTrace(this.appendTraceName);
+    if (this.replayCache === void 0) {
+      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events);
+    }
+    return this.replayCache;
   }
   inspect() {
     const actors = [...new Set(this.events.map((e2) => e2.actorId))];
@@ -104548,31 +105602,46 @@ var LiminaTracer = class _LiminaTracer {
       ...opts,
       onPartialFinalLine: recoverPartialFinalLine ? "ignore" : opts.onPartialFinalLine
     };
-    const tracer = _LiminaTracer.fromJsonl(jsonl, maxInMemory, replayOpts);
+    let replay;
+    try {
+      replay = _LiminaTracer.replayJsonl(jsonl, replayOpts);
+    } catch (err) {
+      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError)) throw err;
+      const lines = jsonl.split("\n");
+      const prefixLineCount = Math.max(0, err.lineNumber - 1);
+      const prefix = prefixLineCount === 0 ? "" : lines.slice(0, prefixLineCount).join("\n") + "\n";
+      replay = _LiminaTracer.replayJsonl(prefix, { ...opts, onPartialFinalLine: "error" });
+      ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
+    }
+    const tracer = _LiminaTracer.fromReplay(replay, maxInMemory, false);
     tracer.appendTraceName = name;
-    if (tracer.threadId !== threadId && tracer.durableEvents.length === 0) {
+    if (tracer.threadId !== threadId && replay.events.length === 0) {
       return new _LiminaTracer(threadId, maxInMemory).enableAppend(name);
     }
-    tracer.lastIntegrityHash = lastIntegrityHash(tracer.durableEvents);
-    if (recoverPartialFinalLine && _LiminaTracer.replayJsonl(jsonl, replayOpts).partialFinalLine !== void 0) {
-      ops.op_write_trace(name, tracer.exportJsonl());
-    }
+    tracer.lastIntegrityHash = integrityTail(replay.events);
+    if (recoverPartialFinalLine && replay.partialFinalLine !== void 0) ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
     return tracer;
+  }
+  static ephemeral(threadId, maxInMemory = 8192) {
+    return new _LiminaTracer(threadId, maxInMemory, false);
   }
   static fromJsonl(jsonl, maxInMemory = 8192, opts = {}) {
     const replay = _LiminaTracer.replayJsonl(jsonl, opts);
+    return _LiminaTracer.fromReplay(replay, maxInMemory, true);
+  }
+  static fromReplay(replay, maxInMemory, keepDurable) {
     const tracer = new _LiminaTracer(replay.threadId ?? "trace_replay", maxInMemory);
     let maxSeq = -1;
     for (const ev of replay.events) {
       const clean = withoutIntegrity(ev);
-      tracer.durableEvents.push(clean);
+      if (keepDurable) tracer.durableEvents.push(clean);
       tracer.events.push(clean);
       const seq = eventSeq(ev.id);
       if (seq !== null && seq > maxSeq) maxSeq = seq;
     }
     while (tracer.events.length > maxInMemory) tracer.events.shift();
     tracer.seq = maxSeq + 1;
-    tracer.lastIntegrityHash = lastIntegrityHash(tracer.durableEvents);
+    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail(replay.events);
     return tracer;
   }
   static replayJsonl(jsonl, opts = {}) {
@@ -104612,6 +105681,23 @@ function lastIntegrityHash(events) {
     previousHash = hashEvent(ev, previousHash);
   }
   return previousHash;
+}
+function integrityTail(events) {
+  if (events.length === 0) return null;
+  const last = events[events.length - 1];
+  return last.integrity?.hash ?? lastIntegrityHash(events.map(withoutIntegrity));
+}
+function serializeEvents(events) {
+  let previousHash = null;
+  const lines = [];
+  for (const ev of events) {
+    const clean = withoutIntegrity(ev);
+    const hash4 = hashEvent(clean, previousHash);
+    const withIntegrity = { ...clean, integrity: { hash: hash4, previousHash } };
+    lines.push(JSON.stringify(withIntegrity));
+    previousHash = hash4;
+  }
+  return lines.length > 0 ? lines.join("\n") + "\n" : "";
 }
 function buildReplay(events) {
   const byId = /* @__PURE__ */ new Map();
@@ -104660,7 +105746,7 @@ async function replayCommands(commands, deps) {
   let seeds = 0;
   for (const cmd of commands) {
     if (cmd.kind === "seed") {
-      installSeededRandom(cmd.seed);
+      installSeededRandom(cmd.seed, true);
       seeds++;
       continue;
     }
@@ -104677,7 +105763,7 @@ async function replayCommands(commands, deps) {
       }
       continue;
     }
-    await registry2.invoke(cmd.tool, cmd.input, {
+    const response = await registry2.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
@@ -104685,6 +105771,11 @@ async function replayCommands(commands, deps) {
       world,
       causedBy: []
     });
+    if (!response.success) {
+      const code3 = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`world replay: command seq ${cmd.seq} tool ${cmd.tool} failed (${code3}): ${message}`);
+    }
     skillInvokes++;
   }
   return {
@@ -104750,6 +105841,7 @@ function parseKeyframes(jsonl) {
 }
 
 // src/worldlog/snapshot.ts
+var SNAPSHOT_VERSION = 2;
 var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 var B64_INV = (() => {
   const inv = new Array(128).fill(-1);
@@ -104774,6 +105866,11 @@ function bytesToBase64(bytes) {
   return out;
 }
 function base64ToBytes(b64) {
+  if (b64.length % 4 !== 0) throw new Error("world snapshot: invalid base64 length");
+  const firstPad = b64.indexOf("=");
+  if (firstPad !== -1 && !/^=+$/.test(b64.slice(firstPad))) {
+    throw new Error("world snapshot: invalid base64 padding");
+  }
   let len = b64.length;
   while (len > 0 && b64[len - 1] === "=") len--;
   const outLen = len * 3 >> 2;
@@ -104782,8 +105879,9 @@ function base64ToBytes(b64) {
   let acc = 0;
   let bits = 0;
   for (let i2 = 0; i2 < len; i2++) {
-    const v3 = B64_INV[b64.charCodeAt(i2)];
-    if (v3 < 0) throw new Error("world snapshot: invalid base64 character");
+    const code3 = b64.charCodeAt(i2);
+    const v3 = code3 < B64_INV.length ? B64_INV[code3] : -1;
+    if (v3 === void 0 || v3 < 0) throw new Error("world snapshot: invalid base64 character");
     acc = acc << 6 | v3;
     bits += 6;
     if (bits >= 8) {
@@ -104793,6 +105891,50 @@ function base64ToBytes(b64) {
   }
   return out;
 }
+var finite = external_exports.number().refine(Number.isFinite, "expected finite number");
+var int4 = finite.refine(Number.isInteger, "expected integer");
+var sparseIndexValue = external_exports.union([int4, external_exports.null()]);
+var vec33 = external_exports.tuple([finite, finite, finite]);
+var vec43 = external_exports.tuple([finite, finite, finite, finite]);
+var entityIndexSchema = external_exports.object({
+  aliveCount: int4,
+  maxId: int4,
+  versioning: external_exports.boolean(),
+  versionBits: int4,
+  entityMask: int4,
+  versionShift: int4,
+  versionMask: int4,
+  dense: external_exports.array(sparseIndexValue),
+  sparse: external_exports.array(sparseIndexValue)
+});
+var snapshotEntitySchema = external_exports.object({
+  id: external_exports.string(),
+  eid: int4,
+  bodyId: int4.optional(),
+  generation: int4,
+  pos: vec33,
+  rot: vec43,
+  scale: vec33
+});
+var characterSnapshotSchema = external_exports.object({
+  bodyId: int4,
+  vy: finite,
+  grounded: external_exports.boolean(),
+  heading: finite
+});
+var worldSnapshotSchema = external_exports.object({
+  snapshotVersion: external_exports.literal(SNAPSHOT_VERSION),
+  sessionId: external_exports.string(),
+  tick: int4,
+  snapshotSeq: int4,
+  rngState: int4,
+  entitySeq: int4,
+  entityVersion: int4,
+  entityIndex: entityIndexSchema,
+  entities: external_exports.array(snapshotEntitySchema),
+  characters: external_exports.array(characterSnapshotSchema).optional().default([]),
+  physics: external_exports.string()
+});
 
 // src/export/package.ts
 var EXPORT_VERSION = 1;
@@ -104954,7 +106096,7 @@ function deterministicMeta(recorder, tick) {
     logVersion: LOG_VERSION,
     sessionId: recorder.sessionId,
     createdAt: `tick:${tick}`,
-    commands: recorder.commands.length,
+    commands: recorder.commandCount,
     ticks: maxTick
   };
 }
@@ -105062,6 +106204,9 @@ function registerSaveSkills(registry2, opts) {
       let data;
       let mode;
       if (recorder !== void 0) {
+        if (recorder.compactedCommandCount > 0) {
+          throw new Error("save.export: recorder command prefix was compacted; export from the durable world-log segment instead");
+        }
         const meta3 = deterministicMeta(recorder, ctx.tick);
         const files = assembleExport({
           worldId,
@@ -105440,7 +106585,7 @@ function registerProgressionSkills(registry2, opts) {
 }
 
 // src/skills/worldstate.ts
-var Vec315 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec316 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField15 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var WorldStateManager = class {
   state = {
@@ -105587,12 +106732,12 @@ function registerWorldAudioExtensionSkills(registry2, opts) {
     category: "world",
     permissions: ["world.read"],
     input: getSpawnInput,
-    output: external_exports.object({ position: Vec315 }),
+    output: external_exports.object({ position: Vec316 }),
     // Pure read — no emit (mirrors the other read-only skills).
     handler: () => ({ position: worldMgr.getSpawn() })
   };
   const setSpawnInput = external_exports.object({
-    position: Vec315.describe("Spawn position [x, y, z]."),
+    position: Vec316.describe("Spawn position [x, y, z]."),
     meta: MetaField15
   });
   const setSpawn = {
@@ -105670,7 +106815,7 @@ function registerWorldAudioExtensionSkills(registry2, opts) {
   };
   const playSFXInput = external_exports.object({
     name: external_exports.string().min(1).describe("SFX name from the sound library."),
-    position: Vec315.optional().describe("Optional position for spatial playback."),
+    position: Vec316.optional().describe("Optional position for spatial playback."),
     volume: external_exports.number().min(0).max(1).default(0.8),
     config: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Custom SFX data (pitch variation, randomization, etc.)."),
     meta: MetaField15
@@ -105690,7 +106835,7 @@ function registerWorldAudioExtensionSkills(registry2, opts) {
     }
   };
   const setReverbInput = external_exports.object({
-    position: Vec315.describe("Reverb zone center position."),
+    position: Vec316.describe("Reverb zone center position."),
     radius: external_exports.number().positive().describe("Zone radius."),
     size: external_exports.number().positive().default(1).describe("Room size."),
     decay: external_exports.number().positive().default(1).describe("Reverb decay time."),
@@ -105732,6 +106877,7 @@ function registerCoreSkills(registry2, opts) {
   const terrainRegions = /* @__PURE__ */ new Map();
   const materials = new MaterialRegistry();
   registerSceneSkills(registry2, materials);
+  registerArchitectureSkills(registry2);
   registerEcsSkills(registry2);
   registerThreeSkills(registry2, assets, materials);
   registerAssetSkills(registry2, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
@@ -105767,8 +106913,12 @@ function registerCoreSkills(registry2, opts) {
   const interaction = registerInteractionSkills(registry2, { inventoryManager: inventory.inventoryManager });
   const gamestate = registerGameStateSkills(registry2);
   const triggers = registerTriggerEventSkills(registry2);
+  const cutscene = registerCutsceneSkills(registry2);
+  const director = registerDirectorSkills(registry2);
+  const clips = registerClipAuthorSkills(registry2);
   const quest = registerQuestSkills(registry2);
   const combat = registerCombatSkills(registry2);
+  const ability = registerAbilitySkills(registry2, { statsManager: combat.statsManager });
   const behavior = registerBehaviorDialogueSkills(registry2);
   const nav = registerNavmeshSkills(registry2);
   const vfx = registerVFXSkills(registry2);
@@ -105792,8 +106942,12 @@ function registerCoreSkills(registry2, opts) {
     inventory,
     gamestate,
     triggers,
+    cutscene,
+    director,
+    clips,
     quest,
     combat,
+    ability,
     behavior,
     nav,
     vfx,
@@ -105832,6 +106986,7 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   events = null;
   controller = null;
   gravityY = -9.81;
+  disposed = false;
   nextBodyId = 0;
   /** Stable body id -> rapier RigidBodyHandle. Removed ids are deleted (never reissued). */
   idToHandle = /* @__PURE__ */ new Map();
@@ -105851,8 +107006,24 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   }
   // ── internals ────────────────────────────────────────────────────────────────
   requireWorld() {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
     if (this.world === null) throw new Error("WasmRapierPhysics: op before op_physics_create_world");
     return this.world;
+  }
+  freeMaybe(value) {
+    const free = value?.free;
+    if (typeof free === "function") free.call(value);
+  }
+  releaseWorldResources() {
+    this.freeMaybe(this.controller);
+    this.freeMaybe(this.events);
+    this.freeMaybe(this.world);
+    this.controller = null;
+    this.events = null;
+    this.world = null;
+    this.nextBodyId = 0;
+    this.idToHandle.clear();
+    this.handleToId.clear();
   }
   /** Resolve a stable id to its live RigidBody, or null for unknown/removed ids. */
   bodyFor(id) {
@@ -105901,6 +107072,8 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   }
   // ── PhysicsOps surface ───────────────────────────────────────────────────────
   op_physics_create_world(gravityY) {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
+    this.releaseWorldResources();
     this.gravityY = gravityY;
     this.world = new this.R.World({ x: 0, y: gravityY, z: 0 });
     this.configureWorld();
@@ -106114,12 +107287,15 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     return blob;
   }
   op_physics_restore(bytes) {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metaLen = dv.getUint32(0, true);
     const metaBytes = bytes.subarray(4, 4 + metaLen);
     const meta3 = JSON.parse(new TextDecoder().decode(metaBytes));
     const rapierBytes = bytes.slice(4 + metaLen);
-    this.world = this.R.World.restoreSnapshot(rapierBytes);
+    const restoredWorld = this.R.World.restoreSnapshot(rapierBytes);
+    this.releaseWorldResources();
+    this.world = restoredWorld;
     this.gravityY = meta3.gravityY;
     this.configureWorld();
     this.events = new this.R.EventQueue(true);
@@ -106127,6 +107303,11 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     this.nextBodyId = meta3.nextBodyId;
     this.idToHandle = new Map(meta3.entries);
     this.handleToId = new Map(meta3.entries.map(([id, handle]) => [handle, id]));
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.releaseWorldResources();
   }
 };
 
@@ -106662,6 +107843,8 @@ var KeyframePhysics = class {
   tick = 0;
   /** bodyId -> ascending keyframe ticks + the body's transform at each. */
   timelines = /* @__PURE__ */ new Map();
+  /** Reused scratch for op_physics_body_pos so the playback hot path never allocs. */
+  scratch7 = new Float32Array(7);
   constructor(keyframes) {
     for (const kf of [...keyframes].sort((a2, b3) => a2.tick - b3.tick)) {
       for (const b3 of kf.bodies) {
@@ -106718,7 +107901,7 @@ var KeyframePhysics = class {
     const qy = a2[4] + (b3[4] * s2 - a2[4]) * f2;
     const qz = a2[5] + (b3[5] * s2 - a2[5]) * f2;
     const qw = a2[6] + (b3[6] * s2 - a2[6]) * f2;
-    const inv = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+    const inv = 1 / (Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) || 1);
     out[3] = qx * inv;
     out[4] = qy * inv;
     out[5] = qz * inv;
@@ -106768,7 +107951,7 @@ var KeyframePhysics = class {
     this.lookup(id, out);
   }
   op_physics_body_pos(id, out) {
-    const s2 = new Float32Array(7);
+    const s2 = this.scratch7;
     this.lookup(id, s2);
     out[0] = s2[0];
     out[1] = s2[1];
@@ -106905,7 +108088,7 @@ var ReplayPlayer = class {
       }
       return false;
     }
-    await this.registry.invoke(cmd.tool, cmd.input, {
+    const response = await this.registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
@@ -106913,6 +108096,11 @@ var ReplayPlayer = class {
       world: this.world,
       causedBy: []
     });
+    if (!response.success) {
+      const code3 = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`ReplayPlayer: command seq ${cmd.seq} tool ${cmd.tool} failed (${code3}): ${message}`);
+    }
     return false;
   }
   /** Apply setup commands up to (not including) the first `step` — rebuilds the
@@ -107027,7 +108215,7 @@ var FlyCamera = class {
     }
     if (k3.has("Space")) my += 1;
     if (k3.has("KeyC")) my -= 1;
-    const len = Math.hypot(mx, my, mz);
+    const len = Math.sqrt(mx * mx + my * my + mz * mz);
     if (len > 0) {
       const boost = k3.has("ShiftLeft") || k3.has("ShiftRight") ? 3.5 : 1;
       const s2 = this.speed * boost * dt / len;
@@ -107100,6 +108288,15 @@ var DurableTraceStore = class {
   }
   mem = /* @__PURE__ */ new Map();
   inflight = /* @__PURE__ */ new Set();
+  persistFailures = 0;
+  lastPersistError = void 0;
+  /** Write-behind persistence health (observability). The in-memory mirror is
+   *  always authoritative, so a nonzero `failures` means the durable IndexedDB
+   *  copy has silently fallen behind (durability loss) — surfaced here for
+   *  diagnostics rather than swallowed. `lastError` is the most recent failure. */
+  get persistStatus() {
+    return { failures: this.persistFailures, lastError: this.lastPersistError };
+  }
   /** Load prior traces from the backing store into the mirror. */
   async hydrate() {
     for (const [k3, v3] of await this.kv.loadAll()) this.mem.set(k3, v3);
@@ -107121,7 +108318,9 @@ var DurableTraceStore = class {
     while (this.inflight.size > 0) await Promise.all([...this.inflight]);
   }
   persist(name, value) {
-    const p2 = this.kv.put(name, value).catch(() => {
+    const p2 = this.kv.put(name, value).catch((err) => {
+      this.persistFailures++;
+      this.lastPersistError = err;
     });
     this.inflight.add(p2);
     void p2.finally(() => this.inflight.delete(p2));
@@ -107323,7 +108522,7 @@ async function run(opts) {
       registerCoreSkills(r2, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)) });
       return r2;
     },
-    tracer: new LiminaTracer("ses_browser_player"),
+    tracer: LiminaTracer.ephemeral("ses_browser_player"),
     opsOverrides: hostOverrides
   });
   await player.init();
@@ -107333,14 +108532,16 @@ async function run(opts) {
     const perf = globalThis.performance;
     return perf !== void 0 ? perf.now() : Date.now();
   };
-  const fly = terrain !== void 0 ? new FlyCamera({ x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : void 0;
+  const fly = terrain !== void 0 ? new FlyCamera(opts.flyStart ?? { x: 0, y: 34, z: 70, yaw: 0, pitch: -0.32 }) : void 0;
   if (fly !== void 0) {
     const doc = globalThis.document;
-    fly.attach(
-      opts.input,
-      opts.canvas,
-      doc
-    );
+    if (opts.input !== void 0) {
+      fly.attach(
+        opts.input,
+        opts.canvas,
+        doc
+      );
+    }
     const cam = camera;
     cam.far = 900;
     cam.updateProjectionMatrix();
@@ -107350,7 +108551,7 @@ async function run(opts) {
   const orbitMaxRadius = opts.orbit?.maxRadius ?? 40;
   const orbitMaxHeight = opts.orbit?.maxHeight ?? 25;
   const orbitSpin = opts.orbit?.autoSpin ?? 4e-3;
-  let angle = 0;
+  let angle = opts.orbit?.azimuth ?? 0;
   let radius = opts.orbit?.radius ?? 16;
   let camHeight = opts.orbit?.height ?? 8;
   if (opts.orbit?.far !== void 0) {
@@ -107442,7 +108643,20 @@ async function runLive(opts) {
     worker.terminate();
     return null;
   }
-  worker.onmessage = null;
+  let liveLoop = null;
+  let aborted2 = false;
+  const failLive = (message) => {
+    aborted2 = true;
+    status("error", message);
+    liveLoop?.stop();
+    worker.terminate();
+  };
+  worker.onmessage = (ev) => {
+    const msg = ev.data;
+    if (msg.type !== "error") return;
+    failLive(`sim worker ${msg.phase ?? "tick"}: ${msg.message ?? "unknown"}`);
+  };
+  worker.onerror = (ev) => failLive("sim worker error: " + (ev.message ?? "unknown"));
   const joined = new SharedTransformStorage({ buffer: ready.buffer });
   const inputRing = new InputRingBuffer({ buffer: ready.inputBuffer });
   const statusShared = typeof SharedArrayBuffer === "function" && ready.status instanceof SharedArrayBuffer;
@@ -107477,7 +108691,7 @@ async function runLive(opts) {
     height: opts.height,
     mode: "windowed"
   };
-  const registry2 = new SkillRegistry(new LiminaTracer("ses_browser_live"));
+  const registry2 = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   registerCoreSkills(registry2);
   const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
   for (const cmd of opts.commands) {
@@ -107523,6 +108737,10 @@ async function runLive(opts) {
   let angle = 0;
   const radius = opts.orbit?.radius ?? 16;
   const camHeight = opts.orbit?.height ?? 8;
+  if (aborted2) {
+    worker.terminate();
+    return null;
+  }
   status("ready", `${eids.length} entities authored \u2014 live sim running`);
   const loop = startAccumulatorLoop({
     step: () => {
@@ -107547,6 +108765,7 @@ async function runLive(opts) {
       renderer.render(scene, camera);
     }
   });
+  liveLoop = loop;
   return {
     worker,
     loop,

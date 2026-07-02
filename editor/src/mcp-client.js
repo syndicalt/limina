@@ -36,9 +36,10 @@ export class McpError extends Error {
 }
 
 export class McpClient {
-  /** @param {string} url e.g. ws://localhost:8787/ */
-  constructor(url) {
+  /** @param {string} url e.g. ws://localhost:8787/ @param {string | undefined} authToken */
+  constructor(url, authToken = undefined) {
     this.url = url;
+    this.authToken = authToken;
     /** @type {WebSocket | undefined} */
     this.ws = undefined;
     this.nextId = 1;
@@ -123,8 +124,9 @@ export class McpClient {
   }
 
   /** Bind this session's identity + profile (-> permission set) server-side. */
-  async initialize(agentId, sessionId, profile) {
-    const msg = await this._request("initialize", { agentId, sessionId, profile });
+  async initialize(agentId, sessionId, profile, authToken = this.authToken) {
+    const params = authToken ? { agentId, sessionId, profile, authToken } : { agentId, sessionId, profile };
+    const msg = await this._request("initialize", params);
     if (msg.error) throw new McpError(msg.error.code, msg.error.message, msg.error.data);
     this.session = msg.result?.session;
     return this.session;

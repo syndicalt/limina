@@ -76,6 +76,7 @@ const packages = new PackageRegistry(registry, host, tracer, ENGINE_VERSION, eng
 registerPackageSkills(registry, packages); // rebind package.* to THIS instance
 
 const builderBase = { agentId: "engine", sessionId: "ses_pkg", profile: "builder.readWrite", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+const auditBase = { agentId: "agt_pkg_auditor", sessionId: "ses_pkg_audit", profile: "system.readonly", permissions: resolveProfile("system.readonly"), tick: 0, world };
 
 // Manifest validation: a malformed manifest (bad name + non-semver version) is rejected by Zod.
 const badInstall = packages.install({ name: "Bad Name!!", version: "not-semver", kind: "agent", engineCompat: "^1.0.0", entry: "x" });
@@ -105,6 +106,18 @@ const legitManifest = {
 };
 const inst = packages.install(legitManifest);
 assert(inst.ok && inst.ref === "orbit-mover@1.2.0", "the well-formed third-party manifest installs as orbit-mover@1.2.0");
+const installedOnce = packages.get("orbit-mover@1.2.0");
+assert(installedOnce !== undefined, "installed package record should be inspectable");
+assert(
+  !/^\d{4}-\d{2}-\d{2}T/.test(installedOnce.installedAt),
+  `installedAt must not be a wall-clock ISO timestamp: ${installedOnce.installedAt}`,
+);
+packages.install(legitManifest);
+const installedTwice = packages.get("orbit-mover@1.2.0");
+assert(
+  installedTwice?.installedAt === installedOnce.installedAt,
+  "reinstalling the same package manifest must produce the same deterministic installedAt stamp",
+);
 
 // Resolve by name@range — highest satisfying version.
 assert(packages.resolve("orbit-mover", "^1.0.0")?.ref === "orbit-mover@1.2.0", "resolve picks the version satisfying ^1.0.0");
@@ -157,12 +170,12 @@ assert(revDeny !== undefined, "the package revocation is audited (rule=package.r
 ops.op_log("  [P1 govern] revocation: revoked package DENIED reload (package.revoked) + audited");
 
 // AUDITED — provenance + a decision via audit.explain / audit.query.
-const explain = ok(await registry.invoke("audit.explain", { eventId: loadEventId }, builderBase));
+const explain = ok(await registry.invoke("audit.explain", { eventId: loadEventId }, auditBase));
 const decisionField = field(explain, "decision");
 assert(decisionField !== null && decisionField !== undefined && field(decisionField, "rule") === "package.admitted", "audit.explain on the load event returns the governing package-admit decision");
 assert(field(field(decisionField, "context"), "package") === "orbit-mover@1.2.0", "the audited governing decision carries the package provenance");
 assert(field(field(explain, "provenance"), "package") === "orbit-mover@1.2.0", "audit.explain provenance names the package");
-const q = ok(await registry.invoke("audit.query", { package: "orbit-mover@1.2.0" }, builderBase));
+const q = ok(await registry.invoke("audit.query", { package: "orbit-mover@1.2.0" }, auditBase));
 const summary = field(q, "summary");
 assert((field(summary, "total") as number) >= 1 && arr(field(summary, "packages")).includes("orbit-mover@1.2.0"), "audit.query{package} surfaces the package provenance from real recorded decisions");
 ops.op_log("  [P1 audit] audit.explain -> package.admitted decision + provenance; audit.query{package} -> " + JSON.stringify(field(summary, "packages")));

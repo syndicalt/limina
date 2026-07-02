@@ -111,7 +111,11 @@ export function buildAssetInstancedMeshes(root: SceneObject, instances: AssetIns
 }
 
 /** Dispose an asset InstancedMesh's GPU resources after it's removed from the scene.
- *  Geometry/material are owned by the source glTF; only the instance buffer is freed. */
+ *  asset.scatter parses a fresh glTF root per mount, so the instanced mesh owns the
+ *  source geometry/material references for that mount and must release them too. */
 export function disposeAssetInstancedMesh(mesh: THREE.InstancedMesh): void {
   (mesh as unknown as { dispose?: () => void }).dispose?.();
+  mesh.geometry.dispose();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of new Set(materials)) material.dispose();
 }

@@ -40,9 +40,7 @@ interface MCPResponse {
 }
 ```
 
-`callTool` requires an initialized session — `{ agentId, sessionId, permissions }`. Without one it returns `forbidden` ("MCP session is not initialized"). On success it builds the invocation base from the session and calls `registry.invoke(req.tool, req.input, base)`.
-
-A trusted in-process variant, `callToolInternal`, lets engine systems that already own attribution override `context.agentId`/`sessionId` (permissions still come from the session) — this is how the player's DecisionSystem routes a player's actions through the same path as an external builder.
+`callTool` requires an initialized session — `{ agentId, sessionId, permissions }`. Without one it returns `forbidden` ("MCP session is not initialized"). On success it builds the invocation base from the session and calls `registry.invoke(req.tool, req.input, base)`. Trusted in-process systems use the same `callTool(req, session)` path with their engine-owned session; they do not override attribution through request payloads.
 
 ## Error codes
 
@@ -129,7 +127,7 @@ All three share identical JSON-RPC 2.0 semantics, the same `initialize` handshak
 
 ### In-process
 
-The `Mcp` class directly: `listTools` / `callTool` / `callToolInternal`. No serialization — used by engine systems and the in-world player loop.
+The `Mcp` class directly: `listTools(session)` / `callTool(req, session)`. No serialization — used by engine systems and the in-world player loop.
 
 ### stdio
 

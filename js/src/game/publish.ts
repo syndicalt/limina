@@ -20,7 +20,7 @@ export function canExport(gds: GameDesignSpec): boolean {
 export interface ExportOptions {
   /** Stable world id stamped into the export manifest. */
   worldId: string;
-  /** ISO timestamp; defaults to now. */
+  /** Export creation marker. Defaults to the recorder's deterministic world-log marker. */
   createdAt?: string;
   /** Keyframe cadence (0 → no keyframes; a direct command-stream replay). */
   keyframeInterval?: number;
@@ -37,13 +37,14 @@ export interface ExportOptions {
  *  whole session (attach() before authoring) for the export to be replay-complete; pass `keyframes`
  *  (transform snapshots) so the export renders with motion in the browser's Mode-A replay. */
 export function exportGame(recorder: WorldRecorder, opts: ExportOptions): ExportFiles {
+  const meta = recorder.meta();
   return assembleExport({
     worldId: opts.worldId,
-    meta: recorder.meta(),
+    meta,
     commands: recorder.commands,
     keyframes: opts.keyframes ?? [],
     keyframeInterval: opts.keyframeInterval ?? 0,
     assets: opts.assets,
-    createdAt: opts.createdAt ?? new Date().toISOString(),
+    createdAt: opts.createdAt ?? meta.createdAt,
   });
 }

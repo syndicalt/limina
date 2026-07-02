@@ -260,7 +260,7 @@ export class SimWorkerController {
       mode: "headless",
     };
 
-    const registry = new SkillRegistry(new LiminaTracer("ses_sim_worker"));
+    const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_sim_worker"));
     const core = registerCoreSkills(registry);
 
     return new SimWorkerController({
@@ -294,6 +294,7 @@ export class SimWorkerController {
       if (!res.success) {
         throw new Error(`loadWorld: skill '${cmd.tool}' failed: ${res.error?.message ?? "unknown error"}`);
       }
+      this.syncLiveTransformMutationToPhysics(cmd);
       results.push(res.result);
     }
     this.syncTransforms();
@@ -345,15 +346,13 @@ export class SimWorkerController {
   }
 
   /** Tear the controller down (shell `stop`): mark it disposed so no later `tick()`
-   *  steps the released world, and drop the retained input frame. Idempotent.
-   *  Releasing the controller reference afterward lets the joined SABs be collected.
-   *  NOTE: the live wasm-Rapier world's solver state lives in wasm linear memory the
-   *  JS GC does not reclaim; freeing it needs a public `dispose()`/`free()` on
-   *  WasmRapierPhysics (not owned here) that `this.physics` would forward to. */
+   *  steps the released world, drop the retained input frame, and free the wasm
+   *  Rapier world/controller/event handles. Idempotent. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.lastInputFrame = null;
+    this.physics.dispose();
   }
 
   /** Copy every live body/entity transform from the physics solver into the
@@ -368,6 +367,33 @@ export class SimWorkerController {
       this.world.ops.op_physics_body_transform(entry.bodyId, scratch);
       this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
       this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
+    }
+  }
+
+  /** `ecs.updateComponent` is the editor's live transform mutation path. The
+   *  worker owns Rapier and then streams body transforms into the SAB, so for a
+   *  body-bound entity the physics body must be updated before the next sync. */
+  private syncLiveTransformMutationToPhysics(cmd: AuthorCommand): void {
+    if (cmd.kind !== "skill" || cmd.tool !== "ecs.updateComponent") return;
+    const input = cmd.input as { entity?: unknown; component?: unknown; value?: unknown };
+    if (typeof input.entity !== "string" || !Array.isArray(input.value)) return;
+    const entry = this.entityTable.resolve(input.entity);
+    if (entry?.bodyId === undefined) return;
+    if (input.component === "position" && input.value.length >= 3) {
+      this.physics.setBodyTranslation(
+        entry.bodyId,
+        Number(input.value[0]),
+        Number(input.value[1]),
+        Number(input.value[2]),
+      );
+    } else if (input.component === "rotation" && input.value.length >= 3) {
+      this.physics.setBodyRotation(
+        entry.bodyId,
+        Number(input.value[0]),
+        Number(input.value[1]),
+        Number(input.value[2]),
+        Number(input.value[3] ?? 1),
+      );
     }
   }
 
@@ -422,7 +448,8 @@ type InitMessage = {
 };
 type StepMessage = { type: "step" };
 type StopMessage = { type: "stop" };
-type ShellMessage = InitMessage | StepMessage | StopMessage;
+type ApplyCommandsMessage = { type: "applyCommands"; commands?: AuthorCommand[] };
+type ShellMessage = InitMessage | StepMessage | StopMessage | ApplyCommandsMessage;
 
 /** Install the Worker message wiring on a worker global. `init` builds the
  *  controller (importing rapier-compat — resolved by the browser bundle, never the
@@ -475,6 +502,8 @@ export function installSimWorker(scope: WorkerScopeLike): void {
         }, 1000 / hz);
       } else if (msg.type === "step") {
         if (controller !== null) scope.postMessage({ type: "tick", tick: controller.tick() });
+      } else if (msg.type === "applyCommands") {
+        if (controller !== null && msg.commands !== undefined) await controller.loadWorld(msg.commands);
       } else if (msg.type === "stop") {
         teardown();
       }

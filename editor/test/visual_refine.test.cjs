@@ -13,16 +13,18 @@
 // Prereq: static server on :5173 (serves editor/). Run: node editor/test/visual_refine.test.cjs
 //   exit 0 = converged; exit 2 = no browser/server (skip).
 
-const fs = require("fs");
-const PWC = fs.readFileSync("/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/ec66f3aa-28e5-4be6-af39-c803b3c96622/scratchpad/pwc_path.txt", "utf8").trim();
-const CHROME = process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
+const { artifactPath } = require("./artifacts.cjs");
+const CHROME = chromeExecutable();
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
-  let chromium, refineVisual;
-  try { ({ chromium } = require(PWC)); } catch { console.log("SKIP: playwright-core not loadable"); process.exit(2); }
+  let refineVisual;
+  const loaded = loadChromium();
+  if (!loaded.chromium) skip(loaded.error);
+  const chromium = loaded.chromium;
   try { ({ refineVisual } = await import("../vendor/self_correct.mjs")); } catch (e) { fail("could not import refineVisual (run `npm run bundle:editor` in js/): " + e.message); }
-  if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium not found"); process.exit(2); }
+  requireChromeBinary(CHROME);
 
   let browser;
   try {
@@ -81,7 +83,8 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     });
 
     const finalLum = (await renderProvider.render(result.finalConfig)).stats.meanLum;
-    await page.screenshot({ path: "editor/test/visual_refine.png" });
+    const shot = artifactPath("visual_refine.png");
+    await page.screenshot({ path: shot });
     await browser.close();
 
     if (!result.converged) {
@@ -95,7 +98,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     console.log(`visual_refine.test OK: the REAL self-correction loop converged on rendered pixels in ${result.iterations} iteration(s) — ` +
       `from a too-dark sun ${SUN_MIN} (lum ${lo.toFixed(4)}) up to sun ${result.finalConfig.sun.toFixed(3)} hitting target luminance ` +
       `${target.toFixed(4)} (final ${finalLum.toFixed(4)}, score ${result.finalScore.toFixed(3)}). Render: engine baseline via SwiftShader WebGL2; ` +
-      `critique: real readback luminance. No human, no mocks.`);
+      `critique: real readback luminance. No human, no mocks. Screenshot: ${shot}.`);
     process.exit(0);
   } catch (e) { try { await browser.close(); } catch (_) {} fail(e && e.message ? e.message : String(e)); }
 })();

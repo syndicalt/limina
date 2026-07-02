@@ -80,15 +80,14 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
  *  agent's `profile` in the invoke base (actionSystem / runBoundedMultiTurn do). */
 export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): ApprovalGate {
   // DEFAULT-HOLD: a reviewed agent's call is HELD unless EVERY capability it requires
-  // is read-only / introspection. This is a denylist of reads, not an allowlist of a
-  // few known-mutating perms — so it catches ALL write-class skills for an ARBITRARY
-  // bundle (scene/ecs/physics writes, agent.write, ui.write, audio.play, social.act,
-  // terrain.generate, and any future write cap), which an allowlist would silently miss.
-  const READ_ONLY = new Set(["scene.read", "ecs.read", "physics.read", "agent.read", "terrain.read"]);
+  // is read-only by naming convention. This avoids a stale static allowlist: newly
+  // added reads such as `nav.read` stay ungated, while write/action caps such as
+  // scene.write, audio.play, social.act, terrain.generate, and orchestrate are held.
+  const readOnly = (permission: string): boolean => permission.endsWith(".read");
   return (name, base, skill: SkillDefinition): boolean => {
     if (base.profile === undefined || !reviewProfiles.has(base.profile)) return false;
     if (name.startsWith("approval.")) return false; // never gate the resolution skills
-    return skill.permissions.some((p) => !READ_ONLY.has(p));
+    return skill.permissions.some((p) => !readOnly(p));
   };
 }
 
@@ -114,6 +113,7 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 //    recorder logs the propose-invoke (worldlog/recorder.ts `attach`), so on a
 //    gate-off replay a DENIED action would re-apply. The gate is OFF by default,
 //    so non-gated sessions replay byte-identically (verified by p4_worldlog_*).
-// 4. The pending map has no TTL/eviction; an agent that re-proposes every tick
-//    creates near-duplicate pending entries (no dedup). Fine per session; cap it
-//    for a long-lived host.
+// 4. The pending map is capacity-bounded by SkillRegistry.setApprovalQueueLimit
+//    and fails closed when full. It still intentionally has no TTL/dedup because
+//    duplicate-looking proposals can differ by tick/provenance and need explicit
+//    reviewer handling.

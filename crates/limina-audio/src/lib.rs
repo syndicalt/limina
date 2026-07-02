@@ -24,7 +24,7 @@ use std::f32::consts::PI;
 use std::io::{Cursor, Write};
 use std::num::{NonZeroU16, NonZeroU32};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Weak};
 use std::thread;
@@ -32,6 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use deno_core::{extension, op2, OpState};
+use deno_error::JsErrorBox;
 use rodio::buffer::SamplesBuffer;
 use rodio::source::Source;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SpatialPlayer};
@@ -45,6 +46,12 @@ const BUS_VOICE: usize = 3;
 /// queued), so a stall can never grow memory without bound. Sized to comfortably
 /// absorb a frame's worth of listener/emitter/volume updates plus a few one-shots.
 const AUDIO_CMD_CAPACITY: usize = 256;
+const MAX_SFX_SECONDS: f32 = 60.0;
+const MAX_PCM_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 120;
+const MAX_TTS_TEXT_BYTES: usize = 1_000;
+const MAX_TTS_WORKERS: usize = 4;
+const MAX_TTS_DECODED_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 30;
+const MAX_GAIN: f32 = 4.0;
 
 /// Commands sent from the JS-thread ops (and TTS workers) to the audio thread.
 enum AudioCmd {
@@ -91,7 +98,8 @@ enum AudioCmd {
         data: Vec<f32>,
         channels: NonZeroU16,
         rate: NonZeroU32,
-        #[allow(dead_code)] // reserved for a future positional voice; the voice is currently non-spatial (full presence over music)
+        // reserved for a future positional voice; the voice is currently non-spatial (full presence over music)
+        #[allow(dead_code)]
         emitter: [f32; 3],
         bus: usize,
         volume: f32,
@@ -228,9 +236,10 @@ fn rate() -> NonZeroU32 {
 }
 
 /// Synthesize a mono sine with a short attack/decay envelope (click-free).
-fn synth_sine(freq: f32, secs: f32) -> Vec<f32> {
+fn synth_sine(freq: f32, secs: f32) -> Result<Vec<f32>, String> {
+    validate_sfx_params(freq, secs, 1.0)?;
     let sr = SAMPLE_RATE as f32;
-    let n = (secs.max(0.0) * sr) as usize;
+    let n = (secs * sr) as usize;
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
         let t = i as f32 / sr;
@@ -238,7 +247,92 @@ fn synth_sine(freq: f32, secs: f32) -> Vec<f32> {
         let release = ((secs - t) / 0.05).clamp(0.0, 1.0);
         v.push((2.0 * PI * freq * t).sin() * 0.25 * attack.min(release));
     }
-    v
+    Ok(v)
+}
+
+fn validate_gain(volume: f32) -> Result<(), String> {
+    if !volume.is_finite() || !(0.0..=MAX_GAIN).contains(&volume) {
+        return Err(format!("audio volume must be finite and in 0..={MAX_GAIN}"));
+    }
+    Ok(())
+}
+
+fn validate_bus(bus: u32) -> Result<(), String> {
+    if bus as usize >= N_BUSES {
+        return Err(format!(
+            "audio bus {bus} is out of range 0..{}",
+            N_BUSES - 1
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sfx_params(freq: f32, secs: f32, volume: f32) -> Result<(), String> {
+    if !freq.is_finite() || !(20.0..=20_000.0).contains(&freq) {
+        return Err("audio frequency must be finite and in 20..=20000 Hz".into());
+    }
+    if !secs.is_finite() || !(0.0..=MAX_SFX_SECONDS).contains(&secs) {
+        return Err(format!(
+            "audio duration must be finite and in 0..={MAX_SFX_SECONDS} seconds"
+        ));
+    }
+    validate_gain(volume)
+}
+
+fn validate_position(pos: [f32; 3]) -> Result<(), String> {
+    if pos.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err("audio position values must be finite".into())
+    }
+}
+
+fn validate_pcm_params(
+    len: usize,
+    sample_rate: u32,
+    channels: u32,
+    volume: f32,
+) -> Result<(), String> {
+    if len > MAX_PCM_SAMPLES {
+        return Err(format!(
+            "audio buffer exceeds sample cap ({len}>{MAX_PCM_SAMPLES})"
+        ));
+    }
+    if !(1..=192_000).contains(&sample_rate) {
+        return Err("audio sample rate must be in 1..=192000 Hz".into());
+    }
+    if !(1..=8).contains(&channels) {
+        return Err("audio channels must be in 1..=8".into());
+    }
+    validate_gain(volume)
+}
+
+fn validate_tts_text(text: &str) -> Result<(), String> {
+    if text.len() > MAX_TTS_TEXT_BYTES {
+        return Err(format!(
+            "audio TTS text exceeds byte cap ({}>{MAX_TTS_TEXT_BYTES})",
+            text.len()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_decoded_tts(
+    len: usize,
+    sample_rate: u32,
+    channels: NonZeroU16,
+    volume: f32,
+) -> Result<(), String> {
+    if len > MAX_TTS_DECODED_SAMPLES {
+        return Err(format!(
+            "audio TTS decoded sample count exceeds cap ({len}>{MAX_TTS_DECODED_SAMPLES})"
+        ));
+    }
+    validate_pcm_params(len, sample_rate, channels.get() as u32, volume)
+}
+
+fn audio_arg_error(msg: String) -> JsErrorBox {
+    JsErrorBox::generic(msg)
 }
 
 /// Synthesize a soft 2 s chord pad. Frequencies (110/165/220 Hz) complete whole
@@ -384,8 +478,28 @@ fn decode_wav(bytes: Vec<u8>) -> Result<(Vec<f32>, NonZeroU16, NonZeroU32), Stri
     let decoder = Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();
-    let data: Vec<f32> = decoder.collect();
+    let mut data = Vec::new();
+    for sample in decoder {
+        if data.len() >= MAX_TTS_DECODED_SAMPLES {
+            return Err(format!(
+                "audio TTS decoded sample count exceeds cap (>{MAX_TTS_DECODED_SAMPLES})"
+            ));
+        }
+        if !sample.is_finite() {
+            return Err("audio TTS decoded samples must be finite".into());
+        }
+        data.push(sample);
+    }
+    validate_decoded_tts(data.len(), sample_rate.get(), channels, 1.0)?;
     Ok((data, channels, sample_rate))
+}
+
+struct TtsWorkerSlot(Arc<AtomicUsize>);
+
+impl Drop for TtsWorkerSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Open the OS audio output, PREFERRING the PipeWire/Pulse-routed virtual device
@@ -446,6 +560,7 @@ fn run_audio(
     let mut vols = [1.0f32; N_BUSES];
     let mut left_ear = [-0.1f32, 0.0, 0.0];
     let mut right_ear = [0.1f32, 0.0, 0.0];
+    let tts_inflight = Arc::new(AtomicUsize::new(0));
     for cmd in rx {
         match cmd {
             AudioCmd::PlaySfx {
@@ -455,9 +570,16 @@ fn run_audio(
                 bus,
                 volume,
             } => {
+                let data = match synth_sine(freq, secs) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("[audio] dropped invalid sfx command: {e}");
+                        continue;
+                    }
+                };
                 let player = Player::connect_new(mixer);
                 player.set_volume(effective(&vols, bus, volume));
-                player.append(SamplesBuffer::new(ch1(), rate(), synth_sine(freq, secs)));
+                player.append(SamplesBuffer::new(ch1(), rate(), data));
                 player.play();
                 sounds.insert(
                     id,
@@ -519,9 +641,16 @@ fn run_audio(
                 bus,
                 volume,
             } => {
+                let data = match synth_sine(freq, secs) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("[audio] dropped invalid spatial command: {e}");
+                        continue;
+                    }
+                };
                 let sp = SpatialPlayer::connect_new(mixer, emitter, left_ear, right_ear);
                 sp.set_volume(effective(&vols, bus, volume));
-                sp.append(SamplesBuffer::new(ch1(), rate(), synth_sine(freq, secs)));
+                sp.append(SamplesBuffer::new(ch1(), rate(), data));
                 sp.play();
                 sounds.insert(
                     id,
@@ -544,10 +673,19 @@ fn run_audio(
                 // upgrade the WEAK sender per line, so a live worker keeps the channel
                 // alive only for its own (bounded) lifetime — never the audio thread.
                 if let (Some(provider), Some(back)) = (voice.clone(), back.upgrade()) {
-                    thread::Builder::new()
+                    if tts_inflight.load(Ordering::Acquire) >= MAX_TTS_WORKERS {
+                        eprintln!(
+                            "[audio] tts queue full; dropping line (>{MAX_TTS_WORKERS} workers)"
+                        );
+                        continue;
+                    }
+                    tts_inflight.fetch_add(1, Ordering::AcqRel);
+                    let tts_inflight_done = Arc::clone(&tts_inflight);
+                    if thread::Builder::new()
                         .name("limina-tts".into())
-                        .spawn(
-                            move || match provider.synth(&text, pitch).and_then(decode_wav) {
+                        .spawn(move || {
+                            let _slot = TtsWorkerSlot(tts_inflight_done);
+                            match provider.synth(&text, pitch).and_then(decode_wav) {
                                 Ok((data, channels, rate)) => {
                                     // Backpressure applies here too: a full channel
                                     // drops the decoded line rather than queueing it.
@@ -562,9 +700,12 @@ fn run_audio(
                                     });
                                 }
                                 Err(e) => eprintln!("[audio] tts failed: {e}"),
-                            },
-                        )
-                        .ok();
+                            }
+                        })
+                        .is_err()
+                    {
+                        tts_inflight.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
             }
             AudioCmd::PlayDecoded {
@@ -580,6 +721,14 @@ fn run_audio(
                 // clearly): play it on the voice bus at full presence, not distance-
                 // attenuated under rodio's 1/d² (which buries it under music at
                 // typical camera distances).
+                if let Err(e) = validate_decoded_tts(data.len(), rate.get(), channels, volume) {
+                    eprintln!("[audio] dropped invalid decoded TTS command: {e}");
+                    continue;
+                }
+                if data.iter().any(|sample| !sample.is_finite()) {
+                    eprintln!("[audio] dropped invalid decoded TTS command: non-finite sample");
+                    continue;
+                }
                 let player = Player::connect_new(mixer);
                 player.set_volume(effective(&vols, bus, volume));
                 player.append(SamplesBuffer::new(channels, rate, data));
@@ -711,9 +860,17 @@ pub fn op_audio_init(state: &mut OpState) -> u32 {
 
 /// Play a one-shot synthesized SFX blip on `bus` at `volume`. Returns its handle.
 #[op2(fast)]
-pub fn op_audio_play(state: &mut OpState, freq: f32, secs: f32, bus: u32, volume: f32) -> u32 {
+pub fn op_audio_play(
+    state: &mut OpState,
+    freq: f32,
+    secs: f32,
+    bus: u32,
+    volume: f32,
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_sfx_params(freq, secs, volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlaySfx {
@@ -723,14 +880,16 @@ pub fn op_audio_play(state: &mut OpState, freq: f32, secs: f32, bus: u32, volume
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Start a looping synthesized ambience bed on `bus` at `volume`. Returns its handle.
 #[op2(fast)]
-pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> u32 {
+pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlayAmbience {
@@ -738,7 +897,7 @@ pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> u32 {
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Play a one-shot positional SFX blip emitted at world `(ex,ey,ez)`. Returns its handle.
@@ -753,9 +912,12 @@ pub fn op_audio_play_spatial(
     ez: f32,
     bus: u32,
     volume: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_sfx_params(freq, secs, volume).map_err(audio_arg_error)?;
+    validate_position([ex, ey, ez]).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlaySpatial {
@@ -766,7 +928,7 @@ pub fn op_audio_play_spatial(
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Speak a line at world `(ex,ey,ez)` on the voice bus — FIRE-AND-FORGET. Returns
@@ -781,9 +943,12 @@ pub fn op_audio_speak(
     ez: f32,
     volume: f32,
     pitch: u32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_tts_text(&text).map_err(audio_arg_error)?;
+    validate_position([ex, ey, ez]).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::Speak {
@@ -793,7 +958,7 @@ pub fn op_audio_speak(
         volume,
         pitch: pitch.min(99) as u8,
     });
-    id
+    Ok(id)
 }
 
 /// Play an arbitrary in-memory PCM buffer (mono/stereo f32) on `bus`, optionally
@@ -808,9 +973,14 @@ pub fn op_audio_play_buffer(
     bus: u32,
     volume: f32,
     looping: bool,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_pcm_params(data.len(), sample_rate, channels, volume).map_err(audio_arg_error)?;
+    if data.iter().any(|sample| !sample.is_finite()) {
+        return Err(JsErrorBox::generic("audio buffer samples must be finite"));
+    }
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlayBuffer {
@@ -822,15 +992,23 @@ pub fn op_audio_play_buffer(
         volume,
         looping,
     });
-    id
+    Ok(id)
 }
 
 /// Move a positional sound's emitter (e.g. follow an entity each frame).
 #[op2(fast)]
-pub fn op_audio_set_emitter(state: &mut OpState, id: u32, x: f32, y: f32, z: f32) {
+pub fn op_audio_set_emitter(
+    state: &mut OpState,
+    id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> Result<(), JsErrorBox> {
+    validate_position([x, y, z]).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetEmitter { id, pos: [x, y, z] });
     }
+    Ok(())
 }
 
 /// Set the listener's two ear positions (JS derives them from the camera each frame).
@@ -843,21 +1021,26 @@ pub fn op_audio_set_listener(
     rx: f32,
     ry: f32,
     rz: f32,
-) {
+) -> Result<(), JsErrorBox> {
+    validate_position([lx, ly, lz]).map_err(audio_arg_error)?;
+    validate_position([rx, ry, rz]).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetListener {
             left: [lx, ly, lz],
             right: [rx, ry, rz],
         });
     }
+    Ok(())
 }
 
 /// Set one sound's base volume (used by the JS max-distance cutoff + general gain).
 #[op2(fast)]
-pub fn op_audio_set_volume(state: &mut OpState, id: u32, volume: f32) {
+pub fn op_audio_set_volume(state: &mut OpState, id: u32, volume: f32) -> Result<(), JsErrorBox> {
+    validate_gain(volume).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetVolume { id, volume });
     }
+    Ok(())
 }
 
 /// Stop one sound by handle.
@@ -878,13 +1061,20 @@ pub fn op_audio_stop_all(state: &mut OpState) {
 
 /// Set a bus volume (0=master, 1=sfx, 2=ambience, 3=voice); re-gains live sounds.
 #[op2(fast)]
-pub fn op_audio_set_bus_volume(state: &mut OpState, bus: u32, volume: f32) {
+pub fn op_audio_set_bus_volume(
+    state: &mut OpState,
+    bus: u32,
+    volume: f32,
+) -> Result<(), JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetBusVolume {
             bus: bus as usize,
             volume,
         });
     }
+    Ok(())
 }
 
 extension!(
@@ -943,7 +1133,7 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
         let tx = Arc::new(tx);
         let back = Arc::downgrade(&tx); // what the audio thread holds
-        // A consumer mirroring run_audio's `for cmd in rx { .. }` loop.
+                                        // A consumer mirroring run_audio's `for cmd in rx { .. }` loop.
         let consumer = thread::spawn(move || {
             let mut n = 0usize;
             for _cmd in rx {
@@ -963,5 +1153,40 @@ mod tests {
         drop(worker_tx);
         assert!(back.upgrade().is_none());
         assert_eq!(consumer.join().expect("consumer joined"), 1);
+    }
+
+    #[test]
+    fn synth_sine_rejects_nonfinite_and_huge_inputs() {
+        assert!(synth_sine(440.0, 0.25).is_ok());
+        assert!(synth_sine(f32::NAN, 0.25).is_err());
+        assert!(synth_sine(440.0, f32::INFINITY).is_err());
+        assert!(synth_sine(440.0, MAX_SFX_SECONDS + 0.001).is_err());
+    }
+
+    #[test]
+    fn native_audio_param_guards_bound_buffers_and_coordinates() {
+        assert!(validate_sfx_params(440.0, MAX_SFX_SECONDS, 1.0).is_ok());
+        assert!(validate_sfx_params(440.0, -0.1, 1.0).is_err());
+        assert!(validate_sfx_params(5.0, 1.0, 1.0).is_err());
+        assert!(validate_position([0.0, 1.0, 2.0]).is_ok());
+        assert!(validate_position([0.0, f32::NAN, 2.0]).is_err());
+        assert!(validate_pcm_params(MAX_PCM_SAMPLES, SAMPLE_RATE, 2, 1.0).is_ok());
+        assert!(validate_pcm_params(MAX_PCM_SAMPLES + 1, SAMPLE_RATE, 2, 1.0).is_err());
+        assert!(validate_pcm_params(128, 0, 2, 1.0).is_err());
+        assert!(validate_pcm_params(128, SAMPLE_RATE, 0, 1.0).is_err());
+    }
+
+    #[test]
+    fn native_audio_tts_guards_bound_text_and_decoded_audio() {
+        assert!(validate_tts_text(&"x".repeat(MAX_TTS_TEXT_BYTES)).is_ok());
+        assert!(validate_tts_text(&"x".repeat(MAX_TTS_TEXT_BYTES + 1)).is_err());
+
+        let channels = NonZeroU16::new(2).unwrap();
+        assert!(validate_decoded_tts(MAX_TTS_DECODED_SAMPLES, SAMPLE_RATE, channels, 1.0).is_ok());
+        assert!(
+            validate_decoded_tts(MAX_TTS_DECODED_SAMPLES + 1, SAMPLE_RATE, channels, 1.0).is_err()
+        );
+        assert!(validate_decoded_tts(128, 192_001, channels, 1.0).is_err());
+        assert!(validate_decoded_tts(128, SAMPLE_RATE, channels, MAX_GAIN + 0.1).is_err());
     }
 }

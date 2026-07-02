@@ -20,6 +20,22 @@ const el = (tag, cls, text) => {
   return n;
 };
 
+export const MAX_TRACE_EVENTS = 5000;
+
+export function ingestTraceEvents(eventsById, events, maxEvents = MAX_TRACE_EVENTS) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  for (const ev of events) {
+    if (!ev || ev.id === undefined) continue;
+    if (eventsById.has(ev.id)) eventsById.delete(ev.id);
+    eventsById.set(ev.id, ev);
+  }
+  while (eventsById.size > maxEvents) {
+    const oldest = eventsById.keys().next().value;
+    if (oldest === undefined) break;
+    eventsById.delete(oldest);
+  }
+}
+
 const state = {
   /** @type {McpClient | undefined} */ client: undefined,
   /** @type {McpClient | undefined} */ agentClient: undefined,
@@ -61,8 +77,9 @@ function setStatus(connected) {
 async function connect() {
   const url = $("url").value.trim();
   const profile = $("profile").value;
+  const authToken = $("auth-token").value.trim() || undefined;
   disconnect();
-  const client = new McpClient(url);
+  const client = new McpClient(url, authToken);
   client.onConnectionChange = setStatus;
   client.onSync = () => {}; // live transforms cached; World panel re-renders on poll
   try {
@@ -107,7 +124,7 @@ async function refreshAll() {
     // Incremental trace via the afterSeq cursor.
     const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 500 });
     if (tail && Array.isArray(tail.events)) {
-      for (const ev of tail.events) state.events.set(ev.id, ev);
+      ingestTraceEvents(state.events, tail.events);
       if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
       history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
     }
@@ -279,9 +296,10 @@ async function resolve(approvalId, grant) {
 // ---------------------------------------------------------------------------
 async function proposeTestEdit() {
   const url = $("url").value.trim();
+  const authToken = $("auth-token").value.trim() || undefined;
   try {
     if (!state.agentClient) {
-      const a = new McpClient(url);
+      const a = new McpClient(url, authToken);
       await a.connect();
       await a.initialize("agt_demo", "ses_demo_" + Math.random().toString(36).slice(2, 6), "builder.review");
       state.agentClient = a;

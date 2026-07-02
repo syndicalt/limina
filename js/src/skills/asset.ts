@@ -18,7 +18,7 @@ import { AssetRegistry } from "../asset-registry.ts";
 import { Position, Scale, renderSyncSystem } from "../ecs/world.ts";
 import { gltfResourceSchema, loadGltfIntoScene, parseGltfScene } from "./three.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
-import { buildAssetInstancedMeshes } from "../terrain/asset-scatter-render.ts";
+import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { RegionState } from "./terrain.ts";
@@ -157,9 +157,12 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       }
       // Optional material override (reuses three.setMaterial's apply, by id). Scoped
       // to asset.place's OWN declared permission, NOT the caller's full grant set.
+      // Pass `ctx.chainId` so the WorldRecorder folds this nested invoke into the
+      // already-recorded `asset.place` command (it is reproduced on replay by
+      // re-invoking asset.place) rather than recording it as a separate top-level.
       if (input.material !== undefined) {
         const res = await registry.invoke("three.setMaterial", { entity, ...input.material }, {
-          agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(PLACE_PERMS), tick: ctx.tick, world: ctx.world,
+          agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(PLACE_PERMS), tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
         });
         if (!res.success) throw new Error(`asset.place: material override failed: ${JSON.stringify(res.error)}`);
       }
@@ -250,7 +253,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       // asset's glTF ONCE through the shared loader, and instance its meshes. Best-
       // effort — the deterministic placements + the logged config are the contract.
       let mounted = 0;
-      const scene = ctx.world.scene as { add?: (o: unknown) => void } | undefined;
+      const scene = ctx.world.scene as { add?: (o: unknown) => void; remove?: (o: unknown) => void } | undefined;
       if (scene !== undefined && typeof scene.add === "function") {
         const byId = new Map<string, AssetInstance[]>();
         for (const inst of placements) {
@@ -258,9 +261,22 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
           if (list === undefined) { list = []; byId.set(inst.assetId, list); }
           list.push(inst);
         }
+        const mountedMeshes: THREE.InstancedMesh[] = [];
         for (const [id, list] of byId) {
           const root = await parseGltfScene(id, assets.resolve(id).bytes);
-          for (const mesh of buildAssetInstancedMeshes(root, list)) { scene.add(mesh); mounted++; }
+          for (const mesh of buildAssetInstancedMeshes(root, list)) {
+            scene.add(mesh);
+            mountedMeshes.push(mesh);
+            mounted++;
+          }
+        }
+        if (mountedMeshes.length > 0) {
+          (region.renderDisposables ??= []).push(() => {
+            for (const mesh of mountedMeshes) {
+              if (typeof scene.remove === "function") scene.remove(mesh);
+              disposeAssetInstancedMesh(mesh);
+            }
+          });
         }
       }
 

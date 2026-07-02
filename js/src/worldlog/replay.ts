@@ -101,7 +101,7 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
       continue;
     }
     // cmd.kind === "skill": re-apply the recorded tool call (agent or scripted).
-    await registry.invoke(cmd.tool, cmd.input, {
+    const response = await registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
@@ -109,6 +109,11 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
       world,
       causedBy: [],
     });
+    if (!response.success) {
+      const code = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`world replay: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+    }
     skillInvokes++;
   }
 

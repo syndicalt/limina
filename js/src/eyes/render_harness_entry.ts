@@ -177,9 +177,19 @@ const masonry = makeMasonry();
 // Flagship-demo render: build a real archetype scene from a box spec (e.g. the siege keep's actual
 // architecture.building parts + attackers), frame the camera to its bounds, render with the baseline.
 const sceneMeshes: THREE.Mesh[] = [];
+
+function disposeSceneMesh(mesh: THREE.Mesh): void {
+  mesh.geometry.dispose();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const mat of materials) mat.dispose();
+}
+
 window.__renderScene = async (spec) => {
   for (const m of shapes) m.mesh.visible = false; // hide the A/B probe spheres
-  for (const m of sceneMeshes) scene.remove(m);
+  for (const m of sceneMeshes) {
+    scene.remove(m);
+    disposeSceneMesh(m);
+  }
   sceneMeshes.length = 0;
   scene.background = skyBackground; // full fidelity for the showcase
   renderer.toneMappingExposure = 1.0;

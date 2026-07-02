@@ -99,7 +99,7 @@ async function runScenario(): Promise<ScenarioResult> {
   // registerOrchestrationSkills co-installs it. If that production wiring is missing,
   // the worker mutations below would apply un-held and the "held" assertions fail.
 
-  const coordPerms = resolveProfile("reviewer.coordinator");
+  const coordPerms = new Set([...resolveProfile("reviewer.coordinator"), "scene.write", "ecs.modify"]);
   assert(coordPerms.has(ORCHESTRATE_PERMISSION) && coordPerms.has("approval.review"), "coordinator profile missing orchestrate/approval.review");
   const coordBase = (tick: number, causedBy?: string[]) => ({
     agentId: "agt_coord", sessionId: "ses_coord", permissions: coordPerms, profile: "reviewer.coordinator", tick, world, causedBy,
@@ -236,7 +236,8 @@ assert(r2.delA.workerId === r.delA.workerId && r2.delB.workerId === r.delB.worke
     gate("some.skill", { profile: DELEGATE_REVIEW_PROFILE } as never, { permissions: perms } as never);
   assert(held(["agent.write"]) && held(["terrain.generate"]) && held(["ui.write"]) && held(["social.act"]) && held(["audio.play"]),
     "the review gate must hold ALL write-class skills (agent/terrain/ui/social/audio), not just scene/ecs/physics");
-  assert(!held(["scene.read"]) && !held(["scene.read", "ecs.read"]), "read-only skills must NOT be held");
+  assert(!held(["scene.read"]) && !held(["scene.read", "ecs.read"]) && !held(["nav.read"]),
+    "read-only skills must NOT be held, including new *.read capabilities such as nav.read");
 }
 
 // (B3) a worker BUNDLE may not contain escalation caps. At the DEFAULT depth budget
@@ -252,6 +253,8 @@ assert(r2.delA.workerId === r.delA.workerId && r2.delB.workerId === r.delB.worke
   assert(!escApproval.success, "delegate with approval.review in the bundle must be REJECTED (would self-approve)");
   const escOrch = await registry.invoke("delegate", { task: "x", bundle: ["scene.read", "orchestrate"], provider: "p" }, base);
   assert(!escOrch.success, "delegate with orchestrate in the bundle must be REJECTED at the default depth cap (maxDepth=1)");
+  const escOverclaim = await registry.invoke("delegate", { task: "x", bundle: ["scene.read", "scene.write"], provider: "p" }, base);
+  assert(!escOverclaim.success, "delegate must reject a worker bundle containing caps the coordinator session does not hold");
 }
 
 // (FIX 1) The cross-agent TRACE surface is gated behind `trace.read`: a scoped

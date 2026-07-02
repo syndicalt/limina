@@ -42,6 +42,18 @@ assert(
   "rotation quaternion not synced",
 );
 
+const defaultScratchSeen: Float32Array[] = [];
+const identityOps = {
+  op_physics_body_transform(_id: number, out: Float32Array): void {
+    defaultScratchSeen.push(out);
+    out.set([4, 5, 6, 0, 0, 0, 1]);
+  },
+};
+syncPhysicsBodyTransform(eid, 1, identityOps);
+syncPhysicsBodyTransform(eid, 2, identityOps);
+assert(defaultScratchSeen.length === 2 && defaultScratchSeen[0] === defaultScratchSeen[1],
+  "syncPhysicsBodyTransform default path must reuse its scratch buffer instead of allocating per call");
+
 ops.op_physics_create_world(-9.81);
 ops.op_physics_add_static_box(0, -0.5, 0, 8, 0.5, 8, 0.8, 0.1);
 const bodyId = ops.op_physics_add_box_material(0, 3, 0, 0.5, 0.8, 0.1);

@@ -50,16 +50,7 @@ pub fn op_ecs_spatial_query_batch(
     // Thin op wrapper: the `#[op2]` macro scopes the op type inside a generated
     // `const fn`, so the pure logic lives in a module-level fn that unit tests can
     // call directly (no JS runtime needed).
-    spatial_query_batch(
-        px,
-        py,
-        pz,
-        ordered_eids,
-        cell_size,
-        queries,
-        max_hits,
-        out,
-    )
+    spatial_query_batch(px, py, pz, ordered_eids, cell_size, queries, max_hits, out)
 }
 
 /// Pure implementation of the batched uniform-grid radius query (see the op doc
@@ -250,16 +241,7 @@ mod tests {
         max_hits: u32,
         out: &mut [u32],
     ) -> Result<(), JsErrorBox> {
-        spatial_query_batch(
-            px,
-            py,
-            pz,
-            ordered_eids,
-            cell_size,
-            queries,
-            max_hits,
-            out,
-        )
+        spatial_query_batch(px, py, pz, ordered_eids, cell_size, queries, max_hits, out)
     }
 
     #[test]
@@ -324,8 +306,8 @@ mod tests {
         assert_eq!(out_a, out_b);
 
         assert_eq!(out_a[0], 3); // all three included (NaN not excluded)
-        // Finite distances first, ascending (eid 0 at d=0, then eid 2 at d=1),
-        // and the NaN-distance eid 1 pinned last.
+                                 // Finite distances first, ascending (eid 0 at d=0, then eid 2 at d=1),
+                                 // and the NaN-distance eid 1 pinned last.
         assert_eq!(&out_a[1..4], &[0u32, 2u32, 1u32]);
     }
 }

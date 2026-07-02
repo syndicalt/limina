@@ -48,9 +48,15 @@ import time
 
 import numpy as np
 
+AUTH_HEADER = "X-Limina-Terrain-Token"
+
 
 def log(msg: str) -> None:
     print(f"[terrain-worker] {msg}", file=sys.stderr, flush=True)
+
+
+def is_loopback_host(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1")
 
 
 def bounded_int(req: dict, key: str, lo: int, hi: int, default=None) -> int:
@@ -164,10 +170,18 @@ class TileGenerator:
         }
 
 
-def build_app(gen: TileGenerator):
+def build_app(gen: TileGenerator, auth_token: str | None = None):
     from flask import Flask, request, jsonify
 
     app = Flask(__name__)
+
+    @app.before_request
+    def require_auth():
+        if auth_token is None:
+            return None
+        if request.headers.get(AUTH_HEADER) != auth_token:
+            return jsonify({"error": "missing or invalid terrain service token"}), 401
+        return None
 
     @app.route("/health", methods=["GET", "POST"])
     def health():
@@ -211,7 +225,13 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8917)
+    ap.add_argument("--auth-token", default=os.environ.get("LIMINA_TERRAIN_TOKEN"),
+                    help=f"shared secret required in {AUTH_HEADER}; required when binding outside loopback")
     args = ap.parse_args()
+
+    if not is_loopback_host(args.host) and not args.auth_token:
+        log(f"ERROR: refusing to bind {args.host} without --auth-token or LIMINA_TERRAIN_TOKEN")
+        sys.exit(2)
 
     if args.device == "cuda":
         import torch
@@ -221,7 +241,7 @@ def main():
     gen = TileGenerator(args.model, args.dtype, args.device)
     log(f"serving terrain tiles on http://{args.host}:{args.port}  "
         f"model={args.model} dtype={args.dtype} device={args.device}")
-    app = build_app(gen)
+    app = build_app(gen, args.auth_token)
     # threaded=False: one GPU, one model — serialize requests (the _lock also guards).
     app.run(host=args.host, port=args.port, threaded=False)
 

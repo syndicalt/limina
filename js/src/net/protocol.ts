@@ -71,8 +71,10 @@ export interface NetOps {
   op_net_listen(port: number): Promise<number>;
   op_net_listener_port(listenerId: number): number;
   op_net_accept(listenerId: number): Promise<number>;
+  op_net_accept_allowed_origins(listenerId: number, allowedOriginsJson: string): Promise<number>;
   op_net_close_listener(listenerId: number): void;
   op_net_accept_host(): Promise<number>;
+  op_net_host_port(): number;
   op_net_connect(url: string): Promise<number>;
   op_net_recv(connId: number): Promise<string>;
   op_net_send(connId: number, line: string): Promise<void>;

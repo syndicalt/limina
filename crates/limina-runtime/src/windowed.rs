@@ -28,6 +28,26 @@ use crate::module_loader::TypescriptModuleLoader;
 const FIXED_DT: f64 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 5;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StepBudgetResult {
+    steps: u32,
+    dropped: f64,
+}
+
+fn apply_step_budget(accumulator: &mut f64, fixed_dt: f64, max_steps: u32) -> StepBudgetResult {
+    let mut steps = 0;
+    while *accumulator >= fixed_dt && steps < max_steps {
+        *accumulator -= fixed_dt;
+        steps += 1;
+    }
+    let mut dropped = 0.0;
+    if steps == max_steps && *accumulator > fixed_dt {
+        dropped = *accumulator - fixed_dt;
+        *accumulator = fixed_dt;
+    }
+    StepBudgetResult { steps, dropped }
+}
+
 #[derive(Default)]
 struct App {
     window: Option<Rc<Window>>,
@@ -236,12 +256,16 @@ pub fn run_windowed(
             let dt = (now - last).as_secs_f64().min(0.25);
             last = now;
             accumulator += dt;
-            let mut sub = 0;
-            while accumulator >= FIXED_DT && sub < MAX_STEPS_PER_FRAME {
+            let budget = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+            for _ in 0..budget.steps {
                 invoke_callback(&mut js_runtime, Callback::Step(FIXED_DT));
-                accumulator -= FIXED_DT;
                 steps += 1;
-                sub += 1;
+            }
+            if budget.dropped > 0.0 {
+                eprintln!(
+                    "[limina] windowed loop dropped {:.3}ms of fixed-step debt after hitting {MAX_STEPS_PER_FRAME} steps/frame",
+                    budget.dropped * 1000.0,
+                );
             }
 
             // Render once with the leftover interpolation factor.
@@ -282,6 +306,36 @@ enum Callback {
     Frame(f32),
     Step(f64),
     Resize(u32, u32),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn step_budget_drops_excess_time_debt_after_stall() {
+        let mut accumulator = 0.25;
+        let applied = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+        assert_eq!(applied.steps, MAX_STEPS_PER_FRAME);
+        assert!(
+            applied.dropped > 0.0,
+            "stall debt beyond the frame budget must be reported"
+        );
+        assert!(
+            accumulator <= FIXED_DT,
+            "leftover accumulator {} must not produce alpha > 1",
+            accumulator,
+        );
+    }
+
+    #[test]
+    fn step_budget_preserves_normal_remainder_without_dropping() {
+        let mut accumulator = FIXED_DT * 2.25;
+        let applied = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+        assert_eq!(applied.steps, 2);
+        assert_eq!(applied.dropped, 0.0);
+        assert!((accumulator - FIXED_DT * 0.25).abs() < 1e-12);
+    }
 }
 
 /// Invoke a registered JS callback inside a `TryCatch` so a thrown error is

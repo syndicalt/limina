@@ -12,7 +12,7 @@ import { Mcp, StdioMcpTransport } from "./mcp.ts";
 
 declare const Deno: { core: { ops: typeof ops & {
   op_mcp_read_stdin_line(): Promise<string>;
-  op_mcp_write_stdout_line(line: string): void;
+  op_mcp_write_stdout_line(line: string): Promise<void>;
 } } };
 
 const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };

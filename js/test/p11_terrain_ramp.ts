@@ -7,7 +7,7 @@
 //
 // Run: limina js/test/p11_terrain_ramp.ts   (exit 0 = pass)
 
-import { buildTerrainMesh } from "../src/terrain/render.ts";
+import { buildTerrainMesh, disposeTerrainMesh } from "../src/terrain/render.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "../src/terrain/procedural.ts";
 import { terrainTypeHints } from "../src/terrain/terrain-types.ts";
 import { biomeScatterConfigs, surveyRegionRelief } from "../src/terrain/biome-content.ts";
@@ -42,6 +42,12 @@ const rampMat = ramp.material as any;
 assert(rampMat.colorNode !== undefined && rampMat.colorNode !== null, "palette must set a colorNode");
 assert(rampMat.roughnessNode !== undefined && rampMat.roughnessNode !== null, "palette must set a roughnessNode");
 assert(ramp.geometry.getAttribute("position").count === tile.nrows * tile.ncols, "ramp geometry vertex count wrong");
+const rampOwnedTextures = rampMat.userData?.liminaOwnedTextures as { dispose?: () => void }[] | undefined;
+assert(Array.isArray(rampOwnedTextures) && rampOwnedTextures.length === 1, "palette material must track its baked climate texture for disposal");
+let rampTextureDisposes = 0;
+for (const tex of rampOwnedTextures) tex.dispose = () => { rampTextureDisposes++; };
+disposeTerrainMesh(ramp);
+assert(rampTextureDisposes === 1, "disposeTerrainMesh must dispose the palette climate texture");
 
 // (3) PALETTE with default relief (derived from the tile heights) also builds.
 const ramp2 = buildTerrainMesh(tile, { palette: { seaLevel: sea } });

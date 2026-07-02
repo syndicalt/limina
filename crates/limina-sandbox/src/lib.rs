@@ -29,7 +29,12 @@ use std::time::{Duration, Instant};
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
-use rquickjs::{CatchResultExt, Context, Function, Object, Runtime, Value};
+use rquickjs::{CatchResultExt, Context, Ctx, Function, Object, Runtime, Value};
+
+const MAX_SANDBOX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
+const MAX_SANDBOX_STACK_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SANDBOX_DEADLINE_MS: f64 = 5_000.0;
+const MAX_LIVE_SANDBOXES: usize = 256;
 
 /// Mutable state shared between the injected `host.invoke` closure and the op
 /// driving an eval. The closure can ONLY (a) read the injected perception
@@ -74,6 +79,42 @@ fn ensure_registry(state: &mut OpState) -> &mut SandboxRegistry {
     state.borrow_mut::<SandboxRegistry>()
 }
 
+fn finite_non_negative(name: &str, value: f64) -> Result<f64, JsErrorBox> {
+    if value.is_finite() && value >= 0.0 {
+        Ok(value)
+    } else {
+        Err(JsErrorBox::generic(format!(
+            "{name} must be finite and >= 0"
+        )))
+    }
+}
+
+fn finite_bounded_non_negative(name: &str, value: f64, max: f64) -> Result<f64, JsErrorBox> {
+    let value = finite_non_negative(name, value)?;
+    if value <= max {
+        Ok(value)
+    } else {
+        Err(JsErrorBox::generic(format!("{name} must be <= {max}")))
+    }
+}
+
+fn validate_create_budgets(
+    mem_limit_bytes: f64,
+    max_stack_bytes: f64,
+) -> Result<(usize, usize), JsErrorBox> {
+    let mem_limit_bytes = finite_bounded_non_negative(
+        "mem_limit_bytes",
+        mem_limit_bytes,
+        MAX_SANDBOX_MEMORY_BYTES as f64,
+    )?;
+    let max_stack_bytes = finite_bounded_non_negative(
+        "max_stack_bytes",
+        max_stack_bytes,
+        MAX_SANDBOX_STACK_BYTES as f64,
+    )?;
+    Ok((mem_limit_bytes as usize, max_stack_bytes as usize))
+}
+
 /// Create a fresh QuickJS sandbox for one untrusted agent and return its handle.
 /// `mem_limit_bytes` is the per-agent memory budget (a catchable OOM, the host
 /// survives), `max_stack_bytes` the stack cap, `read_caps_json` a JSON array of
@@ -86,13 +127,32 @@ pub fn op_sandbox_create(
     max_stack_bytes: f64,
     #[string] read_caps_json: String,
 ) -> Result<u32, JsErrorBox> {
-    let read_caps: HashSet<String> = serde_json::from_str(&read_caps_json)
+    sandbox_create_impl(state, mem_limit_bytes, max_stack_bytes, &read_caps_json)
+}
+
+fn sandbox_create_impl(
+    state: &mut OpState,
+    mem_limit_bytes: f64,
+    max_stack_bytes: f64,
+    read_caps_json: &str,
+) -> Result<u32, JsErrorBox> {
+    let (mem_limit_bytes, max_stack_bytes) =
+        validate_create_budgets(mem_limit_bytes, max_stack_bytes)?;
+    let read_caps: HashSet<String> = serde_json::from_str(read_caps_json)
         .map_err(|e| JsErrorBox::generic(format!("invalid read_caps_json: {e}")))?;
+    {
+        let reg = ensure_registry(state);
+        if reg.sandboxes.len() >= MAX_LIVE_SANDBOXES {
+            return Err(JsErrorBox::generic(format!(
+                "sandbox registry live context cap exceeded ({MAX_LIVE_SANDBOXES})"
+            )));
+        }
+    }
     let rt = Runtime::new().map_err(|e| JsErrorBox::generic(format!("quickjs runtime: {e}")))?;
-    if mem_limit_bytes > 0.0 {
+    if mem_limit_bytes > 0 {
         rt.set_memory_limit(mem_limit_bytes as usize);
     }
-    if max_stack_bytes > 0.0 {
+    if max_stack_bytes > 0 {
         rt.set_max_stack_size(max_stack_bytes as usize);
     }
     let ctx =
@@ -129,7 +189,10 @@ pub fn op_sandbox_create(
     .map_err(|e| JsErrorBox::generic(format!("inject host surface: {e}")))?;
 
     let reg = ensure_registry(state);
-    reg.next += 1;
+    reg.next = reg
+        .next
+        .checked_add(1)
+        .ok_or_else(|| JsErrorBox::generic("sandbox handle id overflow"))?;
     let handle = reg.next;
     reg.sandboxes.insert(handle, Sandbox { rt, ctx, shared });
     Ok(handle)
@@ -151,6 +214,8 @@ pub fn op_sandbox_eval(
     #[string] perception_json: String,
     deadline_ms: f64,
 ) -> Result<String, JsErrorBox> {
+    let deadline_ms =
+        finite_bounded_non_negative("deadline_ms", deadline_ms, MAX_SANDBOX_DEADLINE_MS)?;
     let reg = ensure_registry(state);
     let sb = reg
         .sandboxes
@@ -174,20 +239,12 @@ pub fn op_sandbox_eval(
     let outcome: Result<String, String> =
         sb.ctx.with(
             |ctx| match ctx.eval::<Value, _>(code.as_str()).catch(&ctx) {
-                Ok(v) => Ok(if let Some(s) = v.as_string() {
-                    s.to_string().unwrap_or_default()
-                } else if let Some(i) = v.as_int() {
-                    i.to_string()
-                } else if let Some(f) = v.as_float() {
-                    f.to_string()
-                } else if let Some(b) = v.as_bool() {
-                    b.to_string()
-                } else if v.is_null() {
-                    "null".to_string()
-                } else if v.is_undefined() {
-                    "undefined".to_string()
-                } else {
-                    format!("{:?}", v.type_of())
+                Ok(v) => value_to_envelope_string(&ctx, v).map_err(|err| {
+                    format!("{err}")
+                        .lines()
+                        .next()
+                        .unwrap_or("error")
+                        .to_string()
                 }),
                 Err(err) => Err(format!("{err}")
                     .lines()
@@ -218,9 +275,33 @@ pub fn op_sandbox_eval(
     Ok(envelope.to_string())
 }
 
+fn value_to_envelope_string<'js>(ctx: &Ctx<'js>, v: Value<'js>) -> rquickjs::Result<String> {
+    if let Some(s) = v.as_string() {
+        Ok(s.to_string().unwrap_or_default())
+    } else if let Some(i) = v.as_int() {
+        Ok(i.to_string())
+    } else if let Some(f) = v.as_float() {
+        Ok(f.to_string())
+    } else if let Some(b) = v.as_bool() {
+        Ok(b.to_string())
+    } else if v.is_null() {
+        Ok("null".to_string())
+    } else if v.is_undefined() {
+        Ok("undefined".to_string())
+    } else if let Some(json) = ctx.json_stringify(v.clone())? {
+        Ok(json.to_string().unwrap_or_default())
+    } else {
+        Ok(format!("{:?}", v.type_of()))
+    }
+}
+
 /// Destroy a sandbox, freeing its QuickJS context. Returns whether one existed.
 #[op2(fast)]
 pub fn op_sandbox_destroy(state: &mut OpState, handle: u32) -> bool {
+    sandbox_destroy_impl(state, handle)
+}
+
+fn sandbox_destroy_impl(state: &mut OpState, handle: u32) -> bool {
     match state.try_borrow_mut::<SandboxRegistry>() {
         Some(reg) => reg.sandboxes.remove(&handle).is_some(),
         None => false,
@@ -245,3 +326,52 @@ extension!(
         op_sandbox_count,
     ],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_create_rejects_absurd_native_budgets() {
+        assert!(validate_create_budgets(MAX_SANDBOX_MEMORY_BYTES as f64 + 1.0, 256.0).is_err());
+        assert!(validate_create_budgets(
+            16.0 * 1024.0 * 1024.0,
+            MAX_SANDBOX_STACK_BYTES as f64 + 1.0
+        )
+        .is_err());
+        assert!(validate_create_budgets(64.0 * 1024.0 * 1024.0, 256.0 * 1024.0).is_ok());
+    }
+
+    #[test]
+    fn sandbox_eval_rejects_absurd_deadlines() {
+        assert!(finite_bounded_non_negative(
+            "deadline_ms",
+            MAX_SANDBOX_DEADLINE_MS + 1.0,
+            MAX_SANDBOX_DEADLINE_MS
+        )
+        .is_err());
+        assert!(
+            finite_bounded_non_negative("deadline_ms", 1_000.0, MAX_SANDBOX_DEADLINE_MS).is_ok()
+        );
+    }
+
+    #[test]
+    fn sandbox_registry_rejects_unbounded_live_context_growth() {
+        let mut state = OpState::new(None);
+        let mut handles = Vec::new();
+        for _ in 0..256 {
+            handles.push(
+                sandbox_create_impl(&mut state, 0.0, 0.0, "[]")
+                    .expect("sandbox within cap should create"),
+            );
+        }
+        let over = sandbox_create_impl(&mut state, 0.0, 0.0, "[]");
+        assert!(
+            over.is_err(),
+            "sandbox registry must reject unbounded live context growth"
+        );
+        for handle in handles {
+            assert!(sandbox_destroy_impl(&mut state, handle));
+        }
+    }
+}

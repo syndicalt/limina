@@ -25,8 +25,10 @@ export class Mcp {
   }
 
   /** Advertise only the tools this session may invoke (least-privilege exposure).
-   *  Before initialize (no session) the full catalog is returned (back-compat). */
+   *  Trusted in-process callers may construct Mcp with a session; external
+   *  transports must pass their initialize-bound session explicitly. */
   listTools(session = this.session): MCPTool[] {
+    if (session === undefined) return [];
     return this.registry.list(session?.permissions);
   }
 
@@ -44,24 +46,6 @@ export class Mcp {
     return this.registry.invoke(req.tool, req.input, base);
   }
 
-  /** Trusted in-process path for engine systems that already own attribution. */
-  callToolInternal(req: MCPRequest, session = this.session): Promise<MCPResponse> {
-    if (session === undefined) {
-      return Promise.resolve({ success: false, error: { code: "forbidden", message: "MCP internal session is not initialized" } });
-    }
-    const internalSession: Session = {
-      agentId: req.context?.agentId ?? session.agentId,
-      sessionId: req.context?.sessionId ?? session.sessionId,
-      permissions: session.permissions,
-    };
-    return this.registry.invoke(req.tool, req.input, {
-      agentId: internalSession.agentId,
-      sessionId: internalSession.sessionId,
-      permissions: internalSession.permissions,
-      tick: this.tick,
-      world: this.world,
-    });
-  }
 }
 
 interface InitializeParams {
@@ -216,7 +200,8 @@ export class JsonRpcTransport {
         return success(id, {});
       case "tools/list":
       case "listTools": {
-        const tools = this.mcp.listTools();
+        if (this.session === undefined) return failure(id, -32000, "MCP session is not initialized");
+        const tools = this.mcp.listTools(this.session);
         if (this.mode === "spec") {
           // Spec field is `inputSchema` (camelCase); limina-native uses `input_schema`.
           return success(id, {

@@ -17,6 +17,18 @@ interface Tracked {
   entityId?: string;
   volume: number;
   maxDistance: number;
+  expiresAtMs?: number;
+}
+
+const SPEECH_MIN_MS = 3_000;
+const SPEECH_MAX_MS = 70_000;
+const SPEECH_PADDING_MS = 1_500;
+const SPEECH_CHARS_PER_SECOND = 9;
+
+function estimateSpeechDurationMs(text: string): number {
+  const spokenChars = Math.max(1, text.trim().length);
+  const estimated = (spokenChars / SPEECH_CHARS_PER_SECOND) * 1000 + SPEECH_PADDING_MS;
+  return Math.min(SPEECH_MAX_MS, Math.max(SPEECH_MIN_MS, estimated));
 }
 
 export class AudioManager {
@@ -25,13 +37,18 @@ export class AudioManager {
   private listenerCenter: Vec3 = [0, 0, 0];
 
   private next(): string {
+    this.pruneFinished();
     return `snd_${this.seq++}`;
+  }
+
+  private finiteExpiry(secs: number, nowMs = Date.now()): number | undefined {
+    return Number.isFinite(secs) && secs > 0 ? nowMs + secs * 1000 : undefined;
   }
 
   play(freq: number, secs: number, bus: BusName, volume: number): string {
     const handle = this.next();
     const id = ops.op_audio_play(freq, secs, BUS[bus], volume);
-    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0 });
+    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
 
@@ -53,11 +70,12 @@ export class AudioManager {
   ): string {
     const handle = this.next();
     const id = ops.op_audio_play_spatial(freq, secs, pos[0], pos[1], pos[2], BUS[bus], volume);
-    this.sounds.set(handle, { id, spatial: true, entityId, volume, maxDistance });
+    this.sounds.set(handle, { id, spatial: true, entityId, volume, maxDistance, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
 
   stop(handle: string): boolean {
+    this.pruneFinished();
     const t = this.sounds.get(handle);
     if (t === undefined) return false;
     ops.op_audio_stop(t.id);
@@ -66,6 +84,7 @@ export class AudioManager {
   }
 
   setVolume(handle: string, volume: number): boolean {
+    this.pruneFinished();
     const t = this.sounds.get(handle);
     if (t === undefined) return false;
     t.volume = volume;
@@ -82,7 +101,8 @@ export class AudioManager {
   playBuffer(data: Float32Array, sampleRate: number, channels: number, bus: BusName, volume: number, loop: boolean): string {
     const handle = this.next();
     const id = ops.op_audio_play_buffer(data, sampleRate, channels, BUS[bus], volume, loop);
-    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0 });
+    const secs = !loop && sampleRate > 0 && channels > 0 ? data.length / channels / sampleRate : 0;
+    this.sounds.set(handle, { id, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
 
@@ -91,12 +111,13 @@ export class AudioManager {
   speak(text: string, pos: Vec3, volume = 0.95, pitch = 0): string {
     const handle = this.next();
     const id = ops.op_audio_speak(text, pos[0], pos[1], pos[2], volume, pitch);
-    this.sounds.set(handle, { id, spatial: true, volume, maxDistance: 0 });
+    this.sounds.set(handle, { id, spatial: true, volume, maxDistance: 0, expiresAtMs: Date.now() + estimateSpeechDurationMs(text) });
     return handle;
   }
 
   /** The entity a spatial handle should follow (host updates its emitter each frame). */
   entityOf(handle: string): string | undefined {
+    this.pruneFinished();
     return this.sounds.get(handle)?.entityId;
   }
 
@@ -109,6 +130,7 @@ export class AudioManager {
 
   /** Host per-frame: move a spatial sound's emitter + apply the max-distance cutoff. */
   follow(handle: string, pos: Vec3): void {
+    this.pruneFinished();
     const t = this.sounds.get(handle);
     if (t === undefined || !t.spatial) return;
     ops.op_audio_set_emitter(t.id, pos[0], pos[1], pos[2]);
@@ -116,5 +138,26 @@ export class AudioManager {
       const g = maxDistanceGain(distance(this.listenerCenter, pos), t.maxDistance, t.volume);
       ops.op_audio_set_volume(t.id, g);
     }
+  }
+
+  /** Drop JS handles for one-shot sounds the native mixer has already finished. */
+  pruneFinished(nowMs = Date.now()): number {
+    let removed = 0;
+    for (const [handle, sound] of this.sounds) {
+      if (sound.expiresAtMs !== undefined && sound.expiresAtMs <= nowMs) {
+        this.sounds.delete(handle);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /** Stop all tracked live sounds and release JS handles. Safe to call more than once. */
+  dispose(): void {
+    this.pruneFinished();
+    for (const sound of this.sounds.values()) {
+      ops.op_audio_stop(sound.id);
+    }
+    this.sounds.clear();
   }
 }

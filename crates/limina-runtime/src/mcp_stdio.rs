@@ -2,6 +2,22 @@ use deno_core::{extension, op2};
 use deno_error::JsErrorBox;
 use std::io::{BufRead, Write};
 
+const MAX_MCP_STDIO_LINE_BYTES: usize = 1024 * 1024;
+
+fn read_stdin_line_bounded<R: BufRead>(reader: R) -> Result<String, JsErrorBox> {
+    let mut line = String::new();
+    let read = reader
+        .take((MAX_MCP_STDIO_LINE_BYTES + 1) as u64)
+        .read_line(&mut line)
+        .map_err(JsErrorBox::from_err)?;
+    if read > MAX_MCP_STDIO_LINE_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "mcp stdio line exceeds {MAX_MCP_STDIO_LINE_BYTES} byte cap"
+        )));
+    }
+    Ok(line)
+}
+
 #[op2]
 #[string]
 async fn op_mcp_read_stdin_line() -> Result<String, JsErrorBox> {
@@ -11,29 +27,49 @@ async fn op_mcp_read_stdin_line() -> Result<String, JsErrorBox> {
     // blocking read onto tokio's blocking pool so the event loop stays live;
     // the line semantics (one call == one newline-terminated line, "" on EOF)
     // are unchanged.
-    tokio::task::spawn_blocking(|| {
-        let mut line = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(JsErrorBox::from_err)?;
-        Ok(line)
-    })
-    .await
-    .map_err(|e| JsErrorBox::generic(format!("stdin read task: {e}")))?
+    tokio::task::spawn_blocking(|| read_stdin_line_bounded(std::io::stdin().lock()))
+        .await
+        .map_err(|e| JsErrorBox::generic(format!("stdin read task: {e}")))?
 }
 
-#[op2(fast)]
-fn op_mcp_write_stdout_line(#[string] line: &str) -> Result<(), JsErrorBox> {
-    let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(line.as_bytes())
-        .map_err(JsErrorBox::from_err)?;
-    stdout.write_all(b"\n").map_err(JsErrorBox::from_err)?;
-    stdout.flush().map_err(JsErrorBox::from_err)
+#[op2]
+async fn op_mcp_write_stdout_line(#[string] line: String) -> Result<(), JsErrorBox> {
+    tokio::task::spawn_blocking(move || {
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(line.as_bytes())
+            .map_err(JsErrorBox::from_err)?;
+        stdout.write_all(b"\n").map_err(JsErrorBox::from_err)?;
+        stdout.flush().map_err(JsErrorBox::from_err)
+    })
+    .await
+    .map_err(|e| JsErrorBox::generic(format!("stdout write task: {e}")))?
 }
 
 extension!(
     limina_mcp_stdio,
     ops = [op_mcp_read_stdin_line, op_mcp_write_stdout_line],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn stdio_read_line_rejects_oversized_frames() {
+        let oversized = format!("{}\n", "x".repeat(MAX_MCP_STDIO_LINE_BYTES + 1));
+        let err = read_stdin_line_bounded(Cursor::new(oversized.into_bytes())).unwrap_err();
+        assert!(
+            err.to_string().contains("line exceeds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn stdio_read_line_accepts_bounded_frames() {
+        let line = "{\"jsonrpc\":\"2.0\",\"id\":1}\n";
+        let got = read_stdin_line_bounded(Cursor::new(line.as_bytes())).unwrap();
+        assert_eq!(got, line);
+    }
+}

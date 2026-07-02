@@ -218,14 +218,3 @@ export class SharedTransformStorage implements TransformStorage {
     return out;
   }
 }
-
-/**
- * Convenience matching `createTransformStorage(world)` from facade.ts: returns a
- * fresh SAB-backed storage (allocate path). `world` is accepted for call-site
- * symmetry and is not retained (the SoA lives in the buffer, not the bitECS world).
- */
-export function createSharedTransformStorage(
-  _world?: unknown,
-): SharedTransformStorage {
-  return new SharedTransformStorage();
-}

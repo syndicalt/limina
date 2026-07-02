@@ -2297,6 +2297,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "deno_core",
+ "deno_error",
  "rodio",
 ]
 

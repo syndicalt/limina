@@ -90,6 +90,7 @@ export class WasmRapierPhysics {
   private events: EventQueue | null = null;
   private controller: KinematicCharacterController | null = null;
   private gravityY = -9.81;
+  private disposed = false;
 
   private nextBodyId = 0;
   /** Stable body id -> rapier RigidBodyHandle. Removed ids are deleted (never reissued). */
@@ -114,8 +115,26 @@ export class WasmRapierPhysics {
   // ── internals ────────────────────────────────────────────────────────────────
 
   private requireWorld(): World {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
     if (this.world === null) throw new Error("WasmRapierPhysics: op before op_physics_create_world");
     return this.world;
+  }
+
+  private freeMaybe(value: unknown): void {
+    const free = (value as { free?: () => void } | null)?.free;
+    if (typeof free === "function") free.call(value);
+  }
+
+  private releaseWorldResources(): void {
+    this.freeMaybe(this.controller);
+    this.freeMaybe(this.events);
+    this.freeMaybe(this.world);
+    this.controller = null;
+    this.events = null;
+    this.world = null;
+    this.nextBodyId = 0;
+    this.idToHandle.clear();
+    this.handleToId.clear();
   }
 
   /** Resolve a stable id to its live RigidBody, or null for unknown/removed ids. */
@@ -171,6 +190,8 @@ export class WasmRapierPhysics {
   // ── PhysicsOps surface ───────────────────────────────────────────────────────
 
   op_physics_create_world(gravityY: number): void {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
+    this.releaseWorldResources();
     this.gravityY = gravityY;
     this.world = new this.R.World({ x: 0, y: gravityY, z: 0 });
     this.configureWorld();
@@ -312,6 +333,18 @@ export class WasmRapierPhysics {
     body.applyImpulse({ x: ix, y: iy, z: iz }, true);
   }
 
+  setBodyTranslation(id: number, x: number, y: number, z: number): void {
+    const body = this.bodyFor(id);
+    if (body === null) return;
+    body.setTranslation({ x, y, z }, true);
+  }
+
+  setBodyRotation(id: number, x: number, y: number, z: number, w: number): void {
+    const body = this.bodyFor(id);
+    if (body === null) return;
+    body.setRotation({ x, y, z, w }, true);
+  }
+
   op_physics_step(): void {
     const w = this.requireWorld();
     w.step(this.events ?? undefined);
@@ -409,6 +442,7 @@ export class WasmRapierPhysics {
   }
 
   op_physics_restore(bytes: Uint8Array): void {
+    if (this.disposed) throw new Error("WasmRapierPhysics: disposed");
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metaLen = dv.getUint32(0, true);
     const metaBytes = bytes.subarray(4, 4 + metaLen);
@@ -419,7 +453,9 @@ export class WasmRapierPhysics {
     };
     // restoreSnapshot needs a standalone view of just the rapier bytes.
     const rapierBytes = bytes.slice(4 + metaLen);
-    this.world = this.R.World.restoreSnapshot(rapierBytes);
+    const restoredWorld = this.R.World.restoreSnapshot(rapierBytes);
+    this.releaseWorldResources();
+    this.world = restoredWorld;
     this.gravityY = meta.gravityY;
     this.configureWorld();
     this.events = new this.R.EventQueue(true);
@@ -427,5 +463,11 @@ export class WasmRapierPhysics {
     this.nextBodyId = meta.nextBodyId;
     this.idToHandle = new Map(meta.entries);
     this.handleToId = new Map(meta.entries.map(([id, handle]) => [handle, id]));
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.releaseWorldResources();
   }
 }

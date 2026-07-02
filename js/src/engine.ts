@@ -260,6 +260,11 @@ export interface EntityTableSnapshot {
  *  a recycled bitECS eid can never be reached through a stale `ent_`. */
 export class EntityTable {
   private readonly map = new Map<string, EntityEntry>();
+  /** Reverse index `bodyId -> ent_ id`, maintained alongside `map` so a physics
+   *  body can be resolved to its entity in O(1) (collision events, raycasts)
+   *  instead of a linear scan of every entry. `bodyId` is set once at `create`
+   *  and never mutated on a live entry, so this stays consistent with `map`. */
+  private readonly byBody = new Map<number, string>();
   private seq = 0;
   private tableVersion = 0;
 
@@ -270,16 +275,24 @@ export class EntityTable {
   create(entry: Omit<EntityEntry, "generation">): string {
     const id = `ent_${this.seq++}`;
     this.map.set(id, { generation: 0, ...entry });
+    if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, id);
     this.tableVersion++;
     return id;
   }
   resolve(id: string): EntityEntry | undefined {
     return this.map.get(id);
   }
+  /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
+   *  when no live entity owns that body. Replaces the per-call linear scan the
+   *  collision/raycast skills used at scale. */
+  entityByBody(bodyId: number): string | undefined {
+    return this.byBody.get(bodyId);
+  }
   destroy(id: string): EntityEntry | undefined {
     const entry = this.map.get(id);
     if (entry !== undefined) {
       this.map.delete(id);
+      if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
       this.tableVersion++;
     }
     return entry;
@@ -304,8 +317,10 @@ export class EntityTable {
    *  bindings are runtime-only and left unbound (rebound on demand). */
   restore(snapshot: EntityTableSnapshot): void {
     this.map.clear();
+    this.byBody.clear();
     for (const entry of snapshot.entries) {
       this.map.set(entry.id, { eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
+      if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, entry.id);
     }
     this.seq = snapshot.seq;
     this.tableVersion = snapshot.version;
