@@ -40,7 +40,12 @@ use tokio_tungstenite::{accept_hdr_async, WebSocketStream};
 /// Returned by `op_net_accept` when its listener has been closed, so the JS
 /// accept loop can break cleanly instead of awaiting a connection forever.
 const ACCEPT_CLOSED: u32 = u32::MAX;
-const NET_SEND_TIMEOUT: Duration = Duration::from_millis(50);
+// Headroom for a single send on a CONTENDED single-thread runtime. 50ms was far too
+// tight: while a browser polls + reconnects, an ack or delta send can miss a 50ms
+// window purely from event-loop scheduling (not a dead peer), and dropping the conn
+// on that (below) spuriously killed live coordinator writes AND kicked the subscribed
+// browser into a reconnect storm. A real send completes in well under this.
+const NET_SEND_TIMEOUT: Duration = Duration::from_millis(1500);
 /// Cap the per-connection WebSocket UPGRADE handshake. The accept loop performs the
 /// handshake inline before it can accept the next client, so a single half-open peer
 /// (a TCP connect that never sends the HTTP Upgrade -- e.g. a browser mid-reconnect,
@@ -424,7 +429,13 @@ async fn net_send_impl(
             Err(JsErrorBox::generic(format!("net send: {e}")))
         }
         Err(_) => {
-            deregister_conn(&state, conn_id, &conn);
+            // A send TIMEOUT is NOT proof the peer is dead -- it can be pure scheduling
+            // latency or transient TCP backpressure. Do NOT deregister here: dropping the
+            // conn on a slow send is what kicked the subscribed browser into a reconnect
+            // storm and severed live coordinator writes. Genuine death (EOF / Close /
+            // socket error) is detected by the recv loop, which deregisters there. Report
+            // the failed send; the caller (best-effort broadcast, or a retryable reply)
+            // decides what to do, and the connection survives.
             Err(JsErrorBox::generic(format!(
                 "net send timeout after {}ms",
                 NET_SEND_TIMEOUT.as_millis()
