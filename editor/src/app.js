@@ -294,19 +294,23 @@ async function resolve(approvalId, grant) {
 // approval queue populates without a separate agent process. Goes through the
 // REAL gate (the call comes back as pending_approval — that's the expected hold).
 // ---------------------------------------------------------------------------
-async function proposeTestEdit() {
+async function ensureAgentClient() {
   const url = $("url").value.trim();
   const authToken = $("auth-token").value.trim() || undefined;
+  if (state.agentClient) return state.agentClient;
+  const a = new McpClient(url, authToken);
+  await a.connect();
+  await a.initialize("agt_demo", "ses_demo_" + Math.random().toString(36).slice(2, 6), "builder.review");
+  state.agentClient = a;
+  return a;
+}
+
+async function proposeTestEdit() {
   try {
-    if (!state.agentClient) {
-      const a = new McpClient(url, authToken);
-      await a.connect();
-      await a.initialize("agt_demo", "ses_demo_" + Math.random().toString(36).slice(2, 6), "builder.review");
-      state.agentClient = a;
-    }
+    const agent = await ensureAgentClient();
     const pos = [Math.round((Math.random() * 8 - 4) * 10) / 10, 0.5, Math.round((Math.random() * 8 - 4) * 10) / 10];
     try {
-      await state.agentClient.callTool("scene.createEntity", { position: pos, shape: "box", color: 0x44aaff });
+      await agent.callTool("scene.createEntity", { position: pos, shape: "box", color: 0x44aaff });
       logLine("proposal applied directly — is the review gate enabled on the server?", "warn");
     } catch (e) {
       if (e instanceof McpError && e.isPendingApproval) {
@@ -318,6 +322,58 @@ async function proposeTestEdit() {
     await refreshAll();
   } catch (e) {
     logLine("propose failed: " + (e && e.message ? e.message : String(e)), "err");
+  }
+}
+
+function firstMovableEntity() {
+  const entity = (state.snapshot?.entities ?? [])[0];
+  if (entity?.entity) {
+    const liveState = state.client?.entityState?.get(entity.entity);
+    return { id: entity.entity, position: liveState?.pos ?? entity.transform?.position };
+  }
+
+  const rowId = $("world-body")?.querySelector(".row .mono")?.textContent?.trim();
+  if (rowId && rowId.startsWith("ent_")) return { id: rowId, position: undefined };
+  return undefined;
+}
+
+function movedPosition(position) {
+  const hasPosition = Array.isArray(position) && position.length >= 3 && position.every((n) => Number.isFinite(n));
+  if (!hasPosition) {
+    return [Math.round((Math.random() * 8 - 4) * 10) / 10, 0.5, Math.round((Math.random() * 8 - 4) * 10) / 10];
+  }
+  const dx = Math.round((Math.random() * 1.5 - 0.75) * 10) / 10;
+  const dz = Math.round((Math.random() * 1.5 - 0.75) * 10) / 10;
+  return [
+    Math.round((position[0] + dx) * 10) / 10,
+    position[1],
+    Math.round((position[2] + dz) * 10) / 10,
+  ];
+}
+
+async function proposeAgentMove() {
+  try {
+    const target = firstMovableEntity();
+    if (!target) {
+      logLine("no entity to move — click + test and approve one first", "warn");
+      return;
+    }
+
+    const agent = await ensureAgentClient();
+    const pos = movedPosition(target.position);
+    try {
+      await agent.callTool("ecs.updateComponent", { entity: target.id, component: "position", value: pos });
+      logLine(`agent moved ${target.id} to [${pos.join(", ")}] directly — is the review gate enabled on the server?`, "warn");
+    } catch (e) {
+      if (e instanceof McpError && e.isPendingApproval) {
+        logLine(`agent proposed ecs.updateComponent on ${target.id} — HELD (approvalId ${e.message.slice(0, 20)}…)`, "info");
+      } else {
+        throw e;
+      }
+    }
+    await refreshAll();
+  } catch (e) {
+    logLine("propose move failed: " + (e && e.message ? e.message : String(e)), "err");
   }
 }
 
@@ -335,5 +391,6 @@ function fmt(n) { return (Math.round(n * 1000) / 1000).toString(); }
 $("connect").onclick = () => void connect();
 $("disconnect").onclick = () => { disconnect(); logLine("disconnected", "warn"); };
 $("propose").onclick = () => void proposeTestEdit();
+$("propose-move").onclick = () => void proposeAgentMove();
 $("interval").onchange = () => { if (state.client) startPolling(); };
 logLine("ready — set the server URL and Connect (run editor/server/editor_host.ts for the gate-enabled server)", "info");

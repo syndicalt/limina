@@ -77,6 +77,11 @@ const state = {
   transformControls: undefined,
   transformHelper: undefined,
   selected: undefined,
+  ctrlRotateDown: false,
+  ctrlRotateActive: false,
+  agentHighlight: undefined,
+  agentHighlightTimeout: undefined,
+  agentHighlightFrame: undefined,
 };
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -113,13 +118,15 @@ async function poll() {
       if (res.reset) { state.commands = []; state.cursor = 0; }
       if (Array.isArray(res.commands) && res.commands.length > 0) {
         const newCmds = res.commands;
+        const authorCmds = toAuthorCommands(newCmds);
         for (const cmd of res.commands) state.commands.push(cmd);
         if (state.running && !state.rebooting && !res.reset) {
-          const r = await state.running.applyAuthorCommands(toAuthorCommands(newCmds));
+          const r = await state.running.applyAuthorCommands(authorCmds);
           if (r.needsReboot) state.dirty = true;
         } else {
           state.dirty = true;
         }
+        showLastAgentTarget(authorCmds);
       }
       if (typeof res.next === "number") state.cursor = res.next;
       if (state.dirty && !state.rebooting) await reboot();
@@ -132,8 +139,91 @@ async function poll() {
   }
 }
 
+function disposeMaterial(material) {
+  if (Array.isArray(material)) {
+    for (const item of material) item?.dispose?.();
+  } else {
+    material?.dispose?.();
+  }
+}
+
+function stopAgentHighlightLoop() {
+  if (state.agentHighlightFrame !== undefined) {
+    cancelAnimationFrame(state.agentHighlightFrame);
+    state.agentHighlightFrame = undefined;
+  }
+}
+
+function startAgentHighlightLoop() {
+  if (state.agentHighlightFrame !== undefined) return;
+  const tick = () => {
+    const highlight = state.agentHighlight;
+    if (!highlight) {
+      state.agentHighlightFrame = undefined;
+      return;
+    }
+    highlight.helper.update();
+    state.agentHighlightFrame = requestAnimationFrame(tick);
+  };
+  state.agentHighlightFrame = requestAnimationFrame(tick);
+}
+
+function clearAgentHighlight() {
+  if (state.agentHighlightTimeout !== undefined) {
+    clearTimeout(state.agentHighlightTimeout);
+    state.agentHighlightTimeout = undefined;
+  }
+  stopAgentHighlightLoop();
+  const helper = state.agentHighlight?.helper;
+  if (helper) {
+    try { helper.parent?.remove(helper); } catch { /* ignore */ }
+    try { helper.geometry?.dispose?.(); } catch { /* ignore */ }
+    try { disposeMaterial(helper.material); } catch { /* ignore */ }
+  }
+  state.agentHighlight = undefined;
+}
+
+function refreshAgentHighlightTimeout() {
+  if (state.agentHighlightTimeout !== undefined) clearTimeout(state.agentHighlightTimeout);
+  state.agentHighlightTimeout = setTimeout(() => {
+    clearAgentHighlight();
+  }, 1500);
+}
+
+function showAgentHighlight(entityId) {
+  const running = state.running;
+  const entry = running?.entities?.resolve?.(entityId);
+  if (!running?.scene || !entry?.mesh) return;
+  if (state.agentHighlight?.entityId !== entityId) {
+    clearAgentHighlight();
+    const helper = new THREE.BoxHelper(entry.mesh, 0xffb020);
+    helper.raycast = () => {};
+    running.scene.add(helper);
+    state.agentHighlight = { entityId, helper };
+  }
+  state.agentHighlight.helper.update();
+  refreshAgentHighlightTimeout();
+  startAgentHighlightLoop();
+}
+
+// Actor ids that are the HUMAN operator, not an agent: "human" is the optimistic
+// local apply; "editor_writer" is the builder.readWrite client the gizmo/inspector
+// persist through (mcp records agentId = the client name, and those writes echo
+// back via worldlog.tail). Neither should trigger the "an agent is working here" cue.
+const SELF_ACTOR_IDS = new Set(["human", "editor_writer"]);
+
+function showLastAgentTarget(commands) {
+  let target;
+  for (const cmd of commands) {
+    if (!SELF_ACTOR_IDS.has(cmd.agentId) && cmd.input?.entity) target = cmd.input.entity;
+  }
+  if (target) showAgentHighlight(target);
+}
+
 function clearGizmo() {
+  clearAgentHighlight();
   state.selected = undefined;
+  state.ctrlRotateActive = false;
   if (state.transformControls) {
     try { state.transformControls.detach(); } catch { /* ignore */ }
     try { state.transformControls.dispose(); } catch { /* ignore */ }
@@ -143,6 +233,22 @@ function clearGizmo() {
   }
   state.transformControls = undefined;
   state.transformHelper = undefined;
+}
+
+function isTextInputTarget(target) {
+  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+}
+
+function reconcileCtrlRotateMode() {
+  const controls = state.transformControls;
+  if (!controls || controls.dragging) return;
+  if (state.ctrlRotateDown) {
+    controls.setMode("rotate");
+    state.ctrlRotateActive = true;
+  } else if (state.ctrlRotateActive) {
+    controls.setMode("translate");
+    state.ctrlRotateActive = false;
+  }
 }
 
 function installGizmo(running) {
@@ -159,12 +265,14 @@ function installGizmo(running) {
       if (active) running.setCameraControlsEnabled(false);
       else running.setCameraControlsEnabled(true);
     }
+    if (!active) reconcileCtrlRotateMode();
     if (!selected || typeof running.setSyncSuppressed !== "function") return;
     if (active) running.setSyncSuppressed(selected.eid, true);
     else void commitSelectedTransform(selected, running);
   });
   state.transformControls = controls;
   state.transformHelper = helper;
+  reconcileCtrlRotateMode();
 }
 
 function selectEntity(id, running) {
@@ -173,6 +281,13 @@ function selectEntity(id, running) {
   state.selected = { id, eid: entry.eid, mesh: entry.mesh };
   state.transformControls?.attach(entry.mesh);
   setStatus("selected", id);
+}
+
+function deselectEntity() {
+  state.transformControls?.detach();
+  state.selected = undefined;
+  state.ctrlRotateActive = false;
+  setStatus("following", "no selection");
 }
 
 function pickEntity(event) {
@@ -194,6 +309,7 @@ function pickEntity(event) {
       return;
     }
   }
+  if (!controls.axis) deselectEntity();
 }
 
 export async function applyOptimisticUpdate(entity, component, value) {
@@ -300,11 +416,24 @@ canvas.addEventListener("pointercancel", (event) => {
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
   if (!controls) return;
-  const target = event.target;
-  if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+  if (isTextInputTarget(event.target)) return;
+  if (event.key === "Control" || event.ctrlKey) {
+    state.ctrlRotateDown = true;
+    reconcileCtrlRotateMode();
+    return;
+  }
   if (event.key === "w") controls.setMode("translate");
   else if (event.key === "e") controls.setMode("rotate");
   else if (event.key === "r") controls.setMode("scale");
+});
+window.addEventListener("keyup", (event) => {
+  if (event.key !== "Control") return;
+  state.ctrlRotateDown = false;
+  reconcileCtrlRotateMode();
+});
+window.addEventListener("blur", () => {
+  state.ctrlRotateDown = false;
+  reconcileCtrlRotateMode();
 });
 
 setStatus("waiting", "connect the panels to follow the authoring stream");
@@ -313,6 +442,7 @@ const loop = setInterval(() => { void (state.client ? poll() : tryConnect()); },
 
 window.addEventListener("beforeunload", () => {
   clearInterval(loop);
+  clearAgentHighlight();
   clearGizmo();
   try { state.running?.stop(); } catch { /* ignore */ }
   try { state.client?.close(); } catch { /* ignore */ }
