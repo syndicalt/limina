@@ -87,6 +87,10 @@ export interface InvokeBase {
    *  is robust to concurrent top-level chains interleaving on a single thread,
    *  which a depth/flag counter cannot be. */
   chainId?: string;
+  /** Internal approval-resolution bypass. Only resolveApproval sets this when it
+   *  re-enters invoke() to apply an already-approved parked action; callers must
+   *  not use it as a general policy or validation bypass. */
+  approvalGateBypassed?: true;
 }
 
 export interface SkillDefinition<I = unknown, O = unknown> {
@@ -527,7 +531,7 @@ export class SkillRegistry {
     // 3b. Approval gate (off by default). Hold the validated, policy-approved
     //     intent for human review instead of applying it — no world change until
     //     a reviewer grants it.
-    if (this.reviewGate !== undefined && this.reviewGate(name, base, skill)) {
+    if (base.approvalGateBypassed !== true && this.reviewGate !== undefined && this.reviewGate(name, base, skill)) {
       if (this.pending.size >= this.maxPendingApprovals) {
         ctx.emit("skill.approval.denied", {
           skill: name,
@@ -590,7 +594,13 @@ export class SkillRegistry {
     // propose tick — only these apply-time events move.
     const applyTick = reviewer?.applyTick;
     const grantedId = this.tracer.emit({ type: "skill.approval.granted", actorId: parked.base.agentId, threadId: parked.base.sessionId, parentEventId: null, causedBy: [approvalId], payload: { approvalId, skill: parked.skill, reviewer: reviewer?.agentId, tick: stampTick(applyTick, parked.base.tick) } });
-    const { ctx, meta } = this.makeCtx(parked.base);
-    return this.applyHandler(skill, parked.input, parked.base, ctx, meta, [approvalId, grantedId], applyTick);
+    const invokeBase: InvokeBase = {
+      ...parked.base,
+      tick: stampTick(applyTick, parked.base.tick),
+      causedBy: [approvalId, grantedId],
+      chainId: undefined,
+      approvalGateBypassed: true,
+    };
+    return this.invoke(parked.skill, parked.input, invokeBase);
   }
 }

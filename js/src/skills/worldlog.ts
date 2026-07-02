@@ -26,7 +26,7 @@ const PER_TICK_PHYSICS = new Set(["step", "move_character", "apply_impulse"]);
 // permission (e.g. approval.list needs `approval.review` to LIST but mutates nothing). Left in, they
 // enter the authoring stream once per poll and reboot the live viewport every second (flicker).
 const INTROSPECTION = new Set([
-  "worldlog.tail", "inspector.snapshot", "trace.tail", "approval.list",
+  "worldlog.tail", "inspector.snapshot", "trace.tail", "approval.list", "approval.grant", "approval.deny",
   "skills.list", "skills.search", "skills.browse", "skills.describe",
 ]);
 function isAuthoringCommand(cmd: WorldCommand, registry: SkillRegistry): boolean {
