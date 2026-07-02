@@ -97,6 +97,12 @@ async function connect() {
     await client.initialize("human_editor", sessionId, profile);
     try { await client.subscribe(); } catch { /* read-stream optional */ }
     state.client = client;
+    // The skill catalog is STATIC — fetch its size ONCE (limit:0 skips the entity page) so
+    // routine World polls can drop the full-catalog serialization from every snapshot.
+    try {
+      const cat = await client.callTool("inspector.snapshot", { limit: 0, includeResources: false, includeSkills: true });
+      state.skillCount = cat?.skills?.length ?? 0;
+    } catch { state.skillCount = 0; }
     logLine(`connected to ${url} as ${profile}`, "ok");
     startPolling();
     await refreshAll();
@@ -180,7 +186,10 @@ async function refreshAll() {
     // World snapshot only when its panel is open, and less often (it's the heaviest read).
     if (panelOpen("world") && snapshotTick % 2 === 0) {
       setSpin("world", true);
-      try { state.snapshot = await c.callTool("inspector.snapshot", { limit: 200 }); }
+      // Routine polls drop the two blocks that don't scale: the O(world) resource scan and
+      // the static skill catalog (its size is cached once at connect as state.skillCount).
+      // Live positions come from the delta stream (client.entityState), overlaid below.
+      try { state.snapshot = await c.callTool("inspector.snapshot", { limit: 200, includeResources: false, includeSkills: false }); }
       finally { setSpin("world", false); }
     }
     snapshotTick++;
@@ -212,7 +221,7 @@ function renderWorld() {
   const meta = el("div", "kv");
   meta.appendChild(kv("mode", snap.world?.mode ?? "?"));
   meta.appendChild(kv("entities", String(snap.entities?.length ?? 0)));
-  meta.appendChild(kv("skills", String(snap.skills?.length ?? 0)));
+  meta.appendChild(kv("skills", String(snap.skills?.length || state.skillCount || 0)));
   meta.appendChild(kv("caller caps", (snap.permissions?.caller ?? []).join(", ") || "—"));
   root.appendChild(meta);
 

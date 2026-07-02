@@ -256,6 +256,14 @@ export function registerSystemSkills(registry: SkillRegistry): void {
   const snapshotInput = z.object({
     afterEntity: z.string().optional(),
     limit: z.number().int().min(0).max(500).default(100),
+    // Per-poll cost controls for high-frequency observers (the live editor). Both default
+    // TRUE so the observability contract is unchanged for every existing caller/test. A
+    // routine poller that only needs entities+transforms sets them false to skip the two
+    // blocks that scale with world size / are static catalog data:
+    //   includeResources=false  -> skip the O(all-entities) resource scan (loaded/counts).
+    //   includeSkills=false     -> skip re-serializing the full (static) skill catalog.
+    includeResources: z.boolean().default(true),
+    includeSkills: z.boolean().default(true),
   });
   registry.register({
     name: "inspector.snapshot",
@@ -326,10 +334,14 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           resource: entry.resource,
         }];
       });
-      const loaded = ids.flatMap((entity) => {
-        const resource = ctx.world.entities.resolve(entity)?.resource;
-        return resource === undefined ? [] : [{ entity, ...resource }];
-      });
+      // The resource scan walks EVERY entity (not just the page), so it is O(world) per
+      // call — the dominant per-poll cost on a large map. A routine poller opts out.
+      const loaded = input.includeResources
+        ? ids.flatMap((entity) => {
+          const resource = ctx.world.entities.resolve(entity)?.resource;
+          return resource === undefined ? [] : [{ entity, ...resource }];
+        })
+        : [];
       const resources = loaded.map((r) => r as LoadedResourceMetadata);
       // The trace block is the SAME cross-agent surface trace.tail exposes — so it is
       // gated by the SAME `trace.read` capability (Fix 1). inspector.snapshot stays
@@ -353,15 +365,17 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         // static catalog metadata, NOT sensitive cross-agent runtime data, so this is
         // not a capability leak. The trace block (real cross-agent events WITH payloads)
         // IS sensitive and is gated by trace.read below.
-        skills: [...registry.list()].map((tool) => {
-          const def = registry.describe(tool.name);
-          return {
-            name: tool.name,
-            version: def?.version ?? "unknown",
-            category: def?.category ?? "unknown",
-            permissions: [...(def?.permissions ?? [])],
-          };
-        }),
+        skills: input.includeSkills
+          ? [...registry.list()].map((tool) => {
+            const def = registry.describe(tool.name);
+            return {
+              name: tool.name,
+              version: def?.version ?? "unknown",
+              category: def?.category ?? "unknown",
+              permissions: [...(def?.permissions ?? [])],
+            };
+          })
+          : [],
         permissions: {
           caller: [...ctx.permissions].sort(),
           profiles: Object.fromEntries(Object.entries(PERMISSION_PROFILES).map(([name, permissions]) => [name, [...permissions]])),

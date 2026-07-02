@@ -96,11 +96,17 @@ export class McpClient {
     }
     // Read-only state-sync notifications (no id).
     if (msg.method === "state/snapshot" || msg.method === "state/delta") {
-      const entities = msg.method === "state/snapshot" ? msg.params?.entities : msg.params?.changes;
-      if (Array.isArray(entities)) {
-        for (const e of entities) this.entityState.set(e.id, e);
-        if (this.onSync) this.onSync();
-      }
+      // A snapshot is a fresh authoritative baseline (on subscribe/reconnect): REPLACE the
+      // cache so entities from a prior subscription don't linger. A delta is incremental:
+      // apply the changed set and DROP the `removed` ids. Applying removals is what keeps
+      // entityState bounded to the live entity count — without it, every despawned entity
+      // leaks forever (unbounded browser memory on a long editing session).
+      if (msg.method === "state/snapshot") this.entityState.clear();
+      const changes = msg.method === "state/snapshot" ? msg.params?.entities : msg.params?.changes;
+      if (Array.isArray(changes)) for (const e of changes) this.entityState.set(e.id, e);
+      const removed = msg.params?.removed;
+      if (Array.isArray(removed)) for (const id of removed) this.entityState.delete(id);
+      if (Array.isArray(changes) || Array.isArray(removed)) { if (this.onSync) this.onSync(); }
       return;
     }
     if (typeof msg.method === "string" && msg.method.startsWith("chat/")) {
