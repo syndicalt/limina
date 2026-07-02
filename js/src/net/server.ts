@@ -410,6 +410,36 @@ export class AuthoritativeServer {
           await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidParams, "tools/call requires object arguments"));
           return;
         }
+        // READ-ONLY skills are OBSERVATIONS, not authoring: serve them IMMEDIATELY,
+        // off the authoritative tick loop. Only MUTATING intents go through the
+        // per-tick total order (intentQueue) below. Reads never change the world
+        // timeline, so ordering them against mutations buys nothing -- but forcing
+        // them through the single serial tick drain does real harm: a client's
+        // read-polling (the editor viewport tails worldlog/inspector every second)
+        // then shares one lane with every other client's intents, and a slow reader
+        // serial-stalls the tick and starves the coordinator bridge's acks. Serving
+        // reads on their own connection loop decouples them. They still run through
+        // registry.invoke (recorded + permission-checked) exactly as before; only
+        // the SERVING PATH changes, not what is recorded. Read-only == every declared
+        // permission ends in ".read" (empty-perm introspection like worldlog.tail
+        // counts as read), the inverse of the worldlog `isAuthoringCommand` test.
+        const def = this.registry.describe(p.name);
+        if (def !== undefined && def.permissions.every((perm) => perm.endsWith(".read"))) {
+          const result = await this.registry.invoke(p.name, args, {
+            agentId: conn.session.agentId,
+            sessionId: conn.session.sessionId,
+            permissions: conn.session.permissions,
+            profile: conn.session.profile,
+            tick: this.tick,
+            world: this.world,
+          });
+          if (!result.success && result.error !== undefined) {
+            await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc(result.error.code), result.error.message, result));
+          } else {
+            await this.reply(conn.connId, this.success(id, result));
+          }
+          return;
+        }
         // INTENT: queue for application at the next tick boundary (one total
         // order). NOTE: the payload's `context`, if any, is IGNORED -- attribution
         // comes from conn.session only.
@@ -492,7 +522,15 @@ export class AuthoritativeServer {
     while (this.running) {
       await defaultOps.op_sleep_ms(this.tickMs);
       if (!this.running) break;
-      await this.doTick();
+      try {
+        await this.doTick();
+      } catch (err) {
+        // A single bad tick (a throwing skill handler, a transient transport error)
+        // must NOT kill the authoritative loop and freeze ALL authoring. Log and
+        // continue; the next tick re-drains the queue. Without this boundary one
+        // rejected op silently wedges the server (the observed long-running-host stall).
+        defaultOps.op_log(`AuthoritativeServer.doTick error (continuing): ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
@@ -510,6 +548,11 @@ export class AuthoritativeServer {
     const causedBy: number[] = [];
     const queue = this.intentQueue;
     this.intentQueue = [];
+    // Apply intents SERIALLY (one total order, deterministic), but fire each reply
+    // CONCURRENTLY: a slow/backpressured client must not serial-stall the tick (and
+    // thereby delay every other client's intents this tick). Each send is
+    // independently bounded by NET_SEND_TIMEOUT; we await them all after applying.
+    const replySends: Promise<void>[] = [];
     for (const it of queue) {
       const result: MCPResponse = await this.registry.invoke(it.name, it.input, {
         agentId: it.session.agentId,
@@ -520,14 +563,14 @@ export class AuthoritativeServer {
         world: this.world,
       });
       if (it.reqId !== undefined) {
-        if (!result.success && result.error !== undefined) {
-          await this.sendSafe(it.connId, this.error(it.reqId ?? null, mcpErrorToJsonRpc(result.error.code), result.error.message, result));
-        } else {
-          await this.sendSafe(it.connId, this.success(it.reqId ?? null, result));
-        }
+        const line = (!result.success && result.error !== undefined)
+          ? this.error(it.reqId ?? null, mcpErrorToJsonRpc(result.error.code), result.error.message, result)
+          : this.success(it.reqId ?? null, result);
+        replySends.push(this.sendSafe(it.connId, line));
       }
       if (result.success) causedBy.push(this.intentSeq++);
     }
+    if (replySends.length > 0) await Promise.allSettled(replySends);
 
     // 2. Advance the authoritative sim one fixed step (recorded), then sync
     //    native body transforms into ECS storage (the per-tick engine rule).
