@@ -41,6 +41,13 @@ use tokio_tungstenite::{accept_hdr_async, WebSocketStream};
 /// accept loop can break cleanly instead of awaiting a connection forever.
 const ACCEPT_CLOSED: u32 = u32::MAX;
 const NET_SEND_TIMEOUT: Duration = Duration::from_millis(50);
+/// Cap the per-connection WebSocket UPGRADE handshake. The accept loop performs the
+/// handshake inline before it can accept the next client, so a single half-open peer
+/// (a TCP connect that never sends the HTTP Upgrade -- e.g. a browser mid-reconnect,
+/// a health probe, a port scan) would otherwise block ALL new connections forever.
+/// A real local handshake completes in <1ms; anything past this is abandoned so the
+/// loop keeps accepting. Bounds head-of-line blocking to one timeout, never infinite.
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Host-bound listener for `limina --mcp-ws` (installed by the host before the
 /// JS server loop runs). Server-only; the production server never shuts it down.
@@ -257,8 +264,12 @@ async fn net_accept_impl_with_origins(
             }
         };
         tcp.set_nodelay(true).ok();
-        match accept_ws_with_origins(tcp, allowed_origins.clone()).await {
-            Ok(ws) => return Ok(with_net(&state, |net| net.register(ws))),
+        // Bound the handshake so a stalled/half-open peer cannot wedge the accept loop
+        // (and thereby starve EVERY subsequent connection, e.g. a coordinator bridge
+        // that connects while a browser is churning reconnects). Drop + keep accepting.
+        match timeout(WS_HANDSHAKE_TIMEOUT, accept_ws_with_origins(tcp, allowed_origins.clone())).await {
+            Ok(Ok(ws)) => return Ok(with_net(&state, |net| net.register(ws))),
+            Ok(Err(_)) => continue,
             Err(_) => continue,
         }
     }
@@ -298,8 +309,11 @@ async fn net_accept_host_impl(state: Rc<RefCell<OpState>>) -> Result<u32, JsErro
     loop {
         let (tcp, _peer) = listener.accept().await.map_err(JsErrorBox::from_err)?;
         tcp.set_nodelay(true).ok();
-        match tokio_tungstenite::accept_async(tcp).await {
-            Ok(ws) => return Ok(with_net(&state, |net| net.register(ws))),
+        // Same head-of-line guard as the gated listener: a stalled handshake must not
+        // block the host accept loop from taking the next client.
+        match timeout(WS_HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async(tcp)).await {
+            Ok(Ok(ws)) => return Ok(with_net(&state, |net| net.register(ws))),
+            Ok(Err(_)) => continue,
             Err(_) => continue,
         }
     }
