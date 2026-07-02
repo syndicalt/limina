@@ -104,7 +104,7 @@ const server = new AuthoritativeServer(editorTransport, {
       return true;
     }
 
-    const model = ops.op_read_env("ANTHROPIC_MODEL") || "claude-opus-4-8";
+    const model = ops.op_read_env("ANTHROPIC_MODEL") || "claude-haiku-4-5-20251001";
     await ctx.reply({ ok: true, turnId: p.turnId });
     // Wire shape: JSON-RPC notification method is chat/<event>, params is the
     // full self-describing { type:"chat.<event>", turnId, ... } object.

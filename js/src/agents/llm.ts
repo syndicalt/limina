@@ -296,16 +296,26 @@ export class AnthropicProvider implements LLMProvider {
   async decide(
     req: DecideRequest,
   ): Promise<{ toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } }> {
+    // PROMPT CACHING: the tools (~50k tokens) + system prompt are byte-identical on
+    // every call in a turn (and across turns within the 5-min TTL). Mark a cache
+    // breakpoint at the end of that static prefix so repeated calls read it at ~10%
+    // of the input cost. The dynamic user message comes AFTER the breakpoint (order
+    // is tools → system → messages) and is never cached. A breakpoint on the last
+    // tool caches the whole tools block; one on system caches the system too.
+    const tools = req.tools.map((t) => ({
+      name: encodeAnthropicToolName(t.name),
+      description: t.description,
+      input_schema: t.input_schema,
+    })) as Array<Record<string, unknown>>;
+    if (tools.length > 0) {
+      tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: { type: "ephemeral" } };
+    }
     const body = JSON.stringify({
       model: this.model,
       max_tokens: this.maxTokens,
-      system: req.systemPrompt,
+      system: [{ type: "text", text: req.systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: buildAnthropicUserMessage(req) }],
-      tools: req.tools.map((t) => ({
-        name: encodeAnthropicToolName(t.name),
-        description: t.description,
-        input_schema: t.input_schema,
-      })),
+      tools,
     });
     const headers = JSON.stringify({
       "x-api-key": this.apiKey,

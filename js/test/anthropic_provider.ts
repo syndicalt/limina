@@ -47,8 +47,10 @@ if (headers["content-type"] !== "application/json") throw new Error("missing con
 const body = JSON.parse(captured.body);
 if (body.model !== "claude-test") throw new Error("wrong model");
 if (body.max_tokens !== 123) throw new Error("wrong max_tokens");
-if (body.system !== "Use tools.") throw new Error("wrong system prompt");
+if (body.system[0].text !== "Use tools.") throw new Error("wrong system prompt");
+if (body.system[0].cache_control?.type !== "ephemeral") throw new Error("system prompt not marked for prompt caching");
 if (body.tools[0].name !== "scene__queryEntities") throw new Error("tool name was not encoded");
+if (body.tools[body.tools.length - 1].cache_control?.type !== "ephemeral") throw new Error("tools block not marked for prompt caching");
 const content = body.messages[0].content;
 if (typeof content !== "string" || !content.includes("User request:")) {
   throw new Error("user message should be a natural 'User request:' instruction, not a JSON dump");
