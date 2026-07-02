@@ -29,6 +29,27 @@ import {
   type WorldLogMeta,
 } from "./log.ts";
 
+// Pure READ-ONLY skills the live editor polls every tick — recording them bloats the
+// world log ~25x (2500+ reads vs ~100 mutations in a dev session) and, with the editor
+// host's compactFlushed off, grows memory unbounded. Listed by NAME because they declare
+// no perm (worldlog.tail) or a privileged-but-non-mutating one (approval.list needs
+// `approval.review` to LIST). This is the RECORDER's counterpart to worldlog.ts's
+// INTROSPECTION filter, but WITHOUT approval.grant/deny — those MUTATE (they apply/reject
+// held actions) and MUST be recorded for faithful replay. Skills with an all-".read"
+// permission set are also skipped (see attach); this set covers the empty/privileged ones.
+const RECORDER_SKIP_READS = new Set<string>([
+  "worldlog.tail",
+  "inspector.snapshot",
+  "trace.tail",
+  "approval.list",
+  "scene.queryEntities",
+  "scene.inspect",
+  "skills.list",
+  "skills.search",
+  "skills.browse",
+  "skills.describe",
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -186,20 +207,43 @@ export class WorldRecorder {
       // post-invoke commit-back (below) can pin resolved identity into it.
       let cmd: SkillCommand | undefined;
       if (isHead) {
-        const tick = base.tick;
-        if (tick > rec.maxTick) rec.maxTick = tick;
-        const seq = rec.seq++;
-        cmd = {
-          kind: "skill",
-          seq,
-          tick,
-          tool: name,
-          input: input === undefined ? undefined : cloneInput(input),
-          actorId: base.agentId,
-          sessionId: base.sessionId,
-          perms: [...base.permissions].sort(),
-        };
-        rec.commands.push(cmd);
+        // Pure READ-ONLY skills are OBSERVATIONS, not authoring -- don't record them.
+        // The live editor polls worldlog.tail / inspector.snapshot / trace.tail every
+        // tick; recording each bloated the world log ~25x (2500+ reads vs ~100 real
+        // mutations in a dev session) and, with compactFlushed off, grew editor_host
+        // memory unbounded -- the long-running-host degradation. Read-only == every
+        // declared permission ends in ".read" (empty-perm introspection like
+        // worldlog.tail counts); this is the SAME predicate AuthoritativeServer uses to
+        // serve reads off the tick loop, so the two stay consistent. Unknown skills and
+        // anything with a non-".read" permission (incl. approval.*) are still recorded.
+        const def = registry.describe(name);
+        // Read-only iff (a) it is one of the known pure-read skills the editor polls
+        // that declare NO / privileged perms the perm test can't catch (worldlog.tail
+        // has [], approval.list needs `approval.review` yet mutates nothing), OR (b) it
+        // declares perms and they are ALL ".read". CRUCIAL: an EMPTY perm set does NOT
+        // imply read-only -- a skill can mutate purely via nested invokes (e.g. a skill
+        // whose handler re-invokes a mutating skill), so we never infer read-only from
+        // emptiness; unknown + empty-perm skills are conservatively RECORDED.
+        const readOnly = def !== undefined && (
+          RECORDER_SKIP_READS.has(name) ||
+          (def.permissions.length > 0 && def.permissions.every((p) => p.endsWith(".read")))
+        );
+        if (!readOnly) {
+          const tick = base.tick;
+          if (tick > rec.maxTick) rec.maxTick = tick;
+          const seq = rec.seq++;
+          cmd = {
+            kind: "skill",
+            seq,
+            tick,
+            tool: name,
+            input: input === undefined ? undefined : cloneInput(input),
+            actorId: base.agentId,
+            sessionId: base.sessionId,
+            perms: [...base.permissions].sort(),
+          };
+          rec.commands.push(cmd);
+        }
       }
       // `depth` governs the OPS proxy (a physics op is recorded iff issued OUTSIDE
       // any skill chain); increment it around the whole chain, decrement on settle.
