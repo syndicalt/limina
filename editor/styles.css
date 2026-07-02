@@ -226,11 +226,13 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .chat-attachment-chip img { width: 30px; height: 30px; object-fit: cover; border-radius: 5px; }
 .chat-chip-remove { border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
 .chat-chip-remove:hover { color: var(--text); }
-.chat-composer { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; align-items: end; padding: 10px; border-top: 1px solid var(--border); background: rgba(14, 17, 22, .78); }
+.chat-composer { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(106px, auto) auto; gap: 8px; align-items: end; padding: 10px; border-top: 1px solid var(--border); background: rgba(14, 17, 22, .78); }
 .chat-icon-btn { width: 32px; height: 32px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 18px; line-height: 1; transition: filter .15s ease, border-color .15s ease; }
 .chat-icon-btn:hover { filter: brightness(1.12); border-color: var(--accent); }
 .chat-input { width: 100%; min-height: 32px; max-height: 110px; resize: vertical; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; font: inherit; line-height: 1.35; }
 .chat-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+.chat-model-select { width: 112px; height: 32px; background: #11161d; color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 0 8px; font-size: 12px; font-family: var(--mono); }
+.chat-model-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
 .chat-send { height: 32px; }
 .chat-drop-overlay { position: absolute; inset: 9px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--accent); border-radius: 9px; background: color-mix(in srgb, var(--accent) 16%, rgba(14, 17, 22, .9)); color: var(--text); font-weight: 700; opacity: 0; pointer-events: none; transform: scale(.985); transition: opacity .14s ease, transform .14s ease; }
 .chat-window.chat-dragging .chat-drop-overlay { opacity: 1; transform: scale(1); }

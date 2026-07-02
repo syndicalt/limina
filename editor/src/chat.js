@@ -13,12 +13,30 @@ const el = (tag, cls, text) => {
 
 const chatPanel = $("chat");
 const chatBody = $("chat-body");
+const CHAT_MODEL_STORAGE_KEY = "limina.chat.model";
+const DEFAULT_CHAT_MODEL = "claude-haiku-4-5-20251001";
+const CHAT_MODELS = [
+  { label: "Haiku 4.5", value: DEFAULT_CHAT_MODEL },
+  { label: "Sonnet 5", value: "claude-sonnet-5" },
+  { label: "Opus 4.8", value: "claude-opus-4-8" },
+];
+const CHAT_MODEL_IDS = new Set(CHAT_MODELS.map((model) => model.value));
+
+function storedChatModel() {
+  try {
+    const value = localStorage.getItem(CHAT_MODEL_STORAGE_KEY);
+    return CHAT_MODEL_IDS.has(value) ? value : DEFAULT_CHAT_MODEL;
+  } catch {
+    return DEFAULT_CHAT_MODEL;
+  }
+}
 
 const state = {
   turns: new Map(),
   attachments: [],
   turnSeq: 0,
   activeDrag: 0,
+  model: storedChatModel(),
   chatTransport: undefined,
 };
 
@@ -259,9 +277,18 @@ function clearComposer() {
   renderPendingAttachments();
 }
 
+function setChatModel(model) {
+  state.model = CHAT_MODEL_IDS.has(model) ? model : DEFAULT_CHAT_MODEL;
+  try {
+    localStorage.setItem(CHAT_MODEL_STORAGE_KEY, state.model);
+  } catch {
+    // Storage is optional; the in-memory selection is still authoritative for this session.
+  }
+}
+
 async function sendChat({ text, attachments }) {
   const turnId = uid("turn");
-  const message = { turnId, text, attachments };
+  const message = { turnId, text, attachments, model: state.model };
   makeTurn("user", `${turnId}_user`, text, attachments);
   makeTurn("agent", turnId, "", []);
   await state.chatTransport.send(message);
@@ -373,6 +400,7 @@ function createLiveChatTransport(offlineTransport) {
           turnId: msg.turnId,
           text: msg.text,
           attachments: msg.attachments,
+          model: msg.model,
         });
       } catch (e) {
         chatError(msg.turnId, `chat/send failed: ${e?.message || e}`);
@@ -440,9 +468,19 @@ function buildChat() {
   input.id = "chat-input";
   input.rows = 1;
   input.placeholder = "Co-author with the build agent";
+  const model = el("select", "chat-model-select");
+  model.id = "chat-model";
+  model.title = "Model";
+  model.setAttribute("aria-label", "Chat model");
+  for (const optionModel of CHAT_MODELS) {
+    const option = el("option", null, optionModel.label);
+    option.value = optionModel.value;
+    option.selected = optionModel.value === state.model;
+    model.appendChild(option);
+  }
   const send = el("button", "btn chat-send", "Send");
   send.type = "submit";
-  composer.append(fileInput, attach, input, send);
+  composer.append(fileInput, attach, input, model, send);
   shell.append(log, attachments, composer, el("div", "chat-drop-overlay", "Drop files to attach"));
   chatBody.appendChild(shell);
 
@@ -455,6 +493,7 @@ function buildChat() {
     e.preventDefault();
     submitComposer();
   });
+  model.addEventListener("change", () => setChatModel(model.value));
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();

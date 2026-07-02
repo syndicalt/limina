@@ -36,6 +36,7 @@ import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
 import { resolveProfile } from "../../js/src/skills/permissions.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
+import type { ProviderMap } from "../../js/src/agents/systems.ts";
 
 const net = ops as unknown as NetOps;
 const PORT = 8787;
@@ -45,6 +46,24 @@ const EDITOR_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ];
+const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+const ALLOWED_ANTHROPIC_MODELS = new Set([
+  DEFAULT_ANTHROPIC_MODEL,
+  "claude-sonnet-5",
+  "claude-opus-4-8",
+]);
+
+function resolveAnthropicModel(requested: unknown): string {
+  if (typeof requested === "string" && ALLOWED_ANTHROPIC_MODELS.has(requested)) {
+    return requested;
+  }
+  const configured = ops.op_read_env("ANTHROPIC_MODEL");
+  return ALLOWED_ANTHROPIC_MODELS.has(configured) ? configured : DEFAULT_ANTHROPIC_MODEL;
+}
+
+function buildProviders(model: string, apiKey: string): ProviderMap {
+  return { anthropic: new AnthropicProvider(model, apiKey) };
+}
 
 // A minimal Transformable for headless spawns (no render-sync runs here).
 const STUB = { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
@@ -104,14 +123,14 @@ const server = new AuthoritativeServer(editorTransport, {
       return true;
     }
 
-    const model = ops.op_read_env("ANTHROPIC_MODEL") || "claude-haiku-4-5-20251001";
+    const model = resolveAnthropicModel(p.model);
     await ctx.reply({ ok: true, turnId: p.turnId });
     // Wire shape: JSON-RPC notification method is chat/<event>, params is the
     // full self-describing { type:"chat.<event>", turnId, ... } object.
     void runChatTurn({
       registry: server.registry,
       world: server.world,
-      providers: { anthropic: new AnthropicProvider(model, key) },
+      providers: buildProviders(model, key),
       tracer: server.registry.tracer,
       msg: { turnId: p.turnId, text: p.text, attachments: p.attachments },
       push: (m) => ctx.push(`chat/${m.type.split(".")[1]}`, m),
