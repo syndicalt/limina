@@ -66,9 +66,15 @@ function logLine(msg, kind = "info") {
   }
 }
 
+// `connected`: true | false, or the string "connecting" for the in-progress state.
 function setStatus(connected) {
   const dot = $("status-dot");
   const txt = $("status-text");
+  if (connected === "connecting") {
+    dot.className = "dot dot-connecting";
+    txt.textContent = "connecting…";
+    return;
+  }
   dot.className = "dot " + (connected ? "dot-on" : "dot-off");
   txt.textContent = connected ? "connected" : "disconnected";
 }
@@ -81,6 +87,7 @@ async function connect() {
   const profile = $("profile").value;
   const authToken = $("auth-token").value.trim() || undefined;
   disconnect();
+  setStatus("connecting");
   const client = new McpClient(url, authToken);
   client.onConnectionChange = setStatus;
   client.onSync = () => {}; // live transforms cached; World panel re-renders on poll
@@ -138,25 +145,43 @@ function stopPolling() {
 // Poll: incremental trace.tail (cursor), approval.list, periodic snapshot.
 // ---------------------------------------------------------------------------
 let snapshotTick = 0;
+// A panel is polled ONLY when it is open — a closed World/Reasoning/Approval/Team panel
+// costs nothing. Its loading spinner shows only while that panel's own fetch is in flight.
+const panelOpen = (id) => window.liminaWindows?.isOpen?.(id) ?? true;
+function setSpin(id, on) { const el = $(id + "-spin"); if (el) el.hidden = !on; }
 async function refreshAll() {
   const c = state.client;
-  if (!c) return;
+  if (!c || state.refreshing) return; // in-flight guard: opening a panel can also trigger a refresh
+  state.refreshing = true;
   try {
-    // Incremental trace via the afterSeq cursor. Small batch: the cursor keeps up under the
-    // self-scheduled loop, so we never need a huge tail (and a huge tail is what pins the
-    // server on JSON.stringify). If the cursor ever falls behind, it catches up over a few polls.
-    const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 120 });
-    if (tail && Array.isArray(tail.events)) {
-      ingestTraceEvents(state.events, tail.events);
-      if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
-      history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
+    // trace.tail feeds the Reasoning tree AND the Team roster AND the history timeline.
+    // Small incremental batch (the cursor keeps up under the self-scheduled loop; a huge tail
+    // is what pins the server on JSON.stringify). Poll only if one of those panels is open.
+    if (panelOpen("reasoning") || panelOpen("roster") || panelOpen("history")) {
+      const spins = ["reasoning", "roster"].filter(panelOpen);
+      spins.forEach((id) => setSpin(id, true));
+      try {
+        const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 120 });
+        if (tail && Array.isArray(tail.events)) {
+          ingestTraceEvents(state.events, tail.events);
+          if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
+          history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
+        }
+      } finally { spins.forEach((id) => setSpin(id, false)); }
     }
-    // Approval queue every poll (cheap, must stay fresh).
-    const list = await c.callTool("approval.list", {});
-    state.approvals = (list && list.pending) || [];
-    // World snapshot less often (heavier).
-    if (snapshotTick % 2 === 0) {
-      state.snapshot = await c.callTool("inspector.snapshot", { limit: 200 });
+    // Approval queue only when its panel is open.
+    if (panelOpen("approval")) {
+      setSpin("approval", true);
+      try {
+        const list = await c.callTool("approval.list", {});
+        state.approvals = (list && list.pending) || [];
+      } finally { setSpin("approval", false); }
+    }
+    // World snapshot only when its panel is open, and less often (it's the heaviest read).
+    if (panelOpen("world") && snapshotTick % 2 === 0) {
+      setSpin("world", true);
+      try { state.snapshot = await c.callTool("inspector.snapshot", { limit: 200 }); }
+      finally { setSpin("world", false); }
     }
     snapshotTick++;
     renderWorld();
@@ -165,8 +190,15 @@ async function refreshAll() {
     renderApprovals();
   } catch (e) {
     logLine("poll error: " + (e && e.message ? e.message : String(e)), "err");
+  } finally {
+    state.refreshing = false;
   }
 }
+
+// Opening a panel fetches its data immediately (with the in-flight guard, this never
+// overlaps the self-scheduled loop) so a just-opened panel shows its spinner + data at once
+// instead of waiting up to a full poll interval.
+window.addEventListener("limina:window-open", () => { if (state.client) void refreshAll(); });
 
 // ---------------------------------------------------------------------------
 // (a) WORLD panel.

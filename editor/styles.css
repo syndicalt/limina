@@ -42,6 +42,8 @@ input, select {
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .dot-on { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .dot-off { background: var(--muted); }
+.dot-connecting { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: dot-pulse 0.9s ease-in-out infinite; }
+@keyframes dot-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* buttons */
 .btn {
@@ -106,6 +108,12 @@ input, select {
 .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); }
 .panel-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+/* Per-panel loading indicator — shows only while THAT panel's own fetch is in flight. */
+.panel-spin { width: 11px; height: 11px; flex: none; border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent); border-top-color: var(--accent);
+  animation: panel-spin 0.7s linear infinite; }
+.panel-spin[hidden] { display: none; }
+@keyframes panel-spin { to { transform: rotate(360deg); } }
 .hint { color: var(--muted); font-size: 11px; font-family: var(--mono); }
 .panel-body { padding: 10px 12px; overflow: auto; flex: 1; }
 .count { background: var(--amber); color: #1c1402; border-radius: 10px; padding: 0 7px; font-size: 11px; margin-left: 4px; }

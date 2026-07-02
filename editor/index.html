@@ -71,12 +71,12 @@
     </nav>
 
     <section class="panel window" id="world" hidden>
-      <div class="panel-head" data-drag><h3>World</h3><button class="win-close" data-close="world" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>World</h3><span class="panel-spin" id="world-spin" hidden></span><button class="win-close" data-close="world" aria-label="Close">×</button></div>
       <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
     </section>
 
     <section class="panel window" id="roster" hidden>
-      <div class="panel-head" data-drag><h3>Team</h3><button class="win-close" data-close="roster" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>Team</h3><span class="panel-spin" id="roster-spin" hidden></span><button class="win-close" data-close="roster" aria-label="Close">×</button></div>
       <div class="panel-body" id="roster-body"><div class="muted">connect to begin</div></div>
     </section>
 
@@ -86,7 +86,7 @@
     </section>
 
     <section class="panel window" id="reasoning" hidden>
-      <div class="panel-head" data-drag><h3>Reasoning</h3><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>Reasoning</h3><span class="panel-spin" id="reasoning-spin" hidden></span><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
       <div class="panel-body" id="reason-body"><div class="muted">connect to begin</div></div>
     </section>
 
@@ -96,7 +96,7 @@
     </section>
 
     <section class="panel window" id="approval" hidden>
-      <div class="panel-head" data-drag><h3>Approval <span id="approval-count" class="count">0</span></h3><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button><button class="win-close" data-close="approval" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>Approval <span id="approval-count" class="count">0</span></h3><span class="panel-spin" id="approval-spin" hidden></span><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button><button class="win-close" data-close="approval" aria-label="Close">×</button></div>
       <div class="panel-body" id="approval-body"><div class="muted">connect to begin</div></div>
     </section>
 
