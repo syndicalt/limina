@@ -171,6 +171,35 @@ assert(ctrl.ticks === 60, `tick counter should read 60 after 60 ticks (got ${ctr
 }
 
 // ===========================================================================
+// 4b. BODYLESS static renderable — its authored pose must reach the SAB.
+// A scene.createEntity with no dynamic/static body has NO Rapier body; its pose
+// lives only in the ECS SoA. syncTransforms must stream that into the transform
+// SAB, else the render thread reads the default (0,0,0) slot and the entity renders
+// at the ORIGIN — exactly the offline-authored → reconnect re-author (loadWorld) bug.
+// It must also STAY put after a tick (no body → no simulation).
+// ===========================================================================
+{
+  const c = await buildController();
+  await c.loadWorld(authoringScript());
+  const rs = await c.loadWorld([
+    { kind: "skill", tool: "scene.createEntity", input: { shape: "sphere", size: 1, position: [7, 3, -5] }, perms: ["scene.write"] },
+  ]);
+  const entity = (rs[0] as { entity: string }).entity;
+  const eid = c.entities.resolve(entity)?.eid;
+  assert(eid !== undefined, "bodyless add must resolve to an eid");
+  assert(c.entities.resolve(entity)?.bodyId === undefined, "the entity must have NO physics body (bodyless)");
+  assert(
+    c.transforms.Position.x[eid] === 7 && c.transforms.Position.y[eid] === 3 && c.transforms.Position.z[eid] === -5,
+    `bodyless authored pose must reach the SAB (got ${c.transforms.Position.x[eid]},${c.transforms.Position.y[eid]},${c.transforms.Position.z[eid]} — pre-fix this was 0,0,0)`,
+  );
+  c.tick();
+  assert(
+    c.transforms.Position.x[eid] === 7 && c.transforms.Position.y[eid] === 3 && c.transforms.Position.z[eid] === -5,
+    `a bodyless (static) entity must not move after a tick (got ${c.transforms.Position.x[eid]},${c.transforms.Position.y[eid]},${c.transforms.Position.z[eid]})`,
+  );
+}
+
+// ===========================================================================
 // 5. TICK COUNTER — readable cross-instance via Atomics over the status SAB.
 // (When SAB is available this proves the render thread can poll progress.)
 // ===========================================================================
