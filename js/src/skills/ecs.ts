@@ -2,6 +2,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { createTransformStorage } from "../ecs/facade.ts";
+import { propagateTransform } from "../ecs/hierarchy.ts";
 import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
 
 function eidOf(ctx: ExecutionContext, entity: string): number | undefined {
@@ -34,6 +35,11 @@ const updateComponent: SkillDefinition<z.infer<typeof updateInput>, { ok: boolea
       storage.writeScale(eid, v[0], v[1], v[2]);
     }
     ctx.world.spatial?.invalidate();
+    // Scene hierarchy: if this entity has children, its transform change propagates to the
+    // whole subtree (parentWorld ∘ localOffset). No-op / cheap when it has no children.
+    if (ctx.world.entities.childrenOf(input.entity).length > 0) {
+      propagateTransform(ctx.world, input.entity);
+    }
     ctx.emit("ecs.component.updated", { entity: input.entity, component: input.component });
     return { ok: true };
   },

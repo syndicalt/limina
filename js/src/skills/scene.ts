@@ -2,11 +2,12 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
-import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { MAX_ENTITIES, Position, Rotation, Scale, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import { teardownEntity } from "./entity-teardown.ts";
 import { createMaterial, isMaterialName, MATERIAL_NAMES } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
+import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hierarchy.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -30,6 +31,9 @@ const createEntityInput = z.object({
   static: z.boolean().default(false),
   friction: z.number().min(0).max(10).default(0.5),
   restitution: z.number().min(0).max(2).default(0),
+  // Scene hierarchy: create this entity as a child of `parent` (an ent_ id). Its
+  // localOffset is captured from `position` (world) relative to the parent's world transform.
+  parent: z.string().optional(),
 });
 function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer<typeof createEntityInput>, { entity: string }> {
  return {
@@ -101,6 +105,11 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
     // to rebuild the mesh once this create command has been compacted out of the live log.
     const origin = { tool: "scene.createEntity", input: { ...input } };
     const entity = ctx.world.entities.create({ eid, mesh, bodyId, origin });
+    // Parent, if the referenced entity is live: capture the child's offset (its create
+    // position relative to the parent's world transform) so a later parent move propagates.
+    if (input.parent !== undefined && ctx.world.entities.resolve(input.parent) !== undefined) {
+      ctx.world.entities.setParent(entity, input.parent, computeLocalOffset(ctx.world, input.parent, eid));
+    }
     ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
     return { entity };
   },
@@ -126,6 +135,50 @@ const destroyEntity: SkillDefinition<z.infer<typeof destroyEntityInput>, { remov
     }
     ctx.emit("ecs.component.removed", { entity: input.entity, eid: entry.eid });
     return { removed: true };
+  },
+};
+
+const reparentInput = z.object({
+  entity: z.string(),
+  // The new parent's ent_ id, or null/omitted to unparent the entity back to the world root.
+  parent: z.string().nullable().optional(),
+  // Default true: the child stays visually in place and its offset is recomputed relative to
+  // the new parent (Godot's "keep global transform"). False: its current transform is
+  // reinterpreted as the offset under the new parent (it may jump).
+  keepWorldTransform: z.boolean().default(true),
+});
+const reparent: SkillDefinition<z.infer<typeof reparentInput>, { ok: boolean }> = {
+  name: "scene.reparent",
+  version: "1.0.0",
+  description: "Set or clear an entity's scene-hierarchy parent. keepWorldTransform (default true) keeps the child in place; parent=null unparents to the world root. Moving a parent later propagates to its children.",
+  category: "scene",
+  permissions: ["scene.write"],
+  input: reparentInput,
+  output: z.object({ ok: z.boolean() }),
+  handler: (input, ctx) => {
+    const entry = ctx.world.entities.resolve(input.entity);
+    if (entry === undefined) return { ok: false };
+    const parentId = input.parent ?? undefined;
+    if (parentId === undefined) {
+      ctx.world.entities.setParent(input.entity, undefined);
+      return { ok: true };
+    }
+    // Reject a missing parent or a cycle (parent must not be the entity or its descendant).
+    if (ctx.world.entities.resolve(parentId) === undefined) return { ok: false };
+    if (isAncestor(ctx.world, input.entity, parentId)) return { ok: false };
+    const offset = input.keepWorldTransform
+      ? computeLocalOffset(ctx.world, parentId, entry.eid)
+      : {
+        pos: [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]] as [number, number, number],
+        rot: [Rotation.x[entry.eid], Rotation.y[entry.eid], Rotation.z[entry.eid], Rotation.w[entry.eid]] as [number, number, number, number],
+        scale: [Scale.x[entry.eid], Scale.y[entry.eid], Scale.z[entry.eid]] as [number, number, number],
+      };
+    ctx.world.entities.setParent(input.entity, parentId, offset);
+    // keep-world is a no-op reposition; reinterpret-as-local moves the child. Propagate either
+    // way so the subtree is consistent (idempotent for keep-world).
+    propagateTransform(ctx.world, parentId);
+    ctx.emit("scene.reparented", { entity: input.entity, parent: parentId });
+    return { ok: true };
   },
 };
 
@@ -227,6 +280,7 @@ const inspectScene: SkillDefinition<
 export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
   registry.register(makeCreateEntity(materials));
   registry.register(destroyEntity);
+  registry.register(reparent);
   registry.register(queryEntities);
   registry.register(inspectScene);
 }
