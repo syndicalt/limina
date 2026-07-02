@@ -480,9 +480,19 @@ function buildChat() {
   }
   const send = el("button", "btn chat-send", "Send");
   send.type = "submit";
-  composer.append(fileInput, attach, input, model, send);
+  composer.append(fileInput, attach, input, send);
   shell.append(log, attachments, composer, el("div", "chat-drop-overlay", "Drop files to attach"));
   chatBody.appendChild(shell);
+
+  // The model select lives in the panel HEADER (right side, before the close
+  // button) so it never crowds the composer.
+  const chatHead = chatPanel?.querySelector(".panel-head");
+  if (chatHead) {
+    model.style.marginLeft = "auto";
+    const closeBtn = chatHead.querySelector(".win-close");
+    if (closeBtn) chatHead.insertBefore(model, closeBtn);
+    else chatHead.appendChild(model);
+  }
 
   attach.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
