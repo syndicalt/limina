@@ -100,7 +100,7 @@ async function connect() {
 }
 
 function disconnect() {
-  if (state.polling) { clearInterval(state.polling); state.polling = undefined; }
+  stopPolling();
   if (state.client) { state.client.close(); state.client = undefined; }
   if (state.agentClient) { state.agentClient.close(); state.agentClient = undefined; }
   state.events.clear();
@@ -109,10 +109,29 @@ function disconnect() {
   setStatus(false);
 }
 
+// SELF-SCHEDULING poll loop — the next poll is scheduled ms AFTER the previous one
+// FINISHES, never on a fixed timer. A fixed setInterval fires regardless of whether the
+// prior async refreshAll completed, so once a poll takes longer than the interval (a large
+// trace.tail batch on a busy host) the polls OVERLAP and compound into a request flood that
+// pegs the server on JSON.stringify and starves everything (chat included). Waiting for each
+// poll self-throttles: the client can never outrun the server.
 function startPolling() {
   const ms = Math.max(250, Number($("interval").value) || 1000);
-  if (state.polling) clearInterval(state.polling);
-  state.polling = setInterval(() => { void refreshAll(); }, ms);
+  stopPolling();
+  state.pollActive = true;
+  const loop = async () => {
+    if (!state.pollActive || !state.client) return;
+    try { await refreshAll(); } finally {
+      if (state.pollActive) state.pollTimer = setTimeout(() => { void loop(); }, ms);
+    }
+  };
+  void loop();
+}
+
+function stopPolling() {
+  state.pollActive = false;
+  if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = undefined; }
+  if (state.polling) { clearInterval(state.polling); state.polling = undefined; }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,8 +142,10 @@ async function refreshAll() {
   const c = state.client;
   if (!c) return;
   try {
-    // Incremental trace via the afterSeq cursor.
-    const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 500 });
+    // Incremental trace via the afterSeq cursor. Small batch: the cursor keeps up under the
+    // self-scheduled loop, so we never need a huge tail (and a huge tail is what pins the
+    // server on JSON.stringify). If the cursor ever falls behind, it catches up over a few polls.
+    const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 120 });
     if (tail && Array.isArray(tail.events)) {
       ingestTraceEvents(state.events, tail.events);
       if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;

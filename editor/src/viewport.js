@@ -487,11 +487,21 @@ window.addEventListener("blur", () => {
 });
 
 setStatus("waiting", "connect the panels to follow the authoring stream");
-const loop = setInterval(() => { void (state.client ? poll() : tryConnect()); }, 1000);
+// Self-scheduling loop (NOT a fixed setInterval): the next tick is scheduled AFTER the
+// current poll/reboot finishes, so a slow re-author can never overlap the next poll into a
+// compounding request flood that pegs the server.
+let viewportLoopStopped = false;
+const viewportTick = async () => {
+  if (viewportLoopStopped) return;
+  try { await (state.client ? poll() : tryConnect()); } finally {
+    if (!viewportLoopStopped) setTimeout(() => { void viewportTick(); }, 1000);
+  }
+};
+void viewportTick();
 // (The ☰ tools menu + floating windows are owned by editor/src/windows.js.)
 
 window.addEventListener("beforeunload", () => {
-  clearInterval(loop);
+  viewportLoopStopped = true;
   clearAgentHighlight();
   clearGizmo();
   try { state.running?.stop(); } catch { /* ignore */ }
