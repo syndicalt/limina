@@ -135,8 +135,8 @@ export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
  */
 export class SnapshotRing {
   private readonly stores: [SharedTransformStorage, SharedTransformStorage];
-  private readonly present: ReadonlySet<number>;
-  private readonly eids: number[];
+  private readonly present: Set<number>;
+  private eids: number[];
   private readonly scaleSrc: TransformStore;
   private which = 0;
 
@@ -155,6 +155,17 @@ export class SnapshotRing {
   /** The set of eids every snapshot carries (for `FrameInterpolator.interpolate`). */
   get presentSet(): ReadonlySet<number> {
     return this.present;
+  }
+
+  /** Add newly-authored eids to future freezes/interpolations without rebuilding
+   *  the viewport. Existing eids are ignored so command retries or multi-source
+   *  capture paths cannot duplicate per-frame work. */
+  addEids(newEids: Iterable<number>): void {
+    for (const eid of newEids) {
+      if (this.present.has(eid)) continue;
+      this.present.add(eid);
+      this.eids.push(eid);
+    }
   }
 
   /** Freeze the live SAB (`src`) into the next ping-pong store and return a snapshot.

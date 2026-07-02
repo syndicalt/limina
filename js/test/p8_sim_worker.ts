@@ -150,6 +150,33 @@ assert(ctrl.ticks === 60, `tick counter should read 60 after 60 ticks (got ${ctr
 {
   const c = await buildController();
   await c.loadWorld(authoringScript());
+  const before = c.entities.ids().length;
+  const rs = await c.loadWorld([
+    {
+      kind: "skill",
+      tool: "scene.createEntity",
+      input: { shape: "box", size: 1, position: [-3, 9, 4], dynamic: true, collider: "box" },
+      perms: ["scene.write"],
+    },
+  ]);
+  const entity = (rs[0] as { entity: string }).entity;
+  const eid = c.entities.resolve(entity)?.eid;
+  assert(eid !== undefined, "live structural add must resolve to an eid");
+  assert(c.entities.ids().length === before + 1, `live structural add should grow entity table from ${before} to ${before + 1}`);
+  assert(c.transforms.Position.x[eid] === -3, `live structural add did not sync SAB x (got ${c.transforms.Position.x[eid]})`);
+  assert(c.transforms.Position.y[eid] === 9, `live structural add did not sync SAB y (got ${c.transforms.Position.y[eid]})`);
+  assert(c.transforms.Position.z[eid] === 4, `live structural add did not sync SAB z (got ${c.transforms.Position.z[eid]})`);
+  c.tick();
+  assert(c.transforms.Position.y[eid] < 9, `live structural dynamic add did not enter simulation after a tick (y=${c.transforms.Position.y[eid]})`);
+}
+
+// ===========================================================================
+// 5. TICK COUNTER — readable cross-instance via Atomics over the status SAB.
+// (When SAB is available this proves the render thread can poll progress.)
+// ===========================================================================
+{
+  const c = await buildController();
+  await c.loadWorld(authoringScript());
   const statusView = new Int32Array(c.buffers.status, 0, 1);
   for (let i = 0; i < 10; i++) c.tick();
   const viaAtomics = typeof Atomics !== "undefined" && c.buffers.status instanceof SharedArrayBuffer
@@ -160,7 +187,7 @@ assert(ctrl.ticks === 60, `tick counter should read 60 after 60 ticks (got ${ctr
 }
 
 // ===========================================================================
-// 5. DISPOSE — controller teardown forwards to the wasm physics backend exactly
+// 6. DISPOSE — controller teardown forwards to the wasm physics backend exactly
 // once, so Rapier's wasm-side allocations are not left behind after worker stop.
 // ===========================================================================
 {
@@ -179,7 +206,7 @@ assert(ctrl.ticks === 60, `tick counter should read 60 after 60 ticks (got ${ctr
 }
 
 // ===========================================================================
-// 6. DETERMINISM — two fresh controllers + identical input script => byte-identical
+// 7. DETERMINISM — two fresh controllers + identical input script => byte-identical
 // SAB transforms after 60 ticks. Real wasm physics is deterministic, and each
 // controller writes its OWN transform SAB, so the two buffers must match exactly.
 // ===========================================================================

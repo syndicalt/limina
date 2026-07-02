@@ -430,6 +430,13 @@ export interface RunningLive {
 }
 
 const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial"]);
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn"]);
+
+function resultEntityId(result: unknown): string | undefined {
+  return typeof result === "object" && result !== null && typeof (result as { entity?: unknown }).entity === "string"
+    ? (result as { entity: string }).entity
+    : undefined;
+}
 
 function authoringFailureMessage(cmd: AuthorCommand, message: string): string {
   if (cmd.kind === "physics") return `authoring physics '${String(cmd.op)}' failed: ${message}`;
@@ -593,6 +600,34 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     authoredScale.Scale.y[eid] = Number(input.value[1]);
     authoredScale.Scale.z[eid] = Number(input.value[2]);
   };
+  const syncAuthoredScaleForEid = (eid: number): void => {
+    authoredScale.Scale.x[eid] = Scale.x[eid];
+    authoredScale.Scale.y[eid] = Scale.y[eid];
+    authoredScale.Scale.z[eid] = Scale.z[eid];
+  };
+  const seedJoinedTransformForEid = (eid: number): void => {
+    joined.Position.x[eid] = Position.x[eid];
+    joined.Position.y[eid] = Position.y[eid];
+    joined.Position.z[eid] = Position.z[eid];
+    joined.Rotation.x[eid] = Rotation.x[eid];
+    joined.Rotation.y[eid] = Rotation.y[eid];
+    joined.Rotation.z[eid] = Rotation.z[eid];
+    joined.Rotation.w[eid] = Rotation.w[eid];
+  };
+  const captureNewEids = (before: ReadonlySet<string>, result: unknown): number[] => {
+    const out: number[] = [];
+    const entity = resultEntityId(result);
+    if (entity !== undefined) {
+      const eid = entities.resolve(entity)?.eid;
+      if (eid !== undefined) out.push(eid);
+    }
+    for (const id of entities.ids()) {
+      if (before.has(id)) continue;
+      const eid = entities.resolve(id)?.eid;
+      if (eid !== undefined && !out.includes(eid)) out.push(eid);
+    }
+    return out;
+  };
 
   // ── M4 interpolation: tween the two latest frozen ticks into the render store
   //    (the world.ts SoA globals renderSyncSystem reads) each frame. ──
@@ -698,28 +733,60 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     pickEntityId,
     cameraControls,
     applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
-      let structural = 0;
+      const unsupportedStructuralTools: string[] = [];
+      let structuralAdds = 0;
       for (const cmd of cmds) {
-        if (cmd.kind === "skill" && !LIVE_IN_PLACE_SKILLS.has(cmd.tool)) structural++;
+        if (cmd.kind === "physics") {
+          unsupportedStructuralTools.push(`physics.${String(cmd.op)}`);
+          continue;
+        }
+        if (LIVE_IN_PLACE_SKILLS.has(cmd.tool)) continue;
+        if (LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)) structuralAdds++;
+        else unsupportedStructuralTools.push(cmd.tool);
       }
-      if (structural > 0) return { applied: 0, needsReboot: true, structural };
+      if (unsupportedStructuralTools.length > 0) {
+        console.warn(
+          "limina live authoring: structural command requires viewport reboot:",
+          [...new Set(unsupportedStructuralTools)].join(", "),
+        );
+        return { applied: 0, needsReboot: true, structural: structuralAdds + unsupportedStructuralTools.length };
+      }
 
-      const mutationCmds = cmds.filter((cmd): cmd is Extract<AuthorCommand, { kind: "skill" }> =>
-        cmd.kind === "skill" && LIVE_IN_PLACE_SKILLS.has(cmd.tool)
-      );
+      const workerCmds: AuthorCommand[] = [];
+      const addedEids: number[] = [];
       let applied = 0;
       for (const cmd of cmds) {
+        const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
+          ? new Set(entities.ids())
+          : undefined;
         const res = await applyOne(cmd);
         if (!res.success) {
           throw new Error(authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
         }
         syncAuthoredScaleMutation(cmd);
+        if (beforeIds !== undefined) {
+          const newEids = captureNewEids(beforeIds, res.result);
+          if (newEids.length === 0) {
+            throw new Error(authoringFailureMessage(cmd, "structural add produced no resolvable entity eid"));
+          }
+          for (const eid of newEids) {
+            syncAuthoredScaleForEid(eid);
+            seedJoinedTransformForEid(eid);
+            if (!addedEids.includes(eid)) addedEids.push(eid);
+          }
+        }
+        if (cmd.kind === "skill" && (LIVE_IN_PLACE_SKILLS.has(cmd.tool) || LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool))) {
+          workerCmds.push(cmd);
+        }
         applied++;
       }
-      if (mutationCmds.length > 0) {
-        worker.postMessage({ type: "applyCommands", commands: mutationCmds });
+      if (addedEids.length > 0) {
+        ring.addEids(addedEids);
       }
-      return { applied, needsReboot: false, structural: 0 };
+      if (workerCmds.length > 0) {
+        worker.postMessage({ type: "applyCommands", commands: workerCmds });
+      }
+      return { applied, needsReboot: false, structural: structuralAdds };
     },
     setCameraControlsEnabled: (on: boolean): void => {
       if (cameraControls !== undefined) cameraControls.enabled = on;
