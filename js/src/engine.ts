@@ -240,6 +240,15 @@ export interface EntityOrigin {
   input: Record<string, unknown>;
 }
 
+/** A child's transform relative to its parent, captured when the parent is set. The
+ *  world-space SoA stays authoritative; on a parent move, propagation recomputes the
+ *  child's world transform = parentWorld ∘ localOffset (js/src/ecs/hierarchy.ts). */
+export interface TransformOffset {
+  pos: [number, number, number];
+  rot: [number, number, number, number];
+  scale: [number, number, number];
+}
+
 export interface EntityEntry {
   eid: number;
   generation: number;
@@ -247,6 +256,10 @@ export interface EntityEntry {
   bodyId?: number;
   resource?: LoadedResourceMetadata;
   origin?: EntityOrigin;
+  /** Parent entity id (scene hierarchy). Root entities have none. */
+  parent?: string;
+  /** This entity's transform relative to `parent`, captured at parent-set time. */
+  localOffset?: TransformOffset;
 }
 
 /** The serializable identity slice of one entity-table entry. The mesh/resource
@@ -278,6 +291,9 @@ export class EntityTable {
    *  instead of a linear scan of every entry. `bodyId` is set once at `create`
    *  and never mutated on a live entry, so this stays consistent with `map`. */
   private readonly byBody = new Map<number, string>();
+  /** Reverse index `parent id -> set of child ids` (scene hierarchy), maintained
+   *  alongside `map` so children/subtree lookups are O(children) not O(world). */
+  private readonly byParent = new Map<string, Set<string>>();
   private seq = 0;
   private tableVersion = 0;
 
@@ -309,6 +325,26 @@ export class EntityTable {
     const entry = this.map.get(id);
     if (entry !== undefined) entry.origin = origin;
   }
+  /** Set (or move) a child's parent + captured local offset, maintaining the byParent
+   *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */
+  setParent(childId: string, parentId: string | undefined, localOffset?: TransformOffset): void {
+    const entry = this.map.get(childId);
+    if (entry === undefined) return;
+    if (entry.parent !== undefined) this.byParent.get(entry.parent)?.delete(childId);
+    entry.parent = parentId;
+    entry.localOffset = parentId === undefined ? undefined : localOffset;
+    if (parentId !== undefined) {
+      let set = this.byParent.get(parentId);
+      if (set === undefined) { set = new Set(); this.byParent.set(parentId, set); }
+      set.add(childId);
+    }
+    this.tableVersion++;
+  }
+  /** The direct child ids of `parentId` (empty if none). Order is insertion order. */
+  childrenOf(parentId: string): string[] {
+    const set = this.byParent.get(parentId);
+    return set === undefined ? [] : [...set];
+  }
   /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
    *  when no live entity owns that body. Replaces the per-call linear scan the
    *  collision/raycast skills used at scale. */
@@ -320,6 +356,11 @@ export class EntityTable {
     if (entry !== undefined) {
       this.map.delete(id);
       if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
+      // Keep the hierarchy index consistent: drop this id from its parent's child set
+      // and drop its own child set. Cascading the subtree is the caller's job (scene
+      // teardown), so any surviving children keep a now-dangling `parent` until then.
+      if (entry.parent !== undefined) this.byParent.get(entry.parent)?.delete(id);
+      this.byParent.delete(id);
       this.tableVersion++;
     }
     return entry;
@@ -345,6 +386,9 @@ export class EntityTable {
   restore(snapshot: EntityTableSnapshot): void {
     this.map.clear();
     this.byBody.clear();
+    // Parent relations are rebound by restoreSnapshot via setParent (like resource/origin),
+    // so start with an empty hierarchy index; setParent repopulates it.
+    this.byParent.clear();
     for (const entry of snapshot.entries) {
       this.map.set(entry.id, { eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
       if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, entry.id);

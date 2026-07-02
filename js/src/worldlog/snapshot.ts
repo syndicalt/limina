@@ -32,7 +32,7 @@
 
 import { Position, Rotation, Scale } from "../ecs/world.ts";
 import { $internal } from "../../build/bitecs.bundle.mjs";
-import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata } from "../engine.ts";
+import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata, TransformOffset } from "../engine.ts";
 import type { WorldContext } from "../skills/registry.ts";
 import {
   captureRandomState,
@@ -110,6 +110,10 @@ export interface SnapshotEntity {
    *  structural params (primitive shape/size/material) that live ONLY in the create
    *  command, so a bounded-tail viewer rebuilds the mesh without the original command. */
   origin?: EntityOrigin;
+  /** Scene-hierarchy parent (an ent_ id), when this entity is parented. */
+  parent?: string;
+  /** This entity's transform relative to `parent`, captured at parent-set time. */
+  localOffset?: TransformOffset;
 }
 
 /** A complete, self-contained world snapshot at a tick boundary. */
@@ -270,6 +274,8 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       tags: tagSet === undefined ? [] : [...tagSet].sort(),
       resource: world.entities.resolve(entry.id)?.resource,
       origin: world.entities.resolve(entry.id)?.origin,
+      parent: world.entities.resolve(entry.id)?.parent,
+      localOffset: world.entities.resolve(entry.id)?.localOffset,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -339,6 +345,9 @@ const snapshotEntitySchema = z.object({
   resource: resourceMetaSchema.optional(),
   // The create command; input is arbitrary skill params (passthrough — do not strip).
   origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
+  // Scene hierarchy: parent id + this entity's transform relative to it.
+  parent: z.string().optional(),
+  localOffset: z.object({ pos: vec3, rot: vec4, scale: vec3 }).optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -427,6 +436,7 @@ export function restoreSnapshot(
     if (e.tags.length > 0) world.tags.set(e.eid, new Set(e.tags));
     if (e.resource !== undefined) world.entities.bindResource(e.id, e.resource);
     if (e.origin !== undefined) world.entities.bindOrigin(e.id, e.origin);
+    if (e.parent !== undefined) world.entities.setParent(e.id, e.parent, e.localOffset);
   }
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
   //    native blob cannot carry (matched to live controllers by body id). The
