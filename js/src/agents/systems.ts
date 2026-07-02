@@ -249,6 +249,10 @@ export interface BoundedMultiTurnOptions {
   maxToolCalls: number;
   timeoutMs: number;
   maxTokens?: number;
+  /** The caller's direct instruction for this turn (e.g. the chat message), passed
+   *  straight to the provider instead of being scraped from perception (which the
+   *  per-tick event stream can crowd out on the live server). */
+  userMessage?: string;
   /** Tool EXPOSURE tier sent to the model each step. "bootstrap" advertises only the
    *  small core surface (+ skills.search/browse/describe for on-demand discovery) —
    *  keeps the request tiny and cheap even as the catalog grows; the agent can still
@@ -364,6 +368,7 @@ export async function runBoundedMultiTurn(
       perception: agent.perception,
       tools: registry.list(agentGrants(agent), { mode: options.toolMode ?? "full" }),
       previousResults: [...previousResults],
+      userMessage: options.userMessage,
     }, options.timeoutMs - elapsed(start));
     if (decision === "timeout") {
       return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };

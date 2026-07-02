@@ -114,6 +114,9 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
   try {
     await runBoundedMultiTurn(agent, opts.registry, opts.providers, opts.world, opts.tracer, {
       startTick: 0,
+      // Pass the user's message straight to the provider so it never depends on the
+      // perception event window (the live tick loop can flush the chat.user event).
+      userMessage: opts.msg.text,
       maxSteps: opts.limits?.maxSteps ?? 8,
       maxToolCalls: opts.limits?.maxToolCalls ?? 16,
       // Advertise only the small core surface (+ discovery skills) each step — keeps

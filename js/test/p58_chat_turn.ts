@@ -27,7 +27,7 @@ class BuildOneEntityProvider implements LLMProvider {
     this.calls++;
     if (this.calls === 1) {
       assert(req.systemPrompt.includes("author"), "system prompt should describe authoring");
-      assert(req.perception.recentEvents.some((e) => e.type.includes("Build a red cube")), "user chat text should seed perception");
+      assert(req.userMessage === "Build a red cube at 1,2,3.", "the chat text must reach the provider via req.userMessage (not only perception)");
       return Promise.resolve({
         text: "Creating a red cube.",
         toolCalls: [{

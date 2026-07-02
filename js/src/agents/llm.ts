@@ -11,6 +11,10 @@ export interface DecideRequest {
   perception: Perception;
   tools: MCPTool[];
   previousResults: unknown[];
+  /** The caller's direct instruction for this turn (e.g. the chat message). Passed
+   *  explicitly rather than scraped from perception.recentEvents, which the live
+   *  server's per-tick event stream can crowd out. Preferred when present. */
+  userMessage?: string;
 }
 
 export interface LLMProvider {
@@ -214,12 +218,14 @@ function decodeAnthropicToolName(name: string): string {
   return name.replaceAll("__", ".");
 }
 
-/** Build the user message: lead with the human's plain-language instruction
- *  (extracted from the perception's `chat.user:` events), plus prior tool results
- *  for multi-step turns. Sending the raw perception JSON as the message made the
- *  model treat it as data and merely acknowledge; a natural instruction makes it
- *  CALL skills. The model can query scene state via read skills when it needs to. */
+/** Build the user message: lead with the human's plain-language instruction, plus
+ *  prior tool results for multi-step turns. The instruction comes from
+ *  `req.userMessage` when present (passed explicitly); the perception `chat.user:`
+ *  scrape is only a fallback for callers that don't set it. Sending raw perception
+ *  JSON made the model treat it as data and merely acknowledge; a natural
+ *  instruction makes it CALL skills. It can query scene state via read skills. */
 function buildAnthropicUserMessage(req: DecideRequest): string {
+  const direct = typeof req.userMessage === "string" ? req.userMessage.trim() : "";
   const events = Array.isArray(req.perception?.recentEvents) ? req.perception.recentEvents : [];
   const instructions: string[] = [];
   for (const ev of events) {
@@ -228,7 +234,9 @@ function buildAnthropicUserMessage(req: DecideRequest): string {
       instructions.push(t.slice("chat.user:".length).trim());
     }
   }
-  const request = instructions.length > 0 ? instructions.join("\n") : "Continue the previous work.";
+  const request = direct.length > 0
+    ? direct
+    : (instructions.length > 0 ? instructions.join("\n") : "Continue the previous work.");
   const parts = [
     `User request:\n${request}`,
     "",
