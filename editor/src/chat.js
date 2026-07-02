@@ -15,11 +15,14 @@ const chatPanel = $("chat");
 const chatBody = $("chat-body");
 const CHAT_MODEL_STORAGE_KEY = "limina.chat.model";
 const DEFAULT_CHAT_MODEL = "claude-haiku-4-5-20251001";
-const CHAT_MODELS = [
+export const CHAT_MODELS = [
   { label: "Haiku 4.5", value: DEFAULT_CHAT_MODEL },
   { label: "Sonnet 5", value: "claude-sonnet-5" },
   { label: "Opus 4.8", value: "claude-opus-4-8" },
 ];
+// Fired whenever the built-in agent's model changes from EITHER picker (chat header or Settings),
+// so the other picker stays in sync — both are views of the same localStorage["limina.chat.model"].
+export const CHAT_MODEL_CHANGE_EVENT = "limina:chat-model-change";
 const CHAT_MODEL_IDS = new Set(CHAT_MODELS.map((model) => model.value));
 
 function storedChatModel() {
@@ -277,13 +280,24 @@ function clearComposer() {
   renderPendingAttachments();
 }
 
-function setChatModel(model) {
+export function setChatModel(model) {
   state.model = CHAT_MODEL_IDS.has(model) ? model : DEFAULT_CHAT_MODEL;
   try {
     localStorage.setItem(CHAT_MODEL_STORAGE_KEY, state.model);
   } catch {
     // Storage is optional; the in-memory selection is still authoritative for this session.
   }
+}
+
+/** The built-in agent's current model (shared by the chat header + Settings pickers). */
+export function currentChatModel() {
+  return state.model;
+}
+
+// Broadcast a model change so the OTHER picker updates. Called by whichever picker the user touched.
+function broadcastChatModel(model) {
+  setChatModel(model);
+  window.dispatchEvent(new CustomEvent(CHAT_MODEL_CHANGE_EVENT, { detail: { model: state.model } }));
 }
 
 async function sendChat({ text, attachments }) {
@@ -503,7 +517,12 @@ function buildChat() {
     e.preventDefault();
     submitComposer();
   });
-  model.addEventListener("change", () => setChatModel(model.value));
+  model.addEventListener("change", () => broadcastChatModel(model.value));
+  // Keep the header picker in sync when the model is changed from Settings.
+  window.addEventListener(CHAT_MODEL_CHANGE_EVENT, (e) => {
+    const next = e.detail?.model;
+    if (next && model.value !== next) model.value = next;
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();

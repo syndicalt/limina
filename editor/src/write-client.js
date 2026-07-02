@@ -51,6 +51,13 @@ export async function writeUpdate(entity, component, value) {
   return result;
 }
 
+export async function destroyEntity(entity) {
+  const client = await ensureWriter();
+  const result = await client.callTool("scene.destroyEntity", { entity });
+  if (!result || result.removed !== true) throw new Error(`scene.destroyEntity returned removed=false for ${entity}`);
+  return result;
+}
+
 export function resetWriter() {
   state.client = undefined;
   state.connecting = undefined;

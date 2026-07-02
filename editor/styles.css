@@ -53,6 +53,8 @@ input, select {
 .btn-small { padding: 3px 9px; font-size: 11px; }
 .btn-approve { background: var(--green); color: #06210d; }
 .btn-reject { background: var(--red); color: #2a0606; }
+.btn-danger { background: transparent; color: var(--red); border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border)); }
+.btn-danger:hover { background: color-mix(in srgb, var(--red) 16%, transparent); filter: none; }
 
 /* stage: the viewport IS the app — it fills the whole area; the tools float over it */
 .stage { flex: 1; position: relative; min-height: 0; background: var(--bg); }
@@ -125,6 +127,29 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .tags { display: flex; gap: 4px; margin-left: auto; }
 .tag { background: #233042; color: var(--accent); border-radius: 4px; padding: 1px 6px; font-size: 10px; }
 
+/* Team roster — one row per active builder, colored by its shared cue color */
+.roster-row { gap: 8px; }
+.roster-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; box-shadow: 0 0 6px rgba(0, 0, 0, .45); }
+.roster-name { color: var(--text); }
+.roster-action { margin-left: 4px; }
+.roster-status { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; border-radius: 4px; padding: 1px 6px; }
+.roster-status-building { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); }
+.roster-status-idle { color: var(--muted); background: var(--panel-2); }
+
+/* Settings popover — gear in the top bar (mirrors the ☰ tools menu chrome) */
+.settings-toggle { padding: 4px 9px; font-size: 14px; line-height: 1; }
+.settings-popover {
+  position: absolute; top: 46px; right: 14px; z-index: 1000000; min-width: 230px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+  background: rgba(22, 27, 34, .97); box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.settings-popover[hidden] { display: none; }
+.settings-row { display: flex; align-items: center; gap: 10px; }
+.settings-label { color: var(--dim); flex: none; width: 74px; }
+.settings-input { flex: 1; min-width: 0; }
+.settings-check { flex: none; margin-left: auto; }
+
 /* Inspector take-control form */
 .take-form { display: flex; flex-direction: column; gap: 10px; }
 .take-entity { color: var(--text); }
@@ -135,7 +160,7 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .take-fieldset legend { color: var(--dim); font-size: 11px; padding: 0 4px; }
 .take-fieldset label { color: var(--dim); display: flex; align-items: center; gap: 4px; min-width: 0; }
 .take-fieldset input { width: 100%; min-width: 0; font-family: var(--mono); }
-.take-actions { display: flex; justify-content: flex-end; }
+.take-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .take-status { color: var(--dim); font-size: 11px; min-height: 16px; }
 .take-status-ok { color: var(--green); }
 .take-status-warn { color: var(--amber); }

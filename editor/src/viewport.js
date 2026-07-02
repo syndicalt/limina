@@ -16,7 +16,24 @@
 
 import { runLive, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { McpClient } from "./mcp-client.js";
-import { resetWriter, writeUpdate } from "./write-client.js";
+import { destroyEntity, resetWriter, writeUpdate } from "./write-client.js";
+
+// Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
+// color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
+// builder reads as the same color in every surface. Stable hash of the agentId -> palette slot.
+const CUE_PALETTE = [0x4aa3ff, 0x3fb950, 0xd29922, 0xa371f7, 0xf778ba];
+export function cueColorFor(agentId) {
+  const s = String(agentId ?? "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return CUE_PALETTE[h % CUE_PALETTE.length];
+}
+
+// Builder cues on/off (Settings toggles this via localStorage). Default ON.
+const CUES_STORAGE_KEY = "limina.editor.cues";
+function cuesEnabled() {
+  try { return localStorage.getItem(CUES_STORAGE_KEY) !== "off"; } catch { return true; }
+}
 
 const canvas = document.getElementById("editor-viewport");
 const statusEl = document.getElementById("viewport-status");
@@ -79,8 +96,9 @@ const state = {
   selected: undefined,
   ctrlRotateDown: false,
   ctrlRotateActive: false,
-  agentHighlight: undefined,
-  agentHighlightTimeout: undefined,
+  // Per-builder cues: agentId -> { helper, entityId, timeout }. Each builder's cue auto-clears
+  // independently after 1500ms; a single shared RAF loop keeps every helper glued to its mesh.
+  agentHighlights: new Map(),
   agentHighlightFrame: undefined,
 };
 const raycaster = new THREE.Raycaster();
@@ -126,7 +144,7 @@ async function poll() {
         } else {
           state.dirty = true;
         }
-        showLastAgentTarget(authorCmds);
+        showActiveAgentTargets(authorCmds);
       }
       if (typeof res.next === "number") state.cursor = res.next;
       if (state.dirty && !state.rebooting) await reboot();
@@ -157,52 +175,65 @@ function stopAgentHighlightLoop() {
 function startAgentHighlightLoop() {
   if (state.agentHighlightFrame !== undefined) return;
   const tick = () => {
-    const highlight = state.agentHighlight;
-    if (!highlight) {
+    if (state.agentHighlights.size === 0) {
       state.agentHighlightFrame = undefined;
       return;
     }
-    highlight.helper.update();
+    for (const entry of state.agentHighlights.values()) entry.helper.update();
     state.agentHighlightFrame = requestAnimationFrame(tick);
   };
   state.agentHighlightFrame = requestAnimationFrame(tick);
 }
 
-function clearAgentHighlight() {
-  if (state.agentHighlightTimeout !== undefined) {
-    clearTimeout(state.agentHighlightTimeout);
-    state.agentHighlightTimeout = undefined;
-  }
-  stopAgentHighlightLoop();
-  const helper = state.agentHighlight?.helper;
+function disposeHighlightEntry(entry) {
+  if (!entry) return;
+  if (entry.timeout !== undefined) clearTimeout(entry.timeout);
+  const helper = entry.helper;
   if (helper) {
     try { helper.parent?.remove(helper); } catch { /* ignore */ }
     try { helper.geometry?.dispose?.(); } catch { /* ignore */ }
     try { disposeMaterial(helper.material); } catch { /* ignore */ }
   }
-  state.agentHighlight = undefined;
 }
 
-function refreshAgentHighlightTimeout() {
-  if (state.agentHighlightTimeout !== undefined) clearTimeout(state.agentHighlightTimeout);
-  state.agentHighlightTimeout = setTimeout(() => {
-    clearAgentHighlight();
-  }, 1500);
+// Clear ALL builders' cues (reboot / deselect / teardown).
+function clearAgentHighlight() {
+  for (const entry of state.agentHighlights.values()) disposeHighlightEntry(entry);
+  state.agentHighlights.clear();
+  stopAgentHighlightLoop();
 }
 
-function showAgentHighlight(entityId) {
+// Clear one builder's cue (its independent 1500ms timeout fired).
+function clearAgentHighlightFor(agentId) {
+  const entry = state.agentHighlights.get(agentId);
+  if (!entry) return;
+  disposeHighlightEntry(entry);
+  state.agentHighlights.delete(agentId);
+  if (state.agentHighlights.size === 0) stopAgentHighlightLoop();
+}
+
+function refreshAgentHighlightTimeout(agentId) {
+  const entry = state.agentHighlights.get(agentId);
+  if (!entry) return;
+  if (entry.timeout !== undefined) clearTimeout(entry.timeout);
+  entry.timeout = setTimeout(() => clearAgentHighlightFor(agentId), 1500);
+}
+
+function showAgentHighlight(agentId, entityId) {
   const running = state.running;
   const entry = running?.entities?.resolve?.(entityId);
   if (!running?.scene || !entry?.mesh) return;
-  if (state.agentHighlight?.entityId !== entityId) {
-    clearAgentHighlight();
-    const helper = new THREE.BoxHelper(entry.mesh, 0xffb020);
+  let cue = state.agentHighlights.get(agentId);
+  if (!cue || cue.entityId !== entityId) {
+    if (cue) disposeHighlightEntry(cue);
+    const helper = new THREE.BoxHelper(entry.mesh, cueColorFor(agentId));
     helper.raycast = () => {};
     running.scene.add(helper);
-    state.agentHighlight = { entityId, helper };
+    cue = { entityId, helper, timeout: undefined };
+    state.agentHighlights.set(agentId, cue);
   }
-  state.agentHighlight.helper.update();
-  refreshAgentHighlightTimeout();
+  cue.helper.update();
+  refreshAgentHighlightTimeout(agentId);
   startAgentHighlightLoop();
 }
 
@@ -212,12 +243,15 @@ function showAgentHighlight(entityId) {
 // back via worldlog.tail). Neither should trigger the "an agent is working here" cue.
 const SELF_ACTOR_IDS = new Set(["human", "editor_writer"]);
 
-function showLastAgentTarget(commands) {
-  let target;
+// Highlight the LAST entity each non-self builder touched in this batch, one colored cue per
+// builder — so a coordinated team is legible (who is working where) rather than a single shared mark.
+function showActiveAgentTargets(commands) {
+  if (!cuesEnabled()) { clearAgentHighlight(); return; }
+  const lastByAgent = new Map();
   for (const cmd of commands) {
-    if (!SELF_ACTOR_IDS.has(cmd.agentId) && cmd.input?.entity) target = cmd.input.entity;
+    if (!SELF_ACTOR_IDS.has(cmd.agentId) && cmd.input?.entity) lastByAgent.set(cmd.agentId, cmd.input.entity);
   }
-  if (target) showAgentHighlight(target);
+  for (const [agentId, entityId] of lastByAgent) showAgentHighlight(agentId, entityId);
 }
 
 function clearGizmo() {
@@ -425,6 +459,22 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "w") controls.setMode("translate");
   else if (event.key === "e") controls.setMode("rotate");
   else if (event.key === "r") controls.setMode("scale");
+});
+// Delete / Backspace destroys the selected entity (immediate — the world log records the destroy,
+// which is the recovery path). Guarded by isTextInputTarget so it never fires while typing in chat
+// or an inspector field. The recorded destroy re-authors back through poll() and drops the mesh.
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Delete" && event.key !== "Backspace") return;
+  if (isTextInputTarget(event.target)) return;
+  const selected = state.selected;
+  if (!selected) return;
+  event.preventDefault();
+  const id = selected.id;
+  deselectEntity();
+  destroyEntity(id).catch((e) => {
+    resetWriter();
+    surfaceViewportWarning("destroy failed", e);
+  });
 });
 window.addEventListener("keyup", (event) => {
   if (event.key !== "Control") return;

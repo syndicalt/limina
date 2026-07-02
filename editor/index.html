@@ -24,6 +24,25 @@
       <button id="connect" class="btn">Connect</button>
       <button id="disconnect" class="btn btn-ghost">Disconnect</button>
       <span class="status"><span id="status-dot" class="dot dot-off"></span><span id="status-text">disconnected</span></span>
+      <button id="settings-toggle" class="btn btn-ghost settings-toggle" title="Settings" aria-label="Settings">⚙</button>
+      <div class="settings-popover panel" id="settings-popover" hidden>
+        <div class="settings-row">
+          <label class="settings-label" for="settings-model">Model</label>
+          <select id="settings-model" class="settings-input"></select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="settings-cues">Builder cues</label>
+          <input id="settings-cues" class="settings-check" type="checkbox" />
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="settings-default-url">Server</label>
+          <input id="settings-default-url" class="settings-input" type="text" />
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="settings-default-interval">Poll ms</label>
+          <input id="settings-default-interval" class="settings-input" type="number" min="250" step="250" />
+        </div>
+      </div>
     </div>
   </header>
 
@@ -43,6 +62,7 @@
     <button class="tools-toggle" id="tools-toggle" title="Tools" aria-label="Tools menu">☰</button>
     <nav class="tools-menu" id="tools-menu" hidden>
       <button data-target="world">World</button>
+      <button data-target="roster">Team</button>
       <button data-target="inspector">Inspector</button>
       <button data-target="reasoning">Reasoning</button>
       <button data-target="history">History</button>
@@ -53,6 +73,11 @@
     <section class="panel window" id="world" hidden>
       <div class="panel-head" data-drag><h3>World</h3><button class="win-close" data-close="world" aria-label="Close">×</button></div>
       <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
+    </section>
+
+    <section class="panel window" id="roster" hidden>
+      <div class="panel-head" data-drag><h3>Team</h3><button class="win-close" data-close="roster" aria-label="Close">×</button></div>
+      <div class="panel-body" id="roster-body"><div class="muted">connect to begin</div></div>
     </section>
 
     <section class="panel window" id="inspector" hidden>

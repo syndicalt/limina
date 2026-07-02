@@ -9,8 +9,10 @@
 // live entity transforms between snapshots).
 
 import { McpClient, McpError } from "./mcp-client.js";
-import { buildForest, groupByActor, eventKind } from "./reasoning.js";
+import { buildForest, groupByActor, eventKind, isIntrospectionEvent } from "./reasoning.js";
 import { createHistoryPanel } from "./history.js";
+import { cueColorFor } from "./viewport.js";
+import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -137,6 +139,7 @@ async function refreshAll() {
     }
     snapshotTick++;
     renderWorld();
+    renderRoster();
     renderReasoning();
     renderApprovals();
   } catch (e) {
@@ -193,6 +196,80 @@ function renderWorld() {
     }
     root.appendChild(at);
   }
+}
+
+// ---------------------------------------------------------------------------
+// (a2) TEAM roster — the coordinated builder team, made legible. A builder is any
+// non-system actor that authored a skill (from the trace we already poll). Each row
+// shows the builder's cue color (shared with the viewport via cueColorFor), its name,
+// a human label for its last action, and a building/idle status derived from recency.
+// ---------------------------------------------------------------------------
+const SYSTEM_ACTORS = new Set(["editor_host", "viewport_follower", "human_editor", "human", "editor_writer"]);
+
+// Map raw skill/tool names to friendly verbs — the UI never surfaces internal tool names.
+const ROSTER_VERBS = {
+  "scene.createEntity": "placed a shape",
+  "asset.place": "placed an asset",
+  "ecs.updateComponent": "moved an entity",
+  "world.generateRegion": "shaped terrain",
+  "scene.destroyEntity": "removed an entity",
+  "three.setMaterial": "restyled a surface",
+  "player.spawn": "spawned the player",
+};
+function rosterVerb(skill) { return ROSTER_VERBS[skill] || "editing"; }
+
+// A builder is "building" if it authored something within the last few polls, else "idle".
+const ROSTER_IDLE_POLLS = 3;
+const rosterActivity = new Map(); // actorId -> { lastId, activeTick }
+let rosterTick = 0;
+
+function hexColor(value) {
+  return "#" + (value >>> 0).toString(16).padStart(6, "0");
+}
+
+function rosterRow(actor, skill, building) {
+  const row = el("div", "row roster-row");
+  const swatch = el("span", "roster-swatch");
+  swatch.style.background = hexColor(cueColorFor(actor));
+  row.appendChild(swatch);
+  row.appendChild(el("span", "roster-name mono", actor));
+  row.appendChild(el("span", "roster-action dim", rosterVerb(skill)));
+  // Status slot. Derived from activity for now. TODO(question-channel): there is no
+  // editor-readable signal for a builder's question yet (that channel is the user's own
+  // agent's subagent mechanism), so a "waiting on coordinator" state + read-only question
+  // text would attach HERE once such a signal exists — do not fabricate one.
+  const status = el("span", "roster-status " + (building ? "roster-status-building" : "roster-status-idle"));
+  status.textContent = building ? "building" : "idle";
+  row.appendChild(status);
+  return row;
+}
+
+function renderRoster() {
+  const root = $("roster-body");
+  if (!root) return;
+  rosterTick++;
+  // Last authored skill per non-system builder (Map preserves insertion order → last write wins).
+  const byActor = new Map();
+  for (const ev of state.events.values()) {
+    if (ev.type !== "skill.executed" || isIntrospectionEvent(ev)) continue;
+    const skill = ev.payload?.skill;
+    const actor = ev.actorId;
+    if (!skill || !actor || SYSTEM_ACTORS.has(actor)) continue;
+    byActor.set(actor, { skill, id: ev.id });
+  }
+  root.innerHTML = "";
+  if (byActor.size === 0) {
+    root.appendChild(el("div", "muted", "no builders active"));
+    return;
+  }
+  const list = el("div", "list");
+  for (const [actor, info] of [...byActor.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const prev = rosterActivity.get(actor);
+    if (!prev || prev.lastId !== info.id) rosterActivity.set(actor, { lastId: info.id, activeTick: rosterTick });
+    const building = rosterTick - rosterActivity.get(actor).activeTick <= ROSTER_IDLE_POLLS;
+    list.appendChild(rosterRow(actor, info.skill, building));
+  }
+  root.appendChild(list);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,4 +470,79 @@ $("disconnect").onclick = () => { disconnect(); logLine("disconnected", "warn");
 $("propose").onclick = () => void proposeTestEdit();
 $("propose-move").onclick = () => void proposeAgentMove();
 $("interval").onchange = () => { if (state.client) startPolling(); };
+
+// ---------------------------------------------------------------------------
+// Settings popover — shared model default (synced with the chat header picker), the
+// builder-cues toggle (viewport reads it), and connection DEFAULTS that prefill the
+// top-bar #url / #interval on load. The top-bar connect/token stay the live path.
+// ---------------------------------------------------------------------------
+const SETTINGS_CUES_KEY = "limina.editor.cues";
+const SETTINGS_URL_KEY = "limina.editor.serverUrl";
+const SETTINGS_INTERVAL_KEY = "limina.editor.pollInterval";
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage optional */ } };
+
+function setupSettings() {
+  const toggle = $("settings-toggle");
+  const popover = $("settings-popover");
+  if (!toggle || !popover) return;
+
+  // Connection defaults prefill the top-bar inputs (which hold the live values).
+  const urlInput = $("url");
+  const intervalInput = $("interval");
+  const storedUrl = lsGet(SETTINGS_URL_KEY);
+  const storedInterval = lsGet(SETTINGS_INTERVAL_KEY);
+  if (storedUrl && urlInput) urlInput.value = storedUrl;
+  if (storedInterval && intervalInput) intervalInput.value = storedInterval;
+
+  const settingsUrl = $("settings-default-url");
+  const settingsInterval = $("settings-default-interval");
+  if (settingsUrl && urlInput) settingsUrl.value = urlInput.value;
+  if (settingsInterval && intervalInput) settingsInterval.value = intervalInput.value;
+  settingsUrl?.addEventListener("change", () => {
+    const v = settingsUrl.value.trim();
+    lsSet(SETTINGS_URL_KEY, v);
+    if (urlInput) urlInput.value = v;
+  });
+  settingsInterval?.addEventListener("change", () => {
+    const v = settingsInterval.value.trim();
+    lsSet(SETTINGS_INTERVAL_KEY, v);
+    if (intervalInput) { intervalInput.value = v; if (state.client) startPolling(); }
+  });
+
+  // Model default — shares state with the chat header picker via setChatModel + the change event.
+  const modelSelect = $("settings-model");
+  if (modelSelect) {
+    modelSelect.innerHTML = "";
+    for (const m of CHAT_MODELS) {
+      const opt = el("option", null, `Claude · ${m.label}`);
+      opt.value = m.value;
+      opt.selected = m.value === currentChatModel();
+      modelSelect.appendChild(opt);
+    }
+    modelSelect.addEventListener("change", () => {
+      setChatModel(modelSelect.value);
+      window.dispatchEvent(new CustomEvent(CHAT_MODEL_CHANGE_EVENT, { detail: { model: modelSelect.value } }));
+    });
+    window.addEventListener(CHAT_MODEL_CHANGE_EVENT, (e) => {
+      const next = e.detail?.model;
+      if (next && modelSelect.value !== next) modelSelect.value = next;
+    });
+  }
+
+  // Builder cues toggle (default on ⇒ checked unless explicitly "off").
+  const cues = $("settings-cues");
+  if (cues) {
+    cues.checked = lsGet(SETTINGS_CUES_KEY) !== "off";
+    cues.addEventListener("change", () => lsSet(SETTINGS_CUES_KEY, cues.checked ? "on" : "off"));
+  }
+
+  // Open/close (mirrors the ☰ tools menu): gear toggles; a click elsewhere closes.
+  toggle.addEventListener("click", (e) => { e.stopPropagation(); popover.hidden = !popover.hidden; });
+  document.addEventListener("click", (e) => {
+    if (!popover.hidden && !popover.contains(e.target) && e.target !== toggle) popover.hidden = true;
+  });
+}
+setupSettings();
+
 logLine("ready — set the server URL and Connect (run editor/server/editor_host.ts for the gate-enabled server)", "info");

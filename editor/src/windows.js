@@ -14,6 +14,7 @@ if (menuBtn && menu && stage) {
     world: { left: 16, top: 60 },
     reasoning: { left: 392, top: 60 },
     inspector: { left: 768, top: 60 },
+    roster: { left: 204, top: 222 },
     history: { left: 16, top: 384 },
     approval: { left: 392, top: 384 },
     chat: { left: 768, top: 384 },

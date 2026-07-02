@@ -2,7 +2,7 @@
 // transform, apply it optimistically to the live viewport, then write through the
 // shared builder.readWrite MCP write path.
 
-import { closeWriter, ensureWriter, resetWriter, writeUpdate } from "./write-client.js";
+import { closeWriter, destroyEntity, ensureWriter, resetWriter, writeUpdate } from "./write-client.js";
 import { applyOptimisticUpdate, reconcileViewport, surfaceViewportWarning } from "./viewport.js";
 
 const worldBody = document.getElementById("world-body");
@@ -122,6 +122,12 @@ function renderInspector() {
   apply.textContent = "Apply";
   apply.addEventListener("click", () => { void applyEdits(); });
   actions.appendChild(apply);
+  const del = document.createElement("button");
+  del.className = "btn btn-small btn-danger";
+  del.type = "button";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => { void deleteEntity(); });
+  actions.appendChild(del);
   form.appendChild(actions);
 
   const status = document.createElement("div");
@@ -189,6 +195,28 @@ async function applyEdits() {
     surfaceViewportWarning("take-control apply failed", e);
     setStatus("failed: " + message, "err");
     await reconcileViewport();
+  }
+}
+
+async function deleteEntity() {
+  if (!state.entity) {
+    setStatus("select an entity first", "warn");
+    return;
+  }
+  const entity = state.entity;
+  try {
+    setStatus("deleting...", "info");
+    await ensureWriter();
+    await destroyEntity(entity);
+    console.info("take-control destroyed", { entity });
+    state.entity = undefined;
+    highlightSelectedRow();
+    renderInspector();
+  } catch (e) {
+    resetWriter();
+    const message = e && e.message ? e.message : String(e);
+    surfaceViewportWarning("take-control delete failed", e);
+    setStatus("failed: " + message, "err");
   }
 }
 

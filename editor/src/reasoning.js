@@ -45,6 +45,12 @@ const INTROSPECTION = new Set([
 ]);
 const isIntrospection = (e) => e.type === "skill.executed" && INTROSPECTION.has(e.payload?.skill);
 
+/** True for a read-only introspection skill event (worldlog.tail, inspector.snapshot, …). The
+ *  roster uses this to exclude polling infrastructure from the "who authored a skill" builder set. */
+export function isIntrospectionEvent(e) {
+  return isIntrospection(e);
+}
+
 export function buildForest(events) {
   events = events.filter((e) => !isIntrospection(e));
   const byId = new Map();
