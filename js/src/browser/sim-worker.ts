@@ -149,9 +149,11 @@ function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
     // ── host services ──
     op_log: noop,
     op_http_post: () => Promise.resolve(""),
+    op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
     op_read_asset: () => new Uint8Array(0),
     op_sha256: () => "",
+    op_read_env: () => "",
     // ── durable trace ──
     op_write_trace: noop,
     op_append_trace: noop,

@@ -92,9 +92,11 @@ export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
     // ── host services ──
     op_log: noop,
     op_http_post: () => Promise.resolve(""),
+    op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
     op_read_asset: () => new Uint8Array(0),
     op_sha256: () => "",
+    op_read_env: () => "",
     // ── durable trace ──
     op_write_trace: noop,
     op_append_trace: noop,
@@ -193,10 +195,25 @@ export class SnapshotRing {
 // only on `attach()`, never at import, so this module stays side-effect-free.
 // A minimal ambient event surface keeps it compilable without the DOM lib.
 
-interface KeyEventLike { key: string; preventDefault(): void; }
+interface KeyEventLike {
+  key: string;
+  preventDefault(): void;
+  target?: { tagName?: string; isContentEditable?: boolean } | null;
+}
 interface EventTargetLike {
   addEventListener(type: string, cb: (ev: KeyEventLike) => void): void;
   removeEventListener(type: string, cb: (ev: KeyEventLike) => void): void;
+}
+
+/** True when a key event targets an editable field (the chat textarea, inspector inputs).
+ *  Player controls are bound globally on `window`, so without this guard `wasdqe`/space are
+ *  captured + preventDefault'd while the user is typing — swallowing those keys in chat. */
+function isEditableKeyTarget(ev: KeyEventLike): boolean {
+  const t = ev.target;
+  if (!t) return false;
+  if (t.isContentEditable) return true;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 /** Yaw turn rate (radians per frame at full deflection) for the Q/E heading keys. */
@@ -207,6 +224,7 @@ export class LivePlayerInput {
   private heading = 0;
   private readonly tracked = "wasdqe ";
   private readonly onDown = (ev: KeyEventLike): void => {
+    if (isEditableKeyTarget(ev)) return; // typing in chat/inspector — don't capture wasdqe/space
     const k = ev.key === " " ? " " : ev.key.toLowerCase();
     const key = k === "shift" || ev.key === "Shift" ? "shift" : k;
     if (this.tracked.includes(k) || key === "shift") { this.pressed.add(key); ev.preventDefault(); }

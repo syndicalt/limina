@@ -83,9 +83,11 @@ export interface EngineOps {
   // host services
   op_log(msg: string): void;
   op_http_post(url: string, body: string): Promise<string>;
+  op_http_post_headers(url: string, body: string, headersJson: string): Promise<string>;
   op_sleep_ms(ms: number): Promise<void>;
   op_read_asset(relativeId: string): Uint8Array;
   op_sha256(input: string): string;
+  op_read_env(name: string): string;
   op_write_trace(name: string, content: string): void;
   op_append_trace(name: string, content: string): void;
   op_read_trace(name: string): string;

@@ -15,7 +15,7 @@ export interface DecideRequest {
 
 export interface LLMProvider {
   readonly name: string;
-  decide(req: DecideRequest): Promise<{ toolCalls: MCPRequest[]; usage?: { totalTokens?: number } }>;
+  decide(req: DecideRequest): Promise<{ toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } }>;
 }
 
 /** Deterministic policy function — the CI test path and the demo baseline. */
@@ -193,4 +193,141 @@ function parseToolCallFromContent(content: string): MCPRequest | undefined {
   const rec = asRecord(obj);
   if (rec === undefined || typeof rec.name !== "string") return undefined;
   return { tool: rec.name.replaceAll("__", "."), input: asRecord(rec.arguments) ?? {} };
+}
+
+// ── Anthropic Messages API provider ──────────────────────────────────────────
+// A real op_http_post_headers call (x-api-key + anthropic-version). Skill names
+// carry dots; Anthropic tool names must match ANTHROPIC_TOOL_NAME_RE, so encode
+// "." as "__" on the wire and decode on the way back. Needs api.anthropic.com on
+// the LIMINA_HTTP_POST_ALLOW allowlist + ANTHROPIC_API_KEY (both from .env).
+const ANTHROPIC_TOOL_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+function encodeAnthropicToolName(name: string): string {
+  const encoded = name.replaceAll(".", "__");
+  if (!ANTHROPIC_TOOL_NAME_RE.test(encoded)) {
+    throw new Error(`anthropic: tool name '${name}' cannot be encoded as a valid Anthropic tool name`);
+  }
+  return encoded;
+}
+
+function decodeAnthropicToolName(name: string): string {
+  return name.replaceAll("__", ".");
+}
+
+/** Build the user message: lead with the human's plain-language instruction
+ *  (extracted from the perception's `chat.user:` events), plus prior tool results
+ *  for multi-step turns. Sending the raw perception JSON as the message made the
+ *  model treat it as data and merely acknowledge; a natural instruction makes it
+ *  CALL skills. The model can query scene state via read skills when it needs to. */
+function buildAnthropicUserMessage(req: DecideRequest): string {
+  const events = Array.isArray(req.perception?.recentEvents) ? req.perception.recentEvents : [];
+  const instructions: string[] = [];
+  for (const ev of events) {
+    const t = (ev as { type?: unknown }).type;
+    if (typeof t === "string" && t.startsWith("chat.user:")) {
+      instructions.push(t.slice("chat.user:".length).trim());
+    }
+  }
+  const request = instructions.length > 0 ? instructions.join("\n") : "Continue the previous work.";
+  const parts = [
+    `User request:\n${request}`,
+    "",
+    "Carry this out now by CALLING the appropriate skill(s) — do not just describe or acknowledge it.",
+  ];
+  const prior = Array.isArray(req.previousResults) ? req.previousResults : [];
+  if (prior.length > 0) {
+    parts.push("", `Results of your prior tool calls this turn (JSON):\n${JSON.stringify(prior).slice(0, 6000)}`);
+  }
+  return parts.join("\n");
+}
+
+function parseAnthropicMessagesResponse(
+  text: string,
+): { toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("anthropic: non-JSON response");
+  }
+  const root = asRecord(parsed);
+  if (root === undefined) throw new Error("anthropic: response must be an object");
+  if (typeof root.error === "object" && root.error !== null) {
+    const err = asRecord(root.error);
+    const message = typeof err?.message === "string" ? err.message : "API error";
+    throw new Error(`anthropic: ${message}`);
+  }
+  const toolCalls: MCPRequest[] = [];
+  const textBlocks: string[] = [];
+  const content = root.content;
+  if (Array.isArray(content)) {
+    for (const blockValue of content) {
+      const block = asRecord(blockValue);
+      if (block === undefined || typeof block.type !== "string") continue;
+      if (block.type === "text" && typeof block.text === "string") {
+        textBlocks.push(block.text);
+      } else if (block.type === "tool_use" && typeof block.name === "string") {
+        toolCalls.push({ tool: decodeAnthropicToolName(block.name), input: asRecord(block.input) ?? {} });
+      }
+    }
+  }
+  const usageRecord = asRecord(root.usage);
+  const inputTokens = typeof usageRecord?.input_tokens === "number" ? usageRecord.input_tokens : 0;
+  const outputTokens = typeof usageRecord?.output_tokens === "number" ? usageRecord.output_tokens : 0;
+  const usage = usageRecord === undefined ? undefined : { totalTokens: inputTokens + outputTokens };
+  const outText = textBlocks.join("");
+  return { toolCalls, ...(outText.length > 0 ? { text: outText } : {}), ...(usage !== undefined ? { usage } : {}) };
+}
+
+export class AnthropicProvider implements LLMProvider {
+  readonly name = "anthropic";
+  private readonly baseUrl: string;
+  private readonly maxTokens: number;
+
+  constructor(
+    private readonly model: string,
+    private readonly apiKey: string,
+    opts: { maxTokens?: number; baseUrl?: string } = {},
+  ) {
+    this.maxTokens = opts.maxTokens ?? 4096;
+    this.baseUrl = (opts.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  }
+
+  async decide(
+    req: DecideRequest,
+  ): Promise<{ toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } }> {
+    const body = JSON.stringify({
+      model: this.model,
+      max_tokens: this.maxTokens,
+      system: req.systemPrompt,
+      messages: [{ role: "user", content: buildAnthropicUserMessage(req) }],
+      tools: req.tools.map((t) => ({
+        name: encodeAnthropicToolName(t.name),
+        description: t.description,
+        input_schema: t.input_schema,
+      })),
+    });
+    const headers = JSON.stringify({
+      "x-api-key": this.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    });
+    // Retry only TRANSPORT failures ("http post: error sending request …" — a
+    // transient network blip on a large multi-call turn). API errors (auth, rate
+    // limit, bad request) come back as a parsed `anthropic: …` error and must NOT
+    // be retried. Bounded with a short backoff so one flaky send doesn't kill a turn.
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const raw = await ops.op_http_post_headers(`${this.baseUrl}/v1/messages`, body, headers);
+        return parseAnthropicMessagesResponse(raw);
+      } catch (e) {
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.startsWith("http post:")) throw e; // API/parse error — do not retry
+        if (attempt < 2) await ops.op_sleep_ms(500 * (attempt + 1));
+      }
+    }
+    throw lastErr;
+  }
 }

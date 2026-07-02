@@ -86,6 +86,20 @@ export interface AuthoritativeServerOptions {
     name: string;
     compactFlushed?: boolean;
   };
+  /** Optional host hook for application-specific JSON-RPC methods. Server core
+   *  remains generic: known protocol methods are handled above; unknown methods
+   *  reach this hook and fall back to method-not-found when unhandled. */
+  onClientMessage?: (
+    method: string,
+    params: unknown,
+    ctx: {
+      session: ClientSession | undefined;
+      connId: number;
+      reply(result: unknown): Promise<void>;
+      push(method: string, params: unknown): Promise<void>;
+      error(message: string): Promise<void>;
+    },
+  ) => boolean | Promise<boolean>;
 }
 
 interface ClientSession {
@@ -142,6 +156,7 @@ export class AuthoritativeServer {
   private readonly policy?: PolicyEngine;
   private readonly initializeAuthToken?: string;
   private readonly allowedProfiles?: ReadonlySet<string>;
+  private readonly onClientMessage?: AuthoritativeServerOptions["onClientMessage"];
 
   private readonly conns = new Map<number, ClientConn>();
   private intentQueue: QueuedIntent[] = [];
@@ -171,6 +186,7 @@ export class AuthoritativeServer {
     this.policy = opts.policy;
     this.initializeAuthToken = opts.initializeAuthToken;
     this.allowedProfiles = opts.allowedProfiles;
+    this.onClientMessage = opts.onClientMessage;
     this.registry = new SkillRegistry(tracer, opts.policy);
     registerCoreSkills(this.registry);
 
@@ -446,6 +462,20 @@ export class AuthoritativeServer {
         return;
       }
       default:
+        if (this.onClientMessage !== undefined) {
+          const handled = await this.onClientMessage(rec.method, params, {
+            session: conn.session,
+            connId: conn.connId,
+            reply: (result: unknown) => this.reply(conn.connId, this.success(id, result)),
+            push: (method: string, params: unknown) => this.sendSafe(conn.connId, JSON.stringify({
+              jsonrpc: "2.0",
+              method,
+              params,
+            })),
+            error: (message: string) => this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.internalError, message)),
+          });
+          if (handled) return;
+        }
         // AUTHORITY: there is NO set-state verb. Any unknown method (a direct
         // state write attempt included) is rejected; state is untouched.
         await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${rec.method}`));

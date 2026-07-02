@@ -34,6 +34,8 @@ import type { NetOps } from "../../js/src/net/protocol.ts";
 import { installCottageScenario } from "../../js/src/demos/coordinator_cottage.ts";
 import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
 import { resolveProfile } from "../../js/src/skills/permissions.ts";
+import { AnthropicProvider } from "../../js/src/agents/llm.ts";
+import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
 
 const net = ops as unknown as NetOps;
 const PORT = 8787;
@@ -51,6 +53,14 @@ function spawnTagged(world: WorldContext, x: number, y: number, z: number, tags:
   const id = world.entities.create({ eid });
   if (tags.length > 0) world.tags.set(eid, new Set(tags));
   return id;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+
+function persistChat(record: ChatTurnPersistRecord): void {
+  ops.op_append_trace("editor_host_chat.jsonl", JSON.stringify(record) + "\n");
 }
 
 const listenerId = await net.op_net_listen(PORT);
@@ -74,6 +84,44 @@ const server = new AuthoritativeServer(editorTransport, {
   worldLog: { name: "editor_host_worldlog.jsonl", compactFlushed: false },
   initializeAuthToken: EDITOR_AUTH_TOKEN,
   allowedProfiles: EDITOR_ALLOWED_PROFILES,
+  onClientMessage: async (method, params, ctx) => {
+    if (method !== "chat/send") return false;
+    if (ctx.session === undefined) {
+      await ctx.error("chat/send requires an initialized session");
+      return true;
+    }
+    const p = asRecord(params);
+    if (p === undefined || typeof p.turnId !== "string" || typeof p.text !== "string") {
+      await ctx.error("chat/send requires { turnId, text, attachments? }");
+      return true;
+    }
+
+    const key = ops.op_read_env("ANTHROPIC_API_KEY");
+    if (key.length === 0) {
+      const message = "ANTHROPIC_API_KEY not set (add it to the project .env / environment; also allowlist api.anthropic.com via LIMINA_HTTP_POST_ALLOW)";
+      await ctx.push("chat/error", { type: "chat.error", turnId: p.turnId, message });
+      await ctx.reply({ ok: false, error: message });
+      return true;
+    }
+
+    const model = ops.op_read_env("ANTHROPIC_MODEL") || "claude-opus-4-8";
+    await ctx.reply({ ok: true, turnId: p.turnId });
+    // Wire shape: JSON-RPC notification method is chat/<event>, params is the
+    // full self-describing { type:"chat.<event>", turnId, ... } object.
+    void runChatTurn({
+      registry: server.registry,
+      world: server.world,
+      providers: { anthropic: new AnthropicProvider(model, key) },
+      tracer: server.registry.tracer,
+      msg: { turnId: p.turnId, text: p.text, attachments: p.attachments },
+      push: (m) => ctx.push(`chat/${m.type.split(".")[1]}`, m),
+      persist: persistChat,
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      void ctx.push("chat/error", { type: "chat.error", turnId: p.turnId, message });
+    });
+    return true;
+  },
   bootstrap: ({ world }) => {
     // A small starting world so the editor's World panel has content to render.
     spawnTagged(world, 0, 0, 0, ["ground", "spawn"]);

@@ -249,6 +249,9 @@ export interface BoundedMultiTurnOptions {
   maxToolCalls: number;
   timeoutMs: number;
   maxTokens?: number;
+  onText?: (text: string) => void;
+  onStep?: (step: { tool: string; label: string; icon?: string }) => void;
+  onError?: (err: unknown) => void;
 }
 
 export interface BoundedMultiTurnResult {
@@ -266,6 +269,14 @@ function tokenUsage(res: { usage?: { totalTokens?: number } }): number {
   return typeof res.usage?.totalTokens === "number" && Number.isFinite(res.usage.totalTokens)
     ? Math.max(0, res.usage.totalTokens)
     : 0;
+}
+
+function notifyBoundedObserverError(options: BoundedMultiTurnOptions, err: unknown): void {
+  try {
+    options.onError?.(err);
+  } catch {
+    // Observer callbacks must not affect deterministic agent execution.
+  }
 }
 
 function timeoutAfter(ms: number): Promise<"timeout"> {
@@ -351,6 +362,11 @@ export async function runBoundedMultiTurn(
     if (decision === "timeout") {
       return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };
     }
+    try {
+      if (decision.text !== undefined && decision.text.length > 0) options.onText?.(decision.text);
+    } catch (err) {
+      notifyBoundedObserverError(options, err);
+    }
     tokensUsed += tokenUsage(decision);
     if (options.maxTokens !== undefined && tokensUsed > options.maxTokens) {
       return { steps: steps + 1, toolCalls, tokensUsed, reason: "token_budget" };
@@ -375,15 +391,32 @@ export async function runBoundedMultiTurn(
         previousResults.push({ success: false, error: { code: "invalid_input", message: `invalid input: ${call.tool}` } });
         continue;
       }
-      const response = await registry.invoke(call.tool, call.input, {
-        agentId: agent.id,
-        sessionId: agent.sessionId,
-        permissions: agentGrants(agent),
-        profile: agent.profile,
-        tick,
-        world,
-        causedBy: [decisionId],
-      });
+      try {
+        options.onStep?.({ tool: call.tool, label: call.tool });
+      } catch (err) {
+        notifyBoundedObserverError(options, err);
+      }
+      let response: MCPResponse;
+      try {
+        response = await registry.invoke(call.tool, call.input, {
+          agentId: agent.id,
+          sessionId: agent.sessionId,
+          permissions: agentGrants(agent),
+          profile: agent.profile,
+          tick,
+          world,
+          causedBy: [decisionId],
+        });
+      } catch (err) {
+        // A thrown tool handler must NOT kill the whole turn: record it as a failed
+        // tool result so the model sees the error and can adapt on the next step,
+        // mirroring the unknown-tool / invalid-args reject-and-continue paths.
+        const message = err instanceof Error ? err.message : String(err);
+        const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "handler_threw", tool: call.tool, message } });
+        lastToolResultId = rejected;
+        previousResults.push({ success: false, error: { code: "handler_error", message } });
+        continue;
+      }
       toolCalls++;
       lastToolResultId = emitToolResult(tracer, agent, response, response.metadata?.eventsEmitted.length ? [decisionId, ...response.metadata.eventsEmitted] : [decisionId]);
       previousResults.push(response);
