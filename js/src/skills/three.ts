@@ -205,6 +205,136 @@ const setLighting: SkillDefinition<z.infer<typeof setLightingInput>, { ok: boole
   },
 };
 
+// Lights authored one-at-a-time via three.addLight, keyed by an opaque id so
+// three.removeLight can target exactly one without disturbing the rest (or the
+// single ambient+directional pair setLighting owns above). Per-scene, mirroring
+// sceneLights: a scene torn down/rebuilt starts with a fresh light set.
+const addedLights = new Map<SceneLike, Map<string, unknown>>();
+let lightSeq = 0;
+
+const LIGHT_KINDS = ["directional", "point", "spot"] as const;
+
+const addLightInput = z.object({
+  kind: z.enum(LIGHT_KINDS),
+  color: z.number().int().min(0).max(0xffffff).default(0xffffff),
+  intensity: z.number().min(0).max(100).default(1),
+  // directional: the light's position (it points at `target`, default origin).
+  // point/spot: the light's world position.
+  position: Vec3.default([0, 0, 0]),
+  // directional/spot only: the point the light aims at. Default is three's own
+  // default target (world origin) — set only when the caller wants otherwise, so
+  // its Object3D (which three requires added to the scene to take effect) is only
+  // created when actually needed.
+  target: Vec3.optional(),
+  // point/spot: max range before falloff hits zero. 0 = no limit (three.js default).
+  distance: z.number().min(0).default(0),
+  // point/spot: physical falloff exponent (2 = physically correct, three.js default).
+  decay: z.number().min(0).default(2),
+  // spot: cone half-angle in radians (three.js default Math.PI/3).
+  angle: z.number().min(0).max(Math.PI / 2).default(Math.PI / 3),
+  // spot: soft-edge fraction of the cone, 0 (hard) - 1 (fully soft).
+  penumbra: z.number().min(0).max(1).default(0),
+  // Real shadow mapping, same idea as setLighting's directional shadow: point/spot
+  // get a perspective shadow camera (near/far only — three sizes the frustum from
+  // distance/angle itself); directional keeps the orthographic frustum, sized via
+  // shadowCameraExtent exactly like setLighting.
+  castShadow: z.boolean().default(false),
+  shadowMapSize: z.number().int().min(256).max(4096).default(1024),
+  shadowCameraExtent: z.number().positive().max(500).default(20),
+  shadowCameraNear: z.number().positive().default(0.5),
+  shadowCameraFar: z.number().positive().default(120),
+  shadowBias: z.number().min(-0.01).max(0.01).default(-0.0008),
+});
+const addLight: SkillDefinition<z.infer<typeof addLightInput>, { ok: boolean; id: string }> = {
+  name: "three.addLight",
+  version: "1.0.0",
+  description: "Add one directional/point/spot light to the scene (on top of setLighting's single ambient+directional pair) and return its id for later three.removeLight. Supports color/intensity, position, a directional/spot target, point/spot range+decay, spot angle+penumbra, and real shadow-map casting.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: addLightInput,
+  output: z.object({ ok: z.boolean(), id: z.string() }),
+  handler: (input, ctx) => {
+    const scene = ctx.world.scene;
+    let light: { castShadow: boolean; shadow: { mapSize: { width: number; height: number }; bias: number; camera: { near: number; far: number; left: number; right: number; top: number; bottom: number; updateProjectionMatrix(): void } }; position: { set(x: number, y: number, z: number): void }; target?: { position: { set(x: number, y: number, z: number): void } } };
+    switch (input.kind) {
+      case "directional": {
+        const l = new THREE.DirectionalLight(input.color, input.intensity);
+        l.position.set(input.position[0], input.position[1], input.position[2]);
+        if (input.target !== undefined) {
+          l.target.position.set(input.target[0], input.target[1], input.target[2]);
+          scene.add(l.target);
+        }
+        light = l;
+        break;
+      }
+      case "point": {
+        const l = new THREE.PointLight(input.color, input.intensity, input.distance, input.decay);
+        l.position.set(input.position[0], input.position[1], input.position[2]);
+        light = l;
+        break;
+      }
+      case "spot": {
+        const l = new THREE.SpotLight(input.color, input.intensity, input.distance, input.angle, input.penumbra, input.decay);
+        l.position.set(input.position[0], input.position[1], input.position[2]);
+        if (input.target !== undefined) {
+          l.target.position.set(input.target[0], input.target[1], input.target[2]);
+          scene.add(l.target);
+        }
+        light = l;
+        break;
+      }
+    }
+    if (input.castShadow) {
+      light.castShadow = true;
+      light.shadow.mapSize.width = input.shadowMapSize;
+      light.shadow.mapSize.height = input.shadowMapSize;
+      light.shadow.bias = input.shadowBias;
+      const cam = light.shadow.camera;
+      cam.near = input.shadowCameraNear;
+      cam.far = input.shadowCameraFar;
+      if (input.kind === "directional") {
+        cam.left = -input.shadowCameraExtent;
+        cam.right = input.shadowCameraExtent;
+        cam.top = input.shadowCameraExtent;
+        cam.bottom = -input.shadowCameraExtent;
+      }
+      cam.updateProjectionMatrix();
+    }
+    scene.add(light);
+    const id = `light_${lightSeq++}`;
+    let perScene = addedLights.get(scene);
+    if (perScene === undefined) {
+      perScene = new Map();
+      addedLights.set(scene, perScene);
+    }
+    perScene.set(id, light);
+    ctx.emit("three.light.added", { id, kind: input.kind });
+    return { ok: true, id };
+  },
+};
+
+const removeLightInput = z.object({ id: z.string() });
+const removeLight: SkillDefinition<z.infer<typeof removeLightInput>, { ok: boolean }> = {
+  name: "three.removeLight",
+  version: "1.0.0",
+  description: "Remove a light previously added via three.addLight, by its id.",
+  category: "three",
+  permissions: ["scene.write"],
+  input: removeLightInput,
+  output: z.object({ ok: z.boolean() }),
+  handler: (input, ctx) => {
+    const scene = ctx.world.scene;
+    const perScene = addedLights.get(scene);
+    const light = perScene?.get(input.id) as { target?: unknown } | undefined;
+    if (light === undefined) return { ok: false };
+    scene.remove(light);
+    if (light.target !== undefined) scene.remove(light.target);
+    perScene!.delete(input.id);
+    ctx.emit("three.light.removed", { id: input.id });
+    return { ok: true };
+  },
+};
+
 const loadGltfInput = z.object({
   assetId: z.string(),
   position: Vec3.default([0, 0, 0]),
@@ -441,5 +571,7 @@ export function registerThreeSkills(registry: SkillRegistry, assets: AssetRegist
   registry.register(setTransform);
   registry.register(makeSetMaterial(materials));
   registry.register(setLighting);
+  registry.register(addLight);
+  registry.register(removeLight);
   registry.register(makeLoadGltf(assets));
 }
