@@ -449,7 +449,7 @@ function buildChat() {
   const log = el("div", "chat-log");
   log.id = "chat-log";
   const empty = el("div", "chat-empty");
-  empty.textContent = "Ask the build agent to co-author the current scene.";
+  empty.textContent = "Describe what to build.";
   log.appendChild(empty);
   const attachments = el("div", "chat-attachments");
   attachments.id = "chat-attachments";
@@ -467,7 +467,7 @@ function buildChat() {
   const input = el("textarea", "chat-input");
   input.id = "chat-input";
   input.rows = 1;
-  input.placeholder = "Co-author with the build agent";
+  input.placeholder = "Describe what to build…";
   const model = el("select", "chat-model-select");
   model.id = "chat-model";
   model.title = "Model";

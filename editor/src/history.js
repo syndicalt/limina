@@ -115,7 +115,7 @@ export function createHistoryPanel(opts = {}) {
     const readout = el("span", "hist-readout");
     const setReadout = () => {
       const p = ctrl.playheadAt();
-      readout.textContent = `edit ${p} / ${ctrl.tip()} · ${ctrl.isLive() ? "live" : "time-travel"}`;
+      readout.textContent = `edit ${p} / ${ctrl.tip()} · ${ctrl.isLive() ? "live" : "past"}`;
     };
     scrub.addEventListener("input", () => { ctrl.scrub(parseInt(scrub.value, 10)); setReadout(); emitScrub(); renderCommands(); });
     scrubRow.appendChild(el("span", "hist-label", "timeline"));

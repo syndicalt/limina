@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>limina · co-authoring editor</title>
+  <title>limina</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">limina <span class="brand-sub">co-authoring editor</span></div>
+    <div class="brand">limina</div>
     <div class="conn">
       <label>server <input id="url" type="text" value="ws://localhost:8787/" size="22" /></label>
       <label>token <input id="auth-token" type="password" value="" size="18" autocomplete="off" /></label>
@@ -33,7 +33,7 @@
     <section class="panel viewport" id="viewport">
       <div class="panel-head">
         <h3>Live viewport</h3>
-        <span class="hint"><span id="viewport-status">idle</span> · runLive (sim-worker + SAB + WebGPU)</span>
+        <span class="hint"><span id="viewport-status">idle</span></span>
       </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
@@ -51,22 +51,22 @@
     </nav>
 
     <section class="panel window" id="world" hidden>
-      <div class="panel-head" data-drag><h3>World</h3><span class="hint">inspector.snapshot</span><button class="win-close" data-close="world" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>World</h3><button class="win-close" data-close="world" aria-label="Close">×</button></div>
       <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
     </section>
 
     <section class="panel window" id="inspector" hidden>
-      <div class="panel-head" data-drag><h3>Inspector</h3><span class="hint">take control</span><button class="win-close" data-close="inspector">×</button></div>
+      <div class="panel-head" data-drag><h3>Inspector</h3><button class="win-close" data-close="inspector">×</button></div>
       <div class="panel-body" id="inspector-body"><div class="muted">select an entity in World</div></div>
     </section>
 
     <section class="panel window" id="reasoning" hidden>
-      <div class="panel-head" data-drag><h3>Reasoning</h3><span class="hint">trace.tail · causedBy</span><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>Reasoning</h3><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
       <div class="panel-body" id="reason-body"><div class="muted">connect to begin</div></div>
     </section>
 
     <section class="panel window" id="history" hidden>
-      <div class="panel-head" data-drag><h3>History</h3><span class="hint">branch · time-travel</span><button class="win-close" data-close="history" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>History</h3><button class="win-close" data-close="history" aria-label="Close">×</button></div>
       <div class="panel-body" id="history-body"><div class="muted">connect to begin</div></div>
     </section>
 
@@ -76,7 +76,7 @@
     </section>
 
     <section class="panel window chat-window" id="chat" hidden>
-      <div class="panel-head" data-drag><h3>Chat</h3><span class="hint">co-author · Cmd/Ctrl+K</span><button class="win-close" data-close="chat" aria-label="Close">×</button></div>
+      <div class="panel-head" data-drag><h3>Chat</h3><button class="win-close" data-close="chat" aria-label="Close">×</button></div>
       <div class="panel-body chat-body" id="chat-body"></div>
     </section>
   </main>
