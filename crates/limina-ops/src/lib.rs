@@ -157,9 +157,15 @@ pub fn op_append_trace(
         .append(true)
         .open(&path)
         .map_err(JsErrorBox::from_err)?;
+    // NO per-call fsync. op_append_trace runs SYNCHRONOUSLY on the single event-loop thread
+    // and is called once PER EVENT — every skill, every streamed chat token, every read-poll
+    // the editor makes. A blocking sync_data() per event serialized the whole runtime on disk
+    // latency, so as event volume rose the editor host throttled to a crawl and stalled chat
+    // and new connections. The write lands in the OS page cache (durable across a PROCESS
+    // crash; a trace/world-log record does not need synchronous per-record durability), and
+    // the OS flushes it — turning a per-event millisecond fsync into a microsecond memcpy.
     file.write_all(content.as_bytes())
-        .map_err(JsErrorBox::from_err)?;
-    file.sync_data().map_err(JsErrorBox::from_err)
+        .map_err(JsErrorBox::from_err)
 }
 
 /// Read back a trace JSONL from `<cwd>/traces/<name>`.

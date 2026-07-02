@@ -286,29 +286,36 @@ export class AuthoritativeServer {
   // them: a stalled handshake only occupies ONE slot; other clients keep connecting.
   private async acceptLoop(): Promise<void> {
     let inFlight = 0;
+    let closed = false; // the listener returned ACCEPT_CLOSED -- stop replenishing the pool
     const pump = (): void => {
-      while (this.running && inFlight < ACCEPT_CONCURRENCY) {
+      while (this.running && !closed && inFlight < ACCEPT_CONCURRENCY) {
         inFlight += 1;
-        void this.acceptOne().finally(() => {
-          inFlight -= 1;
-          if (this.running) pump();
-        });
+        void this.acceptOne()
+          .then((listenerClosed) => { if (listenerClosed) closed = true; })
+          .finally(() => {
+            inFlight -= 1;
+            if (this.running && !closed) pump();
+          });
       }
     };
     pump();
   }
 
-  private async acceptOne(): Promise<void> {
+  /** Accept ONE connection. Returns true when the listener is CLOSED so the pool STOPS
+   *  replenishing -- otherwise a transport that returns ACCEPT_CLOSED while `running` is
+   *  still true would respawn forever into a microtask spin that starves the event loop. */
+  private async acceptOne(): Promise<boolean> {
     let connId: number;
     try {
       connId = await this.transport.accept();
     } catch {
-      return; // transport/handshake error on this slot -- the pool replenishes it
+      return false; // transient accept/handshake error on this slot -- keep the pool going
     }
-    if (connId === ACCEPT_CLOSED || !this.running) return;
+    if (connId === ACCEPT_CLOSED || !this.running) return true;
     const conn: ClientConn = { connId, subscribed: false, closing: false };
     this.conns.set(connId, conn);
     this.bgLoops.push(this.connLoop(conn));
+    return false;
   }
 
   private async connLoop(conn: ClientConn): Promise<void> {
