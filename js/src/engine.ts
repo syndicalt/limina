@@ -284,6 +284,14 @@ export class EntityTable {
   resolve(id: string): EntityEntry | undefined {
     return this.map.get(id);
   }
+  /** Re-attach a resource binding to a live entry after a snapshot restore. The
+   *  identity slice (EntityEntrySnapshot) deliberately omits mesh/resource, so a
+   *  self-sufficient world snapshot (M2 v3) rebinds the resource metadata here
+   *  rather than widening the identity contract. No-op if the id is not live. */
+  bindResource(id: string, resource: LoadedResourceMetadata): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.resource = resource;
+  }
   /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
    *  when no live entity owns that body. Replaces the per-call linear scan the
    *  collision/raycast skills used at scale. */

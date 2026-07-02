@@ -32,7 +32,7 @@
 
 import { Position, Rotation, Scale } from "../ecs/world.ts";
 import { $internal } from "../../build/bitecs.bundle.mjs";
-import type { EntityTableSnapshot } from "../engine.ts";
+import type { EntityTableSnapshot, LoadedResourceMetadata } from "../engine.ts";
 import type { WorldContext } from "../skills/registry.ts";
 import {
   captureRandomState,
@@ -48,7 +48,12 @@ import type { ReplayDeps } from "./replay.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { z } from "../../build/zod.bundle.mjs";
 
-export const SNAPSHOT_VERSION = 2;
+// v3 (M2 → editor snapshot+bounded-tail): the snapshot is now SELF-SUFFICIENT for a
+// browser rebuild — it carries each live entity's tags and resource/asset metadata in
+// addition to physics + transforms + identity + RNG. Earlier versions relied on replaying
+// the pre-snapshot authoring commands to reproduce tags/resources; a bounded-tail viewer
+// no longer has those commands, so they must ride in the snapshot itself.
+export const SNAPSHOT_VERSION = 3;
 
 /** A character controller's body-LESS resume state at the snapshot tick. The
  *  kinematic body's TRANSFORM rides in the native physics blob, but a controller's
@@ -85,7 +90,7 @@ export interface EntityIndexSnapshot {
   sparse: number[];
 }
 
-/** One live entity's identity + transform at the snapshot tick. */
+/** One live entity's identity + transform + authoring state at the snapshot tick. */
 export interface SnapshotEntity {
   id: string;
   eid: number;
@@ -94,6 +99,13 @@ export interface SnapshotEntity {
   pos: [number, number, number];
   rot: [number, number, number, number];
   scale: [number, number, number];
+  /** The entity's tag set (ecs.addComponent/removeComponent). Empty when untagged.
+   *  Not reconstructable from transforms — carried so a bounded-tail viewer that
+   *  never saw the tag commands still restores them. */
+  tags: string[];
+  /** Placed-asset metadata (v3), when this entity is asset-backed. The browser
+   *  needs it to rebuild the mesh without replaying the original create command. */
+  resource?: LoadedResourceMetadata;
 }
 
 /** A complete, self-contained world snapshot at a tick boundary. */
@@ -239,6 +251,10 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
   const entities: SnapshotEntity[] = [];
   for (const entry of table.entries) {
     const eid = entry.eid;
+    // Tags (world.tags is keyed by eid) and resource (a runtime binding on the live
+    // entry) are the two authoring-state pieces the identity slice drops — capture
+    // them so the snapshot alone reproduces the entity, no pre-snapshot replay needed.
+    const tagSet = world.tags.get(eid);
     entities.push({
       id: entry.id,
       eid,
@@ -247,6 +263,8 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       pos: [Position.x[eid], Position.y[eid], Position.z[eid]],
       rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
       scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]],
+      tags: tagSet === undefined ? [] : [...tagSet].sort(),
+      resource: world.entities.resolve(entry.id)?.resource,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -289,6 +307,20 @@ const entityIndexSchema = z.object({
   dense: z.array(sparseIndexValue),
   sparse: z.array(sparseIndexValue),
 });
+// Placed-asset metadata (LoadedResourceMetadata). passthrough() so a future field
+// survives a snapshot round-trip instead of being silently stripped on parse.
+const resourceMetaSchema = z.object({
+  kind: z.literal("gltf"),
+  assetId: z.string(),
+  source: z.string(),
+  hash: z.string(),
+  bytes: int,
+  rootName: z.string().optional(),
+  objectCount: int,
+  meshCount: int,
+  materialCount: int,
+  textureCount: int,
+}).passthrough();
 const snapshotEntitySchema = z.object({
   id: z.string(),
   eid: int,
@@ -297,6 +329,9 @@ const snapshotEntitySchema = z.object({
   pos: vec3,
   rot: vec4,
   scale: vec3,
+  // Optional/defaulted so a pre-v3 or minimal snapshot literal still parses.
+  tags: z.array(z.string()).optional().default([]),
+  resource: resourceMetaSchema.optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -374,11 +409,16 @@ export function restoreSnapshot(
     })),
   };
   world.entities.restore(tableSnap);
-  // 5. ECS transforms: every live entity's Position/Rotation/Scale at T.
+  // 5. ECS transforms + authoring state (tags/resource): every live entity at T.
+  //    The snapshot is authoritative, so tags are replaced wholesale (a fresh
+  //    recovery world starts empty; a reused world must not keep stale tags).
+  world.tags.clear();
   for (const e of snapshot.entities) {
     Position.x[e.eid] = e.pos[0]; Position.y[e.eid] = e.pos[1]; Position.z[e.eid] = e.pos[2];
     Rotation.x[e.eid] = e.rot[0]; Rotation.y[e.eid] = e.rot[1]; Rotation.z[e.eid] = e.rot[2]; Rotation.w[e.eid] = e.rot[3];
     Scale.x[e.eid] = e.scale[0]; Scale.y[e.eid] = e.scale[1]; Scale.z[e.eid] = e.scale[2];
+    if (e.tags.length > 0) world.tags.set(e.eid, new Set(e.tags));
+    if (e.resource !== undefined) world.entities.bindResource(e.id, e.resource);
   }
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
   //    native blob cannot carry (matched to live controllers by body id). The
