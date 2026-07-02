@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, HOST};
 use reqwest::Url;
 
 /// String logging op. The `#[string]` arg forces the non-fast path; fine here.
@@ -172,12 +173,33 @@ pub fn op_read_trace(#[string] name: String) -> Result<String, JsErrorBox> {
 /// host pumps the event loop. The only HTTP need (LLM providers) goes through here.
 const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HTTP_HEADER_COUNT: usize = 24;
+const MAX_HTTP_HEADER_NAME_VALUE_BYTES: usize = 4096;
 
 #[op2]
 #[string]
 pub async fn op_http_post(
     #[string] url: String,
     #[string] body: String,
+) -> Result<String, JsErrorBox> {
+    http_post_with_headers(url, body, None).await
+}
+
+#[op2]
+#[string]
+pub async fn op_http_post_headers(
+    #[string] url: String,
+    #[string] body: String,
+    #[string] headers_json: String,
+) -> Result<String, JsErrorBox> {
+    let headers = parse_http_post_headers(&headers_json)?;
+    http_post_with_headers(url, body, Some(headers)).await
+}
+
+async fn http_post_with_headers(
+    url: String,
+    body: String,
+    headers: Option<HeaderMap>,
 ) -> Result<String, JsErrorBox> {
     if body.len() > MAX_HTTP_REQUEST_BYTES {
         return Err(JsErrorBox::generic(
@@ -190,14 +212,71 @@ pub async fn op_http_post(
         .host_str()
         .ok_or_else(|| JsErrorBox::generic("http post: URL host is required"))?;
     let client = build_http_post_client(host, &addrs)?;
+    let headers = headers.unwrap_or_else(default_http_post_headers);
     let mut resp = client
         .post(url)
-        .header("content-type", "application/json")
+        .headers(headers)
         .body(body)
         .send()
         .await
         .map_err(|e| JsErrorBox::generic(format!("http post: {e}")))?;
     read_limited_text_response(&mut resp, MAX_HTTP_RESPONSE_BYTES).await
+}
+
+fn default_http_post_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers
+}
+
+fn parse_http_post_headers(headers_json: &str) -> Result<HeaderMap, JsErrorBox> {
+    let parsed: serde_json::Value = serde_json::from_str(headers_json)
+        .map_err(|e| JsErrorBox::generic(format!("http post headers: invalid JSON: {e}")))?;
+    let object = parsed.as_object().ok_or_else(|| {
+        JsErrorBox::generic("http post headers: headers_json must be a JSON object")
+    })?;
+    if object.len() > MAX_HTTP_HEADER_COUNT {
+        return Err(JsErrorBox::generic(format!(
+            "http post headers: too many headers (max {MAX_HTTP_HEADER_COUNT})"
+        )));
+    }
+
+    let mut headers = HeaderMap::new();
+    for (name, value) in object {
+        let value = value.as_str().ok_or_else(|| {
+            JsErrorBox::generic("http post headers: header values must be strings")
+        })?;
+        if name.len().saturating_add(value.len()) > MAX_HTTP_HEADER_NAME_VALUE_BYTES {
+            return Err(JsErrorBox::generic(format!(
+                "http post headers: header '{name}' is too large"
+            )));
+        }
+        if !name.is_ascii() || !value.is_ascii() {
+            return Err(JsErrorBox::generic(format!(
+                "http post headers: header '{name}' must be ASCII"
+            )));
+        }
+        let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+            JsErrorBox::generic(format!(
+                "http post headers: invalid header name '{name}': {e}"
+            ))
+        })?;
+        if header_name == HOST {
+            return Err(JsErrorBox::generic(
+                "http post headers: Host header is not allowed",
+            ));
+        }
+        let header_value = HeaderValue::from_str(value).map_err(|e| {
+            JsErrorBox::generic(format!(
+                "http post headers: invalid header value for '{name}': {e}"
+            ))
+        })?;
+        headers.insert(header_name, header_value);
+    }
+    if !headers.contains_key(CONTENT_TYPE) {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    }
+    Ok(headers)
 }
 
 fn validate_http_post_url(raw: &str) -> Result<Url, JsErrorBox> {
@@ -236,8 +315,7 @@ fn is_http_post_host_allowed(host: &str, port: Option<u16>) -> bool {
         return ip.is_loopback();
     }
     let host_port = port.map(|p| format!("{host_lc}:{p}"));
-    std::env::var("LIMINA_HTTP_POST_ALLOW")
-        .ok()
+    resolve_env("LIMINA_HTTP_POST_ALLOW")
         .map(|allow| {
             allow.split(',').any(|entry| {
                 let entry = entry.trim().to_ascii_lowercase();
@@ -372,6 +450,76 @@ pub fn op_sha256(#[string] input: &str) -> String {
     sha256_hex(input)
 }
 
+/// Read a tightly allowlisted environment variable for host-side configuration.
+/// The embedded JS runtime intentionally cannot access `Deno.env`; this op only
+/// exposes Limina/Anthropic configuration names, never arbitrary host secrets.
+#[op2]
+#[string]
+pub fn op_read_env(#[string] name: &str) -> String {
+    read_allowlisted_env(name)
+}
+
+fn read_allowlisted_env(name: &str) -> String {
+    if !is_allowed_env_name(name) {
+        return String::new();
+    }
+    resolve_env(name).unwrap_or_default()
+}
+
+/// Resolve an env var with the PROCESS environment taking precedence, falling
+/// back to a best-effort parse of `<cwd>/.env`. This lets a project `.env` file
+/// supply values (e.g. ANTHROPIC_API_KEY, LIMINA_HTTP_POST_ALLOW) without the
+/// operator having to export them first — while an explicit export still wins.
+fn resolve_env(name: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(name) {
+        return Some(v);
+    }
+    let dir = std::env::current_dir().ok()?;
+    read_dotenv_value_in(&dir, name)
+}
+
+/// Read a single key from `<dir>/.env`. Ignores blank lines, `#` comments, and an
+/// optional `export ` prefix; strips one layer of matching surrounding quotes.
+/// Returns None if the file is absent/unreadable or the key is not present. Split
+/// from `resolve_env` (which supplies the cwd) so the parser is unit-testable
+/// without mutating the process working directory.
+fn read_dotenv_value_in(dir: &Path, name: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(dir.join(".env")).ok()?;
+    for raw in contents.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == name {
+                let v = v.trim();
+                let unquoted = v
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .unwrap_or(v);
+                return Some(unquoted.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_allowed_env_name(name: &str) -> bool {
+    let rest = if let Some(rest) = name.strip_prefix("ANTHROPIC_") {
+        rest
+    } else if let Some(rest) = name.strip_prefix("LIMINA_") {
+        rest
+    } else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
 /// Pure hex-sha256, split out from the `op2` wrapper so it is directly testable.
 fn sha256_hex(input: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -389,7 +537,8 @@ fn sha256_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_http_post_host_allowed, is_http_post_target_ip_allowed, read_asset_bytes, sha256_hex,
+        is_http_post_host_allowed, is_http_post_target_ip_allowed, parse_http_post_headers,
+        read_allowlisted_env, read_asset_bytes, read_dotenv_value_in, sha256_hex,
         validate_http_post_url,
     };
 
@@ -420,6 +569,44 @@ mod tests {
         );
         assert_eq!(sha256_hex("limina"), sha256_hex("limina"));
         assert_ne!(sha256_hex("limina"), sha256_hex("Limina"));
+    }
+
+    #[test]
+    fn op_read_env_allows_only_limina_and_anthropic_uppercase_names() {
+        std::env::set_var("ANTHROPIC_TEST_KEY", "allowed-anthropic");
+        std::env::set_var("LIMINA_TEST_KEY", "allowed-limina");
+        std::env::set_var("SECRET_TEST_KEY", "denied-secret");
+        std::env::set_var("ANTHROPIC_test_key", "denied-lowercase");
+
+        assert_eq!(read_allowlisted_env("ANTHROPIC_TEST_KEY"), "allowed-anthropic");
+        assert_eq!(read_allowlisted_env("LIMINA_TEST_KEY"), "allowed-limina");
+        assert_eq!(read_allowlisted_env("SECRET_TEST_KEY"), "");
+        assert_eq!(read_allowlisted_env("ANTHROPIC_test_key"), "");
+        assert_eq!(read_allowlisted_env("ANTHROPIC_"), "");
+        assert_eq!(read_allowlisted_env("ANTHROPIC_TEST_KEY/../SECRET"), "");
+        assert_eq!(read_allowlisted_env("LIMINA_UNSET_TEST_KEY"), "");
+
+        std::env::remove_var("ANTHROPIC_TEST_KEY");
+        std::env::remove_var("LIMINA_TEST_KEY");
+        std::env::remove_var("SECRET_TEST_KEY");
+        std::env::remove_var("ANTHROPIC_test_key");
+    }
+
+    #[test]
+    fn read_dotenv_value_parses_keys_comments_quotes_and_export() {
+        let dir = temp_root("dotenv");
+        std::fs::write(
+            dir.join(".env"),
+            "# a comment\n\nANTHROPIC_API_KEY=sk-plain\nexport LIMINA_HTTP_POST_ALLOW=api.anthropic.com\nQUOTED=\"quoted value\"\nSINGLE='single'\n",
+        )
+        .unwrap();
+        assert_eq!(read_dotenv_value_in(&dir, "ANTHROPIC_API_KEY").as_deref(), Some("sk-plain"));
+        assert_eq!(read_dotenv_value_in(&dir, "LIMINA_HTTP_POST_ALLOW").as_deref(), Some("api.anthropic.com"));
+        assert_eq!(read_dotenv_value_in(&dir, "QUOTED").as_deref(), Some("quoted value"));
+        assert_eq!(read_dotenv_value_in(&dir, "SINGLE").as_deref(), Some("single"));
+        assert_eq!(read_dotenv_value_in(&dir, "MISSING"), None);
+        // absent file → None, not a panic.
+        assert_eq!(read_dotenv_value_in(&temp_root("dotenv-empty"), "ANY"), None);
     }
 
     /// A relative file inside the configured root reads back its exact bytes.
@@ -538,6 +725,100 @@ mod tests {
             "127.0.0.1".parse::<std::net::IpAddr>().unwrap()
         );
     }
+
+    #[tokio::test]
+    async fn op_http_post_headers_applies_custom_headers_and_default_content_type() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0_u8; 4096];
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut buf)
+                .await
+                .unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            tokio::io::AsyncWriteExt::write_all(
+                &mut socket,
+                b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok",
+            )
+            .await
+            .unwrap();
+            req
+        });
+
+        let body = "{\"hello\":true}".to_string();
+        let response = super::http_post_with_headers(
+            format!("http://{addr}/messages"),
+            body.clone(),
+            Some(
+                parse_http_post_headers(
+                    r#"{"x-api-key":"test-key","anthropic-version":"2023-06-01"}"#,
+                )
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let req = server.await.unwrap();
+        assert_eq!(response, "ok");
+        assert!(req.contains("POST /messages HTTP/1.1"), "{req}");
+        assert!(req.contains("x-api-key: test-key"), "{req}");
+        assert!(req.contains("anthropic-version: 2023-06-01"), "{req}");
+        assert!(req.contains("content-type: application/json"), "{req}");
+        assert!(req.ends_with(&body), "{req}");
+    }
+
+    #[tokio::test]
+    async fn op_http_post_headers_preserves_allowlist_rejection() {
+        let err = super::http_post_with_headers(
+            "http://example.com/v1/messages".to_string(),
+            "{}".to_string(),
+            Some(parse_http_post_headers("{}").unwrap()),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "got: {err}");
+    }
+
+    #[test]
+    fn op_http_post_headers_rejects_count_size_and_host_header() {
+        let defaulted = parse_http_post_headers(r#"{"x-test":"ok"}"#).unwrap();
+        assert_eq!(defaulted.get("content-type").unwrap(), "application/json");
+        let overridden =
+            parse_http_post_headers(r#"{"content-type":"application/x-ndjson"}"#).unwrap();
+        assert_eq!(
+            overridden.get("content-type").unwrap(),
+            "application/x-ndjson"
+        );
+
+        let too_many = format!(
+            "{{{}}}",
+            (0..25)
+                .map(|i| format!(r#""x-{i}":"v""#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert!(parse_http_post_headers(&too_many)
+            .unwrap_err()
+            .to_string()
+            .contains("too many"));
+
+        let too_large = format!(r#"{{"x-test":"{}"}}"#, "a".repeat(4097));
+        assert!(parse_http_post_headers(&too_large)
+            .unwrap_err()
+            .to_string()
+            .contains("too large"));
+
+        assert!(parse_http_post_headers(r#"{"host":"evil.test"}"#)
+            .unwrap_err()
+            .to_string()
+            .contains("Host"));
+        assert!(parse_http_post_headers(r#"[]"#)
+            .unwrap_err()
+            .to_string()
+            .contains("object"));
+    }
 }
 
 extension!(
@@ -550,8 +831,10 @@ extension!(
         op_counter_inc,
         op_read_asset,
         op_http_post,
+        op_http_post_headers,
         op_sleep_ms,
         op_sha256,
+        op_read_env,
         op_write_trace,
         op_append_trace,
         op_read_trace,

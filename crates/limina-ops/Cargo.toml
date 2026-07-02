@@ -9,5 +9,6 @@ publish.workspace = true
 deno_core.workspace = true
 deno_error.workspace = true
 reqwest.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 sha2.workspace = true
