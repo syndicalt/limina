@@ -13,6 +13,14 @@
 // SAB requires CROSS-ORIGIN ISOLATION (COOP: same-origin + COEP: require-corp). Serve the editor with
 // `node tools/scaffold/scripts/serve.mjs editor 5173`. Without it (or without WebGPU) runLive returns
 // null and we show the poster; the MCP panels keep working.
+//
+// Viewport editing controls:
+// - W/E/R: translate / rotate / scale gizmo modes.
+// - Ctrl hold: temporary rotate mode, restored to translate on release.
+// - S: toggle TransformControls snapping; UI inputs set translate / rotate / scale increments.
+// - X: toggle gizmo space between global (world) and local.
+// - G: toggle the unobtrusive ground grid helper.
+// - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
 import { runLive, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { McpClient } from "./mcp-client.js";
@@ -37,6 +45,15 @@ function cuesEnabled() {
 
 const canvas = document.getElementById("editor-viewport");
 const statusEl = document.getElementById("viewport-status");
+const viewportUi = {
+  snapToggle: document.getElementById("viewport-snap-toggle"),
+  snapTranslate: document.getElementById("viewport-snap-translate"),
+  snapRotate: document.getElementById("viewport-snap-rotate"),
+  snapScale: document.getElementById("viewport-snap-scale"),
+  spaceToggle: document.getElementById("viewport-space-toggle"),
+  gridToggle: document.getElementById("viewport-grid-toggle"),
+  wireframeToggle: document.getElementById("viewport-wireframe-toggle"),
+};
 function setStatus(phase, detail) {
   if (statusEl) statusEl.textContent = detail !== undefined ? `${phase}: ${detail}` : phase;
 }
@@ -93,9 +110,11 @@ const state = {
   dirty: false,
   transformControls: undefined,
   transformHelper: undefined,
+  gridHelper: undefined,
   selected: undefined,
   ctrlRotateDown: false,
   ctrlRotateActive: false,
+  wireframeMaterials: new Map(),
   // Per-builder cues: agentId -> { helper, entityId, timeout }. Each builder's cue auto-clears
   // independently after 1500ms; a single shared RAF loop keeps every helper glued to its mesh.
   agentHighlights: new Map(),
@@ -105,6 +124,166 @@ const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 const CLICK_MOVE_TOLERANCE_PX = 5;
 const pointerClick = { id: undefined, x: 0, y: 0 };
+const SNAP_DEFAULTS = {
+  translate: 0.5,
+  rotateDegrees: 15,
+  scale: 0.1,
+};
+const viewportOptions = {
+  snapEnabled: false,
+  translateSnap: SNAP_DEFAULTS.translate,
+  rotateSnapDegrees: SNAP_DEFAULTS.rotateDegrees,
+  scaleSnap: SNAP_DEFAULTS.scale,
+  transformSpace: "world",
+  gridVisible: true,
+  wireframeVisible: false,
+};
+
+function normalizePositiveNumber(value, fallback) {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? next : fallback;
+}
+
+function updateToggleButton(button, active, activeText, inactiveText) {
+  if (!button) return;
+  button.classList.toggle("active", active);
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.textContent = active ? activeText : inactiveText;
+}
+
+function syncViewportUi() {
+  if (viewportUi.snapTranslate) viewportUi.snapTranslate.value = String(viewportOptions.translateSnap);
+  if (viewportUi.snapRotate) viewportUi.snapRotate.value = String(viewportOptions.rotateSnapDegrees);
+  if (viewportUi.snapScale) viewportUi.snapScale.value = String(viewportOptions.scaleSnap);
+  updateToggleButton(viewportUi.snapToggle, viewportOptions.snapEnabled, "Snap on", "Snap off");
+  updateToggleButton(viewportUi.spaceToggle, viewportOptions.transformSpace === "local", "Local", "Global");
+  updateToggleButton(viewportUi.gridToggle, viewportOptions.gridVisible, "Grid on", "Grid off");
+  updateToggleButton(viewportUi.wireframeToggle, viewportOptions.wireframeVisible, "Wire on", "Wire off");
+}
+
+function applySnapSettings() {
+  const controls = state.transformControls;
+  if (!controls) return;
+  const translateSnap = viewportOptions.snapEnabled ? viewportOptions.translateSnap : null;
+  const rotateSnap = viewportOptions.snapEnabled ? THREE.MathUtils.degToRad(viewportOptions.rotateSnapDegrees) : null;
+  const scaleSnap = viewportOptions.snapEnabled ? viewportOptions.scaleSnap : null;
+  controls.setTranslationSnap?.(translateSnap);
+  controls.setRotationSnap?.(rotateSnap);
+  controls.setScaleSnap?.(scaleSnap);
+}
+
+function applyTransformSpace() {
+  state.transformControls?.setSpace?.(viewportOptions.transformSpace);
+}
+
+function removeGridHelper() {
+  const grid = state.gridHelper;
+  if (!grid) return;
+  try { grid.parent?.remove(grid); } catch { /* ignore */ }
+  try { grid.geometry?.dispose?.(); } catch { /* ignore */ }
+  try { disposeMaterial(grid.material); } catch { /* ignore */ }
+  state.gridHelper = undefined;
+}
+
+function markEditorHelper(object) {
+  object.userData.editorHelper = true;
+  object.traverse?.((child) => { child.userData.editorHelper = true; });
+}
+
+function installGridHelper(running) {
+  removeGridHelper();
+  if (!viewportOptions.gridVisible || !running?.scene) return;
+  const grid = new THREE.GridHelper(64, 64, 0x34465a, 0x22303d);
+  grid.name = "limina-editor-grid";
+  markEditorHelper(grid);
+  grid.raycast = () => {};
+  const materials = Array.isArray(grid.material) ? grid.material : [grid.material];
+  for (const material of materials) {
+    material.transparent = true;
+    material.opacity = 0.28;
+    material.depthWrite = false;
+  }
+  running.scene.add(grid);
+  state.gridHelper = grid;
+}
+
+function eachMaterial(material, fn) {
+  if (Array.isArray(material)) {
+    for (const item of material) if (item) fn(item);
+  } else if (material) {
+    fn(material);
+  }
+}
+
+function restoreWireframeMaterials() {
+  for (const [material, originalWireframe] of state.wireframeMaterials) {
+    if (material) material.wireframe = originalWireframe;
+  }
+  state.wireframeMaterials.clear();
+}
+
+function applyWireframeMode(running) {
+  restoreWireframeMaterials();
+  if (!viewportOptions.wireframeVisible || !running?.scene) return;
+  running.scene.traverse((object) => {
+    if (!object?.isMesh || object.userData?.editorHelper) return;
+    eachMaterial(object.material, (material) => {
+      if (!state.wireframeMaterials.has(material)) state.wireframeMaterials.set(material, material.wireframe === true);
+      material.wireframe = true;
+    });
+  });
+}
+
+function toggleSnapping(force) {
+  viewportOptions.snapEnabled = force === undefined ? !viewportOptions.snapEnabled : force === true;
+  applySnapSettings();
+  syncViewportUi();
+}
+
+function setTransformSpace(space) {
+  viewportOptions.transformSpace = space === "local" ? "local" : "world";
+  applyTransformSpace();
+  syncViewportUi();
+}
+
+function toggleGrid(force) {
+  viewportOptions.gridVisible = force === undefined ? !viewportOptions.gridVisible : force === true;
+  if (viewportOptions.gridVisible) installGridHelper(state.running);
+  else removeGridHelper();
+  syncViewportUi();
+}
+
+function toggleWireframe(force) {
+  viewportOptions.wireframeVisible = force === undefined ? !viewportOptions.wireframeVisible : force === true;
+  applyWireframeMode(state.running);
+  syncViewportUi();
+}
+
+function bindViewportUi() {
+  viewportUi.snapToggle?.addEventListener("click", () => toggleSnapping());
+  viewportUi.spaceToggle?.addEventListener("click", () => {
+    setTransformSpace(viewportOptions.transformSpace === "local" ? "world" : "local");
+  });
+  viewportUi.gridToggle?.addEventListener("click", () => toggleGrid());
+  viewportUi.wireframeToggle?.addEventListener("click", () => toggleWireframe());
+
+  viewportUi.snapTranslate?.addEventListener("change", () => {
+    viewportOptions.translateSnap = normalizePositiveNumber(viewportUi.snapTranslate.value, SNAP_DEFAULTS.translate);
+    applySnapSettings();
+    syncViewportUi();
+  });
+  viewportUi.snapRotate?.addEventListener("change", () => {
+    viewportOptions.rotateSnapDegrees = normalizePositiveNumber(viewportUi.snapRotate.value, SNAP_DEFAULTS.rotateDegrees);
+    applySnapSettings();
+    syncViewportUi();
+  });
+  viewportUi.snapScale?.addEventListener("change", () => {
+    viewportOptions.scaleSnap = normalizePositiveNumber(viewportUi.snapScale.value, SNAP_DEFAULTS.scale);
+    applySnapSettings();
+    syncViewportUi();
+  });
+  syncViewportUi();
+}
 
 // Connect once the panels' inputs are populated (the user entered the URL + auth token and connected
 // the panels). Retries on a slow cadence until it succeeds, then switches to authoring-stream polling.
@@ -290,6 +469,7 @@ function installGizmo(running) {
   if (!running?.scene || !running?.camera || !running?.renderer?.domElement || typeof TransformControls !== "function") return;
   const controls = new TransformControls(running.camera, running.renderer.domElement);
   const helper = typeof controls.getHelper === "function" ? controls.getHelper() : controls;
+  markEditorHelper(helper);
   running.scene.add(helper);
   controls.setMode("translate");
   controls.addEventListener("dragging-changed", (event) => {
@@ -306,6 +486,8 @@ function installGizmo(running) {
   });
   state.transformControls = controls;
   state.transformHelper = helper;
+  applySnapSettings();
+  applyTransformSpace();
   reconcileCtrlRotateMode();
 }
 
@@ -403,6 +585,8 @@ async function reboot() {
   state.dirty = false;
   try {
     clearGizmo();
+    removeGridHelper();
+    restoreWireframeMaterials();
     if (state.running) { try { state.running.stop(); } catch { /* ignore */ } state.running = undefined; }
     const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
     canvas.width = w; canvas.height = h;
@@ -421,6 +605,8 @@ async function reboot() {
     if (state.running === null) setStatus("error", "no COOP/COEP or WebGPU — viewport unavailable");
     else {
       installGizmo(state.running);
+      installGridHelper(state.running);
+      applyWireframeMode(state.running);
       setStatus("live", `${state.commands.length} commands`);
     }
   } catch (e) {
@@ -449,16 +635,37 @@ canvas.addEventListener("pointercancel", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
-  if (!controls) return;
   if (isTextInputTarget(event.target)) return;
-  if (event.key === "Control" || event.ctrlKey) {
+  if (controls && (event.key === "Control" || event.ctrlKey)) {
     state.ctrlRotateDown = true;
     reconcileCtrlRotateMode();
     return;
   }
-  if (event.key === "w") controls.setMode("translate");
-  else if (event.key === "e") controls.setMode("rotate");
-  else if (event.key === "r") controls.setMode("scale");
+  const key = event.key.toLowerCase();
+  if (key === "s") {
+    event.preventDefault();
+    toggleSnapping();
+    return;
+  }
+  if (key === "x") {
+    event.preventDefault();
+    setTransformSpace(viewportOptions.transformSpace === "local" ? "world" : "local");
+    return;
+  }
+  if (key === "g") {
+    event.preventDefault();
+    toggleGrid();
+    return;
+  }
+  if (key === "f") {
+    event.preventDefault();
+    toggleWireframe();
+    return;
+  }
+  if (!controls) return;
+  if (key === "w") controls.setMode("translate");
+  else if (key === "e") controls.setMode("rotate");
+  else if (key === "r") controls.setMode("scale");
 });
 // Delete / Backspace destroys the selected entity (immediate — the world log records the destroy,
 // which is the recovery path). Guarded by isTextInputTarget so it never fires while typing in chat
@@ -486,6 +693,7 @@ window.addEventListener("blur", () => {
   reconcileCtrlRotateMode();
 });
 
+bindViewportUi();
 setStatus("waiting", "connect the panels to follow the authoring stream");
 // Self-scheduling loop (NOT a fixed setInterval): the next tick is scheduled AFTER the
 // current poll/reboot finishes, so a slow re-author can never overlap the next poll into a
@@ -504,6 +712,8 @@ window.addEventListener("beforeunload", () => {
   viewportLoopStopped = true;
   clearAgentHighlight();
   clearGizmo();
+  removeGridHelper();
+  restoreWireframeMaterials();
   try { state.running?.stop(); } catch { /* ignore */ }
   try { state.client?.close(); } catch { /* ignore */ }
 });
