@@ -39,8 +39,8 @@ import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/cha
 import type { ProviderMap } from "../../js/src/agents/systems.ts";
 
 const net = ops as unknown as NetOps;
-const PORT = 8787;
-const EDITOR_AUTH_TOKEN = ops.op_sha256(`editor:${Date.now()}:${Math.random()}`).slice(0, 32);
+const PORT = Number(ops.op_read_env("LIMINA_EDITOR_PORT")) || 8787;
+const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN") || ops.op_sha256(`editor:${Date.now()}:${Math.random()}`).slice(0, 32);
 const EDITOR_ALLOWED_PROFILES = new Set(["reviewer", "system.readonly", "reviewer.coordinator", "builder.review", "builder.readWrite"]);
 const EDITOR_ALLOWED_ORIGINS = [
   "http://localhost:5173",
