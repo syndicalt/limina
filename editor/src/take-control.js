@@ -230,6 +230,9 @@ function selectRow(row) {
   state.base = transform;
   highlightSelectedRow();
   renderInspector();
+  // The Inspector is not a menu window you open by hand — selecting an entity in the
+  // World panel pops it up (and focuses it if already open).
+  window.liminaWindows?.open?.("inspector");
 }
 
 if (worldBody && inspectorBody) {
