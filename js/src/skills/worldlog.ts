@@ -14,12 +14,27 @@ import type { WorldRecorder } from "../worldlog/recorder.ts";
 import { PHYSICS_OP_FN, type WorldCommand } from "../worldlog/log.ts";
 import type { AuthorCommand } from "../kernel/authoring.ts";
 
-/** A recorded command is replayable authoring iff it mutates the world. */
+/** A recorded command is replayable authoring iff it CONSTRUCTS the world. Physics ops count EXCEPT
+ *  `step` (the per-tick sim advance): the authoritative server records a step every tick, but the
+ *  viewport's own runLive sim steps locally — re-authoring the server's steps would flood the stream
+ *  (a reboot per poll → visible flicker) and double-simulate. `move_character`/`apply_impulse` are
+ *  per-tick DYNAMICS the local sim also reproduces, so they are excluded too; construction ops
+ *  (create_world, add-body, remove_body) are kept. */
+const PER_TICK_PHYSICS = new Set(["step", "move_character", "apply_impulse"]);
+// Read-only introspection the editor + viewport poll EVERY tick. These must be excluded by NAME, not
+// just by the permission test below: some are read-only in effect yet declare a non-`.read`
+// permission (e.g. approval.list needs `approval.review` to LIST but mutates nothing). Left in, they
+// enter the authoring stream once per poll and reboot the live viewport every second (flicker).
+const INTROSPECTION = new Set([
+  "worldlog.tail", "inspector.snapshot", "trace.tail", "approval.list",
+  "skills.list", "skills.search", "skills.browse", "skills.describe",
+]);
 function isAuthoringCommand(cmd: WorldCommand, registry: SkillRegistry): boolean {
-  if (cmd.kind === "physics") return true;
-  if (cmd.kind !== "skill") return false; // seed marker, etc.
+  if (cmd.kind === "physics") return !PER_TICK_PHYSICS.has(cmd.op);
+  if (cmd.kind !== "skill") return false;   // seed marker, etc.
+  if (INTROSPECTION.has(cmd.tool)) return false;
   const def = registry.describe(cmd.tool);
-  if (def === undefined) return false;     // a tool the replaying registry won't have
+  if (def === undefined) return false;      // a tool the replaying registry won't have
   return def.permissions.some((p) => !p.endsWith(".read"));
 }
 

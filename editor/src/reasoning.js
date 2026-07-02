@@ -36,7 +36,17 @@ function presentParents(ev, byId) {
  * @returns {{roots: TreeNode[], byId: Map<string, Ev>}}
  * @typedef {{event: Ev, kind: string, children: TreeNode[]}} TreeNode
  */
+/** Read-only introspection the editor + viewport poll every tick (worldlog.tail, inspector.snapshot,
+ *  trace.tail, approval.list, skills.*). It is infrastructure, not agent reasoning — drop it so the
+ *  panels' own polling can't flood the causal view. */
+const INTROSPECTION = new Set([
+  "worldlog.tail", "inspector.snapshot", "trace.tail", "approval.list",
+  "skills.list", "skills.search", "skills.browse", "skills.describe",
+]);
+const isIntrospection = (e) => e.type === "skill.executed" && INTROSPECTION.has(e.payload?.skill);
+
 export function buildForest(events) {
+  events = events.filter((e) => !isIntrospection(e));
   const byId = new Map();
   for (const e of events) byId.set(e.id, e);
 

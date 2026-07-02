@@ -56,11 +56,13 @@ const recOps = recorder.wrapOps(ops);
 const world = makeWorld(recOps);
 const base = { agentId: "agt_build", sessionId: SESSION, permissions: BUILDER, tick: 1, world };
 
-// Author a MIX: a top-level physics op (world setup), two mutating skills, and a READ-ONLY poll.
+// Author a MIX: world-setup physics, a PER-TICK step (must be filtered), two mutating skills, a poll.
 recOps.op_physics_create_world(-9.81);
+recOps.op_physics_step(); // per-tick sim advance — the server records one every tick; must NOT flood the viewport
 const e1 = ok(await registry.invoke("scene.createEntity", { shape: "box", position: [1, 2, 3] }, base)).entity as string;
 ok(await registry.invoke("ecs.updateComponent", { entity: e1, component: "position", value: [4, 5, 6] }, base));
 await registry.invoke("trace.tail", { afterSeq: -1 }, base); // read-only introspection — MUST be filtered out
+await registry.invoke("approval.list", {}, base).catch(() => {}); // read-only but PRIVILEGED (approval.review) — excluded by NAME, not the permission test
 
 // ---- A. worldlog.tail returns ONLY authoring commands, after the cursor -------------------------
 const tail = ok(await registry.invoke("worldlog.tail", { since: 0 }, base)) as { commands: WorldCommand[]; next: number; reset: boolean };
@@ -68,8 +70,10 @@ const tools = tail.commands.filter((c) => c.kind === "skill").map((c) => (c as {
 assert(tools.includes("scene.createEntity"), "A: authoring scene.createEntity must be present");
 assert(tools.includes("ecs.updateComponent"), "A: authoring ecs.updateComponent must be present");
 assert(!tools.includes("trace.tail"), "A: read-only trace.tail must be EXCLUDED from the authoring stream");
+assert(!tools.includes("approval.list"), "A: approval.list (read-only but PRIVILEGED) must be EXCLUDED by name — the per-poll flicker cause");
 assert(!tools.includes("worldlog.tail"), "A: the tail skill must exclude ITSELF (read-only)");
 assert(tail.commands.some((c) => c.kind === "physics" && (c as { op: string }).op === "create_world"), "A: the world-setup physics op must be present (short name)");
+assert(!tail.commands.some((c) => c.kind === "physics" && (c as { op: string }).op === "step"), "A: the PER-TICK physics step must be EXCLUDED (construction only, or it floods the viewport)");
 assert(!tail.commands.some((c) => c.kind === "seed"), "A: the seed marker must be EXCLUDED");
 assert(tail.reset === false, "A: no compaction → reset is false");
 
