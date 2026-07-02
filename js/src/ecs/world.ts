@@ -133,9 +133,21 @@ export interface PhysicsTransformOps {
   op_physics_body_transform(id: number, out: Float32Array): void;
 }
 
+const defaultPhysicsTransformScratch = new Float32Array(7);
+
 // Sparse map eid -> scene object. AoS (object refs) deliberately, since three
 // objects are not SoA-friendly; only the numeric transforms live in TypedArrays.
 const renderables: (Transformable | undefined)[] = [];
+
+/** Return the eid currently bound to a render object, if any. This intentionally
+ *  scans the existing eid -> object registry instead of maintaining duplicate
+ *  mesh identity state; picking is infrequent and can stay O(n). */
+export function renderableOwnerEid(object: unknown): number | undefined {
+  for (let eid = 0; eid < renderables.length; eid++) {
+    if (renderables[eid] === object) return eid;
+  }
+  return undefined;
+}
 
 export function createEcsWorld(): unknown {
   return createWorld();
@@ -150,6 +162,10 @@ export function spawnRenderable(
   z: number,
 ): number {
   const eid: number = addEntity(world);
+  if (eid < 0 || eid >= MAX_ENTITIES) {
+    removeEntity(world, eid);
+    throw new Error(`spawnRenderable: eid ${eid} exceeds MAX_ENTITIES ${MAX_ENTITIES}`);
+  }
   addComponent(world, eid, Position);
   addComponent(world, eid, Rotation);
   addComponent(world, eid, Scale);
@@ -176,8 +192,9 @@ export function despawnRenderable(world: unknown, eid: number): void {
 
 /** Copy ECS transforms onto their bound scene objects. The ONLY path that
  *  drives object transforms - removing it freezes the scene. */
-export function renderSyncSystem(world: unknown): void {
+export function renderSyncSystem(world: unknown, skip?: Set<number>): void {
   for (const eid of query(world, [Position, Rotation, Scale])) {
+    if (skip?.has(eid)) continue;
     const object = renderables[eid];
     if (object === undefined) continue;
     object.position.set(Position.x[eid], Position.y[eid], Position.z[eid]);
@@ -191,7 +208,7 @@ export function syncPhysicsBodyTransform(
   eid: number,
   bodyId: number,
   ops: PhysicsTransformOps,
-  scratch = new Float32Array(7),
+  scratch = defaultPhysicsTransformScratch,
 ): void {
   ops.op_physics_body_transform(bodyId, scratch);
   Position.x[eid] = scratch[0];

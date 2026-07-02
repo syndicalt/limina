@@ -11,11 +11,13 @@
     <div class="brand">limina <span class="brand-sub">co-authoring editor</span></div>
     <div class="conn">
       <label>server <input id="url" type="text" value="ws://localhost:8787/" size="22" /></label>
+      <label>token <input id="auth-token" type="password" value="" size="18" autocomplete="off" /></label>
       <label>as
         <select id="profile">
           <option value="reviewer" selected>reviewer</option>
           <option value="system.readonly">system.readonly</option>
-          <option value="builder.readWrite">builder.readWrite</option>
+          <option value="reviewer.coordinator">reviewer.coordinator</option>
+          <option value="builder.review">builder.review</option>
         </select>
       </label>
       <label>poll ms <input id="interval" type="number" value="1000" min="250" step="250" size="5" /></label>
@@ -25,46 +27,61 @@
     </div>
   </header>
 
-  <main class="panels">
-    <section class="panel" id="viewport">
+  <!-- STAGE: the viewport IS the app (full canvas). Tools are independent floating windows, each
+       opened from the ☰ menu, draggable by its title bar and closable — not one crammed sidebar. -->
+  <main class="stage">
+    <section class="panel viewport" id="viewport">
       <div class="panel-head">
         <h3>Live viewport</h3>
         <span class="hint"><span id="viewport-status">idle</span> · runLive (sim-worker + SAB + WebGPU)</span>
       </div>
       <div class="panel-body" id="viewport-body">
-        <canvas id="editor-viewport" width="640" height="360" style="width:100%;height:100%;display:block;background:#0b0f14;border-radius:6px"></canvas>
+        <canvas id="editor-viewport" width="640" height="360"></canvas>
       </div>
     </section>
 
-    <section class="panel" id="world">
-      <div class="panel-head"><h3>World</h3><span class="hint">inspector.snapshot</span></div>
+    <button class="tools-toggle" id="tools-toggle" title="Tools" aria-label="Tools menu">☰</button>
+    <nav class="tools-menu" id="tools-menu" hidden>
+      <button data-target="world">World</button>
+      <button data-target="inspector">Inspector</button>
+      <button data-target="reasoning">Reasoning</button>
+      <button data-target="history">History</button>
+      <button data-target="approval">Approval</button>
+    </nav>
+
+    <section class="panel window" id="world" hidden>
+      <div class="panel-head" data-drag><h3>World</h3><span class="hint">inspector.snapshot</span><button class="win-close" data-close="world" aria-label="Close">×</button></div>
       <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
     </section>
 
-    <section class="panel" id="reasoning">
-      <div class="panel-head"><h3>Reasoning</h3><span class="hint">trace.tail · causedBy</span></div>
+    <section class="panel window" id="inspector" hidden>
+      <div class="panel-head" data-drag><h3>Inspector</h3><span class="hint">take control</span><button class="win-close" data-close="inspector">×</button></div>
+      <div class="panel-body" id="inspector-body"><div class="muted">select an entity in World</div></div>
+    </section>
+
+    <section class="panel window" id="reasoning" hidden>
+      <div class="panel-head" data-drag><h3>Reasoning</h3><span class="hint">trace.tail · causedBy</span><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
       <div class="panel-body" id="reason-body"><div class="muted">connect to begin</div></div>
     </section>
 
-    <section class="panel" id="history">
-      <div class="panel-head"><h3>History</h3><span class="hint">git-for-worlds · branch · time-travel · merge</span></div>
+    <section class="panel window" id="history" hidden>
+      <div class="panel-head" data-drag><h3>History</h3><span class="hint">branch · time-travel</span><button class="win-close" data-close="history" aria-label="Close">×</button></div>
       <div class="panel-body" id="history-body"><div class="muted">connect to begin</div></div>
     </section>
 
-    <section class="panel" id="approval">
-      <div class="panel-head">
-        <h3>Approval queue <span id="approval-count" class="count">0</span></h3>
-        <button id="propose" class="btn btn-small" title="Connect a builder.review agent and propose a held edit">+ test edit</button>
-      </div>
+    <section class="panel window" id="approval" hidden>
+      <div class="panel-head" data-drag><h3>Approval <span id="approval-count" class="count">0</span></h3><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button class="win-close" data-close="approval" aria-label="Close">×</button></div>
       <div class="panel-body" id="approval-body"><div class="muted">connect to begin</div></div>
     </section>
   </main>
 
   <footer class="logbar">
-    <div class="log-head">activity</div>
+    <div class="log-head">console</div>
     <div id="log" class="log"></div>
   </footer>
 
+  <script type="module" src="src/windows.js"></script>
+  <script type="module" src="src/take-control.js"></script>
   <script type="module" src="src/app.js"></script>
   <script type="module" src="src/viewport.js"></script>
 </body>

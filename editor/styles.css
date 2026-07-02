@@ -54,8 +54,53 @@ input, select {
 .btn-approve { background: var(--green); color: #06210d; }
 .btn-reject { background: var(--red); color: #2a0606; }
 
-/* panels */
-.panels { flex: 1; display: grid; grid-template-columns: 1.1fr 1.2fr 1fr; gap: 1px; background: var(--border); min-height: 0; }
+/* stage: the viewport IS the app — it fills the whole area; the tools float over it */
+.stage { flex: 1; position: relative; min-height: 0; background: var(--bg); }
+.viewport { position: absolute; inset: 0; background: var(--panel); }
+.viewport > .panel-head {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2; border-bottom: none;
+  background: linear-gradient(to bottom, rgba(14, 17, 22, .82), rgba(14, 17, 22, 0));
+  pointer-events: none;
+}
+.viewport > .panel-body { position: absolute; inset: 0; padding: 0; }
+#editor-viewport { width: 100%; height: 100%; display: block; background: #0b0f14; }
+
+/* floating tool windows — opened from the ☰ menu, draggable by the title bar, closable */
+.window {
+  position: absolute; width: 360px; max-height: 62vh; z-index: 5;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: rgba(22, 27, 34, .95); backdrop-filter: blur(9px);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
+}
+.window[hidden] { display: none; }
+.window > .panel-head { justify-content: flex-start; gap: 8px; cursor: move; user-select: none; }
+.win-close {
+  margin-left: auto; background: transparent; border: none; color: var(--dim);
+  cursor: pointer; font-size: 17px; line-height: 1; padding: 0 2px;
+}
+.win-close:hover { color: var(--text); }
+
+/* ☰ tools menu (top-right of the stage) */
+.tools-toggle {
+  position: absolute; top: 12px; right: 12px; z-index: 1000000;
+  width: 36px; height: 34px; border-radius: 8px; cursor: pointer;
+  background: rgba(22, 27, 34, .93); color: var(--text); border: 1px solid var(--border);
+  font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.tools-toggle:hover { filter: brightness(1.15); }
+.tools-menu {
+  position: absolute; top: 54px; right: 12px; z-index: 1000000; min-width: 150px;
+  background: rgba(22, 27, 34, .97); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+}
+.tools-menu[hidden] { display: none; }
+.tools-menu button {
+  background: transparent; border: none; color: var(--text); text-align: left;
+  padding: 6px 12px 6px 22px; border-radius: 5px; cursor: pointer; font-size: 12px; position: relative;
+}
+.tools-menu button:hover { background: var(--panel-2); }
+.tools-menu button.open::before { content: "●"; position: absolute; left: 9px; top: 9px; color: var(--green); font-size: 9px; }
+
 .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); }
 .panel-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
@@ -76,8 +121,25 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 /* lists */
 .list { display: flex; flex-direction: column; gap: 3px; }
 .row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; background: var(--panel-2); }
+.row.selected { outline: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 18%, var(--panel-2)); }
 .tags { display: flex; gap: 4px; margin-left: auto; }
 .tag { background: #233042; color: var(--accent); border-radius: 4px; padding: 1px 6px; font-size: 10px; }
+
+/* Inspector take-control form */
+.take-form { display: flex; flex-direction: column; gap: 10px; }
+.take-entity { color: var(--text); }
+.take-fieldset {
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px;
+}
+.take-fieldset legend { color: var(--dim); font-size: 11px; padding: 0 4px; }
+.take-fieldset label { color: var(--dim); display: flex; align-items: center; gap: 4px; min-width: 0; }
+.take-fieldset input { width: 100%; min-width: 0; font-family: var(--mono); }
+.take-actions { display: flex; justify-content: flex-end; }
+.take-status { color: var(--dim); font-size: 11px; min-height: 16px; }
+.take-status-ok { color: var(--green); }
+.take-status-warn { color: var(--amber); }
+.take-status-err { color: var(--red); }
 
 /* reasoning tree */
 .tree { list-style: none; margin: 0; padding-left: 14px; border-left: 1px dashed var(--border); }
@@ -101,9 +163,11 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .approval-actions { display: flex; gap: 8px; }
 
 /* log */
-.logbar { background: var(--panel); border-top: 1px solid var(--border); max-height: 150px; display: flex; flex-direction: column; }
-.log-head { padding: 5px 12px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
-.log { overflow: auto; padding: 4px 12px; font-family: var(--mono); font-size: 11px; }
+/* console: fixed height, drag its header up/down to expand (windows.js clamps 32px..50vh) */
+.logbar { background: var(--panel); border-top: 1px solid var(--border); height: 150px; min-height: 28px; display: flex; flex-direction: column; }
+.log-head { padding: 5px 12px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); cursor: ns-resize; user-select: none; flex: none; }
+.log-head::before { content: "⋯"; margin-right: 8px; color: var(--muted); letter-spacing: 2px; }
+.log { overflow: auto; padding: 4px 12px; font-family: var(--mono); font-size: 11px; flex: 1; min-height: 0; }
 .log-row { display: flex; gap: 10px; padding: 1px 0; }
 .log-time { color: var(--muted); }
 .log-ok .log-msg { color: var(--green); }

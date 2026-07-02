@@ -14,13 +14,17 @@
 // `typeof document` so importing this module off a browser does nothing.
 
 import * as THREE from "../build/three.bundle.mjs";
+export { THREE };
+export { OrbitControls } from "../build/three.bundle.mjs";
+export { TransformControls } from "../build/three.bundle.mjs";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
-import { createEcsWorld, Position, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
+import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
 import { resolveProfile } from "./skills/permissions.ts";
+import { applyAuthorCommand } from "./kernel/authoring.ts";
 import { LiminaTracer } from "./observability/event.ts";
 // ── Phase 8 Mode-B (M5) live runtime: the verified M1–M4 + M3 worker pieces ──
 import { WasmRapierPhysics, type RapierModule } from "./browser/wasm-rapier-physics.ts";
@@ -244,7 +248,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
       registerCoreSkills(r, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)) });
       return r;
     },
-    tracer: new LiminaTracer("ses_browser_player"),
+    tracer: LiminaTracer.ephemeral("ses_browser_player"),
     opsOverrides: hostOverrides,
   });
 
@@ -406,12 +410,30 @@ export interface RunLiveOptions {
   profile?: string;
   /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future). */
   orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number };
+  /** Opt-in browser camera controls for editor-style viewports. Falsy preserves the legacy auto-spin. */
+  orbitControls?: boolean;
 }
 
 export interface RunningLive {
   worker: WorkerLike;
   loop: AccumulatorLoopHandle;
+  scene: SceneLike;
+  camera: CameraLike;
+  renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void; domElement?: unknown };
+  entities: EntityTable;
+  pickEntityId(object: { parent?: unknown }): string | undefined;
+  cameraControls?: unknown;
+  applyAuthorCommands(cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }>;
+  setCameraControlsEnabled(on: boolean): void;
+  setSyncSuppressed(eid: number, on: boolean): void;
   stop(): void;
+}
+
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial"]);
+
+function authoringFailureMessage(cmd: AuthorCommand, message: string): string {
+  if (cmd.kind === "physics") return `authoring physics '${String(cmd.op)}' failed: ${message}`;
+  return `authoring '${cmd.tool}' failed: ${message}`;
 }
 
 interface ReadyMessage { type: "ready"; buffer: SharedArrayBuffer | ArrayBuffer; inputBuffer: SharedArrayBuffer | ArrayBuffer; status: SharedArrayBuffer | ArrayBuffer; }
@@ -528,25 +550,21 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     height: opts.height,
     mode: "windowed",
   };
-  const registry = new SkillRegistry(new LiminaTracer("ses_browser_live"));
+  const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   registerCoreSkills(registry);
   const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
-  for (const cmd of opts.commands) {
-    if (cmd.kind === "physics") {
-      const fn = (ops as unknown as Record<string, (...a: unknown[]) => unknown>)[cmd.op];
-      fn(...cmd.args);
-      continue;
-    }
-    const res = await registry.invoke(cmd.tool, cmd.input, {
-      agentId: cmd.agentId ?? "author",
+  const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
+    return applyAuthorCommand(registry, world, cmd, {
       sessionId: "ses_browser_live",
-      permissions: cmd.perms !== undefined ? new Set(cmd.perms) : permissions,
+      defaultAgentId: "author",
+      defaultPerms: permissions,
       tick: 0,
-      world,
-      causedBy: [],
     });
+  };
+  for (const cmd of opts.commands) {
+    const res = await applyOne(cmd);
     if (!res.success) {
-      status("error", `authoring '${cmd.tool}' failed: ${res.error?.message ?? "unknown"}`);
+      status("error", authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
       worker.terminate();
       return null;
     }
@@ -565,6 +583,16 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     authoredScale.Scale.y[eid] = Scale.y[eid];
     authoredScale.Scale.z[eid] = Scale.z[eid];
   }
+  const syncAuthoredScaleMutation = (cmd: AuthorCommand): void => {
+    if (cmd.kind !== "skill" || cmd.tool !== "ecs.updateComponent") return;
+    const input = cmd.input as { entity?: unknown; component?: unknown; value?: unknown };
+    if (typeof input.entity !== "string" || input.component !== "scale" || !Array.isArray(input.value)) return;
+    const eid = entities.resolve(input.entity)?.eid;
+    if (eid === undefined) return;
+    authoredScale.Scale.x[eid] = Number(input.value[0]);
+    authoredScale.Scale.y[eid] = Number(input.value[1]);
+    authoredScale.Scale.z[eid] = Number(input.value[2]);
+  };
 
   // ── M4 interpolation: tween the two latest frozen ticks into the render store
   //    (the world.ts SoA globals renderSyncSystem reads) each frame. ──
@@ -572,6 +600,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const interp = new FrameInterpolator(renderStore);
   const ring = new SnapshotRing(eids, authoredScale);
   let lastConsumed = -1;
+  const suppressedEids = new Set<number>();
 
   // ── Input pump + camera framing. ──
   const liveInput = new LivePlayerInput();
@@ -583,12 +612,47 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let angle = 0;
   const radius = opts.orbit?.radius ?? 16;
   const camHeight = opts.orbit?.height ?? 8;
+  let cameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
+  if (opts.orbitControls === true) {
+    camera.position.set(
+      orbitCenter[0] + Math.cos(angle) * radius,
+      orbitCenter[1] + camHeight,
+      orbitCenter[2] + Math.sin(angle) * radius,
+    );
+    camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+    cameraControls = new THREE.OrbitControls(camera, renderer.domElement);
+    cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+    cameraControls.enableRotate = true;
+    cameraControls.enableZoom = true;
+    cameraControls.enablePan = true;
+    cameraControls.enableDamping = true;
+    cameraControls.update();
+  }
 
   // If the worker already threw during the WebGPU/scene build above, bail now instead
   // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
   if (aborted) { worker.terminate(); return null; }
 
   status("ready", `${eids.length} entities authored — live sim running`);
+
+  const entityIdForEid = (eid: number): string | undefined => {
+    for (const id of entities.ids()) {
+      if (entities.resolve(id)?.eid === eid) return id;
+    }
+    return undefined;
+  };
+  const pickEntityId = (object: { parent?: unknown }): string | undefined => {
+    let current: unknown = object;
+    while (current !== undefined && current !== null) {
+      const eid = renderableOwnerEid(current);
+      if (eid !== undefined) {
+        const id = entityIdForEid(eid);
+        if (id !== undefined) return id;
+      }
+      current = typeof current === "object" ? (current as { parent?: unknown }).parent : undefined;
+    }
+    return undefined;
+  };
 
   // ── The accumulator rAF loop (host.ts). `step` consumes the worker's latest tick
   //    (freezing it for interpolation) at the fixed cadence; `frame(alpha)` pumps
@@ -607,14 +671,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       inputRing.writeInput(liveInput.frame(lastConsumed < 0 ? 0 : lastConsumed, inFrame));
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
       interp.interpolate(alpha, ring.presentSet);
-      renderSyncSystem(ecs);
-      angle += orbitSpin;
-      camera.position.set(
-        orbitCenter[0] + Math.cos(angle) * radius,
-        orbitCenter[1] + camHeight,
-        orbitCenter[2] + Math.sin(angle) * radius,
-      );
-      camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+      renderSyncSystem(ecs, suppressedEids);
+      if (cameraControls !== undefined) {
+        cameraControls.update();
+      } else {
+        angle += orbitSpin;
+        camera.position.set(
+          orbitCenter[0] + Math.cos(angle) * radius,
+          orbitCenter[1] + camHeight,
+          orbitCenter[2] + Math.sin(angle) * radius,
+        );
+        camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+      }
       renderer.render(scene, camera);
     },
   });
@@ -623,8 +691,46 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   return {
     worker,
     loop,
+    scene,
+    camera,
+    renderer,
+    entities,
+    pickEntityId,
+    cameraControls,
+    applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
+      let structural = 0;
+      for (const cmd of cmds) {
+        if (cmd.kind === "skill" && !LIVE_IN_PLACE_SKILLS.has(cmd.tool)) structural++;
+      }
+      if (structural > 0) return { applied: 0, needsReboot: true, structural };
+
+      const mutationCmds = cmds.filter((cmd): cmd is Extract<AuthorCommand, { kind: "skill" }> =>
+        cmd.kind === "skill" && LIVE_IN_PLACE_SKILLS.has(cmd.tool)
+      );
+      let applied = 0;
+      for (const cmd of cmds) {
+        const res = await applyOne(cmd);
+        if (!res.success) {
+          throw new Error(authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
+        }
+        syncAuthoredScaleMutation(cmd);
+        applied++;
+      }
+      if (mutationCmds.length > 0) {
+        worker.postMessage({ type: "applyCommands", commands: mutationCmds });
+      }
+      return { applied, needsReboot: false, structural: 0 };
+    },
+    setCameraControlsEnabled: (on: boolean): void => {
+      if (cameraControls !== undefined) cameraControls.enabled = on;
+    },
+    setSyncSuppressed: (eid: number, on: boolean): void => {
+      if (on) suppressedEids.add(eid);
+      else suppressedEids.delete(eid);
+    },
     stop: (): void => {
       loop.stop();
+      cameraControls?.dispose();
       try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }
       worker.terminate();
       if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
