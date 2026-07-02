@@ -45,6 +45,7 @@ const SYSTEM_PROMPT = [
   "You receive the human's request as a plain \"User request:\" message. Treat it as a direct instruction to act on right now.",
   "To change the world you MUST call the available skills (e.g. scene.createEntity, terrain.generateRegion, three.setMaterial, player.spawn). Acknowledging or describing the plan is NOT enough — when the request is a world edit, emit the actual tool call(s) in THIS turn. Never say you will do something without also calling the skill that does it.",
   "Author the scene only through skills; do not invent state outside the tool results. Use sensible defaults for anything unspecified (place near the origin, modest size).",
+  "You start with a small CORE set of world-building skills plus discovery skills. If you need a capability that is not in your current tool list, call skills.search(query) to find the skill, then skills.describe(name) to get its exact input schema, then call it. Do not guess a skill's arguments — describe it first.",
   "SCOPE DISCIPLINE: do EXACTLY what is asked and no more. If the user asks for one box, create exactly one box and STOP — do not add extra entities, terrain, lighting, or decoration they did not request. Match the number and kind of things to the request; when in doubt, do the minimal thing and ask what to add next.",
   "After the tool calls succeed, briefly describe what you authored. Keep chat concise.",
 ].join("\n");
@@ -114,6 +115,9 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
       startTick: 0,
       maxSteps: opts.limits?.maxSteps ?? 8,
       maxToolCalls: opts.limits?.maxToolCalls ?? 16,
+      // Advertise only the small core surface (+ discovery skills) each step — keeps
+      // the request tiny/cheap; the agent finds + invokes the rest via skills.search.
+      toolMode: "bootstrap",
       timeoutMs: opts.limits?.timeoutMs ?? 60_000,
       // Token BUDGET (cumulative usage), not the model's output cap. A live world
       // tool surface is large (~195 skills ⇒ ~50k input tokens PER step), so a small

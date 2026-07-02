@@ -249,6 +249,12 @@ export interface BoundedMultiTurnOptions {
   maxToolCalls: number;
   timeoutMs: number;
   maxTokens?: number;
+  /** Tool EXPOSURE tier sent to the model each step. "bootstrap" advertises only the
+   *  small core surface (+ skills.search/browse/describe for on-demand discovery) —
+   *  keeps the request tiny and cheap even as the catalog grows; the agent can still
+   *  INVOKE any registered skill it discovers. "full" (default) advertises everything
+   *  the grants allow (back-compat for autonomous NPC agents). */
+  toolMode?: "bootstrap" | "full";
   onText?: (text: string) => void;
   onStep?: (step: { tool: string; label: string; icon?: string }) => void;
   onError?: (err: unknown) => void;
@@ -356,7 +362,7 @@ export async function runBoundedMultiTurn(
     const decision = await decideWithTimeout(provider, {
       systemPrompt: agent.llm.systemPrompt,
       perception: agent.perception,
-      tools: registry.list(agentGrants(agent)),
+      tools: registry.list(agentGrants(agent), { mode: options.toolMode ?? "full" }),
       previousResults: [...previousResults],
     }, options.timeoutMs - elapsed(start));
     if (decision === "timeout") {
