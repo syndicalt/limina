@@ -28,7 +28,7 @@
 // the controller without the shell touching a Worker global).
 
 import { EntityTable, type CameraLike, type EngineOps, type PhysicsOps, type SceneLike } from "../engine.ts";
-import { createEcsWorld, Position, Rotation } from "../ecs/world.ts";
+import { createEcsWorld } from "../ecs/world.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
@@ -365,22 +365,17 @@ export class SimWorkerController {
     const scratch = this.scratch7;
     for (const id of this.entityTable.ids()) {
       const entry = this.entityTable.resolve(id);
-      if (entry === undefined) continue;
-      if (entry.bodyId !== undefined) {
-        // Physics-bound: stream the live Rapier body transform.
-        this.world.ops.op_physics_body_transform(entry.bodyId, scratch);
-        this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
-        this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
-      } else {
-        // Bodyless static renderable (a scene.createEntity with no dynamic/static body):
-        // its authored pose lives in the ECS SoA (set at spawn, updated by
-        // ecs.updateComponent). Stream THAT into the SAB. Without this the render thread
-        // reads the entity's never-written slot as the default (0,0,0) -- so a world
-        // rebuilt via loadWorld (the offline-authored → reconnect re-author path) renders
-        // every bodyless entity at the origin instead of where it was placed.
-        this.transformStorage.writePosition(entry.eid, Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]);
-        this.transformStorage.writeRotation(entry.eid, Rotation.x[entry.eid], Rotation.y[entry.eid], Rotation.z[entry.eid], Rotation.w[entry.eid]);
-      }
+      if (entry === undefined || entry.bodyId === undefined) continue;
+      // ONLY physics-bound entities stream their live transform into the SAB each tick.
+      // Bodyless static renderables are DELIBERATELY not written here: putting them in the
+      // per-tick SAB present-set makes renderSyncSystem overwrite a gizmo/inspector move the
+      // instant the drag's sync-suppression lifts (before the server round-trip lands), which
+      // breaks direct-manipulation editing. (The offline-authored → reconnect origin-render
+      // bug this once addressed needs a movement-safe re-fix: sync a bodyless pose on load /
+      // on authored change, not every frame.)
+      this.world.ops.op_physics_body_transform(entry.bodyId, scratch);
+      this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+      this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
     }
   }
 
