@@ -62,8 +62,12 @@ const at = (tick: number) => ({ agentId: "agt_p57", sessionId: "ses_p57", permis
 
 const rA = await registry.invoke("scene.createEntity", { position: [1, 2, 3] }, at(1));
 const rB = await registry.invoke("scene.createEntity", { position: [4, 5, 6] }, at(2));
+// C: a distinctly-shaped primitive — its shape/size/color live ONLY in the create command,
+// so the origin is the only way a bounded-tail viewer can rebuild its mesh.
+const rC = await registry.invoke("scene.createEntity", { shape: "sphere", size: 2, color: 0xff0000, position: [7, 8, 9] }, at(3));
 const idA = (rA.result as { entity: string }).entity;
 const idB = (rB.result as { entity: string }).entity;
+const idC = (rC.result as { entity: string }).entity;
 const eidA = world.entities.resolve(idA)!.eid;
 
 // Tag A; give B a resource binding (as an asset-place skill would).
@@ -92,6 +96,13 @@ const parsed = parseSnapshot(serializeSnapshot(snap));
 assert(parsed.entities.find((e) => e.id === idB)?.resource?.hash === "sha256:deadbeef", "resource must survive JSON round-trip");
 assert(parsed.entities.find((e) => e.id === idA)?.tags.join(",") === "hostile,tower", "tags must survive JSON round-trip");
 
+// Origin: the structural params for rebuilding the mesh must survive capture + JSON round-trip.
+const entC = snap.entities.find((e) => e.id === idC)!;
+assert(entC.origin?.tool === "scene.createEntity", "capture must record the create command as origin");
+assert(entC.origin?.input.shape === "sphere" && entC.origin?.input.size === 2 && entC.origin?.input.color === 0xff0000, "origin must carry the structural params (shape/size/color)");
+const parsedC = parsed.entities.find((e) => e.id === idC)!;
+assert(parsedC.origin?.input.shape === "sphere" && parsedC.origin?.input.size === 2, "origin structural params must survive JSON round-trip");
+
 const recovered = await recoverWorld(parsed, [], { makeWorld: makeHeadlessWorld, makeRegistry, tracer: new LiminaTracer("ses_p57_recover") });
 
 // 1. Transforms/physics identical (the pre-existing contract).
@@ -107,5 +118,9 @@ const restoredRes = recovered.world.entities.resolve(idB)?.resource;
 assert(restoredRes !== undefined, "resource was not restored from the snapshot");
 assert(restoredRes.assetId === "watchtower-1" && restoredRes.hash === "sha256:deadbeef" && restoredRes.meshCount === 5, "restored resource metadata is wrong");
 assert(recovered.world.entities.resolve(idA)?.resource === undefined, "non-asset entity must have no resource after restore");
+
+// 4. Origin (create command) rebound so a restored world can also rebuild structure.
+const restoredOrigin = recovered.world.entities.resolve(idC)?.origin;
+assert(restoredOrigin?.tool === "scene.createEntity" && restoredOrigin?.input.shape === "sphere" && restoredOrigin?.input.size === 2, "origin was not restored from the snapshot");
 
 ops.op_log("[js] p57_snapshot_v3_extend OK: WorldSnapshot v3 captures + restores tags and resource metadata (JSON round-trip + recoverWorld), so the snapshot alone rebuilds the world without replaying pre-snapshot authoring commands");

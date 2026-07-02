@@ -230,12 +230,23 @@ export interface LoadedResourceMetadata {
 
 // ---- Entity table: opaque ent_ ids -> internal handles -------------------
 
+/** The authoring command ({tool, input}) that CREATED this entity. Kept as a runtime
+ *  binding so a self-sufficient world snapshot (M2 v3) can carry the STRUCTURAL params
+ *  (shape/size/material for primitives — which live only in the create command, not in
+ *  world state) to a viewer that rebuilds meshes after the create command has been
+ *  compacted out of the live log. Not part of the identity slice; rebound on re-creation. */
+export interface EntityOrigin {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
 export interface EntityEntry {
   eid: number;
   generation: number;
   mesh?: SceneObject;
   bodyId?: number;
   resource?: LoadedResourceMetadata;
+  origin?: EntityOrigin;
 }
 
 /** The serializable identity slice of one entity-table entry. The mesh/resource
@@ -291,6 +302,12 @@ export class EntityTable {
   bindResource(id: string, resource: LoadedResourceMetadata): void {
     const entry = this.map.get(id);
     if (entry !== undefined) entry.resource = resource;
+  }
+  /** Re-attach the origin (create command) to a live entry after a snapshot restore —
+   *  the companion to bindResource for the structural rebuild binding. No-op if not live. */
+  bindOrigin(id: string, origin: EntityOrigin): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.origin = origin;
   }
   /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
    *  when no live entity owns that body. Replaces the per-call linear scan the

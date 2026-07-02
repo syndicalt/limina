@@ -32,7 +32,7 @@
 
 import { Position, Rotation, Scale } from "../ecs/world.ts";
 import { $internal } from "../../build/bitecs.bundle.mjs";
-import type { EntityTableSnapshot, LoadedResourceMetadata } from "../engine.ts";
+import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata } from "../engine.ts";
 import type { WorldContext } from "../skills/registry.ts";
 import {
   captureRandomState,
@@ -106,6 +106,10 @@ export interface SnapshotEntity {
   /** Placed-asset metadata (v3), when this entity is asset-backed. The browser
    *  needs it to rebuild the mesh without replaying the original create command. */
   resource?: LoadedResourceMetadata;
+  /** The create command ({tool, input}) that authored this entity (v3). Carries the
+   *  structural params (primitive shape/size/material) that live ONLY in the create
+   *  command, so a bounded-tail viewer rebuilds the mesh without the original command. */
+  origin?: EntityOrigin;
 }
 
 /** A complete, self-contained world snapshot at a tick boundary. */
@@ -265,6 +269,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]],
       tags: tagSet === undefined ? [] : [...tagSet].sort(),
       resource: world.entities.resolve(entry.id)?.resource,
+      origin: world.entities.resolve(entry.id)?.origin,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -332,6 +337,8 @@ const snapshotEntitySchema = z.object({
   // Optional/defaulted so a pre-v3 or minimal snapshot literal still parses.
   tags: z.array(z.string()).optional().default([]),
   resource: resourceMetaSchema.optional(),
+  // The create command; input is arbitrary skill params (passthrough — do not strip).
+  origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -419,6 +426,7 @@ export function restoreSnapshot(
     Scale.x[e.eid] = e.scale[0]; Scale.y[e.eid] = e.scale[1]; Scale.z[e.eid] = e.scale[2];
     if (e.tags.length > 0) world.tags.set(e.eid, new Set(e.tags));
     if (e.resource !== undefined) world.entities.bindResource(e.id, e.resource);
+    if (e.origin !== undefined) world.entities.bindOrigin(e.id, e.origin);
   }
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
   //    native blob cannot carry (matched to live controllers by body id). The

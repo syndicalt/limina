@@ -96,7 +96,11 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
         bodyId = ctx.world.ops.op_physics_add_box_material(x, y, z, input.size / 2, input.friction, input.restitution);
       }
     }
-    const entity = ctx.world.entities.create({ eid, mesh, bodyId });
+    // Persist the create command as the entity's origin so a self-sufficient snapshot can
+    // carry the structural params (shape/size/material/color) a bounded-tail viewer needs
+    // to rebuild the mesh once this create command has been compacted out of the live log.
+    const origin = { tool: "scene.createEntity", input: { ...input } };
+    const entity = ctx.world.entities.create({ eid, mesh, bodyId, origin });
     ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
     return { entity };
   },
