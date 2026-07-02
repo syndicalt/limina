@@ -237,16 +237,25 @@ function buildAnthropicUserMessage(req: DecideRequest): string {
   const request = direct.length > 0
     ? direct
     : (instructions.length > 0 ? instructions.join("\n") : "Continue the previous work.");
-  const parts = [
-    `User request:\n${request}`,
-    "",
-    "Carry this out now by CALLING the appropriate skill(s) — do not just describe or acknowledge it.",
-  ];
   const prior = Array.isArray(req.previousResults) ? req.previousResults : [];
-  if (prior.length > 0) {
-    parts.push("", `Results of your prior tool calls this turn (JSON):\n${JSON.stringify(prior).slice(0, 6000)}`);
+  if (prior.length === 0) {
+    // FIRST step of the turn: do the request now.
+    return [
+      `User request:\n${request}`,
+      "",
+      "Carry this out now by CALLING the appropriate skill(s) — do not just describe or acknowledge it.",
+    ].join("\n");
   }
-  return parts.join("\n");
+  // FOLLOW-UP step: work has already been done this turn. Frame it as "are we done?"
+  // — NOT a repeat of the original imperative, which is what makes the model re-run
+  // a create it already succeeded at (one sphere → three spheres).
+  return [
+    `Original request:\n${request}`,
+    "",
+    `Tool calls you have ALREADY made this turn, with their results (JSON):\n${JSON.stringify(prior).slice(0, 6000)}`,
+    "",
+    "Check whether the original request is now fully satisfied. If it is, STOP: make NO further tool calls and reply with one short summary sentence. Do NOT repeat a call you already made, and do NOT add anything the user did not ask for. Only call another skill if the request genuinely still needs it.",
+  ].join("\n");
 }
 
 function parseAnthropicMessagesResponse(

@@ -52,8 +52,12 @@ if (body.system[0].cache_control?.type !== "ephemeral") throw new Error("system 
 if (body.tools[0].name !== "scene__queryEntities") throw new Error("tool name was not encoded");
 if (body.tools[body.tools.length - 1].cache_control?.type !== "ephemeral") throw new Error("tools block not marked for prompt caching");
 const content = body.messages[0].content;
-if (typeof content !== "string" || !content.includes("User request:")) {
-  throw new Error("user message should be a natural 'User request:' instruction, not a JSON dump");
+// previousResults is non-empty here, so this is the follow-up-step framing.
+if (typeof content !== "string" || !content.includes("Original request:")) {
+  throw new Error("follow-up user message should reference the original request, not a JSON dump");
+}
+if (!content.includes("STOP")) {
+  throw new Error("follow-up user message should tell the model to stop when the request is satisfied");
 }
 if (!content.includes('"ok":true')) {
   throw new Error("user message should carry prior tool results as context");
