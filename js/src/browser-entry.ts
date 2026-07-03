@@ -431,6 +431,11 @@ export interface RunningLive {
 
 const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial"]);
 const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn"]);
+// Removals that hot-drop a single entity (mesh + body + eid) instead of forcing a full
+// viewport reboot. The skill runs on the render-thread world (teardownEntity removes the
+// mesh) and is forwarded to the sim worker (which tears down the body + eid); the removed
+// eid is dropped from the interpolation ring so its stale transform is never re-applied.
+const LIVE_REMOVE_SKILLS = new Set(["scene.destroyEntity"]);
 
 function resultEntityId(result: unknown): string | undefined {
   return typeof result === "object" && result !== null && typeof (result as { entity?: unknown }).entity === "string"
@@ -741,6 +746,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           continue;
         }
         if (LIVE_IN_PLACE_SKILLS.has(cmd.tool)) continue;
+        if (LIVE_REMOVE_SKILLS.has(cmd.tool)) continue; // hot removal, no reboot
         if (LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)) structuralAdds++;
         else unsupportedStructuralTools.push(cmd.tool);
       }
@@ -754,16 +760,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
       const workerCmds: AuthorCommand[] = [];
       const addedEids: number[] = [];
+      const removedEids: number[] = [];
       let applied = 0;
       for (const cmd of cmds) {
         const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
           ? new Set(entities.ids())
+          : undefined;
+        // A removal frees its entity from the render-thread table, so resolve the eid
+        // BEFORE applying so the interpolation ring + suppressed set can be cleaned after.
+        const removedEid = cmd.kind === "skill" && LIVE_REMOVE_SKILLS.has(cmd.tool)
+          ? entities.resolve(String((cmd.input as { entity?: unknown })?.entity ?? ""))?.eid
           : undefined;
         const res = await applyOne(cmd);
         if (!res.success) {
           throw new Error(authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
         }
         syncAuthoredScaleMutation(cmd);
+        if (removedEid !== undefined) removedEids.push(removedEid);
         if (beforeIds !== undefined) {
           const newEids = captureNewEids(beforeIds, res.result);
           if (newEids.length === 0) {
@@ -775,13 +788,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
             if (!addedEids.includes(eid)) addedEids.push(eid);
           }
         }
-        if (cmd.kind === "skill" && (LIVE_IN_PLACE_SKILLS.has(cmd.tool) || LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool))) {
+        if (cmd.kind === "skill" && (LIVE_IN_PLACE_SKILLS.has(cmd.tool) || LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool) || LIVE_REMOVE_SKILLS.has(cmd.tool))) {
           workerCmds.push(cmd);
         }
         applied++;
       }
       if (addedEids.length > 0) {
         ring.addEids(addedEids);
+      }
+      if (removedEids.length > 0) {
+        // Stop mirroring + suppressing the destroyed eids (the worker frees the body next).
+        ring.removeEids(removedEids);
+        for (const eid of removedEids) suppressedEids.delete(eid);
       }
       if (workerCmds.length > 0) {
         worker.postMessage({ type: "applyCommands", commands: workerCmds });

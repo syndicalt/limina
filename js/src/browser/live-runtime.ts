@@ -170,6 +170,17 @@ export class SnapshotRing {
     }
   }
 
+  /** Drop eids (a destroyed entity) from future freezes/interpolations so a removed
+   *  mesh's stale transform is never re-applied — the counterpart to addEids that lets
+   *  a delete hot-remove one entity instead of rebooting the whole viewport. */
+  removeEids(gone: Iterable<number>): void {
+    for (const eid of gone) {
+      if (!this.present.delete(eid)) continue;
+      const i = this.eids.indexOf(eid);
+      if (i !== -1) this.eids.splice(i, 1);
+    }
+  }
+
   /** Freeze the live SAB (`src`) into the next ping-pong store and return a snapshot.
    *  Copies Position+Rotation from `src` (the worker's writes) and Scale from the
    *  authored static source, for every tracked eid. */
