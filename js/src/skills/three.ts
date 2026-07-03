@@ -89,8 +89,9 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
   input: setMaterialInput,
   output: z.object({ ok: z.boolean() }),
   handler: (input, ctx) => {
-    const root = ctx.world.entities.resolve(input.entity)?.mesh;
-    if (root === undefined) return { ok: false };
+    const entry = ctx.world.entities.resolve(input.entity);
+    if (entry === undefined) return { ok: false };
+    const root = entry.mesh;
 
     // REPLACE path: an imported texture-pack material, or a palette material upgraded to
     // procedural-PBR (`pbr: true`), swaps in a freshly-built node material per mesh. (Throws
@@ -110,6 +111,20 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
     const metalness = input.metalness ?? preset?.metalness;
 
     const hasMaterialChange = color !== undefined || roughness !== undefined || metalness !== undefined;
+
+    // First-class material state: record the surface ON THE ENTITY so it survives even when this
+    // (authoritative/headless) context has no local mesh to mutate — an asset-backed entity loads
+    // its real mesh only in the browser. The inspector reads this state and a self-sufficient
+    // snapshot carries it; the browser still applies the recorded command to its mesh (LIVE_IN_PLACE).
+    if (hasMaterialChange || input.material !== undefined) {
+      ctx.world.entities.bindMaterial(input.entity, {
+        color,
+        roughness,
+        metalness,
+        name: input.material,
+        pbr: input.material !== undefined ? input.pbr : undefined,
+      });
+    }
 
     const applyMaterialProps = (material: MaterialLike): void => {
       if (color !== undefined) material.color.set(color);
@@ -137,8 +152,12 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
       }
     };
 
-    if (typeof root.traverse === "function") root.traverse(visit);
-    else visit(root);
+    // Apply to the local mesh when this context has one (browser render context; the headless
+    // host for primitives). A mesh-less entity has already updated its material state above.
+    if (root !== undefined) {
+      if (typeof root.traverse === "function") root.traverse(visit);
+      else visit(root);
+    }
 
     ctx.emit("three.material.updated", { entity: input.entity });
     return { ok: true };

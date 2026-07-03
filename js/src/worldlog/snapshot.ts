@@ -32,7 +32,7 @@
 
 import { Position, Rotation, Scale } from "../ecs/world.ts";
 import { $internal } from "../../build/bitecs.bundle.mjs";
-import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata, TransformOffset } from "../engine.ts";
+import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata, MaterialState, TransformOffset } from "../engine.ts";
 import type { WorldContext } from "../skills/registry.ts";
 import {
   captureRandomState,
@@ -114,6 +114,9 @@ export interface SnapshotEntity {
   parent?: string;
   /** This entity's transform relative to `parent`, captured at parent-set time. */
   localOffset?: TransformOffset;
+  /** First-class surface material (MaterialState), so a bounded-tail viewer restores the entity's
+   *  color/roughness/metalness (or palette/imported name) without replaying setMaterial commands. */
+  material?: MaterialState;
 }
 
 /** A complete, self-contained world snapshot at a tick boundary. */
@@ -276,6 +279,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       origin: world.entities.resolve(entry.id)?.origin,
       parent: world.entities.resolve(entry.id)?.parent,
       localOffset: world.entities.resolve(entry.id)?.localOffset,
+      material: world.entities.resolve(entry.id)?.material,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -348,6 +352,14 @@ const snapshotEntitySchema = z.object({
   // Scene hierarchy: parent id + this entity's transform relative to it.
   parent: z.string().optional(),
   localOffset: z.object({ pos: vec3, rot: vec4, scale: vec3 }).optional(),
+  // First-class surface material (color/roughness/metalness, or palette/imported name + pbr).
+  material: z.object({
+    color: z.number().optional(),
+    roughness: z.number().optional(),
+    metalness: z.number().optional(),
+    name: z.string().optional(),
+    pbr: z.boolean().optional(),
+  }).optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -437,6 +449,7 @@ export function restoreSnapshot(
     if (e.resource !== undefined) world.entities.bindResource(e.id, e.resource);
     if (e.origin !== undefined) world.entities.bindOrigin(e.id, e.origin);
     if (e.parent !== undefined) world.entities.setParent(e.id, e.parent, e.localOffset);
+    if (e.material !== undefined) world.entities.bindMaterial(e.id, e.material);
   }
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
   //    native blob cannot carry (matched to live controllers by body id). The

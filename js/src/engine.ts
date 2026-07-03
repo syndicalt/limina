@@ -243,6 +243,22 @@ export interface EntityOrigin {
   input: Record<string, unknown>;
 }
 
+/** The entity's surface material as first-class world state — not merely a property of a
+ *  THREE mesh — so it survives on a headless or asset-backed entity that has no local mesh
+ *  in this context. three.setMaterial and scene.createEntity write it here, the inspector
+ *  reads it, and a self-sufficient snapshot carries it. `name`/`pbr` record a palette or
+ *  imported material; the numeric fields are the resolved PBR params the inspector shows and
+ *  a bounded-tail viewer rebuilds from. */
+export interface MaterialState {
+  color?: number;
+  roughness?: number;
+  metalness?: number;
+  /** A palette ("sand", "wood", …) or imported texture-pack material name, when set by name. */
+  name?: string;
+  /** Whether a palette material was upgraded to a procedural-PBR surface. */
+  pbr?: boolean;
+}
+
 /** A child's transform relative to its parent, captured when the parent is set. The
  *  world-space SoA stays authoritative; on a parent move, propagation recomputes the
  *  child's world transform = parentWorld ∘ localOffset (js/src/ecs/hierarchy.ts). */
@@ -263,6 +279,9 @@ export interface EntityEntry {
   parent?: string;
   /** This entity's transform relative to `parent`, captured at parent-set time. */
   localOffset?: TransformOffset;
+  /** First-class surface material (see MaterialState) — written by three.setMaterial /
+   *  scene.createEntity so it survives without a local mesh (asset/headless entities). */
+  material?: MaterialState;
 }
 
 /** The serializable identity slice of one entity-table entry. The mesh/resource
@@ -327,6 +346,22 @@ export class EntityTable {
   bindOrigin(id: string, origin: EntityOrigin): void {
     const entry = this.map.get(id);
     if (entry !== undefined) entry.origin = origin;
+  }
+  /** Merge a material update into a live entry's first-class material state. three.setMaterial
+   *  and scene.createEntity write here so the surface survives without a local mesh (asset/headless
+   *  entities), and a snapshot restore rebinds it. Only defined fields overwrite — an undefined
+   *  field leaves the prior value, so a partial edit (just roughness, say) is non-destructive.
+   *  No-op if the id is not live. */
+  bindMaterial(id: string, material: MaterialState): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    const merged: MaterialState = { ...entry.material };
+    if (material.color !== undefined) merged.color = material.color;
+    if (material.roughness !== undefined) merged.roughness = material.roughness;
+    if (material.metalness !== undefined) merged.metalness = material.metalness;
+    if (material.name !== undefined) merged.name = material.name;
+    if (material.pbr !== undefined) merged.pbr = material.pbr;
+    entry.material = merged;
   }
   /** Set (or move) a child's parent + captured local offset, maintaining the byParent
    *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */

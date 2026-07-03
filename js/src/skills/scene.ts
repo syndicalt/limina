@@ -4,7 +4,7 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Position, Rotation, Scale, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import { teardownEntity } from "./entity-teardown.ts";
-import { createMaterial, isMaterialName, MATERIAL_NAMES } from "../materials/palette.ts";
+import { createMaterial, getMaterialParams, isMaterialName, MATERIAL_NAMES } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hierarchy.ts";
@@ -104,7 +104,16 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
     // carry the structural params (shape/size/material/color) a bounded-tail viewer needs
     // to rebuild the mesh once this create command has been compacted out of the live log.
     const origin = { tool: "scene.createEntity", input: { ...input } };
-    const entity = ctx.world.entities.create({ eid, mesh, bodyId, origin });
+    // First-class material state (see MaterialState): the resolved PBR surface, stored on the
+    // entity so the inspector + a self-sufficient snapshot read it without a mesh — mirrors what
+    // three.setMaterial writes. Palette/imported names carry their name (+pbr); the plain color
+    // path carries the numeric surface (matching the MeshStandardNodeMaterial defaults above).
+    const materialState = input.material === undefined
+      ? { color: input.color, roughness: 0.6, metalness: 0.1 }
+      : isMaterialName(input.material)
+        ? { name: input.material, pbr: input.pbr, ...getMaterialParams(input.material) }
+        : { name: input.material, pbr: true };
+    const entity = ctx.world.entities.create({ eid, mesh, bodyId, origin, material: materialState });
     // Parent, if the referenced entity is live: capture the child's offset (its create
     // position relative to the parent's world transform) so a later parent move propagates.
     if (input.parent !== undefined && ctx.world.entities.resolve(input.parent) !== undefined) {

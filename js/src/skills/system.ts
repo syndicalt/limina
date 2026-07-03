@@ -303,9 +303,16 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         // The create command ({tool, input}) — gives the editor the full property set
         // (shape/size/material/color/static/dynamic) so the inspector can edit more than transform.
         origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
-        // The entity's LIVE surface material (so the inspector seeds color/roughness/metalness from
-        // the current material, not the stale create-time value). Undefined when the mesh has none.
-        material: z.object({ color: z.number().optional(), roughness: z.number().optional(), metalness: z.number().optional() }).optional(),
+        // The entity's surface material — first-class world state (MaterialState), so it seeds even
+        // for an asset-backed/mesh-less entity, falling back to the live mesh material. `name`/`pbr`
+        // describe a palette/imported surface; the numeric fields are the resolved PBR params.
+        material: z.object({
+          color: z.number().optional(),
+          roughness: z.number().optional(),
+          metalness: z.number().optional(),
+          name: z.string().optional(),
+          pbr: z.boolean().optional(),
+        }).optional(),
       })),
       agents: z.array(z.unknown()),
       skills: z.array(z.object({
@@ -352,7 +359,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           physics: { bodyId: entry.bodyId },
           resource: entry.resource,
           origin: entry.origin,
-          material: readMaterial(entry.mesh),
+          material: entry.material ?? readMaterial(entry.mesh),
         }];
       });
       // The resource scan walks EVERY entity (not just the page), so it is O(world) per
