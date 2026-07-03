@@ -62,6 +62,12 @@ const history = createHistoryPanel({
   },
 });
 
+// Structured entity lookup for the property inspector — the full record (transform, tags,
+// physics.bodyId, resource, and origin = the create command with shape/size/material/color/
+// static/dynamic) from the latest inspector.snapshot. take-control uses this to edit more than
+// the transform. Returns undefined if the entity isn't in the current snapshot page.
+window.liminaEntity = (id) => (state.snapshot?.entities ?? []).find((e) => e.entity === id);
+
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
   state.log = state.log.slice(0, 80);

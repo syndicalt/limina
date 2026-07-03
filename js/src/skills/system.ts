@@ -287,6 +287,9 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         tags: z.array(z.string()),
         physics: z.object({ bodyId: z.number().int().optional() }),
         resource: z.unknown().optional(),
+        // The create command ({tool, input}) — gives the editor the full property set
+        // (shape/size/material/color/static/dynamic) so the inspector can edit more than transform.
+        origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
       })),
       agents: z.array(z.unknown()),
       skills: z.array(z.object({
@@ -332,6 +335,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           tags,
           physics: { bodyId: entry.bodyId },
           resource: entry.resource,
+          origin: entry.origin,
         }];
       });
       // The resource scan walks EVERY entity (not just the page), so it is O(world) per
