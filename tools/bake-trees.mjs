@@ -205,29 +205,27 @@ function configureTree(tree, ez, species, seed) {
 }
 
 function rematerialTree(tree) {
-  tree.traverse((object) => {
-    if (!object.isMesh) {
-      return;
+  // ez-tree exposes the two meshes explicitly (tree.js: this.branchesMesh / this.leavesMesh);
+  // GLTFExporter renames them to mesh_0/mesh_1, so identify by these references, NOT by name.
+  const apply = (mesh, isLeaf) => {
+    if (!mesh) return;
+    if (Array.isArray(mesh.material)) {
+      for (const material of mesh.material) material.dispose();
+    } else if (mesh.material) {
+      mesh.material.dispose();
     }
-
-    if (Array.isArray(object.material)) {
-      for (const material of object.material) {
-        material.dispose();
-      }
-    } else if (object.material) {
-      object.material.dispose();
-    }
-
-    const isLeaf = /leaf|leaves|foliage/i.test(object.name);
-    object.material = new THREE.MeshStandardMaterial({
+    mesh.name = isLeaf ? "leaves" : "branches";
+    mesh.material = new THREE.MeshStandardMaterial({
       color: isLeaf ? LEAF_COLOR : BARK_COLOR,
       roughness: 0.9,
       metalness: 0,
       side: isLeaf ? THREE.DoubleSide : THREE.FrontSide,
     });
-    object.castShadow = true;
-    object.receiveShadow = true;
-  });
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  };
+  apply(tree.branchesMesh, false);
+  apply(tree.leavesMesh, true);
 }
 
 function buildTree(ez, species, seed) {
