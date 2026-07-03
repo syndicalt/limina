@@ -23,6 +23,7 @@
 // - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
 import { runLive, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
 import { destroyEntity, resetWriter, writeUpdate } from "./write-client.js";
 
@@ -114,6 +115,7 @@ const state = {
   transformHelper: undefined,
   gridHelper: undefined,
   selected: undefined,
+  selectionGuardFrame: undefined,
   ctrlRotateDown: false,
   ctrlRotateActive: false,
   wireframeMaterials: new Map(),
@@ -450,6 +452,7 @@ function showActiveAgentTargets(commands) {
 
 function clearGizmo() {
   clearAgentHighlight();
+  stopSelectionGuardLoop();
   state.selected = undefined;
   state.ctrlRotateActive = false;
   if (state.transformControls) {
@@ -506,17 +509,48 @@ function installGizmo(running) {
   reconcileCtrlRotateMode();
 }
 
+// Per-frame guard: if the SELECTED entity leaves the scene graph (deleted via the World panel, an
+// agent, or a recorded-stream re-author — any path other than the viewport's own Delete key, which
+// detaches first), auto-detach the gizmo. Without this, TransformControls validates its now-orphaned
+// object every frame and floods "The attached 3D object must be a part of the scene graph", wedging
+// the app. Self-terminating: runs only while something is selected + attached.
+function stopSelectionGuardLoop() {
+  if (state.selectionGuardFrame !== undefined) {
+    cancelAnimationFrame(state.selectionGuardFrame);
+    state.selectionGuardFrame = undefined;
+  }
+}
+
+function startSelectionGuardLoop() {
+  if (state.selectionGuardFrame !== undefined) return;
+  const tick = () => {
+    const mesh = state.selected?.mesh;
+    const scene = state.running?.scene;
+    if (!mesh || !scene) { state.selectionGuardFrame = undefined; return; }
+    if (!isAttachedToScene(mesh, scene)) {
+      // The selected entity was destroyed out from under the gizmo — detach before TransformControls
+      // spams the scene-graph error every frame. deselectEntity() also stops this loop.
+      deselectEntity();
+      return;
+    }
+    state.selectionGuardFrame = requestAnimationFrame(tick);
+  };
+  state.selectionGuardFrame = requestAnimationFrame(tick);
+}
+
 function selectEntity(id, running) {
   const entry = running?.entities?.resolve?.(id);
   if (!entry?.mesh || typeof entry.eid !== "number") return false;
   state.selected = { id, eid: entry.eid, mesh: entry.mesh };
   state.transformControls?.attach(entry.mesh);
+  startSelectionGuardLoop();
   setStatus("selected", id);
   return true;
 }
 
 function deselectEntity() {
-  state.transformControls?.detach();
+  stopSelectionGuardLoop();
+  try { state.transformControls?.detach(); } catch { /* ignore — object may already be gone */ }
   state.selected = undefined;
   state.ctrlRotateActive = false;
   setStatus("following", "no selection");
