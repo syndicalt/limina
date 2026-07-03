@@ -21,7 +21,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
