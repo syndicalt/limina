@@ -200,7 +200,7 @@ function fieldset(label, prefix, values) {
 
 function section(label) {
   const wrap = document.createElement("fieldset");
-  wrap.className = "take-fieldset";
+  wrap.className = "insp-section";
   const legend = document.createElement("legend");
   legend.textContent = label;
   wrap.appendChild(legend);
