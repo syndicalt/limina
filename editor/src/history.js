@@ -20,21 +20,22 @@ function el(tag, cls, text) {
 export function createHistoryPanel(opts = {}) {
   const onScrub = typeof opts.onScrub === "function" ? opts.onScrub : () => {};
   let ctrl = new EditorHistoryController([], "main");
-  const seen = new Set(); // trace event ids already ingested (dedupe across polls)
+  const seen = new Set(); // command seqs already ingested (dedupe across polls)
 
-  // Map a trace event to a lightweight world-log command record (the controller treats commands
-  // opaquely apart from seq; it re-stamps seq on extend, so a placeholder seq is fine).
-  const toCommand = (ev) => ({ kind: "skill", seq: 0, tool: (ev && ev.type) || "event", id: ev && ev.id });
+  // Map an AUTHORING world-log command (from worldlog.tail — the actual world edits) to the
+  // controller's lightweight record. The controller re-stamps its own seq on commit; the source
+  // seq is kept as the stable dedup key + display seq.
+  const toCommand = (cmd) => ({ kind: cmd.kind || "skill", seq: cmd.seq, tool: cmd.tool || cmd.op || "cmd", id: cmd.seq });
 
-  /** Ingest newly-observed world-log events onto the MAIN branch, preserving the user's current
-   *  view (checked-out branch + scrub position). */
-  function recordEvents(events) {
-    if (!Array.isArray(events) || events.length === 0) return;
+  /** Ingest newly-observed AUTHORING commands (world edits) onto the MAIN branch, preserving the
+   *  user's current view (checked-out branch + scrub position). */
+  function recordCommands(commands) {
+    if (!Array.isArray(commands) || commands.length === 0) return;
     const fresh = [];
-    for (const ev of events) {
-      if (!ev || ev.id === undefined || seen.has(ev.id)) continue;
-      seen.add(ev.id);
-      fresh.push(toCommand(ev));
+    for (const cmd of commands) {
+      if (!cmd || cmd.seq === undefined || seen.has(cmd.seq)) continue;
+      seen.add(cmd.seq);
+      fresh.push(toCommand(cmd));
     }
     if (fresh.length === 0) return;
     const prevBranch = ctrl.currentBranch();
@@ -144,9 +145,11 @@ export function createHistoryPanel(opts = {}) {
   }
 
   function emitScrub() {
-    try { onScrub(ctrl.commandsAtPlayhead()); } catch (_e) { /* host viewport hook is optional */ }
+    // Give the host both the prefix at the playhead and whether we're live, so it can replay the
+    // viewport to a past state (or return to following the newest edits).
+    try { onScrub({ commands: ctrl.commandsAtPlayhead(), live: ctrl.isLive() }); } catch (_e) { /* host viewport hook is optional */ }
   }
 
   render();
-  return { recordEvents, reset, controller: () => ctrl };
+  return { recordCommands, reset, controller: () => ctrl };
 }

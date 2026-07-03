@@ -319,7 +319,11 @@ async function poll() {
         const newCmds = res.commands;
         const authorCmds = toAuthorCommands(newCmds);
         for (const cmd of res.commands) state.commands.push(cmd);
-        if (state.running && !state.rebooting && !res.reset) {
+        // While scrubbed into the past, accumulate new commands but don't hot-apply them to the
+        // frozen past view (returning to live replays the full stream).
+        if (state.scrubLimit !== undefined) {
+          // no-op: the past view stays put; state.commands keeps growing in the background
+        } else if (state.running && !state.rebooting && !res.reset) {
           const r = await state.running.applyAuthorCommands(authorCmds);
           if (r.needsReboot) state.dirty = true;
         } else {
@@ -585,7 +589,11 @@ async function commitSelectedTransform(selected, running) {
 }
 
 async function reboot() {
-  if (state.commands.length === 0) { setStatus("following", "empty — waiting for the agent to build"); return; }
+  // Time-travel: when scrubbed to a past point, replay only the authoring-command PREFIX up to
+  // the playhead (state.scrubLimit); undefined = live (replay everything). state.commands still
+  // accumulates in the background so returning to live is instant.
+  const cmds = state.scrubLimit === undefined ? state.commands : state.commands.slice(0, state.scrubLimit);
+  if (cmds.length === 0) { setStatus("following", "empty — waiting for the agent to build"); return; }
   state.rebooting = true;
   state.dirty = false;
   try {
@@ -595,10 +603,11 @@ async function reboot() {
     if (state.running) { try { state.running.stop(); } catch { /* ignore */ } state.running = undefined; }
     const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
     canvas.width = w; canvas.height = h;
-    setStatus("rendering", `${state.commands.length} authoring commands`);
+    const past = state.scrubLimit !== undefined;
+    setStatus(past ? "past" : "rendering", `${cmds.length} authoring commands${past ? " (history)" : ""}`);
     state.running = await runLive({
       canvas, width: w, height: h,
-      commands: toAuthorCommands(state.commands),
+      commands: toAuthorCommands(cmds),
       input: window,
       onStatus: setStatus,
       orbit: { center: [0, 1, 0], radius: 16, height: 8 },
@@ -612,7 +621,7 @@ async function reboot() {
       installGizmo(state.running);
       installGridHelper(state.running);
       applyWireframeMode(state.running);
-      setStatus("live", `${state.commands.length} commands`);
+      setStatus(past ? "past" : "live", `${cmds.length} commands${past ? " · viewing history" : ""}`);
     }
   } catch (e) {
     setStatus("error", e && e.message ? e.message : String(e));
@@ -642,6 +651,15 @@ window.addEventListener(SELECT_ENTITY_EVENT, (event) => {
   const entity = event instanceof CustomEvent ? event.detail?.entity : undefined;
   if (typeof entity !== "string" || !entity.startsWith("ent_")) return;
   selectEntity(entity, state.running);
+});
+// History time-travel: the History panel scrubs over the authoring-command timeline and emits
+// the target here — replay the world to that prefix (limit=null → back to live/following).
+window.addEventListener("limina:scrub-to", (event) => {
+  const limit = event instanceof CustomEvent ? event.detail?.limit : undefined;
+  const next = (limit === null || limit === undefined) ? undefined : Math.max(0, Math.min(limit | 0, state.commands.length));
+  if (next === state.scrubLimit) return;
+  state.scrubLimit = next;
+  if (!state.rebooting) void reboot();
 });
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;

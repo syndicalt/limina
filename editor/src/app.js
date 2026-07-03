@@ -43,6 +43,7 @@ const state = {
   /** @type {McpClient | undefined} */ agentClient: undefined,
   events: new Map(), // id -> event (accumulated trace)
   afterSeq: -1,
+  worldlogCursor: 0, // worldlog.tail cursor for the History (authoring-command) timeline
   snapshot: undefined,
   approvals: [],
   polling: undefined,
@@ -50,8 +51,15 @@ const state = {
 };
 
 // git-for-worlds History panel (branch / time-travel / merge), backed by the tested
-// EditorHistoryController. Ingests observed world-log edits onto the "main" branch.
-const history = createHistoryPanel({ onLog: (m) => logLine(m, "ok") });
+// EditorHistoryController. Ingests the AUTHORING command stream (worldlog.tail — the actual world
+// edits) onto the "main" branch; scrubbing time-travels the viewport to that past state.
+const history = createHistoryPanel({
+  onLog: (m) => logLine(m, "ok"),
+  // Playhead moved: tell the viewport to replay to that prefix (live=true → follow the newest).
+  onScrub: ({ commands, live }) => {
+    window.dispatchEvent(new CustomEvent("limina:scrub-to", { detail: { limit: live ? null : commands.length } }));
+  },
+});
 
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
@@ -118,6 +126,7 @@ function disconnect() {
   if (state.agentClient) { state.agentClient.close(); state.agentClient = undefined; }
   state.events.clear();
   state.afterSeq = -1;
+  state.worldlogCursor = 0;
   history.reset();
   setStatus(false);
 }
@@ -160,10 +169,9 @@ async function refreshAll() {
   if (!c || state.refreshing) return; // in-flight guard: opening a panel can also trigger a refresh
   state.refreshing = true;
   try {
-    // trace.tail feeds the Reasoning tree AND the Team roster AND the history timeline.
-    // Small incremental batch (the cursor keeps up under the self-scheduled loop; a huge tail
-    // is what pins the server on JSON.stringify). Poll only if one of those panels is open.
-    if (panelOpen("reasoning") || panelOpen("roster") || panelOpen("history")) {
+    // trace.tail feeds the Reasoning tree AND the Team roster (the causal/"why" stream). The
+    // History timeline is fed separately from worldlog.tail below (the actual world EDITS).
+    if (panelOpen("reasoning") || panelOpen("roster")) {
       const spins = ["reasoning", "roster"].filter(panelOpen);
       spins.forEach((id) => setSpin(id, true));
       try {
@@ -171,9 +179,21 @@ async function refreshAll() {
         if (tail && Array.isArray(tail.events)) {
           ingestTraceEvents(state.events, tail.events);
           if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
-          history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
         }
       } finally { spins.forEach((id) => setSpin(id, false)); }
+    }
+    // History = the AUTHORING command stream (worldlog.tail — the real world edits). Scrubbing it
+    // time-travels the viewport (via limina:scrub-to). Poll only when the History panel is open.
+    if (panelOpen("history")) {
+      setSpin("history", true);
+      try {
+        const wl = await c.callTool("worldlog.tail", { since: state.worldlogCursor });
+        if (wl && Array.isArray(wl.commands)) {
+          if (wl.reset) { history.reset(); state.worldlogCursor = 0; }
+          history.recordCommands(wl.commands);
+          if (typeof wl.next === "number") state.worldlogCursor = wl.next;
+        }
+      } finally { setSpin("history", false); }
     }
     // Approval queue only when its panel is open.
     if (panelOpen("approval")) {
