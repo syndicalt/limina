@@ -41,9 +41,10 @@ export function ingestTraceEvents(eventsById, events, maxEvents = MAX_TRACE_EVEN
 const state = {
   /** @type {McpClient | undefined} */ client: undefined,
   /** @type {McpClient | undefined} */ agentClient: undefined,
-  events: new Map(), // id -> event (accumulated trace)
+  events: new Map(), // id -> event (accumulated trace, rendered into the console Trace tab)
+  activity: [], // chronological authoring edits (worldlog) for the Activity panel
   afterSeq: -1,
-  worldlogCursor: 0, // worldlog.tail cursor for the History (authoring-command) timeline
+  worldlogCursor: 0, // worldlog.tail cursor for the History + Activity (authoring-command) streams
   snapshot: undefined,
   approvals: [],
   polling: undefined,
@@ -64,6 +65,14 @@ const history = createHistoryPanel({
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
   state.log = state.log.slice(0, 80);
+  // Errors also surface as a toast (the console is hidden by default). Dedupe consecutive
+  // identical errors so a repeating transient poll failure doesn't stack toasts.
+  if (kind === "err" && msg !== state.lastErrToast) {
+    state.lastErrToast = msg;
+    window.dispatchEvent(new CustomEvent("limina:toast", { detail: { message: msg, kind: "error" } }));
+  } else if (kind !== "err") {
+    state.lastErrToast = undefined;
+  }
   const box = $("log");
   box.innerHTML = "";
   for (const l of state.log) {
@@ -182,18 +191,21 @@ async function refreshAll() {
         }
       } finally { spins.forEach((id) => setSpin(id, false)); }
     }
-    // History = the AUTHORING command stream (worldlog.tail — the real world edits). Scrubbing it
-    // time-travels the viewport (via limina:scrub-to). Poll only when the History panel is open.
-    if (panelOpen("history")) {
-      setSpin("history", true);
+    // The AUTHORING command stream (worldlog.tail — the real world edits) drives BOTH the History
+    // timeline (scrub time-travels the viewport) and the Activity feed. Poll when either is open;
+    // always keep both fed so a just-opened panel is current (recordCommands dedups by seq).
+    if (panelOpen("history") || panelOpen("reasoning")) {
+      const spins = ["history", "reasoning"].filter(panelOpen);
+      spins.forEach((id) => setSpin(id, true));
       try {
         const wl = await c.callTool("worldlog.tail", { since: state.worldlogCursor });
         if (wl && Array.isArray(wl.commands)) {
-          if (wl.reset) { history.reset(); state.worldlogCursor = 0; }
+          if (wl.reset) { history.reset(); state.activity = []; state.worldlogCursor = 0; }
           history.recordCommands(wl.commands);
+          ingestActivity(wl.commands);
           if (typeof wl.next === "number") state.worldlogCursor = wl.next;
         }
-      } finally { setSpin("history", false); }
+      } finally { spins.forEach((id) => setSpin(id, false)); }
     }
     // Approval queue only when its panel is open.
     if (panelOpen("approval")) {
@@ -216,6 +228,7 @@ async function refreshAll() {
     renderWorld();
     renderRoster();
     renderReasoning();
+    renderConsoleTrace();
     renderApprovals();
   } catch (e) {
     logLine("poll error: " + (e && e.message ? e.message : String(e)), "err");
@@ -300,6 +313,18 @@ const ROSTER_VERBS = {
 };
 function rosterVerb(skill) { return ROSTER_VERBS[skill] || "editing"; }
 
+// The Activity feed: chronological authoring edits (worldlog skill commands), attributed. Physics
+// ops (kind:"physics") are engine-level and stay out of the author-facing feed. Bounded ring.
+const MAX_ACTIVITY = 300;
+function ingestActivity(commands) {
+  if (!Array.isArray(commands)) return;
+  for (const cmd of commands) {
+    if (!cmd || cmd.kind !== "skill" || typeof cmd.tool !== "string") continue;
+    state.activity.push({ tool: cmd.tool, actor: cmd.actorId || "agent" });
+  }
+  if (state.activity.length > MAX_ACTIVITY) state.activity.splice(0, state.activity.length - MAX_ACTIVITY);
+}
+
 // A builder is "building" if it authored something within the last few polls, else "idle".
 const ROSTER_IDLE_POLLS = 3;
 const rosterActivity = new Map(); // actorId -> { lastId, activeTick }
@@ -355,14 +380,40 @@ function renderRoster() {
 }
 
 // ---------------------------------------------------------------------------
-// (b) REASONING panel — causal forest grouped by actor.
+// (b) ACTIVITY panel (#reason-body) — chronological WORLD EDITS, attributed (what the agents did
+//     to the world). The raw causal TRACE is a developer view and now lives in the console's
+//     Trace tab (renderConsoleTrace). Both "stick to bottom unless the user scrolled up".
 // ---------------------------------------------------------------------------
+function nearBottom(root) { return root.scrollHeight - root.scrollTop - root.clientHeight < 24; }
+
 function renderReasoning() {
   const root = $("reason-body");
-  // Follow live activity: if the user is near the bottom, re-pin to the newest line after the
-  // rebuild so the tree visibly updates; if they've scrolled up to read history, leave them be.
-  // innerHTML="" resets scrollTop, so capture the near-bottom state BEFORE wiping.
-  const stick = root.scrollHeight - root.scrollTop - root.clientHeight < 24;
+  if (!root) return;
+  const stick = nearBottom(root);
+  root.innerHTML = "";
+  if (state.activity.length === 0) {
+    root.appendChild(el("div", "muted", "no edits yet — the agents' changes to the world show up here"));
+    return;
+  }
+  const list = el("div", "list");
+  for (const a of state.activity) {
+    const row = el("div", "row roster-row");
+    const swatch = el("span", "roster-swatch");
+    swatch.style.background = hexColor(cueColorFor(a.actor));
+    row.appendChild(swatch);
+    row.appendChild(el("span", "roster-name mono", a.actor));
+    row.appendChild(el("span", "roster-action dim", rosterVerb(a.tool)));
+    list.appendChild(row);
+  }
+  root.appendChild(list);
+  if (stick) root.scrollTop = root.scrollHeight;
+}
+
+// The raw causal trace (developer view), rendered into the console's Trace tab.
+function renderConsoleTrace() {
+  const root = $("console-trace");
+  if (!root) return;
+  const stick = nearBottom(root);
   root.innerHTML = "";
   const events = [...state.events.values()];
   if (events.length === 0) { root.appendChild(el("div", "muted", "no trace events yet")); return; }
