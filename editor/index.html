@@ -46,9 +46,53 @@
     </div>
   </header>
 
-  <!-- STAGE: the viewport IS the app (full canvas). Tools are independent floating windows, each
-       opened from the ☰ menu, draggable by its title bar and closable — not one crammed sidebar. -->
+  <!-- STAGE: docked chrome — a LEFT accordion sidebar (World primary, then History / Activity / Team /
+       Approval), the full-height viewport with the transform toolbar centred along the bottom, and a
+       RIGHT chat sidebar. Both sidebars collapse to a rail. The Inspector stays a FLOATING window that
+       pops on entity select. (windows.js drives the accordion + collapse and keeps window.liminaWindows
+       open/close/isOpen so callers — inspector auto-open, chat auto-open, poll gating — are unchanged.) -->
   <main class="stage">
+    <!-- LEFT: collapsible accordion. World is the primary section (open, grows to fill). -->
+    <aside class="sidebar sidebar-left" id="sidebar-left">
+      <div class="sidebar-scroll">
+        <section class="acc acc-primary acc-open" id="world">
+          <button class="acc-head" type="button" data-acc-toggle="world" aria-expanded="true">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">World</span><span class="panel-spin" id="world-spin" hidden></span>
+          </button>
+          <div class="acc-body" id="world-body"><div class="muted">connect to begin</div></div>
+        </section>
+        <section class="acc" id="history">
+          <button class="acc-head" type="button" data-acc-toggle="history" aria-expanded="false">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">History</span>
+          </button>
+          <div class="acc-body" id="history-body"><div class="muted">connect to begin</div></div>
+        </section>
+        <section class="acc" id="reasoning">
+          <button class="acc-head" type="button" data-acc-toggle="reasoning" aria-expanded="false">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">Activity</span><span class="panel-spin" id="reasoning-spin" hidden></span>
+          </button>
+          <div class="acc-body" id="reason-body"><div class="muted">connect to begin</div></div>
+        </section>
+        <section class="acc" id="roster">
+          <button class="acc-head" type="button" data-acc-toggle="roster" aria-expanded="false">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">Team</span><span class="panel-spin" id="roster-spin" hidden></span>
+          </button>
+          <div class="acc-body" id="roster-body"><div class="muted">connect to begin</div></div>
+        </section>
+        <section class="acc" id="approval">
+          <button class="acc-head" type="button" data-acc-toggle="approval" aria-expanded="false">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">Approval</span><span id="approval-count" class="count">0</span><span class="panel-spin" id="approval-spin" hidden></span>
+          </button>
+          <div class="acc-body" id="approval-body">
+            <div class="acc-actions"><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button></div>
+            <div class="muted">connect to begin</div>
+          </div>
+        </section>
+      </div>
+      <button class="sidebar-toggle" id="sidebar-left-toggle" type="button" title="Collapse panels" aria-label="Collapse left sidebar">‹</button>
+    </aside>
+
+    <!-- CENTER: the live viewport (unchanged canvas); transform tools centred along the bottom. -->
     <section class="panel viewport" id="viewport">
       <div class="panel-head">
         <h3>Live viewport</h3>
@@ -74,49 +118,19 @@
       </div>
     </section>
 
-    <button class="tools-toggle" id="tools-toggle" title="Tools" aria-label="Tools menu">☰</button>
-    <nav class="tools-menu" id="tools-menu" hidden>
-      <button data-target="world">World</button>
-      <button data-target="roster">Team</button>
-      <button data-target="reasoning">Activity</button>
-      <button data-target="history">History</button>
-      <button data-target="approval">Approval</button>
-      <button data-target="chat">Chat</button>
-    </nav>
+    <!-- RIGHT: collapsible chat sidebar. -->
+    <aside class="sidebar sidebar-right" id="sidebar-right">
+      <button class="sidebar-toggle" id="sidebar-right-toggle" type="button" title="Collapse chat" aria-label="Collapse chat">›</button>
+      <div class="sidebar-scroll" id="chat">
+        <div class="acc-head acc-head-static panel-head"><span class="acc-title">Chat</span></div>
+        <div class="chat-body" id="chat-body"></div>
+      </div>
+    </aside>
 
-    <section class="panel window" id="world" hidden>
-      <div class="panel-head" data-drag><h3>World</h3><span class="panel-spin" id="world-spin" hidden></span><button class="win-close" data-close="world" aria-label="Close">×</button></div>
-      <div class="panel-body" id="world-body"><div class="muted">connect to begin</div></div>
-    </section>
-
-    <section class="panel window" id="roster" hidden>
-      <div class="panel-head" data-drag><h3>Team</h3><span class="panel-spin" id="roster-spin" hidden></span><button class="win-close" data-close="roster" aria-label="Close">×</button></div>
-      <div class="panel-body" id="roster-body"><div class="muted">connect to begin</div></div>
-    </section>
-
+    <!-- FLOATING: the Inspector pops on entity select (draggable, closable). -->
     <section class="panel window" id="inspector" hidden>
       <div class="panel-head" data-drag><h3>Inspector</h3><button class="win-close" data-close="inspector">×</button></div>
       <div class="panel-body" id="inspector-body"><div class="muted">select an entity in World</div></div>
-    </section>
-
-    <section class="panel window" id="reasoning" hidden>
-      <div class="panel-head" data-drag><h3>Activity</h3><span class="panel-spin" id="reasoning-spin" hidden></span><button class="win-close" data-close="reasoning" aria-label="Close">×</button></div>
-      <div class="panel-body" id="reason-body"><div class="muted">connect to begin</div></div>
-    </section>
-
-    <section class="panel window" id="history" hidden>
-      <div class="panel-head" data-drag><h3>History</h3><button class="win-close" data-close="history" aria-label="Close">×</button></div>
-      <div class="panel-body" id="history-body"><div class="muted">connect to begin</div></div>
-    </section>
-
-    <section class="panel window" id="approval" hidden>
-      <div class="panel-head" data-drag><h3>Approval <span id="approval-count" class="count">0</span></h3><span class="panel-spin" id="approval-spin" hidden></span><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button><button class="win-close" data-close="approval" aria-label="Close">×</button></div>
-      <div class="panel-body" id="approval-body"><div class="muted">connect to begin</div></div>
-    </section>
-
-    <section class="panel window chat-window" id="chat" hidden>
-      <div class="panel-head" data-drag><h3>Chat</h3><button class="win-close" data-close="chat" aria-label="Close">×</button></div>
-      <div class="panel-body chat-body" id="chat-body"></div>
     </section>
   </main>
 

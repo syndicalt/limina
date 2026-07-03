@@ -59,8 +59,8 @@ input, select {
 .btn-danger:hover { background: color-mix(in srgb, var(--red) 16%, transparent); filter: none; }
 
 /* stage: the viewport IS the app — it fills the whole area; the tools float over it */
-.stage { flex: 1; position: relative; min-height: 0; background: var(--bg); }
-.viewport { position: absolute; inset: 0; background: var(--panel); }
+.stage { flex: 1; position: relative; min-height: 0; background: var(--bg); display: flex; align-items: stretch; }
+.viewport { position: relative; flex: 1 1 0; min-width: 0; background: var(--panel); }
 .viewport > .panel-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 2; border-bottom: none;
   background: linear-gradient(to bottom, rgba(14, 17, 22, .82), rgba(14, 17, 22, 0));
@@ -69,8 +69,8 @@ input, select {
 .viewport > .panel-body { position: absolute; inset: 0; padding: 0; }
 #editor-viewport { width: 100%; height: 100%; display: block; background: #0b0f14; }
 .viewport-tools {
-  position: absolute; left: 12px; bottom: 12px; z-index: 3;
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 3;
+  display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap;
   max-width: min(780px, calc(100% - 24px)); padding: 6px;
   background: rgba(22, 27, 34, .88); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .34);
@@ -110,26 +110,46 @@ input, select {
 }
 .win-close:hover { color: var(--text); }
 
-/* ☰ tools menu (top-right of the stage) */
-.tools-toggle {
-  position: absolute; top: 12px; right: 12px; z-index: 1000000;
-  width: 36px; height: 34px; border-radius: 8px; cursor: pointer;
-  background: rgba(22, 27, 34, .93); color: var(--text); border: 1px solid var(--border);
-  font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center;
+/* ── docked sidebars: left accordion + right chat, each collapsible to a rail ──────────── */
+.sidebar {
+  position: relative; flex: none; display: flex; min-height: 0; z-index: 5;
+  background: rgba(19, 24, 31, .96); transition: width .16s ease;
 }
-.tools-toggle:hover { filter: brightness(1.15); }
-.tools-menu {
-  position: absolute; top: 54px; right: 12px; z-index: 1000000; min-width: 150px;
-  background: rgba(22, 27, 34, .97); border: 1px solid var(--border); border-radius: 8px;
-  padding: 4px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+.sidebar-left { width: 320px; border-right: 1px solid var(--border); }
+.sidebar-right { width: 340px; border-left: 1px solid var(--border); }
+.sidebar.collapsed { width: 0; }
+.sidebar-scroll { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.sidebar.collapsed .sidebar-scroll { display: none; }
+
+/* rail toggle — sits on the sidebar's inner edge; the only affordance to reopen when collapsed */
+.sidebar-toggle {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 6;
+  width: 16px; height: 46px; padding: 0; cursor: pointer;
+  background: rgba(28, 35, 45, .96); color: var(--dim); border: 1px solid var(--border);
+  font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
 }
-.tools-menu[hidden] { display: none; }
-.tools-menu button {
-  background: transparent; border: none; color: var(--text); text-align: left;
-  padding: 6px 12px 6px 22px; border-radius: 5px; cursor: pointer; font-size: 12px; position: relative;
+.sidebar-left .sidebar-toggle { right: -16px; border-left: none; border-radius: 0 6px 6px 0; }
+.sidebar-right .sidebar-toggle { left: -16px; border-right: none; border-radius: 6px 0 0 6px; }
+.sidebar-toggle:hover { color: var(--text); }
+
+/* ── left accordion sections (World is the primary — it grows to fill when open) ─────────── */
+.acc { display: flex; flex-direction: column; flex: none; min-height: 0; border-bottom: 1px solid var(--border); }
+.acc-primary.acc-open { flex: 1 1 auto; }
+.acc-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  background: transparent; border: none; cursor: pointer; color: var(--text);
+  font-size: 13px; font-weight: 600; text-align: left; user-select: none;
 }
-.tools-menu button:hover { background: var(--panel-2); }
-.tools-menu button.open::before { content: "●"; position: absolute; left: 9px; top: 9px; color: var(--green); font-size: 9px; }
+.acc-head:hover { background: var(--panel-2); }
+.acc-head-static, .acc-head-static:hover { cursor: default; background: transparent; }
+.acc-title { flex: 1; min-width: 0; }
+.acc-chevron { flex: none; color: var(--muted); font-size: 10px; transition: transform .15s ease; }
+.acc-open > .acc-head .acc-chevron { transform: rotate(90deg); }
+.acc-body { display: none; padding: 8px 12px; }
+.acc-open > .acc-body { display: block; overflow: auto; }
+.acc-primary.acc-open > .acc-body { flex: 1; min-height: 0; }
+.acc:not(.acc-primary).acc-open > .acc-body { max-height: 36vh; }
+.acc-actions { display: flex; gap: 6px; margin-bottom: 8px; }
 
 .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); }
@@ -382,8 +402,7 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .hist-cmd.muted { color: var(--muted); }
 
 /* Chat window */
-.chat-window { width: min(440px, calc(100vw - 24px)); height: min(620px, calc(100vh - 210px)); max-height: calc(100vh - 120px); }
-.chat-body { padding: 0; overflow: hidden; }
+.chat-body { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
 .chat-shell { position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; background: linear-gradient(180deg, rgba(28, 35, 45, .72), rgba(14, 17, 22, .18)); }
 .chat-log { flex: 1; min-height: 0; overflow: auto; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; }
 .chat-empty { color: var(--muted); font-style: italic; margin: auto; max-width: 250px; text-align: center; line-height: 1.4; }
@@ -432,7 +451,7 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .chat-model-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
 .chat-send { height: 32px; }
 .chat-drop-overlay { position: absolute; inset: 9px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--accent); border-radius: 9px; background: color-mix(in srgb, var(--accent) 16%, rgba(14, 17, 22, .9)); color: var(--text); font-weight: 700; opacity: 0; pointer-events: none; transform: scale(.985); transition: opacity .14s ease, transform .14s ease; }
-.chat-window.chat-dragging .chat-drop-overlay { opacity: 1; transform: scale(1); }
+.chat-dragging .chat-drop-overlay { opacity: 1; transform: scale(1); }
 
 @keyframes chatFadeIn {
   from { opacity: 0; transform: translateY(5px); }

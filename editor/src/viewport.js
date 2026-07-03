@@ -764,6 +764,24 @@ window.addEventListener("blur", () => {
   reconcileCtrlRotateMode();
 });
 
+// Re-fit the canvas to its container when the layout changes size (a sidebar collapses/expands) or
+// the window resizes. The canvas is otherwise only sized at reboot (runLive), so a docked-sidebar
+// toggle would leave it stretched until the next re-author. Resizes the drawing buffer + the live
+// renderer + the camera aspect in place — no reboot, no scene rebuild.
+function resizeViewport() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  canvas.width = w; canvas.height = h;
+  const running = state.running;
+  try { running?.renderer?.setSize?.(w, h, false); } catch { /* ignore */ }
+  const cam = running?.camera;
+  if (cam) { cam.aspect = w / h; cam.updateProjectionMatrix?.(); }
+}
+let winResizeRaf = 0;
+window.addEventListener("resize", () => { cancelAnimationFrame(winResizeRaf); winResizeRaf = requestAnimationFrame(resizeViewport); });
+// Sidebar collapse animates over ~160ms (CSS); re-fit once the transition has settled.
+window.addEventListener("limina:layout-changed", () => { setTimeout(resizeViewport, 200); });
+
 bindViewportUi();
 setStatus("waiting", "connect the panels to follow the authoring stream");
 // Self-scheduling loop (NOT a fixed setInterval): the next tick is scheduled AFTER the
