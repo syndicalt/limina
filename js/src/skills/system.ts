@@ -142,18 +142,30 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     input: searchInput,
     output: z.object({ matches: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
     handler: (input, ctx) => {
-      const q = input.query.toLowerCase();
       const limit = input.limit ?? 25;
-      const matches: { name: string; description: string; category: string }[] = [];
+      // TOKENIZED + lightly STEMMED match (not one raw-substring test). A naive whole-query substring
+      // made real agent queries miss: "scatter trees" / "plant trees randomly" never substring-match
+      // a name/description, and "trees"/"scattering"/"planting" don't match "tree"/"scatter"/"plant".
+      // Now: split into words, add a crude stem of each (drop -ing/-ed/-s), and a skill matches if its
+      // name+description contains ANY token; rank by how many tokens hit so the best skill leads.
+      const stem = (w: string): string => w.replace(/(ing|ed)$/, "").replace(/s$/, "");
+      const tokens = [...new Set(
+        input.query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2).flatMap((w) => [w, stem(w)]),
+      )];
+      const scored: { score: number; name: string; description: string; category: string }[] = [];
       for (const t of registry.list(ctx.permissions)) {
         const def = registry.describe(t.name);
         if (def === undefined) continue;
         if (input.category !== undefined && def.category !== input.category) continue;
-        if (q.length > 0 && !t.name.toLowerCase().includes(q) && !t.description.toLowerCase().includes(q)) continue;
-        matches.push({ name: t.name, description: t.description, category: def.category });
-        if (matches.length >= limit) break;
+        const hay = (t.name + " " + t.description).toLowerCase();
+        let score = 0;
+        for (const tok of tokens) if (hay.includes(tok)) score++;
+        // Empty query → list everything (category filter still applies); otherwise require a token hit.
+        if (tokens.length > 0 && score === 0) continue;
+        scored.push({ score, name: t.name, description: t.description, category: def.category });
       }
-      return { matches };
+      scored.sort((a, b) => b.score - a.score);
+      return { matches: scored.slice(0, limit).map(({ name, description, category }) => ({ name, description, category })) };
     },
   });
 
