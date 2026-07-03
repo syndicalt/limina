@@ -120,9 +120,29 @@
     </section>
   </main>
 
-  <footer class="logbar">
-    <div class="log-head">console</div>
-    <div id="log" class="log"></div>
+  <footer class="logbar" data-console-expanded="false" data-console-active-tab="console">
+    <button class="log-strip" id="console-expand" type="button" aria-expanded="false" aria-controls="console-panel">
+      <span class="log-strip-title">Console</span>
+      <span class="log-strip-preview" id="console-preview" aria-live="polite"></span>
+      <span class="log-strip-chevron" aria-hidden="true">⌃</span>
+    </button>
+    <div class="console-panel" id="console-panel" aria-label="Console panel">
+      <div class="log-head">
+        <div class="console-tabs" role="tablist" aria-label="Console views">
+          <button class="console-tab active" id="console-tab-console" type="button" role="tab" aria-selected="true" aria-controls="console-pane-console" data-console-tab="console">Console</button>
+          <button class="console-tab" id="console-tab-trace" type="button" role="tab" aria-selected="false" aria-controls="console-pane-trace" data-console-tab="trace">Trace</button>
+        </div>
+        <button class="console-collapse" id="console-collapse" type="button" aria-label="Collapse console">⌄</button>
+      </div>
+      <div class="console-body">
+        <div class="console-pane active" id="console-pane-console" role="tabpanel" aria-labelledby="console-tab-console" data-console-pane="console">
+          <div id="log" class="log"></div>
+        </div>
+        <div class="console-pane" id="console-pane-trace" role="tabpanel" aria-labelledby="console-tab-trace" data-console-pane="trace" hidden>
+          <div id="console-trace" class="console-trace"></div>
+        </div>
+      </div>
+    </div>
   </footer>
 
   <script type="module" src="src/windows.js"></script>
@@ -130,5 +150,7 @@
   <script type="module" src="src/app.js"></script>
   <script type="module" src="src/viewport.js"></script>
   <script type="module" src="src/chat.js"></script>
+  <script type="module" src="src/console.js"></script>
+  <script type="module" src="src/toasts.js"></script>
 </body>
 </html>
