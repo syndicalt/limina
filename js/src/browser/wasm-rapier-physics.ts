@@ -366,6 +366,20 @@ export class WasmRapierPhysics {
     out[0] = t.x; out[1] = t.y; out[2] = t.z;
   }
 
+  /** Re-pose a body's world transform (translation + rotation) by stable id — mirrors the native
+   *  host op (crates/limina-physics op_physics_set_body_transform). Used by writeTransformComponent
+   *  (ecs.updateComponent / scene.moveEntity / a stamped createMesh's rotation) so the collider
+   *  follows and the per-tick body→SoA sync does not snap the entity back. No-op on a non-finite
+   *  input or an unknown/removed id; wakes the body so a re-posed fixed/static body takes effect. */
+  op_physics_set_body_transform(id: number, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): void {
+    if (!(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) &&
+          Number.isFinite(qx) && Number.isFinite(qy) && Number.isFinite(qz) && Number.isFinite(qw))) return;
+    const body = this.bodyFor(id);
+    if (body === null) return;
+    body.setTranslation({ x, y, z }, true);
+    body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
+  }
+
   op_physics_drain_collisions(): CollisionEventRecord[] {
     const records: CollisionEventRecord[] = [];
     const w = this.world;

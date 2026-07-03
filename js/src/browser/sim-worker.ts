@@ -135,6 +135,7 @@ function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
     op_physics_restore: P.op_physics_restore.bind(P),
     op_physics_body_pos: P.op_physics_body_pos.bind(P),
     op_physics_body_transform: P.op_physics_body_transform.bind(P),
+    op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
     op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
     op_physics_raycast: P.op_physics_raycast.bind(P),
     // ── render / loop / device input — no surface in a worker (input arrives via
