@@ -10,12 +10,30 @@ import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.t
 import type { Transformable } from "../ecs/world.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
-import { parseGltfScene } from "./three.ts";
+import { loadGltfIntoScene, parseGltfScene } from "./three.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 
 const inertTransform = (): Transformable => ({ position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } });
+
+/** Yield one animation frame so a heavy mount (GLB parse + GPU upload) doesn't block the main
+ *  thread in one burst — spreads six archetype uploads across six frames instead of a single
+ *  multi-second stall that can trip the browser's unresponsive-page watchdog / lose the WebGPU
+ *  device. Falls back to a macrotask where rAF is absent. */
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 0);
+  });
+
+/** Pick one archetype id for a species deterministically from `seed`. */
+function pickArchetype(species: string, seed: number): string {
+  const palette = SPECIES_ARCHETYPES[species] ?? [];
+  if (palette.length === 0) throw new Error(`vegetation.plant: no archetypes for species '${species}'`);
+  const i = ((seed % palette.length) + palette.length) % palette.length;
+  return palette[i];
+}
 
 /** Default boreal archetype palette — the textured GLBs from tools/bake-trees-browser.mjs. */
 const SPECIES_ARCHETYPES: Record<string, string[]> = {
@@ -106,14 +124,23 @@ export function registerVegetationSkills(
         // CRASH-PROOF: a GLB parse / GPU upload failure must NOT kill the viewport's apply loop.
         // The placements are already recorded (the authoritative contract); if the render mount
         // fails, log it and leave the forest un-mounted rather than throwing into the viewport.
-        try {
-          const byId = new Map<string, AssetInstance[]>();
-          for (const inst of placements) {
-            let list = byId.get(inst.assetId);
-            if (list === undefined) { list = []; byId.set(inst.assetId, list); }
-            list.push(inst);
-          }
-          for (const [id, list] of byId) {
+        const byId = new Map<string, AssetInstance[]>();
+        for (const inst of placements) {
+          let list = byId.get(inst.assetId);
+          if (list === undefined) { list = []; byId.set(inst.assetId, list); }
+          list.push(inst);
+        }
+        // Mount ONE archetype per frame: parsing a dense GLB + uploading its InstancedMesh to the
+        // GPU is heavy; doing all six back-to-back blocks the main thread long enough to trip the
+        // browser's unresponsive-page watchdog / lose the WebGPU device (the reported "crash").
+        // Yielding a frame between archetypes spreads the cost and keeps the viewport responsive.
+        // Per-archetype try/catch so one bad asset can't kill the rest OR the apply loop.
+        let idx = 0;
+        const totalArchetypes = byId.size;
+        for (const [id, list] of byId) {
+          idx++;
+          ctx.emit("vegetation.mounting", { archetype: id, index: idx, total: totalArchetypes, instances: list.length });
+          try {
             const root = await parseGltfScene(id, assets.resolve(id).bytes);
             for (const mesh of buildAssetInstancedMeshes(root, list)) {
               (mesh as unknown as InstMesh).castShadow = true;
@@ -122,9 +149,10 @@ export function registerVegetationSkills(
               meshes.push(mesh);
               mountedCount++;
             }
+          } catch (err) {
+            ctx.emit("vegetation.mount_failed", { archetype: id, message: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          ctx.emit("vegetation.mount_failed", { message: err instanceof Error ? err.message : String(err), placements: placements.length });
+          await nextFrame();
         }
       }
 
@@ -146,4 +174,67 @@ export function registerVegetationSkills(
   };
 
   registry.register(scatter as unknown as Parameters<SkillRegistry["register"]>[0]);
+
+  // vegetation.plant — place ONE tree of a species at a point (the per-tree counterpart to the bulk
+  // scatter). A single normal entity via the proven single-GLB path (loadGltfIntoScene, same as
+  // asset.place) — light on the GPU, so it works where a full scatter is heavy, and lets the agent
+  // compose a scene tree-by-tree. Deterministic + recorded: the archetype is chosen from `seed` and
+  // its content hash is pinned.
+  const plantInput = z.object({
+    /** Which tree to plant. */
+    species: z.enum(["spruce", "pine", "birch"]).default("spruce"),
+    /** World position [x,y,z]. Defaults to the current terrain layer's origin (its flat surface). */
+    position: z.tuple([z.number(), z.number(), z.number()]).optional(),
+    /** Terrain layer whose origin is the default position. Defaults to the most recently created. */
+    terrain: z.string().optional(),
+    /** Selects the archetype variant + is recorded; same seed => same tree. */
+    seed: z.number().int().default(1),
+    /** Uniform scale multiplier on the (already real-world-height) archetype. */
+    scale: z.number().positive().default(1),
+    /** Heading in radians about +Y. */
+    yaw: z.number().default(0),
+  });
+
+  const plant: SkillDefinition<z.infer<typeof plantInput>, { entity: string; assetId: string; assetHash: string }> = {
+    name: "vegetation.plant",
+    version: "1.0.0",
+    description: "Plant a SINGLE tree of a species (spruce/pine/birch) at a point — the per-tree counterpart to vegetation.scatter. A light single entity (works where a full forest is too heavy), for composing a scene tree by tree. Deterministic + recorded.",
+    category: "terrain",
+    permissions: ["scene.write"],
+    commitFields: ["assetHash"],
+    input: plantInput,
+    output: z.object({ entity: z.string(), assetId: z.string(), assetHash: z.string() }),
+    handler: async (input, ctx) => {
+      const assetId = pickArchetype(input.species, input.seed);
+      const resolved = assets.resolve(assetId);
+
+      // Default the position to the CENTRE of the active terrain layer, on its surface (terrain is
+      // centred on its origin; surface Y = origin.y + centre height × scale.y — the same formula the
+      // scatter/mesh/collider use, so the tree sits ON the ground, not floating or buried).
+      let position = input.position;
+      if (position === undefined) {
+        let terrainId = input.terrain;
+        if (terrainId === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; terrainId = last; }
+        const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
+        if (layer !== undefined) {
+          const t = layer.tile;
+          const centre = Math.floor((t.nrows - 1) / 2) * t.ncols + Math.floor((t.ncols - 1) / 2);
+          position = [t.origin[0], t.origin[1] + (t.heights[centre] ?? 0) * t.scale[1], t.origin[2]];
+        } else {
+          position = [0, 0, 0];
+        }
+      }
+
+      const { entity } = await loadGltfIntoScene(ctx as never, assetId, resolved.bytes, resolved.hash, {
+        position,
+        rotationEuler: [0, input.yaw, 0],
+        scale: [input.scale, input.scale, input.scale],
+      });
+
+      ctx.emit("vegetation.planted", { entity, species: input.species, assetId, position });
+      return { entity, assetId, assetHash: resolved.hash };
+    },
+  };
+
+  registry.register(plant as unknown as Parameters<SkillRegistry["register"]>[0]);
 }
