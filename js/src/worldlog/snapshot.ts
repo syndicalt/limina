@@ -34,6 +34,7 @@ import { Position, Rotation, Scale } from "../ecs/world.ts";
 import { $internal } from "../../build/bitecs.bundle.mjs";
 import type { EntityTableSnapshot, EntityOrigin, LoadedResourceMetadata, MaterialState, TransformOffset } from "../engine.ts";
 import type { WorldContext } from "../skills/registry.ts";
+import { BehaviorSpecSchema, EventSpecSchema, type BehaviorSpec, type EventSpec } from "../behavior/behavior-spec.ts";
 import {
   captureRandomState,
   captureWorldState,
@@ -117,6 +118,27 @@ export interface SnapshotEntity {
   /** First-class surface material (MaterialState), so a bounded-tail viewer restores the entity's
    *  color/roughness/metalness (or palette/imported name) without replaying setMaterial commands. */
   material?: MaterialState;
+  /** First-class DECLARATIVE behaviour (BehaviorSpec: idle/patrol/wander/script), so a scene saved
+   *  with behaviour reloads with it — carried WITHOUT replaying the behavior.set commands. */
+  behavior?: BehaviorSpec;
+}
+
+/** One world-level event definition (EventSpec {trigger, action}) + its stable id. Events are NOT
+ *  per-entity, so they ride the snapshot as a top-level list (like `characters`), captured from and
+ *  restored into a world-level event registry. */
+export interface EventSpecSnapshotEntry {
+  id: string;
+  spec: EventSpec;
+}
+
+/** The structural surface the snapshot reads/writes for the world-level event registry. A concrete
+ *  registry (js/src/skills/behavior-spec.ts) satisfies this; the interface keeps the worldlog layer
+ *  free of a dependency on the concrete skill module (mirrors SnapshotableCharacter). */
+export interface SnapshotableEventRegistry {
+  /** Every defined event (id + canonical spec), in definition order. */
+  listEventSpecs(): EventSpecSnapshotEntry[];
+  /** Replace the registry's contents with these entries (a self-sufficient restore). */
+  restoreEventSpecs(entries: readonly EventSpecSnapshotEntry[]): void;
 }
 
 /** A complete, self-contained world snapshot at a tick boundary. */
@@ -138,6 +160,10 @@ export interface WorldSnapshot {
   /** Character-controller resume state (vy/grounded/heading) per controller body.
    *  Empty when the session has no character controllers. */
   characters: CharacterSnapshotEntry[];
+  /** World-level declarative event definitions (EventSpec {trigger, action}) defined via
+   *  event.define. Carried so a self-sufficient snapshot reloads the world's events without
+   *  replaying the pre-snapshot event.define commands. Empty when no events were defined. */
+  events: EventSpecSnapshotEntry[];
   /** base64 of the native Rapier physics blob (op_physics_snapshot). */
   physics: string;
 }
@@ -252,6 +278,10 @@ export interface CaptureSnapshotOptions {
    *  Their kinematic bodies are already in the native blob; this captures the
    *  vy/grounded/heading the blob cannot reconstruct. */
   characters?: readonly SnapshotableCharacter[];
+  /** The world-level event registry whose definitions must be baked into the snapshot so a
+   *  self-sufficient restore reloads them without replaying the event.define commands. Omitted
+   *  when the session defined no events. */
+  events?: SnapshotableEventRegistry;
 }
 
 /** Capture a complete world snapshot at the current tick boundary. MUST be called
@@ -280,6 +310,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       parent: world.entities.resolve(entry.id)?.parent,
       localOffset: world.entities.resolve(entry.id)?.localOffset,
       material: world.entities.resolve(entry.id)?.material,
+      behavior: world.entities.resolve(entry.id)?.behavior,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -298,6 +329,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
     entityIndex: captureEntityIndex(world.ecs),
     entities,
     characters,
+    events: opts.events?.listEventSpecs() ?? [],
     physics: bytesToBase64(physics),
   };
 }
@@ -360,6 +392,10 @@ const snapshotEntitySchema = z.object({
     name: z.string().optional(),
     pbr: z.boolean().optional(),
   }).optional(),
+  // First-class declarative behaviour — validated by the real BehaviorSpec schema (a torn/forged
+  // snapshot behaviour is rejected on parse, never trusted). Optional so a pre-behaviour snapshot
+  // (or a behaviour-less entity) still parses.
+  behavior: BehaviorSpecSchema.optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -378,6 +414,9 @@ const worldSnapshotSchema = z.object({
   entityIndex: entityIndexSchema,
   entities: z.array(snapshotEntitySchema),
   characters: z.array(characterSnapshotSchema).optional().default([]),
+  // World-level event definitions — each spec validated by the real EventSpec schema. Optional +
+  // defaulted so a pre-events snapshot still parses (additive, back-compatible with v3).
+  events: z.array(z.object({ id: z.string(), spec: EventSpecSchema })).optional().default([]),
   physics: z.string(),
 });
 
@@ -418,6 +457,7 @@ export function restoreSnapshot(
   world: WorldContext,
   snapshot: WorldSnapshot,
   characters?: readonly SnapshotableCharacter[],
+  events?: SnapshotableEventRegistry,
 ): void {
   // 1. RNG: resume the seeded generator mid-stream.
   installRandomState(snapshot.rngState);
@@ -450,7 +490,11 @@ export function restoreSnapshot(
     if (e.origin !== undefined) world.entities.bindOrigin(e.id, e.origin);
     if (e.parent !== undefined) world.entities.setParent(e.id, e.parent, e.localOffset);
     if (e.material !== undefined) world.entities.bindMaterial(e.id, e.material);
+    if (e.behavior !== undefined) world.entities.bindBehavior(e.id, e.behavior);
   }
+  // World-level events: replace the registry's contents with the snapshot's baked definitions, so
+  // a self-sufficient restore reloads them without replaying the pre-snapshot event.define stream.
+  if (events !== undefined) events.restoreEventSpecs(snapshot.events);
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
   //    native blob cannot carry (matched to live controllers by body id). The
   //    body transform itself was restored in step 2.
@@ -479,6 +523,7 @@ export async function recoverWorld(
   deltaCommands: WorldCommand[],
   deps: ReplayDeps,
   characters?: readonly SnapshotableCharacter[],
+  events?: SnapshotableEventRegistry,
 ): Promise<RecoveryResult> {
   const tracer = deps.tracer ?? new LiminaTracer("ses_worldlog_recover");
   const registry = deps.makeRegistry(tracer);
@@ -490,7 +535,7 @@ export async function recoverWorld(
   Position.x.fill(0); Position.y.fill(0); Position.z.fill(0);
   Rotation.x.fill(0); Rotation.y.fill(0); Rotation.z.fill(0); Rotation.w.fill(0);
   Scale.x.fill(0); Scale.y.fill(0); Scale.z.fill(0);
-  restoreSnapshot(world, snapshot, characters);
+  restoreSnapshot(world, snapshot, characters, events);
 
   let deltaSkillInvokes = 0;
   let deltaPhysicsOps = 0;

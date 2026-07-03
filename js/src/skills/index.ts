@@ -48,6 +48,7 @@ import { registerClipAuthorSkills, type ClipAuthor } from "./clip_author.ts";
 import { registerQuestSkills, type QuestManager } from "./quest.ts";
 import { registerCombatSkills, type StatsManager, type CombatManager } from "./combat.ts";
 import { registerBehaviorDialogueSkills, type BehaviorManager, type DialogueManager } from "./behavior.ts";
+import { registerBehaviorSpecSkills, type EventSpecRegistry } from "./behavior-spec.ts";
 import { registerNavmeshSkills, type NavmeshManager } from "./navmesh.ts";
 import { registerVFXSkills, type VFXManager } from "./vfx.ts";
 import { registerSaveSkills, type SaveManager } from "./save.ts";
@@ -95,6 +96,9 @@ export interface CoreSkills {
   ability: { abilityManager: AbilityManager };
   /** Phase 12: NPC behavior and dialogue. */
   behavior: { behaviorManager: BehaviorManager; dialogueManager: DialogueManager };
+  /** Track B (B1): declarative behaviour/event RECORD FORMAT — the world-level event registry the
+   *  snapshot layer captures/restores (behavior.set + event.define authoring skills). */
+  behaviorSpec: { events: EventSpecRegistry };
   /** Phase 12: navigation and pathfinding. */
   nav: { navmeshManager: NavmeshManager };
   /** Phase 12: visual effects and particles. */
@@ -234,6 +238,11 @@ export function registerCoreSkills(
   // ability.cast spends from a resource stat, so it binds the combat stats manager (closure dep).
   const ability = registerAbilitySkills(registry, { statsManager: combat.statsManager });
   const behavior = registerBehaviorDialogueSkills(registry);
+  // Track B (B1): the declarative behaviour/event record-format authoring seam. Owns the
+  // world-level EventSpecRegistry the snapshot bakes/restores; behavior.set writes first-class
+  // entity behaviour. Distinct from the NPC-manager `behavior.*` above (that is the runtime brain
+  // seam; this is the portable record format the world log / snapshot carry).
+  const behaviorSpec = registerBehaviorSpecSkills(registry);
   const nav = registerNavmeshSkills(registry);
   const vfx = registerVFXSkills(registry);
   const save = registerSaveSkills(registry);
@@ -245,6 +254,7 @@ export function registerCoreSkills(
     assets, materials, water,
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
+    behaviorSpec,
     nav, vfx, save, progression, worldstate,
   };
 }

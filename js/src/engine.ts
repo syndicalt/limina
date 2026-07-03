@@ -7,6 +7,7 @@ import { createTransformStorage, type TransformStorage } from "./ecs/facade.ts";
 import { createEcsWorld, type Transformable } from "./ecs/world.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import type { BehaviorSpec } from "./behavior/behavior-spec.ts";
 
 // ---- Typed op surface (provider-agnostic; no `any`) ----------------------
 
@@ -282,6 +283,10 @@ export interface EntityEntry {
   /** First-class surface material (see MaterialState) — written by three.setMaterial /
    *  scene.createEntity so it survives without a local mesh (asset/headless entities). */
   material?: MaterialState;
+  /** First-class DECLARATIVE behaviour (see BehaviorSpec) — what this entity DOES (idle/patrol/
+   *  wander/script), as data. Written by behavior.set; carried by a self-sufficient snapshot so a
+   *  saved scene reloads with its behaviour. B1 is the FORMAT + threading; runtime execution is B2. */
+  behavior?: BehaviorSpec;
 }
 
 /** The serializable identity slice of one entity-table entry. The mesh/resource
@@ -362,6 +367,15 @@ export class EntityTable {
     if (material.name !== undefined) merged.name = material.name;
     if (material.pbr !== undefined) merged.pbr = material.pbr;
     entry.material = merged;
+  }
+  /** Bind (replace) a live entry's first-class DECLARATIVE behaviour. behavior.set writes here so
+   *  the behaviour survives on a mesh-less / asset-backed entity (mirrors bindMaterial), and a
+   *  snapshot restore rebinds it. A BehaviorSpec is a whole discriminated-union value, so it is
+   *  REPLACED wholesale (unlike material's per-field merge) — setting patrol over idle is a swap,
+   *  not a merge. Callers pass a canonical spec. No-op if the id is not live. */
+  bindBehavior(id: string, behavior: BehaviorSpec): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.behavior = behavior;
   }
   /** Set (or move) a child's parent + captured local offset, maintaining the byParent
    *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */
