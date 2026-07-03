@@ -339,6 +339,10 @@ function renderRoster() {
 // ---------------------------------------------------------------------------
 function renderReasoning() {
   const root = $("reason-body");
+  // Follow live activity: if the user is near the bottom, re-pin to the newest line after the
+  // rebuild so the tree visibly updates; if they've scrolled up to read history, leave them be.
+  // innerHTML="" resets scrollTop, so capture the near-bottom state BEFORE wiping.
+  const stick = root.scrollHeight - root.scrollTop - root.clientHeight < 24;
   root.innerHTML = "";
   const events = [...state.events.values()];
   if (events.length === 0) { root.appendChild(el("div", "muted", "no trace events yet")); return; }
@@ -350,6 +354,7 @@ function renderReasoning() {
     for (const node of actorRoots) ul.appendChild(renderNode(node));
     root.appendChild(ul);
   }
+  if (stick) root.scrollTop = root.scrollHeight;
 }
 
 function renderNode(node) {
