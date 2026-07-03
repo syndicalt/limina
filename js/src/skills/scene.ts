@@ -8,6 +8,7 @@ import { createMaterial, getMaterialParams, isMaterialName, MATERIAL_NAMES } fro
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hierarchy.ts";
+import { writeTransformComponent } from "./ecs.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -286,10 +287,66 @@ const inspectScene: SkillDefinition<
   },
 };
 
+// scene.moveEntity — reposition / re-orient / rescale an EXISTING entity. The discoverable "move"
+// tool an agent reaches for (ecs.updateComponent is the lower-level primitive). Absolute or relative
+// position, a friendly yaw (radians about +Y) or a full quaternion, and uniform or per-axis scale —
+// all optional, all routed through the shared writeTransformComponent (physics body + hierarchy stay
+// consistent). Applied in place on the live viewport (no reboot).
+const moveInput = z.object({
+  entity: z.string(),
+  /** New position [x,y,z]. With relative:true it is an OFFSET added to the current position. */
+  position: z.tuple([z.number(), z.number(), z.number()]).optional(),
+  /** Treat `position` as a delta from the entity's current position instead of an absolute point. */
+  relative: z.boolean().default(false),
+  /** Heading in radians about +Y — the simple "turn it" knob. Ignored if `rotation` is given. */
+  yaw: z.number().optional(),
+  /** Full orientation quaternion [x,y,z,w] (overrides `yaw`). */
+  rotation: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  /** Uniform scale (number) or per-axis [x,y,z]. */
+  scale: z.union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive(), z.number().positive()])]).optional(),
+});
+const moveEntity: SkillDefinition<z.infer<typeof moveInput>, { entity: string; position: [number, number, number] }> = {
+  name: "scene.moveEntity",
+  version: "1.0.0",
+  description: "Move / re-orient / rescale an EXISTING entity: set its position [x,y,z] (absolute, or relative:true for an offset), turn it (yaw radians about +Y, or a full rotation quaternion), and/or rescale it (uniform number or [x,y,z]). This is how you reposition entities after creating them.",
+  category: "scene",
+  permissions: ["ecs.modify"],
+  input: moveInput,
+  output: z.object({ entity: z.string(), position: z.tuple([z.number(), z.number(), z.number()]) }),
+  handler: (input, ctx) => {
+    const entry = ctx.world.entities.resolve(input.entity);
+    if (entry === undefined) throw new Error(`scene.moveEntity: unknown entity '${input.entity}'`);
+    const eid = entry.eid;
+
+    if (input.position !== undefined) {
+      const [px, py, pz] = input.position;
+      const target: [number, number, number] = input.relative
+        ? [Position.x[eid] + px, Position.y[eid] + py, Position.z[eid] + pz]
+        : [px, py, pz];
+      writeTransformComponent(ctx, input.entity, "position", target);
+    }
+    if (input.rotation !== undefined) {
+      writeTransformComponent(ctx, input.entity, "rotation", input.rotation);
+    } else if (input.yaw !== undefined) {
+      const h = input.yaw / 2;
+      writeTransformComponent(ctx, input.entity, "rotation", [0, Math.sin(h), 0, Math.cos(h)]);
+    }
+    if (input.scale !== undefined) {
+      const s = typeof input.scale === "number" ? [input.scale, input.scale, input.scale] : input.scale;
+      writeTransformComponent(ctx, input.entity, "scale", s);
+    }
+
+    const position: [number, number, number] = [Position.x[eid], Position.y[eid], Position.z[eid]];
+    ctx.emit("scene.entity.moved", { entity: input.entity, position });
+    return { entity: input.entity, position };
+  },
+};
+
 export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
   registry.register(makeCreateEntity(materials));
   registry.register(destroyEntity);
   registry.register(reparent);
   registry.register(queryEntities);
   registry.register(inspectScene);
+  registry.register(moveEntity);
 }

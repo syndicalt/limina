@@ -239,7 +239,7 @@ export class SkillRegistry {
    *  field; this set is the default for skills that don't. */
   private static readonly DEFAULT_CORE: ReadonlySet<string> = new Set([
     "skills.list", "skills.search", "skills.browse", "skills.describe",
-    "scene.createEntity", "scene.queryEntities",
+    "scene.createEntity", "scene.moveEntity", "scene.queryEntities", "ecs.updateComponent",
     "world.generateRegion", "world.populateBiome", "asset.place",
     "terrain.create", "terrain.deform", "vegetation.scatter", "vegetation.plant",
     "player.move", "player.jump", "interaction.interact", "interaction.query", "inventory.add",

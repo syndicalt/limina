@@ -435,7 +435,7 @@ export interface RunningLive {
   stop(): void;
 }
 
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial", "terrain.deform"]);
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform"]);
 // Primitive/structural adds applied INCREMENTALLY on the live scene (no reboot). GLB-mounting skills
 // (asset.place, three.loadGLTF, vegetation.plant/scatter) are DELIBERATELY excluded: they parse a
 // glTF (GLTFLoader.parse → createImageBitmap, a macrotask) which, applied incrementally into an
