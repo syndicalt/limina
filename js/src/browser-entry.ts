@@ -31,6 +31,14 @@ import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
 import { resolveProfile } from "./skills/permissions.ts";
 import { applyAuthorCommand } from "./kernel/authoring.ts";
+import {
+  applyAuthorCommandsIsolated,
+  createWorkerHandshake,
+  type AuthorCommandFailure,
+} from "./kernel/apply-isolated.ts";
+// Re-exported so the editor viewport (plain JS importing the bundle) shares the SAME quarantine
+// helper the headless gate unit-tests — no forked copy of the skip logic.
+export { partitionQuarantined } from "./kernel/apply-isolated.ts";
 import { LiminaTracer } from "./observability/event.ts";
 // ── Phase 8 Mode-B (M5) live runtime: the verified M1–M4 + M3 worker pieces ──
 import { WasmRapierPhysics, type RapierModule } from "./browser/wasm-rapier-physics.ts";
@@ -429,6 +437,12 @@ export interface RunningLive {
   entities: EntityTable;
   pickEntityId(object: { parent?: unknown }): string | undefined;
   cameraControls?: unknown;
+  /** Per-command authoring failures encountered while bringing the viewport up (Layer-2 isolation):
+   *  the viewport still came up with every command that DID apply — a bad/out-of-band command no
+   *  longer wedges it. Absent/empty when the whole command log authored cleanly. The editor uses
+   *  these to QUARANTINE the offending commands so a later reboot does not replay them. Distinct from
+   *  a `null` return, which means the environment could not host the viewport at all. */
+  authoringFailures?: AuthorCommandFailure[];
   applyAuthorCommands(cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }>;
   setCameraControlsEnabled(on: boolean): void;
   setSyncSuppressed(eid: number, on: boolean): void;
@@ -519,18 +533,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     return null;
   }
 
-  const ready = await new Promise<ReadyMessage | null>((resolve) => {
-    worker.onmessage = (ev: { data: unknown }): void => {
-      const msg = ev.data as { type?: string };
-      if (msg.type === "ready") resolve(ev.data as ReadyMessage);
-    };
-    worker.onerror = (ev: { message?: string }): void => {
-      status("error", "sim worker error: " + (ev.message ?? "unknown"));
-      resolve(null);
-    };
-    worker.postMessage({ type: "init", commands: opts.commands });
-  });
-  if (ready === null) { worker.terminate(); return null; }
+  // The handshake ALWAYS settles: it resolves on `ready` OR on `{type:"error"}` OR on a hard
+  // worker.onerror — so `await` can never hang (the old listener resolved only on `ready`, and a
+  // worker `{type:"error"}` left the promise pending forever, freezing the viewport).
+  const handshake = createWorkerHandshake<ReadyMessage>();
+  worker.onmessage = (ev: { data: unknown }): void => { handshake.offer(ev.data); };
+  worker.onerror = (ev: { message?: string }): void => handshake.fail("sim worker error: " + (ev.message ?? "unknown"));
+  worker.postMessage({ type: "init", commands: opts.commands });
+  const handshakeResult = await handshake.promise;
+  if (!handshakeResult.ok) {
+    // A hard startup failure (no worker, rapier import/create failed) — the environment cannot host
+    // the viewport. Report the SPECIFIC reason and return null (the "unsupported / cannot host"
+    // signal, distinct from a per-command authoring failure, which keeps the viewport up below).
+    status("error", handshakeResult.error);
+    worker.terminate();
+    return null;
+  }
+  const ready = handshakeResult.ready;
   // The loop is created far below; the error handler installed here (which can fire
   // any time after `ready`) tears it down via this forward reference.
   let liveLoop: AccumulatorLoopHandle | null = null;
@@ -552,7 +571,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // keep handling messages after `ready` (instead of nulling onmessage) so that throw
   // is surfaced and the now-broken sim is torn down rather than dying silently.
   worker.onmessage = (ev: { data: unknown }): void => {
-    const msg = ev.data as { type?: string; phase?: string; message?: string };
+    const msg = ev.data as { type?: string; phase?: string; message?: string; failures?: AuthorCommandFailure[] };
+    if (msg.type === "authoringFailures") {
+      // NON-FATAL: the worker isolated a bad/out-of-band command (it kept stepping). The render
+      // thread re-authors the same log and reports the same failures via `authoringFailures`, so this
+      // is surfaced for observability, not treated as a fatal sim throw.
+      console.warn(
+        `limina sim worker isolated ${msg.failures?.length ?? 0} authoring failure(s) in ${msg.phase ?? "loadWorld"}:`,
+        (msg.failures ?? []).map((f) => `#${f.index} ${f.command}: ${f.message}`).join("; "),
+      );
+      return;
+    }
     if (msg.type !== "error") return; // tick acks (and anything else) are ignored
     failLive(`sim worker ${msg.phase ?? "tick"}: ${msg.message ?? "unknown"}`);
   };
@@ -642,13 +671,27 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       tick: 0,
     });
   };
-  for (const cmd of opts.commands) {
-    const res = await applyOne(cmd);
-    if (!res.success) {
-      status("error", authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
-      worker.terminate();
-      return null;
-    }
+  // ISOLATE authoring (Layer-2 boundary): a single bad / out-of-band command must NOT terminate the
+  // worker and return null-as-if-unsupported — that wedges the whole viewport. Apply every command,
+  // collect the failures, and bring the viewport up with what DID author. (Same per-command contract
+  // as `applyOne` — `applyAuthorCommandsIsolated` calls the very same `applyAuthorCommand`; only the
+  // abort policy differs. This adds NO fetch/import/createImageBitmap between renderer.init() and the
+  // first render — the assets were pre-warmed above — so the forceWebGL init-collapse window is
+  // untouched: this loop's awaits are identical in kind to the original per-command loop.)
+  const authoringOutcome = await applyAuthorCommandsIsolated(registry, world, opts.commands, {
+    sessionId: "ses_browser_live",
+    defaultAgentId: "author",
+    defaultPerms: permissions,
+    tick: 0,
+  });
+  const authoringFailures = authoringOutcome.failures;
+  if (authoringFailures.length > 0) {
+    // The viewport still comes up; surface the offenders for observability. The caller (editor) reads
+    // `running.authoringFailures` off the returned handle to quarantine + report which/why.
+    console.warn(
+      `limina live authoring isolated ${authoringFailures.length} failure(s):`,
+      authoringFailures.map((f) => `#${f.index} ${authoringFailureMessage(opts.commands[f.index], f.message)}`).join("; "),
+    );
   }
 
   // The authored entity eids = the render set; capture their (static) authored scale
@@ -806,6 +849,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     entities,
     pickEntityId,
     cameraControls,
+    authoringFailures: authoringFailures.length > 0 ? authoringFailures : undefined,
     applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
       const unsupportedStructuralTools: string[] = [];
       let structuralAdds = 0;

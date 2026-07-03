@@ -22,7 +22,7 @@
 // - G: toggle the unobtrusive ground grid helper.
 // - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
-import { runLive, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
 import { destroyEntity, resetWriter, writeUpdate } from "./write-client.js";
@@ -117,6 +117,10 @@ const state = {
   running: undefined,
   cursor: 0,
   commands: [],
+  // Indices (into toAuthorCommands(state.commands)) of commands that FAILED authoring on a prior
+  // reboot. reboot() skips these so ONE historically-bad command (e.g. an out-of-band asset the agent
+  // generated once) can't wedge every future reboot. Cleared on a worldlog reset.
+  quarantined: new Set(),
   rebooting: false,
   dirty: false,
   transformControls: undefined,
@@ -333,7 +337,7 @@ async function poll() {
   try {
     const res = await c.callTool("worldlog.tail", { since: state.cursor });
     if (res) {
-      if (res.reset) { state.commands = []; state.cursor = 0; }
+      if (res.reset) { state.commands = []; state.cursor = 0; state.quarantined.clear(); }
       if (Array.isArray(res.commands) && res.commands.length > 0) {
         const newCmds = res.commands;
         const authorCmds = toAuthorCommands(newCmds);
@@ -655,10 +659,15 @@ async function reboot() {
     const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
     canvas.width = w; canvas.height = h;
     const past = state.scrubLimit !== undefined;
-    setStatus(past ? "past" : "rendering", `${cmds.length} authoring commands${past ? " (history)" : ""}`);
+    // Convert to AuthorCommands, then SKIP any command quarantined on a prior pass (it failed
+    // authoring — replaying it would wedge every future reboot). keptIndex maps a kept command's
+    // position back to its index in authorCmds, so a NEW failure can be quarantined by that index.
+    const authorCmds = toAuthorCommands(cmds);
+    const { kept, keptIndex } = partitionQuarantined(authorCmds, state.quarantined);
+    setStatus(past ? "past" : "rendering", `${kept.length} authoring commands${past ? " (history)" : ""}`);
     state.running = await runLive({
       canvas, width: w, height: h,
-      commands: toAuthorCommands(cmds),
+      commands: kept,
       input: window,
       onStatus: setStatus,
       orbit: { center: [0, 1, 0], radius: 16, height: 8 },
@@ -667,13 +676,32 @@ async function reboot() {
       // /examples site + the old viewport force WebGL2 for the same reason.
       forceWebGL: true,
     });
-    if (state.running === null) setStatus("error", "no COOP/COEP or WebGPU — viewport unavailable");
-    else {
-      installGizmo(state.running);
-      installGridHelper(state.running);
-      applyWireframeMode(state.running);
-      setStatus(past ? "past" : "live", `${cmds.length} commands${past ? " · viewing history" : ""}`);
+    if (state.running === null) {
+      // The environment could not HOST the viewport (no COOP/COEP, no WebGPU, or a hard worker
+      // startup error). runLive already reported the SPECIFIC reason via onStatus=setStatus — do NOT
+      // stomp it with a generic "no COOP/COEP or WebGPU" message (which masked real authoring/worker
+      // failures as a fake GPU error). Leave the precise status runLive set.
+      return;
     }
+    // A per-command authoring failure does NOT null the handle — the viewport came up with everything
+    // that DID author. Quarantine each offender (by its authorCmds index) so the next reboot skips it,
+    // and surface which/why.
+    const failures = state.running.authoringFailures ?? [];
+    for (const f of failures) {
+      const originalIndex = keptIndex[f.index];
+      if (originalIndex !== undefined) state.quarantined.add(originalIndex);
+      logConsolePanel(`viewport quarantined a bad command (${f.command}): ${f.message}`, "err");
+    }
+    installGizmo(state.running);
+    installGridHelper(state.running);
+    applyWireframeMode(state.running);
+    const authored = kept.length - failures.length;
+    setStatus(
+      past ? "past" : "live",
+      failures.length > 0
+        ? `${authored} commands · ${failures.length} quarantined${past ? " · viewing history" : ""}`
+        : `${kept.length} commands${past ? " · viewing history" : ""}`,
+    );
   } catch (e) {
     setStatus("error", e && e.message ? e.message : String(e));
   } finally {

@@ -33,6 +33,7 @@ import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
+import { applyAuthorCommandsIsolated, type AuthorCommandFailure } from "../kernel/apply-isolated.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
 import { SharedTransformStorage } from "./sab-transforms.ts";
@@ -279,35 +280,42 @@ export class SimWorkerController {
     });
   }
 
-  /** Author (or replay) a world into the sim: each command either RE-INVOKES a
-   *  recorded skill through the registry (the worldlog replay rule) or calls an
-   *  engine physics op directly. After authoring, the initial body transforms are
-   *  synced into the transform SAB so the render thread frames the world before the
-   *  first tick. Returns the per-command results (skill result / physics-op return). */
-  async loadWorld(commands: AuthorCommand[]): Promise<unknown[]> {
+  /** Author (or replay) a world into the sim, ISOLATING each command (Layer-2 graceful boundary): a
+   *  single bad / out-of-band command must NEVER throw out of `loadWorld` and abort the whole batch —
+   *  every valid command still applies, and the failures are carried out structurally. Each command
+   *  either RE-INVOKES a recorded skill through the registry (the worldlog replay rule) or calls an
+   *  engine physics op directly; both go through the SAME per-command contract as the kernel/skill
+   *  layers (`applyAuthorCommandsIsolated` → `applyAuthorCommand` → `registry.invoke`, which already
+   *  try/catches every handler). After authoring, the initial body transforms are synced into the
+   *  transform SAB so the render thread frames the world before the first tick. */
+  async loadWorldIsolated(commands: AuthorCommand[]): Promise<{ results: unknown[]; failures: AuthorCommandFailure[] }> {
+    const outcome = await applyAuthorCommandsIsolated(this.registry, this.world, commands, {
+      sessionId: this.sessionId,
+      defaultAgentId: "author",
+      defaultPerms: this.grants,
+      tick: this.tickCount,
+    });
     const results: unknown[] = [];
-    for (const cmd of commands) {
-      if (cmd.kind === "physics") {
-        const fn = (this.world.ops as unknown as Record<string, (...a: unknown[]) => unknown>)[cmd.op];
-        results.push(fn(...cmd.args));
-        continue;
+    for (let i = 0; i < commands.length; i++) {
+      const res = outcome.results[i];
+      if (res !== undefined && res.success) {
+        // Only a SUCCESSFUL live transform mutation re-drives the physics body; a failed command left
+        // no effect to mirror.
+        this.syncLiveTransformMutationToPhysics(commands[i]);
+        results.push(res.result);
+      } else {
+        results.push(undefined);
       }
-      const res = await this.registry.invoke(cmd.tool, cmd.input, {
-        agentId: cmd.agentId ?? "author",
-        sessionId: this.sessionId,
-        permissions: cmd.perms !== undefined ? new Set(cmd.perms) : this.grants,
-        tick: this.tickCount,
-        world: this.world,
-        causedBy: [],
-      });
-      if (!res.success) {
-        throw new Error(`loadWorld: skill '${cmd.tool}' failed: ${res.error?.message ?? "unknown error"}`);
-      }
-      this.syncLiveTransformMutationToPhysics(cmd);
-      results.push(res.result);
     }
     this.syncTransforms();
-    return results;
+    return { results, failures: outcome.failures };
+  }
+
+  /** Back-compat wrapper: returns just the per-command results (skill result / physics-op return, or
+   *  `undefined` for a command that failed). Never throws. Callers that need the failure detail use
+   *  `loadWorldIsolated`. */
+  async loadWorld(commands: AuthorCommand[]): Promise<unknown[]> {
+    return (await this.loadWorldIsolated(commands)).results;
   }
 
   /** Advance the simulation ONE fixed step:
@@ -488,6 +496,15 @@ export function installSimWorker(scope: WorkerScopeLike): void {
     });
   };
 
+  /** Post the NON-FATAL per-command authoring failures from an isolated `loadWorld` back to the main
+   *  thread (distinct `type:"authoringFailures"` so the main thread reports WHICH commands failed
+   *  without treating it as a fatal `{type:"error"}` that tears the sim down). The valid commands
+   *  already applied; the worker keeps stepping. */
+  const postAuthoringFailures = (phase: string, failures: AuthorCommandFailure[]): void => {
+    if (failures.length === 0) return;
+    scope.postMessage({ type: "authoringFailures", phase, failures });
+  };
+
   /** Fully tear down what `init` brought up: stop the self-drive interval and
    *  dispose + release the controller (so its joined SABs can be collected). */
   const teardown = (): void => {
@@ -501,7 +518,11 @@ export function installSimWorker(scope: WorkerScopeLike): void {
       if (msg.type === "init") {
         const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
         controller = await SimWorkerController.create({ rapier, sab: msg.sab, inputBuffer: msg.inputBuffer });
-        if (msg.commands !== undefined) await controller.loadWorld(msg.commands);
+        if (msg.commands !== undefined) {
+          // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
+          // aborting the handshake — the worker still replies `ready` and self-drives.
+          postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);
+        }
         const b = controller.buffers;
         scope.postMessage({ type: "ready", buffer: b.sab, inputBuffer: b.input, status: b.status });
         const hz = msg.hz ?? 60;
@@ -519,7 +540,9 @@ export function installSimWorker(scope: WorkerScopeLike): void {
       } else if (msg.type === "step") {
         if (controller !== null) scope.postMessage({ type: "tick", tick: controller.tick() });
       } else if (msg.type === "applyCommands") {
-        if (controller !== null && msg.commands !== undefined) await controller.loadWorld(msg.commands);
+        if (controller !== null && msg.commands !== undefined) {
+          postAuthoringFailures("applyCommands", (await controller.loadWorldIsolated(msg.commands)).failures);
+        }
       } else if (msg.type === "stop") {
         teardown();
       }
