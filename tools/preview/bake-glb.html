@@ -1,0 +1,66 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js"}}</script></head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { GLTFExporter } from "/js/node_modules/three/examples/jsm/exporters/GLTFExporter.js";
+import { Tree, TreeType, BarkType, LeafType } from "/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js";
+
+function makeBase(species, s) {
+  const t = new Tree(), o = t.options;
+  o.seed = s;
+  if (species === "spruce") {
+    o.type = TreeType.Evergreen; o.bark.type = BarkType.Pine; o.leaves.type = LeafType.Pine;
+    o.branch.levels = 2; o.branch.angle = { 1: 123, 2: 112, 3: 60 }; o.branch.children = { 0: 64, 1: 4, 2: 0 };
+    o.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: 0.004 };
+    o.branch.length = { 0: 38, 1: 10, 2: 4.5, 3: 1 }; o.branch.radius = { 0: 0.82, 1: 0.28, 2: 0.13, 3: 0.08 };
+    o.leaves.count = 16; o.leaves.size = 0.9; o.leaves.start = 0.04;
+  } else if (species === "pine") {
+    o.type = TreeType.Evergreen; o.bark.type = BarkType.Pine; o.leaves.type = LeafType.Pine;
+    o.branch.levels = 1; o.branch.angle = { 1: 126, 2: 60, 3: 60 }; o.branch.children = { 0: 46, 1: 0, 2: 0 };
+    o.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: 0.006 };
+    o.branch.length = { 0: 48, 1: 18, 2: 10, 3: 1 }; o.branch.radius = { 0: 0.72, 1: 0.24, 2: 0.1, 3: 0.08 };
+    o.leaves.count = 12; o.leaves.size = 1.5; o.leaves.start = 0.14;
+  } else {
+    o.type = TreeType.Deciduous; o.bark.type = BarkType.Birch; o.leaves.type = LeafType.Aspen;
+    o.branch.levels = 2; o.branch.angle = { 1: 58, 2: 34, 3: 18 }; o.branch.children = { 0: 8, 1: 3, 2: 0 };
+    o.branch.length = { 0: 42, 1: 8.5, 2: 9.5, 3: 1 }; o.branch.radius = { 0: 0.46, 1: 0.22, 2: 0.14, 3: 0.08 };
+    o.leaves.count = 8; o.leaves.size = 1.7;
+  }
+  t.generate();
+  t.branchesMesh.name = "branches"; t.leavesMesh.name = "leaves";
+  t.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  return t;
+}
+
+const SPEC = [["spruce",1],["spruce",2],["pine",1],["pine",2],["birch",1],["birch",2]];
+
+// Build all trees first, then WAIT for their leaf/bark textures to finish loading before export
+// (ez-tree loads textures async via TextureLoader; exporting early → getImageData width 0).
+const trees = SPEC.map(([sp, sd]) => ({ file: `${sp}-${sd}.glb`, tree: makeBase(sp, sd) }));
+
+const texSet = new Set();
+for (const { tree } of trees) tree.traverse(o => {
+  const m = o.material; if (!m) return;
+  for (const k of ["map", "normalMap", "roughnessMap", "aoMap", "alphaMap"]) if (m[k]) texSet.add(m[k]);
+  // ensure leaves export as alpha-MASK cutouts (GLTFExporter maps alphaTest>0 -> alphaMode MASK)
+  if (/leaf|leaves/i.test(o.name) && m.map) { m.alphaTest = m.alphaTest || 0.4; m.transparent = false; }
+});
+await new Promise((res) => {
+  const ready = () => [...texSet].every(t => { const im = t.image; return im && (im.complete || im.naturalWidth > 0 || im.width > 0); });
+  const tick = () => { if (ready()) { for (const t of texSet) t.needsUpdate = true; res(); } else setTimeout(tick, 120); };
+  tick();
+});
+
+const exporter = new GLTFExporter();
+const out = [];
+for (const { file, tree } of trees) {
+  const glb = await exporter.parseAsync(tree, { binary: true, embedImages: true });
+  let bin = ""; const bytes = new Uint8Array(glb);
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  out.push({ file, b64: btoa(bin), bytes: bytes.length });
+}
+window.__glbs = out;
+window.__done = true;
+</script></body></html>
