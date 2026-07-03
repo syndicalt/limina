@@ -44,11 +44,18 @@ function cloneTransform(t) {
   };
 }
 
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
 function setStatus(message, kind = "info") {
-  const el = document.getElementById("inspector-status");
-  if (!el) return;
-  el.textContent = message;
-  el.className = "take-status take-status-" + kind;
+  const node = document.getElementById("inspector-status");
+  if (!node) return;
+  node.textContent = message;
+  node.className = "take-status take-status-" + kind;
 }
 
 function fmt(n) {
@@ -85,11 +92,19 @@ function originInputFromRecord(record) {
   return input && typeof input === "object" ? input : undefined;
 }
 
-function materialBaseFromOrigin(input) {
+function materialBaseFromRecord(record) {
+  // Prefer the entity's LIVE material (current color/roughness/metalness); fall back to the
+  // create-time origin. This fixes the "color always shows white" seeding bug.
+  const live = record?.material;
+  const origin = originInputFromRecord(record);
+  const pick = (a, b) => (Number.isFinite(a) ? a : (Number.isFinite(b) ? b : undefined));
   const base = {};
-  if (Number.isInteger(input?.color) && input.color >= 0 && input.color <= 0xffffff) base.color = input.color;
-  if (Number.isFinite(input?.roughness)) base.roughness = clamp01(input.roughness);
-  if (Number.isFinite(input?.metalness)) base.metalness = clamp01(input.metalness);
+  const color = pick(live?.color, origin?.color);
+  if (Number.isInteger(color) && color >= 0 && color <= 0xffffff) base.color = color;
+  const roughness = pick(live?.roughness, origin?.roughness);
+  if (roughness !== undefined) base.roughness = clamp01(roughness);
+  const metalness = pick(live?.metalness, origin?.metalness);
+  if (metalness !== undefined) base.metalness = clamp01(metalness);
   return base;
 }
 
@@ -110,7 +125,7 @@ function refreshSelectionFromSnapshot() {
   if (!state.transformEdited) state.base = transformFromRecord(record, state.base);
   if (!state.tagsEdited) state.tags = tagsFromRecord(record) ?? state.tags;
   state.originInput = originInputFromRecord(record) ?? state.originInput;
-  if (!state.materialEdited) state.materialBase = materialBaseFromOrigin(state.originInput);
+  if (!state.materialEdited) state.materialBase = materialBaseFromRecord(record);
 }
 
 function parseVecFromRow(row) {
@@ -137,6 +152,14 @@ function readOptionalNumber(inputName) {
 
 function validVec(v) {
   return v.length === 3 && v.every(Number.isFinite);
+}
+
+// A 0..1 slider value, or undefined if the user never moved it (so Apply only writes touched fields).
+function readSlider(name) {
+  const el = document.querySelector(`[data-take-input="${name}"]`);
+  if (!el || el.dataset.set !== "true") return undefined;
+  const v = Number(el.value);
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
 }
 
 function changed(a, b) {
@@ -213,34 +236,54 @@ function renderTransformSection(form) {
   form.appendChild(actions);
 }
 
+// A labeled 0..1 slider with a live numeric readout. `value` undefined → the control shows a
+// neutral default and is marked "unset" so Apply only writes it if the user actually moves it.
+function inspSlider(parent, label, name, value) {
+  const row = document.createElement("div");
+  row.className = "insp-row";
+  const lab = document.createElement("span");
+  lab.className = "insp-label";
+  lab.textContent = label;
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0"; slider.max = "1"; slider.step = "0.01";
+  slider.className = "insp-slider";
+  slider.value = Number.isFinite(value) ? String(value) : "0.5";
+  slider.dataset.takeInput = name;
+  slider.dataset.set = Number.isFinite(value) ? "true" : "false";
+  const readout = document.createElement("span");
+  readout.className = "insp-val mono";
+  readout.textContent = Number.isFinite(value) ? Number(value).toFixed(2) : "—";
+  slider.addEventListener("input", () => {
+    readout.textContent = Number(slider.value).toFixed(2);
+    slider.dataset.set = "true";
+  });
+  row.append(lab, slider, readout);
+  parent.appendChild(row);
+}
+
 function renderMaterialSection(form) {
   const material = section("Material");
+  const base = state.materialBase;
 
-  const colorLabel = document.createElement("label");
-  colorLabel.textContent = "color";
+  const colorRow = document.createElement("div");
+  colorRow.className = "insp-row";
+  const colorLab = document.createElement("span");
+  colorLab.className = "insp-label";
+  colorLab.textContent = "Color";
   const color = document.createElement("input");
   color.type = "color";
-  color.value = toHexColor(Number.isInteger(state.materialBase.color) ? state.materialBase.color : 0xffffff);
+  color.className = "insp-color";
+  color.value = toHexColor(Number.isInteger(base.color) ? base.color : 0xcccccc);
   color.dataset.takeInput = "material-color";
   color.dataset.dirty = "false";
   color.addEventListener("input", () => { color.dataset.dirty = "true"; });
-  colorLabel.appendChild(color);
-  material.appendChild(colorLabel);
+  colorRow.append(colorLab, color);
+  material.appendChild(colorRow);
 
-  for (const key of ["roughness", "metalness"]) {
-    const labelEl = document.createElement("label");
-    labelEl.textContent = key;
-    const input = document.createElement("input");
-    input.type = "number";
-    input.min = "0";
-    input.max = "1";
-    input.step = "0.01";
-    input.placeholder = "unset";
-    input.value = Number.isFinite(state.materialBase[key]) ? fmt(state.materialBase[key]) : "";
-    input.dataset.takeInput = `material-${key}`;
-    labelEl.appendChild(input);
-    material.appendChild(labelEl);
-  }
+  // Smoothness is the inverse of roughness (Unity convention); Metallic == metalness.
+  inspSlider(material, "Smoothness", "material-smoothness", Number.isFinite(base.roughness) ? 1 - base.roughness : undefined);
+  inspSlider(material, "Metallic", "material-metallic", base.metalness);
 
   form.appendChild(material);
 
@@ -257,75 +300,70 @@ function renderMaterialSection(form) {
 
 function renderTagsSection(form) {
   const tags = section("Tags");
-  const list = document.createElement("div");
-  list.className = "tags";
-  list.style.marginLeft = "0";
-  list.style.flexWrap = "wrap";
-  list.style.gridColumn = "1 / -1";
+  const chips = document.createElement("div");
+  chips.className = "insp-chips";
   if (state.tags.length === 0) {
-    const empty = document.createElement("span");
-    empty.className = "muted";
-    empty.textContent = "none";
-    list.appendChild(empty);
+    chips.appendChild(el("span", "muted", "no tags"));
   } else {
     for (const tag of state.tags) {
-      const chip = document.createElement("span");
-      chip.className = "tag";
-      chip.textContent = tag + " ";
+      const chip = el("span", "insp-chip");
+      chip.appendChild(el("span", null, tag));
       const remove = document.createElement("button");
       remove.type = "button";
+      remove.className = "insp-chip-x";
       remove.textContent = "×";
       remove.title = `Remove ${tag}`;
-      remove.style.background = "transparent";
-      remove.style.border = "0";
-      remove.style.color = "inherit";
-      remove.style.cursor = "pointer";
-      remove.style.padding = "0";
       remove.addEventListener("click", () => { void removeTagEdit(tag); });
       chip.appendChild(remove);
-      list.appendChild(chip);
+      chips.appendChild(chip);
     }
   }
-  tags.appendChild(list);
+  tags.appendChild(chips);
 
-  const addLabel = document.createElement("label");
-  addLabel.textContent = "add";
+  const addRow = el("div", "insp-add-row");
   const input = document.createElement("input");
   input.type = "text";
-  input.placeholder = "tag";
+  input.className = "insp-add-input";
+  input.placeholder = "add a tag…";
   input.dataset.takeInput = "tag-add";
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void addTagEdit();
-    }
+    if (event.key === "Enter") { event.preventDefault(); void addTagEdit(); }
   });
-  addLabel.appendChild(input);
-  tags.appendChild(addLabel);
-  form.appendChild(tags);
-
-  const actions = document.createElement("div");
-  actions.className = "take-actions";
   const add = document.createElement("button");
   add.className = "btn btn-small";
   add.type = "button";
-  add.textContent = "Add tag";
+  add.textContent = "Add";
   add.addEventListener("click", () => { void addTagEdit(); });
-  actions.appendChild(add);
-  form.appendChild(actions);
+  addRow.append(input, add);
+  tags.appendChild(addRow);
+  form.appendChild(tags);
 }
 
 function renderPhysicsSection(form) {
   const input = state.originInput ?? {};
+  const record = entityRecord(state.entity);
+  const hasBody = record?.physics?.bodyId !== undefined;
   const physics = section("Physics & shape");
-  const bodyType = input.dynamic === true ? "Dynamic" : input.static === true ? "Static" : "none";
-  physics.appendChild(readonlyRow("shape", typeof input.shape === "string" ? input.shape : "none"));
-  physics.appendChild(readonlyRow("size", Number.isFinite(input.size) ? fmt(input.size) : "none"));
-  physics.appendChild(readonlyRow("body", bodyType));
-  const note = document.createElement("div");
-  note.className = "muted";
-  note.textContent = "set at creation";
-  note.style.gridColumn = "1 / -1";
+
+  // Body type: from the create command when known; otherwise just whether a collider exists.
+  const bodyType = input.dynamic === true ? "Dynamic body"
+    : input.static === true ? "Static body"
+    : hasBody ? "Has collider"
+    : "No physics";
+  const shape = typeof input.shape === "string" ? input.shape : (record?.resource ? "asset" : "—");
+  const size = Number.isFinite(input.size) ? fmt(input.size) : "—";
+
+  const grid = el("div", "insp-props");
+  const prop = (k, v, muted) => {
+    grid.appendChild(el("span", "insp-prop-k", k));
+    grid.appendChild(el("span", "insp-prop-v " + (muted ? "muted" : "mono"), v));
+  };
+  prop("Shape", shape, shape === "—");
+  prop("Size", size, size === "—");
+  prop("Body", bodyType, bodyType === "No physics");
+  physics.appendChild(grid);
+
+  const note = el("div", "insp-note muted", "Set at creation — editing shape/size is engine work in progress.");
   physics.appendChild(note);
   form.appendChild(physics);
 }
@@ -460,23 +498,13 @@ async function applyMaterialEdits() {
     return;
   }
   const colorInput = document.querySelector('[data-take-input="material-color"]');
-  const roughness = readOptionalNumber("material-roughness");
-  const metalness = readOptionalNumber("material-metalness");
-  if (Number.isNaN(roughness) || Number.isNaN(metalness)) {
-    setStatus("material fields must be finite numbers", "err");
-    return;
-  }
-  if ((roughness !== undefined && (roughness < 0 || roughness > 1)) || (metalness !== undefined && (metalness < 0 || metalness > 1))) {
-    setStatus("roughness and metalness must be 0..1", "err");
-    return;
-  }
+  const smoothness = readSlider("material-smoothness"); // 0..1, undefined if untouched
+  const metalness = readSlider("material-metallic");
+  const roughness = smoothness === undefined ? undefined : 1 - smoothness;
 
   const material = {};
   const color = colorInput ? fromHexColor(colorInput.value) : undefined;
-  const colorDirty = colorInput?.dataset.dirty === "true";
-  if (color !== undefined && (colorDirty || (Number.isInteger(state.materialBase.color) && color !== state.materialBase.color))) {
-    material.color = color;
-  }
+  if (color !== undefined && colorInput?.dataset.dirty === "true") material.color = color;
   if (roughness !== undefined && roughness !== state.materialBase.roughness) material.roughness = roughness;
   if (metalness !== undefined && metalness !== state.materialBase.metalness) material.metalness = metalness;
 

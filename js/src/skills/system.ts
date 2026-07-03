@@ -253,6 +253,19 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     handler: (input) => tracer.flush(input.name),
   });
 
+  // The live surface material off an entity's mesh (color/roughness/metalness), best-effort — the
+  // headless editor host builds real MeshStandard node materials, so the inspector can seed from
+  // the CURRENT material rather than the create-time origin. Bootstrap/stub meshes return undefined.
+  function readMaterial(mesh: unknown): { color?: number; roughness?: number; metalness?: number } | undefined {
+    const mat = (mesh as { material?: { color?: { getHex?: () => number }; roughness?: unknown; metalness?: unknown } } | undefined)?.material;
+    if (mat === undefined) return undefined;
+    const out: { color?: number; roughness?: number; metalness?: number } = {};
+    if (typeof mat.color?.getHex === "function") out.color = mat.color.getHex();
+    if (typeof mat.roughness === "number") out.roughness = mat.roughness;
+    if (typeof mat.metalness === "number") out.metalness = mat.metalness;
+    return out;
+  }
+
   const snapshotInput = z.object({
     afterEntity: z.string().optional(),
     limit: z.number().int().min(0).max(500).default(100),
@@ -290,6 +303,9 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         // The create command ({tool, input}) — gives the editor the full property set
         // (shape/size/material/color/static/dynamic) so the inspector can edit more than transform.
         origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
+        // The entity's LIVE surface material (so the inspector seeds color/roughness/metalness from
+        // the current material, not the stale create-time value). Undefined when the mesh has none.
+        material: z.object({ color: z.number().optional(), roughness: z.number().optional(), metalness: z.number().optional() }).optional(),
       })),
       agents: z.array(z.unknown()),
       skills: z.array(z.object({
@@ -336,6 +352,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           physics: { bodyId: entry.bodyId },
           resource: entry.resource,
           origin: entry.origin,
+          material: readMaterial(entry.mesh),
         }];
       });
       // The resource scan walks EVERY entity (not just the page), so it is O(world) per
