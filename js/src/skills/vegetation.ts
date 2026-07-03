@@ -103,21 +103,28 @@ export function registerVegetationSkills(
       let mountedCount = 0;
       const meshes: unknown[] = [];
       if (ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function") {
-        const byId = new Map<string, AssetInstance[]>();
-        for (const inst of placements) {
-          let list = byId.get(inst.assetId);
-          if (list === undefined) { list = []; byId.set(inst.assetId, list); }
-          list.push(inst);
-        }
-        for (const [id, list] of byId) {
-          const root = await parseGltfScene(id, assets.resolve(id).bytes);
-          for (const mesh of buildAssetInstancedMeshes(root, list)) {
-            (mesh as unknown as InstMesh).castShadow = true;
-            (mesh as unknown as InstMesh).receiveShadow = true;
-            scene.add(mesh);
-            meshes.push(mesh);
-            mountedCount++;
+        // CRASH-PROOF: a GLB parse / GPU upload failure must NOT kill the viewport's apply loop.
+        // The placements are already recorded (the authoritative contract); if the render mount
+        // fails, log it and leave the forest un-mounted rather than throwing into the viewport.
+        try {
+          const byId = new Map<string, AssetInstance[]>();
+          for (const inst of placements) {
+            let list = byId.get(inst.assetId);
+            if (list === undefined) { list = []; byId.set(inst.assetId, list); }
+            list.push(inst);
           }
+          for (const [id, list] of byId) {
+            const root = await parseGltfScene(id, assets.resolve(id).bytes);
+            for (const mesh of buildAssetInstancedMeshes(root, list)) {
+              (mesh as unknown as InstMesh).castShadow = true;
+              (mesh as unknown as InstMesh).receiveShadow = true;
+              scene.add(mesh);
+              meshes.push(mesh);
+              mountedCount++;
+            }
+          }
+        } catch (err) {
+          ctx.emit("vegetation.mount_failed", { message: err instanceof Error ? err.message : String(err), placements: placements.length });
         }
       }
 

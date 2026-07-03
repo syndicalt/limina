@@ -30,82 +30,66 @@ export function buildAssetInstancedMeshes(root: SceneObject, instances: AssetIns
   const rootInv = new THREE.Matrix4();
   if (r.matrixWorld !== undefined) rootInv.copy(r.matrixWorld).invert();
 
-  const meshes: THREE.InstancedMesh[] = [];
-  const local = new THREE.Matrix4();
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const pos = new THREE.Vector3();
-  const scl = new THREE.Vector3();
-
-  // Instance ONE mesh node (no recursion — traverse / the manual walk supplies nodes).
-  const processMesh = (node: unknown): void => {
+  // Collect every mesh node + its asset-root-local transform (local = root^-1 * mesh.matrixWorld).
+  const nodes: { geometry: THREE.BufferGeometry; material: THREE.Material; local: THREE.Matrix4 }[] = [];
+  const collect = (node: unknown): void => {
     const n = node as { isMesh?: boolean; geometry?: THREE.BufferGeometry; material?: THREE.Material; matrixWorld?: THREE.Matrix4 };
     if (n.isMesh !== true || n.geometry === undefined || n.material === undefined) return;
-    // The mesh's transform relative to the asset root (identity for a single mesh at
-    // the origin): local = root.matrixWorld^-1 * mesh.matrixWorld.
-    local.identity();
+    const local = new THREE.Matrix4().identity();
     if (n.matrixWorld !== undefined) local.multiplyMatrices(rootInv, n.matrixWorld);
+    nodes.push({ geometry: n.geometry, material: n.material, local });
+  };
+  if (typeof r.traverse === "function") r.traverse(collect);
+  else { const walk = (node: unknown): void => { collect(node); const c = (node as { children?: unknown[] }).children; if (Array.isArray(c)) for (const ch of c) walk(ch); }; walk(root); }
+  if (nodes.length === 0) return [];
 
-    // ── GLB ORIGIN NORMALIZATION ────────────────────────────────────────────────
-    // The curated GLBs are NOT consistently based at Y=0 or centred at XZ=(0,0) in asset-root
-    // space. Measured main-geometry offsets (post node-transform):
-    //   pine.glb      base_Y=+0.720  Z_center=−6.104   (dominant — pines floated 0.72 m AND
-    //                                                   rendered 6 m in -Z of placement)
-    //   broadleaf.glb base_Y=−0.099  Z_center=−0.338
-    //   bush.glb      base_Y=−0.289
-    //   grass.glb                  X_center=+63.231   (63 m off-position!)
-    //   rock/cactus/palm ≈ 0 (clean)
-    // Compute each mesh's world-space bbox (in asset-root coords) and bake a corrective
-    // translation so the asset's geometry is based at Y=0 and centred at XZ=(0,0). This runs
-    // ONCE per asset per load (amortized across all instances) and never touches the asset
-    // bytes (replay hash-pinning is unaffected — only the instance matrices change).
-    if (n.geometry.boundingBox === null) n.geometry.computeBoundingBox();
-    const bb = n.geometry.boundingBox!;
-    let xmin = Infinity, ymin = Infinity, zmin = Infinity;
-    let xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
-    const corner = new THREE.Vector3();
+  // ── GLB ORIGIN NORMALIZATION (WHOLE ASSET) ──────────────────────────────────
+  // Curated GLBs are not consistently based at Y=0 or centred at XZ=(0,0). Compute ONE combined
+  // bbox across ALL of the asset's meshes (in asset-root space) and ONE corrective translation, so
+  // a MULTI-mesh asset (a tree's separate branches + leaves meshes) stays intact — normalizing each
+  // mesh independently would slam the leaf-canopy mesh down to Y=0 and recentre it, tearing the tree
+  // apart. Single-mesh assets (rock/bush) get the identical result. Bases the asset at Y=0 + centres
+  // its XZ footprint. Runs once per asset load; never touches the asset bytes (replay pinning safe).
+  let xmin = Infinity, ymin = Infinity, zmin = Infinity, xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
+  const corner = new THREE.Vector3();
+  for (const { geometry, local } of nodes) {
+    if (geometry.boundingBox === null) geometry.computeBoundingBox();
+    const bb = geometry.boundingBox!;
     for (const cx of [bb.min.x, bb.max.x]) for (const cy of [bb.min.y, bb.max.y]) for (const cz of [bb.min.z, bb.max.z]) {
       corner.set(cx, cy, cz).applyMatrix4(local);
       if (corner.x < xmin) xmin = corner.x; if (corner.x > xmax) xmax = corner.x;
       if (corner.y < ymin) ymin = corner.y; if (corner.y > ymax) ymax = corner.y;
       if (corner.z < zmin) zmin = corner.z; if (corner.z > zmax) zmax = corner.z;
     }
-    // Corrective translation: lift so base_Y=0, recenter XZ. The offset is in ASSET-ROOT space
-    // (computed from world-space corners above), so it must be applied AFTER `local` — i.e.
-    // LEFT-multiplied (`premultiply`), so the vertex path is instance × offset × local × vertex.
-    // (Right-multiplying `local.multiply(offset)` would apply the offset in NODE-LOCAL space,
-    // where the asset's scale/rotation would mangle it — pine's ×100 scale sent Y to ~600.)
-    local.premultiply(new THREE.Matrix4().makeTranslation(
-      -(xmin + xmax) / 2,  // X: centre the footprint
-      -ymin,               // Y: base at 0 (the trunk sits ON the placement Y)
-      -(zmin + zmax) / 2,  // Z: centre the footprint (fixes pine's 6 m back-shift)
-    ));
+  }
+  const offset = new THREE.Matrix4().makeTranslation(-(xmin + xmax) / 2, -ymin, -(zmin + zmax) / 2);
 
-    const inst = new THREE.InstancedMesh(n.geometry, n.material, instances.length);
+  // One InstancedMesh per mesh, all sharing the asset-level corrective offset (applied in asset-root
+  // space via premultiply → vertex path: instance × offset × local × vertex).
+  const meshes: THREE.InstancedMesh[] = [];
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const pos = new THREE.Vector3();
+  const scl = new THREE.Vector3();
+  for (const { geometry, material, local } of nodes) {
+    const placed = new THREE.Matrix4().copy(local).premultiply(offset);
+    const inst = new THREE.InstancedMesh(geometry, material, instances.length);
     for (let i = 0; i < instances.length; i++) {
       const p = instances[i];
       pos.set(p.x, p.y, p.z);
       q.setFromAxisAngle(Y_AXIS, p.yaw);
       scl.set(p.scale, p.scale, p.scale);
-      m.compose(pos, q, scl).multiply(local);
+      m.compose(pos, q, scl).multiply(placed);
       inst.setMatrixAt(i, m);
     }
     inst.instanceMatrix.needsUpdate = true;
     inst.castShadow = false;
     inst.receiveShadow = true;
+    // Instances spread far from the asset origin, but InstancedMesh frustum-culls against the base
+    // geometry's bounding sphere AT THE ORIGIN — so a scatter whose origin sits off-screen gets the
+    // WHOLE mesh culled (the forest vanishes). Disable per-mesh culling; the scatter is bounded.
+    inst.frustumCulled = false;
     meshes.push(inst);
-  };
-
-  // Prefer THREE.traverse (covers nested groups); fall back to a manual children walk.
-  if (typeof r.traverse === "function") {
-    r.traverse(processMesh);
-  } else {
-    const walk = (node: unknown): void => {
-      processMesh(node);
-      const children = (node as { children?: unknown[] }).children;
-      if (Array.isArray(children)) for (const child of children) walk(child);
-    };
-    walk(root);
   }
   return meshes;
 }

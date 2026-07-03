@@ -35,9 +35,17 @@ function makeBase(species, s) {
 
 const SPEC = [["spruce",1],["spruce",2],["pine",1],["pine",2],["birch",1],["birch",2]];
 
-// Build all trees first, then WAIT for their leaf/bark textures to finish loading before export
-// (ez-tree loads textures async via TextureLoader; exporting early → getImageData width 0).
-const trees = SPEC.map(([sp, sd]) => ({ file: `${sp}-${sd}.glb`, tree: makeBase(sp, sd) }));
+// Build all trees; NORMALIZE each to a realistic height (meters) baked into geometry so a scattered
+// instance is a real tree (~15 m), not a 40-unit giant as tall as a mountain. Base stays at y=0.
+const TARGET_H = { spruce: 16, pine: 15, birch: 11 };
+const trees = SPEC.map(([sp, sd]) => {
+  const tree = makeBase(sp, sd);
+  const box = new THREE.Box3().setFromObject(tree);
+  const h = (box.max.y - box.min.y) || 1;
+  const s = (TARGET_H[sp] || 14) / h;
+  tree.traverse((o) => { if (o.isMesh && o.geometry) o.geometry.scale(s, s, s); });
+  return { file: `${sp}-${sd}.glb`, tree, species: sp };
+});
 
 const texSet = new Set();
 for (const { tree } of trees) tree.traverse(o => {

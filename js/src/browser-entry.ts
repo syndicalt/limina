@@ -17,6 +17,10 @@ import * as THREE from "../build/three.bundle.mjs";
 export { THREE };
 export { OrbitControls } from "../build/three.bundle.mjs";
 export { TransformControls } from "../build/three.bundle.mjs";
+// Real asset-mount path (used by vegetation.scatter/asset.place) — exported so a repro harness
+// can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
+export { parseGltfScene } from "./skills/three.ts";
+export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
