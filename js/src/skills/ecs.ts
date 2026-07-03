@@ -2,6 +2,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { createTransformStorage } from "../ecs/facade.ts";
+import { Position, Rotation } from "../ecs/world.ts";
 import { propagateTransform } from "../ecs/hierarchy.ts";
 import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -35,6 +36,18 @@ const updateComponent: SkillDefinition<z.infer<typeof updateInput>, { ok: boolea
       storage.writeScale(eid, v[0], v[1], v[2]);
     }
     ctx.world.spatial?.invalidate();
+    // Body-bound entity: re-pose its physics body to the new transform so the collider follows
+    // and the per-tick body→SoA sync (syncAllBodies) doesn't snap the entity back. Scale doesn't
+    // apply to a body. This op runs inside the skill (depth>0) so it is NOT recorded separately —
+    // replay re-derives it by re-invoking this skill (determinism intact).
+    const entry = ctx.world.entities.resolve(input.entity);
+    if (entry?.bodyId !== undefined && input.component !== "scale") {
+      ctx.world.ops.op_physics_set_body_transform(
+        entry.bodyId,
+        Position.x[eid], Position.y[eid], Position.z[eid],
+        Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid],
+      );
+    }
     // Scene hierarchy: if this entity has children, its transform change propagates to the
     // whole subtree (parentWorld ∘ localOffset). No-op / cheap when it has no children.
     if (ctx.world.entities.childrenOf(input.entity).length > 0) {

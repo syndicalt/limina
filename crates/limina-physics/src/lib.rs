@@ -792,6 +792,35 @@ pub fn op_physics_body_transform(state: &mut OpState, id: u32, #[buffer] out: &m
     out[0..7].fill(0.0);
 }
 
+/// Set a rigid body's world transform (translation + rotation) by stable id. Used to re-pose a
+/// static/kinematic body when its entity is moved in the editor, so the collider follows and the
+/// per-tick body->SoA sync does not snap the entity back. Called only INSIDE a skill handler
+/// (ecs.updateComponent, depth>0), so it is never recorded as a standalone command.
+#[op2(fast)]
+#[allow(clippy::too_many_arguments)]
+pub fn op_physics_set_body_transform(
+    state: &mut OpState,
+    id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+) {
+    if !(x.is_finite() && y.is_finite() && z.is_finite() && qx.is_finite() && qy.is_finite() && qz.is_finite() && qw.is_finite()) {
+        return;
+    }
+    let world = state.borrow_mut::<PhysicsWorld>();
+    if let Some(handle) = world.handle(id) {
+        if let Some(body) = world.bodies.get_mut(handle) {
+            body.set_translation(Vector::new(x, y, z), true);
+            body.set_rotation(rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(qw, qx, qy, qz)).into(), true);
+        }
+    }
+}
+
 /// A drained collision event. `kind` is 1 for `Started`, 0 for `Stopped`. `point`
 /// and `normal` are the world-space contact geometry from the Rapier manifold for
 /// `Started` events (and `None` for `Stopped`, or when the contact already
@@ -1063,6 +1092,7 @@ extension!(
         op_physics_restore,
         op_physics_body_pos,
         op_physics_body_transform,
+        op_physics_set_body_transform,
         op_physics_drain_collisions,
         op_physics_raycast,
         op_physics_new_world,

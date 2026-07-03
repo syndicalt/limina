@@ -74,6 +74,9 @@ export interface EngineOps {
   op_physics_restore(bytes: Uint8Array): void;
   op_physics_body_pos(id: number, out: Float32Array): void;
   op_physics_body_transform(id: number, out: Float32Array): void;
+  /** Re-pose a body (translation + rotation) by id — used when an entity with a body is moved so
+   *  its collider follows instead of the per-tick body→SoA sync snapping the entity back. */
+  op_physics_set_body_transform(id: number, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): void;
   op_physics_drain_collisions(): CollisionEventRecord[];
   op_physics_raycast(
     ox: number, oy: number, oz: number,
@@ -159,7 +162,7 @@ export type PhysicsOps = Pick<
   | "op_physics_add_heightfield" | "op_physics_add_character" | "op_physics_move_character"
   | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
   | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
-  | "op_physics_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"
+  | "op_physics_body_transform" | "op_physics_set_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"
 >;
 /** Durable world-log I/O. INVARIANT: a trace is seed + the command stream +
  *  content hashes — NEVER raw runtime bytes; snapshots are caches, not the
