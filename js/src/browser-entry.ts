@@ -429,8 +429,8 @@ export interface RunningLive {
   stop(): void;
 }
 
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial"]);
-const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn"]);
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial", "terrain.deform"]);
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn", "terrain.create"]);
 // Removals that hot-drop a single entity (mesh + body + eid) instead of forcing a full
 // viewport reboot. The skill runs on the render-thread world (teardownEntity removes the
 // mesh) and is forwarded to the sim worker (which tears down the body + eid); the removed

@@ -23,6 +23,7 @@ import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills, type RegionState } from "./terrain.ts";
+import { registerTerrainEditSkills } from "./terrain-edit.ts";
 import { registerRenderSkills } from "./render.ts";
 import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
@@ -186,6 +187,9 @@ export function registerCoreSkills(
   // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
   registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions);
+  // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
+  // terrain.deform (brush sculpt). Records ops, not bytes — replay reconstructs the heights.
+  registerTerrainEditSkills(registry);
   // Opt-in, render-only post-processing seam: `render.enablePost` builds the GTAO/bloom/
   // grade pipeline on the live renderer and stows it on world.post (static/cinematic — see
   // render.ts). Render-only; never sim/log state.
