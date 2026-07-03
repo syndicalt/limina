@@ -94,7 +94,24 @@ export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
     op_http_post: () => Promise.resolve(""),
     op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
-    op_read_asset: () => new Uint8Array(0),
+    // Live asset bytes: fetch same-origin /assets/<id> synchronously (AssetRegistry.resolve is
+    // sync). Sync main-thread XHR can't use responseType:arraybuffer, so read binary via the
+    // x-user-defined charset trick. Cached by AssetRegistry after the first resolve. Empty on miss.
+    op_read_asset: (id: string): Uint8Array => {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", "/assets/" + id, false);
+        xhr.overrideMimeType("text/plain; charset=x-user-defined");
+        xhr.send();
+        if (xhr.status < 200 || xhr.status >= 300) return new Uint8Array(0);
+        const text = xhr.responseText;
+        const bytes = new Uint8Array(text.length);
+        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+        return bytes;
+      } catch {
+        return new Uint8Array(0);
+      }
+    },
     op_sha256: () => "",
     op_read_env: () => "",
     // ── durable trace ──

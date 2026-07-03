@@ -52,6 +52,20 @@ await new Promise((res) => {
   tick();
 });
 
+// Downscale textures to 512 max — cuts GLB size + VRAM ~4x (1k source) so the forest fits a 4GB GPU.
+const MAX_TEX = 512;
+for (const t of texSet) {
+  const im = t.image;
+  const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+  if (w > MAX_TEX || h > MAX_TEX) {
+    const s = MAX_TEX / Math.max(w, h);
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+    t.image = c; t.needsUpdate = true;
+  }
+}
+
 const exporter = new GLTFExporter();
 const out = [];
 for (const { file, tree } of trees) {

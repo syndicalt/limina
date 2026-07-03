@@ -61,10 +61,27 @@ const COOP_COEP = {
   "Cross-Origin-Resource-Policy": "same-origin",
 };
 
+// The repo asset root (repo/assets), served at /assets/** so the LIVE editor's op_read_asset
+// can fetch GLB/texture bytes (asset.place, vegetation.scatter) from the same origin.
+const ASSETS_ROOT = resolve(ROOT, "..", "assets");
+
 const server = createServer((req, res) => {
   try {
     // Strip query/hash; decode; block path traversal by normalizing under ROOT.
     const rawPath = decodeURIComponent((req.url ?? "/").split(/[?#]/)[0]);
+    // /assets/** → repo/assets/** (outside ROOT), same COOP/COEP headers, traversal-guarded.
+    if (rawPath.startsWith("/assets/")) {
+      const arel = normalize(rawPath.slice("/assets/".length)).replace(/^(\.\.[/\\])+/, "");
+      const af = join(ASSETS_ROOT, arel);
+      if (!af.startsWith(ASSETS_ROOT) || !existsSync(af) || !statSync(af).isFile()) {
+        res.writeHead(404, { "content-type": "text/plain", ...COOP_COEP }).end("404 Not Found");
+        return;
+      }
+      const at = MIME[extname(af).toLowerCase()] ?? "application/octet-stream";
+      res.writeHead(200, { "content-type": at, "cache-control": "no-cache", ...COOP_COEP });
+      createReadStream(af).pipe(res);
+      return;
+    }
     let rel = normalize(rawPath).replace(/^(\.\.[/\\])+/, "");
     if (rel === "/" || rel === "" || rel.endsWith("/")) rel = join(rel, "index.html");
     const filePath = join(ROOT, rel);
