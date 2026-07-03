@@ -4,6 +4,7 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { applyProceduralPbr, type ProceduralKnobs } from "./procedural-pbr.ts";
+import type { DesignDirection, PaletteRole } from "../game/design-direction.ts";
 
 /** A single PBR preset: base color + the two MeshStandard surface params. */
 export interface MaterialParams {
@@ -101,4 +102,47 @@ export function createMaterial(name: string, opts?: CreateMaterialOptions): THRE
     applyProceduralPbr(material, { color: params.color, roughness: params.roughness }, name, opts.pbrKnobs);
   }
   return material;
+}
+
+// ── Design-Direction-aware resolution (ADDITIVE) ──────────────────────────────────────────────────
+// The 10-name MATERIALS preset above is the fixed, project-agnostic library (unchanged). These
+// functions add a SECOND path: resolve a palette ROLE through the ACTIVE Design Direction so a build
+// can pick on-brief colors/materials declared by the project's art style (game/design-direction.ts).
+// Pure + deterministic — same (dd, role) always yields the same result, no host ops / RNG / clock.
+
+/** Parse a DD `#rrggbb` hex string to the 0xRRGGBB integer THREE.Color / MaterialParams use. */
+function hexToInt(colorHex: string): number {
+  return parseInt(colorHex.slice(1), 16);
+}
+
+/**
+ * Resolve a palette ROLE to the Design Direction's declared color (as a 0xRRGGBB int). This is the
+ * single color source the build-time material defaults and the style-conformance gate both read.
+ * Throws a clear, listing error when the DD's palette does not declare the role (no silent fallback,
+ * mirroring getMaterialParams). Deterministic: first matching palette entry wins.
+ */
+export function resolveRoleColor(dd: DesignDirection, role: PaletteRole): number {
+  const entry = dd.palette.find((p) => p.role === role);
+  if (entry === undefined) {
+    const roles = dd.palette.map((p) => p.role).join(", ");
+    throw new Error(`design direction "${dd.id}" declares no color for role "${role}"; declared roles: ${roles}`);
+  }
+  return hexToInt(entry.colorHex);
+}
+
+/**
+ * Resolve a palette ROLE to a full on-brief MaterialParams from the Design Direction: the role's
+ * declared color, plus roughness/metalness from the DD's per-role recipe hint when present, else the
+ * midpoint of the DD's global material envelope. Additive — it never touches the fixed MATERIALS
+ * presets; scene/material code can call this to honour the active art style. Deterministic.
+ */
+export function resolveRoleMaterial(dd: DesignDirection, role: PaletteRole): MaterialParams {
+  const color = resolveRoleColor(dd, role);
+  const hint = dd.material.roles.find((r) => r.role === role);
+  if (hint !== undefined) {
+    return { color, roughness: hint.roughness01, metalness: hint.metalness01 };
+  }
+  const rough = dd.material.roughness01;
+  const metal = dd.material.metalness01;
+  return { color, roughness: (rough.min + rough.max) / 2, metalness: (metal.min + metal.max) / 2 };
 }

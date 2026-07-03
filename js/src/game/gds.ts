@@ -13,6 +13,7 @@
 // the structural parse THEN the semantic checks.
 
 import { z } from "../../build/zod.bundle.mjs";
+import { DEFAULT_DESIGN_DIRECTION, DesignDirectionSchema, type DesignDirection } from "./design-direction.ts";
 
 // ── Controls ──────────────────────────────────────────────────────────────────────────────────
 export const ControlSchemeSchema = z.object({
@@ -170,7 +171,14 @@ export const GameDesignSpecSchema = z.object({
   controls: ControlSchemeSchema,
   winCondition: z.string().min(1),
   loseCondition: z.string().min(1),
-  artDirection: z.string().min(1),
+  // ART DIRECTION — the governing style. Accepts EITHER the structured, machine-readable
+  // DesignDirection (design-direction.ts) that build agents + the style-conformance gate both consume,
+  // OR a legacy free-text note (the historical shape many example specs still use). The structured DD
+  // is the real thing; `resolveDesignDirection(spec)` normalizes either form to a DesignDirection.
+  // SEAM: this is a union rather than a hard replacement because the structured DD lives in the GDS
+  // alongside pre-existing string authorings (examples/*.gds.ts, compile scripts, tools/director JSON)
+  // that this change is scoped not to touch — see report.
+  artDirection: z.union([DesignDirectionSchema, z.string().min(1)]),
   targetPlatforms: z.array(z.enum(["desktop", "mobile", "web"])).min(1),
   scopeTier: z.enum(["prototype", "polished", "premium"]),
   /** Which layers this game opts into. Drives the build shape + publishing options. */
@@ -199,6 +207,14 @@ export type Assertion = z.infer<typeof AssertionSchema>;
 export type InputScript = z.infer<typeof InputScriptSchema>;
 export type DoDAssertion = z.infer<typeof DoDAssertionSchema>;
 export type GameDesignSpec = z.infer<typeof GameDesignSpecSchema>;
+
+/** Normalize a spec's `artDirection` (structured DD OR legacy free-text) to a DesignDirection the
+ *  build layer + conformance gate consume. A structured value is returned as-is; a free-text note
+ *  falls back to the shipped DEFAULT_DESIGN_DIRECTION (the note is style prose, not machine-readable —
+ *  reported as the seam). Deterministic; no throw for the legacy path. */
+export function resolveDesignDirection(spec: GameDesignSpec): DesignDirection {
+  return typeof spec.artDirection === "string" ? DEFAULT_DESIGN_DIRECTION : spec.artDirection;
+}
 
 /** One semantic problem with a GDS that structural validation can't express. */
 export interface GdsIssue {

@@ -162,6 +162,11 @@ else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 if [ "$HEADLESS" = 1 ]; then echo "   design-gate (silhouette): SKIP (headless: needs GPU/chromium)"
 elif node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no chromium)"; else echo "   design-gate (silhouette): FAIL"; hostfail=1; fi; fi
+# Style-conformance gate (design direction): a build whose materials stay inside the Design Direction's
+# declared palette + surface envelope PASSES; an off-brief build (off-palette color / off-envelope
+# roughness) HARD-FAILS. Pure color/param geometry — no GPU/chromium, so it runs even headless.
+if node gates/design/style-conformance-check.mjs >/dev/null 2>&1; then echo "   design-gate (style conformance): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (style conformance): SKIP"; else echo "   design-gate (style conformance): FAIL"; hostfail=1; fi; fi
 # GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
 if [ "$HEADLESS" = 1 ]; then echo "   design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
 elif node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
