@@ -436,6 +436,11 @@ const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place",
 // mesh) and is forwarded to the sim worker (which tears down the body + eid); the removed
 // eid is dropped from the interpolation ring so its stale transform is never re-applied.
 const LIVE_REMOVE_SKILLS = new Set(["scene.destroyEntity"]);
+// Render-scene mutations (lights) apply on the RENDER thread only: they add/remove three.js
+// lights on the real scene via applyOne, so they must NOT force a full reboot, and must NOT be
+// forwarded to the sim worker (whose scene is a headless stub with no lighting). Without this a
+// three.addLight fell into the "unsupported → reboot" path and the light never rendered.
+const LIVE_RENDER_ONLY_SKILLS = new Set(["three.addLight", "three.removeLight", "three.setLighting"]);
 
 function resultEntityId(result: unknown): string | undefined {
   return typeof result === "object" && result !== null && typeof (result as { entity?: unknown }).entity === "string"
@@ -746,6 +751,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           continue;
         }
         if (LIVE_IN_PLACE_SKILLS.has(cmd.tool)) continue;
+        if (LIVE_RENDER_ONLY_SKILLS.has(cmd.tool)) continue; // render-thread scene mutation (lights), no reboot
         if (LIVE_REMOVE_SKILLS.has(cmd.tool)) continue; // hot removal, no reboot
         if (LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)) structuralAdds++;
         else unsupportedStructuralTools.push(cmd.tool);
