@@ -61,6 +61,17 @@ const updateComponent: SkillDefinition<z.infer<typeof updateInput>, { ok: boolea
   },
 };
 
+/** Add one or more string tags to an entity (by its handle). The shared helper behind ecs.addComponent
+ *  and the auto-tagging the creation skills do so agent-made entities aren't left untagged (e.g. a
+ *  planted tree gets "tree" + its species). No-op for an unknown entity or empty/blank tags. */
+export function tagEntity(ctx: ExecutionContext, entity: string, tags: readonly string[]): void {
+  const eid = eidOf(ctx, entity);
+  if (eid === undefined) return;
+  let set = ctx.world.tags.get(eid);
+  if (set === undefined) { set = new Set(); ctx.world.tags.set(eid, set); }
+  for (const t of tags) { const tag = t.trim(); if (tag.length > 0) set.add(tag); }
+}
+
 const tagInput = z.object({ entity: z.string(), component: z.string().min(1) });
 
 const addComponent: SkillDefinition<z.infer<typeof tagInput>, { ok: boolean }> = {

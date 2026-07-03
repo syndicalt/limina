@@ -11,6 +11,7 @@ import type { Transformable } from "../ecs/world.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
 import { loadGltfIntoScene, parseGltfScene } from "./three.ts";
+import { tagEntity } from "./ecs.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
@@ -67,6 +68,8 @@ const scatterInput = z.object({
   coverage: z.number().min(0).max(1).default(0.9),
   /** Clumping strength [0,1] — >0 gathers trees into natural stands. */
   cluster: z.number().min(0).max(1).default(0.45),
+  /** Extra tags for the forest entity (it is always tagged "forest" + "vegetation"). */
+  tags: z.array(z.string()).optional(),
 });
 
 type SceneLike = { add?: (o: unknown) => void; remove?: (o: unknown) => void };
@@ -166,6 +169,7 @@ export function registerVegetationSkills(
       if (eid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, eid); throw new Error("vegetation.scatter: entity capacity exceeded"); }
       const origin = { tool: "vegetation.scatter", input: { ...input } };
       const entity = ctx.world.entities.create({ eid, origin });
+      tagEntity(ctx as never, entity, ["forest", "vegetation", ...(input.tags ?? [])]);
       if (meshes.length > 0) {
         mounted.set(entity, () => {
           for (const m of meshes) { if (typeof scene?.remove === "function") scene.remove(m); disposeAssetInstancedMesh(m as never); }
@@ -197,6 +201,8 @@ export function registerVegetationSkills(
     scale: z.number().positive().default(1),
     /** Heading in radians about +Y. */
     yaw: z.number().default(0),
+    /** Extra tags for the tree entity (it is always tagged "tree" + its species). */
+    tags: z.array(z.string()).optional(),
   });
 
   const plant: SkillDefinition<z.infer<typeof plantInput>, { entity: string; assetId: string; assetHash: string }> = {
@@ -235,6 +241,7 @@ export function registerVegetationSkills(
         scale: [input.scale, input.scale, input.scale],
       });
 
+      tagEntity(ctx as never, entity, ["tree", input.species, ...(input.tags ?? [])]);
       ctx.emit("vegetation.planted", { entity, species: input.species, assetId, position });
       return { entity, assetId, assetHash: resolved.hash };
     },

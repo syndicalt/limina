@@ -61,6 +61,18 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
   assert(typeof res.entity === "string" && res.entity.length > 0, "must return an entity handle");
   assert(SPRUCE.has(res.assetId), `spruce must pick a spruce archetype, got ${res.assetId}`);
   assert(res.assetHash === "sha256:stub-" + res.assetId, "must pin the resolved content hash");
+  // A planted tree is auto-tagged "tree" + its species (agent-made entities aren't left untagged).
+  const tags = world.tags.get(world.entities.resolve(res.entity)!.eid);
+  assert(tags !== undefined && tags.has("tree") && tags.has("spruce"), `planted tree must be auto-tagged tree+species; got ${tags ? [...tags].join(",") : "none"}`);
+}
+
+// 1b. Custom tags merge with the auto tags.
+{
+  const { registry, world } = await session("ses_p65_tags");
+  const r = await registry.invoke("vegetation.plant", { species: "pine", position: [0, 0, 0], seed: 0, tags: ["landmark", "old-growth"] }, at(world, "ses_p65_tags", 1));
+  assert(r.success, "plant with custom tags must succeed");
+  const tags = world.tags.get(world.entities.resolve((r.result as { entity: string }).entity)!.eid);
+  assert(tags !== undefined && tags.has("tree") && tags.has("pine") && tags.has("landmark") && tags.has("old-growth"), `custom tags must merge with tree+species; got ${tags ? [...tags].join(",") : "none"}`);
 }
 
 // 2. Species selects the right palette; seed selects the variant deterministically.

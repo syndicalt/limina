@@ -8,7 +8,7 @@ import { createMaterial, getMaterialParams, isMaterialName, MATERIAL_NAMES } fro
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hierarchy.ts";
-import { writeTransformComponent } from "./ecs.ts";
+import { tagEntity, writeTransformComponent } from "./ecs.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -35,6 +35,9 @@ const createEntityInput = z.object({
   // Scene hierarchy: create this entity as a child of `parent` (an ent_ id). Its
   // localOffset is captured from `position` (world) relative to the parent's world transform.
   parent: z.string().optional(),
+  // Semantic tags for the new entity (e.g. ["rock","cover"]) — queryable in the World panel /
+  // scene.queryEntities. Tag what you create so the scene stays organised.
+  tags: z.array(z.string()).optional(),
 });
 function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer<typeof createEntityInput>, { entity: string }> {
  return {
@@ -120,6 +123,7 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
     if (input.parent !== undefined && ctx.world.entities.resolve(input.parent) !== undefined) {
       ctx.world.entities.setParent(entity, input.parent, computeLocalOffset(ctx.world, input.parent, eid));
     }
+    if (input.tags !== undefined && input.tags.length > 0) tagEntity(ctx, entity, input.tags);
     ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
     return { entity };
   },
