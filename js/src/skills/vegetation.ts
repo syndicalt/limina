@@ -34,19 +34,22 @@ const nextFrame = (): Promise<void> =>
  *  no fetch/seed (headless, or a stub registry) → no-op, and resolve() falls back to the host read.
  *  Same bytes either way, so determinism is unaffected. */
 async function prewarmAssets(assets: AssetRegistry, ids: string[]): Promise<void> {
-  const seed = (assets as unknown as { seed?: (id: string, b: Uint8Array) => void }).seed;
-  if (typeof fetch !== "function" || typeof seed !== "function") return;
-  await Promise.all([...new Set(ids)].map(async (id) => {
+  const a = assets as unknown as { seed?: (id: string, b: Uint8Array) => void; has?: (id: string) => boolean };
+  if (typeof fetch !== "function" || typeof a.seed !== "function") return;
+  // Skip ids already warm (e.g. pre-seeded before renderer.init) — never fire a macrotask we don't
+  // need, since an async fetch mid-mount can corrupt the WebGL2 render.
+  const cold = [...new Set(ids)].filter((id) => !(typeof a.has === "function" && a.has(id)));
+  await Promise.all(cold.map(async (id) => {
     try {
       const res = await fetch("/assets/" + id);
       if (!res.ok) return;
-      seed.call(assets, id, new Uint8Array(await res.arrayBuffer()));
+      a.seed!.call(assets, id, new Uint8Array(await res.arrayBuffer()));
     } catch { /* fall back to the sync host read in resolve() */ }
   }));
 }
 
 /** Pick one archetype id for a species deterministically from `seed`. */
-function pickArchetype(species: string, seed: number): string {
+export function pickArchetype(species: string, seed: number): string {
   const palette = SPECIES_ARCHETYPES[species] ?? [];
   if (palette.length === 0) throw new Error(`vegetation.plant: no archetypes for species '${species}'`);
   const i = ((seed % palette.length) + palette.length) % palette.length;
@@ -54,11 +57,15 @@ function pickArchetype(species: string, seed: number): string {
 }
 
 /** Default boreal archetype palette — the textured GLBs from tools/bake-trees-browser.mjs. */
-const SPECIES_ARCHETYPES: Record<string, string[]> = {
+export const SPECIES_ARCHETYPES: Record<string, string[]> = {
   spruce: ["trees/spruce-1.glb", "trees/spruce-2.glb"],
   pine: ["trees/pine-1.glb", "trees/pine-2.glb"],
   birch: ["trees/birch-1.glb", "trees/birch-2.glb"],
 };
+
+/** Every tree archetype id (all species) — the set the live viewport pre-warms before init so a
+ *  plant/scatter mounts from a cached clone (no macrotask) and renders on the WebGL2 backend. */
+export const TREE_ARCHETYPE_IDS: string[] = [...new Set(Object.values(SPECIES_ARCHETYPES).flat())];
 
 const scatterInput = z.object({
   /** Terrain layer to scatter on. Defaults to the most recently created one. */

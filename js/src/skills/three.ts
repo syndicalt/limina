@@ -501,11 +501,42 @@ export interface GltfPlacement {
   scale?: [number, number, number];
 }
 
+// A cache of PARSED glTF roots keyed by assetId. parseGltfScene stores the parsed root here as a
+// pristine TEMPLATE (never mounted) and returns a CLONE, so a repeat parse is a synchronous clone
+// instead of an async GLTFLoader.parse. This is load-bearing for the live viewport, NOT just a perf
+// win: GLTFLoader.parse runs createImageBitmap (a macrotask), and on the WebGPURenderer WebGL2 backend
+// a macrotask firing around a render permanently corrupts the render (invisible mesh). Pre-warming
+// this cache before renderer.init() (prewarmGltfScene) means every mid-session mount is a clone —
+// no macrotask — so the mesh renders. Same assetId => same content-addressed bytes => equivalent
+// clone, so determinism/replay are unaffected (a fresh process starts with an empty cache).
+const gltfRootCache = new Map<string, SceneObject>();
+
+function cloneGltfRoot(root: SceneObject): SceneObject {
+  const r = root as unknown as { clone?: (recursive?: boolean) => SceneObject; animations?: unknown[] };
+  if (typeof r.clone !== "function") return root;
+  const copy = r.clone(true);
+  // clone(true) copies the hierarchy + transforms and SHARES geometry/material (cheap); carry the
+  // retained animation clips across too.
+  (copy as unknown as { animations?: unknown[] }).animations = r.animations ?? [];
+  return copy;
+}
+
+/** Ensure `assetId` is parsed + cached WITHOUT mounting it — call this before renderer.init() so a
+ *  later parseGltfScene is a synchronous clone (no macrotask) and the mesh renders on the WebGL2
+ *  backend. Idempotent; a parse failure is swallowed (the later mount surfaces it). */
+export async function prewarmGltfScene(assetId: string, bytes: Uint8Array): Promise<void> {
+  if (gltfRootCache.has(assetId)) return;
+  try { await parseGltfScene(assetId, bytes); } catch { /* the real mount will report the failure */ }
+}
+
 /** Parse `bytes` as the glTF named `assetId` and return its scene root with textures
  *  re-homed for the WebGPU backend (see rehomeTextureToData). THE ONE place the
  *  GLTFLoader + the texture-rehome live: loadGltfIntoScene spawns an ENTITY from it,
- *  while asset.scatter INSTANCES its meshes — neither duplicates the loader setup. */
+ *  while asset.scatter INSTANCES its meshes — neither duplicates the loader setup.
+ *  A cache HIT returns a synchronous clone (see gltfRootCache) — no GLTFLoader.parse. */
 export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
+  const cached = gltfRootCache.get(assetId);
+  if (cached !== undefined) return cloneGltfRoot(cached);
   const manager = new THREE.LoadingManager();
   const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
   manager.setURLModifier((url: string) => {
@@ -530,7 +561,9 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
   // gltf.animations, NOT gltf.scene, so without this a rigged character's clips
   // (idle/walk/run) are silently dropped and animation.play can't find them.
   (root as unknown as { animations?: unknown[] }).animations = gltf.animations ?? [];
-  return root;
+  // Cache the pristine template + hand back a clone (the template is never mounted/mutated).
+  gltfRootCache.set(assetId, root);
+  return cloneGltfRoot(root);
 }
 
 /** THE shared asset->entity pipeline. Parses `bytes` as the glTF named `assetId`

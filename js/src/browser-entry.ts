@@ -20,6 +20,8 @@ export { TransformControls } from "../build/three.bundle.mjs";
 // Real asset-mount path (used by vegetation.scatter/asset.place) — exported so a repro harness
 // can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
 export { parseGltfScene } from "./skills/three.ts";
+import { prewarmGltfScene } from "./skills/three.ts";
+import { SPECIES_ARCHETYPES, pickArchetype } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
@@ -434,7 +436,31 @@ export interface RunningLive {
 }
 
 const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "three.setMaterial", "terrain.deform"]);
-const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
+// Primitive/structural adds applied INCREMENTALLY on the live scene (no reboot). GLB-mounting skills
+// (asset.place, three.loadGLTF, vegetation.plant/scatter) are DELIBERATELY excluded: they parse a
+// glTF (GLTFLoader.parse → createImageBitmap, a macrotask) which, applied incrementally into an
+// already-running WebGL2 render, corrupts it (the mesh renders invisible). They fall through to
+// needsReboot instead, where runLive pre-warms the parse cache BEFORE init so the mount is a clone.
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "player.spawn", "terrain.create"]);
+
+/** The GLB asset ids a command will MOUNT — used to pre-warm the parse cache before renderer.init(). */
+function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
+  if (cmd.kind !== "skill") return [];
+  const input = (cmd.input ?? {}) as Record<string, unknown>;
+  if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF") {
+    return typeof input.assetId === "string" ? [input.assetId] : [];
+  }
+  if (cmd.tool === "vegetation.plant") {
+    const species = typeof input.species === "string" ? input.species : "spruce";
+    const seed = typeof input.seed === "number" ? input.seed : 1;
+    try { return [pickArchetype(species, seed)]; } catch { return []; }
+  }
+  if (cmd.tool === "vegetation.scatter") {
+    const species = Array.isArray(input.species) ? (input.species as string[]) : ["spruce", "pine", "birch"];
+    return [...new Set(species.flatMap((s) => SPECIES_ARCHETYPES[s] ?? []))];
+  }
+  return [];
+}
 // Removals that hot-drop a single entity (mesh + body + eid) instead of forcing a full
 // viewport reboot. The skill runs on the render-thread world (teardownEntity removes the
 // mesh) and is forwarded to the sim worker (which tears down the body + eid); the removed
@@ -539,6 +565,30 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const statusView = new Int32Array(ready.status, 0, 1);
   const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
 
+  // ── Pre-warm GLB assets BEFORE the renderer exists. GLTFLoader.parse (createImageBitmap) + an
+  //    async fetch are macrotasks; one firing around a render on the WebGL2 backend permanently
+  //    corrupts it (invisible mesh — see prewarmGltfScene). Doing ALL the async asset work now —
+  //    fetch the bytes + parse into the clone cache — means every mount during authoring is a
+  //    synchronous clone (no macrotask), so the mesh renders. Best-effort; a missing asset just
+  //    surfaces at mount time. ──
+  const liveAssets = new AssetRegistry();
+  if (typeof fetch === "function") {
+    const gltfIds = new Set<string>();
+    for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd)) gltfIds.add(id);
+    if (gltfIds.size > 0) {
+      status("loading", `loading ${gltfIds.size} asset${gltfIds.size === 1 ? "" : "s"}`);
+      await Promise.all([...gltfIds].map(async (id) => {
+        try {
+          const res = await fetch("/assets/" + id);
+          if (!res.ok) return;
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          liveAssets.seed(id, bytes);        // sync resolve() during apply (no host XHR)
+          await prewarmGltfScene(id, bytes); // parse into the clone cache (no macrotask at mount)
+        } catch { /* a missing/failed asset surfaces when the mount runs */ }
+      }));
+    }
+  }
+
   // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
@@ -572,7 +622,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     mode: "windowed",
   };
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
-  registerCoreSkills(registry);
+  registerCoreSkills(registry, { assets: liveAssets });
   const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
   const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
     return applyAuthorCommand(registry, world, cmd, {
