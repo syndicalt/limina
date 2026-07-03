@@ -37,8 +37,11 @@ export function pbrMat(grain: string, color: number, roughness: number): THREE.M
 }
 
 /** Register a pre-built static mesh as a collidable entity with a box collider of half-extents `half`
- *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity. */
-export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0): string {
+ *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity.
+ *  `origin` (the create command, e.g. {tool, input}) is stored on the entity so a self-sufficient
+ *  snapshot can rebuild the mesh after the create command is compacted out of the live log — pass it
+ *  for agent-authored geometry (scene.createMesh); omit for internal composites. */
+export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0, origin?: unknown): string {
   const [x, y, z] = pos;
   world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh, x, y, z);
@@ -51,7 +54,7 @@ export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, 
   // mesh.rotation directly is overwritten). Box collider stays axis-aligned (an AABB approximation).
   if (yaw !== 0) { Rotation.y[eid] = Math.sin(yaw / 2); Rotation.w[eid] = Math.cos(yaw / 2); }
   const bodyId = world.ops.op_physics_add_static_box(x, y, z, half[0], half[1], half[2], 0.85, 0);
-  return world.entities.create({ eid, mesh, bodyId });
+  return world.entities.create({ eid, mesh, bodyId, origin });
 }
 
 /** A static box mesh + collider, with a given material. */

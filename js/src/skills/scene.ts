@@ -9,12 +9,91 @@ import type { MaterialRegistry } from "../materials/material-registry.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hierarchy.ts";
 import { tagEntity, writeTransformComponent } from "./ecs.ts";
+import { spawnStaticMesh } from "./architecture.ts";
+import { buildGeometry, GeometrySpecSchema } from "../geometry/geometry-spec.ts";
+import type { MaterialState } from "../engine.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
+// The parameterized visual PRIMITIVES scene.createEntity can build (all deterministic THREE geometry).
+// `box`/`sphere` are the original two; the rest widen the general building hand. Default stays "box"
+// so existing recordings are byte-identical.
+const PRIMITIVE_SHAPES = ["box", "sphere", "cylinder", "cone", "plane", "capsule", "torus"] as const;
+
+// ── SHAPE → PHYSICS-COLLIDER MAP (honest approximations) ────────────────────────────────────────
+// The native physics backend ships ONLY box / sphere / capsule colliders. Each visual shape maps to
+// the nearest SOUND collider; a `collider` override is always honored. Defaults (no override):
+//   box      → box     : AABB is exact.
+//   sphere   → box     : the sphere's bounding cube (UNCHANGED from before — the historical default).
+//                        Pass collider:"sphere" for the tight sphere collider.
+//   cylinder → box     : AABB is tight (height==size, radius==size/2) — the round side is boxed.
+//   cone     → box     : AABB is tight; the tapered/apex volume above the base is over-approximated.
+//   plane    → box     : a THIN slab (Z half floored to 0.02m) — a flat quad has ~0 thickness.
+//   capsule  → box     : the capsule's bounding box (taller than a cube; the round caps are boxed).
+//                        Pass collider:"capsule" for the true capsule collider.
+//   torus    → box     : the outer-ring bounding box — the central HOLE is filled (not represented).
+// The box collider is derived from the ACTUAL geometry's AABB (boxColliderHalf), so it is always a
+// SOUND over-approximation (never smaller than the mesh), never a silently-wrong sphere/tunnel.
+
+/** Build a deterministic primitive geometry from the shape + a single uniform `size`. box/sphere
+ *  are byte-identical to the original two; the rest fit inside the same `size` extent. */
+function primitiveGeometry(shape: (typeof PRIMITIVE_SHAPES)[number], size: number): THREE.BufferGeometry {
+  const r = size / 2;
+  switch (shape) {
+    case "sphere": return new THREE.SphereGeometry(r, 24, 16);
+    case "cylinder": return new THREE.CylinderGeometry(r, r, size, 24);
+    case "cone": return new THREE.ConeGeometry(r, size, 24);
+    case "plane": return new THREE.PlaneGeometry(size, size);
+    case "capsule": return new THREE.CapsuleGeometry(r, size, 8, 16);
+    case "torus": return new THREE.TorusGeometry(r, size / 6, 12, 24);
+    case "box":
+    default: return new THREE.BoxGeometry(size, size, size);
+  }
+}
+
+/** Half-extents of a geometry's axis-aligned bounding box, for a SOUND box collider. A near-zero
+ *  extent (a plane's thickness) is floored to 0.02m so the collider is a usable thin slab, never
+ *  degenerate. For box/sphere this is exactly [size/2, size/2, size/2] — byte-identical to before. */
+function boxColliderHalf(geo: THREE.BufferGeometry): [number, number, number] {
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox as { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } };
+  const floor = (h: number): number => (h < 1e-4 ? 0.02 : h);
+  return [floor((bb.max.x - bb.min.x) / 2), floor((bb.max.y - bb.min.y) / 2), floor((bb.max.z - bb.min.z) / 2)];
+}
+
+/** Resolve a surface into a live THREE material AND its first-class MaterialState (see MaterialState):
+ *   • palette name  → createMaterial (flat by default; procedural-PBR when `pbr`);
+ *   • imported name → the built texture-pack material (material.import);
+ *   • no name       → the legacy numeric-color path (byte-identical to before).
+ *  Shared by scene.createEntity and scene.createMesh so the material path is authored once. */
+function resolveSurface(
+  materials: MaterialRegistry | undefined,
+  material: string | undefined,
+  pbr: boolean,
+  color: number,
+): { surface: THREE.MeshStandardNodeMaterial; state: MaterialState } {
+  if (material === undefined) {
+    return {
+      surface: new THREE.MeshStandardNodeMaterial({ color, roughness: 0.6, metalness: 0.1 }),
+      state: { color, roughness: 0.6, metalness: 0.1 },
+    };
+  }
+  if (isMaterialName(material)) {
+    return { surface: createMaterial(material, { pbr }), state: { name: material, pbr, ...getMaterialParams(material) } };
+  }
+  if (materials?.has(material)) {
+    return { surface: materials.build(material), state: { name: material, pbr: true } };
+  }
+  const imported = materials?.names() ?? [];
+  throw new Error(
+    `unknown material "${material}"; known palette: ${MATERIAL_NAMES.join(", ")}` +
+    (imported.length > 0 ? `; imported: ${imported.join(", ")}` : ""),
+  );
+}
+
 const createEntityInput = z.object({
-  shape: z.enum(["box", "sphere"]).default("box"),
+  shape: z.enum(PRIMITIVE_SHAPES).default("box"),
   collider: z.enum(["box", "sphere", "capsule"]).optional(),
   size: z.number().positive().max(50).default(1),
   // Pick a material by intent ("sand", "wood", ...) from the named palette, OR an
@@ -43,36 +122,15 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
  return {
   name: "scene.createEntity",
   version: "1.0.0",
-  description: "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
+  description: "Create a renderable entity (box, sphere, cylinder, cone, plane, capsule, or torus) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
   category: "scene",
   permissions: ["scene.write"],
   input: createEntityInput,
   output: z.object({ entity: z.string() }),
   handler: (input, ctx) => {
     const [x, y, z] = input.position;
-    const geometry = input.shape === "sphere"
-      ? new THREE.SphereGeometry(input.size / 2, 24, 16)
-      : new THREE.BoxGeometry(input.size, input.size, input.size);
-    // Material resolution, in order:
-    //   • palette name  → createMaterial (flat by default; procedural-PBR when `pbr`).
-    //   • imported name → the built texture-pack material (material.import).
-    //   • no name       → the legacy numeric color path (byte-identical to before).
-    let material: THREE.MeshStandardNodeMaterial;
-    if (input.material !== undefined) {
-      if (isMaterialName(input.material)) {
-        material = createMaterial(input.material, { pbr: input.pbr });
-      } else if (materials?.has(input.material)) {
-        material = materials.build(input.material);
-      } else {
-        const imported = materials?.names() ?? [];
-        throw new Error(
-          `unknown material "${input.material}"; known palette: ${MATERIAL_NAMES.join(", ")}` +
-          (imported.length > 0 ? `; imported: ${imported.join(", ")}` : ""),
-        );
-      }
-    } else {
-      material = new THREE.MeshStandardNodeMaterial({ color: input.color, roughness: 0.6, metalness: 0.1 });
-    }
+    const geometry = primitiveGeometry(input.shape, input.size);
+    const { surface: material, state: materialState } = resolveSurface(materials, input.material, input.pbr, input.color);
     const mesh = new THREE.Mesh(geometry, material);
     ctx.world.scene.add(mesh);
     const eid = spawnRenderable(ctx.world.ecs, mesh, x, y, z);
@@ -89,11 +147,11 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
       } else if (collider === "capsule") {
         bodyId = ctx.world.ops.op_physics_add_static_capsule(x, y, z, input.size / 2, input.size / 4, input.friction, input.restitution);
       } else {
-        bodyId = ctx.world.ops.op_physics_add_static_box(
-          x, y, z,
-          input.size / 2, input.size / 2, input.size / 2,
-          input.friction, input.restitution,
-        );
+        // Box collider = the AABB of the ACTUAL geometry (see SHAPE → COLLIDER MAP): exact for box,
+        // tight for cylinder/cone, a thin slab for plane, the outer bbox for torus/capsule. For
+        // box/sphere this is [size/2, size/2, size/2] — byte-identical to before.
+        const [hx, hy, hz] = boxColliderHalf(geometry);
+        bodyId = ctx.world.ops.op_physics_add_static_box(x, y, z, hx, hy, hz, input.friction, input.restitution);
       }
     } else if (input.dynamic) {
       if (collider === "sphere") {
@@ -101,22 +159,17 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
       } else if (collider === "capsule") {
         bodyId = ctx.world.ops.op_physics_add_capsule(x, y, z, input.size / 2, input.size / 4, input.friction, input.restitution);
       } else {
+        // Dynamic box collider takes a single uniform half-extent (the backend op): a cube of size/2.
+        // Byte-identical for the box shape; a coarse cube for a dynamic round shape (rare — static is
+        // the common path for these and gets the tight AABB above).
         bodyId = ctx.world.ops.op_physics_add_box_material(x, y, z, input.size / 2, input.friction, input.restitution);
       }
     }
     // Persist the create command as the entity's origin so a self-sufficient snapshot can
     // carry the structural params (shape/size/material/color) a bounded-tail viewer needs
     // to rebuild the mesh once this create command has been compacted out of the live log.
+    // materialState (first-class MaterialState — see resolveSurface) survives without a live mesh.
     const origin = { tool: "scene.createEntity", input: { ...input } };
-    // First-class material state (see MaterialState): the resolved PBR surface, stored on the
-    // entity so the inspector + a self-sufficient snapshot read it without a mesh — mirrors what
-    // three.setMaterial writes. Palette/imported names carry their name (+pbr); the plain color
-    // path carries the numeric surface (matching the MeshStandardNodeMaterial defaults above).
-    const materialState = input.material === undefined
-      ? { color: input.color, roughness: 0.6, metalness: 0.1 }
-      : isMaterialName(input.material)
-        ? { name: input.material, pbr: input.pbr, ...getMaterialParams(input.material) }
-        : { name: input.material, pbr: true };
     const entity = ctx.world.entities.create({ eid, mesh, bodyId, origin, material: materialState });
     // Parent, if the referenced entity is live: capture the child's offset (its create
     // position relative to the parent's world transform) so a later parent move propagates.
@@ -125,6 +178,81 @@ function makeCreateEntity(materials?: MaterialRegistry): SkillDefinition<z.infer
     }
     if (input.tags !== undefined && input.tags.length > 0) tagEntity(ctx, entity, input.tags);
     ctx.emit("ecs.component.added", { entity, eid, shape: input.shape, collider, static: input.static });
+    return { entity };
+  },
+ };
+}
+
+// ── scene.createMesh — the DECLARATIVE custom-geometry hand ──────────────────────────────────────
+// Where scene.createEntity offers a fixed menu of size-scaled primitives, scene.createMesh takes a
+// full GeometrySpec (a versioned, recorded wire format — see geometry/geometry-spec.ts): any
+// parameterized primitive OR an EXTRUDE spec (a 2D profile swept to a depth), so genuinely custom
+// shapes are reachable with NO shape-specific skill. It feeds spawnStaticMesh (the already-general
+// "any THREE.Mesh → entity" seam), binds first-class material state, and sets transform/tags/parent.
+// The geometry is a pure, deterministic value → the same spec yields byte-identical vertex buffers,
+// and the recorded command replays/exports faithfully.
+const createMeshInput = z.object({
+  geometry: GeometrySpecSchema,
+  position: Vec3.default([0, 0, 0]),
+  // Heading in radians about +Y — the simple "turn it" knob. Ignored if `rotation` is given.
+  yaw: z.number().optional(),
+  // Full orientation quaternion [x,y,z,w] (overrides `yaw`). Re-poses the collider too.
+  rotation: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  // Uniform scale (number) or per-axis [x,y,z]. The box collider is sized to match (visual == collider).
+  scale: z.union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive(), z.number().positive()])]).optional(),
+  material: z.string().optional(),
+  pbr: z.boolean().default(false),
+  color: z.number().int().min(0).max(0xffffff).default(0xffffff),
+  // Scene hierarchy: create this entity as a child of `parent` (an ent_ id).
+  parent: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+function makeCreateMesh(materials?: MaterialRegistry): SkillDefinition<z.infer<typeof createMeshInput>, { entity: string }> {
+ return {
+  name: "scene.createMesh",
+  version: "1.0.0",
+  description: "Create a renderable entity from a DECLARATIVE geometry spec — any parameterized primitive (box/sphere/cylinder/cone/plane/capsule/torus) or an `extrude` spec (a 2D profile [[x,y],...] swept to a depth) — so custom shapes are reachable with no shape-specific skill. Sets position/rotation/scale and material (palette name, optionally PBR, or an imported material); a sound axis-aligned box collider is derived from the geometry. Deterministic + recorded. Returns its entity id.",
+  category: "scene",
+  permissions: ["scene.write"],
+  input: createMeshInput,
+  output: z.object({ entity: z.string() }),
+  handler: (input, ctx) => {
+    const [x, y, z] = input.position;
+    // Pure, deterministic geometry construction (headless-safe — no GL context needed).
+    const geometry = buildGeometry(input.geometry);
+    const { surface, state } = resolveSurface(materials, input.material, input.pbr, input.color);
+    const mesh = new THREE.Mesh(geometry, surface);
+    // Sound box collider = the geometry's AABB, scaled to match the visual scale so collider == mesh.
+    const s: [number, number, number] = input.scale === undefined
+      ? [1, 1, 1]
+      : typeof input.scale === "number"
+        ? [input.scale, input.scale, input.scale]
+        : input.scale;
+    const [bx, by, bz] = boxColliderHalf(geometry);
+    const half: [number, number, number] = [bx * s[0], by * s[1], bz * s[2]];
+    // spawnStaticMesh (from architecture.ts) is the already-general seam: it turns ANY mesh into a
+    // real collidable entity. Rotation is applied below via the shared transform writer (yaw=0 here)
+    // so the collider follows a full quaternion, not just yaw. Pass the create command as `origin` so
+    // a self-sufficient snapshot can rebuild this procedurally-built mesh after the create command is
+    // compacted out of the live log (parity with scene.createEntity).
+    const origin = { tool: "scene.createMesh", input: { ...input } };
+    const entity = spawnStaticMesh(ctx.world, mesh, [x, y, z], half, 0, origin);
+    // First-class material state — survives without a live mesh (asset/headless entities), like
+    // scene.createEntity / three.setMaterial.
+    ctx.world.entities.bindMaterial(entity, state);
+    const eid = ctx.world.entities.resolve(entity)?.eid;
+    // Orientation: a full quaternion overrides yaw. writeTransformComponent re-poses the physics body
+    // so the collider rotates with the mesh.
+    const quat = input.rotation
+      ?? (input.yaw !== undefined ? [0, Math.sin(input.yaw / 2), 0, Math.cos(input.yaw / 2)] as [number, number, number] : undefined);
+    if (quat !== undefined) writeTransformComponent(ctx, entity, "rotation", quat);
+    // Scale is visual (the collider was pre-scaled above); the physics body is not re-scaled.
+    if (input.scale !== undefined) writeTransformComponent(ctx, entity, "scale", s);
+    if (input.parent !== undefined && eid !== undefined && ctx.world.entities.resolve(input.parent) !== undefined) {
+      ctx.world.entities.setParent(entity, input.parent, computeLocalOffset(ctx.world, input.parent, eid));
+    }
+    if (input.tags !== undefined && input.tags.length > 0) tagEntity(ctx, entity, input.tags);
+    ctx.emit("ecs.component.added", { entity, eid, kind: input.geometry.kind, collider: "box", static: true });
     return { entity };
   },
  };
@@ -348,6 +476,7 @@ const moveEntity: SkillDefinition<z.infer<typeof moveInput>, { entity: string; p
 
 export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
   registry.register(makeCreateEntity(materials));
+  registry.register(makeCreateMesh(materials));
   registry.register(destroyEntity);
   registry.register(reparent);
   registry.register(queryEntities);
