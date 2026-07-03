@@ -592,8 +592,15 @@ export async function loadGltfIntoScene(
   const skipMesh = ctx.world.simWorker === true;
   let root: SceneObject | undefined;
   if (!skipMesh) {
-    root = await parseGltfScene(assetId, bytes);
-    ctx.world.scene.add(root);
+    try {
+      root = await parseGltfScene(assetId, bytes);
+      ctx.world.scene.add(root);
+    } catch {
+      // A missing/corrupt asset (e.g. empty bytes because the /assets route isn't served) must NOT
+      // fail the whole apply loop and take down the viewport. Spawn the entity WITHOUT a mesh — it's
+      // invisible until the asset is available, but the scene still loads.
+      root = undefined;
+    }
   }
   const transform = (root ?? INERT_GLTF_TRANSFORM) as unknown as Parameters<typeof spawnRenderable>[1];
   const eid = spawnRenderable(ctx.world.ecs, transform, x, y, z);

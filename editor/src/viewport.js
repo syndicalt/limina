@@ -96,7 +96,15 @@ const PHYSICS_OP_FN = {
 function toAuthorCommands(commands) {
   const out = [];
   for (const cmd of commands) {
-    if (cmd.kind === "physics") out.push({ kind: "physics", op: PHYSICS_OP_FN[cmd.op], args: cmd.args });
+    if (cmd.kind === "physics") {
+      // The live viewport (+ its sim worker) runs its OWN fixed-step sim — it steps every tick. So a
+      // recorded per-tick `step` op must NOT be re-authored: replaying it double-steps, and once a long
+      // session has logged tens of thousands of steps, re-authoring the whole stream on reload fails
+      // ("viewport unavailable"). Only SETUP/authoring physics ops (create_world, add_*, remove_body…)
+      // rebuild state; `step` is pure sim output. (Root fix: don't record `step` — see recorder.ts.)
+      if (cmd.op === "step") continue;
+      out.push({ kind: "physics", op: PHYSICS_OP_FN[cmd.op], args: cmd.args });
+    }
     else if (cmd.kind === "skill") out.push({ kind: "skill", tool: cmd.tool, input: cmd.input, agentId: cmd.actorId, perms: cmd.perms });
     // seed: dropped.
   }

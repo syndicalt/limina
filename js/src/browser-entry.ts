@@ -573,7 +573,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   //    fetch the bytes + parse into the clone cache — means every mount during authoring is a
   //    synchronous clone (no macrotask), so the mesh renders. Best-effort; a missing asset just
   //    surfaces at mount time. ──
-  const liveAssets = new AssetRegistry();
+  // ── Physics + the authoring op surface FIRST. The AssetRegistry — and any cache-MISS resolve() in
+  //    the apply loop below — needs a real op_read_asset; `new AssetRegistry()` with the default
+  //    (still-unset module) ops throws "Cannot read op_read_asset of undefined" on the first uncached
+  //    asset. Building physics here (not after buildRenderTarget) also lets installOps run before any
+  //    renderer/baseline code reaches module-level `ops`. ──
+  const rapier = opts.rapier ?? (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
+  const physics = await WasmRapierPhysics.create(rapier);
+  const ops = composeAuthoringOps(physics);
+  installOps(ops); // complete global op surface for any engine code reaching module-level `ops`
+
+  const liveAssets = new AssetRegistry(ops);
   if (typeof fetch === "function") {
     // Warm the tree palette (so a LATER incremental plant/scatter mounts from a clone) + this scene's
     // own GLB assets. Skip anything already cached — the module cache persists across reboots, so only
@@ -601,15 +611,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, {},
   );
 
-  // ── Re-author the SAME command log on the render-main thread against the REAL
-  //    scene so meshes exist and eids match the worker (deterministic authoring).
-  //    The render-main physics world is built ONLY to author — it is never stepped
-  //    (the worker is authoritative). ──
+  // ── Re-author the SAME command log on the render-main thread against the REAL scene so meshes
+  //    exist and eids match the worker (deterministic authoring). ──
   status("loading", "authoring scene meshes");
-  const rapier = opts.rapier ?? (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
-  const physics = await WasmRapierPhysics.create(rapier);
-  const ops = composeAuthoringOps(physics);
-  installOps(ops); // complete global op surface for any engine code reaching module-level `ops`
 
   const ecs = createEcsWorld();
   const entities = new EntityTable();
