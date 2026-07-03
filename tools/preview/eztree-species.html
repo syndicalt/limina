@@ -1,0 +1,73 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;overflow:hidden;background:#9fb2b8}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js"}}</script></head>
+<body><canvas id="limina-canvas"></canvas>
+<script type="module">
+// Species-variety look check: a ROW of DIFFERENT ez-tree species, each grown from a fixed seed
+// with ez-tree's NATIVE materials. The preset names mirror js/src/render/tree-source.ts's
+// SPECIES_PRESETS exactly (medium variant), so this render shows what generateTree() produces.
+// (willow was requested but ez-tree ships no willow/birch/spruce preset — see tree-source.ts;
+//  substituted 'bush' here so every tree shown is a genuine, distinct shipped preset.)
+import * as THREE from "three";
+import { Tree } from "/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js";
+
+const W = 1800, H = 900;
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("limina-canvas"), antialias: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const SKY = new THREE.Color(0x9fb2b8);
+const scene = new THREE.Scene();
+scene.background = SKY;
+scene.fog = new THREE.FogExp2(SKY, 0.006);
+
+// Lighting mirrors tools/preview/eztree-native.html (warm sun + cool sky).
+const sun = new THREE.DirectionalLight(0xffe6c2, 3.1);
+sun.position.set(-40, 60, 30); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+const sc = sun.shadow.camera; sc.left = -50; sc.right = 50; sc.top = 50; sc.bottom = -50; sc.near = 1; sc.far = 200; sc.updateProjectionMatrix();
+sun.shadow.bias = -0.0006;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbcd0d8, 0x2c3a26, 1.15));
+scene.add(new THREE.AmbientLight(0x30402c, 0.5));
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0x33401f, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+// species label -> shipped preset (medium variant) + a fixed seed. Genuinely distinct presets.
+const ROW = [
+  { species: "oak",   preset: "Oak Medium",   seed: 101 },
+  { species: "ash",   preset: "Ash Medium",   seed: 202 },
+  { species: "aspen", preset: "Aspen Medium", seed: 303 },
+  { species: "pine",  preset: "Pine Medium",  seed: 404 },
+  { species: "bush",  preset: "Bush 2",       seed: 505 },
+];
+
+const TARGET_H = 12, SPACING = 15;
+const box = new THREE.Box3();
+let placed = 0;
+ROW.forEach((entry, i) => {
+  const tree = new Tree();
+  tree.loadPreset(entry.preset);
+  tree.options.seed = entry.seed;
+  tree.generate();
+  tree.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  // Normalize height so species differences read as SHAPE, not scale.
+  box.setFromObject(tree);
+  const h = (box.max.y - box.min.y) || 1;
+  tree.scale.multiplyScalar(TARGET_H / h);
+  box.setFromObject(tree);
+  tree.position.set((i - (ROW.length - 1) / 2) * SPACING, -box.min.y, 0);
+  scene.add(tree);
+  placed++;
+});
+
+const camera = new THREE.PerspectiveCamera(42, W / H, 0.1, 600);
+camera.position.set(0, 7, 62);
+camera.lookAt(0, 6, 0);
+
+let frame = 0;
+function loop() { renderer.render(scene, camera); if (++frame > 8) { window.__placed = placed; window.__done = true; return; } requestAnimationFrame(loop); }
+loop();
+</script></body></html>

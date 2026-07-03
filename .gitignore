@@ -57,3 +57,6 @@ tools/.ez-core.mjs
 assets/prop-a-wooden-barrel-2.glb
 assets/trees/*.glb
 assets/trees/manifest.json
+
+# Preview render outputs (binary screenshots)
+tools/preview/out/
