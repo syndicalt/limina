@@ -219,7 +219,13 @@ function eachMaterial(material, fn) {
 
 function restoreWireframeMaterials() {
   for (const [material, originalWireframe] of state.wireframeMaterials) {
-    if (material) material.wireframe = originalWireframe;
+    if (material && material.wireframe !== originalWireframe) {
+      material.wireframe = originalWireframe;
+      // Node materials (WebGPU/WebGL2 backend) cache a render pipeline keyed on state; toggling
+      // wireframe changes the primitive topology (triangles↔lines), so the pipeline MUST be
+      // rebuilt or the mesh renders nothing (looks like the entity vanished). Force the recompile.
+      material.needsUpdate = true;
+    }
   }
   state.wireframeMaterials.clear();
 }
@@ -231,7 +237,10 @@ function applyWireframeMode(running) {
     if (!object?.isMesh || object.userData?.editorHelper) return;
     eachMaterial(object.material, (material) => {
       if (!state.wireframeMaterials.has(material)) state.wireframeMaterials.set(material, material.wireframe === true);
-      material.wireframe = true;
+      if (material.wireframe !== true) {
+        material.wireframe = true;
+        material.needsUpdate = true; // rebuild the pipeline for line topology (see restore)
+      }
     });
   });
 }
