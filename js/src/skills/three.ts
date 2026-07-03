@@ -529,6 +529,12 @@ export async function prewarmGltfScene(assetId: string, bytes: Uint8Array): Prom
   try { await parseGltfScene(assetId, bytes); } catch { /* the real mount will report the failure */ }
 }
 
+/** Whether `assetId`'s root is already parsed + cached (a later parseGltfScene will be a clone). Lets
+ *  a caller skip re-fetching bytes it doesn't need — the cache persists across viewport reboots. */
+export function hasGltfScene(assetId: string): boolean {
+  return gltfRootCache.has(assetId);
+}
+
 /** Parse `bytes` as the glTF named `assetId` and return its scene root with textures
  *  re-homed for the WebGPU backend (see rehomeTextureToData). THE ONE place the
  *  GLTFLoader + the texture-rehome live: loadGltfIntoScene spawns an ENTITY from it,

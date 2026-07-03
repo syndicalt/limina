@@ -27,27 +27,6 @@ const nextFrame = (): Promise<void> =>
     else setTimeout(resolve, 0);
   });
 
-/** ASYNC pre-warm the asset cache off the main thread before mounting. op_read_asset (the sync
- *  path resolve() falls back to) is a BLOCKING XHR + per-byte decode in the browser — reading six
- *  ~3 MB GLBs that way freezes the viewport. A parallel async fetch (arraybuffer, no per-byte
- *  decode) seeds the cache so the later sync resolve() is an instant hit. Browser-only + best-effort:
- *  no fetch/seed (headless, or a stub registry) → no-op, and resolve() falls back to the host read.
- *  Same bytes either way, so determinism is unaffected. */
-async function prewarmAssets(assets: AssetRegistry, ids: string[]): Promise<void> {
-  const a = assets as unknown as { seed?: (id: string, b: Uint8Array) => void; has?: (id: string) => boolean };
-  if (typeof fetch !== "function" || typeof a.seed !== "function") return;
-  // Skip ids already warm (e.g. pre-seeded before renderer.init) — never fire a macrotask we don't
-  // need, since an async fetch mid-mount can corrupt the WebGL2 render.
-  const cold = [...new Set(ids)].filter((id) => !(typeof a.has === "function" && a.has(id)));
-  await Promise.all(cold.map(async (id) => {
-    try {
-      const res = await fetch("/assets/" + id);
-      if (!res.ok) return;
-      a.seed!.call(assets, id, new Uint8Array(await res.arrayBuffer()));
-    } catch { /* fall back to the sync host read in resolve() */ }
-  }));
-}
-
 /** Pick one archetype id for a species deterministically from `seed`. */
 export function pickArchetype(species: string, seed: number): string {
   const palette = SPECIES_ARCHETYPES[species] ?? [];
@@ -155,9 +134,6 @@ export function registerVegetationSkills(
           if (list === undefined) { list = []; byId.set(inst.assetId, list); }
           list.push(inst);
         }
-        // Fetch every archetype's bytes ASYNCHRONOUSLY first (off the main thread, in parallel), so
-        // the per-archetype resolve() below is an instant cache hit instead of a blocking sync read.
-        await prewarmAssets(assets, [...byId.keys()]);
         // Mount ONE archetype per frame: parsing a dense GLB + uploading its InstancedMesh to the
         // GPU is heavy; doing all six back-to-back blocks the main thread long enough to trip the
         // browser's unresponsive-page watchdog / lose the WebGPU device (the reported "crash").
@@ -234,7 +210,6 @@ export function registerVegetationSkills(
     output: z.object({ entity: z.string(), assetId: z.string(), assetHash: z.string() }),
     handler: async (input, ctx) => {
       const assetId = pickArchetype(input.species, input.seed);
-      await prewarmAssets(assets, [assetId]); // async read off the main thread (browser); no-op headless
       const resolved = assets.resolve(assetId);
 
       // Default the position to the CENTRE of the active terrain layer, on its surface (terrain is

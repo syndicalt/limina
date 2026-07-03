@@ -20,8 +20,8 @@ export { TransformControls } from "../build/three.bundle.mjs";
 // Real asset-mount path (used by vegetation.scatter/asset.place) — exported so a repro harness
 // can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
 export { parseGltfScene } from "./skills/three.ts";
-import { prewarmGltfScene } from "./skills/three.ts";
-import { SPECIES_ARCHETYPES, pickArchetype } from "./skills/vegetation.ts";
+import { hasGltfScene, prewarmGltfScene } from "./skills/three.ts";
+import { SPECIES_ARCHETYPES, TREE_ARCHETYPE_IDS, pickArchetype } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
@@ -436,12 +436,14 @@ export interface RunningLive {
 }
 
 const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform"]);
-// Primitive/structural adds applied INCREMENTALLY on the live scene (no reboot). GLB-mounting skills
-// (asset.place, three.loadGLTF, vegetation.plant/scatter) are DELIBERATELY excluded: they parse a
-// glTF (GLTFLoader.parse → createImageBitmap, a macrotask) which, applied incrementally into an
-// already-running WebGL2 render, corrupts it (the mesh renders invisible). They fall through to
-// needsReboot instead, where runLive pre-warms the parse cache BEFORE init so the mount is a clone.
-const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "player.spawn", "terrain.create"]);
+// Structural adds applied INCREMENTALLY on the live scene (no reboot) — including the GLB-mounting
+// skills. Their mid-session mount is safe because runLive PRE-WARMS the glTF parse cache (the tree
+// palette + the scene's assets) BEFORE renderer.init(), so parseGltfScene returns a synchronous clone
+// — no GLTFLoader.parse / createImageBitmap macrotask around a render, which would corrupt the WebGL2
+// backend (invisible mesh). A handler must NOT do its own async fetch: handlers ALSO run in the sim
+// worker, where a hanging fetch blocks the "ready" handshake and freezes the viewport (learned the
+// hard way — that is why prewarmAssets was removed).
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
 
 /** The GLB asset ids a command will MOUNT — used to pre-warm the parse cache before renderer.init(). */
 function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
@@ -573,11 +575,15 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   //    surfaces at mount time. ──
   const liveAssets = new AssetRegistry();
   if (typeof fetch === "function") {
-    const gltfIds = new Set<string>();
+    // Warm the tree palette (so a LATER incremental plant/scatter mounts from a clone) + this scene's
+    // own GLB assets. Skip anything already cached — the module cache persists across reboots, so only
+    // the first connect pays the fetch. All of this runs BEFORE renderer.init(), the only safe window.
+    const gltfIds = new Set<string>(TREE_ARCHETYPE_IDS);
     for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd)) gltfIds.add(id);
-    if (gltfIds.size > 0) {
-      status("loading", `loading ${gltfIds.size} asset${gltfIds.size === 1 ? "" : "s"}`);
-      await Promise.all([...gltfIds].map(async (id) => {
+    const cold = [...gltfIds].filter((id) => !hasGltfScene(id));
+    if (cold.length > 0) {
+      status("loading", `loading ${cold.length} asset${cold.length === 1 ? "" : "s"}`);
+      await Promise.all(cold.map(async (id) => {
         try {
           const res = await fetch("/assets/" + id);
           if (!res.ok) return;
