@@ -51,6 +51,27 @@ export async function writeUpdate(entity, component, value) {
   return result;
 }
 
+export async function writeMaterial(entity, material) {
+  const client = await ensureWriter();
+  const result = await client.callTool("three.setMaterial", { entity, ...material });
+  if (!result || result.ok !== true) throw new Error(`three.setMaterial returned ok=false for ${entity}`);
+  return result;
+}
+
+export async function addTag(entity, tag) {
+  const client = await ensureWriter();
+  const result = await client.callTool("ecs.addComponent", { entity, component: tag });
+  if (!result || result.ok !== true) throw new Error(`ecs.addComponent returned ok=false for ${entity}`);
+  return result;
+}
+
+export async function removeTag(entity, tag) {
+  const client = await ensureWriter();
+  const result = await client.callTool("ecs.removeComponent", { entity, component: tag });
+  if (!result || result.ok !== true) throw new Error(`ecs.removeComponent returned ok=false for ${entity}`);
+  return result;
+}
+
 export async function destroyEntity(entity) {
   const client = await ensureWriter();
   const result = await client.callTool("scene.destroyEntity", { entity });
