@@ -11,10 +11,51 @@ import { computeLocalOffset, isAncestor, propagateTransform } from "../ecs/hiera
 import { tagEntity, writeTransformComponent } from "./ecs.ts";
 import { spawnStaticMesh } from "./architecture.ts";
 import { buildGeometry, GeometrySpecSchema } from "../geometry/geometry-spec.ts";
-import type { MaterialState } from "../engine.ts";
-import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import type { MaterialState, TransformOffset } from "../engine.ts";
+import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
+import {
+  ENTITY_RECIPE_VERSION,
+  type EntityRecipe,
+  EntityRecipeSchema,
+  validateEntityRecipe,
+} from "../scene/entity-recipe.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+
+// ── Deterministic seeded PRNG (mulberry32) — pure integer math, NO Math.random, so a seed always
+// yields the same stream (replay-safe + headless). Used to give scene.createMesh optional, genuine
+// per-instance geometry variation (the "each stamped house differs" knob a prefab reseed drives). ──
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Displace every position vertex by a small, seeded offset proportional to the geometry's extent on
+// each axis, giving a genuinely DIFFERENT (but deterministic) mesh per seed while preserving the gross
+// shape. Applied BEFORE the collider AABB is measured so the box collider still matches the mesh.
+const JITTER_AMPLITUDE = 0.12; // fraction of each axis extent
+function jitterGeometry(geo: THREE.BufferGeometry, seed: number): void {
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox as { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } };
+  const ex = [(bb.max.x - bb.min.x) || 1, (bb.max.y - bb.min.y) || 1, (bb.max.z - bb.min.z) || 1];
+  const rng = mulberry32(seed);
+  const pos = geo.getAttribute("position") as { count: number; getX(i: number): number; getY(i: number): number; getZ(i: number): number; setXYZ(i: number, x: number, y: number, z: number): void; needsUpdate: boolean };
+  for (let i = 0; i < pos.count; i++) {
+    pos.setXYZ(
+      i,
+      pos.getX(i) + (rng() - 0.5) * JITTER_AMPLITUDE * ex[0],
+      pos.getY(i) + (rng() - 0.5) * JITTER_AMPLITUDE * ex[1],
+      pos.getZ(i) + (rng() - 0.5) * JITTER_AMPLITUDE * ex[2],
+    );
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+}
 
 // The parameterized visual PRIMITIVES scene.createEntity can build (all deterministic THREE geometry).
 // `box`/`sphere` are the original two; the rest widen the general building hand. Default stays "box"
@@ -203,6 +244,11 @@ const createMeshInput = z.object({
   material: z.string().optional(),
   pbr: z.boolean().default(false),
   color: z.number().int().min(0).max(0xffffff).default(0xffffff),
+  // Optional deterministic geometry variation: when set, the vertices are displaced by a small,
+  // SEEDED offset (same seed → identical mesh; different seed → a genuinely different mesh). This is
+  // the seed-bearing knob a prefab reseed (scene.instantiateGroup) drives so each stamped instance
+  // varies. Absent → no jitter, byte-identical to before.
+  seed: z.number().int().optional(),
   // Scene hierarchy: create this entity as a child of `parent` (an ent_ id).
   parent: z.string().optional(),
   tags: z.array(z.string()).optional(),
@@ -211,7 +257,7 @@ function makeCreateMesh(materials?: MaterialRegistry): SkillDefinition<z.infer<t
  return {
   name: "scene.createMesh",
   version: "1.0.0",
-  description: "Create a renderable entity from a DECLARATIVE geometry spec — any parameterized primitive (box/sphere/cylinder/cone/plane/capsule/torus) or an `extrude` spec (a 2D profile [[x,y],...] swept to a depth) — so custom shapes are reachable with no shape-specific skill. Sets position/rotation/scale and material (palette name, optionally PBR, or an imported material); a sound axis-aligned box collider is derived from the geometry. Deterministic + recorded. Returns its entity id.",
+  description: "Create a renderable entity from a DECLARATIVE geometry spec — any parameterized primitive (box/sphere/cylinder/cone/plane/capsule/torus) or an `extrude` spec (a 2D profile [[x,y],...] swept to a depth) — so custom shapes are reachable with no shape-specific skill. Sets position/rotation/scale and material (palette name, optionally PBR, or an imported material); a sound axis-aligned box collider is derived from the geometry. Optional `seed` deterministically varies the geometry (per-vertex jitter) so a prefab can be stamped with per-instance variation. Deterministic + recorded. Returns its entity id.",
   category: "scene",
   permissions: ["scene.write"],
   input: createMeshInput,
@@ -220,6 +266,8 @@ function makeCreateMesh(materials?: MaterialRegistry): SkillDefinition<z.infer<t
     const [x, y, z] = input.position;
     // Pure, deterministic geometry construction (headless-safe — no GL context needed).
     const geometry = buildGeometry(input.geometry);
+    // Optional seeded per-vertex variation (before collider AABB is measured so they stay matched).
+    if (input.seed !== undefined) jitterGeometry(geometry, input.seed);
     const { surface, state } = resolveSurface(materials, input.material, input.pbr, input.color);
     const mesh = new THREE.Mesh(geometry, surface);
     // Sound box collider = the geometry's AABB, scaled to match the visual scale so collider == mesh.
@@ -474,6 +522,221 @@ const moveEntity: SkillDefinition<z.infer<typeof moveInput>, { entity: string; p
   },
 };
 
+// ── PREFABS / RECIPES — scene.group + scene.instantiateGroup + scene.duplicate ────────────────────
+// A prefab is a recorded "group create", not an opaque template: scene.group CAPTURES a root entity's
+// subtree (walk childrenOf) into a named EntityRecipe — each node's origin create-command + its
+// transform RELATIVE TO THE ROOT — and scene.instantiateGroup STAMPS that recipe at a target transform
+// by REPLAYING each captured create-command under a fresh root, wired with the same parent relations.
+// This is built entirely on the EXISTING origin / parent / localOffset machinery — no second scene
+// graph — so instantiated entities are ordinary entities that carry their own origin (a self-sufficient
+// snapshot rebuilds them) and the replay reconstructs them identically. See scene/entity-recipe.ts.
+
+/** Turn a stored transform-relative-to-root into a THREE matrix (for composing with the target). */
+function offsetToMatrix(off: TransformOffset): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(off.pos[0], off.pos[1], off.pos[2]),
+    new THREE.Quaternion(off.rot[0], off.rot[1], off.rot[2], off.rot[3]),
+    new THREE.Vector3(off.scale[0], off.scale[1], off.scale[2]),
+  );
+}
+function yawQuat(yaw: number): THREE.Quaternion {
+  return new THREE.Quaternion(0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2));
+}
+/** Derive a per-node seed from the instance seed + node index (deterministic integer hash), so two
+ *  instances stamped with DIFFERENT seeds reseed each seed-bearing node differently, while the SAME
+ *  instance seed reproduces identical node seeds. */
+function mixSeed(seed: number, index: number): number {
+  return (Math.imul(seed >>> 0, 2654435761) + Math.imul(index + 1, 40503)) >>> 0;
+}
+
+/** CAPTURE: walk the subtree rooted at `rootId` (parent-before-child) into a named recipe. Every node
+ *  must carry an origin create-command (only entities built through a recorded create skill are
+ *  capturable) — otherwise this throws a clear error (a clean {success:false} at the skill boundary). */
+function captureRecipe(world: WorldContext, rootId: string, name: string): EntityRecipe {
+  if (world.entities.resolve(rootId) === undefined) throw new Error(`scene.group: unknown root entity '${rootId}'`);
+  // BFS from the root so parents always precede their children (the order a replay needs).
+  const order: string[] = [];
+  const indexOf = new Map<string, number>();
+  const queue: string[] = [rootId];
+  while (queue.length > 0) {
+    const id = queue.shift() as string;
+    if (indexOf.has(id)) continue;
+    indexOf.set(id, order.length);
+    order.push(id);
+    for (const child of world.entities.childrenOf(id)) queue.push(child);
+  }
+  const nodes = order.map((id, i) => {
+    const entry = world.entities.resolve(id);
+    if (entry === undefined) throw new Error(`scene.group: entity '${id}' vanished during capture`);
+    if (entry.origin === undefined) {
+      throw new Error(`scene.group: entity '${id}' has no origin create-command; only entities created through a recorded create skill can be captured into a recipe`);
+    }
+    // Offset RELATIVE TO THE ROOT (root → identity): reuse the exact hierarchy math.
+    const offset = computeLocalOffset(world, rootId, entry.eid);
+    const parentIdx = i === 0 ? null : (entry.parent !== undefined ? indexOf.get(entry.parent) ?? null : null);
+    return {
+      parent: parentIdx,
+      origin: { tool: entry.origin.tool, input: { ...entry.origin.input } },
+      offset,
+    };
+  });
+  const recipe: EntityRecipe = { version: ENTITY_RECIPE_VERSION, name, nodes };
+  const bad = validateEntityRecipe(recipe);
+  if (bad !== undefined) throw new Error(`scene.group: captured recipe is not well-formed: ${bad}`);
+  return recipe;
+}
+
+/** INSTANTIATE: stamp a recipe at `targetMatrix` by replaying each node's origin create-command under a
+ *  fresh root. Each node's world transform = target ∘ (offset relative to root); the create command's
+ *  position (and, for createMesh, rotation/scale) is overridden to that, its parent is rewired to the
+ *  freshly-created parent, and any seed-bearing create is reseeded when `seed` is supplied. Re-invokes
+ *  the REAL create skills through the registry (never a reimplementation), passing `ctx.chainId` so the
+ *  WorldRecorder folds these nested creates into the single recorded instantiate command. */
+async function instantiateRecipe(
+  registry: SkillRegistry,
+  recipe: EntityRecipe,
+  targetMatrix: THREE.Matrix4,
+  seed: number | undefined,
+  ctx: ExecutionContext,
+): Promise<{ root: string; entities: string[] }> {
+  const bad = validateEntityRecipe(recipe);
+  if (bad !== undefined) throw new Error(`scene.instantiateGroup: malformed recipe '${recipe.name}': ${bad}`);
+  const created: string[] = [];
+  const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
+  const world = new THREE.Matrix4();
+  for (let i = 0; i < recipe.nodes.length; i++) {
+    const node = recipe.nodes[i];
+    world.multiplyMatrices(targetMatrix, offsetToMatrix(node.offset)).decompose(_p, _q, _s);
+    const input: Record<string, unknown> = { ...node.origin.input };
+    input.position = [_p.x, _p.y, _p.z];
+    // createMesh carries its own orientation + scale; createEntity has no rotation field, so it is
+    // placed by its (correctly rotated) world position only — its own box is not self-rotated.
+    if (node.origin.tool === "scene.createMesh") {
+      input.rotation = [_q.x, _q.y, _q.z, _q.w];
+      input.scale = [_s.x, _s.y, _s.z];
+      delete input.yaw; // an explicit rotation overrides yaw
+    }
+    // Reseed genuinely seed-bearing creates (only when a seed is supplied — else instances are identical).
+    if (seed !== undefined && typeof input.seed === "number") input.seed = mixSeed(seed, i);
+    // Wire the fresh subtree: the root is a fresh root (no parent); a child points at its fresh parent.
+    if (node.parent === null) delete input.parent;
+    else input.parent = created[node.parent];
+    const res = await registry.invoke(node.origin.tool, input, {
+      agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions,
+      tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+    });
+    if (!res.success) {
+      throw new Error(`scene.instantiateGroup: replay of '${node.origin.tool}' (node ${i}) failed: ${JSON.stringify(res.error)}`);
+    }
+    created.push((res.result as { entity: string }).entity);
+  }
+  return { root: created[0], entities: created };
+}
+
+const ScaleInput = z.union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive(), z.number().positive()])]);
+function normScale(scale: number | [number, number, number] | undefined): [number, number, number] {
+  return scale === undefined ? [1, 1, 1] : typeof scale === "number" ? [scale, scale, scale] : scale;
+}
+
+const groupInput = z.object({
+  // The subtree ROOT to capture (an ent_ id). Its descendants (scene.createEntity({parent}) children)
+  // are captured with it. Every captured entity must carry an origin create-command.
+  root: z.string(),
+  // The name the recipe is registered under (re-instantiated by scene.instantiateGroup).
+  name: z.string().min(1),
+});
+function makeGroup(recipes: Map<string, EntityRecipe>): SkillDefinition<z.infer<typeof groupInput>, { name: string; nodeCount: number; recipe: EntityRecipe }> {
+  return {
+    name: "scene.group",
+    version: "1.0.0",
+    description: "Capture an entity's subtree (its scene-hierarchy descendants) as a NAMED, reusable prefab recipe: each node's create-command + its transform relative to the root. scene.instantiateGroup then stamps the recipe many times. Recorded so replay rebuilds the recipe. Returns the recipe.",
+    category: "scene",
+    permissions: ["scene.write"],
+    input: groupInput,
+    output: z.object({ name: z.string(), nodeCount: z.number(), recipe: EntityRecipeSchema }),
+    handler: (input, ctx) => {
+      const recipe = captureRecipe(ctx.world, input.root, input.name);
+      recipes.set(input.name, recipe);
+      return { name: input.name, nodeCount: recipe.nodes.length, recipe };
+    },
+  };
+}
+
+const instantiateGroupInput = z.object({
+  // The recipe name registered by scene.group.
+  name: z.string().min(1),
+  // Where to stamp the fresh root [x,y,z].
+  position: Vec3.default([0, 0, 0]),
+  // Heading of the stamped instance in radians about +Y.
+  yaw: z.number().default(0),
+  // Uniform scale (number) or per-axis [x,y,z] applied to the whole instance.
+  scale: ScaleInput.optional(),
+  // Optional per-instance seed: reseeds every seed-bearing create in the recipe so this instance
+  // varies from the next (same seed → identical instance; omitted → the recipe's captured seeds).
+  seed: z.number().int().optional(),
+});
+function makeInstantiateGroup(registry: SkillRegistry, recipes: Map<string, EntityRecipe>): SkillDefinition<z.infer<typeof instantiateGroupInput>, { root: string; entities: string[] }> {
+  return {
+    name: "scene.instantiateGroup",
+    version: "1.0.0",
+    description: "Stamp a named prefab recipe (from scene.group) at a position/yaw/scale, re-creating its whole subtree wired with the same parenting. An optional `seed` reseeds seed-bearing parts so each instance varies (deterministic: same recipe+transform+seed → identical entities). Recorded + replay-safe. Returns the fresh root + all created entity ids.",
+    category: "scene",
+    permissions: ["scene.write"],
+    input: instantiateGroupInput,
+    output: z.object({ root: z.string(), entities: z.array(z.string()) }),
+    handler: async (input, ctx) => {
+      const recipe = recipes.get(input.name);
+      if (recipe === undefined) throw new Error(`scene.instantiateGroup: unknown recipe '${input.name}'`);
+      const s = normScale(input.scale);
+      const targetMatrix = new THREE.Matrix4().compose(
+        new THREE.Vector3(input.position[0], input.position[1], input.position[2]),
+        yawQuat(input.yaw),
+        new THREE.Vector3(s[0], s[1], s[2]),
+      );
+      return instantiateRecipe(registry, recipe, targetMatrix, input.seed, ctx);
+    },
+  };
+}
+
+const duplicateInput = z.object({
+  // The entity (root of a subtree) to duplicate. Its descendants are duplicated with it.
+  entity: z.string(),
+  // Offset added to the source's world position for the copy [x,y,z].
+  offset: Vec3.default([0, 0, 0]),
+  // Extra yaw (radians about +Y) applied to the copy ON TOP of the source's orientation.
+  yaw: z.number().default(0),
+  // Optional seed to reseed seed-bearing parts of the copy (else the copy matches the source).
+  seed: z.number().int().optional(),
+});
+function makeDuplicate(registry: SkillRegistry): SkillDefinition<z.infer<typeof duplicateInput>, { root: string; entities: string[] }> {
+  return {
+    name: "scene.duplicate",
+    version: "1.0.0",
+    description: "Duplicate an entity (and its subtree) at an offset from the source, preserving the source's orientation/scale plus an optional extra yaw. A convenience over scene.group + scene.instantiateGroup. Recorded + replay-safe. Returns the copy's root + all created entity ids.",
+    category: "scene",
+    permissions: ["scene.write"],
+    input: duplicateInput,
+    output: z.object({ root: z.string(), entities: z.array(z.string()) }),
+    handler: async (input, ctx) => {
+      const src = ctx.world.entities.resolve(input.entity);
+      if (src === undefined) throw new Error(`scene.duplicate: unknown entity '${input.entity}'`);
+      // An ephemeral (unregistered) recipe captured on the fly — duplicate is capture + instantiate.
+      const recipe = captureRecipe(ctx.world, input.entity, `__dup:${input.entity}`);
+      const eid = src.eid;
+      // Target = source's world transform, translated by offset, with any extra yaw composed onto its
+      // orientation. The recipe's offsets are relative to its (identity) root, so this places the copy
+      // exactly like the source, shifted.
+      const rot = new THREE.Quaternion(Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]).multiply(yawQuat(input.yaw));
+      const targetMatrix = new THREE.Matrix4().compose(
+        new THREE.Vector3(Position.x[eid] + input.offset[0], Position.y[eid] + input.offset[1], Position.z[eid] + input.offset[2]),
+        rot,
+        new THREE.Vector3(Scale.x[eid], Scale.y[eid], Scale.z[eid]),
+      );
+      return instantiateRecipe(registry, recipe, targetMatrix, input.seed, ctx);
+    },
+  };
+}
+
 export function registerSceneSkills(registry: SkillRegistry, materials?: MaterialRegistry): void {
   registry.register(makeCreateEntity(materials));
   registry.register(makeCreateMesh(materials));
@@ -482,4 +745,10 @@ export function registerSceneSkills(registry: SkillRegistry, materials?: Materia
   registry.register(queryEntities);
   registry.register(inspectScene);
   registry.register(moveEntity);
+  // Per-project prefab registry — one Map per registerSceneSkills call (one registry == one project),
+  // shared by group / instantiateGroup / duplicate. Not global/shared state; promotable later.
+  const recipes = new Map<string, EntityRecipe>();
+  registry.register(makeGroup(recipes));
+  registry.register(makeInstantiateGroup(registry, recipes));
+  registry.register(makeDuplicate(registry));
 }
