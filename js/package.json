@@ -10,6 +10,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@dgreenheck/ez-tree": "^1.1.0",
     "esbuild": "^0.24.2"
   },
   "scripts": {
