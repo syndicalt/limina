@@ -45,6 +45,8 @@ function cuesEnabled() {
 
 const canvas = document.getElementById("editor-viewport");
 const statusEl = document.getElementById("viewport-status");
+const SELECT_ENTITY_EVENT = "limina:select-entity";
+const VIEWPORT_ENTITY_SELECTED_EVENT = "limina:viewport-entity-selected";
 const viewportUi = {
   snapToggle: document.getElementById("viewport-snap-toggle"),
   snapTranslate: document.getElementById("viewport-snap-translate"),
@@ -493,10 +495,11 @@ function installGizmo(running) {
 
 function selectEntity(id, running) {
   const entry = running?.entities?.resolve?.(id);
-  if (!entry?.mesh || typeof entry.eid !== "number") return;
+  if (!entry?.mesh || typeof entry.eid !== "number") return false;
   state.selected = { id, eid: entry.eid, mesh: entry.mesh };
   state.transformControls?.attach(entry.mesh);
   setStatus("selected", id);
+  return true;
 }
 
 function deselectEntity() {
@@ -521,7 +524,9 @@ function pickEntity(event) {
   for (const hit of hits) {
     const id = running.pickEntityId?.(hit.object);
     if (id) {
-      selectEntity(id, running);
+      if (selectEntity(id, running)) {
+        window.dispatchEvent(new CustomEvent(VIEWPORT_ENTITY_SELECTED_EVENT, { detail: { entity: id, source: "viewport" } }));
+      }
       return;
     }
   }
@@ -632,6 +637,11 @@ canvas.addEventListener("pointerup", (event) => {
 });
 canvas.addEventListener("pointercancel", (event) => {
   if (pointerClick.id === event.pointerId) pointerClick.id = undefined;
+});
+window.addEventListener(SELECT_ENTITY_EVENT, (event) => {
+  const entity = event instanceof CustomEvent ? event.detail?.entity : undefined;
+  if (typeof entity !== "string" || !entity.startsWith("ent_")) return;
+  selectEntity(entity, state.running);
 });
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;

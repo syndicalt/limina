@@ -7,6 +7,8 @@ import { applyOptimisticUpdate, reconcileViewport, surfaceViewportWarning } from
 
 const worldBody = document.getElementById("world-body");
 const inspectorBody = document.getElementById("inspector-body");
+const SELECT_ENTITY_EVENT = "limina:select-entity";
+const VIEWPORT_ENTITY_SELECTED_EVENT = "limina:viewport-entity-selected";
 
 const DEFAULT_TRANSFORM = {
   position: [0, 0, 0],
@@ -220,7 +222,7 @@ async function deleteEntity() {
   }
 }
 
-function selectRow(row) {
+function selectRow(row, options = {}) {
   const entity = rowEntity(row);
   if (!entity) return;
   const transform = cloneTransform(DEFAULT_TRANSFORM);
@@ -233,12 +235,21 @@ function selectRow(row) {
   // The Inspector is not a menu window you open by hand — selecting an entity in the
   // World panel pops it up (and focuses it if already open).
   window.liminaWindows?.open?.("inspector");
+  if (options.emitViewportSelection !== false) {
+    window.dispatchEvent(new CustomEvent(SELECT_ENTITY_EVENT, { detail: { entity, source: "world-panel" } }));
+  }
 }
 
 if (worldBody && inspectorBody) {
   worldBody.addEventListener("click", (event) => {
     const row = event.target instanceof Element ? event.target.closest(".row") : null;
     if (row && worldBody.contains(row)) selectRow(row);
+  });
+  window.addEventListener(VIEWPORT_ENTITY_SELECTED_EVENT, (event) => {
+    const entity = event instanceof CustomEvent ? event.detail?.entity : undefined;
+    if (typeof entity !== "string" || !entity.startsWith("ent_")) return;
+    const row = [...worldBody.querySelectorAll(".row")].find((candidate) => rowEntity(candidate) === entity);
+    if (row) selectRow(row, { emitViewportSelection: false });
   });
   new MutationObserver(highlightSelectedRow).observe(worldBody, { childList: true, subtree: true });
   renderInspector();
