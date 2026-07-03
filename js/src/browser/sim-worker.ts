@@ -31,6 +31,7 @@ import { EntityTable, type CameraLike, type EngineOps, type PhysicsOps, type Sce
 import { createEcsWorld } from "../ecs/world.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
@@ -260,10 +261,16 @@ export class SimWorkerController {
       width: opts.width ?? 1,
       height: opts.height ?? 1,
       mode: "headless",
+      // The authoritative sim, with no DOM: GLB-mounting skills skip the mesh parse here (the render
+      // thread mounts it) and only spawn the entity — see loadGltfIntoScene.
+      simWorker: true,
     };
 
     const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_sim_worker"));
-    const core = registerCoreSkills(registry);
+    // AssetRegistry bound to the WORKER's ops (op_read_asset is a no-op → empty bytes): a GLB skill's
+    // assets.resolve() returns instantly here instead of a blocking sync XHR that would hang the
+    // worker's init. The worker never parses the mesh, so it never needs real bytes.
+    const core = registerCoreSkills(registry, { assets: new AssetRegistry(ops) });
 
     return new SimWorkerController({
       physics, transforms, inputRing, statusBuffer, statusShared,

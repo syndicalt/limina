@@ -51,6 +51,11 @@ export interface WorldContext {
   width?: number;
   height?: number;
   mode?: "windowed" | "headless";
+  /** True in the browser SIM WORKER (the authoritative fixed-step sim). It has no DOM, so GLTFLoader
+   *  texture decode hangs — GLB-mounting skills skip the mesh parse here and spawn the entity only
+   *  (the render thread mounts the mesh). Distinct from `mode:"headless"`, which also covers the
+   *  server recorder + gates, both of which DO parse/resolve normally. */
+  simWorker?: boolean;
 }
 
 export interface ExecutionContext {

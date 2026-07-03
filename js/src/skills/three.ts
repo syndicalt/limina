@@ -577,16 +577,26 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
  *  records the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
  *  asset.place call this — no duplicated loader/rehome code. */
 export async function loadGltfIntoScene(
-  ctx: { world: { scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh: SceneObject; resource: LoadedResourceMetadata }): string } } },
+  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: unknown }): string } } },
   assetId: string,
   bytes: Uint8Array,
   hash: string,
   placement: GltfPlacement,
 ): Promise<{ entity: string; resource: LoadedResourceMetadata }> {
-  const root = await parseGltfScene(assetId, bytes);
   const [x, y, z] = placement.position;
-  ctx.world.scene.add(root);
-  const eid = spawnRenderable(ctx.world.ecs, root, x, y, z);
+  // SIM WORKER only: DO NOT parse the mesh. The render thread parses + mounts it; the worker just
+  // needs the ENTITY (eid + transform) for physics/transform authority. Parsing a textured glTF in a
+  // Worker HANGS — GLTFLoader's texture decode has no DOM — which stalls the worker's `ready`
+  // handshake and freezes the viewport at "spawning sim worker". (The server recorder + gates are
+  // also headless but DO parse — they have createImageBitmap and need the resource metadata/hash.)
+  const skipMesh = ctx.world.simWorker === true;
+  let root: SceneObject | undefined;
+  if (!skipMesh) {
+    root = await parseGltfScene(assetId, bytes);
+    ctx.world.scene.add(root);
+  }
+  const transform = (root ?? INERT_GLTF_TRANSFORM) as unknown as Parameters<typeof spawnRenderable>[1];
+  const eid = spawnRenderable(ctx.world.ecs, transform, x, y, z);
   if (placement.rotationEuler !== undefined) {
     const q = new THREE.Quaternion().setFromEuler(
       new THREE.Euler(placement.rotationEuler[0], placement.rotationEuler[1], placement.rotationEuler[2]),
@@ -596,10 +606,17 @@ export async function loadGltfIntoScene(
   if (placement.scale !== undefined) {
     Scale.x[eid] = placement.scale[0]; Scale.y[eid] = placement.scale[1]; Scale.z[eid] = placement.scale[2];
   }
-  const resource = collectGltfMetadata(assetId, hash, bytes, root);
-  const entity = ctx.world.entities.create({ eid, mesh: root, resource });
+  const resource: LoadedResourceMetadata = root !== undefined
+    ? collectGltfMetadata(assetId, hash, bytes, root)
+    : { kind: "gltf", assetId, source: `assets/${assetId}`, hash, bytes: bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
+  const entity = root !== undefined
+    ? ctx.world.entities.create({ eid, mesh: root, resource })
+    : ctx.world.entities.create({ eid, origin: { tool: "asset.load", input: { assetId, position: placement.position } } });
   return { entity, resource };
 }
+
+/** Inert Transformable for the sim-worker entity spawn (position comes from spawnRenderable's args). */
+const INERT_GLTF_TRANSFORM = { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
 
 /** three.loadGLTF over a content-addressed AssetRegistry: the id resolves to bytes
  *  + a CACHED content hash (no re-hash per load), then loads via the shared
