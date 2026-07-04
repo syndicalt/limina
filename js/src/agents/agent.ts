@@ -22,7 +22,7 @@ export interface Perception {
 
 export interface AgentRecord {
   id: string; // agt_
-  type: "builder" | "player";
+  type: "builder" | "player" | "npc";
   entityId?: string; // ent_ the agent inhabits
   perceptionRadius: number;
   decisionIntervalTicks: number;
@@ -50,7 +50,7 @@ export interface QueuedAction {
 
 export interface NewAgent {
   id: string;
-  type: "builder" | "player";
+  type: "builder" | "player" | "npc";
   entityId?: string;
   perceptionRadius?: number;
   decisionIntervalTicks?: number;
