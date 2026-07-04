@@ -81,6 +81,9 @@ export interface RenderBaselinePreset {
   hemisphere: { skyColor: number; groundColor: number; intensity: number };
   /** A faint omnidirectional ambient floor so deep shadows never crush to black. */
   ambientIntensity: number;
+  /** Tint of that ambient floor (sRGB hex). Default 0xffffff (neutral) — a cool hex
+   *  (e.g. 0x556072) gives shadows a cool cast for a golden-hour key/cool-fill split. */
+  ambientColor: number;
   /** Procedural sky gradient — drives both the background and the IBL source. */
   sky: SkyGradient;
   /** Build `scene.environment` (IBL). PMREM when a renderer is present, else a
@@ -109,6 +112,7 @@ export const DEFAULT_RENDER_BASELINE: RenderBaselinePreset = {
   sun: { color: 0xfff4e6, intensity: 3.0, direction: [5, 9, 6] },
   hemisphere: { skyColor: 0x9bb8ff, groundColor: 0x6b5a44, intensity: 0.9 },
   ambientIntensity: 0.15,
+  ambientColor: 0xffffff,
   sky: { top: 0x4a7fc4, horizon: 0xcdd9e6, bottom: 0x2a2620 },
   environment: true,
   environmentIntensity: 1.0,
@@ -148,6 +152,7 @@ export const TROPICAL_BEACH_BASELINE: RenderBaselinePreset = {
   // Tropical sky tint from above, warm dry-sand bounce from below.
   hemisphere: { skyColor: 0x9fd0ff, groundColor: 0xc9a878, intensity: 0.85 },
   ambientIntensity: 0.16,
+  ambientColor: 0xffffff,
   // Deep tropical zenith → warm hazy horizon glow → warm sand bounce. The warm horizon
   // band is what the low-roughness water reflects as a "sunset on the sea" sheen.
   sky: { top: 0x2f7fd6, horizon: 0xffe7c4, bottom: 0x70573f },
@@ -221,6 +226,7 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
     sun: { ...base.sun, ...over.sun },
     hemisphere: { ...base.hemisphere, ...over.hemisphere },
     ambientIntensity: over.ambientIntensity ?? base.ambientIntensity,
+    ambientColor: over.ambientColor ?? base.ambientColor,
     sky: { ...base.sky, ...over.sky },
     environment: over.environment ?? base.environment,
     environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
@@ -333,7 +339,7 @@ export function applyRenderBaseline(
 
   let ambient: unknown;
   if (preset.ambientIntensity > 0) {
-    ambient = new THREE.AmbientLight(0xffffff, preset.ambientIntensity);
+    ambient = new THREE.AmbientLight(preset.ambientColor, preset.ambientIntensity);
     scene.add(ambient);
   }
 

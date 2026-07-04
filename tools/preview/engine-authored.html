@@ -17,6 +17,7 @@ try {
     const running = await runLive({
       canvas, width: 1280, height: 800, commands: scene.commands,
       forceWebGL: true,
+      renderBaseline: scene.renderBaseline,
       orbit: { center: cam.center, radius: cam.radius, height: cam.height },
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });

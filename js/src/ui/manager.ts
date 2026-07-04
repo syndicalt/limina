@@ -308,7 +308,22 @@ export class UiManager {
     const from = entry.panel.material.opacity;
     if (entry.fade !== undefined) entry.fade.reset(from, 0, fadeMs);
     else entry.fade = new Fade(entry.panel, { from, to: 0, durationMs: fadeMs });
+    // Clear the queue so the fade-out lifetime always drains: the tick freezes a TTL
+    // while a bubble is still revealing, and a bubble dismissed MID-reveal must still
+    // fade + remove (not hang because its line never finished typing).
+    entry.queue = undefined;
     entry.lifetime = new Lifetime(fadeMs); // auto-removed once the fade completes
+    return true;
+  }
+
+  /** Reset (or arm) a panel's auto-dismiss TTL — e.g. a speaker spoke again, so keep
+   *  its bubble alive for another readable window instead of letting it expire. No-op
+   *  when the handle is unknown. Returns whether a live panel was refreshed. */
+  refreshTtl(handle: string, ttlMs: number): boolean {
+    const entry = this.entries.get(handle);
+    if (entry === undefined) return false;
+    if (entry.lifetime !== undefined) entry.lifetime.reset(ttlMs);
+    else entry.lifetime = new Lifetime(ttlMs);
     return true;
   }
 
@@ -433,7 +448,16 @@ export class UiManager {
       if (entry.fade !== undefined) entry.fade.update(dtMs);
       if (entry.typewriter !== undefined) entry.typewriter.update(dtMs);
       if (entry.queue !== undefined) entry.queue.update(dtMs);
-      if (entry.lifetime !== undefined && entry.lifetime.update(dtMs)) expired.push(entry.handle);
+      // A TTL is the READABLE window: while a speech bubble is still TYPING its line
+      // (queue not yet revealed) the countdown is FROZEN, so a long line is never cut
+      // off — the TTL only starts draining once the line is fully shown. A plain TTL
+      // panel (no queue, e.g. an ephemeral label) is trivially "revealed" so it counts
+      // down immediately as before; a dismissed bubble has its queue cleared (see
+      // dismiss) so its fade-out lifetime always drains.
+      if (entry.lifetime !== undefined) {
+        const revealed = entry.queue === undefined || entry.queue.revealed;
+        if (revealed && entry.lifetime.update(dtMs)) expired.push(entry.handle);
+      }
       if (entry.worldAnchor !== undefined) entry.worldAnchor.update(camera);
       else if (entry.screenAnchor !== undefined) entry.screenAnchor.update(camera, viewportW, viewportH);
     }

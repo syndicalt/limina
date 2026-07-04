@@ -48,5 +48,15 @@
       "seed": 6
     } }
   ],
+  "renderBaseline": {
+    "exposure": 1.0,
+    "sun": { "color": 16773330, "intensity": 4.4, "direction": [-46, 44, 24] },
+    "hemisphere": { "skyColor": 12374271, "groundColor": 4872752, "intensity": 1.4 },
+    "ambientIntensity": 0.42,
+    "ambientColor": 5595250,
+    "atmosphere": { "enabled": true, "color": 13819321, "density": 0.004 },
+    "ground": { "enabled": false, "size": 240 },
+    "camera": { "far": 600 }
+  },
   "camera": { "center": [0, 9, 0], "radius": 82, "height": 54, "azimuth": 0.7 }
 }

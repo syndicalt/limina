@@ -373,17 +373,33 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
   const colors = new Float32Array(count * 3);
   const c = new THREE.Color();
   const sea = ramp.seaLevel;
-  // Snow caps only the highest band (default 0.82 of relief, matching the pipeline). A settlement
-  // planned onto the HIGH ground sits near that line, so generated engine terrain raises it — snow
-  // stays on the steep true peak while the inhabited knoll reads as grass/rock.
-  const snowY = oy + ramp.amplitude * (ramp.snowFrac ?? 0.82);
+  // Snow line, keyed to the tile's ACTUAL sea-relative relief (not the nominal config
+  // amplitude). village.build caps a focal terrace at ≈0.82 of THIS same sea→peak relief
+  // (see snowSafeFocalTop), so measuring the snow line the same way keeps the inhabited
+  // knoll BELOW the snow band — the settlement reads grass/rock while only a genuine crest
+  // above the settled ground snows. Using the nominal `amplitude` (from origin.y) instead
+  // put the line at a fixed 15.2 that the leveled peak sat right on → the harsh white cap.
+  let maxY = -Infinity;
+  for (let i = 0; i < heights.length; i++) { const h = oy + heights[i] * sy; if (h > maxY) maxY = h; }
+  const relief = Math.max(1e-3, maxY - sea);
+  const snowY = sea + relief * (ramp.snowFrac ?? 0.82);
   for (let i = 0; i < count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const slope = Math.min(1, slopeAt(x, z) * 1.2);
-    if (y < sea + 0.6) c.copy(ELEV_COL.sand);
-    else if (y > snowY) c.copy(ELEV_COL.snow);
-    else c.copy(ELEV_COL.grass).lerp(ELEV_COL.grassDark, (Math.sin((x + z) * 0.2) * 0.5 + 0.5) * 0.3);
-    if (slope > 0.4 && y >= sea) c.lerp(ELEV_COL.rock, Math.min(1, (slope - 0.4) / 0.4));
+    if (y < sea + 0.6) {
+      c.copy(ELEV_COL.sand);
+    } else {
+      c.copy(ELEV_COL.grass).lerp(ELEV_COL.grassDark, (Math.sin((x + z) * 0.2) * 0.5 + 0.5) * 0.3);
+      // SNOW is gated by elevation AND genuine flatness: it caps only the HIGH, near-level
+      // crest. The flatness gate is TIGHT (slope < 0.2) so graded terrace banks / mountain
+      // flanks — which are only mildly sloped but sit high — do NOT get snow; they stay grass
+      // and pick up rock below. This is the harsh-white-scree fix: snow no longer drapes the
+      // steep or graded high faces (the white streaks down the settled knoll are gone).
+      if (y > snowY && slope < 0.2) c.lerp(ELEV_COL.snow, 1 - Math.min(1, slope / 0.2));
+      // Steep faces at any elevation above the coast expose grey ROCK (mountainside/scree),
+      // overriding any partial snow — so steep terrain reads rock, never white.
+      if (slope > 0.35) c.lerp(ELEV_COL.rock, Math.min(1, (slope - 0.35) / 0.35));
+    }
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
   }
   geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));

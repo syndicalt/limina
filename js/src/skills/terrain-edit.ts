@@ -182,10 +182,14 @@ export function registerTerrainEditSkills(
           ...(g.erosion !== undefined ? { erosion: g.erosion } : {}),
         }) as { heights: Float32Array; cfg: { seaLevelM: number; amplitude: number } };
         heights = gh.heights;
-        // snowFrac 0.95: snow caps the summit. village.build CAPS the focal terrace height well below
-        // this line (see its leveling), so the inhabited/terraced knoll stays snow-free while the
-        // steep true peak keeps its cap.
-        elevationColors = { seaLevel: input.origin[1] + gh.cfg.seaLevelM, amplitude: gh.cfg.amplitude, snowFrac: 0.95 };
+        // snowFrac 1.0: snow only where terrain rises to the summit of the sea-relative relief.
+        // applyElevationColors now measures the snow line off the tile's ACTUAL relief (sea→peak).
+        // village.build seats the focal on the HIGHEST ground and grades a flat terrace + smooth
+        // shoulder across the top of that relief, so the settlement IS the local summit — a snow line
+        // below 1.0 painted the graded shoulder as a harsh white ring. Keying it to the summit leaves
+        // the inhabited knoll reading grass/rock/dirt; a bare generated peak (no settlement leveling it)
+        // still whitens at its very top. This is the harsh-white-scree fix for authored village terrain.
+        elevationColors = { seaLevel: input.origin[1] + gh.cfg.seaLevelM, amplitude: gh.cfg.amplitude, snowFrac: 1.0 };
       } else {
         heights = new Float32Array(n * n);
         if (input.baseHeight !== 0) heights.fill(input.baseHeight);

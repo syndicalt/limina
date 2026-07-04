@@ -426,6 +426,10 @@ export interface RunLiveOptions {
   orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number };
   /** Opt-in browser camera controls for editor-style viewports. Falsy preserves the legacy auto-spin. */
   orbitControls?: boolean;
+  /** Scene-level render-baseline override (lights/tonemapping/atmosphere/ground/camera). A world can
+   *  carry its own look (e.g. golden-hour sun + fog) without touching DEFAULT_RENDER_BASELINE. Merged
+   *  over the default by applyRenderBaseline; omit for the default look. */
+  renderBaseline?: RenderBaselineOverride;
 }
 
 export interface RunningLive {
@@ -644,7 +648,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
-    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, {},
+    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, opts.renderBaseline ?? {},
   );
 
   // ── Re-author the SAME command log on the render-main thread against the REAL scene so meshes
