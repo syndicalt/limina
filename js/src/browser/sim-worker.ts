@@ -112,6 +112,28 @@ function stubCamera(): CameraLike {
  *  M1 adapter, and inert stubs for every surface a headless worker lacks (render,
  *  input device, host services, trace, sandbox, audio). Skills read `ctx.world.ops`,
  *  so this is the single op seam the whole sim composes over — no `Deno.core.ops`. */
+/** Read `/assets/<id>` bytes with a SYNCHRONOUS same-origin XHR (the AssetRegistry resolve is sync).
+ *  Sync XHR can't use responseType:"arraybuffer", so binary is read via the x-user-defined charset
+ *  trick (mirrors live-runtime.ts composeAuthoringOps). Returns empty off a browser (no XHR → native
+ *  host / tests) or on any miss/error, so authoring degrades to "no collider" rather than throwing. */
+function readAssetBytesSync(id: string): Uint8Array {
+  const XHR = (globalThis as unknown as { XMLHttpRequest?: new () => XMLHttpRequest }).XMLHttpRequest;
+  if (typeof XHR !== "function") return new Uint8Array(0);
+  try {
+    const xhr = new XHR();
+    xhr.open("GET", "/assets/" + id, false);
+    xhr.overrideMimeType("text/plain; charset=x-user-defined");
+    xhr.send();
+    if (xhr.status < 200 || xhr.status >= 300) return new Uint8Array(0);
+    const text = xhr.responseText;
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+    return bytes;
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
 function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
   const noop = (): void => {};
   return {
@@ -154,7 +176,13 @@ function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
     op_http_post: () => Promise.resolve(""),
     op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
-    op_read_asset: () => new Uint8Array(0),
+    // Asset bytes: the worker AUTHORS the building collider (asset.place → gltfLocalAabb → static box),
+    // which needs the GLB bytes. Read them same-origin via a SYNCHRONOUS XHR (a Worker permits sync
+    // XHR; it blocks only this background thread, once per asset at authoring — NOT the render thread).
+    // Bytes-only: no GLTFLoader / no texture decode, so it does NOT hit the "parse hangs a Worker"
+    // trap that `skipMesh` guards. Inert (empty) off a browser (native host / no XHR) — headless tests
+    // inject their own reader onto `world.ops.op_read_asset`.
+    op_read_asset: (id: string): Uint8Array => readAssetBytesSync(id),
     op_sha256: () => "",
     op_read_env: () => "",
     // ── durable trace ──

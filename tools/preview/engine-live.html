@@ -14,8 +14,7 @@ try {
     const canvas = document.getElementById("limina-canvas");
     const commands = [
       { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
-      { kind: "skill", tool: "scene.createEntity", input: { shape: "box", size: 20, position: [0, -0.5, 0], color: 0x334022, dynamic: false, static: true } },
-      { kind: "skill", tool: "vegetation.plant", input: { species: "spruce", position: [0, 0, -2], seed: 1 } },
+      { kind: "skill", tool: "terrain.create", input: { size: 200, resolution: 96, baseHeight: 0 } },
     ];
     const running = await runLive({
       canvas, width: 1200, height: 760, commands,
@@ -24,7 +23,11 @@ try {
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok"));
-    // Let its own render loop run, then report what's actually in the scene graph.
+    await new Promise((r) => setTimeout(r, 1200)); // render the box scene first
+    // INCREMENTAL add — exactly what the editor does when the agent plants a tree mid-session.
+    const scatterCmd = { kind: "skill", tool: "vegetation.scatter", input: { species: ["spruce","pine","birch"], density: 14, seed: 7, coverage: 0.7, slopeMax: 0.6 } };
+    const applied = running && running.applyAuthorCommands ? await running.applyAuthorCommands([scatterCmd]) : "no applyAuthorCommands";
+    window.__log.push("scatter => " + JSON.stringify(applied));
     await new Promise((r) => setTimeout(r, 2500));
     if (running && running.scene) {
       let meshes = 0, named = [];

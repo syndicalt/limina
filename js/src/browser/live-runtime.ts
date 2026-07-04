@@ -232,9 +232,23 @@ interface EventTargetLike {
   addEventListener(type: string, cb: (ev: KeyEventLike) => void): void;
   removeEventListener(type: string, cb: (ev: KeyEventLike) => void): void;
 }
+/** A pointer-lock capable element (the canvas): request lock on click, and its owner document
+ *  delivers the locked mouse deltas + reports which element holds the lock. */
+interface MouseEventLike { movementX?: number; movementY?: number }
+interface DocumentLike {
+  pointerLockElement?: unknown;
+  addEventListener(type: string, cb: (ev: MouseEventLike) => void): void;
+  removeEventListener(type: string, cb: (ev: MouseEventLike) => void): void;
+}
+interface PointerTargetLike {
+  ownerDocument?: DocumentLike | null;
+  requestPointerLock?: () => void;
+  addEventListener(type: string, cb: (ev: MouseEventLike) => void): void;
+  removeEventListener(type: string, cb: (ev: MouseEventLike) => void): void;
+}
 
 /** True when a key event targets an editable field (the chat textarea, inspector inputs).
- *  Player controls are bound globally on `window`, so without this guard `wasdqe`/space are
+ *  Player controls are bound globally on `window`, so without this guard wasd/space are
  *  captured + preventDefault'd while the user is typing — swallowing those keys in chat. */
 function isEditableKeyTarget(ev: KeyEventLike): boolean {
   const t = ev.target;
@@ -244,15 +258,33 @@ function isEditableKeyTarget(ev: KeyEventLike): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
-/** Yaw turn rate (radians per frame at full deflection) for the Q/E heading keys. */
-const YAW_RATE = 0.03;
+/** Mouse-look sensitivity (radians per pixel of pointer-locked movement). */
+const MOUSE_SENSITIVITY = 0.0025;
+/** First-person pitch clamps (radians): look up to ~26°, down to ~-69°. */
+const MIN_PITCH = -1.2;
+const MAX_PITCH = 0.45;
+/** Initial pitch — level, with a hair of downward look. */
+const INITIAL_PITCH = -0.05;
 
+/**
+ * The render-main input producer for the live walk. Standard first-person / MMO scheme:
+ *   • W/S — walk forward / back (along the current heading).
+ *   • A/D — STRAFE left / right (no turn; turning is the mouse's job).
+ *   • Mouse (pointer-locked on the canvas) — X yaws the view, Y pitches it.
+ *   • Shift — run, Space — jump.
+ * `heading` (look[0]) is the yaw the sim rotates W/S+strafe by AND the camera yaw; `pitch` (look[1])
+ * drives the camera pitch. Heading + pitch accumulate from the mouse only (event-driven).
+ */
 export class LivePlayerInput {
   private readonly pressed = new Set<string>();
   private heading = 0;
-  private readonly tracked = "wasdqe ";
+  private pitch = INITIAL_PITCH;
+  private readonly tracked = "wasd ";
+  private pointerTarget: PointerTargetLike | null = null;
+  private pointerDoc: DocumentLike | null = null;
+
   private readonly onDown = (ev: KeyEventLike): void => {
-    if (isEditableKeyTarget(ev)) return; // typing in chat/inspector — don't capture wasdqe/space
+    if (isEditableKeyTarget(ev)) return; // typing in chat/inspector — don't capture wasd/space
     const k = ev.key === " " ? " " : ev.key.toLowerCase();
     const key = k === "shift" || ev.key === "Shift" ? "shift" : k;
     if (this.tracked.includes(k) || key === "shift") { this.pressed.add(key); ev.preventDefault(); }
@@ -262,6 +294,20 @@ export class LivePlayerInput {
     this.pressed.delete(k === "shift" || ev.key === "Shift" ? "shift" : k);
   };
 
+  /** Request pointer lock on the canvas so mouse-look engages (browser gesture requirement). */
+  private readonly onClick = (): void => {
+    this.pointerTarget?.requestPointerLock?.();
+  };
+  /** Accumulate yaw (movementX) + pitch (movementY) ONLY while the canvas holds the pointer lock. */
+  private readonly onMouseMove = (ev: MouseEventLike): void => {
+    if (this.pointerDoc?.pointerLockElement !== this.pointerTarget) return;
+    this.heading += (ev.movementX ?? 0) * MOUSE_SENSITIVITY;
+    this.pitch -= (ev.movementY ?? 0) * MOUSE_SENSITIVITY;
+    if (this.pitch < MIN_PITCH) this.pitch = MIN_PITCH;
+    if (this.pitch > MAX_PITCH) this.pitch = MAX_PITCH;
+  };
+
+  /** Bind the KEYBOARD (typically `window`, matching the editor viewport). */
   attach(target: EventTargetLike): void {
     target.addEventListener("keydown", this.onDown);
     target.addEventListener("keyup", this.onUp);
@@ -271,18 +317,35 @@ export class LivePlayerInput {
     target.removeEventListener("keyup", this.onUp);
   }
 
-  /** Build the current input frame, advancing the accumulated heading from Q/E.
+  /** Bind MOUSE-LOOK to the canvas: click captures the pointer, then locked mouse deltas turn the
+   *  heading + pitch the camera. Safe to skip (e.g. no canvas) — keyboard turn (A/D) still works. */
+  attachPointer(canvas: PointerTargetLike | null | undefined): void {
+    if (!canvas || typeof canvas.addEventListener !== "function") return;
+    this.pointerTarget = canvas;
+    this.pointerDoc = canvas.ownerDocument ?? null;
+    canvas.addEventListener("click", this.onClick);
+    this.pointerDoc?.addEventListener("mousemove", this.onMouseMove);
+  }
+  detachPointer(): void {
+    this.pointerTarget?.removeEventListener("click", this.onClick);
+    this.pointerDoc?.removeEventListener("mousemove", this.onMouseMove);
+    this.pointerTarget = null;
+    this.pointerDoc = null;
+  }
+
+  /** Build the current input frame. Heading comes purely from the mouse; A/D strafe.
    *  `tick` stamps the producer's frame (latency observability). */
   frame(tick: number, out?: InputFrame): InputFrame {
     const p = this.pressed;
     const forward = (p.has("w") ? 1 : 0) - (p.has("s") ? 1 : 0);
+    // A/D STRAFE (D = right, A = left); the character controller rotates strafe into world
+    // space by the mouse heading (character.ts: +strafe = right). No keyboard turn.
     const strafe = (p.has("d") ? 1 : 0) - (p.has("a") ? 1 : 0);
-    this.heading += ((p.has("e") ? 1 : 0) - (p.has("q") ? 1 : 0)) * YAW_RATE;
     const jump = p.has(" ") ? 1 : 0;
     const run = p.has("shift") ? 1 : 0;
     const f = out ?? { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
     f.move[0] = strafe; f.move[1] = 0; f.move[2] = forward;
-    f.look[0] = this.heading; f.look[1] = 0;
+    f.look[0] = this.heading; f.look[1] = this.pitch;
     f.buttons[0] = jump; f.buttons[1] = run;
     f.tick = tick;
     return f;

@@ -22,7 +22,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -225,8 +225,10 @@ export function registerTerrainEditSkills(
       const origin = { tool: "terrain.create", input: { ...input } };
       const entity = ctx.world.entities.create({ eid, mesh: mesh as never, bodyId, origin });
       // Stash the elevation ramp so terrain.deform can re-color the rebuilt geometry (a deform
-      // that levels a terrace would otherwise drop the vertex colors → a white patch).
-      layers.set(entity, { tile, mesh, eid, ...(elevationColors !== undefined ? { elevationColors } : {}) });
+      // that levels a terrace would otherwise drop the vertex colors → a white patch). Also stash
+      // the entity id + physics bodyId so terrain.deform can REBUILD the heightfield collider to
+      // follow the reshaped heights (see the deform handler — the sink-through fix).
+      layers.set(entity, { tile, mesh, eid, entity, bodyId, ...(elevationColors !== undefined ? { elevationColors } : {}) });
       ctx.emit("terrain.created", { entity, size: input.size, resolution: n });
       return { entity };
     },
@@ -251,6 +253,22 @@ export function registerTerrainEditSkills(
       if (layer === undefined) return { ok: false };
 
       applyBrush(layer.tile, input);
+
+      // REBUILD THE GROUND COLLIDER so physics follows the reshaped surface. Without this, deform
+      // moves the visual mesh but leaves the heightfield collider at its pre-deform heights — the
+      // player then floats where terrain was cut down (e.g. village.build's terraces) and sinks
+      // THROUGH where it was raised. Rapier exposes no in-place heightfield height update, so we
+      // remove the old body and add a fresh heightfield from the mutated heights (the SAME op pair
+      // native streaming uses → identical on the headless-authoritative and render Rapier worlds,
+      // so replay/native↔wasm parity holds). Runs in EVERY authoring context (both own a Rapier
+      // world), not just where a render mesh exists.
+      const { tile } = layer;
+      const [dox, doy, doz] = tile.origin;
+      const [dsx, dsy, dsz] = tile.scale;
+      ctx.world.ops.op_physics_remove_body(layer.bodyId);
+      const newBodyId = ctx.world.ops.op_physics_add_heightfield(dox, doy, doz, tile.nrows, tile.ncols, dsx, dsy, dsz, tile.heights);
+      layer.bodyId = newBodyId;
+      ctx.world.entities.rebindBody(layer.entity, newBodyId);
 
       // Rebuild the render geometry from the mutated heights (browser render context only).
       if (layer.mesh !== undefined) {

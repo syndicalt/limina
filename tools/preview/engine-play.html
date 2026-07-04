@@ -2,14 +2,14 @@
 <body style="margin:0;background:#b9c4cc;overflow:hidden">
 <canvas id="limina-canvas" width="1280" height="800" style="display:block;width:100vw;height:100vh"></canvas>
 <div id="hud" style="position:fixed;left:12px;bottom:12px;font:13px/1.5 system-ui,sans-serif;color:#fff;text-shadow:0 1px 2px #000;background:rgba(0,0,0,.35);padding:8px 12px;border-radius:8px;pointer-events:none">
-  <b>Walk the settlement</b> — click the canvas first, then:<br>
-  <b>W/A/S/D</b> move · <b>Q/E</b> turn (camera) · <b>Shift</b> run · <b>Space</b> jump
+  <b>Walk the settlement</b> — click the canvas to capture the mouse, then:<br>
+  <b>W/S</b> move · <b>A/D</b> strafe · <b>mouse</b> look · <b>Shift</b> run · <b>Space</b> jump
 </div>
 <script type="module">
 // INTERACTIVE walker: authors the SAME agent scene (tools/preview/authored-village-play.json) through
 // the REAL live engine (runLive) with `input: window` — the identical input path the editor viewport
 // uses (editor/src/viewport.js). Because the scene contains a player.spawn, runLive drives the
-// third-person FOLLOW camera and WASD/Q-E/Shift/Space move the character. No screenshot, no auto-exit:
+// third-person FOLLOW camera; W/S move, A/D turn, mouse looks, Shift runs, Space jumps. No screenshot:
 // this page is meant to be opened in a real browser and played.
 window.__log = []; window.__err = [];
 try {

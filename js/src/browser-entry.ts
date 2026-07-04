@@ -25,7 +25,6 @@ import { SPECIES_ARCHETYPES, TREE_ARCHETYPE_IDS, pickArchetype } from "./skills/
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
-import { ThirdPersonCamera } from "./world/third_person_camera.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
@@ -811,21 +810,27 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cameraControls.update();
   }
 
-  // ── FOLLOW CAMERA. When a player character was spawned (player.spawn is in the log), drive a
-  //    third-person follow camera from the player entity's live interpolated Position instead of the
-  //    auto-orbit — so the settlement is WALKABLE with a proper behind-the-back framing. Gated on a
-  //    player existing: non-player scenes (the fidelity renders) find no controller and keep the
-  //    orbit path untouched. The camera yaw tracks the input heading (inFrame.look[0], the same yaw
-  //    the sim rotates WASD by), so movement stays camera-relative. ──
-  let followCam: ThirdPersonCamera | undefined;
+  // ── FIRST-PERSON CAMERA. When a player character was spawned (player.spawn is in the log), put the
+  //    camera AT the player capsule's eye instead of auto-orbiting — so the settlement is WALKABLE and
+  //    scale reads true against doorways (no avatar mesh needed; the player IS the camera). Gated on a
+  //    player existing: non-player scenes (the fidelity renders) find no controller and keep the orbit
+  //    path untouched. View yaw/pitch track the input look (inFrame.look, mouse-driven), and the
+  //    character controller rotates WASD+strafe by that same yaw, so movement is view-relative. ──
   let playerEid: number | undefined;
   {
     const playerId = core.player.controllers.ids()[0];
     if (playerId !== undefined) {
       playerEid = entities.resolve(playerId)?.eid;
-      if (playerEid !== undefined) followCam = new ThirdPersonCamera({ distance: 6, lookHeight: 1.5, pitch: -0.18 });
+      if (playerEid !== undefined) {
+        // Mouse-look ONLY on a walkable (player) scene: click the canvas to capture the pointer, then
+        // mouse X yaws the view + mouse Y pitches it. Gated on a player so it never hijacks the
+        // editor's click-to-select on a non-player scene.
+        liveInput.attachPointer(renderer.domElement as Parameters<LivePlayerInput["attachPointer"]>[0]);
+      }
     }
   }
+  // Eye height above the capsule CENTER (center rests at ~0.9 m for the 1.8 m capsule → eye ~1.6 m).
+  const EYE_OFFSET = 0.7;
 
   // If the worker already threw during the WebGPU/scene build above, bail now instead
   // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
@@ -870,11 +875,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
       interp.interpolate(alpha, ring.presentSet);
       renderSyncSystem(ecs, suppressedEids);
-      if (followCam !== undefined && playerEid !== undefined) {
-        // Read the player's interpolated world position out of the render store (interp wrote it
-        // above) and frame the follow camera behind the input heading.
-        followCam.yaw = inFrame.look[0];
-        followCam.update(camera, [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]]);
+      if (playerEid !== undefined) {
+        // FIRST-PERSON: sit at the player capsule's eye (interpolated Position + EYE_OFFSET) and look
+        // along the mouse heading (yaw) + pitch. yaw=0 → forward is -Z, matching the controller's move
+        // basis (character.ts), so W walks where you look.
+        const yaw = inFrame.look[0];
+        const pitch = inFrame.look[1];
+        const cp = Math.cos(pitch);
+        const ex = Position.x[playerEid];
+        const ey = Position.y[playerEid] + EYE_OFFSET;
+        const ez = Position.z[playerEid];
+        camera.position.set(ex, ey, ez);
+        camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
       } else if (cameraControls !== undefined) {
         cameraControls.update();
       } else {
@@ -984,6 +996,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }
       worker.terminate();
       if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
+      liveInput.detachPointer();
     },
   };
 }

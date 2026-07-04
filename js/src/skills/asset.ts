@@ -17,6 +17,7 @@ import { z } from "../../build/zod.bundle.mjs";
 import { AssetRegistry } from "../asset-registry.ts";
 import { Position, Scale, renderSyncSystem } from "../ecs/world.ts";
 import { gltfResourceSchema, loadGltfIntoScene, parseGltfScene } from "./three.ts";
+import { gltfLocalAabb, type LocalAabb } from "../assets/gltf-bounds.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
@@ -25,6 +26,63 @@ import type { RegionState } from "./terrain.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+
+/** Transform an asset's LOCAL AABB (gltfLocalAabb) by a placement — scale → rotation → position — then
+ *  apply the SAME normalizeHeight (a uniform scale about the entity origin) + ground lift asset.place
+ *  applies to the visible mesh, yielding the placed WORLD AABB the building collider spans. Pure +
+ *  deterministic (no THREE mesh, no wall-clock): identical in the sim-worker, render-main, and gates. */
+function placedWorldAabb(
+  local: LocalAabb,
+  position: readonly [number, number, number],
+  rotationEuler?: readonly [number, number, number],
+  scale?: readonly [number, number, number],
+  normalizeHeight?: number,
+  ground?: boolean,
+): { min: [number, number, number]; max: [number, number, number] } {
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3(position[0], position[1], position[2]),
+    new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(rotationEuler?.[0] ?? 0, rotationEuler?.[1] ?? 0, rotationEuler?.[2] ?? 0),
+    ),
+    new THREE.Vector3(scale?.[0] ?? 1, scale?.[1] ?? 1, scale?.[2] ?? 1),
+  );
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  const v = new THREE.Vector3();
+  for (let cx = 0; cx < 2; cx++) {
+    for (let cy = 0; cy < 2; cy++) {
+      for (let cz = 0; cz < 2; cz++) {
+        v.set(cx ? local.max[0] : local.min[0], cy ? local.max[1] : local.min[1], cz ? local.max[2] : local.min[2]).applyMatrix4(m);
+        if (v.x < min[0]) min[0] = v.x;
+        if (v.y < min[1]) min[1] = v.y;
+        if (v.z < min[2]) min[2] = v.z;
+        if (v.x > max[0]) max[0] = v.x;
+        if (v.y > max[1]) max[1] = v.y;
+        if (v.z > max[2]) max[2] = v.z;
+      }
+    }
+  }
+  // normalizeHeight: uniform scale about the entity origin (position), so the box height becomes
+  // normalizeHeight — mirrors the mesh's `Scale *= normalizeHeight / meshHeight`.
+  if (normalizeHeight !== undefined) {
+    const h = max[1] - min[1];
+    if (h > 1e-6) {
+      const f = normalizeHeight / h;
+      for (const b of [min, max]) {
+        b[0] = position[0] + (b[0] - position[0]) * f;
+        b[1] = position[1] + (b[1] - position[1]) * f;
+        b[2] = position[2] + (b[2] - position[2]) * f;
+      }
+    }
+  }
+  // ground: lift so the base sits at position.y (mirrors the mesh's `Position.y += position.y - min.y`).
+  if (ground) {
+    const dy = position[1] - min[1];
+    min[1] += dy;
+    max[1] += dy;
+  }
+  return { min, max };
+}
 
 const placeInput = z.object({
   assetId: z.string(),
@@ -130,11 +188,28 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         rotationEuler: input.rotation,
         scale: input.scale,
       });
-      // MEASURE → (normalize) → GROUND. A glTF origin is usually centred, so without this the asset's
-      // base sinks below position.y. We measure the placed world AABB and (a) optionally uniform-scale
-      // to normalizeHeight, then (b) lift so the base sits AT position.y. All deterministic from the
-      // bytes, so a replay re-grounds identically; meta.bounds (the placed world size) is returned.
-      let bounds: [number, number, number] = [0, 0, 0];
+      // MEASURE → (normalize) → GROUND, then BUILDING COLLIDER. A glTF origin is usually centred, so
+      // without grounding the asset's base sinks below position.y.
+      //
+      // The placed world AABB is computed DETERMINISTICALLY FROM THE BYTES (gltfLocalAabb + the
+      // placement transform), NOT from the parsed THREE mesh. That is load-bearing: the AUTHORITATIVE
+      // browser physics runs in the sim-worker, which never parses the mesh (`skipMesh` — GLTFLoader's
+      // texture decode hangs a Worker), so a mesh-measured collider was silently skipped there and the
+      // player walked straight through every building (the p84 bug). Deriving the AABB from the bytes
+      // makes asset.place author the collider IDENTICALLY in the worker, the render-main thread, and
+      // headless gates — pure function of (bytes, placement), so a replay re-adds an identical box.
+      const localAabb = gltfLocalAabb(resolved.bytes);
+      const placed = localAabb === null
+        ? null
+        : placedWorldAabb(localAabb, input.position, input.rotation, input.scale, input.normalizeHeight, input.ground);
+      let bounds: [number, number, number] = placed === null
+        ? [0, 0, 0]
+        : [placed.max[0] - placed.min[0], placed.max[1] - placed.min[1], placed.max[2] - placed.min[2]];
+
+      // Adjust the VISIBLE mesh (render-main / gate contexts only — the worker has no mesh). Uses the
+      // same normalize/ground the deterministic AABB above applied, so the collider aligns with what
+      // renders. Skipped in the worker (rec.mesh undefined), which keeps only the collider — correct,
+      // since the worker owns physics, not the render pose.
       const rec = ctx.world.entities.resolve(entity) as { eid: number; mesh?: THREE.Object3D } | undefined;
       if (rec?.mesh !== undefined && rec.eid !== undefined) {
         const measure = (): THREE.Box3 => {
@@ -155,21 +230,23 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
           Position.y[rec.eid] += input.position[1] - box.min.y; // base → position.y
           box = measure();
         }
+        // The mesh is authoritative for the RETURNED bounds when it parsed (exact geometry), keeping the
+        // recorded meta identical to the historical mesh-measured value on the render/gate path.
         bounds = [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z];
-        // BUILDING COLLIDER (so the player can't walk through placed structures). Add a Rapier
-        // static box approximating the placed asset's FINAL world AABB — mirrors architecture.building
-        // (spawnStaticMesh → op_physics_add_static_box per wall), but here as an AABB approximation of
-        // the whole asset. Deterministic + replay-safe: the AABB is measured from the loaded bytes +
-        // the recorded transform, so a replay re-measures + re-adds an identical collider (this op runs
-        // INSIDE asset.place, so it is reproduced by re-invoking the skill, never separately logged).
-        // NOT bound to the entity's bodyId: the entity keeps its authored (grounded) render pose, while
-        // the collider centers on the AABB center (mid-height), which differs from that pose — binding
-        // would teleport the mesh onto the box center. village.build inherits this per nested building.
-        const hx = bounds[0] / 2, hy = bounds[1] / 2, hz = bounds[2] / 2;
+      }
+
+      // BUILDING COLLIDER — a Rapier static box over the placed asset's FINAL world AABB. NOT bound to
+      // the entity's bodyId: the entity keeps its authored (grounded) render pose while the collider
+      // centers on the AABB center (mid-height); binding would teleport the mesh onto the box center.
+      // village.build inherits this per nested building.
+      if (placed !== null) {
+        const hx = (placed.max[0] - placed.min[0]) / 2;
+        const hy = (placed.max[1] - placed.min[1]) / 2;
+        const hz = (placed.max[2] - placed.min[2]) / 2;
         if (hx > 1e-4 && hy > 1e-4 && hz > 1e-4) {
-          const cx = (box.min.x + box.max.x) / 2;
-          const cy = (box.min.y + box.max.y) / 2;
-          const cz = (box.min.z + box.max.z) / 2;
+          const cx = (placed.min[0] + placed.max[0]) / 2;
+          const cy = (placed.min[1] + placed.max[1]) / 2;
+          const cz = (placed.min[2] + placed.max[2]) / 2;
           ctx.world.ops.op_physics_add_static_box(cx, cy, cz, hx, hy, hz, 0.85, 0);
         }
       }

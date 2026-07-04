@@ -352,6 +352,18 @@ export class EntityTable {
     const entry = this.map.get(id);
     if (entry !== undefined) entry.origin = origin;
   }
+  /** Re-point a live entry's physics `bodyId`, keeping the `byBody` reverse index consistent.
+   *  Used when a collider is REBUILT in place (e.g. terrain.deform reshapes a heightfield: the
+   *  old body is removed and a fresh one added, so the entity must follow the new id). No-op if
+   *  the id is not live. Passing `undefined` detaches the body (drops the reverse entry). */
+  rebindBody(id: string, bodyId: number | undefined): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
+    entry.bodyId = bodyId;
+    if (bodyId !== undefined) this.byBody.set(bodyId, id);
+    this.tableVersion++;
+  }
   /** Merge a material update into a live entry's first-class material state. three.setMaterial
    *  and scene.createEntity write here so the surface survives without a local mesh (asset/headless
    *  entities), and a snapshot restore rebinds it. Only defined fields overwrite — an undefined

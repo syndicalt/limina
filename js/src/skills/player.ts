@@ -204,10 +204,12 @@ const queryAxisInput = z.object({
 
 const spawnPlayerInput = z.object({
   position: Vec3.describe("Spawn position — the capsule CENTER. Rest height = surfaceY + halfHeight + radius."),
-  halfHeight: z.number().positive().default(0.5).describe("Capsule cylindrical half-height (excludes the radius caps)."),
-  radius: z.number().positive().default(0.35).describe("Capsule radius."),
-  walkSpeed: z.number().positive().default(4.5).describe("Ground walk speed (m/s)."),
-  runSpeed: z.number().positive().default(8.0).describe("Run/sprint speed (m/s)."),
+  // Human-scale capsule: total height 2·(halfHeight+radius) = 2·(0.6+0.3) = 1.8 m, so a person reads
+  // correctly next to a ~3.5 m church portal and a ~12 m keep (not doll-scaled).
+  halfHeight: z.number().positive().default(0.6).describe("Capsule cylindrical half-height (excludes the radius caps). 0.6 ⇒ ~1.8 m human with the 0.3 radius caps."),
+  radius: z.number().positive().default(0.3).describe("Capsule radius."),
+  walkSpeed: z.number().positive().default(3.0).describe("Ground walk speed (m/s) — a natural human walk."),
+  runSpeed: z.number().positive().default(6.0).describe("Run/sprint speed (m/s) — a brisk run (Shift)."),
   gravity: z.number().positive().default(22).describe("Downward gravity acceleration magnitude (m/s^2)."),
   jumpSpeed: z.number().positive().default(8).describe("Initial upward jump velocity (m/s)."),
   crouchSpeedScale: z.number().positive().max(1).default(0.5).describe("Move-speed scale while crouching."),
