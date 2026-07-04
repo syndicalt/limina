@@ -32,6 +32,7 @@ import { TILE_SIZE } from "../terrain/procedural.ts";
 import { isTerrainType, terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import type { RegionState } from "./terrain.ts";
+import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 /** One water surface currently in the scene (for inspection / idempotent rebuild on
@@ -69,10 +70,17 @@ const waterRegionInput = z.object({
 });
 
 const addWaterInput = z.object({
-  level: z.number().default(0),
+  /** Sea-level world Y the surface sits at. OMIT to auto-derive it from the target editable
+   *  terrain layer's `elevationColors.seaLevel` (the waterline terrain.create computed) so the
+   *  shoreline lines up with no drift; an explicit value overrides. Defaults to 0 only when
+   *  there is no generated terrain to read. */
+  level: z.number().optional(),
   size: z.number().positive().max(100000).default(DEFAULT_WATER_SIZE),
   color: z.number().int().min(0).max(0xffffff).default(DEFAULT_WATER_COLOR),
   region: waterRegionInput.optional(),
+  /** Editable terrain layer (terrain.create) to couple to for the auto-derived level + the
+   *  depth-fade. Defaults to the most recently created layer (like terrain.deform/village.build). */
+  terrainEntity: z.string().optional(),
 });
 const addWaterOutput = z.object({
   level: z.number(),
@@ -150,6 +158,47 @@ export function deriveDepthFromRegions(
   return { sampleHeight, bounds: { minX: uMinX, minZ: uMinZ, maxX: uMaxX, maxZ: uMaxZ } };
 }
 
+/** Derive a TRUE water-column-depth descriptor from an EDITABLE terrain layer (terrain.create).
+ *  OUR settlement scene sculpts its ground with terrain.create — an editable heightfield held in
+ *  `layer.tile`, NOT the region table — so deriveDepthFromRegions can't see it and the depth-fade
+ *  would fall back to the camera-distance proxy. This builds `sampleHeight(x,z)` from the tile's
+ *  heightfield with the SAME bilinear sampler village.build/grass read (world<->grid mapping from
+ *  terrain/mesh.ts: x0 = ox - sizeX/2, y = origin.y + heights[r*ncols+c]), over the tile's world-XZ
+ *  rectangle, so the shoreline depth-fade (turquoise shallows → opaque deep) tracks the eroded
+ *  terrain. RENDER-ONLY: it only feeds colour/opacity, never sim state; deterministic and
+ *  re-derived on replay from the re-created layer. EXPORTED for the depth UAT. */
+export function deriveDepthFromLayer(layer: EditableTerrain): WaterDepthOptions {
+  const tile = layer.tile;
+  const n = tile.ncols, nr = tile.nrows;
+  const [ox, oy, oz] = tile.origin;
+  const sizeX = tile.scale[0], sizeZ = tile.scale[2];
+  const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
+  const dxStep = sizeX / (n - 1), dzStep = sizeZ / (nr - 1);
+  const heights = tile.heights;
+  const sampleHeight = (x: number, z: number): number => {
+    const fc = Math.min(n - 1, Math.max(0, (x - x0) / dxStep));
+    const fr = Math.min(nr - 1, Math.max(0, (z - z0) / dzStep));
+    const c0 = Math.floor(fc), r0 = Math.floor(fr);
+    const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
+    const tx = fc - c0, tz = fr - r0;
+    const h = (r: number, c: number): number => oy + heights[r * n + c];
+    const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
+    const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
+    return a + (b - a) * tz;
+  };
+  return { sampleHeight, bounds: { minX: x0, minZ: z0, maxX: x0 + sizeX, maxZ: z0 + sizeZ } };
+}
+
+/** Pick the target editable terrain layer: the explicit `id`, else the most recently created
+ *  (the SAME resolution terrain.deform / village.build use). Undefined when no layer exists. */
+function pickLayer(layers: Map<string, EditableTerrain> | undefined, id?: string): EditableTerrain | undefined {
+  if (layers === undefined) return undefined;
+  if (id !== undefined) return layers.get(id);
+  let last: EditableTerrain | undefined;
+  for (const v of layers.values()) last = v;
+  return last;
+}
+
 /** Register the `world.addWater` skill bound to a closure list of placed surfaces
  *  (returned for host/test inspection — the SAME shape terrain skills return). The
  *  `terrainSource` (the SAME deterministic source the terrain.* skills are bound to) is
@@ -161,6 +210,11 @@ export function registerWaterSkills(
   registry: SkillRegistry,
   terrainSource?: TerrainSource,
   terrainRegions?: Map<string, RegionState>,
+  /** The live editable-terrain layer map (terrain.create). When the scene has NO generated
+   *  region (our settlement uses the editable layer, not the region table), the water auto-derives
+   *  its LEVEL from the layer's `elevationColors.seaLevel` and bakes its depth-fade from the layer's
+   *  heightfield. Read-only — never mutated. */
+  terrainLayers?: Map<string, EditableTerrain>,
 ): { surfaces: WaterSurfaceState[] } {
   const surfaces: WaterSurfaceState[] = [];
 
@@ -174,6 +228,13 @@ export function registerWaterSkills(
     input: addWaterInput,
     output: addWaterOutput,
     handler: (input, ctx) => {
+      // The editable terrain layer this water couples to (explicit, else most-recent). Source of
+      // BOTH the auto-derived sea level AND the editable-layer depth-fade for OUR settlement scene.
+      const layer = pickLayer(terrainLayers, input.terrainEntity);
+      // Sea level: an explicit `level` wins; else the layer's computed waterline (so the shoreline
+      // lines up with zero drift — the SAME value terrain.create derived from seaCoverage); else 0.
+      const level = input.level ?? layer?.elevationColors?.seaLevel ?? 0;
+
       // TRUE water-column-depth shading when a region + a bound terrain source are present:
       // bake the depth field from the SAME source/seed/type/bounds the terrain was built
       // with. Read-only — it only feeds the render graph (colour/opacity), never sim state.
@@ -194,21 +255,27 @@ export function registerWaterSkills(
           },
           resolution: region.resolution,
         };
-      } else if (region === undefined && terrainSource !== undefined && terrainRegions !== undefined) {
-        // DEFAULT true-depth path: no explicit region descriptor, but the world has generated
-        // terrain — derive the depth field from those regions (their seed/lod/hints), so the
-        // water grades by ACTUAL water-column depth and the shoreline tracks the real coast.
-        // Only when there is no terrain at all does this stay undefined → proxy fallback.
-        depth = deriveDepthFromRegions(terrainSource, terrainRegions);
+      } else if (region === undefined) {
+        // DEFAULT true-depth path: no explicit region descriptor. Prefer generated regions (their
+        // seed/lod/hints); ELSE — our settlement case — derive the depth field from the EDITABLE
+        // terrain layer's heightfield, so the water grades by ACTUAL water-column depth and the
+        // shoreline tracks the real eroded coast. Only when there is neither does this stay
+        // undefined → the camera-distance proxy fallback.
+        if (terrainSource !== undefined && terrainRegions !== undefined) {
+          depth = deriveDepthFromRegions(terrainSource, terrainRegions);
+        }
+        if (depth === undefined && layer !== undefined) {
+          depth = deriveDepthFromLayer(layer);
+        }
       }
-      const mesh = buildWaterSurface({ level: input.level, size: input.size, color: input.color, depth });
+      const mesh = buildWaterSurface({ level, size: input.size, color: input.color, depth });
       // Render-only: add to the scene graph ONLY. No spawnRenderable (ECS), no
       // ctx.world.entities.create, no op_physics_* — so sim state is untouched.
       ctx.world.scene.add(mesh);
-      const surface: WaterSurfaceState = { level: input.level, size: input.size, color: input.color, mesh };
+      const surface: WaterSurfaceState = { level, size: input.size, color: input.color, mesh };
       surfaces.push(surface);
-      ctx.emit("world.water.added", { level: input.level, size: input.size, color: input.color });
-      return { level: input.level, size: input.size, color: input.color };
+      ctx.emit("world.water.added", { level, size: input.size, color: input.color });
+      return { level, size: input.size, color: input.color };
     },
   };
 

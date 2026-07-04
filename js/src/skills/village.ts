@@ -198,14 +198,20 @@ export function registerVillageSkills(
         const hz = heightAt(x, z + step) - heightAt(x, z - step);
         return Math.hypot(hx, hz) / (2 * step);
       };
-      // Observed relief; an editable layer carries no water, so seat sea-level just below the
-      // lowest point — the whole surface above it is buildable (surveySites excludes h<=sea+1.5).
+      // Observed relief.
       let lo = Infinity, hi = -Infinity;
       for (let i = 0; i < heights.length; i++) { const v = heights[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+      // Sea level: when this layer was GENERATED with a real waterline (terrain.create's
+      // `generate` stores elevationColors.seaLevel), use it so NO building settles at/below the
+      // lake — surveySites rejects any site with h <= seaLevel + 1.5, keeping the whole
+      // settlement on dry land above the world.addWater surface. A plain editable slab (no
+      // generated water) keeps the legacy "just below the lowest point" so its entire surface
+      // stays buildable.
+      const seaLevel = layer.elevationColors?.seaLevel ?? (oy + lo - 2);
       const sampler = {
         heightAt, slopeAt,
         halfSize: sizeX / 2,
-        seaLevel: oy + lo - 2,
+        seaLevel,
         amplitude: Math.max(1, hi - lo),
       };
 

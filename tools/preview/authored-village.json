@@ -7,10 +7,14 @@
       "generate": { "seed": 6, "amplitude": 16, "seaCoverage": 0.2, "erosion": { "rain": 1.5, "thermal": 6 } }
     } },
 
+    { "kind": "skill", "tool": "world.addWater", "input": {
+      "size": 400, "color": 2841970
+    } },
+
     { "kind": "skill", "tool": "vegetation.scatter", "input": {
       "species": ["spruce", "pine", "birch"],
       "seed": 6, "density": 30,
-      "elevationMin": 1.5, "elevationMax": 13,
+      "elevationMin": 4.0, "elevationMax": 13,
       "slopeMax": 0.7, "coverage": 0.62, "cluster": 0.5,
       "sizeRange": [0.7, 1.4]
     } },
@@ -18,7 +22,7 @@
     { "kind": "skill", "tool": "vegetation.grass", "input": {
       "climate": "summer",
       "seed": 6, "density": 1024, "maxBlades": 460000,
-      "elevationMin": 1.5, "elevationMax": 15,
+      "elevationMin": 4.0, "elevationMax": 15,
       "slopeMax": 0.6, "coverage": 0.95, "cluster": 0.1,
       "bladeHeight": 0.3, "bladeWidth": 0.045, "segments": 4, "curvature": 0.08,
       "windStrength": 0.045, "windSpeed": 1.1, "windGust": 0.06, "windGustFreq": 0.18,
