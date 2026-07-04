@@ -73,6 +73,8 @@ const scatterConfigSchema = z.object({
   biomes: z.array(z.number().int()).optional(),
   tempMin: z.number().optional(),
   tempMax: z.number().optional(),
+  /** Footprint-exclusion discs (world XZ) — a candidate inside any is skipped (settlement clearings). */
+  exclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
 });
 
 const scatterInput = z.object({

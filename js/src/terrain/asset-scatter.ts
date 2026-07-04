@@ -87,6 +87,15 @@ export interface ScatterAsset {
   embedRadius?: number;
 }
 
+/** A circular keep-out disc in world XZ (center + radius). A candidate whose XZ falls
+ *  inside ANY exclusion is skipped — used to carve tree-free clearings around a
+ *  settlement's building/courtyard/lane footprints. Pure data, replay-safe. */
+export interface ScatterExclusion {
+  x: number;
+  z: number;
+  r: number;
+}
+
 /** An agent-set scatter recipe. Pure data — recorded verbatim in the world log as
  *  the request (never the resulting instances). */
 export interface ScatterConfig {
@@ -126,6 +135,14 @@ export interface ScatterConfig {
   /** Optional inclusive temperature window (reads the climate grid's tempC channel). */
   tempMin?: number;
   tempMax?: number;
+  /** OPT-IN footprint-exclusion discs (world XZ). A candidate whose XZ falls inside ANY
+   *  disc is REJECTED — carving tree-free clearings around a settlement's buildings,
+   *  courtyard and lane. Applied as a PURE post-RNG filter (like the elevation/slope
+   *  gates): the per-candidate draw ORDER is unchanged, so an excluded candidate is simply
+   *  skipped and every surviving placement is byte-identical to an un-excluded run minus
+   *  the removed ones (the same superset/replay guarantee the other gates carry).
+   *  Empty/absent → byte-identical back-compat. */
+  exclusions?: ScatterExclusion[];
 }
 
 /** One placed asset instance. `y` is the terrain surface at (x,z). Serializable,
@@ -191,6 +208,12 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
   const clusterSeed = (baseSeed(seed, config.seed) ^ 0x7f4a7c15) | 0;
   const [sizeLo, sizeHi] = config.sizeRange ?? [0.8, 1.2];
   const wantClimate = config.biomes !== undefined || config.tempMin !== undefined || config.tempMax !== undefined;
+  // Footprint-exclusion discs (world XZ). Pre-square the radii once so the per-candidate
+  // test is a branch-free squared-distance compare (no per-candidate sqrt).
+  const exclusions = config.exclusions ?? [];
+  const exN = exclusions.length;
+  const exX = new Float64Array(exN), exZ = new Float64Array(exN), exR2 = new Float64Array(exN);
+  for (let e = 0; e < exN; e++) { exX[e] = exclusions[e].x; exZ[e] = exclusions[e].z; exR2[e] = exclusions[e].r * exclusions[e].r; }
 
   const [ox, oy, oz] = tile.origin;
   const [sx, sy, sz] = tile.scale;
@@ -275,6 +298,17 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
       if (coverRoll > effCoverage) continue;
       if (y < elevationMin || y > elevationMax) continue; // tree line / water line (heights)
       if (slope > slopeMax) continue; // cliffs (heights)
+      // FOOTPRINT EXCLUSION: skip a candidate inside any keep-out disc (settlement clearings).
+      // A pure post-RNG filter — all per-candidate draws above already happened in fixed order,
+      // so the surviving placements are byte-identical to the un-excluded run minus the removed.
+      if (exN > 0) {
+        let blocked = false;
+        for (let e = 0; e < exN; e++) {
+          const dx = x - exX[e], dz = z - exZ[e];
+          if (dx * dx + dz * dz <= exR2[e]) { blocked = true; break; }
+        }
+        if (blocked) continue;
+      }
       if (wantClimate) {
         const r = Math.min(nrows - 1, Math.max(0, Math.round(fr)));
         const c = Math.min(ncols - 1, Math.max(0, Math.round(fc)));

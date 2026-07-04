@@ -119,11 +119,12 @@ function chainFrom(placed) {
 }
 
 // ------------------------------------------------------------------- the lane
-// Winding rammed-earth ribbon conforming to the terrain, threaded through the
-// nearest-neighbour chain of the placed buildings starting at the focal. `placed`
-// is [{ x, z, r }] (focal first). Returns flat {positions,uvs,indices} (or null if
-// fewer than 2 buildings). Consumers wrap it + call computeVertexNormals().
-export function buildLaneGeometry(heightAt, placed) {
+// Centerline of the winding rammed-earth lane: the door-brushing waypoints (`pts`) and the
+// densely-sampled centripetal Catmull-Rom curve (`samples`, world {x,y,z} on the terrain).
+// Factored out of buildLaneGeometry so BOTH the ribbon mesh AND the footprint-exclusion
+// carve-out (village.build) read the SAME centerline — one algorithm, no drift. Returns null
+// for fewer than 2 buildings (no lane).
+export function laneCenterline(heightAt, placed) {
   if (placed.length < 2) return null;
 
   const chain = chainFrom(placed);
@@ -147,6 +148,17 @@ export function buildLaneGeometry(heightAt, placed) {
   const n = Math.max(64, pts.length * 24);
   const samples = [];
   for (let i = 0; i <= n; i++) samples.push(curvePoint(pts, i / n));
+  return { pts, samples, n };
+}
+
+// Winding rammed-earth ribbon conforming to the terrain, threaded through the
+// nearest-neighbour chain of the placed buildings starting at the focal. `placed`
+// is [{ x, z, r }] (focal first). Returns flat {positions,uvs,indices} (or null if
+// fewer than 2 buildings). Consumers wrap it + call computeVertexNormals().
+export function buildLaneGeometry(heightAt, placed) {
+  const centerline = laneCenterline(heightAt, placed);
+  if (centerline === null) return null;
+  const { pts, samples, n } = centerline;
 
   // Ribbon: two vertices per sample, each re-seated on the terrain. UVs run in metres
   // (u across, v along the arc) to match the earth texture tiling.

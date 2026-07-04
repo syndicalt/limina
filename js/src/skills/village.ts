@@ -30,7 +30,8 @@ import { hashStr, mulberry32, planVillage } from "../world/pipeline/village-layo
 // The shared, pure GROUND geometry (the SAME lane ribbon + terrain-conforming pads the preview
 // authors) — returns flat {positions,uvs,indices}; we wrap them into meshes + spawn them as
 // recorded entities. A pure function of (terrain, placements, radii) — recomputed on replay.
-import { buildLaneGeometry, buildGroundPadGeometry } from "../world/pipeline/village-geometry.mjs";
+import { buildLaneGeometry, buildGroundPadGeometry, laneCenterline } from "../world/pipeline/village-geometry.mjs";
+import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 // The SHARED procedural material factory (identical earth/cobble the preview paints) — THREE is
 // injected so the engine's three/webgpu build is used. Same no-drift discipline as the layout.
 import { makeMaterials } from "../world/pipeline/village-materials.mjs";
@@ -120,10 +121,24 @@ function footprintRadius(assets: AssetRegistry, assetId: string): number {
 
 /** Register village.build, bound to the editable terrain `layers` map (shared with
  *  terrain.create/deform) + the content-addressed AssetRegistry. */
+/** Extra world-XZ margin (meters) added to every registered footprint disc, beyond the
+ *  ground-pad/courtyard/lane extent, so a tree's CANOPY (not just its trunk center) stays
+ *  off the built ground — a candidate is placed at its center, so the disc must be inflated
+ *  by roughly a tree's radius to keep foliage from overhanging the pad edge. */
+const FOOTPRINT_TREE_MARGIN = 2.5;
+/** The lane ribbon's half-width (world meters) — matches village-geometry's `halfW`. The lane
+ *  exclusion discs sample the centerline at this + margin so no tree lands on the rammed earth. */
+const LANE_HALF_WIDTH = 1.4;
+
 export function registerVillageSkills(
   registry: SkillRegistry,
   layers: Map<string, EditableTerrain>,
   assets: AssetRegistry,
+  /** Shared settlement-footprint registry (keyed by terrain id). village.build REPLACES this
+   *  terrain's entry each build with the freshly-computed building/courtyard/lane keep-out discs,
+   *  which vegetation.scatter auto-includes as exclusions. Replace (not append) keeps it replay-safe:
+   *  a re-run recomputes byte-identical discs from the same config. */
+  footprints: Map<string, ScatterExclusion[]> = new Map(),
 ): void {
   const build: SkillDefinition<z.infer<typeof buildInput>, z.infer<typeof buildOutput>> = {
     name: "village.build",
@@ -313,6 +328,38 @@ export function registerVillageSkills(
         const groundEntity = ctx.world.entities.create({ eid: geid, mesh: mesh as never, origin: { tool: "village.build", input: { ground: true } } });
         entities.push(groundEntity);
       }
+
+      // -- FOOTPRINT REGISTRY: publish this settlement's keep-out discs (building pads + focal
+      //    courtyard/apron + lane samples) so a later vegetation.scatter on THIS terrain auto-clears
+      //    the built ground with no manual data-flow. A PURE function of (placements, radii, heights) —
+      //    recomputed byte-identically on replay — and REPLACED (not appended) so a re-run of
+      //    village.build can't grow duplicates. The discs mirror the ground geometry authored above:
+      //    each building's earth pad (focal: the earth apron r+16 covering the cobbled courtyard),
+      //    inflated by a canopy margin, plus lane discs sampling the SAME centerline the ribbon uses.
+      const exclusions: ScatterExclusion[] = [];
+      for (let k = 0; k < placements.length; k++) {
+        const p = placements[k];
+        const r = radii[p.index];
+        // Match the pad radii in the ground-geometry block: focal earth apron r+16 (spans the
+        // cobbled courtyard + graded terrace), cottages the trodden pad r*1.15+1.
+        const padR = k === 0 ? r + 16 : r * 1.15 + 1;
+        exclusions.push({ x: p.x, z: p.z, r: padR + FOOTPRINT_TREE_MARGIN });
+      }
+      const laneCl = laneCenterline(heightAt, placed);
+      if (laneCl !== null) {
+        // Sub-sample the centerline by arc length so consecutive discs overlap (spacing < 2·radius),
+        // giving a continuous tree-free corridor without thousands of tiny discs.
+        const laneR = LANE_HALF_WIDTH + FOOTPRINT_TREE_MARGIN;
+        const spacing = laneR; // < 2·laneR → overlapping cover along the lane
+        let acc = spacing; // emit the first sample
+        let prev: { x: number; z: number } | null = null;
+        for (const s of laneCl.samples) {
+          if (prev !== null) acc += Math.hypot(s.x - prev.x, s.z - prev.z);
+          if (acc >= spacing) { exclusions.push({ x: s.x, z: s.z, r: laneR }); acc = 0; }
+          prev = s;
+        }
+      }
+      footprints.set(id, exclusions);
 
       // -- Record the REQUEST on the trace: direction + steering + seed + pinned hashes + count,
       //    NEVER the individual transforms (recomputed on replay).

@@ -24,6 +24,7 @@ import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills, type RegionState } from "./terrain.ts";
 import { registerTerrainEditSkills, type EditableTerrain } from "./terrain-edit.ts";
+import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { registerVillageSkills } from "./village.ts";
 import { registerVegetationSkills } from "./vegetation.ts";
 import { registerRenderSkills } from "./render.ts";
@@ -198,12 +199,17 @@ export function registerCoreSkills(
   // vegetation.scatter reads the SAME live terrain-layer map to scatter a forest on the sculpt.
   const terrainLayers = new Map<string, EditableTerrain>();
   registerTerrainEditSkills(registry, terrainLayers);
-  registerVegetationSkills(registry, terrainLayers, assets);
+  // Shared settlement-footprint registry (keyed by terrain id): village.build fills it with the
+  // built ground's keep-out discs and vegetation.scatter auto-excludes them, so "build a village
+  // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors
+  // how terrainLayers is created here and shared across the terrain-editing skills.
+  const settlementFootprints = new Map<string, ScatterExclusion[]>();
+  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints);
   // village.build: ONE skill that lays a terrain-aware settlement onto an editable
   // terrain layer by placing curated library GLBs (via asset.place) at transforms from
   // the SHARED, pure layout planner (world/pipeline/village-layout.mjs — same brain the
   // preview uses). Records the direction/steering/seed + pinned hashes, not the transforms.
-  registerVillageSkills(registry, terrainLayers, assets);
+  registerVillageSkills(registry, terrainLayers, assets, settlementFootprints);
   // Opt-in, render-only post-processing seam: `render.enablePost` builds the GTAO/bloom/
   // grade pipeline on the live renderer and stows it on world.post (static/cinematic — see
   // render.ts). Render-only; never sim/log state.

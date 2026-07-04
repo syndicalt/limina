@@ -8,7 +8,7 @@
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
-import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
+import { scatterAssets, type AssetInstance, type ScatterConfig, type ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
 import { loadGltfIntoScene, parseGltfScene } from "./three.ts";
 import { tagEntity } from "./ecs.ts";
@@ -68,6 +68,10 @@ const scatterInput = z.object({
   coverage: z.number().min(0).max(1).default(0.9),
   /** Clumping strength [0,1] — >0 gathers trees into natural stands. */
   cluster: z.number().min(0).max(1).default(0.45),
+  /** Explicit keep-out discs (world XZ) — no tree spawns inside any. UNIONED with the
+   *  settlement footprints village.build auto-registers for this terrain, so "scatter a
+   *  forest and it avoids the village" just works with no manual data-flow. */
+  exclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
   /** Extra tags for the forest entity (it is always tagged "forest" + "vegetation"). */
   tags: z.array(z.string()).optional(),
 });
@@ -79,6 +83,10 @@ export function registerVegetationSkills(
   registry: SkillRegistry,
   layers: Map<string, EditableTerrain>,
   assets: AssetRegistry,
+  /** Shared settlement-footprint registry (keyed by terrain id) that village.build fills.
+   *  vegetation.scatter AUTO-includes the footprints for the terrain it scatters on, unioned
+   *  with any explicit `exclusions`, so trees avoid the village with no manual wiring. */
+  footprints: Map<string, ScatterExclusion[]> = new Map(),
   mounted: Map<string, () => void> = new Map(),
 ): void {
   const scatter: SkillDefinition<z.infer<typeof scatterInput>, { entity: string; instances: number; assetHashes: Record<string, string>; placements: unknown[] }> = {
@@ -107,6 +115,13 @@ export function registerVegetationSkills(
       const assetHashes: Record<string, string> = {};
       for (const id of paletteIds) assetHashes[id] = assets.resolve(id).hash;
 
+      // Auto-include the settlement footprints registered for THIS terrain (village.build
+      // fills the registry when it builds), unioned with any explicit exclusions. Replay-safe:
+      // the registry is deterministically rebuilt by re-running village.build before this scatter,
+      // so the union is identical on replay without logging the derived discs.
+      const registered = footprints.get(terrainId) ?? [];
+      const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
+
       const config: ScatterConfig = {
         seed: input.seed,
         density: input.density,
@@ -117,6 +132,7 @@ export function registerVegetationSkills(
         cluster: input.cluster,
         ...(input.elevationMin !== undefined ? { elevationMin: input.elevationMin } : {}),
         ...(input.elevationMax !== undefined ? { elevationMax: input.elevationMax } : {}),
+        ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
       };
 
       // Deterministic placements over the editable heightfield (Y = surface, slope/elevation gated).
@@ -176,7 +192,7 @@ export function registerVegetationSkills(
         });
       }
 
-      ctx.emit("vegetation.scattered", { entity, terrain: terrainId, instances: placements.length, mounted: mountedCount });
+      ctx.emit("vegetation.scattered", { entity, terrain: terrainId, instances: placements.length, mounted: mountedCount, exclusions: allExclusions.length });
       return { entity, instances: placements.length, assetHashes, placements };
     },
   };
