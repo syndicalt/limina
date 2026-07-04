@@ -697,9 +697,19 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // The authored entity eids = the render set; capture their (static) authored scale
   // so the interpolator keeps meshes at size (the worker syncs position+rotation only).
   const eids: number[] = [];
+  // BODILESS statics (asset.place / asset.scatter / any renderable with no physics body)
+  // need their authored pose SEEDED into the transform SAB below: the sim-worker streams
+  // ONLY body-bound entities into the SAB each tick (sim-worker syncTransforms skips
+  // `bodyId === undefined`), so a bodiless slot would otherwise stay at the SAB's zero and
+  // the mesh would collapse onto the origin. Body-bound entities are left out here — the
+  // worker owns their per-tick pose (seeding them would fight the live physics sync).
+  const bodilessEids: number[] = [];
   for (const id of entities.ids()) {
-    const eid = entities.resolve(id)?.eid;
-    if (eid !== undefined) eids.push(eid);
+    const entry = entities.resolve(id);
+    const eid = entry?.eid;
+    if (eid === undefined) continue;
+    eids.push(eid);
+    if (entry?.bodyId === undefined) bodilessEids.push(eid);
   }
   const authoredScale = new SharedTransformStorage();
   for (const eid of eids) {
@@ -731,6 +741,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     joined.Rotation.z[eid] = Rotation.z[eid];
     joined.Rotation.w[eid] = Rotation.w[eid];
   };
+  // Seed the shared transform SAB with each bodiless static's authored Position+Rotation
+  // (Scale is supplied per-frame by SnapshotRing from `authoredScale`). Symmetric with the
+  // incremental live-authoring path (seedJoinedTransformForEid on newly-added eids) and with
+  // the authoredScale seed above — the initial authored set was the one channel that never
+  // seeded Position/Rotation, so bodiless statics read 0 and stacked at the origin. This seed
+  // is STABLE across every tick: the worker never overwrites a bodiless SAB slot, so freeze →
+  // interpolate carries the authored pose forward unchanged (prev==curr ⇒ no drift).
+  for (const eid of bodilessEids) seedJoinedTransformForEid(eid);
   const captureNewEids = (before: ReadonlySet<string>, result: unknown): number[] => {
     const out: number[] = [];
     const entity = resultEntityId(result);
