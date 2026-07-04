@@ -88,6 +88,28 @@ export function gableRoofGeometry(W: number, D: number, pitch: number, overhang:
   return { geo, half };
 }
 
+/** Build a GABLE-END infill: the triangular pediment wall that fills between a rectangular end-wall top
+ *  (y=0 here) and the sloping roof (apex at y=pitch), so the building is CLOSED at the gable ends. Base
+ *  runs along local X (width `baseWidth`), apex up local Y, extruded by `thickness` along local Z — a
+ *  solid triangular prism. Rendered double-sided by the caller (seen from outside AND the interior). */
+export function gableTriangleGeometry(baseWidth: number, pitch: number, thickness: number): { geo: THREE.BufferGeometry; half: V3 } {
+  const hw = baseWidth / 2, hz = thickness / 2;
+  const BLf: V3 = [-hw, 0, hz], BRf: V3 = [hw, 0, hz], Af: V3 = [0, pitch, hz];
+  const BLb: V3 = [-hw, 0, -hz], BRb: V3 = [hw, 0, -hz], Ab: V3 = [0, pitch, -hz];
+  const tri = (...vs: V3[]): number[] => vs.flat();
+  const pos = new Float32Array([
+    ...tri(BLf, BRf, Af),                       // front face (+Z)
+    ...tri(BRb, BLb, Ab),                       // back face (-Z)
+    ...tri(BLb, BRb, BRf), ...tri(BLb, BRf, BLf), // base
+    ...tri(BLb, BLf, Af), ...tri(BLb, Af, Ab),   // left slope
+    ...tri(BRf, BRb, Ab), ...tri(BRf, Ab, Af),   // right slope
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return { geo, half: [hw, pitch / 2, hz] };
+}
+
 export interface Part { kind: string; entity: string; position: V3; size: V3; }
 
 const buildingInput = z.object({
@@ -200,6 +222,11 @@ function makeBuilding(): SkillDefinition<z.infer<typeof buildingInput>, Building
   };
 }
 
-export function registerArchitectureSkills(registry: SkillRegistry): void {
-  registry.register(makeBuilding());
+// architecture.building is now KIT-BACKED and registered by registerBuildingSkills (js/src/skills/
+// building/skill.ts), which delegates to assembleBuilding — so this module never imports building-
+// recipe.ts (no import cycle). This registrar is kept (index.ts calls it) but registers nothing; the
+// exported helpers below (spawnStaticMesh / gableRoofGeometry / gableTriangleGeometry / pbrMat / shade)
+// remain the shared geometry primitives the kit builds on.
+export function registerArchitectureSkills(_registry: SkillRegistry): void {
+  // no-op — see note above.
 }

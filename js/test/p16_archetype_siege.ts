@@ -117,7 +117,7 @@ async function runSiege(session: string): Promise<{ log: string[]; outcome: stri
 
 // ── 1. The siege composes into a coherent, WINNABLE loop. ─────────────────────────────────────
 const A = await runSiege("ses_p16_siege_A");
-assert(A.keepEntities === 8, `the keep was built from architecture.building (8 parts, got ${A.keepEntities})`);
+assert(A.keepEntities >= 10, `the keep was built from architecture.building (a real kit building, got ${A.keepEntities} parts)`);
 const spawns = A.log.filter((l) => l.includes("spawn#")).length;
 assert(spawns >= 3, `the director paced at least 3 waves (got ${spawns})`);
 assert(A.kills >= 3, `the defender's volley killed the attackers (kills=${A.kills})`);

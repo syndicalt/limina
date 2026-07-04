@@ -53,7 +53,7 @@ export type DesignStyle = (typeof DESIGN_STYLE_NAMES)[number];
 // A closed set of material-semantic roles (project-level), spanning environment, structure, character,
 // and focal. Reconciles the card's building-specific roles (accent / trim) into a project vocabulary.
 export const PALETTE_ROLE_NAMES = [
-  "stone", "wood", "foliage", "ground", "water", "metal", "accent", "trim", "skin", "sky",
+  "stone", "wood", "foliage", "ground", "water", "metal", "accent", "trim", "skin", "sky", "slate",
 ] as const;
 export type PaletteRole = (typeof PALETTE_ROLE_NAMES)[number];
 
@@ -225,6 +225,7 @@ export const DEFAULT_DESIGN_DIRECTION: DesignDirection = {
     { role: "trim", colorHex: "#6f675e" },     // MATERIALS.rock — dark structural trim
     { role: "skin", colorHex: "#c8a27a" },     // neutral character skin
     { role: "sky", colorHex: "#b9c4cc" },      // hazed sky (matches world-config default fog)
+    { role: "slate", colorHex: "#49535d" },    // dark blue-grey slate (roof shingles)
   ],
   material: {
     // Grounded stylized realism = mostly-diffuse dielectrics with a couple of low-roughness exceptions

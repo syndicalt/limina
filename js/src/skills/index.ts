@@ -45,6 +45,7 @@ import { registerGameStateSkills, type GameStateManager } from "./gamestate.ts";
 import { registerTriggerEventSkills, type TriggerManager, type EventManager } from "./triggers.ts";
 import { registerCutsceneSkills, type CutsceneManager } from "./cutscene.ts";
 import { registerArchitectureSkills } from "./architecture.ts";
+import { registerBuildingSkills } from "./building/skill.ts";
 import { registerDirectorSkills, type DirectorManager } from "./director.ts";
 import { registerAbilitySkills, type AbilityManager } from "./ability.ts";
 import { registerClipAuthorSkills, type ClipAuthor } from "./clip_author.ts";
@@ -153,6 +154,7 @@ export function registerCoreSkills(
   const materials = new MaterialRegistry();
   registerSceneSkills(registry, materials);
   registerArchitectureSkills(registry);
+  registerBuildingSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry, assets, materials);
   registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
