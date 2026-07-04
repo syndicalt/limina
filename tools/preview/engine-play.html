@@ -25,7 +25,10 @@ try {
     const running = await runLive({
       canvas, width: 1280, height: 800,
       commands: scene.commands,
-      forceWebGL: true,
+      // Use NATIVE WebGPU when the browser has it (real Chrome/Edge); only fall back to the
+      // WebGL2 backend when there's no WebGPU. Forcing WebGL2 in a WebGPU-capable browser
+      // fails here ("getSupportedExtensions of null") — that path is for the headless harness.
+      forceWebGL: !navigator.gpu,
       renderBaseline: scene.renderBaseline,
       input: window,                 // ← keyboard drives the player (same as the editor viewport)
       orbit: { center: cam.center, radius: cam.radius, height: cam.height },
@@ -35,4 +38,15 @@ try {
     window.__log.push("runLive returned " + (running === null ? "NULL (cannot host — needs COOP/COEP + WebGL2/WebGPU)" : "ok"));
   }
 } catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); }
+// Surface status ON SCREEN so a blank canvas explains itself (no devtools needed).
+try {
+  const isolated = (self.crossOriginIsolated === true);
+  const line = window.__err.length
+    ? ("⚠ ERROR: " + window.__err.join(" | "))
+    : ("status: " + (window.__log.slice(-3).join(" · ") || "(no runLive status)"));
+  const el = document.getElementById("hud");
+  el.insertAdjacentHTML("beforeend",
+    '<br><span style="color:#ffd27f">' + line.replace(/[<>&]/g, (c) => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c])).slice(0, 500) + '</span>' +
+    '<br><span style="color:#9fd">crossOriginIsolated=' + isolated + ' · SharedArrayBuffer=' + (typeof SharedArrayBuffer !== "undefined") + ' · gpu=' + (!!navigator.gpu) + '</span>');
+} catch {}
 </script></body></html>
