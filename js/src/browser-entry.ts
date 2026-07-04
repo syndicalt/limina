@@ -25,6 +25,7 @@ import { SPECIES_ARCHETYPES, TREE_ARCHETYPE_IDS, pickArchetype } from "./skills/
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
+import { ThirdPersonCamera } from "./world/third_person_camera.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
@@ -672,7 +673,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     mode: "windowed",
   };
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
-  registerCoreSkills(registry, { assets: liveAssets });
+  const core = registerCoreSkills(registry, { assets: liveAssets });
   const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
   const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
     return applyAuthorCommand(registry, world, cmd, {
@@ -810,6 +811,22 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cameraControls.update();
   }
 
+  // ── FOLLOW CAMERA. When a player character was spawned (player.spawn is in the log), drive a
+  //    third-person follow camera from the player entity's live interpolated Position instead of the
+  //    auto-orbit — so the settlement is WALKABLE with a proper behind-the-back framing. Gated on a
+  //    player existing: non-player scenes (the fidelity renders) find no controller and keep the
+  //    orbit path untouched. The camera yaw tracks the input heading (inFrame.look[0], the same yaw
+  //    the sim rotates WASD by), so movement stays camera-relative. ──
+  let followCam: ThirdPersonCamera | undefined;
+  let playerEid: number | undefined;
+  {
+    const playerId = core.player.controllers.ids()[0];
+    if (playerId !== undefined) {
+      playerEid = entities.resolve(playerId)?.eid;
+      if (playerEid !== undefined) followCam = new ThirdPersonCamera({ distance: 6, lookHeight: 1.5, pitch: -0.18 });
+    }
+  }
+
   // If the worker already threw during the WebGPU/scene build above, bail now instead
   // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
   if (aborted) { worker.terminate(); return null; }
@@ -853,7 +870,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
       interp.interpolate(alpha, ring.presentSet);
       renderSyncSystem(ecs, suppressedEids);
-      if (cameraControls !== undefined) {
+      if (followCam !== undefined && playerEid !== undefined) {
+        // Read the player's interpolated world position out of the render store (interp wrote it
+        // above) and frame the follow camera behind the input heading.
+        followCam.yaw = inFrame.look[0];
+        followCam.update(camera, [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]]);
+      } else if (cameraControls !== undefined) {
         cameraControls.update();
       } else {
         angle += orbitSpin;

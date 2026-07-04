@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>limina — walk the village</title></head>
+<body style="margin:0;background:#b9c4cc;overflow:hidden">
+<canvas id="limina-canvas" width="1280" height="800" style="display:block;width:100vw;height:100vh"></canvas>
+<div id="hud" style="position:fixed;left:12px;bottom:12px;font:13px/1.5 system-ui,sans-serif;color:#fff;text-shadow:0 1px 2px #000;background:rgba(0,0,0,.35);padding:8px 12px;border-radius:8px;pointer-events:none">
+  <b>Walk the settlement</b> — click the canvas first, then:<br>
+  <b>W/A/S/D</b> move · <b>Q/E</b> turn (camera) · <b>Shift</b> run · <b>Space</b> jump
+</div>
+<script type="module">
+// INTERACTIVE walker: authors the SAME agent scene (tools/preview/authored-village-play.json) through
+// the REAL live engine (runLive) with `input: window` — the identical input path the editor viewport
+// uses (editor/src/viewport.js). Because the scene contains a player.spawn, runLive drives the
+// third-person FOLLOW camera and WASD/Q-E/Shift/Space move the character. No screenshot, no auto-exit:
+// this page is meant to be opened in a real browser and played.
+window.__log = []; window.__err = [];
+try {
+  const sceneUrl = new URLSearchParams(location.search).get("scene") || "/tools/preview/authored-village-play.json";
+  const scene = await (await fetch(sceneUrl)).json();
+  const M = await import("/editor/vendor/limina-runtime.js");
+  const runLive = M.runLive;
+  if (typeof runLive !== "function") { window.__err.push("runLive not exported"); }
+  else {
+    const canvas = document.getElementById("limina-canvas");
+    canvas.tabIndex = 0; canvas.addEventListener("click", () => canvas.focus());
+    const cam = scene.camera || { center: [0, 3, 0], radius: 24, height: 10 };
+    const running = await runLive({
+      canvas, width: 1280, height: 800,
+      commands: scene.commands,
+      forceWebGL: true,
+      renderBaseline: scene.renderBaseline,
+      input: window,                 // ← keyboard drives the player (same as the editor viewport)
+      orbit: { center: cam.center, radius: cam.radius, height: cam.height },
+      onStatus: (s, m) => { window.__log.push(s + ": " + m); },
+    });
+    window.__running = running; // exposed for debugging / smoke checks (camera + entity table)
+    window.__log.push("runLive returned " + (running === null ? "NULL (cannot host — needs COOP/COEP + WebGL2/WebGPU)" : "ok"));
+  }
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); }
+</script></body></html>

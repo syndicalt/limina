@@ -594,6 +594,13 @@ export async function loadGltfIntoScene(
   if (!skipMesh) {
     try {
       root = await parseGltfScene(assetId, bytes);
+      // Placed assets cast + receive shadows. GLTF meshes default castShadow=false, so a
+      // placed building/prop would otherwise throw NO shadow (unlike vegetation.scatter,
+      // which sets it) — leaving buildings looking ungrounded next to shadow-casting trees.
+      (root as unknown as { traverse: (fn: (o: unknown) => void) => void }).traverse((o) => {
+        const m = o as { isMesh?: boolean; castShadow?: boolean; receiveShadow?: boolean };
+        if (m.isMesh === true) { m.castShadow = true; m.receiveShadow = true; }
+      });
       ctx.world.scene.add(root);
     } catch {
       // A missing/corrupt asset (e.g. empty bytes because the /assets route isn't served) must NOT

@@ -156,6 +156,22 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
           box = measure();
         }
         bounds = [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z];
+        // BUILDING COLLIDER (so the player can't walk through placed structures). Add a Rapier
+        // static box approximating the placed asset's FINAL world AABB — mirrors architecture.building
+        // (spawnStaticMesh → op_physics_add_static_box per wall), but here as an AABB approximation of
+        // the whole asset. Deterministic + replay-safe: the AABB is measured from the loaded bytes +
+        // the recorded transform, so a replay re-measures + re-adds an identical collider (this op runs
+        // INSIDE asset.place, so it is reproduced by re-invoking the skill, never separately logged).
+        // NOT bound to the entity's bodyId: the entity keeps its authored (grounded) render pose, while
+        // the collider centers on the AABB center (mid-height), which differs from that pose — binding
+        // would teleport the mesh onto the box center. village.build inherits this per nested building.
+        const hx = bounds[0] / 2, hy = bounds[1] / 2, hz = bounds[2] / 2;
+        if (hx > 1e-4 && hy > 1e-4 && hz > 1e-4) {
+          const cx = (box.min.x + box.max.x) / 2;
+          const cy = (box.min.y + box.max.y) / 2;
+          const cz = (box.min.z + box.max.z) / 2;
+          ctx.world.ops.op_physics_add_static_box(cx, cy, cz, hx, hy, hz, 0.85, 0);
+        }
       }
       // Optional material override (reuses three.setMaterial's apply, by id). Scoped
       // to asset.place's OWN declared permission, NOT the caller's full grant set.

@@ -196,6 +196,18 @@ export function registerTerrainEditSkills(
       }
       const tile: TerrainTile = { nrows: n, ncols: n, origin: [input.origin[0], input.origin[1], input.origin[2]], scale: [input.size, 1, input.size], heights };
 
+      // GROUND COLLIDER (the load-bearing fix so a spawned player stands on this layer instead of
+      // falling forever). MIRRORS world.generateRegion (terrain.ts applyTile): build a Rapier
+      // heightfield collider from the SAME tile heights/rows/cols/scale/origin. Deterministic +
+      // replay-safe — the tile is reconstructed identically from the recorded terrain.create params,
+      // so re-invoking on replay re-adds an identical collider. Runs once per authoring context
+      // (headless authoritative sim-worker AND the render-main thread), each into its OWN Rapier
+      // world — the same per-thread composition world.generateRegion already relies on (no
+      // double-add within a thread). scaleY is 1 (heights are meters relative to origin.y).
+      const [ox, oy, oz] = tile.origin;
+      const [sx, sy, sz] = tile.scale;
+      const bodyId = ctx.world.ops.op_physics_add_heightfield(ox, oy, oz, tile.nrows, tile.ncols, sx, sy, sz, tile.heights);
+
       let mesh: MeshLike | undefined;
       const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
       if (scene !== undefined && typeof scene.add === "function") {
@@ -207,10 +219,11 @@ export function registerTerrainEditSkills(
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), input.origin[0], input.origin[1], input.origin[2]);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
+        ctx.world.ops.op_physics_remove_body(bodyId);
         throw new Error("terrain.create: entity capacity exceeded (MAX_ENTITIES)");
       }
       const origin = { tool: "terrain.create", input: { ...input } };
-      const entity = ctx.world.entities.create({ eid, mesh: mesh as never, origin });
+      const entity = ctx.world.entities.create({ eid, mesh: mesh as never, bodyId, origin });
       // Stash the elevation ramp so terrain.deform can re-color the rebuilt geometry (a deform
       // that levels a terrace would otherwise drop the vertex colors → a white patch).
       layers.set(entity, { tile, mesh, eid, ...(elevationColors !== undefined ? { elevationColors } : {}) });
