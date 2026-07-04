@@ -24,6 +24,7 @@ import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills, type RegionState } from "./terrain.ts";
 import { registerTerrainEditSkills, type EditableTerrain } from "./terrain-edit.ts";
+import { registerVillageSkills } from "./village.ts";
 import { registerVegetationSkills } from "./vegetation.ts";
 import { registerRenderSkills } from "./render.ts";
 import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
@@ -198,6 +199,11 @@ export function registerCoreSkills(
   const terrainLayers = new Map<string, EditableTerrain>();
   registerTerrainEditSkills(registry, terrainLayers);
   registerVegetationSkills(registry, terrainLayers, assets);
+  // village.build: ONE skill that lays a terrain-aware settlement onto an editable
+  // terrain layer by placing curated library GLBs (via asset.place) at transforms from
+  // the SHARED, pure layout planner (world/pipeline/village-layout.mjs — same brain the
+  // preview uses). Records the direction/steering/seed + pinned hashes, not the transforms.
+  registerVillageSkills(registry, terrainLayers, assets);
   // Opt-in, render-only post-processing seam: `render.enablePost` builds the GTAO/bloom/
   // grade pipeline on the live renderer and stows it on world.post (static/cinematic — see
   // render.ts). Render-only; never sim/log state.

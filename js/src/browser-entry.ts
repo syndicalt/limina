@@ -466,6 +466,13 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
   if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF") {
     return typeof input.assetId === "string" ? [input.assetId] : [];
   }
+  // village.build mounts a GLB per building (via nested asset.place); its ids live in
+  // steering.buildings[].assetId, so pre-warm each one's parse cache before init().
+  if (cmd.tool === "village.build") {
+    const steering = (input.steering ?? {}) as { buildings?: Array<{ assetId?: unknown }> };
+    const bs = Array.isArray(steering.buildings) ? steering.buildings : [];
+    return bs.map((b) => (typeof b.assetId === "string" ? b.assetId : "")).filter((s) => s.length > 0);
+  }
   if (cmd.tool === "vegetation.plant") {
     const species = typeof input.species === "string" ? input.species : "spruce";
     const seed = typeof input.seed === "number" ? input.seed : 1;

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { planVillage } from "/js/src/world/pipeline/village-layout.mjs";
 
 // ---------------------------------------------------------------------------
 // buildVillage — GENERIC, data-driven village composer.
@@ -950,86 +951,12 @@ function builderFor(style) {
   return best ?? genericBuilder;
 }
 
-// ------------------------------------------------------------ terrain survey
-
-// Sample the map into buildable candidate sites (above sea, not too steep),
-// with a local-flatness measure for terracing decisions.
-function surveySites(terrain, relax = 1) {
-  const H = terrain.halfSize;
-  const sea = terrain.config?.seaLevelM ?? 0;
-  const step = THREE.MathUtils.clamp(H / 44, 3, 12);
-  const maxSlope = 0.28 * relax;
-  const out = [];
-  for (let x = -H * 0.84; x <= H * 0.84; x += step) {
-    for (let z = -H * 0.84; z <= H * 0.84; z += step) {
-      const h = terrain.heightAt(x, z);
-      if (h <= sea + 1.5) continue;
-      const s = terrain.slopeAt(x, z);
-      if (s > maxSlope) continue;
-      // local flatness = worst slope in a small ring around the site
-      let flat = s;
-      for (const [dx, dz] of [[6, 0], [-6, 0], [0, 6], [0, -6]]) {
-        flat = Math.max(flat, terrain.slopeAt(x + dx, z + dz));
-      }
-      out.push({ x, z, h, flat });
-    }
-  }
-  return out;
-}
-
-// Downhill direction at a point (unit XZ), from finite differences.
-function downhill(terrain, x, z) {
-  const e = 2.5;
-  const gx = terrain.heightAt(x + e, z) - terrain.heightAt(x - e, z);
-  const gz = terrain.heightAt(x, z + e) - terrain.heightAt(x, z - e);
-  const v = new THREE.Vector2(-gx, -gz);
-  return v.lengthSq() > 1e-6 ? v.normalize() : v.set(0, 1);
-}
-
-// ------------------------------------------------------------------- layout
-
-// steering.layout.density → minimum clear spacing between buildings (m).
-function spacingFor(density) {
-  const d = String(density ?? "").toLowerCase();
-  if (/dense|tight|packed/.test(d)) return 8;
-  if (/loose|sparse|scatter/.test(d)) return 18;
-  return 12;
-}
-
-// Which role is focal, and does the wording ask for high ground? All read
-// from steering.layout.focal — no role names are assumed here.
-function parseFocal(steering) {
-  const txt = String(steering?.layout?.focal ?? "").toLowerCase();
-  const roles = (steering?.buildings ?? []).map((b) => String(b.role ?? ""));
-  const focalRole = roles.find((r) => r && txt.includes(r.toLowerCase())) ?? roles[0] ?? null;
-  const wantsHigh = /high|knoll|hill|summit|ridge|overlook|crag/.test(txt);
-  return { focalRole, wantsHigh };
-}
-
-function farEnough(site, placed, minGap) {
-  for (const p of placed) {
-    const d = Math.hypot(site.x - p.x, site.z - p.z);
-    if (d < Math.max(minGap, p.r + site.r + 3)) return false;
-  }
-  return true;
-}
-
-// Greedy best-scoring site pick with progressive constraint relaxation so a
-// harsh map still seats every building.
-function pickSite(cands, placed, radius, minGap, score) {
-  for (let relax = 0; relax < 6; relax++) {
-    const gap = minGap * (1 - relax * 0.13);
-    let best = null, bestS = -Infinity;
-    for (const c of cands) {
-      const s = { ...c, r: radius };
-      if (!farEnough(s, placed, gap)) continue;
-      const sc = score(c, relax);
-      if (sc > bestS) { bestS = sc; best = s; }
-    }
-    if (best) return best;
-  }
-  return null;
-}
+// The terrain-aware LAYOUT (survey / focal + cluster + edge placement ordering /
+// facing) now lives as a PURE, shared function in
+// js/src/world/pipeline/village-layout.mjs (planVillage), so the preview and the
+// engine's village.build skill run the SAME algorithm and never drift. This module
+// keeps only what authors GEOMETRY at those transforms: the builders/materials
+// above, plus the lane + ground pads below (which consume the returned placements).
 
 // --------------------------------------------------------------------- lane
 
@@ -1158,150 +1085,58 @@ export async function buildVillage(terrain, direction, steering) {
   const rng = mulberry32(hashStr(seedKey));
   const mats = makeMaterials(direction, rng);
 
-  // -- 1) Expand steering.buildings into concrete instances and BUILD them
-  //       at the origin first (so real footprint radii drive the layout).
-  const { focalRole, wantsHigh } = parseFocal(steering);
+  // -- 1) Expand steering.buildings into concrete instances and BUILD them at the
+  //       origin first (so their real footprint radii drive the shared layout).
   const specs = steering?.buildings ?? [];
-  const instances = [];
-  specs.forEach((spec, listIndex) => {
+  const instances = []; // parallel to the layout's instance order (spec-by-spec, count times)
+  specs.forEach((spec) => {
     const count = Math.max(1, spec.count ?? 1);
     for (let i = 0; i < count; i++) {
       const group = builderFor(spec.style)({ rng, mats, role: spec.role });
-      instances.push({
-        role: spec.role, style: spec.style, listIndex, count, group,
-        radius: group.userData.radius ?? 6,
-        focal: spec.role === focalRole && i === 0,
-      });
+      instances.push({ group, radius: group.userData.radius ?? 6 });
     }
   });
+  const radii = instances.map((i) => i.radius);
 
-  // -- 2) Survey the terrain for buildable ground (relax if the map is harsh)
-  let cands = surveySites(terrain, 1);
-  if (cands.length < instances.length * 4) cands = surveySites(terrain, 1.5);
-  const hMin = Math.min(...cands.map((c) => c.h));
-  const hMax = Math.max(...cands.map((c) => c.h));
-  const hSpan = Math.max(1, hMax - hMin);
-  const spacing = spacingFor(steering?.layout?.density);
-  const placed = []; // [{x,z,h,r,inst}]
+  // -- 2) Run the SHARED, pure terrain-aware layout. A tiny sampler wraps the
+  //       preview terrain into the { heightAt, slopeAt, halfSize, seaLevel,
+  //       amplitude } contract planVillage reads.
+  const sampler = {
+    heightAt: (x, z) => terrain.heightAt(x, z),
+    slopeAt: (x, z) => terrain.slopeAt(x, z),
+    halfSize: terrain.halfSize,
+    seaLevel: terrain.config?.seaLevelM ?? 0,
+    amplitude: terrain.config?.amplitude,
+  };
+  const { placements } = planVillage(sampler, direction, steering, radii);
+  if (placements.length === 0) return { objects: [], footprints: [] };
 
-  // -- 3) Focal building: the wording of steering.layout.focal decides the
-  //       terrain preference — "high/knoll/…" biases hard toward elevated
-  //       flat ground; otherwise central flat ground wins.
-  const focalInst = instances.find((i) => i.focal) ?? instances[0];
-  const focalSite = pickSite(cands, placed, focalInst.radius, 0, (c, relax) => {
-    const hN = (c.h - hMin) / hSpan;
-    const flatness = 1 - Math.min(1, c.flat / (0.22 + relax * 0.05));
-    const centrality = 1 - Math.hypot(c.x, c.z) / terrain.halfSize;
-    return (wantsHigh ? hN * 2.2 : centrality * 0.8) + flatness * 1.4;
-  });
-  focalSite.inst = focalInst;
-  placed.push(focalSite);
+  // Reconstruct the placed footprints (placements[0] is the focal) for the lane +
+  // the ground pads, which stay here because they author GEOMETRY on the terrain.
+  const placed = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] }));
+  const { mesh: laneMesh } = buildLane(terrain, placed, mats);
 
-  // Placement ordering, derived from the steering list itself (role-agnostic):
-  //   • singles (count==1) earlier in the list = closer to the focal (civic);
-  //   • multi-count entries form the terraced cluster below the focal;
-  //   • the LAST single is pushed to the settlement edge (out past the cluster).
-  const singles = instances.filter((i) => !i.focal && i.count === 1);
-  const cluster = instances.filter((i) => !i.focal && i.count > 1);
-  const edgeSingle = singles.length > 1 || cluster.length ? singles.pop() : null;
-
-  // -- 3a) Inner singles: good flat ground on a ring just below the focal.
-  singles.forEach((inst, rank) => {
-    const target = focalInst.radius + inst.radius + spacing * (1.2 + rank * 0.9);
-    const site = pickSite(cands, placed, inst.radius, spacing, (c, relax) => {
-      const d = Math.hypot(c.x - focalSite.x, c.z - focalSite.z);
-      const ring = 1 - Math.min(1, Math.abs(d - target) / (spacing * (1.5 + relax)));
-      const flatness = 1 - Math.min(1, c.flat / 0.18);
-      const below = c.h <= focalSite.h ? 0.4 : 0; // sit below the focal
-      return ring * 1.2 + flatness * 1.5 + below;
-    });
-    if (site) { site.inst = inst; placed.push(site); }
-  });
-
-  // -- 3b) The cluster (e.g. dwellings): terraced along a CONTOUR BAND below
-  //        the focal — flattest pockets near one target elevation, real gaps
-  //        enforced by the density spacing.
-  const bandH = focalSite.h - hSpan * 0.3; // the terrace contour to follow
-  const bandTol = Math.max(2.5, (terrain.config?.amplitude ?? hSpan) * 0.06);
-  const dMin = focalInst.radius + spacing * 1.2;
-  const dMax = Math.min(terrain.halfSize * 0.78, dMin + spacing * (cluster.length + 2));
-  for (const inst of cluster) {
-    const site = pickSite(cands, placed, inst.radius, spacing, (c, relax) => {
-      const d = Math.hypot(c.x - focalSite.x, c.z - focalSite.z);
-      if (d < dMin || d > dMax * (1 + relax * 0.15)) return -Infinity;
-      const onBand = 1 - Math.min(1, Math.abs(c.h - bandH) / (bandTol * (1 + relax)));
-      const flatness = 1 - Math.min(1, c.flat / 0.16);
-      // mild pull toward already-placed cluster mates → a connected terrace,
-      // (spacing keeps it from clumping)
-      let near = 0;
-      for (const p of placed) {
-        if (p.inst && p.inst.count > 1) {
-          near = Math.max(near, 1 - Math.min(1, Math.hypot(c.x - p.x, c.z - p.z) / (spacing * 3)));
-        }
-      }
-      return onBand * 1.6 + flatness * 1.8 + near * 0.5;
-    });
-    if (site) { site.inst = inst; placed.push(site); }
-  }
-
-  // -- 3c) The edge single (e.g. an outbuilding): beyond the cluster extent.
-  if (edgeSingle) {
-    const clusterMax = placed
-      .filter((p) => p.inst?.count > 1)
-      .reduce((m, p) => Math.max(m, Math.hypot(p.x - focalSite.x, p.z - focalSite.z)), dMin);
-    const target = clusterMax + spacing * 1.4;
-    const site = pickSite(cands, placed, edgeSingle.radius, spacing, (c, relax) => {
-      const d = Math.hypot(c.x - focalSite.x, c.z - focalSite.z);
-      const ring = 1 - Math.min(1, Math.abs(d - target) / (spacing * (2 + relax)));
-      const flatness = 1 - Math.min(1, c.flat / 0.2);
-      return ring * 1.4 + flatness * 1.4;
-    });
-    if (site) { site.inst = edgeSingle; placed.push(site); }
-  }
-
-  // -- 4) The lane: winding earth strip from the focal down through the rest.
-  const { mesh: laneMesh, samples: laneSamples } = buildLane(terrain, placed, mats);
-
-  // -- 5) Seat + orient every building on the terrain.
-  const villageCenter = placed.reduce(
-    (a, p) => a.add(new THREE.Vector2(p.x, p.z)), new THREE.Vector2()
-  ).divideScalar(placed.length);
-
+  // -- 3) Seat + orient every building on the terrain at the planned transforms.
   const objects = [];
   const footprints = [];
-  for (const p of placed) {
-    const g = p.inst.group;
+  for (let k = 0; k < placements.length; k++) {
+    const p = placements[k];
+    const g = instances[p.index].group;
     // Bury the base slightly so sloped ground never shows a floating corner.
     g.position.set(p.x, terrain.heightAt(p.x, p.z) - 0.3, p.z);
-
-    // Facing: focal looks out over the settlement; everything else fronts
-    // the lane (nearest lane point), falling back to downhill.
-    let face;
-    if (p.inst.focal) {
-      face = new THREE.Vector2(villageCenter.x - p.x, villageCenter.y - p.z);
-    } else if (laneSamples.length) {
-      let best = laneSamples[0], bd = Infinity;
-      for (let i = 0; i < laneSamples.length; i += 4) {
-        const s = laneSamples[i];
-        const d = (s.x - p.x) ** 2 + (s.z - p.z) ** 2;
-        if (d < bd) { bd = d; best = s; }
-      }
-      face = new THREE.Vector2(best.x - p.x, best.z - p.z);
-    }
-    if (!face || face.lengthSq() < 1e-6) face = downhill(terrain, p.x, p.z);
-    g.rotation.y = Math.atan2(face.x, face.y); // local +Z (door) → face target
+    g.rotation.y = p.yaw; // planned facing (local +Z door → target)
 
     objects.push(g);
-    footprints.push({ x: p.x, z: p.z, r: p.r });
+    footprints.push({ x: p.x, z: p.z, r: radii[p.index] });
 
-    // Trodden ground under every building; the focal one gets a broad earth
-    // apron with a cobbled courtyard on top (kills bare-scree readings
-    // around the high ground — the summit reads as a lived-in plaza).
-    if (p.inst.focal) {
-      objects.push(groundPad(terrain, p.x, p.z, p.r + 15, mats.earth, 0.2));
-      objects.push(groundPad(terrain, p.x, p.z, p.r + 5, mats.cobble, 0.32));
+    // Trodden ground under every building; the focal one (placements[0]) gets a
+    // broad earth apron with a cobbled courtyard on top (kills bare-scree
+    // readings around the high ground — the summit reads as a lived-in plaza).
+    if (k === 0) {
+      objects.push(groundPad(terrain, p.x, p.z, radii[p.index] + 15, mats.earth, 0.2));
+      objects.push(groundPad(terrain, p.x, p.z, radii[p.index] + 5, mats.cobble, 0.32));
     } else {
-      objects.push(groundPad(terrain, p.x, p.z, p.r * 1.15 + 1, mats.earth));
+      objects.push(groundPad(terrain, p.x, p.z, radii[p.index] * 1.15 + 1, mats.earth));
     }
   }
   if (laneMesh) objects.push(laneMesh);

@@ -1,0 +1,31 @@
+{
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 120, "resolution": 128, "baseHeight": 0, "color": 5926970 } },
+
+    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 46, "delta": 10, "mode": "raise", "falloff": "smooth" } },
+    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [2, -3], "radius": 24, "delta": 8, "mode": "raise", "falloff": "smooth" } },
+    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 10, "delta": 4, "mode": "raise", "falloff": "smooth" } },
+    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 14, "delta": 0, "mode": "smooth", "falloff": "smooth" } },
+
+    { "kind": "skill", "tool": "village.build", "input": {
+      "direction": {
+        "setting": "medieval", "artStyle": "stylized-realism",
+        "palette": { "stone": "#9b9890", "timber": "#5c4632", "plaster": "#e6ddc8", "thatch": "#b39a5e", "slate": "#474d54", "terracotta": "#9c5a34", "trim": "#6f675e" },
+        "mood": "weathered, lived-in"
+      },
+      "steering": {
+        "buildings": [
+          { "role": "keep", "style": "nordic castle", "assetId": "library/keep.glb", "count": 1 },
+          { "role": "church", "style": "romanesque", "assetId": "library/church.glb", "count": 1 },
+          { "role": "cottage", "style": "wattle-and-daub", "assetId": "library/cottage.glb", "count": 6 },
+          { "role": "barn", "style": "timber", "assetId": "library/barn.glb", "count": 1 }
+        ],
+        "layout": { "focal": "keep on the high knoll", "density": "loose" }
+      },
+      "seed": 6
+    } }
+  ],
+  "camera": { "center": [0, 9, 0], "radius": 82, "height": 54, "azimuth": 0.7 }
+}
