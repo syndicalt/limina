@@ -1,0 +1,77 @@
+<!doctype html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;background:#b9c4cc"><canvas id="limina-canvas" width="1280" height="800"></canvas>
+<script type="module">
+// EYE-LEVEL grass camera: build the authored scene via runLive, then FREEZE the auto-orbit loop and
+// render ONE frame from a low camera standing on the terrain over an open grassy area. Ground Y is
+// found by raycasting straight down at the requested XZ, so the camera sits ~eye height above the
+// real heightfield surface. Query params: scene, cx, cz (stand point), yaw (look azimuth rad),
+// eye (eye height m), look (metres ahead the camera looks toward), pitch (down tilt m).
+window.__log = []; window.__err = []; window.__status = [];
+try {
+  const q = new URLSearchParams(location.search);
+  const sceneUrl = q.get("scene") || "/tools/preview/authored-village.json";
+  const cx = parseFloat(q.get("cx") ?? "-15");
+  const cz = parseFloat(q.get("cz") ?? "14");
+  const yaw = parseFloat(q.get("yaw") ?? "0.6");
+  const eye = parseFloat(q.get("eye") ?? "1.6");
+  const look = parseFloat(q.get("look") ?? "12");
+  const pitch = parseFloat(q.get("pitch") ?? "1.2");
+  const scene = await (await fetch(sceneUrl)).json();
+  const THREE = await import("/js/build/three.bundle.mjs");
+  const M = await import("/editor/vendor/limina-runtime.js");
+  const runLive = M.runLive;
+  const canvas = document.getElementById("limina-canvas");
+  const running = await runLive({
+    canvas, width: 1280, height: 800, commands: scene.commands,
+    forceWebGL: true,
+    orbit: { center: [cx, eye, cz], radius: 10, height: eye },
+    onStatus: (s, m) => window.__status.push(s + ": " + m),
+  });
+  if (!running || !running.scene) { window.__err.push("runLive returned null/no scene"); window.__done = true; }
+  else {
+    // Let the sim + terrain + grass finish building.
+    await new Promise((r) => setTimeout(r, 3500));
+    // Freeze the auto-orbit render loop so our camera is the one that renders.
+    try { running.loop?.stop?.(); } catch (e) { window.__log.push("loop.stop threw " + e); }
+    const scene3 = running.scene, renderer = running.renderer;
+    if (q.get("scan")) {
+      // Grid scan: report groundY over the tile so I can find open mid-elevation spots.
+      const rows = [];
+      for (let z = -45; z <= 45; z += 15) {
+        const cells = [];
+        for (let x = -45; x <= 45; x += 15) {
+          const rr = new THREE.Raycaster(new THREE.Vector3(x, 200, z), new THREE.Vector3(0, -1, 0), 0, 500);
+          const hh = rr.intersectObject(scene3, true).filter((h) => !/grass|water/i.test((h.object && h.object.name) || ""));
+          cells.push((x >= 0 ? "+" : "") + x + "," + (z >= 0 ? "+" : "") + z + "=" + (hh.length ? hh[0].point.y.toFixed(1) : "--"));
+        }
+        rows.push(cells.join("  "));
+      }
+      window.__log.push("SCAN groundY grid:\n" + rows.join("\n"));
+      window.__done = true;
+    } else {
+    // Raycast straight down to find the terrain surface Y at (cx,cz). Ignore grass/water hits.
+    const ray = new THREE.Raycaster(new THREE.Vector3(cx, 200, cz), new THREE.Vector3(0, -1, 0), 0, 500);
+    const hits = ray.intersectObject(scene3, true).filter((h) => {
+      const n = (h.object && h.object.name) || "";
+      return !/grass|water/i.test(n);
+    });
+    const groundY = hits.length ? hits[0].point.y : eye;
+    window.__log.push("groundY@(" + cx + "," + cz + ")=" + groundY.toFixed(3) + " hits=" + hits.length +
+      " firstHit=" + (hits[0]?.object?.name || "-"));
+    // Eye-level camera standing on the ground, looking across the grass toward a point `look` metres
+    // ahead along `yaw`, angled slightly down (pitch) so the near turf fills the foreground.
+    const cam = new THREE.PerspectiveCamera(58, 1280 / 800, 0.05, 400);
+    const ex = cx, ez = cz, ey = groundY + eye;
+    cam.position.set(ex, ey, ez);
+    const tx = cx + Math.sin(yaw) * look, tz = cz + Math.cos(yaw) * look, ty = groundY + eye - pitch;
+    cam.lookAt(tx, ty, tz);
+    let m = 0, grass = 0, gcount = 0;
+    scene3.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; if (o.name === "limina:grass") { grass++; gcount = o.count; } });
+    window.__log.push("meshes=" + m + " grassMeshes=" + grass + " grassBlades=" + gcount +
+      " cam=(" + ex.toFixed(1) + "," + ey.toFixed(2) + "," + ez.toFixed(1) + ") look=(" + tx.toFixed(1) + "," + ty.toFixed(2) + "," + tz.toFixed(1) + ")");
+    renderer.render(scene3, cam);
+    window.__done = true;
+    }
+  }
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
+</script></body></html>
