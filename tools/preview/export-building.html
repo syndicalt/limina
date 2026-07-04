@@ -1,0 +1,32 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js","three/addons/":"/js/node_modules/three/examples/jsm/","@dgreenheck/ez-tree":"/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js"}}</script>
+</head><body><script type="module">
+// Bake ONE agent-authored building (village.mjs buildStandalone) to a portable
+// GLB. ?style= picks the builder; the palette mirrors the composer's medieval
+// direction so the exported asset matches what the world scene shows. This is
+// the author -> reusable-asset step for a single structure.
+window.__log = []; window.__err = "";
+try {
+  const THREE = await import("three");
+  const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
+  const { buildStandalone } = await import("/tools/preview/assets/village.mjs");
+  const params = new URLSearchParams(location.search);
+  const style = params.get("style") || "nordic castle";
+  const seed = parseInt(params.get("seed") || "1", 10);
+  const direction = {
+    setting: "medieval", artStyle: "stylized-realism",
+    palette: { stone: "#9b9890", timber: "#5c4632", plaster: "#e6ddc8", thatch: "#b39a5e", slate: "#474d54", terracotta: "#9c5a34", trim: "#6f675e" },
+    mood: "weathered, lived-in",
+  };
+  const obj = buildStandalone(style, direction, seed);
+  const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
+  const exporter = new GLTFExporter();
+  const buf = await new Promise((res, rej) => exporter.parse(obj, res, rej, { binary: true, onlyVisible: true }));
+  const bytes = new Uint8Array(buf);
+  let bin = ""; const CH = 0x8000; for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  window.__glb = btoa(bin);
+  window.__bounds = [Number(size.x.toFixed(3)), Number(size.y.toFixed(3)), Number(size.z.toFixed(3))];
+  window.__log.push("exported '" + style + "' GLB bytes=" + bytes.length + " bounds=" + JSON.stringify(window.__bounds));
+  window.__done = true;
+} catch (e) { window.__err = "THROW: " + ((e && (e.stack || e.message)) || e); window.__done = true; }
+</script></body></html>

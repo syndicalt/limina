@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js","three/addons/":"/js/node_modules/three/examples/jsm/","@dgreenheck/ez-tree":"/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js"}}</script>
+</head>
+<body style="margin:0"><canvas id="c" width="1280" height="800"></canvas>
+<script type="module">
+// THE CONSUMER. limina's role in miniature: import an AGENT-AUTHORED Three.js asset/scene module and
+// render it. Zero scene content here — the house, the materials, the lights, the layout, the camera
+// all come from the agent's module (tools/preview/assets/scene.mjs). This proves the thesis:
+// agent authors with full Three.js, the engine consumes it.
+window.__log = []; window.__err = [];
+try {
+  const THREE = await import("three");
+  const sceneUrl = new URLSearchParams(location.search).get("scene") || "/tools/preview/assets/scene.mjs";
+  const mod = await import(sceneUrl);
+  const canvas = document.getElementById("c");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(1280, 800, false);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  if ("outputColorSpace" in renderer && THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  const built = await mod.buildScene();         // agent-authored → { scene, camera } (may be async)
+  const scene = built.scene, camera = built.camera;
+  camera.aspect = 1280 / 800; camera.updateProjectionMatrix();
+  // Render in a loop for ~2s so async-decoded textures (ez-tree's base64 data-URI leaf/bark maps)
+  // finish decoding before we screenshot — otherwise alpha-tested leaves are discarded (bare trees).
+  const start = performance.now();
+  await new Promise((resolve) => {
+    const frame = () => { renderer.render(scene, camera); (performance.now() - start < 2000) ? requestAnimationFrame(frame) : resolve(); };
+    requestAnimationFrame(frame);
+  });
+  let meshes = 0; scene.traverse((o) => { if (o.isMesh) meshes++; });
+  window.__log.push("consumed agent scene: meshes=" + meshes + " children=" + scene.children.length);
+  window.__done = true;
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
+</script></body></html>

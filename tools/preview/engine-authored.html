@@ -1,0 +1,30 @@
+<!doctype html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;background:#b9c4cc"><canvas id="limina-canvas" width="1280" height="800"></canvas>
+<script type="module">
+// Renders a scene an AGENT authored (tools/preview/authored-scene.json = { commands, camera }) through
+// the REAL live engine (runLive). ZERO scene content is written here — every placement/scale/layout/
+// camera comes from the agent's file. This is the honest "can an agent one-shot a scene" test.
+window.__log = []; window.__err = []; window.__status = [];
+try {
+  const sceneUrl = new URLSearchParams(location.search).get("scene") || "/tools/preview/authored-scene.json";
+  const scene = await (await fetch(sceneUrl)).json();
+  const M = await import("/editor/vendor/limina-runtime.js");
+  const runLive = M.runLive;
+  if (typeof runLive !== "function") { window.__err.push("runLive not exported"); window.__done = true; }
+  else {
+    const canvas = document.getElementById("limina-canvas");
+    const cam = scene.camera || { center: [0, 3, 0], radius: 24, height: 10 };
+    const running = await runLive({
+      canvas, width: 1280, height: 800, commands: scene.commands,
+      forceWebGL: true,
+      orbit: { center: cam.center, radius: cam.radius, height: cam.height },
+      onStatus: (s, m) => window.__status.push(s + ": " + m),
+    });
+    window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
+    if (running && running.authoringFailures && running.authoringFailures.length) window.__log.push("authoringFailures=" + JSON.stringify(running.authoringFailures).slice(0, 500));
+    await new Promise((r) => setTimeout(r, 3000));
+    if (running && running.scene) { let m = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; }); window.__log.push("scene meshes=" + m); }
+    window.__done = true;
+  }
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
+</script></body></html>
