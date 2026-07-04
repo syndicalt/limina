@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { planVillage } from "/js/src/world/pipeline/village-layout.mjs";
+import { buildLaneGeometry, buildGroundPadGeometry } from "/js/src/world/pipeline/village-geometry.mjs";
+// The procedural material factory (ashlar/oak/thatch/…/earth/cobble painted from the palette)
+// now lives in the SHARED, THREE-agnostic module so the engine's village.build dresses its
+// ground with the IDENTICAL earth/cobble look. THREE is passed in (see village-materials.mjs).
+import { makeMaterials } from "/js/src/world/pipeline/village-materials.mjs";
 
 // ---------------------------------------------------------------------------
 // buildVillage — GENERIC, data-driven village composer.
@@ -43,331 +48,10 @@ function hashStr(s) {
 }
 const R = (rng, a, b) => a + (b - a) * rng();
 
-// ------------------------------------------------------- procedural textures
-// All surfaces are generated IN CODE (canvas2d → CanvasTexture) from the
-// direction.palette colors — no image files, no deps. Each albedo canvas also
-// yields a sobel-derived normal map so flat faces catch raking light. The
-// factories are small and swappable: the engine can later replace any of
-// them (paintAshlar, paintThatch, …) without touching the builders.
-
-const TEX = 256;
-function makeCanvas(n = TEX) {
-  if (typeof document !== "undefined") {
-    const c = document.createElement("canvas");
-    c.width = c.height = n;
-    return c;
-  }
-  return new OffscreenCanvas(n, n);
-}
-const css = (c) =>
-  `rgb(${Math.round(THREE.MathUtils.clamp(c.r, 0, 1) * 255)},${Math.round(THREE.MathUtils.clamp(c.g, 0, 1) * 255)},${Math.round(THREE.MathUtils.clamp(c.b, 0, 1) * 255)})`;
-const shade = (c, l) => c.clone().multiplyScalar(l);
-const vary = (rng, c, dl, ds = 0.03, dh = 0.008) =>
-  c.clone().offsetHSL(R(rng, -dh, dh), R(rng, -ds, ds), R(rng, -dl, dl));
-
-// Albedo canvases are tagged SRGBColorSpace — the STANDARD, portable colorspace.
-// The painted palette values are screen-space sRGB, so this renders correctly
-// through any consumer that decodes sRGB baseColor maps AND matches what
-// GLTFLoader forces on a baked GLB's baseColor on re-import — so the preview and
-// the exported asset agree (verified by round-trip). Normal/data maps pass
-// srgb=false (NoColorSpace). Consumers tune exposure/lighting to taste; the
-// asset's colorspace is never mis-tagged to compensate for a scene's lighting.
-function canvasTexture(canvas, repeatX = 1, repeatY = repeatX, srgb = false) {
-  const t = new THREE.CanvasTexture(canvas);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(repeatX, repeatY);
-  t.anisotropy = 4;
-  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  return t;
-}
-
-// Cheap sobel over the albedo's luminance → tangent-space normal map.
-function normalFromCanvas(canvas, strength = 1.2) {
-  const n = canvas.width;
-  const src = canvas.getContext("2d").getImageData(0, 0, n, n).data;
-  const lum = (x, y) => {
-    const i = ((((y % n) + n) % n) * n + (((x % n) + n) % n)) * 4;
-    return (src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114) / 255;
-  };
-  const out = makeCanvas(n);
-  const octx = out.getContext("2d");
-  const img = octx.createImageData(n, n);
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      const dx = (lum(x + 1, y) - lum(x - 1, y)) * strength;
-      const dy = (lum(x, y + 1) - lum(x, y - 1)) * strength;
-      const inv = 1 / Math.hypot(dx, dy, 1);
-      const o = (y * n + x) * 4;
-      img.data[o] = (-dx * inv * 0.5 + 0.5) * 255;
-      img.data[o + 1] = (dy * inv * 0.5 + 0.5) * 255;
-      img.data[o + 2] = (inv * 0.5 + 0.5) * 255;
-      img.data[o + 3] = 255;
-    }
-  }
-  octx.putImageData(img, 0, 0);
-  return out;
-}
-
-// -- paint functions: (ctx, n, base THREE.Color, rng) → draws one tile ------
-
-// Coursed stone: ashlar blocks over recessed mortar, per-block tone shifts.
-function paintAshlar(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.52));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 7, ch = n / courses;
-  for (let r = 0; r < courses; r++) {
-    let x = r % 2 ? -ch * 0.9 : 0; // running bond offset
-    while (x < n) {
-      const bw = ch * R(rng, 1.5, 2.3);
-      ctx.fillStyle = css(vary(rng, base, 0.06, 0.04));
-      ctx.fillRect(x + 1.5, r * ch + 1.5, bw - 3, ch - 3);
-      x += bw;
-    }
-  }
-  ctx.globalAlpha = 0.16; // pitting
-  for (let i = 0; i < 320; i++) {
-    ctx.fillStyle = rng() < 0.5 ? css(shade(base, 0.6)) : css(shade(base, 1.18));
-    ctx.fillRect(rng() * n, rng() * n, R(rng, 1, 2.6), R(rng, 1, 2.6));
-  }
-  ctx.globalAlpha = 1;
-}
-
-// Thatch: layered courses with a shadowed step, thousands of leaning strands.
-// Drawn TRANSPOSED (strands along canvas X): extrude side-faces and roof-slab
-// tops both map U down the slope, so strands must run along U to read as
-// combed-down thatch.
-function paintThatch(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.88));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 5, cw = n / courses;
-  for (let i = 0; i < 2200; i++) {
-    const x = rng() * n, y = rng() * n, len = R(rng, 7, 20), lean = R(rng, -2.5, 2.5);
-    ctx.lineWidth = R(rng, 0.7, 1.7);
-    ctx.strokeStyle = css(vary(rng, base, 0.22, 0.06));
-    ctx.globalAlpha = 0.55;
-    for (const [ox, oy] of [[0, 0], [-n, 0], [0, -n]]) { // wrap the seam
-      ctx.beginPath();
-      ctx.moveTo(x + ox, y + oy);
-      ctx.lineTo(x + len + ox, y + lean + oy);
-      ctx.stroke();
-    }
-  }
-  ctx.globalAlpha = 0.38; // course shadow lines (perpendicular to the strands)
-  ctx.fillStyle = css(shade(base, 0.4));
-  for (let r = 0; r < courses; r++) ctx.fillRect((r + 1) * cw - 4.5, 0, 4.5, n);
-  ctx.globalAlpha = 1;
-}
-
-// Daub/limewash plaster: soft mottled blotches + fine grit, never clean-flat.
-function paintPlaster(ctx, n, base, rng) {
-  ctx.fillStyle = css(base);
-  ctx.fillRect(0, 0, n, n);
-  for (let i = 0; i < 150; i++) {
-    ctx.fillStyle = css(vary(rng, base, 0.05, 0.02));
-    ctx.globalAlpha = 0.14;
-    ctx.beginPath();
-    ctx.arc(rng() * n, rng() * n, R(rng, 7, 30), 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 0.1;
-  for (let i = 0; i < 420; i++) {
-    ctx.fillStyle = rng() < 0.5 ? css(shade(base, 0.7)) : css(shade(base, 1.15));
-    ctx.fillRect(rng() * n, rng() * n, R(rng, 1, 2.2), R(rng, 1, 2.2));
-  }
-  ctx.globalAlpha = 1;
-}
-
-// Oak boards: vertical planks, tone-shifted, wavy grain, dark joints, knots.
-function paintOak(ctx, n, base, rng) {
-  const planks = 6, pw = n / planks;
-  for (let p = 0; p < planks; p++) {
-    ctx.fillStyle = css(vary(rng, base, 0.07, 0.05));
-    ctx.fillRect(p * pw, 0, pw, n);
-    ctx.globalAlpha = 0.28; // grain
-    for (let gLine = 0; gLine < 7; gLine++) {
-      const gx = p * pw + R(rng, 2, pw - 2), wob = R(rng, -3, 3);
-      ctx.strokeStyle = css(shade(base, R(rng, 0.55, 0.8)));
-      ctx.lineWidth = R(rng, 0.6, 1.4);
-      ctx.beginPath();
-      ctx.moveTo(gx, 0);
-      ctx.quadraticCurveTo(gx + wob, n / 2, gx, n);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-    if (rng() < 0.5) { // a knot
-      ctx.fillStyle = css(shade(base, 0.5));
-      ctx.beginPath();
-      ctx.ellipse(p * pw + pw / 2, rng() * n, R(rng, 2, 4), R(rng, 3, 6), 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.fillStyle = css(shade(base, 0.42)); // joint
-    ctx.fillRect(p * pw, 0, 1.8, n);
-  }
-}
-
-// Terracotta: staggered tile courses, scalloped shadow at each course foot.
-function paintTiles(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.7));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 6, ch = n / courses, tw = n / 8;
-  for (let r = 0; r < courses; r++) {
-    const off = (r % 2) * tw * 0.5;
-    for (let tIdx = -1; tIdx < 9; tIdx++) {
-      ctx.fillStyle = css(vary(rng, base, 0.07, 0.05, 0.012));
-      ctx.fillRect(tIdx * tw + off + 1, r * ch, tw - 2, ch - 2.5);
-    }
-    ctx.globalAlpha = 0.4; // scalloped course shadow
-    ctx.fillStyle = css(shade(base, 0.4));
-    for (let tIdx = -1; tIdx < 9; tIdx++) {
-      ctx.beginPath();
-      ctx.arc(tIdx * tw + off + tw / 2, (r + 1) * ch - 2, tw / 2.2, 0, Math.PI);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-}
-
-// Slate: thin staggered rectangular shingles, cool tone shifts.
-function paintSlate(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.55));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 7, ch = n / courses, sw = n / 6;
-  for (let r = 0; r < courses; r++) {
-    const off = (r % 2) * sw * 0.5;
-    for (let sIdx = -1; sIdx < 7; sIdx++) {
-      ctx.fillStyle = css(vary(rng, base, 0.06, 0.03));
-      ctx.fillRect(sIdx * sw + off + 1, r * ch + 1, sw - 2, ch - 2);
-    }
-  }
-}
-
-// Packed earth: trodden mottling with pebbles — for lanes and ground pads.
-function paintEarth(ctx, n, base, rng) {
-  ctx.fillStyle = css(base);
-  ctx.fillRect(0, 0, n, n);
-  for (let i = 0; i < 170; i++) {
-    ctx.fillStyle = css(vary(rng, base, 0.07, 0.04));
-    ctx.globalAlpha = 0.13;
-    ctx.beginPath();
-    ctx.arc(rng() * n, rng() * n, R(rng, 6, 26), 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 0.5;
-  for (let i = 0; i < 130; i++) {
-    ctx.fillStyle = css(shade(base, R(rng, 0.55, 1.3)));
-    ctx.beginPath();
-    ctx.ellipse(rng() * n, rng() * n, R(rng, 1, 3.4), R(rng, 1, 2.6), rng() * 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-}
-
-// Cobbles: rounded setts over dark bedding — the focal courtyard floor.
-function paintCobble(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.42));
-  ctx.fillRect(0, 0, n, n);
-  const rows = 9, rh = n / rows;
-  for (let r = 0; r < rows; r++) {
-    let x = (r % 2) * rh * 0.6;
-    while (x < n + rh) {
-      const rw = rh * R(rng, 0.9, 1.4);
-      ctx.fillStyle = css(vary(rng, base, 0.08, 0.04));
-      ctx.beginPath();
-      ctx.ellipse(x, r * rh + rh / 2, rw / 2 - 1, rh / 2 - 1.2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      x += rw;
-    }
-  }
-}
-
-// ---------------------------------------------------------------- materials
-// Every material is minted from direction.palette (role → hex) and painted
-// procedurally; mood strings flavor the finish. Fallback chains keep unknown
-// palettes usable.
-
-function makeMaterials(direction, rng) {
-  const pal = direction?.palette ?? {};
-  const mood = String(direction?.mood ?? "").toLowerCase();
-  const weathered = /weather|worn|aged|lived|grim|rust|decay/.test(mood);
-
-  // Resolve a palette role with fallbacks (generic palettes may omit roles).
-  const col = (...roles) => {
-    for (const r of roles) if (pal[r]) return new THREE.Color(pal[r]);
-    return new THREE.Color(0x8f8a80); // neutral last resort
-  };
-
-  // Textured material factory: paints an albedo tile from the palette color,
-  // derives its normal map, and bakes the mood into tone + roughness.
-  const mk = (paint, baseColor, { repeat = 1, repeatY, rough = 0.9, normal = 1.2 } = {}) => {
-    const base = baseColor.clone();
-    if (weathered) base.multiplyScalar(0.93);
-    const c = makeCanvas();
-    paint(c.getContext("2d"), c.width, base, rng);
-    return new THREE.MeshStandardMaterial({
-      map: canvasTexture(c, repeat, repeatY ?? repeat, true),            // albedo → sRGB
-      normalMap: canvasTexture(normalFromCanvas(c, normal), repeat, repeatY ?? repeat, false), // normals → linear
-      roughness: weathered ? Math.max(rough, 0.85) : rough,
-      metalness: 0.0,
-    });
-  };
-  const plain = (c, roughness) =>
-    new THREE.MeshStandardMaterial({ color: weathered ? shade(c, 0.93) : c, roughness, metalness: 0 });
-
-  // NOTE on repeats: box faces carry 0..1 UVs (repeat = tiles per face);
-  // extruded shapes carry world-unit UVs (repeat = tiles per metre). Wall/
-  // roof defaults below suit their dominant use; mats.scaled() re-tiles for
-  // the exceptions.
-  const timberC = col("timber", "trim", "stone");
-  const mats = {
-    stone: mk(paintAshlar, col("stone", "slate", "plaster"), { repeat: 2.2, rough: 0.92, normal: 1.7 }),
-    timber: mk(paintOak, timberC, { repeat: 1.6, rough: 0.8, normal: 1.1 }),
-    timberDark: mk(paintOak, shade(timberC, 0.68), { repeat: 1.6, rough: 0.85, normal: 1.1 }),
-    plaster: mk(paintPlaster, col("plaster", "stone"), { repeat: 1, rough: 0.85, normal: 0.7 }),
-    thatch: mk(paintThatch, col("thatch", "timber"), { repeat: 0.32, rough: 1.0, normal: 1.5 }),
-    slate: mk(paintSlate, col("slate", "stone", "trim"), { repeat: 0.4, rough: 0.75, normal: 1.2 }),
-    terracotta: mk(paintTiles, col("terracotta", "slate", "thatch"), { repeat: 0.3, rough: 0.8, normal: 1.5 }),
-    trim: plain(col("trim", "timber"), 0.8),
-    // dark voids for openings (windows/arrow slits) — derived, not invented
-    opening: plain(shade(col("trim", "slate"), 0.3), 0.95),
-    // rammed earth for the lane + ground pads — a blend of on-palette browns
-    earth: mk(paintEarth, col("timber", "trim").lerp(col("trim", "stone"), 0.45).lerp(new THREE.Color(0xffffff), 0.18), { repeat: 0.22, rough: 1.0, normal: 0.8 }),
-    cobble: mk(paintCobble, shade(col("stone", "trim").lerp(timberC, 0.35), 0.92), { repeat: 0.26, rough: 0.95, normal: 1.6 }),
-  };
-
-  // Re-tiled clone of a textured material (cached) — for meshes whose UV
-  // scale differs from the material's dominant use (box vs extrude).
-  const scaledCache = new Map();
-  mats.scaled = (name, rx, ry = rx) => {
-    const key = `${name}:${rx}:${ry}`;
-    if (scaledCache.has(key)) return scaledCache.get(key);
-    const src = mats[name];
-    const m = src.clone();
-    for (const slot of ["map", "normalMap"]) {
-      if (src[slot]) {
-        m[slot] = src[slot].clone();
-        m[slot].repeat.set(rx, ry);
-        m[slot].needsUpdate = true;
-      }
-    }
-    scaledCache.set(key, m);
-    return m;
-  };
-
-  // Per-instance tint jitter (deterministic) for e.g. cottage daub — nudges
-  // the material's tint over the shared texture.
-  mats.jitter = (base, amt = 0.05) => {
-    const m = base.clone();
-    const hsl = { h: 0, s: 0, l: 0 };
-    m.color.getHSL(hsl);
-    m.color.setHSL(
-      hsl.h + R(rng, -amt, amt) * 0.03,
-      Math.max(0, hsl.s + R(rng, -amt, amt) * 0.2),
-      THREE.MathUtils.clamp(hsl.l + R(rng, -amt, amt) * 0.12, 0.7, 1)
-    );
-    return m;
-  };
-  return mats;
-}
+// The procedural textures + material factory (makeMaterials, paintAshlar/…/paintEarth/
+// paintCobble, canvasTexture, normalFromCanvas) were EXTRACTED to the shared, THREE-agnostic
+// js/src/world/pipeline/village-materials.mjs so the engine skill dresses its ground identically.
+// buildVillage calls makeMaterials(THREE, direction, rng) below.
 
 // ------------------------------------------------------------ geometry kit
 // Small shared vocabulary the style-builders compose from.
@@ -959,114 +643,38 @@ function builderFor(style) {
 // above, plus the lane + ground pads below (which consume the returned placements).
 
 // --------------------------------------------------------------------- lane
+// The lane ribbon + ground-pad GEOMETRY now come from the PURE, shared brain
+// js/src/world/pipeline/village-geometry.mjs (buildLaneGeometry / buildGroundPad-
+// Geometry) so the preview and the engine's village.build author IDENTICAL ground
+// with no drift. These thin wrappers wrap the returned flat buffers into THREE
+// BufferGeometry + Mesh with this module's procedural earth/cobble materials.
 
 // Winding rammed-earth ribbon that conforms to the terrain, threaded through
 // a nearest-neighbour chain of the placed buildings starting at the focal.
 function buildLane(terrain, placed, mats) {
-  if (placed.length < 2) return { mesh: null, samples: [] };
-
-  // Chain: focal first, then always hop to the nearest unvisited building.
-  const chain = [placed[0]];
-  const rest = placed.slice(1);
-  while (rest.length) {
-    const cur = chain[chain.length - 1];
-    let bi = 0, bd = Infinity;
-    rest.forEach((p, i) => {
-      const d = Math.hypot(p.x - cur.x, p.z - cur.z);
-      if (d < bd) { bd = d; bi = i; }
-    });
-    chain.push(rest.splice(bi, 1)[0]);
-  }
-
-  // Waypoints sit just OUTSIDE each footprint, nudged toward the neighbours,
-  // so the lane brushes past doors instead of tunnelling through walls.
-  const pts = chain.map((p, i) => {
-    const prev = chain[Math.max(0, i - 1)];
-    const next = chain[Math.min(chain.length - 1, i + 1)];
-    const mid = new THREE.Vector2((prev.x + next.x) / 2 - p.x, (prev.z + next.z) / 2 - p.z);
-    if (mid.lengthSq() < 1e-6) mid.set(1, 0);
-    mid.normalize().multiplyScalar(p.r + 2.5);
-    const x = p.x + mid.x, z = p.z + mid.y;
-    return new THREE.Vector3(x, terrain.heightAt(x, z), z);
-  });
-
-  const curve = new THREE.CatmullRomCurve3(pts, false, "centripetal", 0.6);
-  const n = Math.max(64, pts.length * 24);
-  const samples = curve.getPoints(n);
-
-  // Ribbon: two vertices per sample, each re-seated on the terrain. UVs run
-  // in metres (u across, v along the arc) to match the earth texture tiling.
-  const halfW = 1.4, up = new THREE.Vector3(0, 1, 0);
-  const pos = new Float32Array((n + 1) * 2 * 3);
-  const uv = new Float32Array((n + 1) * 2 * 2);
-  const idx = [];
-  let arc = 0;
-  for (let i = 0; i <= n; i++) {
-    const p = samples[i];
-    if (i > 0) arc += p.distanceTo(samples[i - 1]);
-    const t = curve.getTangent(i / n);
-    t.y = 0;
-    if (t.lengthSq() < 1e-6) t.set(0, 0, 1);
-    t.normalize();
-    const side = new THREE.Vector3().crossVectors(up, t).multiplyScalar(halfW);
-    for (const s of [1, -1]) {
-      const x = p.x + side.x * s, z = p.z + side.z * s;
-      const o = (i * 2 + (s > 0 ? 0 : 1)) * 3;
-      pos[o] = x;
-      pos[o + 1] = terrain.heightAt(x, z) + 0.07; // float just above ground
-      pos[o + 2] = z;
-      const u = (i * 2 + (s > 0 ? 0 : 1)) * 2;
-      uv[u] = s > 0 ? 0 : halfW * 2;
-      uv[u + 1] = arc;
-    }
-    if (i < n) {
-      const a = i * 2;
-      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-  }
+  const g = buildLaneGeometry((x, z) => terrain.heightAt(x, z), placed);
+  if (g === null) return { mesh: null };
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
-  geo.setIndex(idx);
+  geo.setAttribute("position", new THREE.BufferAttribute(g.positions, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
+  geo.setIndex(g.indices);
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, mats.earth);
   mesh.receiveShadow = true; // flat ribbon: receives shadow, casting it would only z-fight
-  return { mesh, samples };
+  return { mesh };
 }
 
 // -------------------------------------------------------------- ground pads
 
 // Terrain-conforming disc of trodden ground under a building (or courtyard
-// around the focal): a polar grid re-seated on the terrain, outer ring tucked
-// slightly INTO the ground so the edge feathers away instead of floating.
-// This is the settled, lived-in ground that explains the cleared footprint.
+// around the focal): the settled, lived-in ground that explains the cleared
+// footprint. Geometry from the shared brain; material chosen by the caller.
 function groundPad(terrain, x0, z0, r, mat, lift = 0.14) {
-  const rings = THREE.MathUtils.clamp(Math.round(r / 1.8), 6, 16), seg = 36;
-  const pos = [x0, terrain.heightAt(x0, z0) + lift, z0];
-  const uv = [x0, z0];
-  const idx = [];
-  for (let i = 1; i <= rings; i++) {
-    const rad = (r * i) / rings;
-    const sink = i === rings ? -0.4 : lift; // feather the rim under the turf
-    for (let s = 0; s < seg; s++) {
-      const a = (s / seg) * Math.PI * 2;
-      const x = x0 + Math.cos(a) * rad, z = z0 + Math.sin(a) * rad;
-      pos.push(x, terrain.heightAt(x, z) + sink, z);
-      uv.push(x, z); // metre-space UVs → matches the earth/cobble tiling
-    }
-  }
-  const at = (ring, s) => 1 + (ring - 1) * seg + ((s % seg) + seg) % seg;
-  for (let s = 0; s < seg; s++) idx.push(0, at(1, s + 1), at(1, s));
-  for (let ring = 1; ring < rings; ring++) {
-    for (let s = 0; s < seg; s++) {
-      idx.push(at(ring, s), at(ring, s + 1), at(ring + 1, s));
-      idx.push(at(ring, s + 1), at(ring + 1, s + 1), at(ring + 1, s));
-    }
-  }
+  const g = buildGroundPadGeometry((x, z) => terrain.heightAt(x, z), x0, z0, r, lift);
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
-  geo.setIndex(idx);
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(g.positions, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(g.uvs, 2));
+  geo.setIndex(g.indices);
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
@@ -1083,7 +691,7 @@ export async function buildVillage(terrain, direction, steering) {
     p: direction?.palette, b: steering?.buildings, l: steering?.layout,
   });
   const rng = mulberry32(hashStr(seedKey));
-  const mats = makeMaterials(direction, rng);
+  const mats = makeMaterials(THREE, direction, rng);
 
   // -- 1) Expand steering.buildings into concrete instances and BUILD them at the
   //       origin first (so their real footprint radii drive the shared layout).
@@ -1150,6 +758,6 @@ export async function buildVillage(terrain, direction, steering) {
 // builders + materials buildVillage uses, just one instance at the origin.
 export function buildStandalone(style, direction = {}, seed = 1) {
   const rng = mulberry32((seed >>> 0) || 1);
-  const mats = makeMaterials(direction, rng);
+  const mats = makeMaterials(THREE, direction, rng);
   return builderFor(style)({ rng, mats, role: style });
 }

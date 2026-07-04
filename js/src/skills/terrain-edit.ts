@@ -13,7 +13,8 @@ import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
-import { buildTerrainMesh, terrainTileBufferGeometry } from "../terrain/render.ts";
+import { applyElevationColors, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
+import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 /** An inert transform for the terrain entity's ECS slot (the mesh is world-fixed at its origin). */
@@ -21,7 +22,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -37,6 +38,34 @@ const createInput = z.object({
   baseHeight: z.number().default(0),
   /** Ground color for the render mesh. */
   color: z.number().int().min(0).max(0xffffff).default(0x4a6b3a),
+  /**
+   * OPTIONAL procedural eroded terrain. When present, the layer starts NOT as a flat slab but
+   * as a real eroded heightfield (fBm → hydraulic + thermal erosion → drainage channels) filled
+   * by the PURE, deterministic generator (world/pipeline/terrain-heightfield.mjs), and the render
+   * mesh gets sand/grass/rock/snow elevation colors. Only these PARAMS are recorded — replay
+   * regenerates byte-identical heights (never the height array). Absent → the flat slab default
+   * (backward compatible; existing flat terrain.create ops replay unchanged).
+   */
+  generate: z.object({
+    seed: z.number().int().default(1337),
+    /** Peak relief in meters (0..amplitude above origin.y). */
+    amplitude: z.number().positive().default(14),
+    /** Fraction of the map below the derived sea level (drives the sand/grass line). */
+    seaCoverage: z.number().min(0).max(1).optional(),
+    /** Base fBm frequency (smaller = broader landforms). */
+    noiseScale: z.number().positive().optional(),
+    octaves: z.number().int().min(1).max(12).optional(),
+    lacunarity: z.number().positive().optional(),
+    gain: z.number().positive().optional(),
+    /** Domain-warp strength (meanders the ridgelines). */
+    warp: z.number().min(0).optional(),
+    /** Erosion recipe overrides (rain droplets / thermal passes / talus angle). */
+    erosion: z.object({
+      rain: z.number().min(0).optional(),
+      thermal: z.number().int().min(0).optional(),
+      talus: z.number().min(0).optional(),
+    }).optional(),
+  }).optional(),
 });
 
 const DEFORM_MODES = ["raise", "lower", "smooth", "flatten", "noise"] as const;
@@ -132,14 +161,41 @@ export function registerTerrainEditSkills(
     output: z.object({ entity: z.string() }),
     handler: (input, ctx) => {
       const n = input.resolution;
-      const heights = new Float32Array(n * n);
-      if (input.baseHeight !== 0) heights.fill(input.baseHeight);
+      // Heights: a flat slab by default, OR a PURE eroded heightfield when `generate` is set.
+      // The generator produces an (n)×(n) grid over `size` meters (gridN = n-1 vertices/edge)
+      // deterministically from the recorded params, so replay reconstructs identical heights.
+      let heights: Float32Array;
+      let elevationColors: { seaLevel: number; amplitude: number } | undefined;
+      if (input.generate !== undefined) {
+        const g = input.generate;
+        const gh = generateHeightfield({
+          seed: g.seed,
+          amplitude: g.amplitude,
+          sizeM: input.size,
+          gridN: n - 1,
+          ...(g.seaCoverage !== undefined ? { seaCoverage: g.seaCoverage } : {}),
+          ...(g.noiseScale !== undefined ? { noiseScale: g.noiseScale } : {}),
+          ...(g.octaves !== undefined ? { octaves: g.octaves } : {}),
+          ...(g.lacunarity !== undefined ? { lacunarity: g.lacunarity } : {}),
+          ...(g.gain !== undefined ? { gain: g.gain } : {}),
+          ...(g.warp !== undefined ? { warp: g.warp } : {}),
+          ...(g.erosion !== undefined ? { erosion: g.erosion } : {}),
+        }) as { heights: Float32Array; cfg: { seaLevelM: number; amplitude: number } };
+        heights = gh.heights;
+        // snowFrac 0.95: snow caps the summit. village.build CAPS the focal terrace height well below
+        // this line (see its leveling), so the inhabited/terraced knoll stays snow-free while the
+        // steep true peak keeps its cap.
+        elevationColors = { seaLevel: input.origin[1] + gh.cfg.seaLevelM, amplitude: gh.cfg.amplitude, snowFrac: 0.95 };
+      } else {
+        heights = new Float32Array(n * n);
+        if (input.baseHeight !== 0) heights.fill(input.baseHeight);
+      }
       const tile: TerrainTile = { nrows: n, ncols: n, origin: [input.origin[0], input.origin[1], input.origin[2]], scale: [input.size, 1, input.size], heights };
 
       let mesh: MeshLike | undefined;
       const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
       if (scene !== undefined && typeof scene.add === "function") {
-        const built = buildTerrainMesh(tile, { color: input.color });
+        const built = buildTerrainMesh(tile, elevationColors !== undefined ? { color: input.color, elevationColors } : { color: input.color });
         scene.add(built);
         mesh = built as unknown as MeshLike;
       }
@@ -151,7 +207,9 @@ export function registerTerrainEditSkills(
       }
       const origin = { tool: "terrain.create", input: { ...input } };
       const entity = ctx.world.entities.create({ eid, mesh: mesh as never, origin });
-      layers.set(entity, { tile, mesh, eid });
+      // Stash the elevation ramp so terrain.deform can re-color the rebuilt geometry (a deform
+      // that levels a terrace would otherwise drop the vertex colors → a white patch).
+      layers.set(entity, { tile, mesh, eid, ...(elevationColors !== undefined ? { elevationColors } : {}) });
       ctx.emit("terrain.created", { entity, size: input.size, resolution: n });
       return { entity };
     },
@@ -180,6 +238,9 @@ export function registerTerrainEditSkills(
       // Rebuild the render geometry from the mutated heights (browser render context only).
       if (layer.mesh !== undefined) {
         const next = terrainTileBufferGeometry(layer.tile);
+        // Re-apply elevation vertex colors so a leveled terrace keeps its sand/grass/rock/snow
+        // shading instead of reverting to the material's flat base color.
+        if (layer.elevationColors !== undefined) applyElevationColors(next, layer.tile, layer.elevationColors);
         const old = layer.mesh.geometry;
         (layer.mesh as unknown as { geometry: unknown }).geometry = next;
         old.dispose?.();

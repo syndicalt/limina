@@ -74,6 +74,15 @@ export interface TerrainMeshOptions {
    * placed at TRUE heights assume `factor: 1`; only exaggerate for a bare-DEM look.
    */
   exaggerateY?: { factor: number; pivot: number };
+  /**
+   * OPT-IN elevation-based VERTEX COLORS (dependency-free — no TSL, no climate texture).
+   * When set, each vertex is tinted by its world-Y + local slope with the SAME sand → grass →
+   * rock → snow bands the eroded pipeline (world/pipeline/terrain.mjs) uses, so a generated
+   * heightfield reads as real ground instead of a flat mottled slab. This is the lightweight
+   * counterpart to the TSL `palette` ramp — it just writes a `color` attribute + flips the
+   * material to vertexColors, which works on any backend. Omit for the flat matte default.
+   */
+  elevationColors?: { seaLevel: number; amplitude: number; snowFrac?: number };
 }
 
 /**
@@ -322,6 +331,64 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
 // shows a real edge would expose a raw, untextured skirt. A future pass should generate + texture
 // a downward termination skirt (or fog/clip the boundary) so a shown edge reads intentionally.
 // Out of scope for the demo (whose answer is the falloff); logged so it isn't lost.
+/** The eroded-pipeline elevation palette (world/pipeline/terrain.mjs COL) — the SAME band
+ *  colors so a generated engine tile matches the preview's terrain look. */
+const ELEV_COL = {
+  sand: new THREE.Color(0xc4b68e),
+  grass: new THREE.Color(0x5f7f3c),
+  grassDark: new THREE.Color(0x44602a),
+  rock: new THREE.Color(0x736b60),
+  snow: new THREE.Color(0xe2e7ec),
+} as const;
+
+/** Write a per-vertex `color` attribute onto a tile geometry from world-Y + local slope, using
+ *  the SAME sand/grass/rock/snow banding as the eroded pipeline. Deterministic (pure arithmetic
+ *  over the tile heights). Caller flips the material to vertexColors. */
+export interface ElevationColorRamp { seaLevel: number; amplitude: number; snowFrac?: number }
+
+export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTile, ramp: ElevationColorRamp): void {
+  const { nrows, ncols, origin, scale, heights } = tile;
+  const [ox, oy, oz] = origin;
+  const [sx, sy, sz] = scale;
+  const x0 = ox - sx / 2, z0 = oz - sz / 2;
+  const dxStep = sx / (ncols - 1), dzStep = sz / (nrows - 1);
+  const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
+  const heightAt = (x: number, z: number): number => {
+    const fc = clamp((x - x0) / dxStep, 0, ncols - 1);
+    const fr = clamp((z - z0) / dzStep, 0, nrows - 1);
+    const c0 = Math.floor(fc), r0 = Math.floor(fr);
+    const c1 = Math.min(ncols - 1, c0 + 1), r1 = Math.min(nrows - 1, r0 + 1);
+    const tx = fc - c0, tz = fr - r0;
+    const h = (r: number, c: number): number => oy + heights[r * ncols + c] * sy;
+    const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
+    const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
+    return a + (b - a) * tz;
+  };
+  const step = Math.max(1e-3, dxStep);
+  const slopeAt = (x: number, z: number): number =>
+    Math.hypot(heightAt(x + step, z) - heightAt(x - step, z), heightAt(x, z + step) - heightAt(x, z - step)) / (2 * step);
+
+  const pos = geom.getAttribute("position") as THREE.BufferAttribute;
+  const count = pos.count;
+  const colors = new Float32Array(count * 3);
+  const c = new THREE.Color();
+  const sea = ramp.seaLevel;
+  // Snow caps only the highest band (default 0.82 of relief, matching the pipeline). A settlement
+  // planned onto the HIGH ground sits near that line, so generated engine terrain raises it — snow
+  // stays on the steep true peak while the inhabited knoll reads as grass/rock.
+  const snowY = oy + ramp.amplitude * (ramp.snowFrac ?? 0.82);
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const slope = Math.min(1, slopeAt(x, z) * 1.2);
+    if (y < sea + 0.6) c.copy(ELEV_COL.sand);
+    else if (y > snowY) c.copy(ELEV_COL.snow);
+    else c.copy(ELEV_COL.grass).lerp(ELEV_COL.grassDark, (Math.sin((x + z) * 0.2) * 0.5 + 0.5) * 0.3);
+    if (slope > 0.4 && y >= sea) c.lerp(ELEV_COL.rock, Math.min(1, (slope - 0.4) / 0.4));
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
   const { positions, indices, normals } = terrainTileGeometry(tile);
@@ -356,6 +423,14 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
   if (opts.pbr !== undefined) applyPbrMaterial(material, tile, baseRough, opts.pbr);
   else if (opts.palette !== undefined) applyBiomeRamp(material, tile, baseRough, opts.palette);
   else if (opts.shoreline !== undefined) applyShoreline(material, baseColor, baseRough, opts.shoreline);
+  // Opt-in lightweight elevation vertex colors (no TSL/climate) — sand/grass/rock/snow bands
+  // written to a `color` attribute; flip the material to read them (base color → white so the
+  // vertex colors show true). Independent of the TSL ramps above; used by generated terrain.
+  else if (opts.elevationColors !== undefined) {
+    applyElevationColors(geom, tile, opts.elevationColors as ElevationColorRamp);
+    material.vertexColors = true;
+    material.color.set(0xffffff);
+  }
   // Opt-in render-only vertical exaggeration (geometry only; identity when factor === 1).
   if (opts.exaggerateY !== undefined && opts.exaggerateY.factor !== 1) {
     const { factor, pivot } = opts.exaggerateY;

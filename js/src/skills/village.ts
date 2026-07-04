@@ -17,13 +17,39 @@
 // resolved through the content-addressed registry so they ride the export for replay.
 
 import { z } from "../../build/zod.bundle.mjs";
+import * as THREE from "../../build/three.bundle.mjs";
 import { AssetRegistry } from "../asset-registry.ts";
+import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import type { Transformable } from "../ecs/world.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 // The shared, pure layout brain (dependency-free JS; imported as `any`). planVillage is
 // a deterministic function of (sampler, direction, steering, radii); hashStr derives a
 // stable seed for the recorded request.
-import { planVillage, hashStr } from "../world/pipeline/village-layout.mjs";
+import { hashStr, mulberry32, planVillage } from "../world/pipeline/village-layout.mjs";
+// The shared, pure GROUND geometry (the SAME lane ribbon + terrain-conforming pads the preview
+// authors) — returns flat {positions,uvs,indices}; we wrap them into meshes + spawn them as
+// recorded entities. A pure function of (terrain, placements, radii) — recomputed on replay.
+import { buildLaneGeometry, buildGroundPadGeometry } from "../world/pipeline/village-geometry.mjs";
+// The SHARED procedural material factory (identical earth/cobble the preview paints) — THREE is
+// injected so the engine's three/webgpu build is used. Same no-drift discipline as the layout.
+import { makeMaterials } from "../world/pipeline/village-materials.mjs";
+
+/** An inert transform for a ground mesh entity's ECS slot (the mesh is world-fixed). */
+const inertTransform = (): Transformable => ({ position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } });
+interface MeshLike { geometry: { dispose?: () => void }; }
+
+/** Wrap a pure {positions,uvs,indices} buffer set into a shadow-receiving ground mesh. */
+function meshFromBuffers(buf: { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] }, mat: THREE.Material): THREE.Mesh {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(buf.positions as never, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(buf.uvs as never, 2));
+  geo.setIndex(buf.indices);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = true; // flat ground: receives shadow; casting would only z-fight
+  return mesh;
+}
 
 /** Permission scope for village.build — the SAME scope asset.place declares (village.build's
  *  only side effect is invoking asset.place, under least-privilege, not the caller's full grant). */
@@ -180,12 +206,51 @@ export function registerVillageSkills(
         for (let i = 0; i < count; i++) { radii.push(r); assetOf.push(spec.assetId); }
       }
 
-      // -- Run the SHARED, pure layout.
+      // -- Run the SHARED, pure layout (over the ORIGINAL terrain — sites are chosen on the real
+      //    eroded ground, keeping the flatness/contour preference).
       const { placements } = planVillage(sampler, input.direction, input.steering, radii) as {
         placements: Array<{ role: string; style: string; index: number; x: number; z: number; yaw: number }>;
       };
 
-      // -- Place each building via asset.place (grounded to the sampled height). The nested
+      // -- v2 TERRACING: LEVEL each footprint into a flat platform cut into the hillside BEFORE
+      //    placing, so buildings sit FLUSH (no uphill burial / downhill float) and the settlement
+      //    reads as genuinely terraced. Targets are the ORIGINAL center heights (captured before any
+      //    leveling, so the order of cuts can't perturb them). Each cut is a recorded terrain.deform
+      //    (flatten): a wider SMOOTH flatten grades the terrace shoulder into the slope, then an inner
+      //    CONSTANT-falloff disc stamps a dead-flat platform over the footprint (+ a small apron).
+      //    heightAt reads the layer's live heights (same array terrain.deform mutates), so subsequent
+      //    placement + ground pads see the leveled terraces. Deterministic + replay-safe (nested under
+      //    village.build via ctx.chainId; logs ops, never heights).
+      const levelTargets = placements.map((p) => heightAt(p.x, p.z));
+      // Cap the FOCAL terrace height comfortably below the terrain's snow line: the focal seats on the
+      // very highest ground, so leveling a terrace there would otherwise fill flanks up to the snowy
+      // summit. Cutting it to ≈0.82 of the relief keeps the citadel + its terrace below the snow band
+      // (terrain.create caps snow at ~0.95), so the peak keeps its cap while the settlement stays green.
+      const snowSafeFocalTop = sampler.seaLevel + 2 + Math.max(1, hi - lo) * 0.82;
+      for (let k = 0; k < placements.length; k++) {
+        const p = placements[k];
+        const r = radii[p.index];
+        const isFocal = k === 0;
+        // Dead-flat platform: for the focal it spans the whole plaza (≈ its earth apron, below) so the
+        // apron + cobbled courtyard sit on level ground with no terrain poking through; cottages get a
+        // tight platform just past their footprint. A wider SMOOTH flatten grades the shoulder out.
+        const flatR = isFocal ? r + 9 : r * 1.25 + 1.5;
+        const shoulderR = isFocal ? r + 15 : r * 2.0 + 2.0;
+        // flatten TARGET (relative to origin.y); the focal is capped below the snow line.
+        const targetH = isFocal ? Math.min(levelTargets[k], snowSafeFocalTop) : levelTargets[k];
+        const target = targetH - oy;
+        for (const [radius, falloff] of [[shoulderR, "smooth"], [flatR, "constant"]] as const) {
+          const res = await registry.invoke("terrain.deform", {
+            entity: id, center: [p.x, p.z], radius, delta: target, mode: "flatten", falloff,
+          }, {
+            agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(PLACE_PERMS),
+            tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+          });
+          if (!res.success) throw new Error(`village.build: terrain.deform (level) failed: ${JSON.stringify(res.error)}`);
+        }
+      }
+
+      // -- Place each building via asset.place (grounded to the LEVELED platform height). The nested
       //    invoke is folded into this command (ctx.chainId) and runs under village.build's OWN
       //    least-privilege scope, reproduced on replay by re-running the plan.
       const entities: string[] = [];
@@ -206,6 +271,47 @@ export function registerVillageSkills(
         if (!res.success) throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
         entities.push((res.result as { entity: string }).entity);
         outPlacements.push({ assetId, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+      }
+
+      // -- v2 GROUND: the winding lane + a trodden pad under every building (+ the focal earth
+      //    apron with a cobbled courtyard on top) — the SAME shared geometry the preview authors,
+      //    seated on THIS terrain's heightfield. A PURE function of (heights, placements, radii),
+      //    so replay re-runs village.build and recomputes them byte-identically — we spawn the
+      //    meshes + record their existence as entities, but log NO vertices.
+      const placed = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] }));
+      const groundGeoms: Array<{ buf: { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] }; kind: "earth" | "cobble" }> = [];
+      const laneBuf = buildLaneGeometry(heightAt, placed) as { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] } | null;
+      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: "earth" });
+      for (let k = 0; k < placements.length; k++) {
+        const p = placements[k];
+        const r = radii[p.index];
+        if (k === 0) {
+          // focal: broad earth apron draping the WHOLE terrace (flat plaza + graded shoulder, ≈ shoulderR)
+          // so the raised terrace-fill never shows as bare snow/rock; a cobbled courtyard on the flat plaza.
+          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 16, 0.2), kind: "earth" });
+          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 4, 0.32), kind: "cobble" });
+        } else {
+          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r * 1.15 + 1, 0.14), kind: "earth" });
+        }
+      }
+      const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
+      const canRender = scene !== undefined && typeof scene.add === "function";
+      // The SHARED procedural earth/cobble materials (canvas2d textures) — only minted in a render
+      // context; headless authoring records the ground entities without meshes. Seeded from the
+      // recorded request so the ground look is deterministic (render-only; not part of the log).
+      const groundSeed = (input.seed ?? (hashStr(JSON.stringify({ d: input.direction, s: input.steering })) as number)) >>> 0;
+      const mats = canRender ? makeMaterials(THREE, input.direction, mulberry32(groundSeed || 1)) : null;
+      for (const spec of groundGeoms) {
+        let mesh: MeshLike | undefined;
+        if (canRender && mats !== null) {
+          const m = meshFromBuffers(spec.buf, spec.kind === "cobble" ? mats.cobble : mats.earth);
+          scene!.add!(m);
+          mesh = m as unknown as MeshLike;
+        }
+        const geid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
+        if (geid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, geid); throw new Error("village.build: entity capacity exceeded (MAX_ENTITIES) placing ground geometry"); }
+        const groundEntity = ctx.world.entities.create({ eid: geid, mesh: mesh as never, origin: { tool: "village.build", input: { ground: true } } });
+        entities.push(groundEntity);
       }
 
       // -- Record the REQUEST on the trace: direction + steering + seed + pinned hashes + count,

@@ -2,12 +2,10 @@
   "commands": [
     { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
 
-    { "kind": "skill", "tool": "terrain.create", "input": { "size": 120, "resolution": 128, "baseHeight": 0, "color": 5926970 } },
-
-    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 46, "delta": 10, "mode": "raise", "falloff": "smooth" } },
-    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [2, -3], "radius": 24, "delta": 8, "mode": "raise", "falloff": "smooth" } },
-    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 10, "delta": 4, "mode": "raise", "falloff": "smooth" } },
-    { "kind": "skill", "tool": "terrain.deform", "input": { "center": [0, 0], "radius": 14, "delta": 0, "mode": "smooth", "falloff": "smooth" } },
+    { "kind": "skill", "tool": "terrain.create", "input": {
+      "size": 120, "resolution": 128, "color": 5926970,
+      "generate": { "seed": 6, "amplitude": 16, "seaCoverage": 0.2, "erosion": { "rain": 1.5, "thermal": 6 } }
+    } },
 
     { "kind": "skill", "tool": "village.build", "input": {
       "direction": {
