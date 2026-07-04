@@ -13,6 +13,7 @@ import { scatterProps } from "./scatter.ts";
 import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
 import { applyPbrMaterial, type TerrainPbrOptions } from "./material-pbr.ts";
+import { sharedDetailTexture, triplanarLayer } from "../materials/triplanar-noise.ts";
 export type { TerrainPbrOptions } from "./material-pbr.ts";
 
 export interface TerrainMeshOptions {
@@ -405,6 +406,34 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
   geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 }
 
+/** Add TSL surface MICRO-RELIEF to the vertex-colored elevation terrain (the `elevationColors`
+ *  path). The bands are per-vertex colours (a flat clay read: light lands the same everywhere in
+ *  a band). This layers a real detail NORMAL on top without touching the albedo, so the ground
+ *  catches light with micro-relief and STEEP faces read as craggy ROCK instead of flat grey:
+ *    • a FINE grain normal everywhere (fields/grass/sand pick up a subtle grained surface), and
+ *    • a COARSER, stronger ROCK crag normal blended in by SLOPE (cliffs/terrace cuts read rocky).
+ *  Albedo stays the exact per-vertex elevation bands — the snow-scree slope gate in
+ *  applyElevationColors is untouched, so no snow/scree regression. Render-only, deterministic
+ *  (shared baked noise singleton — same grain family as the PBR terrain path), no time node. */
+function applyElevationSurfaceDetail(material: THREE.MeshStandardNodeMaterial, baseRough: number): void {
+  const tex = sharedDetailTexture();
+  const sharp = 4;
+  const grainL = triplanarLayer(tex, 0.32, 0.45, sharp); // fine ground micro-relief (cycles/m)
+  const rockL = triplanarLayer(tex, 0.13, 1.0, sharp);   // coarse cliff crags
+  // Geometric steepness (0 flat → 1 vertical); steep faces swap the fine grain for strong crags.
+  const steep = T.clamp(T.oneMinus(T.normalWorld.y), 0, 1);
+  const cliffMask = T.smoothstep(0.35, 0.72, steep);
+  const nrm = T.mix(grainL.normal, rockL.normal, cliffMask);
+  // Terrain geometry is identity-transformed (positions already world-space), so the perturbed
+  // world normal → view space via transformNormalToView — the same idiom water.ts / the PBR path use.
+  material.normalNode = T.transformNormalToView(nrm.normalize());
+  // Faint roughness break-up from the fine grain so grazing golden-hour light glints on the relief
+  // instead of a uniform matte. Cliffs read a touch rougher (dry rock). Kept subtle.
+  let rough = T.float(baseRough).sub(grainL.value.sub(0.5).mul(0.12));
+  rough = T.mix(rough, T.float(Math.min(1, baseRough + 0.03)), cliffMask.mul(0.5));
+  material.roughnessNode = T.clamp(rough, 0.5, 1);
+}
+
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
   const { positions, indices, normals } = terrainTileGeometry(tile);
@@ -446,6 +475,9 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
     applyElevationColors(geom, tile, opts.elevationColors as ElevationColorRamp);
     material.vertexColors = true;
     material.color.set(0xffffff);
+    // Layer TSL micro-relief (detail normal + slope-aware rock crags) on top of the vertex
+    // bands so the ground catches light and cliffs read craggy — albedo/banding untouched.
+    applyElevationSurfaceDetail(material, baseRough);
   }
   // Opt-in render-only vertical exaggeration (geometry only; identity when factor === 1).
   if (opts.exaggerateY !== undefined && opts.exaggerateY.factor !== 1) {

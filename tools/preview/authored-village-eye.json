@@ -50,8 +50,8 @@
         "coverage": 0.62,
         "cluster": 0.5,
         "sizeRange": [
-          0.7,
-          1.4
+          0.45,
+          0.8
         ]
       }
     },
@@ -139,27 +139,33 @@
     }
   ],
   "renderBaseline": {
-    "exposure": 1,
+    "exposure": 1.05,
     "sun": {
-      "color": 16773330,
-      "intensity": 4.4,
+      "color": 16770744,
+      "intensity": 4.6,
       "direction": [
-        -46,
-        44,
-        24
+        -52,
+        34,
+        22
       ]
     },
     "hemisphere": {
       "skyColor": 12374271,
       "groundColor": 4872752,
-      "intensity": 1.4
+      "intensity": 1.8
     },
-    "ambientIntensity": 0.42,
-    "ambientColor": 5595250,
+    "ambientIntensity": 0.66,
+    "ambientColor": 7036501,
+    "sky": {
+      "top": 7314377,
+      "horizon": 15520674,
+      "bottom": 5916728
+    },
+    "environmentIntensity": 1.4,
     "atmosphere": {
       "enabled": true,
-      "color": 13819321,
-      "density": 0.004
+      "color": 14732448,
+      "density": 0.0021
     },
     "ground": {
       "enabled": false,
