@@ -139,6 +139,13 @@ export function registerVillageSkills(
    *  which vegetation.scatter auto-includes as exclusions. Replace (not append) keeps it replay-safe:
    *  a re-run recomputes byte-identical discs from the same config. */
   footprints: Map<string, ScatterExclusion[]> = new Map(),
+  /** Shared VEGETATION-CLEAR registry (keyed by terrain id). After village.build computes + registers
+   *  this terrain's footprints, it invokes every registered vegetation clear closure so any forest /
+   *  grass grown on the NATURAL terrain BEFORE this build is re-mounted with the settlement footprints
+   *  carved out — expressing the canonical causal order (nature first, civilization clears) in the
+   *  scene even though vegetation ran earlier in the command list. Empty when no veg preceded (the
+   *  legacy veg-after-village order, where the exclusion is already applied at veg mount time). */
+  vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
 ): void {
   const build: SkillDefinition<z.infer<typeof buildInput>, z.infer<typeof buildOutput>> = {
     name: "village.build",
@@ -360,6 +367,15 @@ export function registerVillageSkills(
         }
       }
       footprints.set(id, exclusions);
+
+      // -- SUBTRACTIVE CLEAR: now that this terrain's footprints are registered, re-mount any
+      //    vegetation that was grown on the NATURAL terrain BEFORE this build so it is re-computed
+      //    with the settlement footprints carved out — the forest/grass under each building pad, the
+      //    focal courtyard, and the lane corridor are dropped from their instanced meshes. Pure +
+      //    replay-safe: the closures recompute deterministic placements against the deterministic
+      //    footprints. No-op when vegetation ran AFTER this build (its mount already saw the discs).
+      const clears = vegetationClears.get(id);
+      if (clears !== undefined) { for (const clear of clears) await clear(); }
 
       // -- Record the REQUEST on the trace: direction + steering + seed + pinned hashes + count,
       //    NEVER the individual transforms (recomputed on replay).

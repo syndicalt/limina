@@ -88,6 +88,11 @@ export function registerVegetationSkills(
    *  with any explicit `exclusions`, so trees avoid the village with no manual wiring. */
   footprints: Map<string, ScatterExclusion[]> = new Map(),
   mounted: Map<string, () => void> = new Map(),
+  /** Shared VEGETATION-CLEAR registry (keyed by terrain id). This scatter registers a re-mount
+   *  closure that recomputes its placements against the terrain's CURRENT footprints and swaps its
+   *  instanced meshes. village.build invokes it after computing footprints, so a forest scattered
+   *  on the natural terrain FIRST is subtractively cleared where the settlement then builds. */
+  vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
 ): void {
   const scatter: SkillDefinition<z.infer<typeof scatterInput>, { entity: string; instances: number; assetHashes: Record<string, string>; placements: unknown[] }> = {
     name: "vegetation.scatter",
@@ -115,38 +120,49 @@ export function registerVegetationSkills(
       const assetHashes: Record<string, string> = {};
       for (const id of paletteIds) assetHashes[id] = assets.resolve(id).hash;
 
-      // Auto-include the settlement footprints registered for THIS terrain (village.build
-      // fills the registry when it builds), unioned with any explicit exclusions. Replay-safe:
-      // the registry is deterministically rebuilt by re-running village.build before this scatter,
-      // so the union is identical on replay without logging the derived discs.
-      const registered = footprints.get(terrainId) ?? [];
-      const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
-
-      const config: ScatterConfig = {
-        seed: input.seed,
-        density: input.density,
-        assets: paletteIds.map((id) => ({ id })),
-        slopeMax: input.slopeMax,
-        sizeRange: input.sizeRange,
-        coverage: input.coverage,
-        cluster: input.cluster,
-        ...(input.elevationMin !== undefined ? { elevationMin: input.elevationMin } : {}),
-        ...(input.elevationMax !== undefined ? { elevationMax: input.elevationMax } : {}),
-        ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
+      // Placements are a PURE function of the terrain + the terrain's CURRENT footprints (unioned
+      // with any explicit exclusions). Computing them fresh on each (re)mount means the SAME closure
+      // grows the full forest when no village exists yet AND re-grows the CLEARED forest once
+      // village.build has registered its footprints — the causal "veg first, then civilization
+      // clears" order. Deterministic + replay-safe: footprints + scatter are pure over the log.
+      const computePlacements = (): AssetInstance[] => {
+        const registered = footprints.get(terrainId!) ?? [];
+        const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
+        const config: ScatterConfig = {
+          seed: input.seed,
+          density: input.density,
+          assets: paletteIds.map((id) => ({ id })),
+          slopeMax: input.slopeMax,
+          sizeRange: input.sizeRange,
+          coverage: input.coverage,
+          cluster: input.cluster,
+          ...(input.elevationMin !== undefined ? { elevationMin: input.elevationMin } : {}),
+          ...(input.elevationMax !== undefined ? { elevationMax: input.elevationMax } : {}),
+          ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
+        };
+        return scatterAssets(layer.tile, input.seed, config);
       };
 
-      // Deterministic placements over the editable heightfield (Y = surface, slope/elevation gated).
-      const placements: AssetInstance[] = scatterAssets(layer.tile, input.seed, config);
-
-      // Mount instanced trees from the textured archetypes — browser render context only (the
-      // headless authoritative context has a stub scene; it records + replays without meshes).
       const scene = ctx.world.scene as SceneLike | undefined;
-      let mountedCount = 0;
-      const meshes: unknown[] = [];
-      if (ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function") {
-        // CRASH-PROOF: a GLB parse / GPU upload failure must NOT kill the viewport's apply loop.
-        // The placements are already recorded (the authoritative contract); if the render mount
-        // fails, log it and leave the forest un-mounted rather than throwing into the viewport.
+      const canRender = ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function";
+      // Live set of this forest's instanced meshes — mutated in place by (re)mount so the removal
+      // closure + the clear closure both see the current set.
+      let meshes: unknown[] = [];
+      let placements: AssetInstance[] = computePlacements();
+
+      const disposeMeshes = (): void => {
+        for (const m of meshes) { if (typeof scene?.remove === "function") scene.remove(m); disposeAssetInstancedMesh(m as never); }
+        meshes = [];
+      };
+
+      // (Re)mount the forest from freshly-computed placements. Drops any previously-mounted meshes
+      // first (the subtractive clear: after village.build registers footprints, the recompute yields
+      // the forest MINUS the instances on the settlement — a strict subset — and the old full set is
+      // disposed). CRASH-PROOF per archetype (a bad GLB never kills the apply loop).
+      const remount = async (): Promise<void> => {
+        placements = computePlacements();
+        if (!canRender) return;
+        disposeMeshes();
         const byId = new Map<string, AssetInstance[]>();
         for (const inst of placements) {
           let list = byId.get(inst.assetId);
@@ -156,8 +172,6 @@ export function registerVegetationSkills(
         // Mount ONE archetype per frame: parsing a dense GLB + uploading its InstancedMesh to the
         // GPU is heavy; doing all six back-to-back blocks the main thread long enough to trip the
         // browser's unresponsive-page watchdog / lose the WebGPU device (the reported "crash").
-        // Yielding a frame between archetypes spreads the cost and keeps the viewport responsive.
-        // Per-archetype try/catch so one bad asset can't kill the rest OR the apply loop.
         let idx = 0;
         const totalArchetypes = byId.size;
         for (const [id, list] of byId) {
@@ -168,16 +182,17 @@ export function registerVegetationSkills(
             for (const mesh of buildAssetInstancedMeshes(root, list)) {
               (mesh as unknown as InstMesh).castShadow = true;
               (mesh as unknown as InstMesh).receiveShadow = true;
-              scene.add(mesh);
+              scene!.add(mesh);
               meshes.push(mesh);
-              mountedCount++;
             }
           } catch (err) {
             ctx.emit("vegetation.mount_failed", { archetype: id, message: err instanceof Error ? err.message : String(err) });
           }
           await nextFrame();
         }
-      }
+      };
+
+      await remount();
 
       // A forest handle entity (world-integrated + removable), anchored at the terrain origin.
       const [ox, oy, oz] = layer.tile.origin;
@@ -186,13 +201,15 @@ export function registerVegetationSkills(
       const origin = { tool: "vegetation.scatter", input: { ...input } };
       const entity = ctx.world.entities.create({ eid, origin });
       tagEntity(ctx as never, entity, ["forest", "vegetation", ...(input.tags ?? [])]);
-      if (meshes.length > 0) {
-        mounted.set(entity, () => {
-          for (const m of meshes) { if (typeof scene?.remove === "function") scene.remove(m); disposeAssetInstancedMesh(m as never); }
-        });
-      }
+      // Keep the removal closure pointed at the LIVE mesh set (mutated by remount).
+      mounted.set(entity, disposeMeshes);
+      // Register the subtractive-clear closure: village.build calls it after registering footprints,
+      // so a forest scattered before the village is re-grown with the settlement footprints carved out.
+      const clears = vegetationClears.get(terrainId) ?? [];
+      clears.push(async () => { await remount(); });
+      vegetationClears.set(terrainId, clears);
 
-      ctx.emit("vegetation.scattered", { entity, terrain: terrainId, instances: placements.length, mounted: mountedCount, exclusions: allExclusions.length });
+      ctx.emit("vegetation.scattered", { entity, terrain: terrainId, instances: placements.length, mounted: meshes.length });
       return { entity, instances: placements.length, assetHashes, placements };
     },
   };

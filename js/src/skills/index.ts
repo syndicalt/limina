@@ -27,6 +27,7 @@ import { registerTerrainEditSkills, type EditableTerrain } from "./terrain-edit.
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { registerVillageSkills } from "./village.ts";
 import { registerVegetationSkills } from "./vegetation.ts";
+import { registerGrassSkill } from "./grass.ts";
 import { registerRenderSkills } from "./render.ts";
 import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
@@ -204,12 +205,26 @@ export function registerCoreSkills(
   // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors
   // how terrainLayers is created here and shared across the terrain-editing skills.
   const settlementFootprints = new Map<string, ScatterExclusion[]>();
-  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints);
+  // Shared VEGETATION-CLEAR registry (keyed by terrain id): each vegetation skill (scatter/grass)
+  // registers a re-mount closure that recomputes its placements against the terrain's CURRENT
+  // settlement footprints and swaps its instanced meshes. village.build invokes these AFTER it
+  // computes its footprints, so the canonical causal order — vegetation grows on the natural terrain
+  // FIRST, then civilization builds and CLEARS the veg on its footprints — renders correctly even
+  // when the veg commands run BEFORE village.build. Deterministic + replay-safe: the footprints and
+  // the placements are pure functions of the recorded ops, so the cleared set reproduces byte-for-
+  // byte on replay. (When veg runs AFTER village.build, the footprints already exist at mount time,
+  // so the initial mount is already cleared and the closure is a harmless no-op re-mount.)
+  const vegetationClears = new Map<string, Array<() => void | Promise<void>>>();
+  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears);
   // village.build: ONE skill that lays a terrain-aware settlement onto an editable
   // terrain layer by placing curated library GLBs (via asset.place) at transforms from
   // the SHARED, pure layout planner (world/pipeline/village-layout.mjs — same brain the
   // preview uses). Records the direction/steering/seed + pinned hashes, not the transforms.
-  registerVillageSkills(registry, terrainLayers, assets, settlementFootprints);
+  registerVillageSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears);
+  // vegetation.grass: climate-aware instanced ground grass over an editable terrain layer. Shares
+  // the SAME terrain-layer map + settlement-footprint registry, so it carpets the buildable ground
+  // and stops at the settlement edge (buildings/courtyard/lane) exactly like the tree scatter.
+  registerGrassSkill(registry, terrainLayers, settlementFootprints, undefined, vegetationClears);
   // Opt-in, render-only post-processing seam: `render.enablePost` builds the GTAO/bloom/
   // grade pipeline on the live renderer and stows it on world.post (static/cinematic — see
   // render.ts). Render-only; never sim/log state.

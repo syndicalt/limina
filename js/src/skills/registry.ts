@@ -246,7 +246,7 @@ export class SkillRegistry {
     "skills.list", "skills.search", "skills.browse", "skills.describe",
     "scene.createEntity", "scene.moveEntity", "scene.queryEntities", "ecs.updateComponent",
     "world.generateRegion", "world.populateBiome", "asset.place",
-    "terrain.create", "terrain.deform", "village.build", "vegetation.scatter", "vegetation.plant",
+    "terrain.create", "terrain.deform", "village.build", "vegetation.scatter", "vegetation.plant", "vegetation.grass",
     "player.move", "player.jump", "interaction.interact", "interaction.query", "inventory.add",
     "social.say", "dialogue.start",
   ]);
