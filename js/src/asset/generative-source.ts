@@ -277,10 +277,12 @@ export class GenerativeAssetSource implements AssetSource {
     if (!req.prompt && !req.referenceImage) {
       throw new Error("GenerativeAssetSource: a request needs a prompt and/or a referenceImage to generate.");
     }
+    // The backend accepts a prompt XOR an image, not both. When a referenceImage is supplied, run
+    // image-to-3D (image only — the reference already carries the visual intent; the prompt still names
+    // the local assetId/cache key). Otherwise text-to-3D from the prompt.
     const body: Record<string, unknown> = { enable_pbr: true };
-    if (req.prompt) body.prompt = req.prompt; // text-to-3D
-    // TODO(image-to-3D): the rapid/tencent endpoint's image field is UNVERIFIED — `image` is a best guess.
-    if (req.referenceImage) body.image = req.referenceImage;
+    if (req.referenceImage) body.image = req.referenceImage; // image-to-3D
+    else if (req.prompt) body.prompt = req.prompt; // text-to-3D
     // Allow callers to pass through extra backend knobs (e.g. style/quality) via req.params.
     if (req.params) {
       for (const [k, v] of Object.entries(req.params)) {

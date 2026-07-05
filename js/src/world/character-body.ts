@@ -63,7 +63,7 @@ export function createCharacterBody(
   opts: CharacterBodyOptions = {},
 ): CharacterBody {
   const T = THREE as unknown as {
-    Box3: new () => { setFromObject: (o: unknown) => { getSize: (v: unknown) => { y: number } } };
+    Box3: new () => { setFromObject: (o: unknown) => { getSize: (v: unknown) => { y: number }; min: { y: number } } };
     Vector3: new () => unknown;
     AnimationMixer: new (root: unknown) => MixerLike;
     Color: new (hex?: number) => { lerp: (c: unknown, a: number) => unknown; clone: () => unknown };
@@ -99,13 +99,17 @@ export function createCharacterBody(
     }
   });
 
-  // Scale to a real human height.
+  // Scale to a real human height, then compute a foot offset so the feet sit at the setPosition Y
+  // regardless of the source's pivot. A rigged library rig pivots at the feet (offset ~0); a generated
+  // (image-to-3D) mesh pivots at its center, so its feet are ~half a body below the origin — without this
+  // it would sink to the waist in the ground. footOffset = -(scaled bbox min.y).
   const target = opts.targetHeightM ?? 1.75;
   const box = new T.Box3().setFromObject(root);
   const size = box.getSize(new T.Vector3()) as { y: number };
   const rawH = size.y > 1e-3 ? size.y : 1;
   const scale = target / rawH;
   root.scale.setScalar(scale);
+  const footOffset = -box.min.y * scale;
 
   // Animation: idle + walk actions, crossfaded by speed.
   const mixer = new T.AnimationMixer(root);
@@ -129,7 +133,7 @@ export function createCharacterBody(
       if (idle) idle.setEffectiveWeight(wantWalk ? 0 : 1);
       if (walk) walk.setEffectiveWeight(wantWalk ? 1 : 0);
     },
-    setPosition(x: number, y: number, z: number): void { root.position.set(x, y, z); },
+    setPosition(x: number, y: number, z: number): void { root.position.set(x, y + footOffset, z); },
     faceDir(dx: number, dz: number): void {
       if (dx * dx + dz * dz < 1e-6) return;
       root.rotation.y = Math.atan2(dx, dz);

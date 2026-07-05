@@ -213,6 +213,22 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "asset";
 }
 
+/** The generative backend's image-to-3D expects the reference as a `data:image/...;base64,...` URI. Let
+ *  `--reference` name a local image FILE (the ergonomic form) and encode it here; a value that is already
+ *  a data:/http(s): URI is passed through untouched. */
+const IMG_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif",
+};
+function referenceToDataUri(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  if (/^(data:|https?:)/i.test(ref)) return ref;
+  if (!existsSync(ref)) fail(`--reference file not found: ${ref}`);
+  const ext = ref.slice(ref.lastIndexOf(".")).toLowerCase();
+  const mime = IMG_MIME[ext];
+  if (!mime) fail(`--reference must be a .jpg/.jpeg/.png/.webp/.gif file or a data:/https: URI (got "${ref}")`);
+  return `data:${mime};base64,${readFileSync(ref).toString("base64")}`;
+}
+
 // ── 4. Main ────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -248,11 +264,14 @@ async function main(): Promise<void> {
   // Build the request for a given seed (curation re-rolls the seed; everything else is fixed). The seed is
   // folded into the cache key, so each re-rolled seed is its own cache entry — and the curated seed that
   // wins is what gets cached, keeping re-rolls deterministic on replay.
+  // Encode a local --reference image file into the data: URI the generative image-to-3D backend expects
+  // (pass-through for values already data:/https:). Done once; folded into the request below.
+  const referenceImage = referenceToDataUri(args.reference);
   const reqFor = (seed: number): AssetRequest => ({
     kind: args.kind,
     seed,
     prompt: args.prompt,
-    referenceImage: args.reference,
+    referenceImage,
     ...(args.source ? { params: { source: args.source } } : {}),
   });
 
