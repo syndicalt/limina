@@ -62,6 +62,7 @@ assertThrows(() => CharacterBriefSchema.parse({ ...VILLAGER_BRIEF, archetype: "w
 assertThrows(() => CharacterBriefSchema.parse({ ...VILLAGER_BRIEF, tier: "genius" }), "unknown tier must reject");
 assertThrows(() => CharacterBriefSchema.parse({ ...VILLAGER_BRIEF, bogusKey: 1 }), "extra key must reject (strict)");
 assertThrows(() => CharacterBriefSchema.parse({ ...ELDER_BRIEF, appearance: { skinTone01: 1.4 } }), "skinTone01 > 1 must reject");
+assertThrows(() => CharacterBriefSchema.parse({ ...VILLAGER_BRIEF, appearance: { outfit: { tunic: "gold" } } }), "outfit role outside the palette enum must reject");
 
 // ── 3. Referential integrity against the active DesignDirection palette ─────────────────────
 // Every shipped brief tints only with roles the default palette defines.
@@ -69,9 +70,11 @@ for (const b of ALL) {
   const v = validateCharacterBrief(b, PALETTE_ROLE_NAMES);
   assert(v.ok, `${b.id} must tint with palette roles only; issues=${JSON.stringify(v.issues)}`);
 }
-// An outfit tinting with a role the palette lacks MUST fail referential integrity.
-const offPalette = validateCharacterBrief({ ...VILLAGER_BRIEF, appearance: { outfitPalette: "gold" } }, ["wood", "metal", "stone", "accent"]);
-assert(!offPalette.ok && offPalette.issues.some((i) => i.path === "appearance.outfitPalette"), "off-palette outfit role must be flagged");
+// An outfit zone tinting with a (valid) role the ACTIVE palette lacks MUST fail referential integrity.
+const offPalette = validateCharacterBrief({ ...VILLAGER_BRIEF, appearance: { outfit: { tunic: "water" } } }, ["wood", "slate", "trim", "ground", "metal", "accent", "stone"]);
+assert(!offPalette.ok && offPalette.issues.some((i) => i.path === "appearance.outfit.tunic"), "off-palette outfit zone must be flagged");
+// The canonical commoner is the plain-grey tunic + natural hose.
+assert(VILLAGER_BRIEF.appearance.outfit?.tunic === "slate" && VILLAGER_BRIEF.appearance.outfit?.hose === "trim", "commoner outfit = grey tunic + natural hose (per-zone)");
 
 // reasoning-LOD discipline: an ambient NPC carrying goals is flagged (the scripted brain ignores them).
 const ambientWithGoals = validateCharacterBrief({ ...CHILD_BRIEF, tier: "ambient", persona: { ...CHILD_BRIEF.persona, goals: ["scheme"] } });

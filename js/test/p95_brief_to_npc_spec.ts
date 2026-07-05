@@ -49,11 +49,12 @@ assert(priest.model.provider === "ollama" && priest.cadence === 15, "named tier 
 assert(child.model.provider !== priest.model.provider, "a child crowd NPC is not a named priest (different brain)");
 assert(child.cadence !== priest.cadence, "child and priest reason at different cadences");
 assert(child.persona.voice !== priest.persona.voice, "child and priest have different voices");
-assert(guardHasArmorTint(), "guard carries the metal outfit tint, villager the wood tint");
-function guardHasArmorTint(): boolean {
-  const g = briefToNpcSpec(GUARD_BRIEF), v = briefToNpcSpec(VILLAGER_BRIEF);
-  return g.color !== undefined && v.color !== undefined && g.color !== v.color;
-}
+// Per-ZONE outfit maps through: a guard's mail-tinted tunic ≠ a villager's grey wool tunic, and the
+// villager carries a multi-zone outfit (tunic + hose + boots …), not one flat colour.
+const gv = briefToNpcSpec(GUARD_BRIEF), vv = briefToNpcSpec(VILLAGER_BRIEF);
+assert(gv.color !== undefined && vv.color !== undefined && gv.color !== vv.color, "guard primary tint ≠ villager primary tint");
+assert(vv.appearance?.outfit !== undefined && Object.keys(vv.appearance.outfit).length >= 3, "villager carries a multi-zone outfit map");
+assert(gv.appearance?.outfit?.tunic !== vv.appearance?.outfit?.tunic, "guard tunic zone ≠ villager tunic zone");
 
 // ── 4. Spawn resolves from role by default ─────────────────────────────────────────────────────
 const spawn = briefToNpcSpec(VILLAGER_BRIEF).spawn;

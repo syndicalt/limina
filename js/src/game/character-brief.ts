@@ -94,17 +94,25 @@ export type Routine = (typeof ROUTINE_NAMES)[number];
 export const REASONING_TIER = ["ambient", "functional", "named"] as const;
 export type ReasoningTier = (typeof REASONING_TIER)[number];
 
+/** Clothing ZONES on a humanoid body — a believable NPC is multi-material (a grey tunic, oatmeal hose,
+ *  brown boots), so outfit is a per-zone map, not one body tint. Zones absent from a body asset are ignored. */
+export const OUTFIT_ZONES = ["cap", "tunic", "jerkin", "undertunic", "hose", "boots", "belt"] as const;
+export type OutfitZone = (typeof OUTFIT_ZONES)[number];
+
 // ── The brief schema ────────────────────────────────────────────────────────────────────────────────
 
 const PaletteRoleEnum = z.enum(PALETTE_ROLE_NAMES);
 
 /** Real-body selection + parametric variation. The body itself is a rigged humanoid ASSET from the
- *  Character AssetSource; this only picks WHICH asset (or the archetype default) and tints outfit/skin. */
+ *  Character AssetSource; this only picks WHICH asset (or the archetype default) and dresses/tints it. */
 const AppearanceSchema = z.object({
   /** Rigged humanoid GLB id from the Character AssetSource. Omitted → the archetype's default body. */
   bodyAssetId: z.string().optional(),
-  /** Clothing tint, a DesignDirection palette role (material swap on the skinned mesh). */
-  outfitPalette: PaletteRoleEnum.optional(),
+  /** Per-ZONE clothing material: outfit zone → DesignDirection palette role. A believable villager is
+   *  multi-material (grey tunic + oatmeal hose + brown boots), so this replaces a single body tint; the
+   *  body layer maps each zone onto the corresponding skinned-mesh material. Every zone is OPTIONAL — omit
+   *  a zone to leave the asset's own material (an explicit object, not z.record, so a PARTIAL map is valid). */
+  outfit: z.object(Object.fromEntries(OUTFIT_ZONES.map((z2) => [z2, PaletteRoleEnum.optional()])) as Record<OutfitZone, z.ZodOptional<typeof PaletteRoleEnum>>).strict().optional(),
   /** Parametric skin variation, 0 = light .. 1 = dark. */
   skinTone01: z.number().min(0).max(1).optional(),
 }).strict();
@@ -162,10 +170,10 @@ export function validateCharacterBrief(
   const brief = parsed.data;
   const issues: CharacterBriefIssue[] = [];
 
-  if (paletteRoles !== undefined && brief.appearance.outfitPalette !== undefined) {
+  if (paletteRoles !== undefined && brief.appearance.outfit !== undefined) {
     const have = new Set<string>(paletteRoles);
-    if (!have.has(brief.appearance.outfitPalette)) {
-      issues.push({ path: "appearance.outfitPalette", message: `outfit tints with role "${brief.appearance.outfitPalette}" which the design direction's palette does not define` });
+    for (const [zone, role] of Object.entries(brief.appearance.outfit)) {
+      if (!have.has(role)) issues.push({ path: `appearance.outfit.${zone}`, message: `outfit zone "${zone}" tints with role "${role}" which the design direction's palette does not define` });
     }
   }
 
@@ -180,9 +188,14 @@ export function validateCharacterBrief(
 
 // ── Canonicalization (byte-stable clone, mirrors building-brief.ts) ───────────────────────────────────
 export function canonicalizeCharacterBrief(b: CharacterBrief): CharacterBrief {
+  let outfit: Appearance["outfit"];
+  if (b.appearance.outfit !== undefined) {
+    outfit = {};
+    for (const z of OUTFIT_ZONES) if (b.appearance.outfit[z] !== undefined) outfit[z] = b.appearance.outfit[z]; // fixed zone order → byte-stable
+  }
   const appearance: Appearance = {
     ...(b.appearance.bodyAssetId !== undefined ? { bodyAssetId: b.appearance.bodyAssetId } : {}),
-    ...(b.appearance.outfitPalette !== undefined ? { outfitPalette: b.appearance.outfitPalette } : {}),
+    ...(outfit !== undefined ? { outfit } : {}),
     ...(b.appearance.skinTone01 !== undefined ? { skinTone01: b.appearance.skinTone01 } : {}),
   };
   return {
@@ -230,9 +243,10 @@ export const VILLAGER_BRIEF: CharacterBrief = {
   persona: { voice: "A plain-spoken villager who works the land and knows everyone's business.", disposition: "friendly", goals: ["go about the day's work", "greet neighbours on the lane"] },
   tier: "functional",
   routine: "wander",
-  appearance: { outfitPalette: "wood" },
+  // CANONICAL commoner (reference commoner-2): plain grey wool tunic, natural hose, tan hood, leather boots.
+  appearance: { outfit: { cap: "ground", tunic: "slate", hose: "trim", boots: "wood", belt: "wood" } },
   perceptionRadius: 18,
-  notes: "Homespun tunic; unhurried gait; comfortable stopping to talk.",
+  notes: "Plain grey wool knee-tunic + hood + natural hose + leather turnshoes; unhurried; stops to talk.",
 };
 
 /** A GATE GUARD: dutiful, holds a post / patrols, mail-clad, wary of strangers. */
@@ -245,7 +259,7 @@ export const GUARD_BRIEF: CharacterBrief = {
   persona: { voice: "A watchful gate guard, terse and dutiful, quick to challenge an unfamiliar face.", disposition: "dutiful", goals: ["watch the approach", "challenge strangers", "keep the peace"] },
   tier: "functional",
   routine: "patrol",
-  appearance: { outfitPalette: "metal" },
+  appearance: { outfit: { tunic: "metal", hose: "slate", boots: "wood", belt: "wood" } },
   perceptionRadius: 24,
   notes: "Mail + tabard; stands square; short clipped speech.",
 };
@@ -260,7 +274,7 @@ export const VENDOR_BRIEF: CharacterBrief = {
   persona: { voice: "A cheerful market trader, always ready with a greeting and a price.", disposition: "cheerful", goals: ["draw custom to the stall", "haggle a fair price"] },
   tier: "functional",
   routine: "tend-post",
-  appearance: { outfitPalette: "accent" },
+  appearance: { outfit: { cap: "accent", tunic: "accent", hose: "wood", boots: "wood" } },
   perceptionRadius: 18,
   notes: "Brighter dyed cloth; animated hands; stays near the stall.",
 };
@@ -275,7 +289,7 @@ export const ELDER_BRIEF: CharacterBrief = {
   persona: { voice: "The village reeve — slow, weighty speech, long memory, little patience for foolishness.", disposition: "gruff", goals: ["counsel the village", "settle disputes", "recall how things were done"] },
   tier: "named",
   routine: "idle-social",
-  appearance: { outfitPalette: "stone", skinTone01: 0.55 },
+  appearance: { outfit: { tunic: "stone", boots: "wood" }, skinTone01: 0.55 },
   perceptionRadius: 20,
   notes: "Plain grey robe; leans on a staff; stationary, others come to them.",
 };
@@ -290,7 +304,7 @@ export const LABORER_BRIEF: CharacterBrief = {
   persona: { voice: "A weathered field hand, few words, glad of a rest and a jug at day's end.", disposition: "friendly", goals: ["haul and mend", "rest when the work's done"] },
   tier: "functional",
   routine: "wander",
-  appearance: { outfitPalette: "ground" },
+  appearance: { outfit: { tunic: "ground", hose: "trim", boots: "wood" } },
   perceptionRadius: 16,
   notes: "Rough undyed cloth; heavy tread.",
 };
@@ -305,7 +319,7 @@ export const CHILD_BRIEF: CharacterBrief = {
   persona: { voice: "A village child, all energy, underfoot and curious.", disposition: "cheerful", goals: [] },
   tier: "ambient",
   routine: "wander",
-  appearance: { outfitPalette: "wood", skinTone01: 0.4 },
+  appearance: { outfit: { tunic: "wood", hose: "trim" }, skinTone01: 0.4 },
   perceptionRadius: 12,
   notes: "Smaller body scale; quick darting movement; ambient-only, no dialogue depth.",
 };
@@ -320,7 +334,7 @@ export const PRIEST_BRIEF: CharacterBrief = {
   persona: { voice: "The parish priest — measured, kindly, given to a blessing and a gentle admonishment.", disposition: "dutiful", goals: ["tend the flock", "keep the church", "offer counsel"] },
   tier: "named",
   routine: "idle-social",
-  appearance: { outfitPalette: "slate" },
+  appearance: { outfit: { tunic: "slate", boots: "wood" } },
   perceptionRadius: 22,
   notes: "Long dark robe; unhurried; lingers near the church door.",
 };

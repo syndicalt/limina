@@ -29,8 +29,15 @@ export interface CharacterBody {
 export interface CharacterBodyOptions {
   /** Target standing height in metres (the asset is scaled to match). Default 1.75. */
   targetHeightM?: number;
-  /** Clothing tint (0xRRGGBB) blended onto the skinned materials. Omit to leave the asset's own texture. */
+  /** Whole-body clothing tint (0xRRGGBB) — the fallback when no per-zone `outfit`+`zoneMaterial` map
+   *  matches a material. Omit to leave the asset's own texture. */
   outfitTint?: number;
+  /** Per-ZONE outfit tint: outfit zone → 0xRRGGBB (from NpcSpec.appearance.outfit). Applied to the
+   *  material whose name matches `zoneMaterial[zone]`; zones without a match fall back to `outfitTint`. */
+  outfit?: Record<string, number>;
+  /** Per-asset ZONE→material-name mapping (a lowercase substring matched against each material/mesh name),
+   *  supplied by the Character AssetSource card so a rig's "shirt"/"pants"/"boots" materials map to zones. */
+  zoneMaterial?: Record<string, string>;
   /** Blend amount for the tint (0 = keep texture, 1 = flat colour). Default 0.45. */
   tintAmount?: number;
   /** Walk/idle threshold in m/s. Default 0.15. */
@@ -62,19 +69,31 @@ export function createCharacterBody(
     Color: new (hex?: number) => { lerp: (c: unknown, a: number) => unknown; clone: () => unknown };
   };
 
-  // Shadows + a subtle outfit tint on every skinned material.
+  // Shadows + outfit tint. Per-ZONE tint (outfit + zoneMaterial map) where a material name matches a zone;
+  // otherwise the whole-body `outfitTint` fallback. The zone map is asset-specific (from the AssetSource
+  // card) — a placeholder rig without named zones just takes the whole-body tint.
   const tintAmt = opts.tintAmount ?? 0.45;
-  const tint = opts.outfitTint !== undefined ? new T.Color(opts.outfitTint) : undefined;
+  const bodyTint = opts.outfitTint !== undefined ? new T.Color(opts.outfitTint) : undefined;
+  const zoneColor: Record<string, { lerp: (c: unknown, a: number) => unknown }> = {};
+  if (opts.outfit) for (const [z, hex] of Object.entries(opts.outfit)) zoneColor[z] = new T.Color(hex) as never;
+  const zoneMat = opts.zoneMaterial;
+  const tintFor = (matName: string, meshName: string): unknown => {
+    if (opts.outfit && zoneMat) {
+      const hay = `${matName} ${meshName}`.toLowerCase();
+      for (const [z, pat] of Object.entries(zoneMat)) if (zoneColor[z] && hay.includes(pat.toLowerCase())) return zoneColor[z];
+    }
+    return bodyTint;
+  };
   root.traverse((o: unknown) => {
-    const n = o as { isMesh?: boolean; castShadow?: boolean; receiveShadow?: boolean; frustumCulled?: boolean; material?: unknown };
+    const n = o as { isMesh?: boolean; name?: string; castShadow?: boolean; receiveShadow?: boolean; frustumCulled?: boolean; material?: unknown };
     if (n.isMesh !== true) return;
     n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false; // skinned bounds move; don't cull
-    if (tint !== undefined) {
-      const mats = Array.isArray(n.material) ? n.material : [n.material];
-      for (const m of mats) {
-        const mm = m as { color?: { lerp: (c: unknown, a: number) => void } };
-        if (mm.color !== undefined) mm.color.lerp(tint, tintAmt);
-      }
+    const mats = Array.isArray(n.material) ? n.material : [n.material];
+    for (const m of mats) {
+      const mm = m as { name?: string; color?: { lerp: (c: unknown, a: number) => void } };
+      if (mm.color === undefined) continue;
+      const c = tintFor(mm.name ?? "", n.name ?? "");
+      if (c !== undefined) mm.color.lerp(c, tintAmt);
     }
   });
 

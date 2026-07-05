@@ -57,7 +57,13 @@ export function briefToNpcSpec(brief: CharacterBrief, index = 0): NpcSpec {
     : brief.spawn?.role !== undefined
       ? { role: brief.spawn.role }
       : { role: brief.role };
-  const outfit = brief.appearance.outfitPalette;
+  // Resolve each outfit ZONE's palette role → a concrete tint for the body layer to apply per zone.
+  const zones = brief.appearance.outfit;
+  const outfitHex = zones !== undefined
+    ? Object.fromEntries(Object.entries(zones).map(([z, role]) => [z, OUTFIT_HEX[role as PaletteRole]]))
+    : undefined;
+  // A single primary colour (the tunic, else the first zone) for the fallback/legacy body tint path.
+  const primaryRole = zones?.tunic ?? (zones !== undefined ? Object.values(zones)[0] : undefined);
   return npcSpecSchema.parse({
     id: `agt_${brief.id.replace(/[^a-z0-9]+/gi, "_")}_${index}`,
     persona: { name: brief.name, voice: composeVoice(brief) },
@@ -67,6 +73,7 @@ export function briefToNpcSpec(brief: CharacterBrief, index = 0): NpcSpec {
     goals: brief.persona.goals,
     model: { provider: t.provider, model: t.model },
     cadence: t.cadence,
-    ...(outfit !== undefined ? { color: OUTFIT_HEX[outfit] } : {}),
+    ...(primaryRole !== undefined ? { color: OUTFIT_HEX[primaryRole] } : {}),
+    ...(outfitHex !== undefined ? { appearance: { outfit: outfitHex } } : {}),
   });
 }

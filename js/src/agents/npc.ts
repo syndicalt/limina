@@ -78,8 +78,13 @@ export const npcSpecSchema = z.object({
   }).strict(),
   /** Reasoning-LOD cadence: ticks between decisions (decisionIntervalTicks). */
   cadence: z.number().int().positive().max(600).default(30),
-  /** Cosmetic humanoid clothing color (0xRRGGBB); derived from id when omitted. */
+  /** Cosmetic humanoid clothing color (0xRRGGBB); derived from id when omitted. Primary/whole-body tint
+   *  (the tunic zone) — the legacy path + fallback when a body has no per-zone material map. */
   color: z.number().int().nonnegative().optional(),
+  /** Cosmetic PER-ZONE outfit tint (outfit zone → 0xRRGGBB), from the CharacterBrief appearance. Render-
+   *  only; the body layer (world/character-body.ts) maps each zone onto the matching skinned-mesh material.
+   *  Optional + additive → replay-safe (specs that omit it are unchanged). */
+  appearance: z.object({ outfit: z.record(z.string(), z.number().int().nonnegative()).optional() }).strict().optional(),
   /** Walk speed (world units / second); Locomotion default 1.6 when omitted. */
   speed: z.number().positive().optional(),
 }).strict();
