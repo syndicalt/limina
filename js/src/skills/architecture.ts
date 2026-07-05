@@ -65,8 +65,13 @@ function spawnStaticBox(world: WorldContext, pos: V3, size: V3, material: THREE.
 
 /** Build a GABLED roof as a triangular prism (flat-shaded, crisp ridge), centered on the X/Z origin
  *  with its eaves at y=0 and the ridge at y=pitch. The ridge runs along the LONGER footprint axis.
- *  Returns the geometry + the collider half-extents of its bounding box. */
-export function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number): { geo: THREE.BufferGeometry; half: V3 } {
+ *  Returns the geometry + the collider half-extents of its bounding box.
+ *
+ *  `closeGableEnds` (default true, legacy): fill the two triangular gable-END faces INTO the roof mesh.
+ *  Pass FALSE for the enterable-building path — those end faces carry the roof-cover (slate) material and,
+ *  sitting outboard of the plaster gable infill, read as SLATE ON A VERTICAL WALL (the texture-orientation
+ *  bug). With the ends open the cover stays on the SLOPES only and the plaster infill is the gable wall. */
+export function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number, closeGableEnds = true): { geo: THREE.BufferGeometry; half: V3 } {
   const ridgeAlongX = W >= D;
   const long = (ridgeAlongX ? W : D) / 2 + overhang; // L: half-length along the ridge
   const short = (ridgeAlongX ? D : W) / 2 + overhang; // B: half-span across the slopes
@@ -74,12 +79,14 @@ export function gableRoofGeometry(W: number, D: number, pitch: number, overhang:
   const bNL: V3 = [-long, 0, -short], bFL: V3 = [-long, 0, short], aL: V3 = [-long, pitch, 0];
   const bNR: V3 = [long, 0, -short], bFR: V3 = [long, 0, short], aR: V3 = [long, pitch, 0];
   const tri = (...vs: V3[]): number[] => vs.flat();
-  const pos = new Float32Array([
+  const slopes = [
     ...tri(bNL, bNR, aR), ...tri(bNL, aR, aL),   // -Z slope
     ...tri(bFL, aL, aR), ...tri(bFL, aR, bFR),   // +Z slope
-    ...tri(bNL, aL, bFL),                        // -X gable end
-    ...tri(bNR, bFR, aR),                        // +X gable end
-  ]);
+  ];
+  const ends = closeGableEnds
+    ? [...tri(bNL, aL, bFL), ...tri(bNR, bFR, aR)] // -X + +X gable ends (legacy; slate-on-vertical)
+    : [];
+  const pos = new Float32Array([...slopes, ...ends]);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.computeVertexNormals();

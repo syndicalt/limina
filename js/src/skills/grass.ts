@@ -307,6 +307,8 @@ export interface GrassGroundTintOptions {
   elevationMax: number;
   slopeMax: number;
   exclusions: ScatterExclusion[];
+  /** INCLUSION discs — when present, the tint is confined to these (a lawn yard). */
+  inclusions?: ScatterExclusion[];
   /** Peak opacity of the tint where the mask is fully inside the grass footprint. */
   opacity: number;
 }
@@ -352,6 +354,13 @@ export function buildGrassGroundTint(tile: TerrainTile, opts: GrassGroundTintOpt
           const ex = opts.exclusions[e], dx = x - ex.x, dz = z - ex.z;
           if (dx * dx + dz * dz <= ex.r * ex.r) { masked = false; break; }
         }
+      }
+      // Inclusion gate (lawn): confine the tint to the yard discs.
+      const incl = opts.inclusions;
+      if (masked && incl !== undefined && incl.length > 0) {
+        let inside = false;
+        for (let e = 0; e < incl.length; e++) { const in0 = incl[e], dx = x - in0.x, dz = z - in0.z; if (dx * dx + dz * dz <= in0.r * in0.r) { inside = true; break; } }
+        masked = inside;
       }
       // Deterministic per-vertex brightness jitter (no Math.random) so the turf isn't dead flat.
       let hsh = (Math.imul(c + 1, 374761393) ^ Math.imul(r + 1, 668265263)) >>> 0;
@@ -479,6 +488,9 @@ const grassInput = z.object({
   /** Extra keep-out discs — UNIONED with the settlement footprints for this terrain, so grass
    *  avoids the village with no manual wiring (identical seam to vegetation.scatter). */
   exclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
+  /** INCLUSION discs — confine the carpet to these regions (the inverse of exclusions). Used to lay a
+   *  tended LAWN on a building's yard: dense short turf ONLY within the yard discs. */
+  include: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
   /** Extra tags for the grass entity (always tagged "grass" + "vegetation"). */
   tags: z.array(z.string()).optional(),
 });
@@ -536,6 +548,7 @@ export function registerGrassSkill(
           elevationMin,
           elevationMax,
           exclusions: allExclusions,
+          ...(input.include !== undefined && input.include.length > 0 ? { inclusions: input.include } : {}),
         };
         return planGrassBlades(layer.tile, plan);
       };
@@ -585,6 +598,7 @@ export function registerGrassSkill(
             elevationMax,
             slopeMax: input.slopeMax,
             exclusions: allExclusions,
+            ...(input.include !== undefined && input.include.length > 0 ? { inclusions: input.include } : {}),
             opacity: input.groundTint,
           });
           if (tint !== null) { scene!.add(tint); tintMesh = tint; }

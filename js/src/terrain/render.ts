@@ -339,6 +339,7 @@ const ELEV_COL = {
   grass: new THREE.Color(0x5f7f3c),
   grassDark: new THREE.Color(0x44602a),
   rock: new THREE.Color(0x736b60),
+  rockDark: new THREE.Color(0x554f46), // darker scree shade the rock band mottles toward
   snow: new THREE.Color(0xe2e7ec),
 } as const;
 
@@ -373,6 +374,7 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
   const count = pos.count;
   const colors = new Float32Array(count * 3);
   const c = new THREE.Color();
+  const rc = new THREE.Color(); // per-vertex mottled rock shade (reused)
   const sea = ramp.seaLevel;
   // Snow line, keyed to the tile's ACTUAL sea-relative relief (not the nominal config
   // amplitude). village.build caps a focal terrace at ≈0.82 of THIS same sea→peak relief
@@ -387,7 +389,8 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
   for (let i = 0; i < count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const slope = Math.min(1, slopeAt(x, z) * 1.2);
-    if (y < sea + 0.6) {
+    // Sand only on the GENTLE shore (a beach); a steep low face falls through to rock below.
+    if (y < sea + 0.6 && slope < 0.35) {
       c.copy(ELEV_COL.sand);
     } else {
       c.copy(ELEV_COL.grass).lerp(ELEV_COL.grassDark, (Math.sin((x + z) * 0.2) * 0.5 + 0.5) * 0.3);
@@ -397,9 +400,17 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
       // and pick up rock below. This is the harsh-white-scree fix: snow no longer drapes the
       // steep or graded high faces (the white streaks down the settled knoll are gone).
       if (y > snowY && slope < 0.2) c.lerp(ELEV_COL.snow, 1 - Math.min(1, slope / 0.2));
-      // Steep faces at any elevation above the coast expose grey ROCK (mountainside/scree),
-      // overriding any partial snow — so steep terrain reads rock, never white.
-      if (slope > 0.35) c.lerp(ELEV_COL.rock, Math.min(1, (slope - 0.35) / 0.35));
+      // ROCK/SCREE is SLOPE-driven and now ramps in from a MODERATE grade (gradient ≈0.18) to
+      // full by ≈0.5 — so moderate-to-steep mountainsides read as rock instead of flat green/grey
+      // (was slope>0.35, which left moderate slopes green). Mottled between two rock shades by a
+      // deterministic value over world XZ, so the slope is textured scree, not a uniform grey slab.
+      // Overrides any partial snow, so steep terrain reads rock, never white.
+      const rockT = Math.min(1, Math.max(0, (slope - 0.18) / 0.32));
+      if (rockT > 0) {
+        const rm = Math.sin(x * 0.7 - z * 0.9) * 0.5 + 0.5;
+        rc.copy(ELEV_COL.rock).lerp(ELEV_COL.rockDark, rm * 0.6);
+        c.lerp(rc, rockT);
+      }
     }
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
   }
@@ -419,11 +430,19 @@ function applyElevationSurfaceDetail(material: THREE.MeshStandardNodeMaterial, b
   const tex = sharedDetailTexture();
   const sharp = 4;
   const grainL = triplanarLayer(tex, 0.32, 0.45, sharp); // fine ground micro-relief (cycles/m)
-  const rockL = triplanarLayer(tex, 0.13, 1.0, sharp);   // coarse cliff crags
-  // Geometric steepness (0 flat → 1 vertical); steep faces swap the fine grain for strong crags.
+  const rockL = triplanarLayer(tex, 0.13, 1.15, sharp);  // coarse cliff crags (stronger relief)
+  const microL = triplanarLayer(tex, 1.3, 0.4, sharp);   // shared FINE eye-level micro-grain
+  // Geometric steepness (0 flat → 1 vertical). Rock crags now ramp in from a MODERATE ~37° grade
+  // (steep≈0.20) to full by a cliff-y ~72° (steep≈0.72) — the fix so moderate mountainsides read
+  // craggy ROCK, not flat grey. (Was 0.35→0.72, which left moderate slopes flat-shaded.)
   const steep = T.clamp(T.oneMinus(T.normalWorld.y), 0, 1);
-  const cliffMask = T.smoothstep(0.35, 0.72, steep);
-  const nrm = T.mix(grainL.normal, rockL.normal, cliffMask);
+  const cliffMask = T.smoothstep(0.20, 0.72, steep);
+  let nrm = T.mix(grainL.normal, rockL.normal, cliffMask);
+  // Layer the shared FINE micro-grain (its deviation from the geometric normal) over EVERY face so
+  // the surface catches light at eye level (breaks up the flat-plastic read on big slopes) — the
+  // coarse crags read at distance, this reads underfoot. Mirrors the PBR path's micro layer.
+  const micro = microL.normal.sub(T.normalWorld);
+  nrm = nrm.add(micro).normalize();
   // Terrain geometry is identity-transformed (positions already world-space), so the perturbed
   // world normal → view space via transformNormalToView — the same idiom water.ts / the PBR path use.
   material.normalNode = T.transformNormalToView(nrm.normalize());

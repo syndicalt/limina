@@ -31,6 +31,12 @@ import { hashStr, mulberry32, planVillage } from "../world/pipeline/village-layo
 // authors) — returns flat {positions,uvs,indices}; we wrap them into meshes + spawn them as
 // recorded entities. A pure function of (terrain, placements, radii) — recomputed on replay.
 import { buildLaneGeometry, buildGroundPadGeometry, laneCenterline } from "../world/pipeline/village-geometry.mjs";
+import { briefToRecipe } from "./building-recipe.ts";
+import { archetypeBrief, type BuildingBrief } from "../game/building-brief.ts";
+// Grass builders — reused DIRECTLY (not via a nested skill invoke) so village.build can lay a tended
+// LAWN on each yard with no registry coupling; render-guarded like the ground pads (headless = no-op).
+import { planGrassBlades, GRASS_CLIMATES } from "./grass-plan.ts";
+import { buildGrassInstancedMesh, buildGrassGroundTint } from "./grass.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 // The SHARED procedural material factory (identical earth/cobble the preview paints) — THREE is
 // injected so the engine's three/webgpu build is used. Same no-drift discipline as the layout.
@@ -58,14 +64,48 @@ const PLACE_PERMS = ["scene.write"] as const;
 
 const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
 
-/** A building spec: what to place (assetId), how the agent describes it (role/style for the
- *  layout's focal-role + facing bookkeeping), and how many. */
+/** Default KIT house size [width, depth, height] (meters) when a kit building omits `sizeM`. */
+const DEFAULT_KIT_SIZE: readonly [number, number, number] = [7, 6, 3.4];
+
+/** A building spec: what to place, how the agent describes it (role/style for the layout's
+ *  focal-role + facing bookkeeping), and how many. A building is either GLB-backed (`assetId`)
+ *  or KIT-backed (`kit: true`, optional `sizeM`) — the latter raises a procedural half-timber
+ *  building through architecture.building at the planned transform instead of placing a GLB. */
 const buildingSpec = z.object({
   role: z.string(),
   style: z.string(),
-  assetId: z.string(),
+  /** The curated GLB to place. Required UNLESS `kit` is set (then a kit building is raised). */
+  assetId: z.string().optional(),
   count: z.number().int().min(1).default(1),
-});
+  /** Raise a KIT half-timber building here (via architecture.building) instead of a GLB. */
+  kit: z.boolean().optional(),
+  /** Kit building size [width, depth, height] in meters (default DEFAULT_KIT_SIZE). Only read for kit. */
+  sizeM: z.tuple([z.number().positive(), z.number().positive(), z.number().positive()]).optional(),
+  /** Raise a per-TYPE building from a shipped archetype BRIEF (game/building-brief.ts) via
+   *  building.assemble — e.g. "buildings.medieval.dwelling.cottage" or ".religious.monastery". The
+   *  brief carries the construction, roof, ornament + footprint, so a cottage and a monastery diverge
+   *  by their brief. Supersedes `sizeM` (footprint comes from the brief). */
+  archetype: z.string().optional(),
+}).refine(
+  (b) => b.archetype !== undefined || b.kit === true || (typeof b.assetId === "string" && b.assetId.length > 0),
+  { message: "village building spec requires `assetId`, `kit: true`, or `archetype`" },
+);
+
+// SITING — how buildings meet the ground, a SPEC-DRIVEN choice (not a hardcoded look). The GDD/planning
+// session sets this per settlement; the DEFAULTS are the natural look (clear trees, sit on flattened
+// grass, no manicured yard, a dirt path). A grand focal (keep/manor with a formal forecourt) OPTS IN to
+// a courtyard/plaza — a curated base is never imposed by default.
+const SitingSchema = z.object({
+  /** How much ground to flatten under each building. minimal = a tight pad + gentle grade (natural);
+   *  graded = a wider shoulder; plaza = a broad level forecourt (grand focal). */
+  terrace: z.enum(["minimal", "graded", "plaza"]).default("minimal"),
+  /** The ground a building sits on. DEFAULT "lawn" = a tended patch of dense short turf (+ ground tint)
+   *  confined to the yard, so settled ground reads as a kept lawn, not wild scrub or a bare scar. "none"
+   *  leaves the natural terrain; "earth" = a bare trodden forecourt; "cobble-courtyard" = paved forecourt. */
+  yard: z.enum(["lawn", "none", "earth", "cobble-courtyard"]).default("lawn"),
+  /** The path between buildings. dirt = a trodden earth lane; cobble = paved; none = no lane. */
+  lane: z.enum(["dirt", "cobble", "none"]).default("dirt"),
+}).default({});
 
 const buildInput = z.object({
   /** Art direction — flavors the placed assets' identity upstream; layout ignores it. */
@@ -81,6 +121,8 @@ const buildInput = z.object({
       focal: z.string().optional(),
       density: z.string().optional(),
     }).default({}),
+    /** How buildings meet the ground (terrace/yard/lane). Defaults = the natural look. */
+    siting: SitingSchema,
   }),
   /** Recorded for provenance; the layout is a pure function of terrain+steering, so the
    *  seed does not perturb placements (determinism holds for any seed). */
@@ -171,6 +213,7 @@ export function registerVillageSkills(
         throw new Error("village.build: no terrain layer to build on — create one with terrain.create first");
       }
       const tile = layer.tile;
+      const siting = input.steering.siting; // terrace/yard/lane treatment — spec-driven, defaults natural.
 
       // -- Build the sampler over the live heightfield. World<->grid mapping matches
       //    terrain/mesh.ts exactly: x = ox - sizeX/2 + col*(sizeX/(ncols-1)), rows->z,
@@ -216,22 +259,50 @@ export function registerVillageSkills(
       };
 
       // -- Expand buildings into instances (spec-by-spec, count times — the order planVillage
-      //    expands), resolving each instance's footprint radius + pinning each GLB's content hash.
+      //    expands), resolving each instance's footprint radius. GLB instances pin their content
+      //    hash + take their footprint from the baked card; KIT instances derive their footprint
+      //    from `sizeM` (half the XZ diagonal — the SAME semantics as footprintRadius) and carry
+      //    the size to raise an architecture.building at placement time. Both flow through the
+      //    SAME radii array planVillage consumes, so kit + GLB buildings terrace + lay out together.
       const radii: number[] = [];
-      const assetOf: string[] = []; // instance index -> assetId
+      /** instance index -> what to raise there: a GLB placement, a plain kit building of size [w,d,h],
+       *  or a per-TYPE archetype BRIEF raised through building.assemble. */
+      type InstPlan =
+        | { kind: "glb"; assetId: string }
+        | { kind: "kit"; sizeM: [number, number, number] }
+        | { kind: "brief"; brief: BuildingBrief };
+      const instOf: InstPlan[] = [];
       const assetHashes: Record<string, string> = {};
       const radiusCache = new Map<string, number>();
       for (const spec of input.steering.buildings) {
-        const resolved = assets.resolve(spec.assetId);
-        const committed = input.assetHashes?.[spec.assetId];
-        if (committed !== undefined && committed !== resolved.hash) {
-          throw new Error(`village.build: '${spec.assetId}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) — authored asset identity changed`);
-        }
-        assetHashes[spec.assetId] = resolved.hash;
-        let r = radiusCache.get(spec.assetId);
-        if (r === undefined) { r = footprintRadius(assets, spec.assetId); radiusCache.set(spec.assetId, r); }
         const count = Math.max(1, spec.count ?? 1);
-        for (let i = 0; i < count; i++) { radii.push(r); assetOf.push(spec.assetId); }
+        if (spec.archetype !== undefined) {
+          const brief = archetypeBrief(spec.archetype);
+          if (brief === undefined) throw new Error(`village.build: unknown archetype '${spec.archetype}' — not in the shipped building-brief library`);
+          // Footprint = half the XZ diagonal of the brief's own footprint (same semantics as GLB/kit).
+          const recipe0 = briefToRecipe(brief);
+          const r = 0.5 * Math.hypot(recipe0.width, recipe0.depth);
+          for (let i = 0; i < count; i++) { radii.push(r); instOf.push({ kind: "brief", brief }); }
+          continue;
+        }
+        if (spec.kit === true) {
+          const sizeM: [number, number, number] = spec.sizeM ?? [...DEFAULT_KIT_SIZE] as [number, number, number];
+          // Footprint radius = half the horizontal (XZ) diagonal of width×depth — the SAME semantics
+          // footprintRadius() uses for a GLB's boundsM, so kit + GLB radii are directly comparable.
+          const r = 0.5 * Math.hypot(sizeM[0], sizeM[1]);
+          for (let i = 0; i < count; i++) { radii.push(r); instOf.push({ kind: "kit", sizeM }); }
+          continue;
+        }
+        const assetId = spec.assetId as string; // guaranteed by the schema refine (assetId required unless kit)
+        const resolved = assets.resolve(assetId);
+        const committed = input.assetHashes?.[assetId];
+        if (committed !== undefined && committed !== resolved.hash) {
+          throw new Error(`village.build: '${assetId}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) — authored asset identity changed`);
+        }
+        assetHashes[assetId] = resolved.hash;
+        let r = radiusCache.get(assetId);
+        if (r === undefined) { r = footprintRadius(assets, assetId); radiusCache.set(assetId, r); }
+        for (let i = 0; i < count; i++) { radii.push(r); instOf.push({ kind: "glb", assetId }); }
       }
 
       // -- Run the SHARED, pure layout (over the ORIGINAL terrain — sites are chosen on the real
@@ -259,11 +330,14 @@ export function registerVillageSkills(
         const p = placements[k];
         const r = radii[p.index];
         const isFocal = k === 0;
-        // Dead-flat platform: for the focal it spans the whole plaza (≈ its earth apron, below) so the
-        // apron + cobbled courtyard sit on level ground with no terrain poking through; cottages get a
-        // tight platform just past their footprint. A wider SMOOTH flatten grades the shoulder out.
-        const flatR = isFocal ? r + 9 : r * 1.25 + 1.5;
-        const shoulderR = isFocal ? r + 15 : r * 2.0 + 2.0;
+        // Terrace footprint from the siting spec. DEFAULT "minimal": a tight flat pad just past the
+        // footprint + a gentle graded shoulder — the building sits on flattened GRASS, no big graded
+        // crater. "plaza" (opt-in, focal only) cuts the broad level forecourt a courtyard needs.
+        // "minimal" (default): deform barely past the footprint so the grassless deformed cells are hidden
+        // UNDER the building; grass stays right up to the walls. "graded"/"plaza" widen it deliberately.
+        const plaza = siting.terrace === "plaza" && isFocal;
+        const flatR = plaza ? r + 9 : siting.terrace === "graded" ? r * 1.25 + 1.5 : r * 0.95;
+        const shoulderR = plaza ? r + 15 : siting.terrace === "graded" ? r * 2.0 + 2.0 : r * 1.15;
         // flatten TARGET (relative to origin.y); the focal is capped below the snow line.
         const targetH = isFocal ? Math.min(levelTargets[k], snowSafeFocalTop) : levelTargets[k];
         const target = targetH - oy;
@@ -278,27 +352,60 @@ export function registerVillageSkills(
         }
       }
 
-      // -- Place each building via asset.place (grounded to the LEVELED platform height). The nested
-      //    invoke is folded into this command (ctx.chainId) and runs under village.build's OWN
-      //    least-privilege scope, reproduced on replay by re-running the plan.
+      // -- Place each building at its planned transform, grounded to the LEVELED platform height. A
+      //    GLB building goes through asset.place (unchanged); a KIT building raises a procedural
+      //    half-timber structure through architecture.building (its floor sits at position.y, so the
+      //    same terraced height grounds it). Both nested invokes are folded into this command
+      //    (ctx.chainId), run under village.build's OWN least-privilege scope, and are reproduced on
+      //    replay by re-running the plan. The kit seed is a PURE function of the village seed + the
+      //    instance index (no clock/RNG), so the kit parts are byte-identical on replay.
+      const villageSeed = (input.seed ?? (hashStr(JSON.stringify({ d: input.direction, s: input.steering })) as number)) >>> 0;
+      const nestedCtx = () => ({
+        agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(PLACE_PERMS),
+        tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+      });
       const entities: string[] = [];
       const outPlacements: Array<{ assetId: string; role: string; style: string; x: number; y: number; z: number; yaw: number }> = [];
       for (const p of placements) {
-        const assetId = assetOf[p.index];
+        const inst = instOf[p.index];
         const y = heightAt(p.x, p.z);
-        const res = await registry.invoke("asset.place", {
-          assetId,
-          position: [p.x, y, p.z],
-          rotation: [0, p.yaw, 0],
-          ground: true,
-          hash: assetHashes[assetId],
-        }, {
-          agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(PLACE_PERMS),
-          tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
-        });
-        if (!res.success) throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
-        entities.push((res.result as { entity: string }).entity);
-        outPlacements.push({ assetId, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+        // Deterministic per-instance seed (village seed mixed with the instance index) — no RNG/clock.
+        const kitSeed = (villageSeed + Math.imul(p.index + 1, 0x9e3779b1)) >>> 0;
+        if (inst.kind === "brief") {
+          // Per-TYPE building raised from its archetype brief through building.assemble (which carries the
+          // craft fields: construction, base course, roof cover). The brief's own footprint + rotation are
+          // baked into the recipe; the floor sits at position.y so the terraced height grounds it.
+          const recipe = briefToRecipe(inst.brief, { rotation: p.yaw });
+          const res = await registry.invoke("building.assemble", {
+            position: [p.x, y, p.z], seed: kitSeed, ...recipe,
+          }, nestedCtx());
+          if (!res.success) throw new Error(`village.build: building.assemble failed for archetype '${inst.brief.id}': ${JSON.stringify(res.error)}`);
+          entities.push((res.result as { root: string }).root);
+          outPlacements.push({ assetId: `archetype:${inst.brief.id}`, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+        } else if (inst.kind === "kit") {
+          const [w, d, h] = inst.sizeM;
+          const res = await registry.invoke("architecture.building", {
+            position: [p.x, y, p.z],
+            rotation: p.yaw, // yaw about +Y (radians) — the SAME facing the GLB path passes as rotation[1]
+            width: w, depth: d, height: h,
+            seed: kitSeed,
+          }, nestedCtx());
+          if (!res.success) throw new Error(`village.build: architecture.building failed for kit '${p.role}': ${JSON.stringify(res.error)}`);
+          entities.push((res.result as { root: string }).root);
+          outPlacements.push({ assetId: "kit", role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+        } else {
+          const assetId = inst.assetId;
+          const res = await registry.invoke("asset.place", {
+            assetId,
+            position: [p.x, y, p.z],
+            rotation: [0, p.yaw, 0],
+            ground: true,
+            hash: assetHashes[assetId],
+          }, nestedCtx());
+          if (!res.success) throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
+          entities.push((res.result as { entity: string }).entity);
+          outPlacements.push({ assetId, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+        }
       }
 
       // -- v2 GROUND: the winding lane + a trodden pad under every building (+ the focal earth
@@ -308,19 +415,18 @@ export function registerVillageSkills(
       //    meshes + record their existence as entities, but log NO vertices.
       const placed = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] }));
       const groundGeoms: Array<{ buf: { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] }; kind: "earth" | "cobble" }> = [];
-      const laneBuf = buildLaneGeometry(heightAt, placed) as { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] } | null;
-      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: "earth" });
-      for (let k = 0; k < placements.length; k++) {
-        const p = placements[k];
+      // The path between buildings, per the siting spec. DEFAULT "dirt" = a trodden earth lane (cobble
+      // reads too formal for a rustic settlement); "cobble" paves it; "none" omits it.
+      const laneBuf = siting.lane === "none" ? null : (buildLaneGeometry(heightAt, placed) as { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] } | null);
+      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: siting.lane === "cobble" ? "cobble" : "earth" });
+      // YARD is OPT-IN (default "none"): buildings sit on the flattened GRASS — no earth apron, no cobbled
+      // courtyard, no curated base (a baked/manicured yard reads as out of place against the natural
+      // ground). Only when the spec asks does the FOCAL get a forecourt: an earth apron, optionally paved.
+      if ((siting.yard === "earth" || siting.yard === "cobble-courtyard") && placements.length > 0) {
+        const p = placements[0];
         const r = radii[p.index];
-        if (k === 0) {
-          // focal: broad earth apron draping the WHOLE terrace (flat plaza + graded shoulder, ≈ shoulderR)
-          // so the raised terrace-fill never shows as bare snow/rock; a cobbled courtyard on the flat plaza.
-          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 16, 0.2), kind: "earth" });
-          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 4, 0.32), kind: "cobble" });
-        } else {
-          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r * 1.15 + 1, 0.14), kind: "earth" });
-        }
+        groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 16, 0.2), kind: "earth" });
+        if (siting.yard === "cobble-courtyard") groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 4, 0.32), kind: "cobble" });
       }
       const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
       const canRender = scene !== undefined && typeof scene.add === "function";
@@ -328,7 +434,12 @@ export function registerVillageSkills(
       // context; headless authoring records the ground entities without meshes. Seeded from the
       // recorded request so the ground look is deterministic (render-only; not part of the log).
       const groundSeed = (input.seed ?? (hashStr(JSON.stringify({ d: input.direction, s: input.steering })) as number)) >>> 0;
-      const mats = canRender ? makeMaterials(THREE, input.direction, mulberry32(groundSeed || 1)) : null;
+      // The procedural earth/cobble textures need a canvas backend (OffscreenCanvas or a DOM document).
+      // A headless authoring context has neither, so it records the ground entities WITHOUT meshes
+      // (render-only; not part of the log) — matching the documented headless discipline. The building
+      // KIT parts do NOT depend on a canvas, so kit buildings still assemble headlessly.
+      const hasCanvas = typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined";
+      const mats = (canRender && hasCanvas) ? makeMaterials(THREE, input.direction, mulberry32(groundSeed || 1)) : null;
       for (const spec of groundGeoms) {
         let mesh: MeshLike | undefined;
         if (canRender && mats !== null) {
@@ -342,6 +453,46 @@ export function registerVillageSkills(
         entities.push(groundEntity);
       }
 
+      // -- LAWN (siting.yard === "lawn", the DEFAULT): the tended ground each building sits on. A ring of
+      //    dense SHORT turf confined to the yard via the INCLUSION primitive (r..r+4), with the building's
+      //    own footprint excluded so no blade grows through the walls, plus a matching ground tint so the
+      //    settled earth reads as kept lawn — never a bare grey scar or wild scrub. A high slopeMax means
+      //    the lawn covers even a graded knoll (the focal), where the wild carpet thins out. Render-only
+      //    (like the ground pads above): deterministic from the footprints, recomputed on replay, logs no
+      //    vertices; headless authoring/tests have no scene, so it is skipped.
+      if (siting.yard === "lawn" && canRender && ctx.world.mode !== "headless") {
+        // The yard blankets the whole settled area (terrace + graded shoulder), so it covers the bare
+        // knoll the wild carpet leaves grey. Excludes only the building's own footprint (no blades in the
+        // walls). slopeMax is effectively off so even a steep graded knoll gets turf.
+        const lawnIncl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] + 12 }));
+        const lawnExcl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] * 0.6 }));
+        const elevMin = sampler.seaLevel - 5, elevMax = oy + hi + 12;
+        const lawnPlacements = planGrassBlades(tile, {
+          seed: (villageSeed ^ 0x1a2b3c4d) >>> 0,
+          density: 300, coverage: 0.97, cluster: 0.12, slopeMax: 4.0,
+          sizeRange: [0.7, 1.1], elevationMin: elevMin, elevationMax: elevMax,
+          exclusions: lawnExcl, inclusions: lawnIncl,
+        });
+        const lawnMeshes: unknown[] = [];
+        const lawnMesh = buildGrassInstancedMesh(lawnPlacements, {
+          climate: "summer", bladeHeight: 0.22, bladeWidth: 0.05, segments: 3, curvature: 0.05,
+          windStrength: 0.03, windSpeed: 1.0, windGust: 0.04, windGustFreq: 0.18,
+          sssStrength: 0.5, aoStrength: 0.5, maxBlades: 90000,
+        });
+        if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
+        const lawnTint = buildGrassGroundTint(tile, {
+          baseColor: GRASS_CLIMATES.summer.base, elevationMin: elevMin, elevationMax: elevMax,
+          slopeMax: 4.0, exclusions: lawnExcl, inclusions: lawnIncl, opacity: 1.0,
+        });
+        if (lawnTint !== null) lawnMeshes.push(lawnTint);
+        for (const lm of lawnMeshes) {
+          scene!.add!(lm);
+          const leid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
+          if (leid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, leid); throw new Error("village.build: entity capacity exceeded (lawn)"); }
+          entities.push(ctx.world.entities.create({ eid: leid, mesh: lm as never, origin: { tool: "village.build", input: { lawn: true } } }));
+        }
+      }
+
       // -- FOOTPRINT REGISTRY: publish this settlement's keep-out discs (building pads + focal
       //    courtyard/apron + lane samples) so a later vegetation.scatter on THIS terrain auto-clears
       //    the built ground with no manual data-flow. A PURE function of (placements, radii, heights) —
@@ -353,10 +504,15 @@ export function registerVillageSkills(
       for (let k = 0; k < placements.length; k++) {
         const p = placements[k];
         const r = radii[p.index];
-        // Match the pad radii in the ground-geometry block: focal earth apron r+16 (spans the
-        // cobbled courtyard + graded terrace), cottages the trodden pad r*1.15+1.
-        const padR = k === 0 ? r + 16 : r * 1.15 + 1;
-        exclusions.push({ x: p.x, z: p.z, r: padR + FOOTPRINT_TREE_MARGIN });
+        // Natural default: clear only the building's OWN footprint — grass grows right up to the walls,
+        // and a tree just can't stand ON the building (it can stand beside it, like a house in a wood).
+        // NO canopy blast radius. Only an OPTED-IN focal forecourt widens the clear to its apron.
+        // Tree-clear radius by yard style. "lawn": a modest clearing (r+4) that the lawn then fills.
+        // "earth"/"cobble-courtyard": clear the whole forecourt apron. "none": tight (grass to walls).
+        const clearR = siting.yard === "lawn" ? r + 4
+          : (k === 0 && (siting.yard === "earth" || siting.yard === "cobble-courtyard")) ? r + 16 + FOOTPRINT_TREE_MARGIN
+            : r;
+        exclusions.push({ x: p.x, z: p.z, r: clearR });
       }
       const laneCl = laneCenterline(heightAt, placed);
       if (laneCl !== null) {

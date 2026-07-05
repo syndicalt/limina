@@ -58,12 +58,17 @@ export interface TerrainPbrOptions extends TerrainPaletteOptions {
     snowScale?: number;
     sandScale?: number;
     /** Detail-NORMAL intensity per layer (0 = flat/clay, 1 = strong relief). The "not clay"
-     *  lever. Defaults: rock 1.0, grass 0.55, snow 0.30, sand 0.7. */
+     *  lever. Defaults: rock 1.15, grass 0.7, snow 0.30, sand 0.7. */
     rockNormal?: number;
     grassNormal?: number;
     snowNormal?: number;
     sandNormal?: number;
-    /** Albedo mottling depth per layer (0 = flat colour, ~0.35 = lively). Default 0.22. */
+    /** Shared FINE micro-grain (eye-level relief) added over EVERY band on top of the coarse
+     *  per-band crags, so a big slope reads textured underfoot, not flat plastic. `microScale` is
+     *  its world tiling (cycles/m; higher = finer). Defaults: microScale 1.3, microNormal 0.4. */
+    microScale?: number;
+    microNormal?: number;
+    /** Albedo mottling depth per layer (0 = flat colour, ~0.35 = lively). Default 0.28. */
     mottle?: number;
     /** Triplanar blend sharpness (higher = crisper plane transitions). Default 4. */
     triplanarSharpness?: number;
@@ -114,19 +119,24 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
 
   const d = pbr.detail ?? {};
   const sharp = d.triplanarSharpness ?? 4;
-  const mottle = d.mottle ?? 0.22;
+  const mottle = d.mottle ?? 0.28;
   const tex = sharedDetailTexture();
   // The four surface layers: each its own tiling + detail-normal strength (the look knobs).
-  // CUT-1 PERF LIMITATION: all 4 layers × 3 triplanar planes (~12 detail fetches) + 1 climate
-  // fetch are evaluated UNCONDITIONALLY per fragment — the band masks blend the results, they do
-  // not gate the fetches. Fine at landscape_window tile counts; a cost cliff at km-scale tile
-  // counts (e.g. model_terrain_window), so `pbr` is intentionally NOT enabled on the model demo
-  // yet. PHASE-4 OPTIMIZATION: reduce to a shared fine/coarse pair (6 fetches) or branch-gate
+  // CUT-1 PERF LIMITATION: 4 band layers + 1 shared micro layer × 3 triplanar planes (~15 detail
+  // fetches) + 1 climate fetch are evaluated UNCONDITIONALLY per fragment — the band masks blend
+  // the results, they do not gate the fetches. Fine at landscape_window tile counts; a cost cliff
+  // at km-scale tile counts (e.g. model_terrain_window), so `pbr` is intentionally NOT enabled on
+  // the model demo yet. PHASE-4 OPTIMIZATION: reduce to a shared fine/coarse pair or branch-gate
   // layers whose mask is ~0, and/or drop to a single triplanar pass with per-layer reprojection.
-  const rockL = triplanarLayer(tex, d.rockScale ?? 0.14, d.rockNormal ?? 1.0, sharp);
-  const grassL = triplanarLayer(tex, d.grassScale ?? 0.45, d.grassNormal ?? 0.55, sharp);
+  const rockL = triplanarLayer(tex, d.rockScale ?? 0.14, d.rockNormal ?? 1.15, sharp);
+  const grassL = triplanarLayer(tex, d.grassScale ?? 0.45, d.grassNormal ?? 0.7, sharp);
   const snowL = triplanarLayer(tex, d.snowScale ?? 0.10, d.snowNormal ?? 0.30, sharp);
   const sandL = triplanarLayer(tex, d.sandScale ?? 0.55, d.sandNormal ?? 0.70, sharp);
+  // A shared FINE micro-grain layered over EVERY band. The coarse per-band crags (above) read at
+  // DISTANCE; this reads at EYE-LEVEL/underfoot, so a big slope catches light with real relief
+  // instead of flat plastic. Only its detail NORMAL is used (deviation from the geometric normal
+  // added to the band normal below) — its albedo is left to the band layers' mottle.
+  const microL = triplanarLayer(tex, d.microScale ?? 1.3, d.microNormal ?? 0.4, sharp);
 
   // Per-layer albedo = base band colour modulated by its own mottle (controlled, not noisy).
   // deno-lint-ignore no-explicit-any
@@ -162,10 +172,22 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   const cold = T.oneMinus(T.smoothstep(-5.0, 6.0, tempC));
   const rEff = T.clamp(r.add(cold.mul(0.06)), 0, 1);
 
-  const rockMask = T.smoothstep(0.32, 0.46, rEff);
-  const snowMask = T.smoothstep(0.84, 0.95, rEff);
-  const cliff = T.smoothstep(0.55, 0.82, steep).mul(T.oneMinus(snowMask)).mul(0.7);
-  const coastMask = T.oneMinus(T.smoothstep(0.0, coastBand, y.sub(sea)));
+  // ── ROCK is now SLOPE-driven (the single biggest fix) as well as elevation-driven. ──
+  // A steep face reads as bare ROCK/scree at ANY elevation (a big mountainside is no longer a flat
+  // green/grey slab), while gentle ground keeps its GRASS/EARTH band. `steep` = 1−normalWorld.y, so
+  // slopeRock ramps in from a moderate ~37° grade (steep≈0.2) to full rock by a cliff-y ~63°
+  // (steep≈0.55). rockMask = the soft UNION of the elevation-band rock (the high mid-band) and the
+  // slope rock (1−(1−a)(1−b), a proven mul/oneMinus union — no `.max` node needed).
+  const elevRock = T.smoothstep(0.32, 0.46, rEff);   // high mid-band rock (elevation)
+  const slopeRock = T.smoothstep(0.20, 0.55, steep); // steep-face rock (slope) — the fix
+  const rockMask = T.oneMinus(T.oneMinus(elevRock).mul(T.oneMinus(slopeRock)));
+  const gentle = T.oneMinus(slopeRock);              // 1 gentle → 0 steep
+  // Snow caps only the high AND GENTLE crest — steep high faces stay rocky scree (not white).
+  const snowMask = T.smoothstep(0.84, 0.95, rEff).mul(gentle);
+  // Retained cliff mask (kept so the steepest faces read fully rocky even under the snow band).
+  const cliff = T.smoothstep(0.55, 0.82, steep).mul(T.oneMinus(snowMask));
+  // Sandy coast only where the shore is GENTLE (a beach); a steep sea-cliff stays rock, not sand.
+  const coastMask = T.oneMinus(T.smoothstep(0.0, coastBand, y.sub(sea))).mul(gentle);
   const subMask = T.smoothstep(0.0, subBand, T.float(sea).sub(y));
 
   // ── Albedo: blend LAYER outputs (band colour × that layer's mottle) in ramp order ──
@@ -191,6 +213,12 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   nrm = T.mix(nrm, sandL.normal, coastMask);
   // Under the sea the floor is wet/smooth — fade detail back toward the geometric normal.
   nrm = T.mix(nrm, T.normalWorld, subMask.mul(0.7));
+  // Add the shared FINE micro-grain everywhere: its DEVIATION from the geometric normal
+  // (microL.normal − normalWorld) layered onto the band normal, so eye-level relief rides on top
+  // of the coarse per-band crags (breaks up the flat-plastic read on big slopes). Faded out under
+  // the sea (the floor is smooth). normalize() before the view-space transform below.
+  const micro = microL.normal.sub(T.normalWorld).mul(T.oneMinus(subMask));
+  nrm = nrm.add(micro).normalize();
   // `normalNode` is consumed directly AS the VIEW-space normal (three's setupNormal returns it
   // as-is). The terrain mesh is identity-transformed (geometry positions are already world-space),
   // so local≈world and `transformNormalToView` (model-view normal matrix = view matrix here) lands

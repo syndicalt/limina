@@ -244,10 +244,10 @@ function plasterField(u: number, v: number): { h: number; b: number } {
   const branchActive = v > 0.35 && v < 0.62 ? 1 : 0;
   const branch = smoothstep(0.008, 0.0, wrapDist(u, branchU)) * branchActive;
   const crackAmt = Math.max(crack, branch * 0.8);
-  h -= crackAmt * 0.3;                                   // the crack is a groove
+  h -= crackAmt * 0.14;                                  // a FAINT hairline groove (relief only)
   const b0 = 0.55 + (lump - 0.5) * 0.18 + (med - 0.5) * 0.16; // mottle from the lumps + daub bumps
   const stain = periodicFbm(u + 0.37, v + 0.19, 3, 3);   // independent low-freq discolouration
-  const b = clamp01(b0 + (stain - 0.5) * 0.22 - crackAmt * 0.3);
+  const b = clamp01(b0 + (stain - 0.5) * 0.22 - crackAmt * 0.07); // barely darken — no "damage decal" stripe
   return { h: clamp01(h), b };
 }
 

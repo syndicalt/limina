@@ -11,8 +11,11 @@
 import { z } from "../../../build/zod.bundle.mjs";
 import type { SkillDefinition, SkillRegistry } from "../registry.ts";
 import { type BuildingRecipe, assembleBuilding } from "../building-recipe.ts";
+import { PALETTE_ROLE_NAMES } from "../../game/design-direction.ts";
+import { CONSTRUCTION_NAMES } from "../../game/building-brief.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+const PaletteRoleEnum = z.enum(PALETTE_ROLE_NAMES);
 
 const OpeningSchema = z.object({
   wall: z.enum(["north", "south", "east", "west"]),
@@ -27,6 +30,8 @@ const RoofSchema = z.object({
   type: z.enum(["gable", "flat"]),
   pitch: z.number().positive().optional(),
   overhang: z.number().min(0).optional(),
+  cover: PaletteRoleEnum.optional().describe("Palette role the roof cover (shingles/thatch/tile) resolves from. Default 'slate'."),
+  bargeboards: z.boolean().optional().describe("Timber verge/eave trim; keeps the cover on the slopes only."),
 }).strict();
 
 const assembleInput = z.object({
@@ -39,6 +44,10 @@ const assembleInput = z.object({
   roof: z.union([RoofSchema, z.null()]).optional().describe("Roof spec; null = open. Omitted = a gable roof."),
   rotation: z.number().optional().describe("Yaw in radians about the building centre."),
   plinth: z.boolean().optional().describe("A foundation course under the footprint (default on)."),
+  // ── Craft fields (construction-material-logic): the structural system, and a masonry base course. ──
+  construction: z.enum(CONSTRUCTION_NAMES).optional().describe("Structural system: masonry types get solid stone walls; timber-framed get the relief timber wall-panel. Absent = timber-frame."),
+  baseCourse: z.number().min(0).max(40).optional().describe("Masonry base-course height wrapping the footprint (stone footing / full stone ground storey). 0 = none."),
+  baseRole: PaletteRoleEnum.optional().describe("Palette role the base course resolves from (default 'stone')."),
   seed: z.number().optional().describe("Deterministic variation seed for the kit parts."),
 });
 
@@ -83,8 +92,8 @@ const archInput = z.object({
   doorHeight: z.number().positive().max(70).default(2.2),
   withRoof: z.boolean().default(true),
   roofStyle: z.enum(["gable", "flat"]).default("gable"),
-  roofPitch: z.number().positive().max(40).default(2.4),
-  roofOverhang: z.number().min(0).max(5).default(0.5),
+  roofPitch: z.number().positive().max(40).default(2.2),
+  roofOverhang: z.number().min(0).max(5).default(0.35),
   seed: z.number().optional(),
   meta: z.record(z.string(), z.unknown()).optional(),
 });
@@ -107,9 +116,20 @@ function makeArchitectureBuilding(): SkillDefinition<z.infer<typeof archInput>, 
     output: archOutput,
     handler: (input, ctx) => {
       const t = input.wallThickness;
+      const W = input.width, D = input.depth, H = input.height;
+      // A real cottage: a door on the SOUTH front + windows on every wall so no face is a blank slab.
+      // Windows are genuine voids (sill 0.9, ~1.0 m tall) framed by the assembler's pillars/sill/lintel.
+      const win = (wall: "north" | "south" | "east" | "west", offset: number, w = 1.0): { wall: "north" | "south" | "east" | "west"; kind: "window"; offset: number; width: number; height: number; sill: number } =>
+        ({ wall, kind: "window", offset, width: w, height: 1.0, sill: 0.9 });
+      const openings: BuildingRecipe["openings"] = [
+        { wall: "south", kind: "door", width: Math.min(input.doorWidth, W * 0.26), height: Math.min(input.doorHeight, H - t - 0.3), sill: 0 },
+      ];
+      if (W >= 5) { openings!.push(win("south", W * 0.32), win("south", -W * 0.32)); }
+      if (W >= 6) { openings!.push(win("north", W * 0.22), win("north", -W * 0.22)); } else { openings!.push(win("north", 0, Math.min(1.4, W * 0.3))); }
+      if (D >= 4) { openings!.push(win("east", 0), win("west", 0)); }
       const recipe: BuildingRecipe = {
-        width: input.width, depth: input.depth, height: input.height, wallThickness: t, rotation: input.rotation,
-        openings: [{ wall: "south", kind: "door", width: Math.min(input.doorWidth, input.width - 2 * t), height: Math.min(input.doorHeight, input.height - t), sill: 0 }],
+        width: W, depth: D, height: H, wallThickness: t, rotation: input.rotation,
+        openings,
         roof: input.withRoof ? { type: input.roofStyle, pitch: input.roofPitch, overhang: input.roofOverhang } : null,
       };
       const res = assembleBuilding(recipe, input.position, ctx.world, input.seed !== undefined ? { seed: input.seed } : undefined);

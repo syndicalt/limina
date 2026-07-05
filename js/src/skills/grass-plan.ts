@@ -68,6 +68,9 @@ export interface GrassPlan {
   elevationMax?: number;
   /** Keep-out discs (world XZ) — no blade inside any. Already unioned by the caller. */
   exclusions?: ScatterExclusion[];
+  /** INCLUSION discs — confine the carpet to these regions (a LAWN on a building's yard). Inverse of
+   *  exclusions: a blade survives only inside one of these. Empty/absent = carpet the whole ground. */
+  inclusions?: ScatterExclusion[];
 }
 
 /** Build the ScatterConfig for a grass plan. A single placeholder "blade" asset (so the weighted
@@ -84,6 +87,7 @@ export function buildGrassScatterConfig(plan: GrassPlan): ScatterConfig {
     ...(plan.elevationMin !== undefined ? { elevationMin: plan.elevationMin } : {}),
     ...(plan.elevationMax !== undefined ? { elevationMax: plan.elevationMax } : {}),
     ...(plan.exclusions !== undefined && plan.exclusions.length > 0 ? { exclusions: plan.exclusions } : {}),
+    ...(plan.inclusions !== undefined && plan.inclusions.length > 0 ? { inclusions: plan.inclusions } : {}),
   };
 }
 

@@ -23,6 +23,7 @@ import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { RegionState } from "./terrain.ts";
+import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -162,7 +163,32 @@ export interface ScatterTerrain {
  *  default core wiring constructs a registry over the host ops; a runtime may pass
  *  its own (e.g. a package-backed AssetRegistry.fromBundle for replay/browser).
  *  `terrain` wires asset.scatter to the deterministic terrain source/cache. */
-export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegistry, terrain?: ScatterTerrain): void {
+/** Bilinear terrain-surface height at world (x,z) over the most-recently-created editable layer (the
+ *  same "last layer wins" default terrain.deform/village.build use). Returns undefined when no editable
+ *  terrain exists — callers then keep the raw position.y. Mirrors village.build's sampler exactly. */
+function terrainSurfaceHeight(layers: Map<string, EditableTerrain>, x: number, z: number): number | undefined {
+  let layer: EditableTerrain | undefined;
+  for (const l of layers.values()) layer = l; // most-recent
+  if (layer === undefined) return undefined;
+  const tile = layer.tile;
+  const n = tile.ncols, nr = tile.nrows;
+  const [ox, oy, oz] = tile.origin;
+  const sizeX = tile.scale[0], sizeZ = tile.scale[2], sy = tile.scale[1] ?? 1;
+  const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
+  const dx = sizeX / (n - 1), dz = sizeZ / (nr - 1);
+  const heights = tile.heights;
+  const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
+  const fc = clamp((x - x0) / dx, 0, n - 1), fr = clamp((z - z0) / dz, 0, nr - 1);
+  const c0 = Math.floor(fc), r0 = Math.floor(fr);
+  const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
+  const tx = fc - c0, tz = fr - r0;
+  const h = (r: number, c: number): number => oy + heights[r * n + c] * sy;
+  const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
+  const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
+  return a + (b - a) * tz;
+}
+
+export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegistry, terrain?: ScatterTerrain, layers?: Map<string, EditableTerrain>): void {
   const place: SkillDefinition<z.infer<typeof placeInput>, { entity: string; hash: string; resource: z.infer<typeof gltfResourceSchema> }> = {
     name: "asset.place",
     version: "1.0.0",
@@ -183,8 +209,16 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       if (input.hash !== undefined && input.hash !== resolved.hash) {
         throw new Error(`asset.place: '${input.assetId}' content hash mismatch (committed ${input.hash}, resolved ${resolved.hash}) — authored asset identity changed`);
       }
+      // GROUND-CONFORM: `ground: true` means "sit on the ground", so when there is an editable terrain
+      // we snap the base to the TERRAIN SURFACE at (x,z), not to the passed position.y — otherwise an
+      // asset placed with y=0 on a raised island sinks into the hillside. Deterministic + replay-safe:
+      // the height is a pure bilinear sample of the recorded terrain, recomputed identically on replay.
+      // (No terrain, or ground:false → keep the raw position.y.) village.build already passes the terrain
+      // height, so this is a no-op there; it fixes direct asset.place onto generated ground.
+      const terrainY = (input.ground && layers !== undefined) ? terrainSurfaceHeight(layers, input.position[0], input.position[2]) : undefined;
+      const groundPos: z.infer<typeof Vec3> = terrainY !== undefined ? [input.position[0], terrainY, input.position[2]] : input.position;
       const { entity, resource } = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, {
-        position: input.position,
+        position: groundPos,
         rotationEuler: input.rotation,
         scale: input.scale,
       });
@@ -201,7 +235,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       const localAabb = gltfLocalAabb(resolved.bytes);
       const placed = localAabb === null
         ? null
-        : placedWorldAabb(localAabb, input.position, input.rotation, input.scale, input.normalizeHeight, input.ground);
+        : placedWorldAabb(localAabb, groundPos, input.rotation, input.scale, input.normalizeHeight, input.ground);
       let bounds: [number, number, number] = placed === null
         ? [0, 0, 0]
         : [placed.max[0] - placed.min[0], placed.max[1] - placed.min[1], placed.max[2] - placed.min[2]];
@@ -227,7 +261,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
           }
         }
         if (input.ground) {
-          Position.y[rec.eid] += input.position[1] - box.min.y; // base → position.y
+          Position.y[rec.eid] += groundPos[1] - box.min.y; // base → the terrain-conformed ground height
           box = measure();
         }
         // The mesh is authoritative for the RETURNED bounds when it parsed (exact geometry), keeping the

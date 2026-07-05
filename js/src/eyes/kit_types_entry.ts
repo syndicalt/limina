@@ -1,7 +1,7 @@
-// GPU-eyes proof for a WHOLE kit-composed building (Slice 2). Builds a cottage through the reworked
-// assembleBuilding (kit parts: relief wall-panels + sills/lintels/plinth/roof, parented under a
-// building-root, materials from the active DesignDirection) into a lightweight world, then renders it
-// through the ENGINE's real render baseline on the REAL GPU. What the PNG shows is the live look.
+// GPU-eyes proof that the SAME kit toolkit + DIFFERENT building briefs yields DIFFERENT, on-craft
+// buildings. Reads ?type=cottage|monastery|keep|longhall, maps that archetype BRIEF (game/building-
+// brief.ts) → recipe (briefToRecipe) → assembleBuilding, and renders it through the engine's REAL render
+// baseline on the REAL GPU. Nothing bespoke: a cottage and a monastery diverge purely by their briefs.
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { applyRenderBaseline } from "../render-baseline.ts";
@@ -9,30 +9,23 @@ import { EntityTable } from "../engine.ts";
 import { createEcsWorld, renderSyncSystem } from "../ecs/world.ts";
 import { createTransformStorage } from "../ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
-import { assembleBuilding, type BuildingRecipe } from "../skills/building-recipe.ts";
+import { assembleBuilding, briefToRecipe } from "../skills/building-recipe.ts";
+import { COTTAGE_BRIEF, MONASTERY_BRIEF, KEEP_BRIEF, LONGHALL_BRIEF, type BuildingBrief } from "../game/building-brief.ts";
 import { DEFAULT_DESIGN_DIRECTION } from "../game/design-direction.ts";
 import type { WorldContext } from "../skills/registry.ts";
 
-declare const window: { __kitReady?: boolean; __kitErr?: string };
+declare const window: { __kitReady?: boolean; __kitErr?: string; __label?: string; location: { search: string } };
 
-// EXACTLY what architecture.building now generates for a village cottage (sizeM 7.5×6×3.6): a door +
-// windows on every wall, the trimmed roof. This is the standalone ASSET we QC before it becomes a GLB.
-const COTTAGE: BuildingRecipe = {
-  width: 7.5, depth: 6, height: 3.6, wallThickness: 0.25,
-  openings: [
-    { wall: "south", kind: "door", width: 1.4, height: 2.2, sill: 0 },
-    { wall: "south", kind: "window", offset: 2.4, width: 1.0, height: 1.0, sill: 0.9 },
-    { wall: "south", kind: "window", offset: -2.4, width: 1.0, height: 1.0, sill: 0.9 },
-    { wall: "north", kind: "window", offset: 1.65, width: 1.0, height: 1.0, sill: 0.9 },
-    { wall: "north", kind: "window", offset: -1.65, width: 1.0, height: 1.0, sill: 0.9 },
-    { wall: "east", kind: "window", width: 1.0, height: 1.0, sill: 0.9 },
-    { wall: "west", kind: "window", width: 1.0, height: 1.0, sill: 0.9 },
-  ],
-  roof: { type: "gable", pitch: 2.2, overhang: 0.35 },
-  plinth: true,
+const BRIEFS: Record<string, BuildingBrief> = {
+  cottage: COTTAGE_BRIEF, monastery: MONASTERY_BRIEF, keep: KEEP_BRIEF, longhall: LONGHALL_BRIEF,
 };
 
 async function main(): Promise<void> {
+  const type = new URLSearchParams(window.location.search).get("type") ?? "cottage";
+  const brief = BRIEFS[type] ?? COTTAGE_BRIEF;
+  const recipe = briefToRecipe(brief);
+  window.__label = `${type}: ${brief.construction} · ${recipe.width}×${recipe.depth}×${recipe.height} · roof ${brief.roof.pitch}/${brief.roof.cover}`;
+
   const canvas = document.getElementById("limina-canvas") as HTMLCanvasElement;
   const W = canvas.width, H = canvas.height;
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL: !navigator.gpu } as never);
@@ -42,22 +35,25 @@ async function main(): Promise<void> {
   (renderer as unknown as { shadowMap: { enabled: boolean; type: number } }).shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(48, W / H, 0.1, 400);
-  // Hero 3/4 angle, grounded, framing the whole cottage.
-  camera.position.set(0, 2.4, 11);
-  camera.lookAt(0, 1.6, 0);
+  const camera = new THREE.PerspectiveCamera(46, W / H, 0.1, 600);
+  // Frame the building from a grounded 3/4 angle, distance derived from its footprint + height.
+  const bw = recipe.width, bd = recipe.depth, bh = recipe.height;
+  const span = Math.max(bw, bd);
+  const dist = span * 1.35 + bh * 0.9 + 5;
+  camera.position.set(dist * 0.72, bh * 0.62 + 2.4, dist);
+  camera.lookAt(0, bh * 0.42, 0);
   applyRenderBaseline({ scene, renderer: renderer as never, camera } as never);
 
-  // A raking key light so the timber relief + eaves throw real shadows.
+  // A raking key light so timber relief, eaves + the base course throw real shadows.
   const key = new THREE.DirectionalLight(0xfff0da, 2.4);
-  key.position.set(-7, 9, 6);
+  key.position.set(-span * 0.8, span + bh + 6, span * 0.7);
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
   const kc = key.shadow.camera as THREE.OrthographicCamera;
-  kc.left = -14; kc.right = 14; kc.top = 14; kc.bottom = -14; kc.near = 0.1; kc.far = 60;
+  const r = span + bh + 6;
+  kc.left = -r; kc.right = r; kc.top = r; kc.bottom = -r; kc.near = 0.1; kc.far = r * 3;
   scene.add(key);
 
-  // A lightweight WorldContext (mirrors p15c's makeWorld) with stub physics — we only render.
   let bid = 0;
   const ops = {
     op_physics_create_world: () => {},
@@ -71,9 +67,8 @@ async function main(): Promise<void> {
     camera: {} as WorldContext["camera"], ops, mode: "headless",
   } as WorldContext;
 
-  assembleBuilding(COTTAGE, [0, 0, 0], world, { dd: DEFAULT_DESIGN_DIRECTION, seed: 3 });
+  assembleBuilding(recipe, [0, 0, 0], world, { dd: DEFAULT_DESIGN_DIRECTION, seed: 7 });
   renderSyncSystem(ecs);
-  // Shadows on every part.
   scene.traverse((o: THREE.Object3D) => { const m = o as THREE.Mesh; if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
 
   let n = 0;

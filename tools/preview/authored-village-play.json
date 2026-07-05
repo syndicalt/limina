@@ -44,7 +44,7 @@
         "buildings": [
           { "role": "keep", "style": "nordic castle", "assetId": "library/keep.glb", "count": 1 },
           { "role": "church", "style": "romanesque", "assetId": "library/church.glb", "count": 1 },
-          { "role": "cottage", "style": "wattle-and-daub", "assetId": "library/cottage.glb", "count": 6 },
+          { "role": "cottage", "style": "half-timber", "kit": true, "sizeM": [7.5, 6, 3.6], "count": 6 },
           { "role": "barn", "style": "timber", "assetId": "library/barn.glb", "count": 1 }
         ],
         "layout": { "focal": "keep on the high knoll", "density": "loose" }
@@ -53,14 +53,14 @@
     } }
   ],
   "renderBaseline": {
-    "exposure": 1.05,
-    "sun": { "color": 16770744, "intensity": 4.6, "direction": [-52, 34, 22] },
-    "hemisphere": { "skyColor": 12374271, "groundColor": 4872752, "intensity": 1.8 },
-    "ambientIntensity": 0.66,
+    "exposure": 1.0,
+    "sun": { "color": 16775906, "intensity": 6.2, "direction": [-38, 52, 28] },
+    "hemisphere": { "skyColor": 9020927, "groundColor": 4872752, "intensity": 0.95 },
+    "ambientIntensity": 0.32,
     "ambientColor": 7036501,
-    "sky": { "top": 7314377, "horizon": 15520674, "bottom": 5916728 },
-    "environmentIntensity": 1.4,
-    "atmosphere": { "enabled": true, "color": 14732448, "density": 0.0021 },
+    "sky": { "top": 6260413, "horizon": 13425890, "bottom": 10465981 },
+    "environmentIntensity": 1.15,
+    "atmosphere": { "enabled": true, "color": 12898264, "density": 0.0013 },
     "ground": { "enabled": false, "size": 240 },
     "camera": { "far": 600 }
   },

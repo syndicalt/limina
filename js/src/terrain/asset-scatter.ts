@@ -143,6 +143,11 @@ export interface ScatterConfig {
    *  the removed ones (the same superset/replay guarantee the other gates carry).
    *  Empty/absent → byte-identical back-compat. */
   exclusions?: ScatterExclusion[];
+  /** INCLUSION discs (world XZ) — the inverse of `exclusions`. When present, a candidate survives only
+   *  if it falls INSIDE at least one inclusion disc; everything outside is skipped. Used to confine a
+   *  scatter to a region — e.g. a tended LAWN or a wildflower bed on a building's yard. Same pure
+   *  post-RNG filter as exclusions (draw order unchanged → deterministic). */
+  inclusions?: ScatterExclusion[];
 }
 
 /** One placed asset instance. `y` is the terrain surface at (x,z). Serializable,
@@ -214,6 +219,11 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
   const exN = exclusions.length;
   const exX = new Float64Array(exN), exZ = new Float64Array(exN), exR2 = new Float64Array(exN);
   for (let e = 0; e < exN; e++) { exX[e] = exclusions[e].x; exZ[e] = exclusions[e].z; exR2[e] = exclusions[e].r * exclusions[e].r; }
+  // Inclusion discs (the inverse): survivors must fall INSIDE one of these (empty = no inclusion gate).
+  const inclusions = config.inclusions ?? [];
+  const inN = inclusions.length;
+  const inX = new Float64Array(inN), inZ = new Float64Array(inN), inR2 = new Float64Array(inN);
+  for (let e = 0; e < inN; e++) { inX[e] = inclusions[e].x; inZ[e] = inclusions[e].z; inR2[e] = inclusions[e].r * inclusions[e].r; }
 
   const [ox, oy, oz] = tile.origin;
   const [sx, sy, sz] = tile.scale;
@@ -308,6 +318,15 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
           if (dx * dx + dz * dz <= exR2[e]) { blocked = true; break; }
         }
         if (blocked) continue;
+      }
+      // INCLUSION: when a region gate is set, keep ONLY candidates inside one of the discs (a lawn/bed).
+      if (inN > 0) {
+        let inside = false;
+        for (let e = 0; e < inN; e++) {
+          const dx = x - inX[e], dz = z - inZ[e];
+          if (dx * dx + dz * dz <= inR2[e]) { inside = true; break; }
+        }
+        if (!inside) continue;
       }
       if (wantClimate) {
         const r = Math.min(nrows - 1, Math.max(0, Math.round(fr)));

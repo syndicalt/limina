@@ -26,14 +26,25 @@ import { type Part, type V3, gableRoofGeometry, gableTriangleGeometry, spawnStat
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import { computeLocalOffset } from "../ecs/hierarchy.ts";
 import { KIT, type KitPart, type PartContext, type PartKind, kitMaterial, kitPlasterMaterial } from "./building/kit.ts";
-import { type DesignDirection, DEFAULT_DESIGN_DIRECTION } from "../game/design-direction.ts";
+import { type DesignDirection, DEFAULT_DESIGN_DIRECTION, type PaletteRole } from "../game/design-direction.ts";
+import type { BuildingBrief } from "../game/building-brief.ts";
 import type { WorldContext } from "./registry.ts";
 
 export type WallSide = "north" | "south" | "east" | "west";
 /** An opening cut into a wall. `offset` is the centre along the wall axis (0 = wall centre); `sill` is
  *  the height of the solid panel below it (0 for a door, >0 for a window). */
 export type Opening = { wall: WallSide; kind: "door" | "window"; offset?: number; width: number; height: number; sill?: number };
-export type RoofSpec = { type: "gable" | "flat"; pitch?: number; overhang?: number };
+export type RoofSpec = {
+  type: "gable" | "flat"; pitch?: number; overhang?: number;
+  /** Palette role the roof cover (shingles/thatch/tile) resolves its material from. Default "slate". */
+  cover?: PaletteRole;
+  /** Timber bargeboards up the gable rakes + an eave fascia — the texture-orientation principle (keeps
+   *  the cover on the SLOPES and frames every exposed roof edge so no vertical face shows wrapped cover). */
+  bargeboards?: boolean;
+};
+/** The structural SYSTEM a building is raised in — drives the wall part choice + the base course, per the
+ *  building-craft construction-material-logic principle. Mirrors game/building-brief.ts Construction. */
+export type Construction = "timber-frame-daub" | "stone-base-timber-upper" | "cut-stone" | "cob" | "log";
 export type BuildingRecipe = {
   width: number; depth: number; height: number;
   wallThickness?: number;
@@ -44,6 +55,16 @@ export type BuildingRecipe = {
   colors?: { wall?: number; floor?: number; roof?: number };
   /** A plinth/foundation course under the footprint (a PG-style base the walls sit on). Default on. */
   plinth?: boolean;
+  // ── Craft fields (all OPTIONAL — omitted means the legacy timber-frame look, so the tested assembler
+  //    contract (p15c) is byte-identical for callers that don't set them; only briefs opt in). ──
+  /** How the shell is built. Chooses the wall part: timber-framed types get the RELIEF timber wall-panel;
+   *  masonry types (cut-stone / cob) get a solid stone wall. Absent = timber-frame (legacy). */
+  construction?: Construction;
+  /** Height of a masonry base course wrapping the footprint (a low stone footing under a timber frame, or
+   *  a full stone ground storey under a jettied upper). 0 / absent = none. Gapped at door openings. */
+  baseCourse?: number;
+  /** Palette role the masonry base course resolves from (default "stone"). */
+  baseRole?: PaletteRole;
 };
 
 /** Options steering the kit composition (all optional — sensible defaults keep old callers working). */
@@ -81,6 +102,10 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
   const dd = opts?.dd ?? DEFAULT_DESIGN_DIRECTION;
   const ctx: PartContext = { dd, seed: opts?.seed ?? 0 };
   const gen = (kind: PartKind): KitPart => opts?.parts?.[kind] ?? KIT[kind];
+
+  // Construction drives the WALL part (material-logic principle): masonry types get a solid stone wall;
+  // timber-framed types keep the RELIEF timber wall-panel. Absent = timber-frame (legacy, byte-identical).
+  const masonryWalls = recipe.construction === "cut-stone" || recipe.construction === "cob";
 
   // ── The building-root: a transform-only entity that owns the whole structure via parenting. Its
   // origin is the SELF-SUFFICIENT recipe (+ position + seed) under the registered `building.assemble`
@@ -130,13 +155,15 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
   // Along-axis wall segment → a part. N/S sit at ±Z running along X; E/W at ±X running along Z (inset
   // by t so corners don't double up). We author the part-local size as [length, height, thickness] and
   // let SIDE_YAW orient it; the world footprint matches the legacy box exactly.
-  const seg = (side: WallSide, structuralKind: string, partKind: PartKind, axisC: number, axisLen: number, yC: number, ySize: number): void => {
+  const seg = (side: WallSide, structuralKind: string, partKind: PartKind, axisC: number, axisLen: number, yC: number, ySize: number, role: PaletteRole = "stone", thick: number = t): void => {
     if (axisLen <= EPS || ySize <= EPS) return;
+    // Keep the segment CENTRED on the wall plane (inset by t) even when `thick` is proud, so a proud base
+    // course fronts the wall face rather than shifting the whole wall.
     const local: V3 = side === "north" ? [axisC, yC, D / 2 - t / 2]
       : side === "south" ? [axisC, yC, -D / 2 + t / 2]
         : side === "east" ? [W / 2 - t / 2, yC, axisC]
           : [-W / 2 + t / 2, yC, axisC];
-    placePart(structuralKind, partKind, "stone", local, [axisLen, ySize, t], SIDE_YAW[side], side === "east" || side === "west");
+    placePart(structuralKind, partKind, role, local, [axisLen, ySize, thick], SIDE_YAW[side], side === "east" || side === "west");
   };
 
   // Emit one wall with its openings: solid pillars between/around openings (full height, RELIEF panel
@@ -150,7 +177,7 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
       .map((o) => { const c = o.offset ?? 0; return { lo: Math.max(-half, c - o.width / 2), hi: Math.min(half, c + o.width / 2), sill: o.sill ?? 0, height: o.height }; })
       .filter((o) => o.hi - o.lo > EPS)
       .sort((a, b) => a.lo - b.lo);
-    const pillar = (lo: number, hi: number): PartKind => (hi - lo >= WALL_PANEL_MIN ? "wall-panel" : "beam");
+    const pillar = (lo: number, hi: number): PartKind => (hi - lo < WALL_PANEL_MIN ? "beam" : masonryWalls ? "wall-solid" : "wall-panel");
     let cursor = -half;
     for (const o of ops) {
       if (o.lo - cursor > EPS) seg(side, `wall_${side}`, pillar(cursor, o.lo), (cursor + o.lo) / 2, o.lo - cursor, H / 2, H); // pillar
@@ -162,6 +189,31 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
     if (half - cursor > EPS) seg(side, `wall_${side}`, pillar(cursor, half), (cursor + half) / 2, half - cursor, H / 2, H); // trailing pillar
   };
   for (const side of ["north", "south", "east", "west"] as WallSide[]) emitWall(side);
+
+  // ── BASE COURSE: a masonry band wrapping the footprint (construction-material-logic principle) — a low
+  // stone footing under a timber frame (cottage), or a full stone ground storey under a jettied timber
+  // upper (manor/longhall). It stands PROUD of the wall face so it reads as stone the frame sits on, is
+  // gapped at DOOR openings so the doorway stays clear, and stops below the window sills. Opt-in via the
+  // recipe; masonry (cut-stone) buildings set baseCourse 0 because the whole wall is already stone. ────
+  const bc = recipe.baseCourse ?? 0;
+  if (bc > EPS) {
+    const baseRole: PaletteRole = recipe.baseRole ?? "stone";
+    const bcH = Math.min(bc, H);
+    const bcThick = t + 0.12; // proud of the wall face
+    for (const side of ["north", "south", "east", "west"] as WallSide[]) {
+      const axisLen = (side === "north" || side === "south") ? W : D - 2 * t;
+      const half = axisLen / 2;
+      const doors = (recipe.openings ?? [])
+        .filter((o) => o.wall === side && o.kind === "door")
+        .map((o) => { const c = o.offset ?? 0; return { lo: Math.max(-half, c - o.width / 2), hi: Math.min(half, c + o.width / 2) }; })
+        .filter((o) => o.hi - o.lo > EPS)
+        .sort((a, b) => a.lo - b.lo);
+      const span = (lo: number, hi: number): void => { if (hi - lo > EPS) seg(side, `base_${side}`, "wall-solid", (lo + hi) / 2, hi - lo, bcH / 2, bcH, baseRole, bcThick); };
+      let cursor = -half;
+      for (const d of doors) { span(cursor, d.lo); cursor = Math.max(cursor, d.hi); }
+      span(cursor, half);
+    }
+  }
 
   // ── DOORSTEP: a stepped stoop just OUTSIDE each door (connective — "walk up to the door"). It sits
   // beyond the footprint at grade, so it never intrudes on the interior voids the structural gate
@@ -183,12 +235,16 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
   // ── ROOF: a custom-geometry gabled prism (kept — structurally load-bearing for p15c's eave check),
   // skinned with the DD's timber material. One entity. ─────────────────────────────────────────────
   const roof = recipe.roof === undefined ? { type: "gable" as const } : recipe.roof;
+  // The roof COVER resolves its material from the recipe's cover role (slate shingles by default) — the
+  // texture-orientation principle keeps it on the SLOPES only (gable ends are OPEN, closed by the plaster
+  // infill below), so no vertical face shows a triplanar-wrapped shingle.
+  const coverRole: PaletteRole = (roof as RoofSpec).cover ?? "slate";
   let roofTop = 0;
   if (roof) {
     if (roof.type === "gable") {
       const pitch = roof.pitch ?? 2.4;
-      const { geo, half } = gableRoofGeometry(W, D, pitch, roof.overhang ?? 0.5);
-      const roofMat = kitMaterial(ctx, "slate");
+      const { geo, half } = gableRoofGeometry(W, D, pitch, roof.overhang ?? 0.5, false);
+      const roofMat = kitMaterial(ctx, coverRole);
       // The roof is an OPEN prism (no underside) on an ENTERABLE building — render both faces so no
       // slope backface-culls (reads as a "missing half") and the underside shows from inside.
       (roofMat as THREE.Material).side = THREE.DoubleSide;
@@ -222,7 +278,7 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
         parts.push({ kind: "gable", entity: gEnt, position: gpos, size: [gBaseW, pitch, t] });
       }
     } else {
-      placePart("roof", "roof-section", "trim", [0, H + t / 2, 0], [W, t, D], 0, false);
+      placePart("roof", "roof-section", coverRole, [0, H + t / 2, 0], [W, t, D], 0, false);
       roofTop = t;
     }
   }
@@ -232,5 +288,68 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
     parts,
     bounds: { min: [px - W / 2, py - t, pz - D / 2], max: [px + W / 2, py + H + roofTop, pz + D / 2] },
     entityCount: parts.length,
+  };
+}
+
+// ── brief → recipe: the seam from PER-TYPE ART DIRECTION (the GDD-planning building brief) to STRUCTURE ──
+// A BuildingBrief says WHAT the building is (construction, storeys, roof, ornament, materials); this turns
+// that into the geometric recipe the assembler raises. The build agent authors/edits a BRIEF and never a
+// bespoke model — a cottage and a monastery diverge purely by their briefs through this one mapping.
+
+/** Ridge height as a fraction of the short half-span, per the brief's named pitch. */
+const PITCH_RATIO: Record<string, number> = { shallow: 0.5, medium: 0.9, steep: 1.4 };
+
+/** Masonry base-course height for each construction system (metres). Timber-framed types get a low stone
+ *  footing; a stone-base-timber-upper gets a full stone ground storey; cut-stone needs none (all stone). */
+function baseCourseFor(brief: BuildingBrief): number {
+  switch (brief.construction) {
+    case "timber-frame-daub": return 0.5;
+    case "stone-base-timber-upper": return brief.storeyHeightM; // the whole ground storey in stone
+    case "cut-stone": return 0;
+    case "cob": return 0.4;
+    case "log": return 0.3;
+  }
+}
+
+export interface BriefToRecipeOptions {
+  /** Site-fit footprint override (the village planner picks this); falls back to the brief's own hint. */
+  footprint?: { width: number; depth: number };
+  rotation?: number;
+}
+
+/** Map a per-type BuildingBrief to the structural BuildingRecipe. Deterministic + pure. */
+export function briefToRecipe(brief: BuildingBrief, opts?: BriefToRecipeOptions): BuildingRecipe {
+  const fw = opts?.footprint?.width ?? brief.footprintM?.width ?? 8;
+  const fd = opts?.footprint?.depth ?? brief.footprintM?.depth ?? 6;
+  const H = brief.storeyHeightM * brief.storeys;
+  const t = 0.25;
+  const shortHalf = Math.min(fw, fd) / 2;
+  const baseCourse = baseCourseFor(brief);
+
+  // Openings: a door on the SOUTH front + windows scaled to the walls; sills clear the base course.
+  const winSill = Math.max(baseCourse + 0.1, 0.9);
+  const winH = brief.openingStyle === "arched" ? Math.max(1.2, Math.min(2.4, H - winSill - 0.4)) : 1.0;
+  const win = (wall: WallSide, offset: number, w = 1.0): Opening => ({ wall, kind: "window", offset, width: w, height: winH, sill: winSill });
+  const openings: Opening[] = [
+    { wall: "south", kind: "door", width: Math.min(1.4, fw * 0.26), height: Math.min(2.2, H - t - 0.3), sill: 0 },
+  ];
+  if (fw >= 5) openings.push(win("south", fw * 0.32), win("south", -fw * 0.32));
+  if (fw >= 6) openings.push(win("north", fw * 0.22), win("north", -fw * 0.22)); else openings.push(win("north", 0, Math.min(1.4, fw * 0.3)));
+  if (fd >= 4) openings.push(win("east", 0), win("west", 0));
+  if (fd >= 12) openings.push(win("east", fd * 0.28), win("east", -fd * 0.28), win("west", fd * 0.28), win("west", -fd * 0.28));
+
+  const gable = brief.roof.shape !== "flat";
+  const pitch = gable ? (PITCH_RATIO[brief.roof.pitch] ?? 0.9) * shortHalf : 0;
+  return {
+    width: fw, depth: fd, height: H, wallThickness: t,
+    rotation: opts?.rotation,
+    openings,
+    roof: gable
+      ? { type: "gable", pitch, overhang: 0.4, cover: brief.material.roofCover, bargeboards: brief.roof.bargeboards }
+      : { type: "flat", cover: brief.material.roofCover, bargeboards: brief.roof.bargeboards },
+    construction: brief.construction,
+    baseCourse,
+    baseRole: brief.material.base,
+    plinth: true,
   };
 }

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "_rationale": "MONOTONIC graphical-fidelity floor for the asset QC gate (gates/design/asset-qc-gate.mjs). Every field is a MINIMUM a baked asset GLB must meet BEFORE it is imported into a world; the floor only ever RATCHETS UP (via ratchetFloor/raiseFloor), never down, climbing toward the Project Gorgon ceiling. Seed values were measured from a real, good, textured kit building (assets/kit-building.glb) then set with headroom below it so that building passes while a degenerate box (single flat-colour material, ~a dozen tris, no albedo map, speck bbox) hard-fails.",
+  "ceilingTarget": "project-gorgon",
+  "default": {
+    "minVertexCount": 100,
+    "minTriangleCount": 40,
+    "minMaterialCount": 1,
+    "requiresAlbedoMap": true,
+    "requiresNormalMap": false,
+    "minBboxDims": [0.5, 0.5, 0.5]
+  },
+  "class": {
+    "building": {
+      "_note": "Buildings are the biggest fidelity gap vs the ceiling. Floor sits below the measured reference (verts 4686, tris 894, mats 3, bbox 9x6.15x7.3) with margin so the reference passes; a flat-box cottage fails on verts+tris+materials+albedo+bbox at once.",
+      "minVertexCount": 500,
+      "minTriangleCount": 200,
+      "minMaterialCount": 2,
+      "requiresAlbedoMap": true,
+      "requiresNormalMap": false,
+      "minBboxDims": [3.0, 2.5, 3.0]
+    }
+  },
+  "provenance": {
+    "measuredFrom": "assets/kit-building.glb",
+    "measured": {
+      "vertexCount": 4686,
+      "triangleCount": 894,
+      "materialCount": 3,
+      "hasAlbedoMap": true,
+      "hasNormalMap": false,
+      "bboxDims": [9.0, 6.15, 7.3]
+    },
+    "ratchetTargets": [
+      "requiresNormalMap: true — the #1 raise. The current reference bakes NO normal map, so requiring one now would reject the very asset the floor is seeded from. raiseFloor() flips this true the moment a normal-mapped building passes; the gate already enforces it when true.",
+      "minTriangleCount / minVertexCount climb toward PG as denser kits land.",
+      "class-specific colour palette conformance strengthens once baked textures can be sampled (see gate's documented approximation)."
+    ]
+  }
+}

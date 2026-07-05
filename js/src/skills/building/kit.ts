@@ -30,6 +30,7 @@ import type { DesignDirection, PaletteRole } from "../../game/design-direction.t
  *  assembler and the registry cannot drift; extend deliberately when a new element is authored. */
 export const PART_KINDS = [
   "wall-panel", // an infill wall: recessed plaster behind a proud timber frame (the relief hero)
+  "wall-solid", // a solid masonry wall (cut-stone / cob construction) — no timber frame
   "window-unit", // a framed opening with a reveal + sill (upgraded in the full-kit slice)
   "doorway", // a framed door opening
   "sill", // the solid panel below a window
@@ -213,19 +214,25 @@ export const wallPanel: KitPart = (spec, ctx) => {
   pieces.push({ geo: boxGeo(frameW, H, fd, postX, 0, fz), mat: 1 });    // right post
   pieces.push({ geo: boxGeo(W, frameW, fd, 0, railY, fz), mat: 1 });    // top plate
   pieces.push({ geo: boxGeo(W, frameW, fd, 0, -railY, fz), mat: 1 });   // sill beam
-  // Studs: split wide panels into believable bays (0 on a narrow pillar, up to 2 on a full wall).
-  const bays = W >= 2.6 ? 2 : W >= 1.3 ? 1 : 0;
+  // A MID-RAIL splits the wall into upper + lower panels (the characteristic Tudor grid). Only on
+  // panels tall + wide enough to warrant it.
+  const midRail = H >= 2.4 && W >= 1.0;
+  if (midRail) pieces.push({ geo: boxGeo(W, frameW, fd, 0, 0, fz), mat: 1 });
+  // Vertical studs divide the wall into believable bays. On a mid-railed wall the studs run the FULL
+  // height (crossing the rail) so the grid reads as coherent posts-and-panels, not scattered sticks.
+  const bays = W >= 3.2 ? 3 : W >= 2.0 ? 2 : W >= 1.1 ? 1 : 0;
   for (let i = 1; i <= bays; i++) {
-    pieces.push({ geo: boxGeo(frameW, H, fd, -half(W) + (W * i) / (bays + 1), 0, fz), mat: 1 });
+    pieces.push({ geo: boxGeo(frameW * 0.9, H, fd, -half(W) + (W * i) / (bays + 1), 0, fz), mat: 1 });
   }
-  // Diagonal corner braces (sill-corner → up toward the plate) on panels big enough to carry them.
-  if (W >= 1.5 && H >= 1.6) {
-    const braceW = frameW * 0.82;
-    const d = Math.min(W, H) * 0.34;                 // equal run/rise ⇒ 45°
-    const L = d * Math.SQRT2 + frameW;               // reach into both joints
-    const sx = half(W) - frameW, sy = -railY + half(frameW);
-    pieces.push({ geo: boxGeoRot(braceW, L, fd, -sx + d / 2, sy + d / 2, fz, -Math.PI / 4), mat: 1 }); // bottom-left → up-right
-    pieces.push({ geo: boxGeoRot(braceW, L, fd, sx - d / 2, sy + d / 2, fz, Math.PI / 4), mat: 1 });   // bottom-right → up-left
+  // A single clean corner brace in each LOWER panel of a WIDE wall — a proper 45° knee from the sill
+  // corner up to the mid-rail, fully contained in the lower panel so it reads structural, not stray.
+  if (midRail && W >= 3.0) {
+    const braceW = frameW * 0.8;
+    const reach = Math.min(half(H) * 0.9, (W / (bays + 1)) * 0.85); // fit inside a bay, up to the rail
+    const L = reach * Math.SQRT2;
+    const cx0 = half(W) - frameW, cy0 = -railY + half(frameW);      // just inside the bottom corner joints
+    pieces.push({ geo: boxGeoRot(braceW, L, fd, -cx0 + reach / 2, cy0 + reach / 2, fz, -Math.PI / 4), mat: 1 });
+    pieces.push({ geo: boxGeoRot(braceW, L, fd, cx0 - reach / 2, cy0 + reach / 2, fz, Math.PI / 4), mat: 1 });
   }
 
   const mesh = mergedMesh(pieces, [plasterMat, timberMat]);
@@ -267,6 +274,7 @@ export const boxPart: KitPart = (spec, ctx) => {
  *  full-kit slice replaces those entries with authored generators. */
 export const KIT: Record<PartKind, KitPart> = {
   "wall-panel": wallPanel,
+  "wall-solid": boxPart,
   "window-unit": boxPart,
   "doorway": boxPart,
   "sill": boxPart,

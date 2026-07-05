@@ -14,7 +14,9 @@
 window.__log = []; window.__err = [];
 try {
   const sceneUrl = new URLSearchParams(location.search).get("scene") || "/tools/preview/authored-village-play.json";
-  const scene = await (await fetch(sceneUrl)).json();
+  const sceneRes = await fetch(sceneUrl);
+  if (!sceneRes.ok) throw new Error(`scene not found: ${sceneUrl} (HTTP ${sceneRes.status}) — check the ?scene= path (it must end in .json)`);
+  const scene = await sceneRes.json();
   const M = await import("/editor/vendor/limina-runtime.js");
   const runLive = M.runLive;
   if (typeof runLive !== "function") { window.__err.push("runLive not exported"); }
