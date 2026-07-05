@@ -63,6 +63,7 @@ import { FlyCamera } from "./browser/fly-camera.ts";
 import { LAWN_DECO_ASSETS } from "./skills/village.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
+export { createCharacterBody, type CharacterBody, type CharacterBodyOptions } from "./world/character-body.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
