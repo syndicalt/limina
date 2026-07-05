@@ -60,6 +60,7 @@ import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terr
 import { ProceduralTerrainSource, TILE_SIZE } from "./terrain/procedural.ts";
 import type { TerrainTile } from "./terrain/types.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
+import { LAWN_DECO_ASSETS } from "./skills/village.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
 import {
   BrowserInput,
@@ -473,9 +474,14 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
   // village.build mounts a GLB per building (via nested asset.place); its ids live in
   // steering.buildings[].assetId, so pre-warm each one's parse cache before init().
   if (cmd.tool === "village.build") {
-    const steering = (input.steering ?? {}) as { buildings?: Array<{ assetId?: unknown }> };
+    const steering = (input.steering ?? {}) as { buildings?: Array<{ assetId?: unknown }>; siting?: { yard?: unknown } };
     const bs = Array.isArray(steering.buildings) ? steering.buildings : [];
-    return bs.map((b) => (typeof b.assetId === "string" ? b.assetId : "")).filter((s) => s.length > 0);
+    const buildingIds = bs.map((b) => (typeof b.assetId === "string" ? b.assetId : "")).filter((s) => s.length > 0);
+    // A "lawn" yard (the default) scatters wildflower/tuft GLBs on the yard — pre-warm those too, else the
+    // render-thread scatter can't resolve them and the lawn stays bare.
+    const yard = steering.siting?.yard;
+    const wantLawn = yard === undefined || yard === "lawn";
+    return wantLawn ? [...buildingIds, ...LAWN_DECO_ASSETS.map((a) => a.id)] : buildingIds;
   }
   if (cmd.tool === "vegetation.plant") {
     const species = typeof input.species === "string" ? input.species : "spruce";

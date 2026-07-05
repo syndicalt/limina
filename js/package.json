@@ -23,6 +23,7 @@
     "check:portability": "node scripts/check-host-portability.mjs",
     "check:determinism": "node scripts/check-determinism.mjs",
     "check:live": "node scripts/check-live-composition.mjs",
+    "check:assets": "node ../tools/qc/asset-sanity.mjs ../assets",
     "bundle:coordinator-demo": "esbuild ../coordinator-demo/src/app.js --bundle --format=esm --platform=browser --outfile=../coordinator-demo/dist/coordinator-demo.js --loader:.ts=ts",
     "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs"
   }

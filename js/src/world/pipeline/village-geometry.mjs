@@ -160,11 +160,25 @@ export function buildLaneGeometry(heightAt, placed) {
   if (centerline === null) return null;
   const { pts, samples, n } = centerline;
 
-  // Ribbon: two vertices per sample, each re-seated on the terrain. UVs run in metres
-  // (u across, v along the arc) to match the earth texture tiling.
+  // Ribbon: a cambered CROSS-SECTION (not a flat 2-vertex strip) so the lane conforms to a
+  // rolling/crowned surface instead of clipping through terrain that bulges between its edges.
+  // Each cross vertex is re-seated on the terrain and lifted by its own offset: the crown rides
+  // a touch proud (sheds water/grass, reads as a cambered road) and the outer edges tuck slightly
+  // INTO the turf so the rim feathers away under the grass instead of floating (kills the z-fight).
+  // Cols run +side → −side (matching the old winding so face normals still point up). UVs are in
+  // metres (u across, v along the arc) to match the ground-texture tiling.
   const halfW = 1.4;
-  const pos = new Float32Array((n + 1) * 2 * 3);
-  const uv = new Float32Array((n + 1) * 2 * 2);
+  // { f: fraction of halfW across (+1 = one edge, −1 = the other), lift: metres above terrain }
+  const CROSS = [
+    { f: 1.0, lift: -0.04 },
+    { f: 0.55, lift: 0.07 },
+    { f: 0.0, lift: 0.10 },
+    { f: -0.55, lift: 0.07 },
+    { f: -1.0, lift: -0.04 },
+  ];
+  const W = CROSS.length;
+  const pos = new Float32Array((n + 1) * W * 3);
+  const uv = new Float32Array((n + 1) * W * 2);
   const idx = [];
   let arc = 0;
   for (let i = 0; i <= n; i++) {
@@ -175,28 +189,30 @@ export function buildLaneGeometry(heightAt, placed) {
     }
     let t = curveTangent(pts, i / n);
     // flatten to XZ + renormalize (matching the preview's t.y=0; t.normalize())
-    let ty0 = 0;
-    if (t.x * t.x + t.z * t.z < 1e-6) { t = { x: 0, y: 0, z: 1 }; ty0 = 0; }
+    if (t.x * t.x + t.z * t.z < 1e-6) { t = { x: 0, y: 0, z: 1 }; }
     else {
-      const l = Math.sqrt(t.x * t.x + ty0 * ty0 + t.z * t.z);
+      const l = Math.sqrt(t.x * t.x + t.z * t.z);
       const inv = 1 / (l || 1);
       t = { x: t.x * inv, y: 0, z: t.z * inv };
     }
-    // side = cross(up(0,1,0), t) * halfW = (t.z, 0, -t.x) * halfW
-    const sideX = t.z * halfW, sideZ = -t.x * halfW;
-    for (const s of [1, -1]) {
-      const x = pp.x + sideX * s, z = pp.z + sideZ * s;
-      const o = (i * 2 + (s > 0 ? 0 : 1)) * 3;
+    // side = cross(up(0,1,0), t) = (t.z, 0, -t.x)
+    const sX = t.z, sZ = -t.x;
+    for (let c = 0; c < W; c++) {
+      const off = halfW * CROSS[c].f;
+      const x = pp.x + sX * off, z = pp.z + sZ * off;
+      const o = (i * W + c) * 3;
       pos[o] = x;
-      pos[o + 1] = heightAt(x, z) + 0.07; // float just above ground
+      pos[o + 1] = heightAt(x, z) + CROSS[c].lift; // terrain-seated + cambered
       pos[o + 2] = z;
-      const u = (i * 2 + (s > 0 ? 0 : 1)) * 2;
-      uv[u] = s > 0 ? 0 : halfW * 2;
+      const u = (i * W + c) * 2;
+      uv[u] = (0.5 - CROSS[c].f * 0.5) * (halfW * 2); // 0..2·halfW across
       uv[u + 1] = arc;
     }
     if (i < n) {
-      const a = i * 2;
-      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      for (let c = 0; c < W - 1; c++) {
+        const a = i * W + c, b = a + 1, d = (i + 1) * W + c, e = d + 1;
+        idx.push(a, b, d, b, e, d); // same winding as the old strip (normals up)
+      }
     }
   }
   return { positions: pos, uvs: uv, indices: idx };

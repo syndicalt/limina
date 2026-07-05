@@ -212,40 +212,91 @@ function paintSlate(ctx, n, base, rng) {
   }
 }
 
-// Packed earth: trodden mottling with pebbles — for lanes and ground pads.
+// Packed earth: a trodden dirt lane — broad damp/dry patches, fine grit, and embedded
+// pebbles drawn with a shadow foot + lit top so the sobel normal map reads real relief.
 function paintEarth(ctx, n, base, rng) {
   ctx.fillStyle = css(base);
   ctx.fillRect(0, 0, n, n);
-  for (let i = 0; i < 170; i++) {
-    ctx.fillStyle = css(vary(rng, base, 0.07, 0.04));
-    ctx.globalAlpha = 0.13;
+  // broad damp/dry patches — big tonal areas so the lane isn't a flat wash
+  for (let i = 0; i < 60; i++) {
+    ctx.globalAlpha = 0.16;
+    ctx.fillStyle = css(vary(rng, base, 0.11, 0.05));
     ctx.beginPath();
-    ctx.arc(rng() * n, rng() * n, R(rng, 6, 26), 0, Math.PI * 2);
+    ctx.ellipse(rng() * n, rng() * n, R(rng, 14, 46), R(rng, 10, 34), rng() * 3, 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.globalAlpha = 0.5;
-  for (let i = 0; i < 130; i++) {
-    ctx.fillStyle = css(shade(base, R(rng, 0.55, 1.3)));
-    ctx.beginPath();
-    ctx.ellipse(rng() * n, rng() * n, R(rng, 1, 3.4), R(rng, 1, 2.6), rng() * 3, 0, Math.PI * 2);
-    ctx.fill();
+  // fine grit speckle
+  ctx.globalAlpha = 0.22;
+  for (let i = 0; i < 900; i++) {
+    ctx.fillStyle = css(shade(base, R(rng, 0.5, 1.35)));
+    ctx.fillRect(rng() * n, rng() * n, R(rng, 0.6, 1.6), R(rng, 0.6, 1.6));
   }
+  // embedded pebbles: shadow foot → stone → highlight (gives the normal map a bump per stone)
   ctx.globalAlpha = 1;
+  for (let i = 0; i < 90; i++) {
+    const x = rng() * n, y = rng() * n, rr = R(rng, 1.6, 4.2);
+    ctx.fillStyle = css(shade(base, 0.4));
+    ctx.beginPath(); ctx.ellipse(x, y + rr * 0.5, rr, rr * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = css(vary(rng, shade(base, 1.15), 0.06, 0.05));
+    ctx.beginPath(); ctx.ellipse(x, y, rr, rr * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = css(shade(base, 1.5));
+    ctx.beginPath(); ctx.ellipse(x - rr * 0.25, y - rr * 0.2, rr * 0.4, rr * 0.28, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
 }
 
-// Cobbles: rounded setts over dark bedding — the focal courtyard floor.
-function paintCobble(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.42));
+// Gravel: dense angular stones of varied grey/tan over a dark bedding, each with a shadow
+// foot + highlight so the normal map reads a crunchy, high-frequency crushed-stone surface.
+function paintGravel(ctx, n, base, rng) {
+  ctx.fillStyle = css(shade(base, 0.5));
   ctx.fillRect(0, 0, n, n);
-  const rows = 9, rh = n / rows;
+  for (let i = 0; i < 1400; i++) {
+    const x = rng() * n, y = rng() * n, rr = R(rng, 1.4, 3.6);
+    const tone = R(rng, 0.68, 1.45);
+    // shadow foot
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = css(shade(base, 0.34));
+    ctx.beginPath(); ctx.ellipse(x + rr * 0.2, y + rr * 0.3, rr * 1.05, rr * 0.85, rng() * 3, 0, Math.PI * 2); ctx.fill();
+    // angular stone (irregular polygon)
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = css(vary(rng, shade(base, tone), 0.05, 0.06, 0.02));
+    const sides = 5 + ((rng() * 3) | 0);
+    ctx.beginPath();
+    for (let s = 0; s < sides; s++) {
+      const a = (s / sides) * Math.PI * 2 + rng() * 0.4;
+      const rad = rr * (0.72 + rng() * 0.42);
+      const px = x + Math.cos(a) * rad, py = y + Math.sin(a) * rad * 0.85;
+      s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+    // lit facet
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = css(shade(base, tone * 1.5));
+    ctx.beginPath(); ctx.ellipse(x - rr * 0.25, y - rr * 0.25, rr * 0.4, rr * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Cobbles: domed rounded setts over dark mortar — a shadow foot + a bright dome highlight
+// per sett so the normal map lifts each stone into a real cobbled crown.
+function paintCobble(ctx, n, base, rng) {
+  ctx.fillStyle = css(shade(base, 0.32)); // dark mortar bedding
+  ctx.fillRect(0, 0, n, n);
+  const rows = 8, rh = n / rows;
   for (let r = 0; r < rows; r++) {
-    let x = (r % 2) * rh * 0.6;
+    let x = (r % 2) * rh * 0.55;
     while (x < n + rh) {
-      const rw = rh * R(rng, 0.9, 1.4);
-      ctx.fillStyle = css(vary(rng, base, 0.08, 0.04));
-      ctx.beginPath();
-      ctx.ellipse(x, r * rh + rh / 2, rw / 2 - 1, rh / 2 - 1.2, 0, 0, Math.PI * 2);
-      ctx.fill();
+      const rw = rh * R(rng, 0.85, 1.25);
+      const cx = x, cy = r * rh + rh / 2, a = rw / 2 - 1.2, b = rh / 2 - 1.4;
+      ctx.fillStyle = css(shade(base, 0.22)); // shadow foot
+      ctx.beginPath(); ctx.ellipse(cx, cy + 1.5, a + 1, b + 1, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = css(vary(rng, base, 0.09, 0.05, 0.015)); // sett
+      ctx.beginPath(); ctx.ellipse(cx, cy, a, b, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.45; // domed highlight
+      ctx.fillStyle = css(shade(base, 1.4));
+      ctx.beginPath(); ctx.ellipse(cx - a * 0.28, cy - b * 0.3, a * 0.42, b * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
       x += rw;
     }
   }
@@ -291,8 +342,9 @@ export function makeMaterials(THREE, direction, rng) {
     terracotta: mk(paintTiles, col("terracotta", "slate", "thatch"), { repeat: 0.3, rough: 0.8, normal: 1.5 }),
     trim: plain(col("trim", "timber"), 0.8),
     opening: plain(shade(col("trim", "slate"), 0.3), 0.95),
-    earth: mk(paintEarth, col("timber", "trim").lerp(col("trim", "stone"), 0.45).lerp(new THREE.Color(0xffffff), 0.18), { repeat: 0.22, rough: 1.0, normal: 0.8 }),
-    cobble: mk(paintCobble, shade(col("stone", "trim").lerp(timberC, 0.35), 0.92), { repeat: 0.26, rough: 0.95, normal: 1.6 }),
+    earth: mk(paintEarth, col("timber", "trim").lerp(col("trim", "stone"), 0.45).lerp(new THREE.Color(0xffffff), 0.18), { repeat: 0.3, rough: 1.0, normal: 1.4 }),
+    gravel: mk(paintGravel, col("stone", "slate").lerp(col("timber", "trim"), 0.28).lerp(new THREE.Color(0xffffff), 0.06), { repeat: 0.6, rough: 1.0, normal: 1.9 }),
+    cobble: mk(paintCobble, shade(col("stone", "trim").lerp(timberC, 0.35), 0.92), { repeat: 0.32, rough: 0.9, normal: 2.0 }),
   };
 
   const scaledCache = new Map();

@@ -37,6 +37,11 @@ import { archetypeBrief, type BuildingBrief } from "../game/building-brief.ts";
 // LAWN on each yard with no registry coupling; render-guarded like the ground pads (headless = no-op).
 import { planGrassBlades, GRASS_CLIMATES } from "./grass-plan.ts";
 import { buildGrassInstancedMesh, buildGrassGroundTint } from "./grass.ts";
+// Lawn decoration: scatter wildflower/tuft GLBs confined to the lawn (the inclusion primitive), instanced
+// exactly like asset.scatter. Render-guarded + graceful (missing curated GLBs are skipped).
+import { scatterAssets, type ScatterConfig, type AssetInstance } from "../terrain/asset-scatter.ts";
+import { buildAssetInstancedMeshes } from "../terrain/asset-scatter-render.ts";
+import { parseGltfScene } from "./three.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 // The SHARED procedural material factory (identical earth/cobble the preview paints) — THREE is
 // injected so the engine's three/webgpu build is used. Same no-drift discipline as the layout.
@@ -66,6 +71,14 @@ const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(
 
 /** Default KIT house size [width, depth, height] (meters) when a kit building omits `sizeM`. */
 const DEFAULT_KIT_SIZE: readonly [number, number, number] = [7, 6, 3.4];
+
+/** The curated GLBs a "lawn" yard sprinkles as vegetation features (wildflowers + tufts), by id + weight.
+ *  Exported so the live runtime can PRE-WARM their glTF parse cache before render (else the render-thread
+ *  scatter can't resolve them). Missing assets are skipped at build time — never fatal. */
+export const LAWN_DECO_ASSETS: readonly { id: string; weight: number }[] = [
+  { id: "vegetation-wildflowers-5.glb", weight: 3 },
+  { id: "vegetation-small-plant-leaves-5.glb", weight: 2 },
+];
 
 /** A building spec: what to place, how the agent describes it (role/style for the layout's
  *  focal-role + facing bookkeeping), and how many. A building is either GLB-backed (`assetId`)
@@ -103,8 +116,9 @@ const SitingSchema = z.object({
    *  confined to the yard, so settled ground reads as a kept lawn, not wild scrub or a bare scar. "none"
    *  leaves the natural terrain; "earth" = a bare trodden forecourt; "cobble-courtyard" = paved forecourt. */
   yard: z.enum(["lawn", "none", "earth", "cobble-courtyard"]).default("lawn"),
-  /** The path between buildings. dirt = a trodden earth lane; cobble = paved; none = no lane. */
-  lane: z.enum(["dirt", "cobble", "none"]).default("dirt"),
+  /** The path between buildings. dirt = a trodden earth lane; gravel = a crushed-stone path;
+   *  cobble = paved setts; none = no lane. */
+  lane: z.enum(["dirt", "gravel", "cobble", "none"]).default("dirt"),
 }).default({});
 
 const buildInput = z.object({
@@ -414,11 +428,11 @@ export function registerVillageSkills(
       //    so replay re-runs village.build and recomputes them byte-identically — we spawn the
       //    meshes + record their existence as entities, but log NO vertices.
       const placed = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] }));
-      const groundGeoms: Array<{ buf: { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] }; kind: "earth" | "cobble" }> = [];
+      const groundGeoms: Array<{ buf: { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] }; kind: "earth" | "gravel" | "cobble" }> = [];
       // The path between buildings, per the siting spec. DEFAULT "dirt" = a trodden earth lane (cobble
-      // reads too formal for a rustic settlement); "cobble" paves it; "none" omits it.
+      // reads too formal for a rustic settlement); "gravel" = a crushed-stone path; "cobble" paves it; "none" omits it.
       const laneBuf = siting.lane === "none" ? null : (buildLaneGeometry(heightAt, placed) as { positions: ArrayLike<number>; uvs: ArrayLike<number>; indices: number[] } | null);
-      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: siting.lane === "cobble" ? "cobble" : "earth" });
+      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: siting.lane === "cobble" ? "cobble" : siting.lane === "gravel" ? "gravel" : "earth" });
       // YARD is OPT-IN (default "none"): buildings sit on the flattened GRASS — no earth apron, no cobbled
       // courtyard, no curated base (a baked/manicured yard reads as out of place against the natural
       // ground). Only when the spec asks does the FOCAL get a forecourt: an earth apron, optionally paved.
@@ -443,7 +457,7 @@ export function registerVillageSkills(
       for (const spec of groundGeoms) {
         let mesh: MeshLike | undefined;
         if (canRender && mats !== null) {
-          const m = meshFromBuffers(spec.buf, spec.kind === "cobble" ? mats.cobble : mats.earth);
+          const m = meshFromBuffers(spec.buf, spec.kind === "cobble" ? mats.cobble : spec.kind === "gravel" ? mats.gravel : mats.earth);
           scene!.add!(m);
           mesh = m as unknown as MeshLike;
         }
@@ -460,7 +474,7 @@ export function registerVillageSkills(
       //    the lawn covers even a graded knoll (the focal), where the wild carpet thins out. Render-only
       //    (like the ground pads above): deterministic from the footprints, recomputed on replay, logs no
       //    vertices; headless authoring/tests have no scene, so it is skipped.
-      if (siting.yard === "lawn" && canRender && ctx.world.mode !== "headless") {
+      if (siting.yard === "lawn" && canRender) { // canRender (scene.add), NOT mode — runLive re-authors village.build with mode "headless" but a real scene (same as the ground pads above).
         // The yard blankets the whole settled area (terrace + graded shoulder), so it covers the bare
         // knoll the wild carpet leaves grey. Excludes only the building's own footprint (no blades in the
         // walls). slopeMax is effectively off so even a steep graded knoll gets turf.
@@ -490,6 +504,42 @@ export function registerVillageSkills(
           const leid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
           if (leid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, leid); throw new Error("village.build: entity capacity exceeded (lawn)"); }
           entities.push(ctx.world.entities.create({ eid: leid, mesh: lm as never, origin: { tool: "village.build", input: { lawn: true } } }));
+        }
+
+        // LAWN DECORATION — the "vegetation features" of a tended yard: a light scatter of wildflowers +
+        // grass tufts CONFINED to the lawn discs (inclusion), the building footprint excluded, low density
+        // so it reads as sprinkled flowers, not a meadow. Instanced exactly like asset.scatter. GRACEFUL:
+        // a curated GLB that doesn't resolve (bare checkout) is skipped, so this never fails a build.
+        const decoAssets: { id: string; weight: number }[] = [];
+        for (const a of LAWN_DECO_ASSETS) {
+          try { assets.resolve(a.id); decoAssets.push({ id: a.id, weight: a.weight }); } catch { /* asset absent — skip */ }
+        }
+        if (decoAssets.length > 0) {
+          const decoConfig: ScatterConfig = {
+            seed: (villageSeed ^ 0x0051ed12) >>> 0,
+            assets: decoAssets,
+            density: 40, coverage: 0.4, cluster: 0.35, slopeMax: 2.0,
+            sizeRange: [0.6, 1.2], elevationMin: elevMin, elevationMax: elevMax,
+            exclusions: lawnExcl, inclusions: lawnIncl,
+          };
+          const byId = new Map<string, AssetInstance[]>();
+          for (const inst of scatterAssets(tile, decoConfig.seed, decoConfig)) {
+            let l = byId.get(inst.assetId); if (l === undefined) { l = []; byId.set(inst.assetId, l); } l.push(inst);
+          }
+          for (const [id, list] of byId) {
+            try {
+              const root = await parseGltfScene(id, assets.resolve(id).bytes);
+              // Normalize each decoration GLB to a sane lawn-plant height — curated library assets have
+              // wildly inconsistent authored scales (some are hundreds of metres, some empty); degenerate
+              // ones are skipped inside the builder. Keeps set-dressing from swamping the settlement.
+              for (const dm of buildAssetInstancedMeshes(root, list, { normalizeHeight: 0.5 })) {
+                scene!.add!(dm);
+                const deid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
+                if (deid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, deid); break; }
+                entities.push(ctx.world.entities.create({ eid: deid, mesh: dm as never, origin: { tool: "village.build", input: { lawnDeco: true } } }));
+              }
+            } catch { /* a decoration asset failed to parse (stub/absent GLB) — skip, never fatal */ }
+          }
         }
       }
 

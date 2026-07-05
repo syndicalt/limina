@@ -45,7 +45,7 @@ export function beaconField(b: BeaconLayoutInput): ContentPlacement[] {
     { assetId: "building-medieval-house-1.glb", position: [-9, 8], height: 4.6, rotY: 0.5 },
     { assetId: "building-wooden-watchtower-1.glb", position: [-12, 1], height: 7.2, rotY: -0.3 },
     { assetId: "prop-water-well-1.glb", position: [-6, 3], height: 1.7 },
-    { assetId: "prop-camping-tent-1.glb", position: [-5.5, 7.5], height: 1.9, rotY: 2.1 },
+    // (camping tent removed — its GLB was quarantined for a broken authoring scale; see /quarantine)
     { assetId: "prop-campfire-1.glb", position: [-4, 4], height: 0.8 },
     { assetId: "prop-barrel-1.glb", position: [-3, 5.2], height: 0.9 },
     { assetId: "prop-barrel-1.glb", position: [-2.2, 6.1], height: 0.9, rotY: 0.7 },
@@ -78,14 +78,14 @@ export function beaconField(b: BeaconLayoutInput): ContentPlacement[] {
   scatter("vegetation-spruce-tree-3.glb", 16, -30, 30, 6.0, 9.5, true, true);
   scatter("vegetation-fir-tree-3.glb", 12, -30, 30, 5.5, 8.5, true, true);
   scatter("broadleaf.glb", 12, -30, -4, 4.5, 6.5, true, true);
-  scatter("vegetation-sapling-young-tree-3.glb", 18, -30, 30, 1.8, 3.0);
+  scatter("vegetation-fir-tree-3.glb", 18, -30, 30, 1.8, 3.0); // young firs (was quarantined sapling GLB)
   // MID — bushes, shrubs, rocks break up the ground line.
   scatter("vegetation-shrub-bush-3.glb", 34, -30, 30, 0.6, 1.3);
   scatter("bush.glb", 26, -30, 30, 0.5, 1.1);
   scatter("rock.glb", 22, -30, 30, 0.4, 1.4);
   // GROUND CARPET — dense + small, correct scale (a tuft is knee-high, a flower ankle-high).
   // This is the layer that turns "a plane with props" into "a forest floor".
-  scatter("vegetation-grass-tuft-3.glb", 95, -30, 30, 0.3, 0.6);
+  scatter("vegetation-small-plant-leaves-5.glb", 95, -30, 30, 0.3, 0.6); // low ground tufts (was quarantined grass-tuft GLB)
   scatter("vegetation-fern-3.glb", 40, -30, 30, 0.4, 0.8);
   scatter("vegetation-bracken-fern-leaves-5.glb", 34, -30, 30, 0.35, 0.7);
   scatter("vegetation-small-plant-leaves-5.glb", 44, -30, 30, 0.2, 0.45);

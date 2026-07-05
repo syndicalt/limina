@@ -23,7 +23,18 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
  * multi-part asset places all parts); an empty list when there are no instances or
  * the asset has no meshes. The caller adds the meshes to the scene + disposes them.
  */
-export function buildAssetInstancedMeshes(root: SceneObject, instances: AssetInstance[]): THREE.InstancedMesh[] {
+export function buildAssetInstancedMeshes(
+  root: SceneObject,
+  instances: AssetInstance[],
+  opts?: {
+    /** Scale the WHOLE asset so its height (Y extent) equals this many metres, about its base.
+     *  Used for small set-dressing (lawn flowers/tufts) whose curated GLBs have inconsistent
+     *  authored scales — a 1.8 km "grass tuft" would otherwise swamp the scene. Assets whose
+     *  height is degenerate (≈0) are skipped (empty list). Omit to keep the asset's own size
+     *  (trees/rocks, where the intrinsic metre scale is meaningful). */
+    normalizeHeight?: number;
+  },
+): THREE.InstancedMesh[] {
   if (instances.length === 0) return [];
   const r = root as unknown as { updateMatrixWorld?: (force?: boolean) => void; matrixWorld?: THREE.Matrix4; traverse?: (cb: (o: unknown) => void) => void };
   r.updateMatrixWorld?.(true);
@@ -63,6 +74,17 @@ export function buildAssetInstancedMeshes(root: SceneObject, instances: AssetIns
     }
   }
   const offset = new THREE.Matrix4().makeTranslation(-(xmin + xmax) / 2, -ymin, -(zmin + zmax) / 2);
+
+  // SIZE NORMALIZATION (opt-in): scale the whole asset about its base so its height matches the
+  // requested metre size — robustness for curated set-dressing GLBs authored at wild scales (a
+  // 1.8 km grass tuft) or degenerately (0-size). Composed AFTER `offset` (which bases the asset at
+  // Y=0), so the scale is about the base. A degenerate asset (height ≈ 0) can't be normalized → skip.
+  if (opts?.normalizeHeight !== undefined) {
+    const assetH = ymax - ymin;
+    if (!(assetH > 1e-3)) return []; // degenerate/empty asset — nothing sane to place
+    const s = opts.normalizeHeight / assetH;
+    offset.premultiply(new THREE.Matrix4().makeScale(s, s, s));
+  }
 
   // One InstancedMesh per mesh, all sharing the asset-level corrective offset (applied in asset-root
   // space via premultiply → vertex path: instance × offset × local × vertex).
