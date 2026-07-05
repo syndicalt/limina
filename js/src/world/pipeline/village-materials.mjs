@@ -82,28 +82,69 @@ function normalFromCanvas(canvas, strength = 1.2) {
   return out;
 }
 
-// -- paint functions: (ctx, n, base Color, rng) → draws one tile ------
+// ------------------------------------------------- generic parametric painters
+// STYLE-AGNOSTIC texture primitives the named paint functions below compose. These carry NO
+// medieval vocabulary — they are the reusable layer a future style pack (sci-fi panelling, toon
+// blockwork, …) draws from too. Each preserves a fixed canvas + `rng` op sequence so the same
+// (palette, seed) paints byte-identical pixels regardless of which named material calls it.
 
-// Coursed stone: ashlar blocks over recessed mortar, per-block tone shifts.
-function paintAshlar(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.52));
+/** Flat base fill of the whole tile. */
+function fillBg(ctx, n, color) {
+  ctx.fillStyle = css(color);
   ctx.fillRect(0, 0, n, n);
-  const courses = 7, ch = n / courses;
+}
+
+/** Speckle/grit pass: `count` tiny squares at `alpha`, each `smin..smax` px, coloured by `colorFn`
+ *  (which draws exactly ONE rng before the square's x/y/w/h). Shared by stone pitting, plaster grit,
+ *  and packed-earth grit — the difference is only count/alpha/size and the per-fleck colour rule. */
+function grit(ctx, n, rng, count, alpha, smin, smax, colorFn) {
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < count; i++) {
+    ctx.fillStyle = colorFn(rng);
+    ctx.fillRect(rng() * n, rng() * n, R(rng, smin, smax), R(rng, smin, smax));
+  }
+  ctx.globalAlpha = 1;
+}
+
+/** Coursed blockwork: `courses` rows of VARIABLE-width blocks (running bond), each tone-shifted.
+ *  The ashlar/brick/panel family — block width jitter (`bwMin..bwMax` × course height), running-bond
+ *  offset, and a recessed mortar `inset`. Consumes R(bw) then vary(3) per block. */
+function coursedBlocks(ctx, n, base, rng, courses, bondOff, bwMin, bwMax, inset, vL, vS) {
+  const ch = n / courses;
   for (let r = 0; r < courses; r++) {
-    let x = r % 2 ? -ch * 0.9 : 0; // running bond offset
+    let x = r % 2 ? -ch * bondOff : 0;
     while (x < n) {
-      const bw = ch * R(rng, 1.5, 2.3);
-      ctx.fillStyle = css(vary(rng, base, 0.06, 0.04));
-      ctx.fillRect(x + 1.5, r * ch + 1.5, bw - 3, ch - 3);
+      const bw = ch * R(rng, bwMin, bwMax);
+      ctx.fillStyle = css(vary(rng, base, vL, vS));
+      ctx.fillRect(x + inset, r * ch + inset, bw - inset * 2, ch - inset * 2);
       x += bw;
     }
   }
-  ctx.globalAlpha = 0.16; // pitting
-  for (let i = 0; i < 320; i++) {
-    ctx.fillStyle = rng() < 0.5 ? css(shade(base, 0.6)) : css(shade(base, 1.18));
-    ctx.fillRect(rng() * n, rng() * n, R(rng, 1, 2.6), R(rng, 1, 2.6));
+}
+
+/** Staggered shingle courses: `courses` rows of FIXED-width tiles (`tileW`), half-offset on odd rows,
+ *  each tone-shifted. `rx/ry/rw/rh` inset the tile rect; `vL/vS/vH` are the per-tile HSL jitter. An
+ *  optional `rowFn(r, ch, off)` runs after each row (e.g. a scalloped course shadow). The slate/tile/
+ *  clapboard family. Consumes vary(3) per tile; `rowFn` draws no rng. */
+function shingleRows(ctx, n, base, rng, courses, tileW, idxFrom, idxTo, rx, ry, rw, rh, vL, vS, vH, rowFn) {
+  const ch = n / courses;
+  for (let r = 0; r < courses; r++) {
+    const off = (r % 2) * tileW * 0.5;
+    for (let idx = idxFrom; idx < idxTo; idx++) {
+      ctx.fillStyle = css(vary(rng, base, vL, vS, vH));
+      ctx.fillRect(idx * tileW + off + rx, r * ch + ry, tileW + rw, ch + rh);
+    }
+    if (rowFn) rowFn(r, ch, off);
   }
-  ctx.globalAlpha = 1;
+}
+
+// -- paint functions: (ctx, n, base Color, rng) → draws one tile, composed from the primitives above --
+
+// Coursed stone: ashlar blocks over recessed mortar, per-block tone shifts + pitting.
+function paintAshlar(ctx, n, base, rng) {
+  fillBg(ctx, n, shade(base, 0.52)); // recessed mortar
+  coursedBlocks(ctx, n, base, rng, 7, 0.9, 1.5, 2.3, 1.5, 0.06, 0.04);
+  grit(ctx, n, rng, 320, 0.16, 1, 2.6, (r) => (r() < 0.5 ? css(shade(base, 0.6)) : css(shade(base, 1.18))));
 }
 
 // Thatch: layered courses with a shadowed step, thousands of leaning strands.
@@ -131,21 +172,15 @@ function paintThatch(ctx, n, base, rng) {
 
 // Daub/limewash plaster: soft mottled blotches + fine grit, never clean-flat.
 function paintPlaster(ctx, n, base, rng) {
-  ctx.fillStyle = css(base);
-  ctx.fillRect(0, 0, n, n);
-  for (let i = 0; i < 150; i++) {
+  fillBg(ctx, n, base);
+  for (let i = 0; i < 150; i++) { // soft blotches
     ctx.fillStyle = css(vary(rng, base, 0.05, 0.02));
     ctx.globalAlpha = 0.14;
     ctx.beginPath();
     ctx.arc(rng() * n, rng() * n, R(rng, 7, 30), 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.globalAlpha = 0.1;
-  for (let i = 0; i < 420; i++) {
-    ctx.fillStyle = rng() < 0.5 ? css(shade(base, 0.7)) : css(shade(base, 1.15));
-    ctx.fillRect(rng() * n, rng() * n, R(rng, 1, 2.2), R(rng, 1, 2.2));
-  }
-  ctx.globalAlpha = 1;
+  grit(ctx, n, rng, 420, 0.1, 1, 2.2, (r) => (r() < 0.5 ? css(shade(base, 0.7)) : css(shade(base, 1.15))));
 }
 
 // Oak boards: vertical planks, tone-shifted, wavy grain, dark joints, knots.
@@ -178,15 +213,9 @@ function paintOak(ctx, n, base, rng) {
 
 // Terracotta: staggered tile courses, scalloped shadow at each course foot.
 function paintTiles(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.7));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 6, ch = n / courses, tw = n / 8;
-  for (let r = 0; r < courses; r++) {
-    const off = (r % 2) * tw * 0.5;
-    for (let tIdx = -1; tIdx < 9; tIdx++) {
-      ctx.fillStyle = css(vary(rng, base, 0.07, 0.05, 0.012));
-      ctx.fillRect(tIdx * tw + off + 1, r * ch, tw - 2, ch - 2.5);
-    }
+  fillBg(ctx, n, shade(base, 0.7));
+  const tw = n / 8;
+  shingleRows(ctx, n, base, rng, 6, tw, -1, 9, 1, 0, -2, -2.5, 0.07, 0.05, 0.012, (r, ch, off) => {
     ctx.globalAlpha = 0.4; // scalloped course shadow
     ctx.fillStyle = css(shade(base, 0.4));
     for (let tIdx = -1; tIdx < 9; tIdx++) {
@@ -195,28 +224,19 @@ function paintTiles(ctx, n, base, rng) {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-  }
+  });
 }
 
 // Slate: thin staggered rectangular shingles, cool tone shifts.
 function paintSlate(ctx, n, base, rng) {
-  ctx.fillStyle = css(shade(base, 0.55));
-  ctx.fillRect(0, 0, n, n);
-  const courses = 7, ch = n / courses, sw = n / 6;
-  for (let r = 0; r < courses; r++) {
-    const off = (r % 2) * sw * 0.5;
-    for (let sIdx = -1; sIdx < 7; sIdx++) {
-      ctx.fillStyle = css(vary(rng, base, 0.06, 0.03));
-      ctx.fillRect(sIdx * sw + off + 1, r * ch + 1, sw - 2, ch - 2);
-    }
-  }
+  fillBg(ctx, n, shade(base, 0.55));
+  shingleRows(ctx, n, base, rng, 7, n / 6, -1, 7, 1, 1, -2, -2, 0.06, 0.03, 0.008, null);
 }
 
 // Packed earth: a trodden dirt lane — broad damp/dry patches, fine grit, and embedded
 // pebbles drawn with a shadow foot + lit top so the sobel normal map reads real relief.
 function paintEarth(ctx, n, base, rng) {
-  ctx.fillStyle = css(base);
-  ctx.fillRect(0, 0, n, n);
+  fillBg(ctx, n, base);
   // broad damp/dry patches — big tonal areas so the lane isn't a flat wash
   for (let i = 0; i < 60; i++) {
     ctx.globalAlpha = 0.16;
@@ -225,12 +245,7 @@ function paintEarth(ctx, n, base, rng) {
     ctx.ellipse(rng() * n, rng() * n, R(rng, 14, 46), R(rng, 10, 34), rng() * 3, 0, Math.PI * 2);
     ctx.fill();
   }
-  // fine grit speckle
-  ctx.globalAlpha = 0.22;
-  for (let i = 0; i < 900; i++) {
-    ctx.fillStyle = css(shade(base, R(rng, 0.5, 1.35)));
-    ctx.fillRect(rng() * n, rng() * n, R(rng, 0.6, 1.6), R(rng, 0.6, 1.6));
-  }
+  grit(ctx, n, rng, 900, 0.22, 0.6, 1.6, (r) => css(shade(base, R(r, 0.5, 1.35)))); // fine grit speckle
   // embedded pebbles: shadow foot → stone → highlight (gives the normal map a bump per stone)
   ctx.globalAlpha = 1;
   for (let i = 0; i < 90; i++) {
