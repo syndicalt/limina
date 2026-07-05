@@ -38,9 +38,14 @@ CANONICAL = commoner-2 (the plain reenactment look) — the humblest, fewest-par
 guard = mail + tabard (`metal`); priest = long dark robe (`slate`); elder = plain grey robe + staff;
 vendor = brighter dyed cloth (`accent`). Commoner = the earthy, undyed baseline everyone else departs from.
 
-## Likely build path
-Rigged humanoid from the Character AssetSource (world/character-body.ts) + shared walk/idle clips.
-GAPS: (1) a grounded-stylized medieval rigged body asset (curated pack or generated — the reference bar
-is commoner-0's painterly-realist look). (2) outfit variation is MULTI-ZONE (shirt / jerkin / hose /
-boots / cap each their own material), so the CharacterBrief `appearance` single `outfitPalette` tint is too
-coarse — needs a per-zone material map for a believable commoner.
+## Build path (BUILT)
+Rigged humanoid from the Character AssetSource + shared walk/idle clips, per-zone outfit tint.
+- **Body:** `qt-farmer.glb` — poly.pizza "Farmer" by Quaternius, **CC0** (see assets/qt-farmer.card.json).
+  Modular part meshes (Farmer_Body / Farmer_Pants / Farmer_Feet / Farmer_Head), Idle/Walk clips.
+- **Outfit (per-zone, reviewed):** tunic=`slate` (grey wool) → body mesh; hose=`trim` (natural) → pants;
+  boots=`wood` (brown) → feet. Skin/eyes/hair are protected from tinting (character-body.ts guard).
+- **Verified:** GPU-rendered walking + grounded in the authored village (art-direction/pg-progress/npc/
+  D-commoner-in-village, E-commoner-hero).
+- **Remaining polish:** the Quaternius rig is stylized-lowpoly (cleaner/more cartoon than commoner-0's
+  painterly bar); a higher-fidelity or generated body slots into the same Character AssetSource seam later.
+  Cap/belt zones are unmapped on this rig (no matching part mesh).

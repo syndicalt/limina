@@ -244,7 +244,7 @@ export const VILLAGER_BRIEF: CharacterBrief = {
   tier: "functional",
   routine: "wander",
   // CANONICAL commoner (reference commoner-2): plain grey wool tunic, natural hose, tan hood, leather boots.
-  appearance: { outfit: { cap: "ground", tunic: "slate", hose: "trim", boots: "wood", belt: "wood" } },
+  appearance: { bodyAssetId: "qt-farmer.glb", outfit: { cap: "ground", tunic: "slate", hose: "trim", boots: "wood", belt: "wood" } },
   perceptionRadius: 18,
   notes: "Plain grey wool knee-tunic + hood + natural hose + leather turnshoes; unhurried; stops to talk.",
 };

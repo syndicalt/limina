@@ -92,6 +92,8 @@ export function createCharacterBody(
     for (const m of mats) {
       const mm = m as { name?: string; color?: { lerp: (c: unknown, a: number) => void } };
       if (mm.color === undefined) continue;
+      // NEVER tint skin / eyes / hair / brows — outfit tint is CLOTHING only.
+      if (/skin|eye|brow|hair|teeth|mouth|lash/i.test(mm.name ?? "")) continue;
       const c = tintFor(mm.name ?? "", n.name ?? "");
       if (c !== undefined) mm.color.lerp(c, tintAmt);
     }

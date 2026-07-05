@@ -1,0 +1,12 @@
+{
+  "id": "qt-farmer",
+  "title": "Villager body — Quaternius Farmer (CC0)",
+  "kind": "character-body",
+  "license": "CC0",
+  "source": "poly.pizza 'Farmer' by Quaternius — https://poly.pizza/m/7pn3R6hPvE",
+  "download": "https://static.poly.pizza/81f2f0cf-6f53-4b57-92ea-dba0928620f2.glb",
+  "rig": "humanoid (CharacterArmature)",
+  "clips": { "idle": "Idle", "walk": "Walk", "run": "Run" },
+  "targetHeightM": 1.75,
+  "zoneMaterial": { "tunic": "body", "hose": "pants", "boots": "feet" }
+}
