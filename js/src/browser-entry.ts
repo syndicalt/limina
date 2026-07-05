@@ -62,6 +62,7 @@ import type { TerrainTile } from "./terrain/types.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
 import { LAWN_DECO_ASSETS } from "./skills/village.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
 import {
   BrowserInput,
   createBrowserRenderOps,
@@ -431,6 +432,10 @@ export interface RunLiveOptions {
    *  carry its own look (e.g. golden-hour sun + fog) without touching DEFAULT_RENDER_BASELINE. Merged
    *  over the default by applyRenderBaseline; omit for the default look. */
   renderBaseline?: RenderBaselineOverride;
+  /** Cel-shading (toon) render style. When set, the scene's PBR meshes are converted to hard-banded
+   *  MeshToonNodeMaterial after authoring (reusing baked albedo) — the authored buildings + ground read
+   *  cel-shaded with no re-authoring. `true` = 3 bands; pass an object to tune bands/saturation. */
+  toon?: boolean | ToonStyleOptions;
 }
 
 export interface RunningLive {
@@ -709,6 +714,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       `limina live authoring isolated ${authoringFailures.length} failure(s):`,
       authoringFailures.map((f) => `#${f.index} ${authoringFailureMessage(opts.commands[f.index], f.message)}`).join("; "),
     );
+  }
+
+  // ── Cel-shading (toon) render style: swap PBR meshes → hard-banded MeshToonNodeMaterial now that the
+  //    scene is fully authored (buildings + ground) and BEFORE the first render — synchronous, so it does
+  //    not open a macrotask in the forceWebGL init-collapse window. Instanced vegetation is left as-is. ──
+  if (opts.toon) {
+    const n = applyToonStyle(scene, typeof opts.toon === "object" ? opts.toon : {});
+    console.info(`limina toon style: converted ${n} material(s) to cel shading`);
   }
 
   // The authored entity eids = the render set; capture their (static) authored scale
