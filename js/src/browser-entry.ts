@@ -174,6 +174,7 @@ async function buildRenderTarget(
   height: number,
   forceWebGL: boolean,
   baseline: RenderBaselineOverride | false,
+  renderScale = 1,
 ): Promise<{
   renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void };
   scene: SceneLike;
@@ -183,7 +184,20 @@ async function buildRenderTarget(
   // selects WebGL2 so the world still renders where WebGPU is unavailable.
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL });
   await renderer.init();
-  renderer.setSize(width, height, false);
+  // Supersample (SSAA): `antialias:true` is a no-op on the WebGPU-renderer forceWebGL path, so flat
+  // low-poly geometry aliases hard at 1:1 and small features (a character's face) drop below a pixel.
+  // renderScale>1 renders into a buffer `scale×` the display size and presents downscaled — real AA
+  // that also resolves sub-pixel detail. Default 1 = unchanged (no extra VRAM; small-GPU-safe); heavy
+  // hero/marketing renders opt in. When scaled we set CSS to the display size so a downscaled present
+  // (and headless canvas screenshot) yields the AA'd frame.
+  const scale = Number.isFinite(renderScale) && renderScale > 1 ? renderScale : 1;
+  if (scale > 1) {
+    const r = renderer as unknown as { setPixelRatio?: (p: number) => void };
+    r.setPixelRatio?.(scale);
+    renderer.setSize(width, height, true);
+  } else {
+    renderer.setSize(width, height, false);
+  }
 
   const scene: SceneLike = new THREE.Scene();
   const camera: CameraLike = new THREE.PerspectiveCamera(60, width / height, 0.1, 200);
@@ -437,6 +451,11 @@ export interface RunLiveOptions {
    *  MeshToonNodeMaterial after authoring (reusing baked albedo) — the authored buildings + ground read
    *  cel-shaded with no re-authoring. `true` = 3 bands; pass an object to tune bands/saturation. */
   toon?: boolean | ToonStyleOptions;
+  /** Supersample factor (SSAA). Default 1 = native buffer (small-GPU-safe). >1 renders `scale×` the
+   *  display size and presents downscaled — the antialiasing the WebGPU forceWebGL path otherwise lacks,
+   *  and the only thing that resolves sub-pixel detail (a character's face at distance). 2 is a good hero
+   *  value; cost is ~scale² fragment work + VRAM, so leave at 1 for the interactive editor. */
+  renderScale?: number;
 }
 
 export interface RunningLive {
@@ -660,7 +679,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
-    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, opts.renderBaseline ?? {},
+    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, opts.renderBaseline ?? {}, opts.renderScale ?? 1,
   );
 
   // ── Re-author the SAME command log on the render-main thread against the REAL scene so meshes
