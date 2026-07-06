@@ -256,7 +256,7 @@
   </div>
   <div class="body">
     <div class="col sidebar">
-      <div class="eyebrow">Map of content</div>
+      <div class="eyebrow" style="display:flex;align-items:center">Map of content<button id="new-doc" title="New document" style="margin-left:auto;background:none;border:none;color:var(--accent);cursor:pointer;font-size:16px;line-height:1;padding:0 2px">＋</button></div>
       <div id="nav"></div>
     </div>
     <div class="col center" id="center"><div class="loading">Loading the vault…</div></div>
@@ -385,10 +385,11 @@ function openDoc(name){
   const editable = kindOf(d.content)!=="build-map";
   document.getElementById("center").innerHTML =
     '<div class="doc-wrap">'
-    +(editable?'<div class="doc-edit"><button class="btn" id="doc-edit">✎ Edit</button></div>':'')
+    +(editable?'<div class="doc-edit"><button class="btn" id="doc-edit">✎ Edit</button> <button class="btn" id="doc-del" title="Delete document">🗑</button></div>':'')
     +'<div class="props">'+chips+'</div><div class="doc">'+renderMd(d.content)+'</div></div>';
   document.querySelectorAll(".doc a.wl").forEach(a=>{ if(a.dataset.doc) a.onclick=(e)=>{e.preventDefault(); openDoc(a.dataset.doc);}; });
   const eb=document.getElementById("doc-edit"); if(eb) eb.onclick=()=>openEditor(activeDoc);
+  const dd=document.getElementById("doc-del"); if(dd) dd.onclick=()=>deleteDoc(activeDoc);
   renderNav();
   if(chatAgent) updateChatCtx();
 }
@@ -477,6 +478,38 @@ async function sendChat(){
   }catch(e){ typing.remove(); pushMsg("sys","⚠ "+e); }
   document.getElementById("chat-send").disabled=false;
 }
+
+// ---- create / delete documents ----
+function newDocDialog(){
+  document.getElementById("insp")?.remove();
+  const kinds=["note","lore","faction","location","character","concept","art-direction","world-bible","cast","storyboard"];
+  const el=document.createElement("div"); el.className="insp"; el.id="insp";
+  el.style.left="50%"; el.style.top="120px"; el.style.right="auto"; el.style.transform="translateX(-50%)";
+  el.innerHTML='<h4>New document<button class="x" id="insp-x">×</button></h4>'
+    +'<label>Title</label><input id="nd-title" placeholder="e.g. The Wardens">'
+    +'<label>Kind</label><select id="nd-kind">'+kinds.map(k=>'<option'+(k==="note"?" selected":"")+'>'+k+'</option>').join("")+'</select>'
+    +'<div class="co">A readable, linkable markdown doc. "note" and lore/faction/etc. are free notes; the design kinds feed the build.</div>'
+    +'<div class="actions"><button class="save" id="nd-create">Create</button></div>';
+  document.body.appendChild(el);
+  document.getElementById("insp-x").onclick=()=>el.remove();
+  document.getElementById("nd-title").focus();
+  document.getElementById("nd-title").addEventListener("keydown",e=>{ if(e.key==="Enter") createDocNow(); });
+  document.getElementById("nd-create").onclick=createDocNow;
+}
+async function createDocNow(){
+  const title=document.getElementById("nd-title").value.trim(), kind=document.getElementById("nd-kind").value;
+  if(!title){ document.getElementById("nd-title").focus(); return; }
+  try{ const r=await fetch("/api/doc-create",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,kind})});
+    const j=await r.json(); if(j.error){ pushToast(j.error); return; }
+    document.getElementById("insp")?.remove(); await load(); activeView="docs"; setTabs(); openDoc(j.name); openEditor(j.name);
+  }catch(e){ pushToast("create failed: "+e); } }
+async function deleteDoc(name){
+  if(!name) return;
+  if(!confirm("Delete '"+name+"'? This removes the file. (world-bible / cast / storyboard feed the build.)")) return;
+  try{ const r=await fetch("/api/doc-delete",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name})});
+    const j=await r.json(); if(j.error){ pushToast(j.error); return; }
+    activeDoc=null; await load(); const first=(STATE.docs.find(d=>kindOf(d.content)==="home")||STATE.docs[0]); if(first) openDoc(first.name);
+  }catch(e){ pushToast("delete failed: "+e); } }
 
 // ---- full markdown editor + save -> cascade surfacing ----
 function openEditor(name){
@@ -882,6 +915,7 @@ async function deleteMarker(id){
   }catch(e){} }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{ activeView=t.dataset.view; setTabs(); showView(); });
 document.getElementById("refresh").onclick=load;
+document.getElementById("new-doc").onclick=newDocDialog;
 
 const themeBtn=document.getElementById("theme");
 function applyTheme(t){ document.body.classList.toggle("dark",t==="dark"); themeBtn.textContent=t==="dark"?"☀":"🌙"; }

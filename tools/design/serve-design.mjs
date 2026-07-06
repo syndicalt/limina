@@ -7,9 +7,9 @@
 //   node tools/design/serve-design.mjs <vault-dir> [port]
 
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -102,6 +102,26 @@ function saveMaps(maps, activeMapId) {
   const clean = Array.isArray(maps) ? maps : [];
   writeFileSync(join(vaultDir, "maps.json"), JSON.stringify({ activeMapId: activeMapId || (clean[0] && clean[0].id), maps: clean }, null, 2));
   return { saved: true, maps: clean.length };
+}
+
+// Create a new vault document (a readable, linkable markdown note).
+function createDoc(title, kind) {
+  const base = String(title || "note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "note";
+  const name = base + ".md";
+  const fp = join(vaultDir, name);
+  if (existsSync(fp)) throw new Error(`a document "${name}" already exists`);
+  const k = String(kind || "note");
+  const t = String(title || base);
+  writeFileSync(fp, `---\nkind: ${k}\ntitle: ${t}\n---\n\n# ${t}\n\nWrite here. Link with [[other-doc]].\n`);
+  return { created: true, name };
+}
+function deleteDoc(name) {
+  const safe = basename(String(name));
+  if (!safe.endsWith(".md")) throw new Error("invalid document name");
+  const fp = join(vaultDir, safe);
+  if (!existsSync(fp)) throw new Error("document not found");
+  unlinkSync(fp);
+  return { deleted: true, name: safe };
 }
 
 // Assemble the FULL role context for an agent (persona + documents + screen) via the engine.
@@ -228,7 +248,7 @@ function moveLocation(id, x, z) {
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -249,6 +269,18 @@ createServer((req, res) => {
           res.end(JSON.stringify(saveMaps(p.maps, p.activeMapId)));
           return;
         }
+        if (req.url === "/api/doc-create") {
+          const r = createDoc(p.title, p.kind);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(r));
+          return;
+        }
+        if (req.url === "/api/doc-delete") {
+          const r = deleteDoc(p.name);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(r));
+          return;
+        }
         if (req.url === "/api/edit-location") {
           if (p.op === "add" && !p.id) {
             const base = String(p.name || "marker").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "marker";
@@ -265,7 +297,7 @@ createServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ role: ctx.role, title: ctx.title, model: MODEL, ...out }));
       } catch (e) {
-        res.writeHead(500, { "content-type": "application/json" });
+        if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: String(e), reply: "⚠ " + String(e) }));
       }
     });
@@ -279,7 +311,7 @@ createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(computeState()));
     } catch (e) {
-      res.writeHead(500, { "content-type": "application/json" });
+      if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(e) }));
     }
   } else {
