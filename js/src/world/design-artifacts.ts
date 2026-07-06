@@ -15,6 +15,27 @@ import {
   validateDesignDirection,
   type DesignDirection,
 } from "../game/design-direction.ts";
+import {
+  DEFAULT_WORLD_BIBLE,
+  WorldBibleSchema,
+  canonicalizeWorldBible,
+  validateWorldBible,
+  type WorldBible,
+} from "../game/world-bible.ts";
+import {
+  DEFAULT_CAST,
+  CastSchema,
+  canonicalizeCast,
+  validateCast,
+  type Cast,
+} from "../game/cast.ts";
+import {
+  DEFAULT_STORYBOARD,
+  StoryboardSchema,
+  canonicalizeStoryboard,
+  validateStoryboard,
+  type Storyboard,
+} from "../game/storyboard.ts";
 
 export const DESIGN_ARTIFACT_KINDS = [
   "gds",
@@ -25,8 +46,7 @@ export const DESIGN_ARTIFACT_KINDS = [
 ] as const;
 
 export type DesignArtifactKind = (typeof DESIGN_ARTIFACT_KINDS)[number];
-export type StudioArtifact = Record<string, unknown>;
-export type DesignArtifactValue = GameDesignSpec | DesignDirection | StudioArtifact;
+export type DesignArtifactValue = GameDesignSpec | DesignDirection | WorldBible | Cast | Storyboard;
 
 export interface DesignArtifactStore {
   artifacts: Map<DesignArtifactKind, DesignArtifactValue>;
@@ -44,11 +64,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function plainObject(value: unknown, label: string): StudioArtifact {
-  if (!isPlainObject(value)) throw new Error(`${label} must be a plain object`);
-  return cloneJson(value);
 }
 
 function canonicalizeGds(value: unknown): GameDesignSpec {
@@ -69,6 +84,33 @@ function canonicalizeArtDirection(value: unknown): DesignDirection {
   return canonicalizeDesignDirection(validation.data);
 }
 
+function canonicalizeWorldBibleArtifact(value: unknown): WorldBible {
+  const validation = validateWorldBible(value);
+  if (!validation.ok || validation.data === undefined) {
+    const details = validation.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("; ");
+    throw new Error(`worldBible validation failed${details.length > 0 ? `: ${details}` : ""}`);
+  }
+  return canonicalizeWorldBible(validation.data);
+}
+
+function canonicalizeCastArtifact(value: unknown): Cast {
+  const validation = validateCast(value);
+  if (!validation.ok || validation.data === undefined) {
+    const details = validation.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("; ");
+    throw new Error(`cast validation failed${details.length > 0 ? `: ${details}` : ""}`);
+  }
+  return canonicalizeCast(validation.data);
+}
+
+function canonicalizeStoryboardArtifact(value: unknown): Storyboard {
+  const validation = validateStoryboard(value);
+  if (!validation.ok || validation.data === undefined) {
+    const details = validation.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("; ");
+    throw new Error(`storyboard validation failed${details.length > 0 ? `: ${details}` : ""}`);
+  }
+  return canonicalizeStoryboard(validation.data);
+}
+
 export const DESIGN_ARTIFACT_REGISTRY: Record<DesignArtifactKind, ArtifactSpec> = {
   gds: {
     schema: GameDesignSpecSchema,
@@ -80,13 +122,19 @@ export const DESIGN_ARTIFACT_REGISTRY: Record<DesignArtifactKind, ArtifactSpec> 
     canonicalize: canonicalizeArtDirection,
   },
   worldBible: {
-    canonicalize: (value) => plainObject(value, "worldBible"),
+    schema: WorldBibleSchema,
+    defaultValue: DEFAULT_WORLD_BIBLE,
+    canonicalize: canonicalizeWorldBibleArtifact,
   },
   cast: {
-    canonicalize: (value) => plainObject(value, "cast"),
+    schema: CastSchema,
+    defaultValue: DEFAULT_CAST,
+    canonicalize: canonicalizeCastArtifact,
   },
   storyboard: {
-    canonicalize: (value) => plainObject(value, "storyboard"),
+    schema: StoryboardSchema,
+    defaultValue: DEFAULT_STORYBOARD,
+    canonicalize: canonicalizeStoryboardArtifact,
   },
 };
 

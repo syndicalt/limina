@@ -11,6 +11,9 @@ import { createHeadlessContext } from "../src/game/index.ts";
 import { RELIC_SPRINT } from "../src/game/examples/relic_sprint.gds.ts";
 import { GameDesignSpecSchema } from "../src/game/gds.ts";
 import { DEFAULT_DESIGN_DIRECTION } from "../src/game/design-direction.ts";
+import { DEFAULT_WORLD_BIBLE } from "../src/game/world-bible.ts";
+import { DEFAULT_CAST } from "../src/game/cast.ts";
+import { DEFAULT_STORYBOARD } from "../src/game/storyboard.ts";
 import { ACCEPT_CLOSED, AuthoritativeServer, type NetServerTransport } from "../src/net/server.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
@@ -117,6 +120,41 @@ assert(artDirection.id === "k5-art-direction", "artDirection patch did not apply
 assert(artDirection.style === DEFAULT_DESIGN_DIRECTION.style && artDirection.palette.length === DEFAULT_DESIGN_DIRECTION.palette.length,
   "artDirection patch did not preserve canonical default fields");
 
+// Newly schema-backed K5 design artifacts: valid set canonicalizes, invalid set rejects.
+async function assertDesignArtifactSchemaBacked(
+  artifact: "worldBible" | "cast" | "storyboard",
+  validValue: Record<string, unknown>,
+  invalidValue: Record<string, unknown>,
+  invalidNeedle: string,
+): Promise<void> {
+  const valid = await ctx.registry.invoke("design.set", { artifact, value: validValue }, ctx.base);
+  assert(valid.success, `design.set(valid ${artifact}) failed: ${JSON.stringify(valid.error)}`);
+  assert(json(designValue(ctx.world, artifact)) === json((valid.result as { value: unknown }).value),
+    `design.set(valid ${artifact}) did not return the canonical stored value`);
+
+  const beforeInvalid = json(designValue(ctx.world, artifact));
+  const beforeInvalidCount = ctx.recorder!.commandCount;
+  const invalid = await ctx.registry.invoke("design.set", { artifact, value: invalidValue }, ctx.base);
+  assert(!invalid.success, `design.set(invalid ${artifact}) must be rejected`);
+  assert(invalid.error?.message.includes(invalidNeedle),
+    `invalid ${artifact} error should mention ${invalidNeedle}: ${JSON.stringify(invalid.error)}`);
+  assert(ctx.recorder!.commandCount === beforeInvalidCount,
+    `failed ${artifact} design.set should not remain recorded (${ctx.recorder!.commandCount} vs ${beforeInvalidCount})`);
+  assert(json(designValue(ctx.world, artifact)) === beforeInvalid, `invalid design.set changed stored ${artifact}`);
+}
+
+const invalidWorldBible = clone(DEFAULT_WORLD_BIBLE) as Record<string, unknown>;
+((invalidWorldBible.locations as Array<Record<string, unknown>>)[0]).regionId = "missing-region";
+await assertDesignArtifactSchemaBacked("worldBible", clone(DEFAULT_WORLD_BIBLE) as Record<string, unknown>, invalidWorldBible, "worldBible");
+
+const invalidCast = clone(DEFAULT_CAST) as Record<string, unknown>;
+((invalidCast.npcs as Array<Record<string, unknown>>)[0]).id = (invalidCast.player as Record<string, unknown>).id;
+await assertDesignArtifactSchemaBacked("cast", clone(DEFAULT_CAST) as Record<string, unknown>, invalidCast, "cast");
+
+const invalidStoryboard = clone(DEFAULT_STORYBOARD) as Record<string, unknown>;
+((invalidStoryboard.beats as Array<Record<string, unknown>>)).push({ ...((invalidStoryboard.beats as Array<Record<string, unknown>>)[0]), title: "Duplicate beat" });
+await assertDesignArtifactSchemaBacked("storyboard", clone(DEFAULT_STORYBOARD) as Record<string, unknown>, invalidStoryboard, "storyboard");
+
 // (f) design.get is read-only: it returns the artifact and does not change command count.
 const beforeGetCommands = ctx.recorder.commandCount;
 const getResult = await ctx.registry.invoke("design.get", { artifact: "gds" }, ctx.base);
@@ -168,5 +206,5 @@ assert(json(designValue(second.world, "gds")) === firstServerGds,
 await second.shutdown();
 
 ops.op_log(
-  "p_design_namespace OK: design.set records one SkillCommand and stores canonical GDS; invalid GDS is rejected with store unchanged; design.patch deep-merges and revalidates, including default-seeded artDirection; replayCommands reconstructs the design store; AuthoritativeServer durable boot rehydrates it; design.get is read-only and unrecorded.",
+  "p_design_namespace OK: design.set records one SkillCommand and stores canonical GDS; invalid GDS is rejected with store unchanged; design.patch deep-merges and revalidates, including default-seeded artDirection; worldBible/cast/storyboard design.set now accept valid canonical artifacts and reject invalid schema/semantic values; replayCommands reconstructs the design store; AuthoritativeServer durable boot rehydrates it; design.get is read-only and unrecorded.",
 );
