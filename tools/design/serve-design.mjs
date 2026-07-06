@@ -122,20 +122,54 @@ async function callModel(system, history, message) {
   } catch (e) { return { ok: false, reply: "⚠ request failed: " + String(e) }; }
 }
 
+// Save an edited doc, then compute the cascade impact of what changed (save -> surface).
+const SBEGIN = "===SAVE_BEGIN===", SEND = "===SAVE_END===";
+function saveDoc(name, content) {
+  const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!safe.endsWith(".md") || safe.includes("..")) throw new Error("invalid doc name");
+  const fp = join(vaultDir, safe);
+  let old = "";
+  try { old = readFileSync(fp, "utf8"); } catch { /* new file */ }
+  writeFileSync(fp, content);
+  const docs = readDocs();
+  const harness = `
+import { diffDocEntities } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { computeImpact } from "${LIMINA_HOME}/js/src/game/design-cascade.ts";
+import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
+const docs = ${JSON.stringify(docs)};
+const changes = diffDocEntities(${JSON.stringify(old)}, ${JSON.stringify(content)});
+const impacts = changes.map((ch) => computeImpact(docs, ch)).filter((i) => i.affected.length > 0 || i.downstreamArtifacts.length > 0);
+ops.op_log("${SBEGIN}" + JSON.stringify({ changes, impacts }) + "${SEND}");
+`;
+  const tmp = mkdtempSync(join(tmpdir(), "limina-save-"));
+  const hp = join(tmp, "s.ts");
+  writeFileSync(hp, harness);
+  const r = spawnSync(LIMINA_BIN, [hp], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  rmSync(tmp, { recursive: true, force: true });
+  const out = (r.stdout || "") + (r.stderr || "");
+  const m = out.match(new RegExp(SBEGIN + "([\\s\\S]*?)" + SEND));
+  return { saved: true, ...(m ? JSON.parse(m[1]) : { changes: [], impacts: [] }) };
+}
+
 createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/api/agent") {
+  if (req.method === "POST" && (req.url === "/api/agent" || req.url === "/api/save")) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
       try {
-        const { agentId, message, screen, history } = JSON.parse(body || "{}");
-        const ctx = assembleContext(agentId, screen || {});
-        const out = await callModel(ctx.systemPrompt, history || [], String(message || ""));
+        const p = JSON.parse(body || "{}");
+        if (req.url === "/api/save") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(saveDoc(p.name, p.content)));
+          return;
+        }
+        const ctx = assembleContext(p.agentId, p.screen || {});
+        const out = await callModel(ctx.systemPrompt, p.history || [], String(p.message || ""));
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ role: ctx.role, title: ctx.title, model: MODEL, ...out }));
       } catch (e) {
         res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: false, reply: "⚠ " + String(e) }));
+        res.end(JSON.stringify({ ok: false, error: String(e), reply: "⚠ " + String(e) }));
       }
     });
     return;

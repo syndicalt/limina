@@ -156,6 +156,31 @@
   .chat-in button { border:none; background:var(--accent); color:#fff; border-radius:9px; padding:0 16px; cursor:pointer;
     font:inherit; font-weight:600; }
   .chat-in button:disabled { opacity:.5; cursor:default; }
+
+  /* markdown editor */
+  .doc-edit { margin-bottom:10px; text-align:right; }
+  .ed { display:flex; flex-direction:column; height:100%; }
+  .ed-bar { display:flex; align-items:center; gap:10px; padding:8px 16px; border-bottom:1px solid var(--line); background:var(--panel-2); }
+  .ed-bar .fn { font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); }
+  .ed-bar .sp { flex:1; }
+  .ed-split { flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; }
+  .ed-split textarea { border:none; border-right:1px solid var(--line); padding:22px 26px; resize:none; outline:none;
+    font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--bg); color:var(--ink); }
+  .ed-prev { overflow:auto; }
+  .ed-save { background:var(--accent) !important; color:#fff !important; border:none !important; }
+
+  /* cascade surface */
+  .cascade { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); width:660px; max-width:94vw;
+    background:var(--panel); border:1px solid var(--amber); border-radius:14px; box-shadow:0 14px 44px rgba(0,0,0,.26);
+    padding:15px 18px; z-index:60; }
+  .cascade h4 { margin:0 0 3px; font-size:14px; display:flex; align-items:center; gap:8px; }
+  .cascade h4 .cx { margin-left:auto; cursor:pointer; background:none; border:none; color:var(--muted); font-size:19px; line-height:1; }
+  .cascade .sum { font-size:12.5px; color:var(--muted); margin-bottom:6px; }
+  .cascade .item { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--line); font-size:13px; }
+  .cascade .item .nm { font-weight:600; } .cascade .item .rel { font-size:11px; color:var(--muted); }
+  .cascade .item .go { margin-left:auto; border:1px solid var(--accent); color:var(--accent); background:none;
+    border-radius:7px; padding:4px 10px; cursor:pointer; font-size:12px; }
+  .cascade .item .go:hover { background:var(--accent-soft); }
 </style>
 </head>
 <body>
@@ -299,9 +324,13 @@ function openDoc(name){
   const { props } = frontmatter(d.content);
   const chips = Object.entries(props).filter(([k])=>k!=="note").slice(0,6)
     .map(([k,v])=>'<span class="prop"><b>'+k+'</b> '+esc(String(v)).slice(0,42)+'</span>').join("");
+  const editable = kindOf(d.content)!=="build-map";
   document.getElementById("center").innerHTML =
-    '<div class="doc-wrap"><div class="props">'+chips+'</div><div class="doc">'+renderMd(d.content)+'</div></div>';
+    '<div class="doc-wrap">'
+    +(editable?'<div class="doc-edit"><button class="btn" id="doc-edit">✎ Edit</button></div>':'')
+    +'<div class="props">'+chips+'</div><div class="doc">'+renderMd(d.content)+'</div></div>';
   document.querySelectorAll(".doc a.wl").forEach(a=>{ if(a.dataset.doc) a.onclick=(e)=>{e.preventDefault(); openDoc(a.dataset.doc);}; });
+  const eb=document.getElementById("doc-edit"); if(eb) eb.onclick=()=>openEditor(activeDoc);
   renderNav();
   if(chatAgent) updateChatCtx();
 }
@@ -389,6 +418,47 @@ async function sendChat(){
     if(j.ok!==false) chatHist.push({role:"assistant",content:j.reply});
   }catch(e){ typing.remove(); pushMsg("sys","⚠ "+e); }
   document.getElementById("chat-send").disabled=false;
+}
+
+// ---- full markdown editor + save -> cascade surfacing ----
+function openEditor(name){
+  const d = STATE.docs.find(x=>x.name===name); if(!d) return;
+  document.getElementById("center").innerHTML =
+    '<div class="ed"><div class="ed-bar"><span class="fn">'+name+'</span><span class="sp"></span>'
+    +'<button class="btn" id="ed-cancel">Cancel</button><button class="btn ed-save" id="ed-save">Save</button></div>'
+    +'<div class="ed-split"><textarea id="ed-ta" spellcheck="false"></textarea><div class="ed-prev col" id="ed-prev"></div></div></div>';
+  const ta=document.getElementById("ed-ta"); ta.value=d.content;
+  const prev=document.getElementById("ed-prev");
+  const render=()=>{ prev.innerHTML='<div class="doc-wrap"><div class="doc">'+renderMd(ta.value)+'</div></div>'; };
+  render(); ta.addEventListener("input",render);
+  document.getElementById("ed-cancel").onclick=()=>openDoc(name);
+  document.getElementById("ed-save").onclick=()=>saveEditor(name, ta.value);
+}
+async function saveEditor(name, content){
+  const btn=document.getElementById("ed-save"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
+  try{
+    const r=await fetch("/api/save",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name,content})});
+    const j=await r.json();
+    const d=STATE.docs.find(x=>x.name===name); if(d) d.content=content;
+    await load(); activeDoc=name; activeView="docs"; setTabs(); openDoc(name);
+    if(j.impacts && j.impacts.length) surfaceCascade(j.impacts);
+  }catch(e){ if(btn){ btn.disabled=false; btn.textContent="Save"; } pushToast("save failed: "+e); }
+}
+function pushToast(m){ console.warn(m); }
+function surfaceCascade(impacts){
+  const old=document.getElementById("cascade"); if(old) old.remove();
+  const src = impacts[0].source ? impacts[0].source.name : (impacts[0].change.entityId||"the design");
+  const seen=new Set(); const items=[];
+  for(const im of impacts) for(const a of im.affected){ if(!seen.has(a.id)){ seen.add(a.id); items.push(a); } }
+  if(items.length===0) return;
+  const el=document.createElement("div"); el.className="cascade"; el.id="cascade";
+  el.innerHTML='<h4>⚑ You changed '+esc(src)+' — review the cascade<button class="cx" id="casc-x">×</button></h4>'
+    +'<div class="sum">'+esc(impacts[0].summary)+'</div>'
+    +items.map(a=>'<div class="item"><span class="nm">'+esc(a.name)+'</span><span class="rel">'+esc(a.relation)+'</span>'
+      +'<button class="go" data-agent="'+esc(a.expertId)+'">Talk to '+esc(a.expertRole)+'</button></div>').join("");
+  document.body.appendChild(el);
+  document.getElementById("casc-x").onclick=()=>el.remove();
+  el.querySelectorAll(".go").forEach(b=>b.onclick=()=>openChat(b.dataset.agent));
 }
 
 function setTabs(){ document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.view===activeView)); }

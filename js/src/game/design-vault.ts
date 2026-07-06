@@ -364,6 +364,38 @@ export function vaultGraph(docs: VaultDoc[]): VaultGraph {
   return { nodes, edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)) };
 }
 
+// ---- entity diff (what changed on save, to drive the cascade) --------------
+
+/** Every id-bearing design entity in a single doc (locations, regions, cast, beats),
+ *  each with a signature of its content so a MODIFY can be told from a no-op. */
+export function docEntities(content: string): { id: string; sig: string }[] {
+  let fm: Frontmatter;
+  try { fm = parseFrontmatter(content); } catch { return []; }
+  const out: { id: string; sig: string }[] = [];
+  const push = (v: Record<string, unknown>) => { const id = str(v.id); if (id) out.push({ id, sig: JSON.stringify(v) }); };
+  for (const l of arr(fm.locations)) push(l);
+  for (const r of arr(fm.regions)) push(r);
+  const p = fm.player as Record<string, unknown> | undefined;
+  if (p && p.id) push(p);
+  for (const n of arr(fm.npcs)) push(n);
+  for (const c of arr(fm.creatures)) push(c);
+  for (const b of arr(fm.beats)) push(b);
+  return out;
+}
+
+/** Diff a doc's entities before vs after an edit -> the changes that drive cascade impact. */
+export function diffDocEntities(oldContent: string, newContent: string): { entityId: string; op: "added" | "modified" | "removed" }[] {
+  const oldMap = new Map(docEntities(oldContent).map((e) => [e.id, e.sig]));
+  const newMap = new Map(docEntities(newContent).map((e) => [e.id, e.sig]));
+  const changes: { entityId: string; op: "added" | "modified" | "removed" }[] = [];
+  for (const [id, sig] of newMap) {
+    if (!oldMap.has(id)) changes.push({ entityId: id, op: "added" });
+    else if (oldMap.get(id) !== sig) changes.push({ entityId: id, op: "modified" });
+  }
+  for (const id of oldMap.keys()) if (!newMap.has(id)) changes.push({ entityId: id, op: "removed" });
+  return changes;
+}
+
 // ---- top-level: vault -> design store --------------------------------------
 
 export interface VaultDoc { name: string; content: string; }

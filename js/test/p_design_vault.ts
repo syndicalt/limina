@@ -10,7 +10,7 @@
 // the TRANSLATION, not a pre-canonicalized shortcut.
 
 import { ops } from "../src/engine.ts";
-import { vaultToStore, parseFrontmatter, vaultGraph } from "../src/game/design-vault.ts";
+import { vaultToStore, parseFrontmatter, vaultGraph, diffDocEntities } from "../src/game/design-vault.ts";
 import { compileDesignToGds } from "../src/game/design-compile.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -164,6 +164,16 @@ assert(graph.edges.some((e) => e.from === "watchtower" && e.to === "the-hamlet" 
 assert(graph.edges.some((e) => e.from === "grundir" && e.to === "longhall" && e.label === "lives-in"), "graph: npc-lives-in-location edge");
 assert(graph.edges.some((e) => e.from === "the-overlook" && e.to === "watchtower" && e.label === "occurs-at"), "graph: beat-occurs-at-location edge");
 assert(graph.edges.every((e) => graph.nodes.some((n) => n.id === e.from) && graph.nodes.some((n) => n.id === e.to)), "graph: no dangling edges");
+
+// 9. diffDocEntities detects what changed on save (drives the cascade).
+const before = WORLD;
+const moved = WORLD.replace("position: [30, 12]", "position: [42, 20]");
+const dMoved = diffDocEntities(before, moved);
+assert(dMoved.length === 1 && dMoved[0].entityId === "watchtower" && dMoved[0].op === "modified", "diff: a moved location is 'modified'");
+const dSame = diffDocEntities(before, before);
+assert(dSame.length === 0, "diff: identical content yields no changes");
+const removed = WORLD.replace(/  - id: signal-fire[\s\S]*?note: The last beacon\.\n/, "");
+assert(diffDocEntities(before, removed).some((c) => c.entityId === "signal-fire" && c.op === "removed"), "diff: a deleted location is 'removed'");
 
 ops.op_log(
   "[js] p_design_vault OK: readable vault docs parse (nested maps, list-of-maps, inline arrays), " +
