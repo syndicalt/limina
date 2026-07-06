@@ -15,29 +15,59 @@ bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 1))
 obj = bpy.context.active_object
 bpy.ops.object.shade_flat()
 
-# ---- procedural Norman ashlar material (Brick Texture masonry) ---------------
+# ---- rich procedural Norman ashlar — depth from DARK CAVITY MORTAR + strong multi-octave normal + ----
+#      per-block tonal variation + weathering. The flat 2-tone+weak-bump version read "painted on".
 m = bpy.data.materials.new("StoneProc"); m.use_nodes = True
-nt = m.node_tree; nodes = nt.nodes; links = nt.links
-bsdf = nodes.get("Principled BSDF")
-brick = nodes.new("ShaderNodeTexBrick")
+nt = m.node_tree; N = nt.nodes; L = nt.links
+bsdf = N.get("Principled BSDF")
+def mix(a, b, fac, blend="MIX"):
+    x = N.new("ShaderNodeMixRGB"); x.blend_type = blend; x.inputs["Fac"].default_value = fac
+    if not isinstance(a, float): L.new(a, x.inputs["Color1"])
+    else: x.inputs["Color1"].default_value = (a, a, a, 1)
+    if hasattr(b, "__len__") and not hasattr(b, "bl_idname"): x.inputs["Color2"].default_value = (*b, 1)
+    elif isinstance(b, float): x.inputs["Color2"].default_value = (b, b, b, 1)
+    else: L.new(b, x.inputs["Color2"])
+    return x.outputs["Color"]
+
+brick = N.new("ShaderNodeTexBrick")
 brick.inputs["Scale"].default_value = 3.0
-brick.inputs["Mortar Size"].default_value = 0.03
-brick.inputs["Color1"].default_value = (0.42, 0.38, 0.31, 1)   # stone tone A
-brick.inputs["Color2"].default_value = (0.50, 0.46, 0.38, 1)   # stone tone B
-brick.inputs["Mortar"].default_value = (0.20, 0.19, 0.17, 1)   # recessed mortar
-noise = nodes.new("ShaderNodeTexNoise"); noise.inputs["Scale"].default_value = 14.0
-mixcol = nodes.new("ShaderNodeMixRGB"); mixcol.blend_type = "MULTIPLY"; mixcol.inputs["Fac"].default_value = 0.25
-links.new(brick.outputs["Color"], mixcol.inputs["Color1"])
-links.new(noise.outputs["Fac"], mixcol.inputs["Color2"])
-links.new(mixcol.outputs["Color"], bsdf.inputs["Base Color"])
-bsdf.inputs["Roughness"].default_value = 0.88
-# bump from mortar (brick Fac) + fine noise
-bump = nodes.new("ShaderNodeBump"); bump.inputs["Strength"].default_value = 0.35
-bumpmix = nodes.new("ShaderNodeMixRGB"); bumpmix.inputs["Fac"].default_value = 0.4
-links.new(brick.outputs["Fac"], bumpmix.inputs["Color1"])
-links.new(noise.outputs["Fac"], bumpmix.inputs["Color2"])
-links.new(bumpmix.outputs["Color"], bump.inputs["Height"])
-links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+brick.inputs["Mortar Size"].default_value = 0.045     # wider joints read at distance
+brick.inputs["Mortar Smooth"].default_value = 0.10
+brick.inputs["Brick Width"].default_value = 0.52; brick.inputs["Row Height"].default_value = 0.26
+brick.inputs["Color1"].default_value = (0.40, 0.36, 0.28, 1)
+brick.inputs["Color2"].default_value = (0.49, 0.45, 0.36, 1)
+brick.inputs["Mortar"].default_value = (0.08, 0.075, 0.065, 1)   # near-black cavity mortar
+fac = brick.outputs["Fac"]                              # ~1 in mortar, ~0 on the block faces
+
+# per-block + large weathering variation (stains, damp streaks)
+weath = N.new("ShaderNodeTexNoise"); weath.inputs["Scale"].default_value = 2.3; weath.inputs["Detail"].default_value = 8
+stain = N.new("ShaderNodeValToRGB")                     # ColorRamp → grime mask
+stain.color_ramp.elements[0].position = 0.42; stain.color_ramp.elements[1].position = 0.72
+L.new(weath.outputs["Fac"], stain.inputs["Fac"])
+# base color: brick, tinted darker by grime, then hard-darkened in the mortar cavity (fake AO)
+col = mix(brick.outputs["Color"], (0.20, 0.18, 0.15), 0.0)          # start = brick color
+col = mix(col, (0.22, 0.20, 0.16), 0.35)                            # blend toward a grime tone …
+gr = N.new("ShaderNodeMixRGB"); gr.blend_type = "MULTIPLY"; L.new(stain.outputs["Color"], gr.inputs["Fac"])
+L.new(col, gr.inputs["Color1"]); gr.inputs["Color2"].default_value = (0.55, 0.52, 0.45, 1)
+cavity = N.new("ShaderNodeMixRGB"); cavity.blend_type = "MULTIPLY"; L.new(fac, cavity.inputs["Fac"])
+L.new(gr.outputs["Color"], cavity.inputs["Color1"]); cavity.inputs["Color2"].default_value = (0.28, 0.26, 0.22, 1)
+L.new(cavity.outputs["Color"], bsdf.inputs["Base Color"])
+
+# roughness: stone ~0.8, mortar rougher, grime rougher
+rmix = N.new("ShaderNodeMixRGB"); rmix.inputs["Color1"].default_value = (0.8,)*3 + (1,)
+L.new(fac, rmix.inputs["Fac"]); rmix.inputs["Color2"].default_value = (0.96,)*3 + (1,)
+L.new(rmix.outputs["Color"], bsdf.inputs["Roughness"])
+
+# NORMAL: strong mortar recess (blocks raised) + fine surface grit, two chained bumps
+inv = N.new("ShaderNodeInvert"); L.new(fac, inv.inputs["Color"])   # blocks=1 (high), mortar=0 (low)
+grit = N.new("ShaderNodeTexNoise"); grit.inputs["Scale"].default_value = 42; grit.inputs["Detail"].default_value = 6
+pit = N.new("ShaderNodeTexVoronoi"); pit.inputs["Scale"].default_value = 26
+b1 = N.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.6; b1.inputs["Distance"].default_value = 0.12
+L.new(inv.outputs["Color"], b1.inputs["Height"])
+b2 = N.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.35
+gmix = mix(grit.outputs["Fac"], pit.outputs["Distance"], 0.5)
+L.new(gmix, b2.inputs["Height"]); L.new(b1.outputs["Normal"], b2.inputs["Normal"])
+L.new(b2.outputs["Normal"], bsdf.inputs["Normal"])
 obj.data.materials.clear(); obj.data.materials.append(m)
 
 # ---- UV unwrap ---------------------------------------------------------------
