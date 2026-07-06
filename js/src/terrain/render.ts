@@ -348,6 +348,39 @@ const ELEV_COL = {
  *  over the tile heights). Caller flips the material to vertexColors. */
 export interface ElevationColorRamp { seaLevel: number; amplitude: number; snowFrac?: number }
 
+// Surface-material palette painted by terrain.paint, keyed to the same albedo families as the
+// elevation ramp so painted patches sit naturally in the world. Index = tile.paintMat id.
+const PAINT_ALBEDO: (THREE.Color | null)[] = [
+  null,                       // 0 = unpainted
+  new THREE.Color(0xc4b68e),  // 1 sand
+  new THREE.Color(0x5f7f3c),  // 2 grass
+  new THREE.Color(0x756657),  // 3 rock
+  new THREE.Color(0x6f5334),  // 4 dirt
+];
+
+/** Blend a tile's paint channel into an existing per-vertex `color` attribute (the one
+ *  applyElevationColors built). A PURE function of tile.paintMat/paintW, so replay recomputes the
+ *  identical colors. Vertices are row-major (index = grid index), matching the paint grid. */
+export function applyPaintOverlay(geom: THREE.BufferGeometry, tile: TerrainTile): void {
+  const { paintMat, paintW } = tile;
+  if (paintMat === undefined || paintW === undefined) return;
+  const attr = geom.getAttribute("color") as THREE.BufferAttribute | undefined;
+  if (attr === undefined) return;
+  const arr = attr.array as Float32Array;
+  const n = Math.min(attr.count, paintMat.length);
+  for (let i = 0; i < n; i++) {
+    const w = paintW[i];
+    if (w <= 0) continue;
+    const col = PAINT_ALBEDO[paintMat[i]];
+    if (col === null || col === undefined) continue;
+    const j = i * 3;
+    arr[j] += (col.r - arr[j]) * w;
+    arr[j + 1] += (col.g - arr[j + 1]) * w;
+    arr[j + 2] += (col.b - arr[j + 2]) * w;
+  }
+  attr.needsUpdate = true;
+}
+
 export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTile, ramp: ElevationColorRamp): void {
   const { nrows, ncols, origin, scale, heights } = tile;
   const [ox, oy, oz] = origin;

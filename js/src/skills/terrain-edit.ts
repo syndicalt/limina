@@ -13,7 +13,7 @@ import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
-import { applyElevationColors, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
+import { applyElevationColors, applyPaintOverlay, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -97,6 +97,51 @@ function hashNoise(col: number, row: number): number {
   let h = (Math.imul(col, 374761393) + Math.imul(row, 668265263)) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// Material ids for terrain.paint — MUST match PAINT_ALBEDO in terrain/render.ts.
+const PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4 } as const;
+const paintInput = z.object({
+  entity: z.string().optional(),
+  center: z.tuple([z.number(), z.number()]),
+  radius: z.number().positive(),
+  strength: z.number().min(0).max(1).default(0.5),
+  falloff: z.enum(FALLOFFS).default("smooth"),
+  material: z.enum(["sand", "grass", "rock", "dirt"]).default("grass"),
+  erase: z.boolean().default(false),
+});
+/** Apply one paint stamp to a tile's material-weight channel, in place (mirrors applyBrush; pure +
+ *  deterministic so replay reconstructs identical paint from the recorded terrain.paint commands). */
+function applyBrushPaint(tile: TerrainTile, input: z.infer<typeof paintInput>): void {
+  const { nrows, ncols, origin, scale } = tile;
+  if (tile.paintMat === undefined) tile.paintMat = new Uint8Array(nrows * ncols);
+  if (tile.paintW === undefined) tile.paintW = new Float32Array(nrows * ncols);
+  const x0 = origin[0] - scale[0] / 2;
+  const z0 = origin[2] - scale[2] / 2;
+  const dxStep = scale[0] / (ncols - 1);
+  const dzStep = scale[2] / (nrows - 1);
+  const [cx, cz] = input.center;
+  const r = input.radius, r2 = r * r;
+  const matId = PAINT_MATERIALS[input.material];
+  for (let row = 0; row < nrows; row++) {
+    const wz = z0 + row * dzStep;
+    for (let col = 0; col < ncols; col++) {
+      const wx = x0 + col * dxStep;
+      const dx = wx - cx, dz = wz - cz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > r2) continue;
+      const t = 1 - Math.sqrt(d2) / r;
+      const f = falloffWeight(input.falloff, t);
+      const i = row * ncols + col;
+      if (input.erase) {
+        tile.paintW[i] = Math.max(0, tile.paintW[i] - input.strength * f);
+        if (tile.paintW[i] <= 0) tile.paintMat[i] = 0;
+      } else {
+        tile.paintMat[i] = matId;
+        tile.paintW[i] = Math.min(1, tile.paintW[i] + input.strength * f);
+      }
+    }
+  }
 }
 
 /** Apply one deterministic brush stamp to a tile's heights, in place. */
@@ -285,7 +330,34 @@ export function registerTerrainEditSkills(
     },
   };
 
+  const paint: SkillDefinition<z.infer<typeof paintInput>, { ok: boolean }> = {
+    name: "terrain.paint",
+    version: "1.0.0",
+    description: "Paint a surface material (sand/grass/rock/dirt) onto an editable terrain layer with a brush in a world-space radius. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. Does NOT change height (pair with terrain.deform).",
+    category: "terrain",
+    permissions: ["scene.write"],
+    input: paintInput,
+    output: z.object({ ok: z.boolean() }),
+    handler: (input, ctx) => {
+      let id = input.entity;
+      if (id === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; id = last; }
+      const layer = id !== undefined ? layers.get(id) : undefined;
+      if (layer === undefined) return { ok: false };
+      applyBrushPaint(layer.tile, input);
+      // Re-color the EXISTING geometry (render context only): rebuild the elevation base color, then
+      // blend the paint overlay. No collider/geometry rebuild — paint never changes height.
+      if (layer.mesh?.geometry !== undefined) {
+        const g = layer.mesh.geometry as unknown as Parameters<typeof applyPaintOverlay>[0];
+        if (layer.elevationColors !== undefined) applyElevationColors(g, layer.tile, layer.elevationColors);
+        applyPaintOverlay(g, layer.tile);
+      }
+      ctx.emit("terrain.painted", { entity: id, material: input.material });
+      return { ok: true };
+    },
+  };
+
   registry.register(create as unknown as Parameters<SkillRegistry["register"]>[0]);
   registry.register(deform as unknown as Parameters<SkillRegistry["register"]>[0]);
+  registry.register(paint as unknown as Parameters<SkillRegistry["register"]>[0]);
   return { layers };
 }

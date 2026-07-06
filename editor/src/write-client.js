@@ -60,6 +60,13 @@ export async function deformTerrain(center, radius, delta, mode, falloff) {
   return client.callTool("terrain.deform", { center, radius, delta, mode, falloff });
 }
 
+// Terrain material paint (Slice 3): blend a surface material (sand/grass/rock/dirt) onto the terrain.
+// strength is a 0..1 blend rate; erase pulls paint back out. Recorded like deform.
+export async function paintTerrain(center, radius, strength, falloff, material, erase) {
+  const client = await ensureWriter();
+  return client.callTool("terrain.paint", { center, radius, strength, falloff, material, erase: !!erase });
+}
+
 export async function writeMaterial(entity, material) {
   const client = await ensureWriter();
   const result = await client.callTool("three.setMaterial", { entity, ...material });

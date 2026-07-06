@@ -25,7 +25,7 @@
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
-import { destroyEntity, resetWriter, writeUpdate, deformTerrain } from "./write-client.js";
+import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain } from "./write-client.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -152,6 +152,7 @@ const state = {
   strokeStartLen: 0,
   flattenTarget: 0, // world height the flatten tool drives toward (captured at stroke start)
   spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
+  paintMaterial: "grass", // active material for the paint tool (sand|grass|rock|dirt)
 };
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -616,7 +617,7 @@ function pickEntity(event) {
 // Raycast the ground under the cursor, then stamp a terrain.deform through the recorded command path
 // (write-client -> server -> worldlog broadcast -> live in-place apply). NO optimistic pre-apply:
 // terrain.deform is ADDITIVE, so applying locally AND via the broadcast-back would double every dab.
-const SCULPT_TOOLS = new Set(["raise", "lower", "smooth", "flatten"]);
+const SCULPT_TOOLS = new Set(["raise", "lower", "smooth", "flatten", "paint"]);
 function raycastGround(event) {
   const running = state.running;
   if (!running?.camera || !running?.scene) return null;
@@ -633,15 +634,20 @@ function raycastGround(event) {
 async function brushDab(event) {
   const p = raycastGround(event);
   if (!p) return;
-  let mode = state.brushTool;
-  if (event.ctrlKey && mode === "raise") mode = "lower"; // Ctrl inverts raise<->lower
-  else if (event.ctrlKey && mode === "lower") mode = "raise";
-  // Flatten drives toward a target height (captured at stroke start); other modes use brush strength.
-  const delta = mode === "flatten" ? state.flattenTarget : state.brush.strength;
   try {
-    await deformTerrain([p.x, p.z], state.brush.radius, delta, mode, state.brush.falloff);
+    if (state.brushTool === "paint") {
+      // Map the shared strength slider (0.2..4) to a 0..1 paint blend rate; Ctrl erases.
+      const rate = Math.min(1, state.brush.strength / 4);
+      await paintTerrain([p.x, p.z], state.brush.radius, rate, state.brush.falloff, state.paintMaterial, event.ctrlKey);
+    } else {
+      let mode = state.brushTool;
+      if (event.ctrlKey && mode === "raise") mode = "lower"; // Ctrl inverts raise<->lower
+      else if (event.ctrlKey && mode === "lower") mode = "raise";
+      const delta = mode === "flatten" ? state.flattenTarget : state.brush.strength; // flatten = target height
+      await deformTerrain([p.x, p.z], state.brush.radius, delta, mode, state.brush.falloff);
+    }
     state.strokeDid = true;
-    await poll(); // pull the recorded deform straight back (localhost round-trip) so it renders now
+    await poll(); // pull the recorded edit straight back (localhost round-trip) so it renders now
   } catch (e) {
     surfaceViewportWarning("terrain brush failed", e);
   }
@@ -687,7 +693,8 @@ function hideBrushRing() { if (brushRing) brushRing.visible = false; }
 // The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
 // sliders, falloff, and undo/redo. It IS the can't-miss edit indicator (accent dot + outline + cursor).
 let hud = null;
-const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"]];
+const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"], ["paint", "Paint"]];
+const HUD_MATS = [["sand", "Sand", "#c4b68e"], ["grass", "Grass", "#5f7f3c"], ["rock", "Rock", "#756657"], ["dirt", "Dirt", "#6f5334"]];
 function styleToolBtn(b, active) {
   b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
     "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
@@ -718,6 +725,20 @@ function buildTerrainHud() {
     hud._toolBtns[id] = b;
   }
   hud.appendChild(tools);
+  // Material picker — only shown while the Paint tool is active.
+  const matRow = document.createElement("div");
+  matRow.style.cssText = "display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px";
+  hud._matBtns = {};
+  for (const [id, label, hex] of HUD_MATS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.dataset.hex = hex;
+    b.onclick = () => { state.paintMaterial = id; refreshHudMats(); };
+    matRow.appendChild(b);
+    hud._matBtns[id] = b;
+  }
+  hud._matRow = matRow;
+  hud.appendChild(matRow);
   const mkSlider = (label, min, max, step, get, set, fmt) => {
     const wrap = document.createElement("div");
     wrap.style.margin = "0 0 8px";
@@ -760,9 +781,23 @@ function buildTerrainHud() {
   if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
   par.appendChild(hud);
 }
+function styleMatBtn(b, active) {
+  const hex = b.dataset.hex || "#888";
+  b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
+    "text-shadow:0 1px 2px rgba(0,0,0,.6);border:2px solid " + (active ? "#fff" : "#454550") + ";background:" + hex;
+}
+function refreshHudMats() {
+  if (!hud?._matBtns) return;
+  for (const id of Object.keys(hud._matBtns)) styleMatBtn(hud._matBtns[id], id === state.paintMaterial);
+}
 function refreshHudTools() {
   if (!hud?._toolBtns) return;
   for (const [id] of HUD_TOOLS) styleToolBtn(hud._toolBtns[id], id === state.brushTool);
+  if (hud._matRow) {
+    const paint = state.brushTool === "paint";
+    hud._matRow.style.display = paint ? "grid" : "none";
+    if (paint) refreshHudMats();
+  }
 }
 function updateEditModeIndicator() {
   buildTerrainHud();
@@ -1029,9 +1064,9 @@ window.addEventListener("keydown", (event) => {
       state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1/2/3 tool` : "");
     return;
   }
-  if (state.editMode && (key === "1" || key === "2" || key === "3" || key === "4")) {
+  if (state.editMode && (key === "1" || key === "2" || key === "3" || key === "4" || key === "5")) {
     event.preventDefault();
-    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth" : "flatten";
+    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth" : key === "4" ? "flatten" : "paint";
     updateEditModeIndicator();
     setStatus("terrain edit", `tool: ${state.brushTool}`);
     return;

@@ -480,7 +480,7 @@ export interface RunningLive {
   stop(): void;
 }
 
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform"]);
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint"]);
 // Structural adds applied INCREMENTALLY on the live scene (no reboot) — including the GLB-mounting
 // skills. Their mid-session mount is safe because runLive PRE-WARMS the glTF parse cache (the tree
 // palette + the scene's assets) BEFORE renderer.init(), so parseGltfScene returns a synchronous clone

@@ -20,6 +20,12 @@ export interface TerrainTile {
   scale: [number, number, number];
   /** Row-major elevation samples (index = row*ncols + col), length nrows*ncols. */
   heights: Float32Array;
+  /** OPTIONAL surface-material paint (in-game terrain.paint). Row-major, length nrows*ncols.
+   *  paintMat[i] = material id (0 none, 1 sand, 2 grass, 3 rock, 4 dirt); paintW[i] = blend weight
+   *  0..1 toward that material's albedo. Like heights, reconstructed deterministically from the
+   *  terrain.paint commands on replay (never snapshotted). Absent until the tile is first painted. */
+  paintMat?: Uint8Array;
+  paintW?: Float32Array;
   /** Optional per-cell climate grid, flat row-major, length = climateChannels *
    *  nrows * ncols. Channels are packed in the fixed CLIMATE_* order below —
    *  [tempC, precipMm, biome], climateChannels === CLIMATE_CHANNELS — matching
