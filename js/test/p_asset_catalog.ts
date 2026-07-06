@@ -33,6 +33,7 @@ const STONE_WELL: CatalogEntry = {
   title: "Stone well",
   category: "prop",
   boundsM: [1.4, 1.6, 1.4],
+  authoredBy: "claude-test-model", // provenance must round-trip to the reviewer + catalog
   tags: ["prop", "medieval"],
 };
 
@@ -75,6 +76,7 @@ const SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-man
   const well = entries.find((e) => e.id === "stone-well.glb");
   assert(well !== undefined, "the published entry must appear in asset.catalog");
   assert(well!.title === STONE_WELL.title && well!.category === STONE_WELL.category, "published entry's fields must be intact");
+  assert(well!.authoredBy === "claude-test-model", "authoredBy provenance must survive publish → catalog");
   assert(well!.boundsM[0] === STONE_WELL.boundsM[0] && well!.boundsM[2] === STONE_WELL.boundsM[2], "published entry's boundsM must be intact");
 }
 
@@ -124,4 +126,31 @@ const SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-man
   assert(publishDef!.permissions.some((p) => !p.endsWith(".read")), `catalog.publish must declare a non-.read permission so the review gate holds it (got ${publishDef!.permissions.join(", ")})`);
 }
 
-ops.op_log("[js] p_asset_catalog OK: asset.catalog browses the seed catalog (assets/catalog.json) merged with this-session catalog.publish entries (published wins on id collision, idempotent upsert, deterministic seed-then-publish ordering); catalog.publish declares scene.write (held under builder.review) while asset.catalog declares catalog.read (never held) — a real, agent-callable, replay-safe asset index.");
+// 6. ＋New build requests: asset.request records a request with a DETERMINISTIC id; asset.requests
+//    lists them in order; the same request sequence in a fresh state reproduces identical records.
+{
+  const seqA = freshCatalog("ses_request_a");
+  const r1 = await seqA.registry.invoke("asset.request", { description: "A stone village well with a timber winch", category: "prop" }, seqA.at(7));
+  assert(r1.success, `asset.request must succeed: ${JSON.stringify(r1.error)}`);
+  assert((r1.result as { requestId: string }).requestId === "req_7_0", `requestId must be deterministic tick+ordinal (got ${(r1.result as { requestId: string }).requestId})`);
+  await seqA.registry.invoke("asset.request", { description: "A hay cart", category: "prop" }, seqA.at(9));
+  const listA = await seqA.registry.invoke("asset.requests", {}, seqA.at(10));
+  assert(listA.success, "asset.requests must succeed");
+  const reqsA = (listA.result as { requests: { requestId: string; description: string }[] }).requests;
+  assert(reqsA.length === 2 && reqsA[0].requestId === "req_7_0" && reqsA[1].requestId === "req_9_1", `requests must list in order with deterministic ids (got ${reqsA.map((r) => r.requestId).join(", ")})`);
+
+  const seqB = freshCatalog("ses_request_b");
+  await seqB.registry.invoke("asset.request", { description: "A stone village well with a timber winch", category: "prop" }, seqB.at(7));
+  await seqB.registry.invoke("asset.request", { description: "A hay cart", category: "prop" }, seqB.at(9));
+  const listB = await seqB.registry.invoke("asset.requests", {}, seqB.at(10));
+  const stripAgent = (rs: unknown) => JSON.stringify(rs);
+  assert(stripAgent((listB.result as { requests: unknown }).requests) === stripAgent(reqsA), "the same request sequence in a fresh state must reproduce byte-identical records");
+
+  // Gate semantics: asset.request is a real write (held under review), asset.requests is read-only.
+  const reqDef = seqA.registry.describe("asset.request");
+  const listDef = seqA.registry.describe("asset.requests");
+  assert(reqDef !== undefined && reqDef.permissions.some((p) => !p.endsWith(".read")), "asset.request must declare a non-.read permission");
+  assert(listDef !== undefined && listDef.permissions.every((p) => p.endsWith(".read")), "asset.requests must declare only .read permissions");
+}
+
+ops.op_log("[js] p_asset_catalog OK: asset.catalog browses the seed catalog (assets/catalog.json) merged with this-session catalog.publish entries (published wins on id collision, idempotent upsert, deterministic seed-then-publish ordering); catalog.publish declares scene.write (held under builder.review) while asset.catalog declares catalog.read (never held); asset.request records ＋New build requests with deterministic replay-safe ids and asset.requests lists them — a real, agent-callable, replay-safe asset index + request queue.");

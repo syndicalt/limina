@@ -25,7 +25,7 @@
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
-import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain, fetchCatalog, placeAsset } from "./write-client.js";
+import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain, fetchCatalog, placeAsset, requestAsset } from "./write-client.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -378,6 +378,9 @@ async function poll() {
           state.dirty = true;
         }
         showActiveAgentTargets(authorCmds);
+        // A granted catalog.publish just landed in the log → the palette is stale; re-fetch so a
+        // freshly approved asset appears without reopening the panel.
+        if (hud && newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void refreshCatalog();
       }
       if (typeof res.next === "number") state.cursor = res.next;
       if (state.dirty && !state.rebooting) await reboot();
@@ -839,6 +842,84 @@ function renderCatalogGrid() {
   }
 }
 
+// --- ＋New asset dialog (Slice 5) -------------------------------------------------------------------
+// Describe an asset that doesn't exist yet → asset.request records it for the architect (a build
+// agent + Blender, outside the engine). Non-blocking: the editor stays fully usable; the finished
+// asset arrives later via QC → approval queue → catalog.publish → the palette-refresh hook in poll().
+let newAssetDialog = null;
+const sessionRequests = []; // {requestId, description} submitted from THIS editor session
+function renderRequestChips() {
+  const box = hud?._catReqs;
+  if (!box) return;
+  box.textContent = "";
+  for (const r of sessionRequests) {
+    const chip = document.createElement("div");
+    chip.textContent = "⏳ " + r.description;
+    chip.title = r.requestId + " — requested; the architect builds it, then it arrives via the approval queue";
+    chip.style.cssText = "padding:4px 8px;border-radius:5px;border:1px dashed #6a6a75;color:#bbb;" +
+      "font:11px system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    box.appendChild(chip);
+  }
+}
+function openNewAssetDialog() {
+  if (newAssetDialog) { newAssetDialog.style.display = "block"; return; }
+  const d = document.createElement("div");
+  d.style.cssText = "position:absolute;top:10px;left:236px;z-index:31;width:250px;padding:12px;border-radius:8px;" +
+    "background:rgba(22,22,27,.97);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5)";
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex;align-items:center;margin-bottom:8px";
+  head.innerHTML = '<strong style="flex:1">New asset</strong>';
+  const close = document.createElement("button");
+  close.textContent = "✕";
+  close.style.cssText = "border:none;background:none;color:#bbb;font:14px system-ui;cursor:pointer";
+  close.onclick = () => { d.style.display = "none"; };
+  head.appendChild(close);
+  d.appendChild(head);
+  const desc = document.createElement("textarea");
+  desc.rows = 3;
+  desc.placeholder = "Describe it — e.g. a stone village well with a timber winch and shingle roof";
+  desc.style.cssText = "width:100%;box-sizing:border-box;background:#2a2a32;color:#eee;border:1px solid #454550;" +
+    "border-radius:5px;padding:6px 8px;font:12px system-ui;resize:vertical;margin-bottom:8px";
+  d.appendChild(desc);
+  const catSel = document.createElement("select");
+  catSel.style.cssText = "width:100%;background:#2a2a32;color:#eee;border:1px solid #454550;border-radius:5px;padding:5px;margin-bottom:10px";
+  for (const c of ["prop", "dwelling", "civic", "military", "religious"]) {
+    const o = document.createElement("option");
+    o.value = c;
+    o.textContent = c;
+    catSel.appendChild(o);
+  }
+  d.appendChild(catSel);
+  const send = document.createElement("button");
+  send.textContent = "Send to architect";
+  send.style.cssText = "width:100%;padding:7px;border-radius:5px;border:1px solid #e0552b;background:#e0552b;color:#fff;font:12px system-ui;cursor:pointer";
+  send.onclick = async () => {
+    const text = desc.value.trim();
+    if (text.length < 3) { setStatus("new asset", "describe it first"); return; }
+    send.disabled = true;
+    send.textContent = "Sending…";
+    try {
+      const res = await requestAsset(text, catSel.value);
+      sessionRequests.push({ requestId: res?.requestId || "req", description: text });
+      renderRequestChips();
+      desc.value = "";
+      d.style.display = "none";
+      setStatus("asset requested", "the architect will build it — watch the approval queue");
+    } catch (e) {
+      resetWriter();
+      surfaceViewportWarning("asset request failed", e);
+    } finally {
+      send.disabled = false;
+      send.textContent = "Send to architect";
+    }
+  };
+  d.appendChild(send);
+  const par = canvas.parentElement || document.body;
+  if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
+  par.appendChild(d);
+  newAssetDialog = d;
+}
+
 // The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
 // sliders, falloff, and undo/redo. It IS the can't-miss edit indicator (accent dot + outline + cursor).
 let hud = null;
@@ -905,10 +986,22 @@ function buildTerrainHud() {
   const catGrid = document.createElement("div");
   catGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:7px;max-height:260px;overflow:auto";
   catPanel.appendChild(catGrid);
+  // Session-submitted ＋New requests (chips) + the ＋New button. A chip is a local "sent" record;
+  // the asset itself arrives later through the approve → catalog.publish → palette-refresh path.
+  const catReqs = document.createElement("div");
+  catReqs.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:8px";
+  catPanel.appendChild(catReqs);
+  const newBtn = document.createElement("button");
+  newBtn.textContent = "＋ New asset";
+  newBtn.style.cssText = "width:100%;margin-top:8px;padding:7px;border-radius:5px;border:1px solid #e0552b;" +
+    "background:#e0552b;color:#fff;font:12px system-ui;cursor:pointer";
+  newBtn.onclick = () => openNewAssetDialog();
+  catPanel.appendChild(newBtn);
   hud._catPanel = catPanel;
   hud._catSearch = catSearch;
   hud._catChips = catChips;
   hud._catGrid = catGrid;
+  hud._catReqs = catReqs;
   hud.appendChild(catPanel);
   const mkSlider = (label, min, max, step, get, set, fmt) => {
     const wrap = document.createElement("div");
@@ -989,6 +1082,8 @@ function updateEditModeIndicator() {
     canvas.style.outline = "";
     canvas.style.cursor = "";
     hideBrushRing();
+    hidePlaceGhost();
+    if (newAssetDialog) newAssetDialog.style.display = "none";
   }
 }
 

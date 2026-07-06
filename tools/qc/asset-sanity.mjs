@@ -6,12 +6,16 @@
 //   • OFF-GROUND  — min-y far from 0 (won't sit on terrain; informational)
 //   • NO-BOUNDS   — no POSITION min/max in the file (can't be validated)
 // Read-only. Usage: node tools/qc/asset-sanity.mjs [assetsDir]
+//
+// glbBbox / CAP_M / DEGEN_M / classifyBounds are exported so other host tools (make-card.mjs,
+// architect-run.mjs) can measure + classify a single GLB's world bbox without re-deriving this
+// transform-aware walk — the CLI below is unchanged (same output, same exit codes).
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const DIR = process.argv[2] || "assets";
-const CAP_M = 60;        // nothing in the library should exceed ~60m in any axis (a big keep is ~20m)
-const DEGEN_M = 0.02;    // any axis under 2cm ⇒ effectively empty
+export const CAP_M = 60;        // nothing in the library should exceed ~60m in any axis (a big keep is ~20m)
+export const DEGEN_M = 0.02;    // any axis under 2cm ⇒ effectively empty
 
 // 4x4 column-major helpers (glTF convention).
 function mul(a, b) {
@@ -42,7 +46,7 @@ function apply(m, p) { // world = m * [p,1]
 // matrix, and for every mesh transform its primitives' POSITION accessor min/max (all 8
 // corners) into world space — the SAME size a scatter/place sees. Ignoring node transforms
 // (raw accessor bounds) mis-reads assets that carry scale/offset in their nodes.
-function glbBbox(buf) {
+export function glbBbox(buf) {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   if (dv.getUint32(0, true) !== 0x46546c67) return null; // 'glTF'
   const jsonLen = dv.getUint32(12, true);
@@ -73,23 +77,43 @@ function glbBbox(buf) {
   return any ? { mn, mx } : null;
 }
 
-if (!existsSync(DIR)) { console.error("no dir:", DIR); process.exit(2); }
-const glbs = readdirSync(DIR).filter((f) => f.endsWith(".glb")).sort();
-const rows = [];
-for (const f of glbs) {
-  let bb; try { bb = glbBbox(readFileSync(join(DIR, f))); } catch (e) { rows.push({ f, flag: "PARSE-ERR", note: String(e).slice(0, 60) }); continue; }
-  if (bb === null) { rows.push({ f, flag: "NO-BOUNDS", note: "no POSITION min/max" }); continue; }
-  const d = bb.mx.map((v, i) => v - bb.mn[i]);
-  const size = d.map((v) => v.toFixed(2)).join(" × ");
+// Given a world-space size [dx,dy,dz] and min-corner [x0,y0,z0] (as returned by glbBbox: d = mx-mn,
+// mn = bb.mn), return the same flag strings the CLI prints — DEGENERATE / OVERSIZE / OFF-GROUND(y0=…).
+// Empty array = clean. Kept as the single source of truth so make-card.mjs / architect-run.mjs
+// classify a bbox identically to this scan.
+export function classifyBounds(d, mn) {
   const flags = [];
   // DEGENERATE = no meaningful extent at all (a point/empty mesh). A single flat axis is fine
   // (billboards, leaves, decals, a ground quad), so gate on the LARGEST dimension, not any.
   if (Math.max(...d) < DEGEN_M) flags.push("DEGENERATE");
   if (d.some((v) => v > CAP_M)) flags.push("OVERSIZE");
-  if (Math.abs(bb.mn[1]) > 1.0) flags.push(`OFF-GROUND(y0=${bb.mn[1].toFixed(1)})`);
-  rows.push({ f, flag: flags.join(" ") || "ok", note: size + " m" });
+  if (Math.abs(mn[1]) > 1.0) flags.push(`OFF-GROUND(y0=${mn[1].toFixed(1)})`);
+  return flags;
 }
-const bad = rows.filter((r) => r.flag !== "ok");
-for (const r of rows) if (r.flag !== "ok") console.log(`  ✗ ${r.flag.padEnd(22)} ${r.f}  [${r.note}]`);
-console.log(`\n${glbs.length} GLBs scanned — ${bad.length} flagged, ${glbs.length - bad.length} clean.`);
-process.exit(bad.some((r) => /DEGENERATE|OVERSIZE|PARSE-ERR/.test(r.flag)) ? 1 : 0);
+
+// Guard the CLI scan behind an entry-point check: importing this module (make-card.mjs,
+// architect-run.mjs) for its exports must NOT re-run the whole-library scan or process.exit —
+// only `node tools/qc/asset-sanity.mjs [assetsDir]` does. Behavior/output when run directly is
+// unchanged.
+function isMain() {
+  return resolve(process.argv[1] || "") === fileURLToPath(import.meta.url);
+}
+
+if (isMain()) {
+  const DIR = process.argv[2] || "assets";
+  if (!existsSync(DIR)) { console.error("no dir:", DIR); process.exit(2); }
+  const glbs = readdirSync(DIR).filter((f) => f.endsWith(".glb")).sort();
+  const rows = [];
+  for (const f of glbs) {
+    let bb; try { bb = glbBbox(readFileSync(join(DIR, f))); } catch (e) { rows.push({ f, flag: "PARSE-ERR", note: String(e).slice(0, 60) }); continue; }
+    if (bb === null) { rows.push({ f, flag: "NO-BOUNDS", note: "no POSITION min/max" }); continue; }
+    const d = bb.mx.map((v, i) => v - bb.mn[i]);
+    const size = d.map((v) => v.toFixed(2)).join(" × ");
+    const flags = classifyBounds(d, bb.mn);
+    rows.push({ f, flag: flags.join(" ") || "ok", note: size + " m" });
+  }
+  const bad = rows.filter((r) => r.flag !== "ok");
+  for (const r of rows) if (r.flag !== "ok") console.log(`  ✗ ${r.flag.padEnd(22)} ${r.f}  [${r.note}]`);
+  console.log(`\n${glbs.length} GLBs scanned — ${bad.length} flagged, ${glbs.length - bad.length} clean.`);
+  process.exit(bad.some((r) => /DEGENERATE|OVERSIZE|PARSE-ERR/.test(r.flag)) ? 1 : 0);
+}

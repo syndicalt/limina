@@ -29,11 +29,30 @@ const catalogEntrySchema = z.object({
   qcRender: z.string().optional(),
   /** Automated QC pre-check flags (e.g. textured/scale/integrity/theme); null = not run. */
   qcChecks: z.record(z.string(), z.union([z.boolean(), z.null()])).optional(),
+  /** Provenance: which model/agent authored the asset (e.g. "claude-fable-5"). The reviewer sees
+   *  this on the approval card — model tier is a quality signal — and it stays on the entry. */
+  authoredBy: z.string().optional(),
   tags: z.array(z.string()).optional(),
 });
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
 const catalogInput = z.object({});
+
+// A ＋New build request: the user's description of an asset that doesn't exist yet. Recording it is
+// the editor's whole job — the ARCHITECT (a build agent + Blender, outside the engine) picks it up,
+// authors the GLB, runs the QC pipeline (tools/design/architect-run.mjs) and proposes catalog.publish.
+const requestInput = z.object({
+  description: z.string().min(3),
+  category: z.enum(CATALOG_CATEGORIES),
+  /** Optional /assets-relative reference image the architect should match. */
+  refImage: z.string().optional(),
+});
+const requestRecordSchema = requestInput.extend({
+  requestId: z.string(),
+  agentId: z.string(),
+  tick: z.number(),
+});
+export type BuildRequest = z.infer<typeof requestRecordSchema>;
 
 /** Per-host mutable catalog state: entries published THIS SESSION (upsert by id, insertion-ordered)
  *  plus the lazily-loaded seed catalog. Shared across invocations the same way terrain-edit.ts's
@@ -44,6 +63,9 @@ export interface AssetCatalogState {
    *  an existing id REPLACES its entry in place, never duplicating). Wins over a seed entry with the
    *  same id when merged. */
   published: Map<string, CatalogEntry>;
+  /** ＋New build requests recorded this session, in request order. Replay-reconstructed like
+   *  `published` — asset.request is a recorded command with a DETERMINISTIC requestId. */
+  requests: BuildRequest[];
   /** The seed catalog (assets/catalog.json), loaded once and cached. `undefined` = not yet attempted;
    *  an empty array is a valid (and terminal) result of a missing/unparsable seed file — it is never
    *  retried. */
@@ -93,7 +115,7 @@ function mergedEntries(state: AssetCatalogState, ctx: ExecutionContext): Catalog
  *  it identically from the recorded catalog.publish commands). */
 export function registerAssetCatalogSkills(
   registry: SkillRegistry,
-  state: AssetCatalogState = { published: new Map() },
+  state: AssetCatalogState = { published: new Map(), requests: [] },
 ): AssetCatalogState {
   const catalog: SkillDefinition<z.infer<typeof catalogInput>, { entries: CatalogEntry[] }> = {
     name: "asset.catalog",
@@ -122,7 +144,38 @@ export function registerAssetCatalogSkills(
     },
   };
 
+  const request: SkillDefinition<z.infer<typeof requestInput>, { requestId: string; queued: number }> = {
+    name: "asset.request",
+    version: "1.0.0",
+    description: "Request a NEW asset by description (the editor's ＋New front door). Records the request for the architect — a build agent that authors the GLB with Blender, runs the QC pipeline and proposes catalog.publish. Non-blocking: this only records; nothing is generated in-engine.",
+    category: "world",
+    permissions: ["scene.write"],
+    input: requestInput,
+    output: z.object({ requestId: z.string(), queued: z.number().int() }),
+    handler: (input, ctx) => {
+      // Deterministic id (tick + per-session ordinal) — NEVER wall-clock/random, so a worldlog
+      // replay reconstructs the identical request list.
+      const requestId = `req_${ctx.tick}_${state.requests.length}`;
+      state.requests.push({ ...input, requestId, agentId: ctx.agentId, tick: ctx.tick });
+      ctx.emit("asset.requested", { requestId, description: input.description, category: input.category });
+      return { requestId, queued: state.requests.length };
+    },
+  };
+
+  const requests: SkillDefinition<z.infer<typeof catalogInput>, { requests: BuildRequest[] }> = {
+    name: "asset.requests",
+    version: "1.0.0",
+    description: "List the ＋New build requests recorded this session (requestId, description, category, requester) — what the architect picks up. Read-only.",
+    category: "world",
+    permissions: ["catalog.read"],
+    input: catalogInput,
+    output: z.object({ requests: z.array(requestRecordSchema) }),
+    handler: () => ({ requests: [...state.requests] }),
+  };
+
   registry.register(catalog as unknown as Parameters<SkillRegistry["register"]>[0]);
   registry.register(publish as unknown as Parameters<SkillRegistry["register"]>[0]);
+  registry.register(request as unknown as Parameters<SkillRegistry["register"]>[0]);
+  registry.register(requests as unknown as Parameters<SkillRegistry["register"]>[0]);
   return state;
 }

@@ -74,6 +74,13 @@ export async function fetchCatalog() {
   return client.callTool("asset.catalog", {});
 }
 
+// ＋New (Slice 5): record a build request for the architect — a description of an asset that doesn't
+// exist yet. Non-blocking; the architect authors it out-of-engine and proposes catalog.publish.
+export async function requestAsset(description, category, refImage) {
+  const client = await ensureWriter();
+  return client.callTool("asset.request", { description, category, ...(refImage ? { refImage } : {}) });
+}
+
 // Catalog place tool (Slice 4): place a whole approved GLB through the same recorded command path.
 // ground:true snaps the asset base to the terrain surface at (x,z); rotation is Euler radians.
 export async function placeAsset(assetId, position, opts = {}) {

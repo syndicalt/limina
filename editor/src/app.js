@@ -475,6 +475,12 @@ function renderApprovals() {
     const top = el("div", "approval-top");
     top.appendChild(el("span", "approval-skill", a.skill));
     top.appendChild(el("span", "tag", a.profile ?? "?"));
+    // Provenance: which model authored the asset. Model tier is a real quality signal for the
+    // reviewer (a cheap-tier build warrants a harder look), so it sits in the card header.
+    const inputForTag = a.input && typeof a.input === "object" ? a.input : {};
+    if (typeof inputForTag.authoredBy === "string" && inputForTag.authoredBy.length > 0) {
+      top.appendChild(el("span", "tag", "model: " + inputForTag.authoredBy));
+    }
     card.appendChild(top);
     card.appendChild(el("div", "dim", `proposed by ${a.agentId} • tick ${a.tick}`));
     // Visual QC: when a proposal carries a QC render + automated pre-checks (an asset review
