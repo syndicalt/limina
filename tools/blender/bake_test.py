@@ -40,13 +40,13 @@ L.new(tc.outputs["UV"], warp.inputs[0]); L.new(wsc.outputs["Vector"], warp.input
 WV = warp.outputs["Vector"]
 
 brick = N.new("ShaderNodeTexBrick")
-brick.inputs["Scale"].default_value = 3.0
-brick.inputs["Mortar Size"].default_value = 0.05
-brick.inputs["Mortar Smooth"].default_value = 0.22     # rounder, chipped-looking joints (not crisp tile)
-brick.inputs["Brick Width"].default_value = 0.58; brick.inputs["Row Height"].default_value = 0.27
-brick.inputs["Color1"].default_value = (0.38, 0.34, 0.27, 1)
-brick.inputs["Color2"].default_value = (0.47, 0.43, 0.34, 1)
-brick.inputs["Mortar"].default_value = (0.08, 0.075, 0.065, 1)
+brick.inputs["Scale"].default_value = 2.1                # LARGER blocks (Project Gorgon target)
+brick.inputs["Mortar Size"].default_value = 0.03         # thin, subtle joints (not heavy black)
+brick.inputs["Mortar Smooth"].default_value = 0.25
+brick.inputs["Brick Width"].default_value = 0.62; brick.inputs["Row Height"].default_value = 0.32
+brick.inputs["Color1"].default_value = (0.34, 0.345, 0.35, 1)   # COOL GREY ashlar
+brick.inputs["Color2"].default_value = (0.44, 0.445, 0.45, 1)
+brick.inputs["Mortar"].default_value = (0.13, 0.13, 0.135, 1)   # dark-grey joint
 L.new(WV, brick.inputs["Vector"])
 fac = brick.outputs["Fac"]
 
@@ -61,13 +61,24 @@ weath = N.new("ShaderNodeTexNoise"); weath.inputs["Scale"].default_value = 2.3; 
 stain = N.new("ShaderNodeValToRGB")
 stain.color_ramp.elements[0].position = 0.4; stain.color_ramp.elements[1].position = 0.78
 L.new(weath.outputs["Fac"], stain.inputs["Fac"])
-# base: brick colour → subtle per-cell tint → light grime → hard-dark mortar cavity (fake AO)
+# VERTICAL WEATHERING STREAKS — dark runs down the wall (the aged-castle read in the reference)
+smap = N.new("ShaderNodeMapping"); smap.inputs["Scale"].default_value = (2.5, 0.12, 2.5)  # stretch in V → vertical
+L.new(WV, smap.inputs["Vector"])
+sn = N.new("ShaderNodeTexNoise"); sn.inputs["Scale"].default_value = 3.5; sn.inputs["Detail"].default_value = 5
+L.new(smap.outputs["Vector"], sn.inputs["Vector"])
+sramp = N.new("ShaderNodeValToRGB")                     # noise → streak mask (dark where low)
+sramp.color_ramp.elements[0].position = 0.32; sramp.color_ramp.elements[0].color = (0.55, 0.55, 0.58, 1)
+sramp.color_ramp.elements[1].position = 0.6;  sramp.color_ramp.elements[1].color = (1, 1, 1, 1)
+L.new(sn.outputs["Fac"], sramp.inputs["Fac"])
+# base: brick → subtle per-cell tint → grey grime → vertical streaks → soft dark joint cavity
 tint = N.new("ShaderNodeMixRGB"); tint.blend_type = "MULTIPLY"; tint.inputs["Fac"].default_value = 1.0
 L.new(brick.outputs["Color"], tint.inputs["Color1"]); L.new(cmap.outputs["Result"], tint.inputs["Color2"])
 gr = N.new("ShaderNodeMixRGB"); gr.blend_type = "MULTIPLY"; L.new(stain.outputs["Color"], gr.inputs["Fac"])
-L.new(tint.outputs["Color"], gr.inputs["Color1"]); gr.inputs["Color2"].default_value = (0.72, 0.70, 0.64, 1)
+L.new(tint.outputs["Color"], gr.inputs["Color1"]); gr.inputs["Color2"].default_value = (0.74, 0.74, 0.76, 1)
+strk = N.new("ShaderNodeMixRGB"); strk.blend_type = "MULTIPLY"; strk.inputs["Fac"].default_value = 0.7
+L.new(gr.outputs["Color"], strk.inputs["Color1"]); L.new(sramp.outputs["Color"], strk.inputs["Color2"])
 cavity = N.new("ShaderNodeMixRGB"); cavity.blend_type = "MULTIPLY"; L.new(fac, cavity.inputs["Fac"])
-L.new(gr.outputs["Color"], cavity.inputs["Color1"]); cavity.inputs["Color2"].default_value = (0.28, 0.26, 0.22, 1)
+L.new(strk.outputs["Color"], cavity.inputs["Color1"]); cavity.inputs["Color2"].default_value = (0.42, 0.42, 0.45, 1)
 L.new(cavity.outputs["Color"], bsdf.inputs["Base Color"])
 
 # roughness: stone vs rougher mortar
@@ -81,11 +92,11 @@ dome = N.new("ShaderNodeTexVoronoi"); dome.feature = "DISTANCE_TO_EDGE"; dome.in
 L.new(WV, dome.inputs["Vector"])                       # centre-high, edge-low → domed, chamfered blocks
 undul = N.new("ShaderNodeTexNoise"); undul.inputs["Scale"].default_value = 13.0; undul.inputs["Detail"].default_value = 4
 grit = N.new("ShaderNodeTexNoise"); grit.inputs["Scale"].default_value = 40; grit.inputs["Detail"].default_value = 6
-h1 = mix(inv.outputs["Color"], dome.outputs["Distance"], 0.14)     # mostly recessed joints, a hint of block relief
-b1 = N.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.4; b1.inputs["Distance"].default_value = 0.13
+h1 = mix(inv.outputs["Color"], dome.outputs["Distance"], 0.05)     # recessed joints; faces stay FLAT (dressed ashlar)
+b1 = N.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.35; b1.inputs["Distance"].default_value = 0.13
 L.new(h1, b1.inputs["Height"])
-h2 = mix(undul.outputs["Fac"], grit.outputs["Fac"], 0.5)           # subtle face wobble + fine grit
-b2 = N.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.22
+h2 = mix(undul.outputs["Fac"], grit.outputs["Fac"], 0.6)           # just a hint of fine grit
+b2 = N.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.11
 L.new(h2, b2.inputs["Height"]); L.new(b1.outputs["Normal"], b2.inputs["Normal"])
 L.new(b2.outputs["Normal"], bsdf.inputs["Normal"])
 obj.data.materials.clear(); obj.data.materials.append(m)

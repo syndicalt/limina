@@ -52,15 +52,19 @@ def bevel(o, w=0.03, s=1):
 
 # ---- dimensions --------------------------------------------------------------
 KW, KD, KH, T = 11.0, 11.0, 15.0, 1.2      # keep footprint, height, wall thickness
-MOTTE_H = 2.2
-z0 = MOTTE_H                                 # keep sits on the motte top
+# --no-motte: omit the earthen mound so the keep sits directly on the ENGINE terrain (grass grows to its
+# base). The baked-in motte only suits an isolated plane render; on real terrain it floats + takes no grass.
+NO_MOTTE = "--no-motte" in argv
+MOTTE_H = 0.0 if NO_MOTTE else 2.2
+z0 = MOTTE_H                                 # keep base height (motte top, or ground)
 TUR = 2.6; TURH = KH + 3.2                   # corner turret size, top height
 PAR_H, MER_H, MER_W, GAP = 0.7, 0.9, 0.9, 0.7   # parapet, merlon height/width, crenel gap
 
 # ---- motte (earthen mound) — a low frustum ----------------------------------
-bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=15, radius2=11, depth=MOTTE_H, location=(0, 0, MOTTE_H/2))
-motte = bpy.context.active_object; motte.name = "Motte"
-motte.data.materials.append(solid("Earth", (0.30, 0.34, 0.17), 0.95))
+if not NO_MOTTE:
+    bpy.ops.mesh.primitive_cone_add(vertices=48, radius1=15, radius2=11, depth=MOTTE_H, location=(0, 0, MOTTE_H/2))
+    motte = bpy.context.active_object; motte.name = "Motte"
+    motte.data.materials.append(solid("Earth", (0.30, 0.34, 0.17), 0.95))
 
 # ---- keep: a SOLID block (exterior landmark; no interior yet) so every opening reads as a blind recess
 #      rather than a see-through void into dark backfaces.
@@ -191,11 +195,11 @@ def bake_tile(res=1024):
     lk.new(wn.outputs["Color"], wsc.inputs[0]); wsc.inputs["Scale"].default_value = 0.065
     warp = nds.new("ShaderNodeVectorMath"); warp.operation = "ADD"
     lk.new(tc.outputs["UV"], warp.inputs[0]); lk.new(wsc.outputs["Vector"], warp.inputs[1]); WV = warp.outputs["Vector"]
-    brick = nds.new("ShaderNodeTexBrick"); brick.inputs["Scale"].default_value = 3.0
-    brick.inputs["Mortar Size"].default_value = 0.05; brick.inputs["Mortar Smooth"].default_value = 0.22
-    brick.inputs["Brick Width"].default_value = 0.58; brick.inputs["Row Height"].default_value = 0.27
-    brick.inputs["Color1"].default_value = (0.33, 0.29, 0.23, 1); brick.inputs["Color2"].default_value = (0.41, 0.37, 0.29, 1)
-    brick.inputs["Mortar"].default_value = (0.08, 0.075, 0.065, 1)
+    brick = nds.new("ShaderNodeTexBrick"); brick.inputs["Scale"].default_value = 2.1   # larger blocks (PG target)
+    brick.inputs["Mortar Size"].default_value = 0.03; brick.inputs["Mortar Smooth"].default_value = 0.25
+    brick.inputs["Brick Width"].default_value = 0.62; brick.inputs["Row Height"].default_value = 0.32
+    brick.inputs["Color1"].default_value = (0.34, 0.345, 0.35, 1); brick.inputs["Color2"].default_value = (0.44, 0.445, 0.45, 1)
+    brick.inputs["Mortar"].default_value = (0.13, 0.13, 0.135, 1)   # cool grey, thin dark-grey joints
     lk.new(WV, brick.inputs["Vector"]); fac = brick.outputs["Fac"]
     cells = nds.new("ShaderNodeTexVoronoi"); cells.inputs["Scale"].default_value = 4.0; lk.new(WV, cells.inputs["Vector"])
     cellv = nds.new("ShaderNodeRGBToBW"); lk.new(cells.outputs["Color"], cellv.inputs["Color"])
@@ -204,11 +208,21 @@ def bake_tile(res=1024):
     weath = nds.new("ShaderNodeTexNoise"); weath.inputs["Scale"].default_value = 2.3; weath.inputs["Detail"].default_value = 8
     stain = nds.new("ShaderNodeValToRGB"); stain.color_ramp.elements[0].position = 0.4; stain.color_ramp.elements[1].position = 0.78
     lk.new(weath.outputs["Fac"], stain.inputs["Fac"])
+    # vertical weathering streaks
+    smap = nds.new("ShaderNodeMapping"); smap.inputs["Scale"].default_value = (2.5, 0.12, 2.5); lk.new(WV, smap.inputs["Vector"])
+    sn = nds.new("ShaderNodeTexNoise"); sn.inputs["Scale"].default_value = 3.5; sn.inputs["Detail"].default_value = 5
+    lk.new(smap.outputs["Vector"], sn.inputs["Vector"])
+    sramp = nds.new("ShaderNodeValToRGB")
+    sramp.color_ramp.elements[0].position = 0.32; sramp.color_ramp.elements[0].color = (0.55, 0.55, 0.58, 1)
+    sramp.color_ramp.elements[1].position = 0.6;  sramp.color_ramp.elements[1].color = (1, 1, 1, 1)
+    lk.new(sn.outputs["Fac"], sramp.inputs["Fac"])
     tint = mix(brick.outputs["Color"], cmap.outputs["Result"], 1.0, "MULTIPLY")
     grime = nds.new("ShaderNodeMixRGB"); grime.blend_type = "MULTIPLY"; lk.new(stain.outputs["Color"], grime.inputs["Fac"])
-    lk.new(tint, grime.inputs["Color1"]); grime.inputs["Color2"].default_value = (0.72, 0.70, 0.64, 1)
+    lk.new(tint, grime.inputs["Color1"]); grime.inputs["Color2"].default_value = (0.74, 0.74, 0.76, 1)
+    strk = nds.new("ShaderNodeMixRGB"); strk.blend_type = "MULTIPLY"; strk.inputs["Fac"].default_value = 0.7
+    lk.new(grime.outputs["Color"], strk.inputs["Color1"]); lk.new(sramp.outputs["Color"], strk.inputs["Color2"])
     cav = nds.new("ShaderNodeMixRGB"); cav.blend_type = "MULTIPLY"; lk.new(fac, cav.inputs["Fac"])
-    lk.new(grime.outputs["Color"], cav.inputs["Color1"]); cav.inputs["Color2"].default_value = (0.28, 0.26, 0.22, 1)
+    lk.new(strk.outputs["Color"], cav.inputs["Color1"]); cav.inputs["Color2"].default_value = (0.42, 0.42, 0.45, 1)
     lk.new(cav.outputs["Color"], bsdf.inputs["Base Color"])
     rgh = nds.new("ShaderNodeMixRGB"); rgh.inputs["Color1"].default_value = (0.84,)*3+(1,)
     lk.new(fac, rgh.inputs["Fac"]); rgh.inputs["Color2"].default_value = (0.97,)*3+(1,); lk.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
@@ -216,10 +230,10 @@ def bake_tile(res=1024):
     dome = nds.new("ShaderNodeTexVoronoi"); dome.feature = "DISTANCE_TO_EDGE"; dome.inputs["Scale"].default_value = 3.0; lk.new(WV, dome.inputs["Vector"])
     undul = nds.new("ShaderNodeTexNoise"); undul.inputs["Scale"].default_value = 13.0; undul.inputs["Detail"].default_value = 4
     grit = nds.new("ShaderNodeTexNoise"); grit.inputs["Scale"].default_value = 40; grit.inputs["Detail"].default_value = 6
-    h1 = mix(inv.outputs["Color"], dome.outputs["Distance"], 0.14)
-    b1 = nds.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.4; b1.inputs["Distance"].default_value = 0.13; lk.new(h1, b1.inputs["Height"])
-    h2 = mix(undul.outputs["Fac"], grit.outputs["Fac"], 0.5)
-    b2 = nds.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.22
+    h1 = mix(inv.outputs["Color"], dome.outputs["Distance"], 0.05)   # faces stay FLAT (dressed ashlar)
+    b1 = nds.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.35; b1.inputs["Distance"].default_value = 0.13; lk.new(h1, b1.inputs["Height"])
+    h2 = mix(undul.outputs["Fac"], grit.outputs["Fac"], 0.6)
+    b2 = nds.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.11
     lk.new(h2, b2.inputs["Height"]); lk.new(b1.outputs["Normal"], b2.inputs["Normal"]); lk.new(b2.outputs["Normal"], bsdf.inputs["Normal"])
     pl.data.materials.append(m)
     sc = bpy.context.scene; sc.render.engine = "CYCLES"; sc.cycles.device = "CPU"; sc.cycles.samples = 16
