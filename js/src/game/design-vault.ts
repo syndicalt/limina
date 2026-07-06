@@ -130,6 +130,60 @@ export function parseFrontmatter(content: string): Frontmatter {
   return obj as Frontmatter;
 }
 
+// ---- frontmatter serializer (for structured authoring: add/edit markers etc.) ----
+
+function needsQuote(s: string): boolean {
+  return s.length === 0 || /^[\s[\]{}"'#>|*&!%@`-]/.test(s) || /:\s/.test(s) || /\s#/.test(s) || /[:#]$/.test(s);
+}
+function serScalar(v: unknown): string {
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (v === null || v === undefined) return "null";
+  if (Array.isArray(v)) return "[" + v.map(serScalar).join(", ") + "]";
+  const s = String(v);
+  return needsQuote(s) ? JSON.stringify(s) : s;
+}
+function isPlainObj(v: unknown): v is Record<string, unknown> {
+  return Object.prototype.toString.call(v) === "[object Object]";
+}
+function arrayOfMaps(v: unknown[]): boolean {
+  return v.length > 0 && v.every(isPlainObj);
+}
+
+/** Serialize a plain object back into the YAML subset parseFrontmatter reads. Scalars,
+ *  inline scalar arrays ([a, b]), block lists of maps (- key: val), and nested maps. */
+export function serializeFrontmatter(obj: Record<string, unknown>, indent = 0): string {
+  const pad = " ".repeat(indent);
+  const lines: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    if (Array.isArray(v) && arrayOfMaps(v)) {
+      lines.push(`${pad}${k}:`);
+      for (const item of v as Record<string, unknown>[]) {
+        const entries = Object.entries(item).filter(([, iv]) => iv !== undefined);
+        entries.forEach(([ik, iv], idx) => {
+          const prefix = idx === 0 ? `${pad}  - ` : `${pad}    `;
+          if (isPlainObj(iv)) { lines.push(`${prefix}${ik}:`); lines.push(serializeFrontmatter(iv, indent + 6)); }
+          else lines.push(`${prefix}${ik}: ${serScalar(iv)}`);
+        });
+      }
+    } else if (Array.isArray(v)) {
+      lines.push(`${pad}${k}: ${serScalar(v)}`);
+    } else if (isPlainObj(v)) {
+      lines.push(`${pad}${k}:`);
+      lines.push(serializeFrontmatter(v, indent + 2));
+    } else {
+      lines.push(`${pad}${k}: ${serScalar(v)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Replace a doc's frontmatter with a serialized object, keeping the prose body verbatim. */
+export function replaceFrontmatter(content: string, obj: Record<string, unknown>): string {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  return "---\n" + serializeFrontmatter(obj) + "\n---\n" + body;
+}
+
 // ---- readable vocabulary -> schema enums ----------------------------------
 
 const BIOME_MAP: Record<string, string> = {

@@ -46,7 +46,7 @@ const BEGIN = "===STATE_BEGIN===", END = "===STATE_END===";
 function computeState() {
   const docs = readDocs();
   const harness = `
-import { vaultToStore, vaultGraph } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { vaultToStore, vaultGraph, parseFrontmatter } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
 import { compileDesignToGds } from "${LIMINA_HOME}/js/src/game/design-compile.ts";
 import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
 const docs = ${JSON.stringify(docs)};
@@ -64,13 +64,15 @@ try {
   });
   build = { ok: !!gds, issues, placements: placements.map((p) => ({ id: p.id, position: p.transform.position })), links: resolved };
 } catch (e) { build = { ok: false, placements: [], links: [], issues: [String(e)] }; }
-let locations = [];
+var world = { regions: [], locations: [] };
 try {
-  const wb = vaultToStore(docs).store.artifacts.get("worldBible");
-  const regions = wb ? wb.regions.map((r) => ({ id: r.id, name: r.name, biome: r.biome })) : [];
-  locations = wb ? wb.locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind, region: l.regionId, x: (l.position||[0,0])[0], z: (l.position||[0,0])[1] })) : [];
-  var world = { regions, locations };
-} catch (e) { var world = { regions: [], locations: [] }; }
+  const wbDoc = docs.find((d) => /kind:\\s*world-bible/.test(d.content));
+  if (wbDoc) {
+    const fm = parseFrontmatter(wbDoc.content);
+    world.regions = (fm.regions || []).map((r) => ({ id: r.id, name: r.name, biome: r.biome }));
+    world.locations = (fm.locations || []).map((l) => ({ id: l.id, name: l.name, kind: l.kind, region: l.region, x: (l.position||[0,0])[0], z: (l.position||[0,0])[1], tags: l.tags || [] }));
+  }
+} catch (e) { world = { regions: [], locations: [] }; }
 ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
 `;
   const tmp = mkdtempSync(join(tmpdir(), "limina-design-"));
@@ -158,6 +160,38 @@ ops.op_log("${SBEGIN}" + JSON.stringify({ changes, impacts }) + "${SEND}");
   return { saved: true, ...(m ? JSON.parse(m[1]) : { changes: [], impacts: [] }) };
 }
 
+// Structured location authoring: add / update / delete / move a marker in the world-bible
+// via a real parse -> modify -> serialize (not regex), then save -> cascade.
+const ELB = "===EL_BEGIN===", ELE = "===EL_END===";
+function editLocation(op, a) {
+  const doc = readDocs().find((d) => /kind:\s*world-bible/.test(d.content));
+  if (!doc) throw new Error("no world-bible document");
+  const src = `
+import { parseFrontmatter, replaceFrontmatter } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
+const content = ${JSON.stringify(doc.content)};
+const fm = parseFrontmatter(content);
+let locs = Array.isArray(fm.locations) ? fm.locations : [];
+const op = ${JSON.stringify(op)}, a = ${JSON.stringify(a)};
+const defRegion = (fm.regions && fm.regions[0] && fm.regions[0].id) || "";
+if (op === "add") locs.push({ id: a.id, name: a.name, kind: a.kind || "landmark", region: a.region || defRegion, position: [Math.round(a.x), Math.round(a.z)], ...(a.tags && a.tags.length ? { tags: a.tags } : {}), note: a.note || a.name });
+else if (op === "update") locs = locs.map((l) => l.id === a.id ? { ...l, ...(a.name !== undefined ? { name: a.name } : {}), ...(a.kind !== undefined ? { kind: a.kind } : {}), ...(a.region !== undefined ? { region: a.region } : {}), ...(a.note !== undefined ? { note: a.note } : {}), ...(a.tags !== undefined ? (a.tags.length ? { tags: a.tags } : { tags: undefined }) : {}) } : l);
+else if (op === "delete") locs = locs.filter((l) => l.id !== a.id);
+else if (op === "move") locs = locs.map((l) => l.id === a.id ? { ...l, position: [Math.round(a.x), Math.round(a.z)] } : l);
+fm.locations = locs;
+ops.op_log("${ELB}" + JSON.stringify({ content: replaceFrontmatter(content, fm) }) + "${ELE}");
+`;
+  const tmp = mkdtempSync(join(tmpdir(), "limina-el-"));
+  const hp = join(tmp, "e.ts");
+  writeFileSync(hp, src);
+  const r = spawnSync(LIMINA_BIN, [hp], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  rmSync(tmp, { recursive: true, force: true });
+  const out = (r.stdout || "") + (r.stderr || "");
+  const m = out.match(new RegExp(ELB + "([\\s\\S]*?)" + ELE));
+  if (!m) throw new Error("edit failed: " + out.slice(-300));
+  return saveDoc(doc.name, JSON.parse(m[1]).content);
+}
+
 // Move a location on the map: rewrite just its position in the world-bible, then cascade.
 function moveLocation(id, x, z) {
   const doc = readDocs().find((d) => /kind:\s*world-bible/.test(d.content));
@@ -171,7 +205,7 @@ function moveLocation(id, x, z) {
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && (req.url === "/api/agent" || req.url === "/api/save" || req.url === "/api/move-location")) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -185,6 +219,17 @@ createServer((req, res) => {
         if (req.url === "/api/move-location") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(moveLocation(p.id, p.x, p.z)));
+          return;
+        }
+        if (req.url === "/api/edit-location") {
+          if (p.op === "add" && !p.id) {
+            const base = String(p.name || "marker").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "marker";
+            const existing = new Set((computeState().world.locations || []).map((l) => l.id));
+            let id = base, n = 2; while (existing.has(id)) id = `${base}-${n++}`;
+            p.id = id;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(editLocation(p.op, p)));
           return;
         }
         const ctx = assembleContext(p.agentId, p.screen || {});

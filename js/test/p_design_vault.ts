@@ -10,7 +10,7 @@
 // the TRANSLATION, not a pre-canonicalized shortcut.
 
 import { ops } from "../src/engine.ts";
-import { vaultToStore, parseFrontmatter, vaultGraph, diffDocEntities } from "../src/game/design-vault.ts";
+import { vaultToStore, parseFrontmatter, vaultGraph, diffDocEntities, serializeFrontmatter, replaceFrontmatter } from "../src/game/design-vault.ts";
 import { compileDesignToGds } from "../src/game/design-compile.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -174,6 +174,18 @@ const dSame = diffDocEntities(before, before);
 assert(dSame.length === 0, "diff: identical content yields no changes");
 const removed = WORLD.replace(/  - id: signal-fire[\s\S]*?note: The last beacon\.\n/, "");
 assert(diffDocEntities(before, removed).some((c) => c.entityId === "signal-fire" && c.op === "removed"), "diff: a deleted location is 'removed'");
+
+// 10. serializeFrontmatter round-trips (the foundation for structured authoring/editing).
+const fmW = parseFrontmatter(WORLD);
+const round = parseFrontmatter("---\n" + serializeFrontmatter(fmW) + "\n---\n# body");
+assert(JSON.stringify(round) === JSON.stringify(fmW), "serializeFrontmatter round-trips parse->serialize->parse");
+// replaceFrontmatter keeps the prose body and lets a structured edit (add a location) persist.
+const withNew = replaceFrontmatter(WORLD, { ...fmW, locations: [...(fmW.locations as unknown[]), { id: "new-mill", name: "The Mill", kind: "landmark", region: "the-hamlet", position: [12, -8], tags: ["work", "water"] }] });
+const reparsed = parseFrontmatter(withNew);
+assert((reparsed.locations as unknown[]).length === (fmW.locations as unknown[]).length + 1, "replaceFrontmatter adds a location");
+assert(withNew.includes("# World"), "replaceFrontmatter preserves the prose body");
+const mill = (reparsed.locations as Record<string, unknown>[]).find((l) => l.id === "new-mill")!;
+assert(Array.isArray(mill.tags) && (mill.tags as string[]).includes("water"), "a placed marker keeps its tags");
 
 ops.op_log(
   "[js] p_design_vault OK: readable vault docs parse (nested maps, list-of-maps, inline arrays), " +
