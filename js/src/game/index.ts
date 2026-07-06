@@ -28,6 +28,11 @@ export {
   type GameDesignSpec, type DoDAssertion, type Entity, type Mechanic, type ContentItem,
 } from "./gds.ts";
 export {
+  compileDesignToGds,
+  type DesignCompileIssue,
+  type DesignCompileResult,
+} from "./design-compile.ts";
+export {
   runDoD, runGate, assertGatePasses,
   type GameUnderTest, type SimInput, type DoDResult, type GateReport, type RunOptions,
 } from "./gate.ts";
