@@ -189,7 +189,8 @@
   .map-head .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 9px; font:inherit; font-size:12.5px; }
   .map-head .coord { margin-left:auto; font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); }
   .map-svg-wrap { flex:1; position:relative; overflow:hidden; }
-  svg.map { width:100%; height:100%; display:block; background:var(--panel-2); cursor:grab; touch-action:none; }
+  svg.map { width:100%; height:100%; display:block; background:var(--panel-2); cursor:default; touch-action:none; }
+  svg.map.space { cursor:grab; }
   svg.map.grabbing { cursor:grabbing; }
   .map-grid { stroke:var(--line); stroke-width:.5; }
   .map-axis { stroke:var(--muted); stroke-width:.8; stroke-dasharray:3 3; opacity:.6; }
@@ -217,6 +218,14 @@
   .map-layers .lr .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .map-layers .lr .x { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; line-height:1; }
   .map-layers .lr .x:hover { color:var(--amber); }
+  .map-layers .lr.sel { background:var(--accent-soft); }
+  .fhandle { fill:#fff; stroke:var(--accent); stroke-width:2; cursor:move; }
+  .feat.selected { filter:drop-shadow(0 0 5px var(--accent)); }
+  .ctx-menu { position:fixed; z-index:70; background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    box-shadow:0 8px 26px rgba(0,0,0,.24); padding:4px; min-width:150px; }
+  .ctx-menu .ci { padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .ctx-menu .ci:hover { background:var(--panel-2); }
+  .ctx-menu .ci.danger:hover { background:var(--amber-soft); color:var(--amber); }
   .insp { position:fixed; top:120px; right:26px; width:294px; background:var(--panel); border:1px solid var(--line);
     border-radius:12px; box-shadow:0 12px 34px rgba(0,0,0,.22); padding:14px 16px; z-index:55; }
   .insp h4 { margin:0 0 2px; font-size:14px; display:flex; align-items:center; }
@@ -537,7 +546,8 @@ function biomeDefs(){
    +p("water",BIOME_BASE.water,'<path d="M0 5 q4 -2 8 0 t8 0 M0 11 q4 -2 8 0 t8 0" stroke="#5b86b8" stroke-width="1" fill="none"/>')
    +'</defs>';
 }
-let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null;
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false;
+const SVGNS="http://www.w3.org/2000/svg";
 function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
 function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
 function evtVB(e,svg){ const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640]; }
@@ -637,7 +647,7 @@ function redrawMap(){
   svg.innerHTML = biomeDefs() + ocean + g + outlines + areas + lines + borders + glyphs + draw + pins + compass;
   renderLayers();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
-  if(mapTool==="select") svg.querySelectorAll(".feat").forEach(f=>f.addEventListener("mousedown",(e)=>{ e.stopPropagation(); if(confirm("Delete this feature?")){ const i=curFeatures().findIndex(x=>x.id===f.dataset.fid); if(i>=0){ curFeatures().splice(i,1); saveMaps(); redrawMap(); } } }));
+  if(mapTool==="select") bindFeatureEditing(svg);
   hint();
 }
 function featLabel(f){
@@ -655,10 +665,11 @@ function renderLayers(){
   if(!f.length){ el.className="map-layers empty"; el.innerHTML=""; return; }
   el.className="map-layers";
   el.innerHTML='<div class="lh"><b>Features ('+f.length+')</b><button class="clr" id="lyr-clear">Clear all</button></div>'
-    +f.map((x,i)=>'<div class="lr" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
+    +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
   document.getElementById("lyr-clear").onclick=clearMapFeatures;
-  el.querySelectorAll(".lr .x").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); curFeatures().splice(+b.dataset.i,1); saveMaps(); redrawMap(); });
-  el.querySelectorAll(".lr").forEach(r=>{ r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
+  el.querySelectorAll(".lr .x").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteFeatById(curFeatures()[+b.dataset.i].id,false); });
+  el.querySelectorAll(".lr").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
+    r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
 }
 function hlFeat(i,on){ const f=curFeatures()[i]; if(!f) return; const svg=document.getElementById("map-svg"); if(!svg) return;
   const el=svg.querySelector('[data-fid="'+f.id+'"]'); if(el) el.style.filter=on?"drop-shadow(0 0 5px var(--accent))":""; }
@@ -666,8 +677,66 @@ function clearMapFeatures(){ if(!curFeatures().length) return;
   if(!confirm("Clear all "+curFeatures().length+" drawn feature(s) on this map? (Markers are not affected.)")) return;
   activeMap().features=[]; saveMaps(); redrawMap(); }
 
+function bindFeatureEditing(svg){
+  svg.querySelectorAll(".feat").forEach(el=>{
+    const fid=el.dataset.fid; if(fid===selFeat) el.classList.add("selected"); el.style.cursor="pointer";
+    el.addEventListener("mousedown",(e)=>{ if(e.button!==0) return; e.stopPropagation();
+      if(selFeat!==fid){ selFeat=fid; redrawMap(); return; }
+      const f=curFeatures().find(x=>x.id===fid); if(!f) return; const [mx,my]=evtVB(e,svg);
+      mapDrag={type:"featmove",fid,mx0:mx,my0:my, start: f.type==="glyph"?{x:f.x,z:f.z}:f.points.map(p=>p.slice())}; });
+    el.addEventListener("contextmenu",(e)=>{ e.preventDefault(); e.stopPropagation(); selFeat=fid; redrawMap(); showFeatMenu(fid,e.clientX,e.clientY); });
+  });
+  if(selFeat){ const f=curFeatures().find(x=>x.id===selFeat);
+    if(!f){ selFeat=null; return; }
+    const gg=document.createElementNS(SVGNS,"g"); gg.setAttribute("id","feat-handles");
+    const addH=(x,z,idx)=>{ const [sx,sy]=w2s(x,z); const c=document.createElementNS(SVGNS,"circle");
+      c.setAttribute("cx",sx); c.setAttribute("cy",sy); c.setAttribute("r",5); c.setAttribute("class","fhandle");
+      c.addEventListener("mousedown",(e)=>{ e.stopPropagation(); const [mx,my]=evtVB(e,svg); mapDrag={type:"vertex",fid:selFeat,idx,mx,my}; });
+      gg.appendChild(c); };
+    if(f.type==="glyph") addH(f.x,f.z,-1); else (f.points||[]).forEach((p,i)=>addH(p[0],p[1],i));
+    svg.appendChild(gg);
+  }
+}
+function deleteFeatById(fid,confirmFirst){
+  const f=curFeatures().find(x=>x.id===fid); if(!f) return;
+  if(confirmFirst && !confirm("Delete this "+featLabel(f)+"?")) return;
+  const i=curFeatures().findIndex(x=>x.id===fid); if(i>=0){ curFeatures().splice(i,1); selFeat=null; saveMaps(); redrawMap(); }
+}
+function showFeatMenu(fid,cx,cy){
+  document.getElementById("feat-menu")?.remove();
+  const m=document.createElement("div"); m.className="ctx-menu"; m.id="feat-menu";
+  m.innerHTML='<div class="ci" data-a="props">Properties…</div><div class="ci danger" data-a="del">Delete</div>';
+  m.style.left=Math.min(cx,innerWidth-172)+"px"; m.style.top=Math.min(cy,innerHeight-90)+"px";
+  document.body.appendChild(m);
+  m.querySelector('[data-a="props"]').onclick=()=>{ m.remove(); const f=curFeatures().find(x=>x.id===fid); if(f) openFeatInspector(f,cx,cy); };
+  m.querySelector('[data-a="del"]').onclick=()=>{ m.remove(); deleteFeatById(fid,false); };
+  setTimeout(()=>document.addEventListener("mousedown",function h(){ m.remove(); document.removeEventListener("mousedown",h); }),0);
+}
+function openFeatInspector(f,cx,cy){
+  document.getElementById("insp")?.remove();
+  let fields="";
+  if(f.type==="area"&&f.kind!=="outline") fields='<label>Biome</label><select id="fi-biome">'+BIOME_LIST.map(b=>'<option'+(b===f.biome?" selected":"")+'>'+b+'</option>').join("")+'</select>';
+  else if(f.type==="area") fields='<label>Land color</label><input type="color" id="fi-color" value="'+(f.fill||"#dccfa6")+'">';
+  else if(f.type==="line") fields='<label>Type</label><select id="fi-kind"><option'+(f.kind==="river"?" selected":"")+'>river</option><option'+(f.kind==="road"?" selected":"")+'>road</option><option'+(f.kind==="border"?" selected":"")+'>border</option></select><label>Color</label><input type="color" id="fi-color" value="'+(f.color||"#5b7d9a")+'">';
+  else if(f.type==="glyph") fields='<label>Glyph</label><select id="fi-glyph">'+GLYPHS.map(g=>'<option'+(g===f.glyph?" selected":"")+'>'+g+'</option>').join("")+'</select>';
+  const el=document.createElement("div"); el.className="insp"; el.id="insp";
+  el.innerHTML='<h4>'+esc(featLabel(f))+'<button class="x" id="insp-x">×</button></h4>'+fields
+    +'<div class="actions"><button class="save" id="fi-save">Save</button><button class="del" id="fi-del">Delete</button></div>';
+  document.body.appendChild(el);
+  const w=el.offsetWidth,h=el.offsetHeight; el.style.left=Math.min((cx||200)+8,innerWidth-w-12)+"px"; el.style.top=Math.min(Math.max((cy||120)-10,12),innerHeight-h-12)+"px"; el.style.right="auto";
+  document.getElementById("insp-x").onclick=()=>el.remove();
+  document.getElementById("fi-save").onclick=()=>{
+    if(f.type==="area"&&f.kind!=="outline") f.biome=document.getElementById("fi-biome").value;
+    else if(f.type==="area") f.fill=document.getElementById("fi-color").value;
+    else if(f.type==="line"){ f.kind=document.getElementById("fi-kind").value; f.color=document.getElementById("fi-color").value; }
+    else if(f.type==="glyph") f.glyph=document.getElementById("fi-glyph").value;
+    el.remove(); saveMaps(); redrawMap(); };
+  document.getElementById("fi-del").onclick=()=>{ el.remove(); deleteFeatById(f.id,false); };
+}
+
 function bindMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
+  svg.addEventListener("contextmenu",(e)=>e.preventDefault());
   document.getElementById("map-sw").onchange=(e)=>switchMap(e.target.value);
   document.getElementById("map-new").onclick=newMap;
   document.querySelectorAll(".map-head .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
@@ -679,17 +748,25 @@ function bindMap(){
     mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
     const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
   svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
+    if(spaceDown||e.button===1){ mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ curFeatures().push({id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)}); saveMaps(); redrawMap(); return; }
     if(["river","road","area","outline","border"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
     if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
+    if(mapTool==="select"&&selFeat){ selFeat=null; redrawMap(); }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
   svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline","border"].includes(mapTool)) finishDraw(); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
   svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my); const c=document.getElementById("map-coord"); if(c) c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz); });
-  window.addEventListener("keydown",mapKey);
+  window.addEventListener("keydown",mapKey); window.addEventListener("keyup",mapKeyUp);
 }
-function mapKey(e){ if(activeView!=="map") return; if(e.key==="Escape"){ drawPts=[]; redrawMap(); } else if(e.key==="Enter"&&drawPts.length) finishDraw(); }
+function mapKey(e){ if(activeView!=="map") return;
+  const typing=/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||"");
+  if((e.key===" "||e.code==="Space")&&!typing){ if(!spaceDown){ spaceDown=true; document.getElementById("map-svg")?.classList.add("space"); } e.preventDefault(); return; }
+  if(e.key==="Escape"){ drawPts=[]; selFeat=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
+  else if(e.key==="Enter"&&drawPts.length&&!typing) finishDraw();
+  else if((e.key==="Delete"||e.key==="Backspace")&&selFeat&&!typing){ e.preventDefault(); deleteFeatById(selFeat,true); } }
+function mapKeyUp(e){ if(e.key===" "||e.code==="Space"){ spaceDown=false; document.getElementById("map-svg")?.classList.remove("space"); } }
 function finishDraw(){ if(drawPts.length<2){ drawPts=[]; redrawMap(); return; }
   if(["river","road","border"].includes(mapTool)) curFeatures().push({id:fid(),type:"line",kind:mapTool,points:drawPts.slice(),color:drawColor});
   else if(mapTool==="area") curFeatures().push({id:fid(),type:"area",kind:"biome",biome:biomeKind,points:drawPts.slice()});
@@ -699,6 +776,8 @@ function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
+  else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
+  else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
   else { if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const p=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(p) p.setAttribute("transform","translate("+mx+","+my+")"); } }
 function drawLassoRect(svg){ const d=mapDrag; let r=document.getElementById("lasso-rect");
   if(!r){ r=document.createElementNS("http://www.w3.org/2000/svg","rect"); r.id="lasso-rect"; r.setAttribute("class","lasso-rect"); svg.appendChild(r); }
@@ -724,6 +803,7 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
+  if(d.type==="vertex"||d.type==="featmove"){ saveMaps(); return; }
   if(d.type!=="pin") return;
   if(!d.moved){ redrawMap(); const loc=mapMarkers().find(l=>l.id===d.id); if(loc) openInspector(loc,null,d.cx,d.cy); return; }
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
