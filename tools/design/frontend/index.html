@@ -546,7 +546,7 @@ function biomeDefs(){
    +p("water",BIOME_BASE.water,'<path d="M0 5 q4 -2 8 0 t8 0 M0 11 q4 -2 8 0 t8 0" stroke="#5b86b8" stroke-width="1" fill="none"/>')
    +'</defs>';
 }
-let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false;
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
 const SVGNS="http://www.w3.org/2000/svg";
 function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
 function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
@@ -595,11 +595,13 @@ function renderMap(){
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
     +'<div class="map-layers" id="map-layers"></div>'
     +'<div class="map-hint" id="map-hint"></div></div></div>';
+  // Fit the view to content only when first opening this map — NOT on every re-render
+  // (tool change, sea toggle, edit), so the pan/zoom stays put while you work.
   const marks=mapMarkers();
-  if(marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
+  if(fittedMap!==activeMapId && marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
     mapPan={x:(Math.min(...xs)+Math.max(...xs))/2, z:(Math.min(...zs)+Math.max(...zs))/2};
     const spanX=Math.max(30,Math.max(...xs)-Math.min(...xs)), spanZ=Math.max(30,Math.max(...zs)-Math.min(...zs));
-    mapScale=Math.max(1, Math.min(880/spanX, 520/spanZ)); }
+    mapScale=Math.max(1, Math.min(880/spanX, 520/spanZ)); fittedMap=activeMapId; }
   bindMap(); redrawMap();
 }
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
