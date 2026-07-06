@@ -132,9 +132,11 @@ async function callModel(system, history, message) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
     return { ok: false, reply:
-      "⚠ No ANTHROPIC_API_KEY found — add it to the project .env to get a live reply. " +
-      "Your full role context IS assembled and ready: this expert already knows its persona, the documents " +
-      "it owns and depends on, and which document you have open. Wire the key and it speaks." };
+      "This expert is driven by YOUR coding-agent session (Claude Code / Codex) through the limina-design " +
+      "MCP bridge — no API key needed. Register tools/design/design-bridge.mjs (with LIMINA_DESIGN_VAULT set " +
+      "to this project's design/ folder) and ask your session to speak as this expert; it pulls this exact " +
+      "role context via design_context and can read/edit the docs + surface cascades. " +
+      "(Optional: set ANTHROPIC_API_KEY in the project .env to also get a built-in reply in this box.)" };
   }
   const messages = [...(history || []).map((h) => ({ role: h.role, content: h.content })), { role: "user", content: message }];
   try {

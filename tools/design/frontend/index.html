@@ -263,9 +263,10 @@
     <div class="col rail">
       <h3>The team</h3>
       <div id="team"></div>
-      <div class="note"><b>Click an expert</b> to talk. Each has full context for its role — its persona,
-        the document it owns and depends on, and the document you're viewing. Live replies need
-        <b>ANTHROPIC_API_KEY</b> in the project .env; without it you still see the context is wired.</div>
+      <div class="note">These experts are driven by <b>your coding-agent session</b> (Claude Code / Codex)
+        through the <b>limina-design MCP bridge</b> — no API key. Register <code>design-bridge.mjs</code> and
+        talk to them from your session; it pulls each one's full role context. (The chat box here is an
+        optional built-in reply that needs <code>ANTHROPIC_API_KEY</code>.)</div>
     </div>
   </div>
 </div>
