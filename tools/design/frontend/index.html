@@ -181,6 +181,25 @@
   .cascade .item .go { margin-left:auto; border:1px solid var(--accent); color:var(--accent); background:none;
     border-radius:7px; padding:4px 10px; cursor:pointer; font-size:12px; }
   .cascade .item .go:hover { background:var(--accent-soft); }
+
+  /* map editor */
+  .map-wrap { height:100%; display:flex; flex-direction:column; }
+  .map-head { padding:12px 20px 8px; display:flex; align-items:center; gap:14px; }
+  .map-head h2 { font-family:var(--serif); margin:0; font-size:19px; font-weight:600; }
+  .map-head .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 9px; font:inherit; font-size:12.5px; }
+  .map-head .coord { margin-left:auto; font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); }
+  .map-svg-wrap { flex:1; position:relative; overflow:hidden; }
+  svg.map { width:100%; height:100%; display:block; background:var(--panel-2); cursor:grab; touch-action:none; }
+  svg.map.grabbing { cursor:grabbing; }
+  .map-grid { stroke:var(--line); stroke-width:.5; }
+  .map-axis { stroke:var(--muted); stroke-width:.8; stroke-dasharray:3 3; opacity:.6; }
+  .pin { cursor:grab; }
+  .pin circle { stroke:#fff; stroke-width:1.5; }
+  .pin text { font-family:var(--sans); font-size:11px; fill:var(--ink); paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
+  .pin.drag circle { stroke:var(--accent); stroke-width:3; }
+  .compass { font-family:var(--sans); font-size:12px; fill:var(--muted); }
+  .map-hint { position:absolute; bottom:12px; left:16px; font-size:11px; color:var(--muted); background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; padding:5px 10px; opacity:.9; }
 </style>
 </head>
 <body>
@@ -189,6 +208,7 @@
     <div class="brand"><span class="mark" id="projname">Design Space</span><span class="sub">Design Space</span></div>
     <div class="tabs">
       <div class="tab active" data-view="docs">Documents</div>
+      <div class="tab" data-view="map">Map</div>
       <div class="tab" data-view="graph">Mind-map</div>
       <div class="tab" data-view="build">Build</div>
     </div>
@@ -464,9 +484,72 @@ function surfaceCascade(impacts){
 function setTabs(){ document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.view===activeView)); }
 function showView(){
   if(activeView==="docs") openDoc(activeDoc || (STATE.docs[0]&&STATE.docs[0].name));
+  else if(activeView==="map") renderMap();
   else if(activeView==="graph") renderGraph();
   else renderBuild();
   if(chatAgent) updateChatCtx();
+}
+
+// ---- 2D map editor (cartography) ----
+const KIND_FILL = { settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null;
+function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
+function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
+function evtVB(e,svg){ const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640]; }
+function renderMap(){
+  const locs=(STATE.world&&STATE.world.locations)||[];
+  document.getElementById("center").innerHTML =
+    '<div class="map-wrap"><div class="map-head"><h2>World Map</h2>'
+    +'<select class="sw" id="map-sw"><option>'+esc((STATE.project||"World")+" — Hamlet")+'</option></select>'
+    +'<span class="coord" id="map-coord">—</span></div>'
+    +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
+    +'<div class="map-hint">drag a marker to move it · drag empty space to pan · scroll to zoom</div></div></div>';
+  if(locs.length){ const xs=locs.map(l=>l.x),zs=locs.map(l=>l.z);
+    mapPan={x:(Math.min(...xs)+Math.max(...xs))/2, z:(Math.min(...zs)+Math.max(...zs))/2};
+    const spanX=Math.max(30,Math.max(...xs)-Math.min(...xs)), spanZ=Math.max(30,Math.max(...zs)-Math.min(...zs));
+    mapScale=Math.max(1, Math.min(880/spanX, 520/spanZ)); }
+  bindMap(); redrawMap();
+}
+function redrawMap(){
+  const svg=document.getElementById("map-svg"); if(!svg) return;
+  const locs=(STATE.world&&STATE.world.locations)||[];
+  // grid every 10 world units, adaptive
+  let step=10; while(step*mapScale<40) step*=2; while(step*mapScale>140) step/=2;
+  const [wx0,wz1]=s2w(0,0), [wx1,wz0]=s2w(1000,640);
+  let g="";
+  for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="640"/>'; }
+  for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="1000" y2="'+sy+'"/>'; }
+  const [ax]=w2s(0,0), [,ay]=w2s(0,0);
+  g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
+  const pins=locs.map(l=>{ const [sx,sy]=w2s(l.x,l.z); const c=KIND_FILL[l.kind]||"#2f6f7a";
+    return '<g class="pin" data-id="'+l.id+'" transform="translate('+sx+','+sy+')">'
+      +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+'</text></g>'; }).join("");
+  const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/>'
+    +'<text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
+  svg.innerHTML = g + pins + compass;
+  svg.querySelectorAll(".pin").forEach(p=>p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)));
+}
+function bindMap(){
+  const svg=document.getElementById("map-svg"); if(!svg) return;
+  svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
+    mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.5,Math.min(60,mapScale));
+    const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
+  svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; const [mx,my]=evtVB(e,svg); mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
+  window.addEventListener("mousemove",onMapMove);
+  window.addEventListener("mouseup",onMapUp);
+  svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my); const c=document.getElementById("map-coord"); if(c) c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz); });
+}
+function startPinDrag(e,id){ e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
+function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
+  if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
+  else { const g=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(g){ g.setAttribute("transform","translate("+mx+","+my+")"); } } }
+async function onMapUp(e){ if(!mapDrag){ return; } const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing");
+  const d=mapDrag; mapDrag=null;
+  if(d.type==="pin"){ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
+    try{ const r=await fetch("/api/move-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:d.id,x:wx,z:wz})});
+      const j=await r.json(); await load(); renderMap();
+      if(j.impacts&&j.impacts.length) surfaceCascade(j.impacts);
+    }catch(err){ redrawMap(); } }
 }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{ activeView=t.dataset.view; setTabs(); showView(); });
 document.getElementById("refresh").onclick=load;

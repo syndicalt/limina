@@ -64,7 +64,14 @@ try {
   });
   build = { ok: !!gds, issues, placements: placements.map((p) => ({ id: p.id, position: p.transform.position })), links: resolved };
 } catch (e) { build = { ok: false, placements: [], links: [], issues: [String(e)] }; }
-ops.op_log("${BEGIN}" + JSON.stringify({ graph, build }) + "${END}");
+let locations = [];
+try {
+  const wb = vaultToStore(docs).store.artifacts.get("worldBible");
+  const regions = wb ? wb.regions.map((r) => ({ id: r.id, name: r.name, biome: r.biome })) : [];
+  locations = wb ? wb.locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind, region: l.regionId, x: (l.position||[0,0])[0], z: (l.position||[0,0])[1] })) : [];
+  var world = { regions, locations };
+} catch (e) { var world = { regions: [], locations: [] }; }
+ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
 `;
   const tmp = mkdtempSync(join(tmpdir(), "limina-design-"));
   const hp = join(tmp, "h.ts");
@@ -151,8 +158,20 @@ ops.op_log("${SBEGIN}" + JSON.stringify({ changes, impacts }) + "${SEND}");
   return { saved: true, ...(m ? JSON.parse(m[1]) : { changes: [], impacts: [] }) };
 }
 
+// Move a location on the map: rewrite just its position in the world-bible, then cascade.
+function moveLocation(id, x, z) {
+  const doc = readDocs().find((d) => /kind:\s*world-bible/.test(d.content));
+  if (!doc) throw new Error("no world-bible document");
+  const esc = String(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("(- id:\\s*" + esc + "\\b[\\s\\S]*?position:\\s*\\[)[^\\]]*(\\])");
+  if (!re.test(doc.content)) throw new Error(`location "${id}" has no position to move`);
+  const next = doc.content.replace(re, `$1${Math.round(x)}, ${Math.round(z)}$2`);
+  if (next === doc.content) return { saved: false, changes: [], impacts: [] };
+  return saveDoc(doc.name, next);
+}
+
 createServer((req, res) => {
-  if (req.method === "POST" && (req.url === "/api/agent" || req.url === "/api/save")) {
+  if (req.method === "POST" && (req.url === "/api/agent" || req.url === "/api/save" || req.url === "/api/move-location")) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -161,6 +180,11 @@ createServer((req, res) => {
         if (req.url === "/api/save") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(saveDoc(p.name, p.content)));
+          return;
+        }
+        if (req.url === "/api/move-location") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(moveLocation(p.id, p.x, p.z)));
           return;
         }
         const ctx = assembleContext(p.agentId, p.screen || {});
