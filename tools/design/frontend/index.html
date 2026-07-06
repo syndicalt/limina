@@ -503,92 +503,161 @@ function showView(){
   else renderBuild();
   if(chatAgent) updateChatCtx();
 }
-
-// ---- 2D map editor (cartography) ----
+// ---- 2D map editor (cartography + multiple hierarchical maps) ----
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
 const KINDS = ["civic","dwelling","religious","military","marker","landmark","camp","ruin","wild"];
-let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, addMode=false;
+const GLYPHS = ["mountain","hills","forest","desert","marsh","water","peak"];
+const GLYPH_LABEL = { mountain:"⛰ Mountains", hills:"⌒ Hills", forest:"♣ Forest", desert:"≈ Desert", marsh:"⍦ Marsh", water:"≋ Water", peak:"▲ Peak" };
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", drawColor="#5b7d9a", drawPts=[], activeMapId=null;
 function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
 function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
 function evtVB(e,svg){ const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640]; }
+function primaryMapId(){ return (STATE.maps&&STATE.maps[0]&&STATE.maps[0].id)||"primary"; }
+function activeMap(){ return (STATE.maps||[]).find(m=>m.id===activeMapId) || (STATE.maps||[])[0] || {id:"primary",features:[]}; }
+function curFeatures(){ const m=activeMap(); if(!Array.isArray(m.features)) m.features=[]; return m.features; }
+function mapMarkers(){ const pid=primaryMapId(); return (STATE.world&&STATE.world.locations||[]).filter(l=> l.map ? l.map===activeMapId : activeMapId===pid); }
+async function saveMaps(){ try{ await fetch("/api/map-save",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({maps:STATE.maps,activeMapId})});}catch(e){} }
+let uid=Math.floor(1e6*(''+performance.now()).length); function fid(){ return "f"+(uid++); }
+
+function glyphSVG(kind,x,y,s){
+  const st='stroke="#6b6459" fill="none" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"';
+  if(kind==="mountain") return `<path ${st} d="M${x-s} ${y+s*.5} L${x-s*.3} ${y-s*.6} L${x+s*.1} ${y} L${x+s*.5} ${y-s*.8} L${x+s} ${y+s*.5}"/>`;
+  if(kind==="peak") return `<path ${st} d="M${x-s*.7} ${y+s*.5} L${x} ${y-s*.8} L${x+s*.7} ${y+s*.5}"/><path ${st} d="M${x-s*.15} ${y-s*.15} L${x} ${y-s*.8} L${x+s*.15} ${y-s*.15}"/>`;
+  if(kind==="hills") return `<path ${st} d="M${x-s} ${y+s*.3} Q ${x-s*.5} ${y-s*.5} ${x} ${y+s*.3} Q ${x+s*.5} ${y-s*.5} ${x+s} ${y+s*.3}"/>`;
+  if(kind==="forest") return `<path ${st} d="M${x-s*.6} ${y+s*.5} L${x-s*.6} ${y+s*.1} M${x-s*.9} ${y+s*.1} L${x-s*.6} ${y-s*.6} L${x-s*.3} ${y+s*.1} Z"/><path ${st} d="M${x+s*.4} ${y+s*.5} L${x+s*.4} ${y+s*.1} M${x+s*.1} ${y+s*.1} L${x+s*.4} ${y-s*.6} L${x+s*.7} ${y+s*.1} Z"/>`;
+  if(kind==="desert") return `<path ${st} d="M${x-s} ${y} Q ${x-s*.5} ${y-s*.5} ${x} ${y} Q ${x+s*.5} ${y+s*.4} ${x+s} ${y}"/>`;
+  if(kind==="marsh") return `<path ${st} d="M${x-s} ${y-s*.2} q ${s*.4} ${-s*.3} ${s*.7} 0 q ${s*.4} ${s*.3} ${s*.7} 0"/><path ${st} d="M${x-s*.5} ${y+s*.5} L${x-s*.5} ${y-s*.1} M${x+s*.2} ${y+s*.5} L${x+s*.2} ${y-s*.1}"/>`;
+  if(kind==="water") return `<path ${st} d="M${x-s} ${y-s*.3} q ${s*.4} ${-s*.35} ${s*.7} 0 q ${s*.4} ${s*.35} ${s*.7} 0"/><path ${st} d="M${x-s} ${y+s*.25} q ${s*.4} ${-s*.35} ${s*.7} 0 q ${s*.4} ${s*.35} ${s*.7} 0"/>`;
+  return `<circle ${st} cx="${x}" cy="${y}" r="${s*.5}"/>`;
+}
+
 function renderMap(){
-  const locs=(STATE.world&&STATE.world.locations)||[];
+  if(!activeMapId) activeMapId = STATE.activeMapId || primaryMapId();
+  const opts=(STATE.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
+  const tools=[["select","Select"],["marker","＋ Marker"],["glyph","Glyph"],["river","River"],["road","Road"],["area","Area"],["outline","Outline"]];
   document.getElementById("center").innerHTML =
-    '<div class="map-wrap"><div class="map-head"><h2>World Map</h2>'
-    +'<select class="sw" id="map-sw"><option>'+esc((STATE.project||"World")+" — Hamlet")+'</option></select>'
-    +'<button class="tool" id="map-add">＋ Add marker</button>'
+    '<div class="map-wrap"><div class="map-head">'
+    +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
+    +'<span style="width:1px;height:22px;background:var(--line)"></span>'
+    +tools.map(t=>'<button class="tool'+(mapTool===t[0]?" on":"")+'" data-tool="'+t[0]+'">'+t[1]+'</button>').join("")
+    +'<select class="sw" id="glyph-pick" style="'+(mapTool==="glyph"?"":"display:none")+'">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>'
+    +'<input type="color" id="draw-color" value="'+drawColor+'" title="Area / line color" style="'+(["area","outline","river","road"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
     +'<span class="coord" id="map-coord">—</span></div>'
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
-    +'<div class="map-hint">drag a marker to move it · drag empty space to pan · scroll to zoom</div></div></div>';
-  if(locs.length){ const xs=locs.map(l=>l.x),zs=locs.map(l=>l.z);
+    +'<div class="map-hint" id="map-hint"></div></div></div>';
+  const marks=mapMarkers();
+  if(marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
     mapPan={x:(Math.min(...xs)+Math.max(...xs))/2, z:(Math.min(...zs)+Math.max(...zs))/2};
     const spanX=Math.max(30,Math.max(...xs)-Math.min(...xs)), spanZ=Math.max(30,Math.max(...zs)-Math.min(...zs));
     mapScale=Math.max(1, Math.min(880/spanX, 520/spanZ)); }
   bindMap(); redrawMap();
 }
+function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
+  const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom",
+    marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
+    river:"click to add river points · double-click to finish · Esc to cancel",
+    road:"click to add road points · double-click to finish · Esc to cancel",
+    area:"click to outline an area · double-click to close · Esc to cancel",
+    outline:"click to trace the land outline · double-click to close · Esc to cancel"}[mapTool];
+  h.textContent=t||""; }
 function redrawMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
-  const locs=(STATE.world&&STATE.world.locations)||[];
-  // grid every 10 world units, adaptive
   let step=10; while(step*mapScale<40) step*=2; while(step*mapScale>140) step/=2;
   const [wx0,wz1]=s2w(0,0), [wx1,wz0]=s2w(1000,640);
   let g="";
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="640"/>'; }
   for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="1000" y2="'+sy+'"/>'; }
-  const [ax]=w2s(0,0), [,ay]=w2s(0,0);
-  g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
-  const pins=locs.map(l=>{ const [sx,sy]=w2s(l.x,l.z); const c=KIND_FILL[l.kind]||"#2f6f7a";
+  const [ax]=w2s(0,0),[,ay]=w2s(0,0); g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
+  // features (outline first, then areas, lines, glyphs)
+  const feats=curFeatures();
+  const poly=(pts)=>pts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return sx+","+sy;}).join(" ");
+  const fsvg=(f)=>{ if(f.type==="area"){ const isOut=f.kind==="outline";
+      return '<polygon class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="'+(f.fill||"#88a")+'" fill-opacity="'+(isOut?0.35:0.28)+'" stroke="'+(f.fill||"#88a")+'" stroke-width="'+(isOut?2:1.2)+'"/>'; }
+    if(f.type==="line"){ const road=f.kind==="road";
+      return '<polyline class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="none" stroke="'+(f.color||(road?"#8a6f4a":"#5b7d9a"))+'" stroke-width="'+(road?2:2.4)+'"'+(road?' stroke-dasharray="6 5"':'')+' stroke-linejoin="round" stroke-linecap="round"/>'; }
+    if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
+    return ""; };
+  const outlines=feats.filter(f=>f.type==="area"&&f.kind==="outline").map(fsvg).join("");
+  const areas=feats.filter(f=>f.type==="area"&&f.kind!=="outline").map(fsvg).join("");
+  const lines=feats.filter(f=>f.type==="line").map(fsvg).join("");
+  const glyphs=feats.filter(f=>f.type==="glyph").map(fsvg).join("");
+  // in-progress drawing
+  let draw="";
+  if(drawPts.length){ const isArea=["area","outline"].includes(mapTool); const pp=poly(drawPts);
+    draw=(isArea?'<polygon points="'+pp+'" fill="'+drawColor+'" fill-opacity="0.2" stroke="'+drawColor+'" stroke-dasharray="4 4" stroke-width="1.4"/>':'<polyline points="'+pp+'" fill="none" stroke="'+drawColor+'" stroke-dasharray="4 4" stroke-width="2"/>')
+      +drawPts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return '<circle cx="'+sx+'" cy="'+sy+'" r="3" fill="'+drawColor+'"/>';}).join(""); }
+  // markers
+  const pins=mapMarkers().map(l=>{ const [sx,sy]=w2s(l.x,l.z); const c=KIND_FILL[l.kind]||"#2f6f7a";
     return '<g class="pin" data-id="'+l.id+'" transform="translate('+sx+','+sy+')">'
-      +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+'</text></g>'; }).join("");
-  const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/>'
-    +'<text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
-  svg.innerHTML = g + pins + compass;
-  svg.querySelectorAll(".pin").forEach(p=>p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)));
+      +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
+      +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
+  const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
+  svg.innerHTML = g + outlines + areas + lines + glyphs + draw + pins + compass;
+  svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
+  if(mapTool==="select") svg.querySelectorAll(".feat").forEach(f=>f.addEventListener("mousedown",(e)=>{ e.stopPropagation(); if(confirm("Delete this feature?")){ const i=curFeatures().findIndex(x=>x.id===f.dataset.fid); if(i>=0){ curFeatures().splice(i,1); saveMaps(); redrawMap(); } } }));
+  hint();
 }
 function bindMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
-  const addBtn=document.getElementById("map-add");
-  if(addBtn) addBtn.onclick=()=>{ addMode=!addMode; addBtn.classList.toggle("on",addMode); svg.classList.toggle("adding",addMode); };
+  document.getElementById("map-sw").onchange=(e)=>switchMap(e.target.value);
+  document.getElementById("map-new").onclick=newMap;
+  document.querySelectorAll(".map-head .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
+  const gp=document.getElementById("glyph-pick"); if(gp) gp.onchange=(e)=>{ glyphKind=e.target.value; hint(); };
+  const dc=document.getElementById("draw-color"); if(dc) dc.oninput=(e)=>{ drawColor=e.target.value; redrawMap(); };
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
-    mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.5,Math.min(60,mapScale));
+    mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
     const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
-  svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return;
-    if(addMode){ const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my); addMode=false; svg.classList.remove("adding"); if(addBtn) addBtn.classList.remove("on"); openInspector(null,{x:Math.round(x),z:Math.round(z)}); return; }
-    const [mx,my]=evtVB(e,svg); mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
-  window.addEventListener("mousemove",onMapMove);
-  window.addEventListener("mouseup",onMapUp);
+  svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
+    if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
+    if(mapTool==="glyph"){ curFeatures().push({id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)}); saveMaps(); redrawMap(); return; }
+    if(["river","road","area","outline"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
+    mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
+  svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline"].includes(mapTool)) finishDraw(); });
+  window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
   svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my); const c=document.getElementById("map-coord"); if(c) c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz); });
+  window.addEventListener("keydown",mapKey);
 }
-function startPinDrag(e,id){ e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
+function mapKey(e){ if(activeView!=="map") return; if(e.key==="Escape"){ drawPts=[]; redrawMap(); } else if(e.key==="Enter"&&drawPts.length) finishDraw(); }
+function finishDraw(){ if(drawPts.length<2){ drawPts=[]; redrawMap(); return; }
+  if(mapTool==="river"||mapTool==="road") curFeatures().push({id:fid(),type:"line",kind:mapTool,points:drawPts.slice(),color:drawColor});
+  else curFeatures().push({id:fid(),type:"area",kind:mapTool==="outline"?"outline":"area",points:drawPts.slice(),fill:drawColor});
+  drawPts=[]; saveMaps(); redrawMap(); }
+function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
-  else { if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const g=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(g){ g.setAttribute("transform","translate("+mx+","+my+")"); } } }
-async function onMapUp(e){ if(!mapDrag){ return; } const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing");
-  const d=mapDrag; mapDrag=null;
+  else { if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const p=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(p) p.setAttribute("transform","translate("+mx+","+my+")"); } }
+async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type!=="pin") return;
-  if(!d.moved){ redrawMap(); const loc=(STATE.world.locations||[]).find(l=>l.id===d.id); if(loc) openInspector(loc,null); return; }
+  if(!d.moved){ redrawMap(); const loc=mapMarkers().find(l=>l.id===d.id); if(loc) openInspector(loc,null,d.cx,d.cy); return; }
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
-  try{ const r=await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({op:"move",id:d.id,x:wx,z:wz})});
-    const j=await r.json(); await load(); renderMap(); if(j.impacts&&j.impacts.length) surfaceCascade(j.impacts);
-  }catch(err){ redrawMap(); } }
+  try{ const r=await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({op:"move",id:d.id,x:wx,z:wz})}); const j=await r.json(); await load(); renderMap(); if(j.impacts&&j.impacts.length) surfaceCascade(j.impacts); }catch(err){ redrawMap(); } }
 
-// ---- marker inspector: create / edit / tag / delete ----
-function openInspector(marker, pos){
+function switchMap(id){ activeMapId=id; STATE.activeMapId=id; drawPts=[]; saveMaps(); renderMap(); }
+async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
+  const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||("map"+(STATE.maps.length+1));
+  if(STATE.maps.some(m=>m.id===id)){ alert("a map with that id exists"); return; }
+  STATE.maps.push({id,name,scope:"region",parent:activeMapId,features:[]}); await saveMaps(); switchMap(id); }
+
+// ---- marker inspector: create / edit / tag / link / delete (spawns at the mouse) ----
+function openInspector(marker, pos, cx, cy){
   const old=document.getElementById("insp"); if(old) old.remove();
   const isNew=!marker;
-  const m = marker || { name:"", kind:"landmark", region:((STATE.world.regions||[])[0]||{}).id||"", tags:[], x:pos.x, z:pos.z };
+  const m = marker || { name:"", kind:"landmark", region:((STATE.world.regions||[])[0]||{}).id||"", tags:[], x:pos.x, z:pos.z, mapLink:"" };
   const regions = STATE.world.regions||[];
+  const otherMaps=(STATE.maps||[]).filter(mp=>mp.id!==activeMapId);
   const el=document.createElement("div"); el.className="insp"; el.id="insp";
   el.innerHTML='<h4>'+(isNew?"New marker":"Edit marker")+'<button class="x" id="insp-x">×</button></h4>'
     +'<label>Name</label><input id="i-name" value="'+esc(m.name)+'">'
     +'<div class="row"><div><label>Kind</label><select id="i-kind">'+KINDS.map(k=>'<option'+(k===m.kind?" selected":"")+'>'+k+'</option>').join("")+'</select></div>'
     +'<div><label>Region</label><select id="i-region">'+regions.map(r=>'<option value="'+esc(r.id)+'"'+(r.id===m.region?" selected":"")+'>'+esc(r.name)+'</option>').join("")+'</select></div></div>'
     +'<label>Tags (comma-separated)</label><input id="i-tags" value="'+esc((m.tags||[]).join(", "))+'">'
+    +'<label>Links to map (zoom in)</label><select id="i-link"><option value="">— none —</option>'+otherMaps.map(mp=>'<option value="'+esc(mp.id)+'"'+(mp.id===m.mapLink?" selected":"")+'>'+esc(mp.name||mp.id)+'</option>').join("")+'</select>'
     +'<div class="co">x '+Math.round(m.x)+'  z '+Math.round(m.z)+(isNew?"  · placed":"")+'</div>'
     +'<div class="actions"><button class="save" id="insp-save">'+(isNew?"Create marker":"Save")+'</button>'
     +(isNew?"":'<button class="del" id="insp-del">Delete</button>')+'</div>';
   document.body.appendChild(el);
+  if(typeof cx==="number"){ const w=el.offsetWidth,h=el.offsetHeight; el.style.left=Math.min(cx+14, innerWidth-w-12)+"px"; el.style.top=Math.min(Math.max(cy-20,12), innerHeight-h-12)+"px"; el.style.right="auto"; }
   document.getElementById("insp-x").onclick=()=>el.remove();
   document.getElementById("insp-save").onclick=()=>saveMarker(isNew?null:m.id, {x:m.x,z:m.z});
   const del=document.getElementById("insp-del"); if(del) del.onclick=()=>deleteMarker(m.id);
@@ -598,8 +667,9 @@ async function saveMarker(id, pos){
   const name=document.getElementById("i-name").value.trim();
   const kind=document.getElementById("i-kind").value, region=document.getElementById("i-region").value;
   const tags=document.getElementById("i-tags").value.split(",").map(s=>s.trim()).filter(Boolean);
+  const mapLink=document.getElementById("i-link").value;
   if(!name){ document.getElementById("i-name").focus(); return; }
-  const body = id ? {op:"update",id,name,kind,region,tags} : {op:"add",name,kind,region,tags,x:pos.x,z:pos.z};
+  const body = id ? {op:"update",id,name,kind,region,tags,mapLink} : {op:"add",name,kind,region,tags,mapLink,x:pos.x,z:pos.z,map:(activeMapId!==primaryMapId()?activeMapId:"")};
   const btn=document.getElementById("insp-save"); btn.disabled=true; btn.textContent="Saving…";
   try{ const r=await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json(); document.getElementById("insp")?.remove(); await load(); renderMap();
