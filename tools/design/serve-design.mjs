@@ -196,6 +196,7 @@ if (op === "add") locs.push({ id: a.id, name: a.name, kind: a.kind || "landmark"
 else if (op === "update") locs = locs.map((l) => l.id === a.id ? { ...l, ...(a.name !== undefined ? { name: a.name } : {}), ...(a.kind !== undefined ? { kind: a.kind } : {}), ...(a.region !== undefined ? { region: a.region } : {}), ...(a.note !== undefined ? { note: a.note } : {}), ...(a.tags !== undefined ? (a.tags.length ? { tags: a.tags } : { tags: undefined }) : {}), ...(a.map !== undefined ? (a.map ? { map: a.map } : { map: undefined }) : {}), ...(a.mapLink !== undefined ? (a.mapLink ? { mapLink: a.mapLink } : { mapLink: undefined }) : {}) } : l);
 else if (op === "delete") locs = locs.filter((l) => l.id !== a.id);
 else if (op === "move") locs = locs.map((l) => l.id === a.id ? { ...l, position: [Math.round(a.x), Math.round(a.z)] } : l);
+else if (op === "unlink") { const ids = new Set(a.ids || []); locs = locs.map((l) => ids.has(l.id) ? { ...l, map: "__off__", mapLink: undefined } : l); }
 fm.locations = locs;
 ops.op_log("${ELB}" + JSON.stringify({ content: replaceFrontmatter(content, fm) }) + "${ELE}");
 `;
@@ -207,6 +208,8 @@ ops.op_log("${ELB}" + JSON.stringify({ content: replaceFrontmatter(content, fm) 
   const out = (r.stdout || "") + (r.stderr || "");
   const m = out.match(new RegExp(ELB + "([\\s\\S]*?)" + ELE));
   if (!m) throw new Error("edit failed: " + out.slice(-300));
+  // "unlink" is a cartography op: remove the markers from the map without cascading.
+  if (op === "unlink") { writeFileSync(join(vaultDir, doc.name), JSON.parse(m[1]).content); return { saved: true, unlinked: (a.ids || []).length, impacts: [] }; }
   return saveDoc(doc.name, JSON.parse(m[1]).content);
 }
 

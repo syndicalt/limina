@@ -174,6 +174,9 @@ const dSame = diffDocEntities(before, before);
 assert(dSame.length === 0, "diff: identical content yields no changes");
 const removed = WORLD.replace(/  - id: signal-fire[\s\S]*?note: The last beacon\.\n/, "");
 assert(diffDocEntities(before, removed).some((c) => c.entityId === "signal-fire" && c.op === "removed"), "diff: a deleted location is 'removed'");
+// Cartography-only fields (map assignment / child-map link) must NOT cascade.
+const withMap = WORLD.replace("kind: military", "kind: military\n    map: marches\n    mapLink: hamlet");
+assert(diffDocEntities(before, withMap).length === 0, "diff: assigning map/mapLink to a marker does NOT cascade");
 
 // 10. serializeFrontmatter round-trips (the foundation for structured authoring/editing).
 const fmW = parseFrontmatter(WORLD);

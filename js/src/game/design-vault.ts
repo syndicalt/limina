@@ -426,7 +426,14 @@ export function docEntities(content: string): { id: string; sig: string }[] {
   let fm: Frontmatter;
   try { fm = parseFrontmatter(content); } catch { return []; }
   const out: { id: string; sig: string }[] = [];
-  const push = (v: Record<string, unknown>) => { const id = str(v.id); if (id) out.push({ id, sig: JSON.stringify(v) }); };
+  // Cartography-only fields (map assignment + child-map link) are NOT part of the design
+  // signature: changing which map a marker sits on, or unlinking it, must not cascade.
+  const push = (v: Record<string, unknown>) => {
+    const id = str(v.id);
+    if (!id) return;
+    const { map: _m, mapLink: _l, ...rest } = v;
+    out.push({ id, sig: JSON.stringify(rest) });
+  };
   for (const l of arr(fm.locations)) push(l);
   for (const r of arr(fm.regions)) push(r);
   const p = fm.player as Record<string, unknown> | undefined;

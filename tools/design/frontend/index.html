@@ -203,6 +203,8 @@
   .map-head .tool { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 11px; font:inherit; font-size:12.5px; cursor:pointer; }
   .map-head .tool.on { background:var(--accent); color:#fff; border-color:var(--accent); }
   svg.map.adding { cursor:crosshair; }
+  svg.map.lassoing { cursor:crosshair; }
+  .lasso-rect { fill:var(--accent); fill-opacity:.08; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
   .insp { position:fixed; top:120px; right:26px; width:294px; background:var(--panel); border:1px solid var(--line);
     border-radius:12px; box-shadow:0 12px 34px rgba(0,0,0,.22); padding:14px 16px; z-index:55; }
   .insp h4 { margin:0 0 2px; font-size:14px; display:flex; align-items:center; }
@@ -535,7 +537,7 @@ function glyphSVG(kind,x,y,s){
 function renderMap(){
   if(!activeMapId) activeMapId = STATE.activeMapId || primaryMapId();
   const opts=(STATE.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
-  const tools=[["select","Select"],["marker","＋ Marker"],["glyph","Glyph"],["river","River"],["road","Road"],["area","Area"],["outline","Outline"]];
+  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["glyph","Glyph"],["river","River"],["road","Road"],["area","Area"],["outline","Outline"]];
   document.getElementById("center").innerHTML =
     '<div class="map-wrap"><div class="map-head">'
     +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
@@ -612,6 +614,7 @@ function bindMap(){
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ curFeatures().push({id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)}); saveMaps(); redrawMap(); return; }
     if(["river","road","area","outline"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
+    if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
   svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline"].includes(mapTool)) finishDraw(); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
@@ -626,8 +629,32 @@ function finishDraw(){ if(drawPts.length<2){ drawPts=[]; redrawMap(); return; }
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
+  else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else { if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const p=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(p) p.setAttribute("transform","translate("+mx+","+my+")"); } }
+function drawLassoRect(svg){ const d=mapDrag; let r=document.getElementById("lasso-rect");
+  if(!r){ r=document.createElementNS("http://www.w3.org/2000/svg","rect"); r.id="lasso-rect"; r.setAttribute("class","lasso-rect"); svg.appendChild(r); }
+  r.setAttribute("x",Math.min(d.x0,d.x1)); r.setAttribute("y",Math.min(d.y0,d.y1)); r.setAttribute("width",Math.abs(d.x1-d.x0)); r.setAttribute("height",Math.abs(d.y1-d.y0)); }
+function inBox(wx,wz,box){ return wx>=box.minX&&wx<=box.maxX&&wz>=box.minZ&&wz<=box.maxZ; }
+async function finishLasso(d){
+  document.getElementById("lasso-rect")?.remove();
+  if(Math.abs(d.x1-d.x0)<4&&Math.abs(d.y1-d.y0)<4) return;
+  const [ax,az]=s2w(d.x0,d.y0), [bx,bz]=s2w(d.x1,d.y1);
+  const box={minX:Math.min(ax,bx),maxX:Math.max(ax,bx),minZ:Math.min(az,bz),maxZ:Math.max(az,bz)};
+  const feats=curFeatures().filter(f=> f.type==="glyph" ? inBox(f.x,f.z,box) : (f.points||[]).some(p=>inBox(p[0],p[1],box)));
+  const marks=mapMarkers().filter(l=>inBox(l.x,l.z,box));
+  if(!feats.length&&!marks.length) return;
+  const linked=marks.filter(l=>l.mapLink);
+  let msg="Delete "+feats.length+" map feature(s) and unlink "+marks.length+" marker(s) from this map?\n(Markers are removed from the map, not deleted from the design — no cascade.)";
+  if(linked.length) msg="⚠ "+linked.map(l=>l.name+" → map '"+l.mapLink+"'").join(", ")+"\nThose links will be removed (the linked maps are kept).\n\n"+msg;
+  if(!confirm(msg)) return;
+  const ids=new Set(feats.map(f=>f.id));
+  activeMap().features=curFeatures().filter(f=>!ids.has(f.id));
+  await saveMaps();
+  if(marks.length){ try{ await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({op:"unlink",ids:marks.map(l=>l.id)})}); }catch(e){} }
+  await load(); renderMap();
+}
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
+  if(d.type==="lasso"){ finishLasso(d); return; }
   if(d.type!=="pin") return;
   if(!d.moved){ redrawMap(); const loc=mapMarkers().find(l=>l.id===d.id); if(loc) openInspector(loc,null,d.cx,d.cy); return; }
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
@@ -655,14 +682,19 @@ function openInspector(marker, pos, cx, cy){
     +'<label>Links to map (zoom in)</label><select id="i-link"><option value="">— none —</option>'+otherMaps.map(mp=>'<option value="'+esc(mp.id)+'"'+(mp.id===m.mapLink?" selected":"")+'>'+esc(mp.name||mp.id)+'</option>').join("")+'</select>'
     +'<div class="co">x '+Math.round(m.x)+'  z '+Math.round(m.z)+(isNew?"  · placed":"")+'</div>'
     +'<div class="actions"><button class="save" id="insp-save">'+(isNew?"Create marker":"Save")+'</button>'
-    +(isNew?"":'<button class="del" id="insp-del">Delete</button>')+'</div>';
+    +(isNew?"":'<button class="del" id="insp-unlink">Off map</button><button class="del" id="insp-del">Delete</button>')+'</div>';
   document.body.appendChild(el);
   if(typeof cx==="number"){ const w=el.offsetWidth,h=el.offsetHeight; el.style.left=Math.min(cx+14, innerWidth-w-12)+"px"; el.style.top=Math.min(Math.max(cy-20,12), innerHeight-h-12)+"px"; el.style.right="auto"; }
   document.getElementById("insp-x").onclick=()=>el.remove();
   document.getElementById("insp-save").onclick=()=>saveMarker(isNew?null:m.id, {x:m.x,z:m.z});
   const del=document.getElementById("insp-del"); if(del) del.onclick=()=>deleteMarker(m.id);
+  const unl=document.getElementById("insp-unlink"); if(unl) unl.onclick=()=>unlinkMarker(m.id);
   document.getElementById("i-name").focus();
 }
+async function unlinkMarker(id){
+  try{ await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({op:"unlink",ids:[id]})});
+    document.getElementById("insp")?.remove(); await load(); renderMap();
+  }catch(e){} }
 async function saveMarker(id, pos){
   const name=document.getElementById("i-name").value.trim();
   const kind=document.getElementById("i-kind").value, region=document.getElementById("i-region").value;
@@ -676,6 +708,10 @@ async function saveMarker(id, pos){
     if(j.impacts&&j.impacts.length) surfaceCascade(j.impacts);
   }catch(e){ btn.disabled=false; btn.textContent="Save"; } }
 async function deleteMarker(id){
+  const loc=(STATE.world.locations||[]).find(l=>l.id===id);
+  let warn="Delete '"+(loc?loc.name:id)+"' from the design? This cascades to anything that references it.";
+  if(loc&&loc.mapLink) warn="⚠ This marker links to map '"+loc.mapLink+"'. Deleting removes the marker (the linked map is kept).\n\n"+warn;
+  if(!confirm(warn)) return;
   try{ const r=await fetch("/api/edit-location",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({op:"delete",id})});
     const j=await r.json(); document.getElementById("insp")?.remove(); await load(); renderMap();
     if(j.impacts&&j.impacts.length) surfaceCascade(j.impacts);
