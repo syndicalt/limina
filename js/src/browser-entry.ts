@@ -480,7 +480,7 @@ export interface RunningLive {
   stop(): void;
 }
 
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint"]);
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint", "catalog.publish"]);
 // Structural adds applied INCREMENTALLY on the live scene (no reboot) — including the GLB-mounting
 // skills. Their mid-session mount is safe because runLive PRE-WARMS the glTF parse cache (the tree
 // palette + the scene's assets) BEFORE renderer.init(), so parseGltfScene returns a synchronous clone
@@ -992,6 +992,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       const removedEids: number[] = [];
       let applied = 0;
       for (const cmd of cmds) {
+        // catalog.publish is DATA-ONLY (an asset-catalog entry) — it touches no scene/ecs/physics
+        // state, and the live viewport's registry doesn't carry the asset-catalog skill (it lives
+        // server-side; the catalog is not part of render/sim state). Apply it as a true no-op: mark
+        // it applied without invoking the registry or forwarding it to the sim worker.
+        if (cmd.kind === "skill" && cmd.tool === "catalog.publish") { applied++; continue; }
         const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
           ? new Set(entities.ids())
           : undefined;

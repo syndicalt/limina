@@ -1,0 +1,5 @@
+{ "commands": [
+  { "kind":"physics","op":"op_physics_create_world","args":[-9.81] },
+  { "kind":"skill","tool":"terrain.create","input":{ "size":80,"resolution":48,"color":5926970 } },
+  { "kind":"skill","tool":"asset.place","input":{ "assetId":"norman-church.glb","position":[0,0,0],"rotation":[0,0.6,0],"ground":true } }
+], "camera":{ "center":[0,9,0],"radius":25,"height":13 } }

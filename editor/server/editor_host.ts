@@ -31,6 +31,7 @@ import { reviewProfileGate } from "../../js/src/skills/approval.ts";
 import type { NetOps } from "../../js/src/net/protocol.ts";
 import { installCottageScenario } from "../../js/src/demos/coordinator_cottage.ts";
 import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
+import { registerAssetCatalogSkills } from "../../js/src/skills/asset-catalog.ts";
 import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
 import { resolveProfile } from "../../js/src/skills/permissions.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
@@ -177,6 +178,12 @@ installCottageScenario(server.registry, { world: server.world });
 // Expose the recorded AUTHORING command stream so the live viewport (editor/src/viewport.js) can
 // re-author it and render the world as it is built. Read-only; filters to mutating commands.
 registerWorldlogSkills(server.registry, { recorder: server.recorder });
+
+// The asset catalog: asset.catalog (browse, read-only) + catalog.publish (record a newly
+// authored/QC'd entry). Same recorded-state pattern as the terrain/asset skills above — a session
+// keeps its own live catalog Map, and a worldlog replay reconstructs it by re-invoking the recorded
+// catalog.publish commands.
+registerAssetCatalogSkills(server.registry);
 
 server.start();
 await server.ready;

@@ -67,6 +67,20 @@ export async function paintTerrain(center, radius, strength, falloff, material, 
   return client.callTool("terrain.paint", { center, radius, strength, falloff, material, erase: !!erase });
 }
 
+// Asset catalog (Slice 4): read the QC-approved catalog for the palette. Read-only — never held by
+// the review gate — but routed through the same writer client so one profile covers the whole tool.
+export async function fetchCatalog() {
+  const client = await ensureWriter();
+  return client.callTool("asset.catalog", {});
+}
+
+// Catalog place tool (Slice 4): place a whole approved GLB through the same recorded command path.
+// ground:true snaps the asset base to the terrain surface at (x,z); rotation is Euler radians.
+export async function placeAsset(assetId, position, opts = {}) {
+  const client = await ensureWriter();
+  return client.callTool("asset.place", { assetId, position, ground: true, ...opts });
+}
+
 export async function writeMaterial(entity, material) {
   const client = await ensureWriter();
   const result = await client.callTool("three.setMaterial", { entity, ...material });

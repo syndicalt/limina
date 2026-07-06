@@ -25,7 +25,7 @@
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
-import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain } from "./write-client.js";
+import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain, fetchCatalog, placeAsset } from "./write-client.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -153,6 +153,12 @@ const state = {
   flattenTarget: 0, // world height the flatten tool drives toward (captured at stroke start)
   spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
   paintMaterial: "grass", // active material for the paint tool (sand|grass|rock|dirt)
+  // Asset catalog place tool (Slice 4). placeAsset = the selected CatalogEntry ({id,title,category,
+  // boundsM,qcRender,...}) or null; the ghost footprint + click-to-place only arm while set.
+  placeAsset: null,
+  placeYaw: 0,      // ghost yaw in radians; R rotates by 15°
+  catalog: [],      // cached asset.catalog entries (refreshed when the Catalog tool opens)
+  placing: false,   // a placement round-trip is in flight — ignore further clicks until it lands
 };
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -669,6 +675,7 @@ function ensureBrushRing() {
     geo.rotateX(-Math.PI / 2);                          // ...laid flat into the XZ ground plane
     const mat = new THREE.MeshBasicMaterial({ color: 0xe0552b, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthTest: false });
     brushRing = new THREE.Mesh(geo, mat);
+    brushRing.raycast = () => {}; // cursor overlays must never intercept the ground raycast
     brushRing.renderOrder = 999; // draw over the terrain
     brushRing.visible = false;
     running.scene.add(brushRing);
@@ -690,10 +697,152 @@ function updateBrushRing(event) {
 }
 function hideBrushRing() { if (brushRing) brushRing.visible = false; }
 
+// --- Asset catalog place tool (Slice 4) ------------------------------------------------------------
+// A translucent footprint box sized from the selected catalog entry's boundsM tracks the ground
+// cursor; a click places the whole GLB via the recorded asset.place. Same idiom as the brush ring:
+// module-level mesh, lazily built, re-parented after a reboot rebuilds the scene. Deliberately a BOX
+// (not the GLB itself): no async asset fetch may run in the pointer path (live pre-warm constraint).
+let placeGhost = null, placeGhostFor = "";
+function ensurePlaceGhost() {
+  const running = state.running;
+  if (!running?.scene || !state.placeAsset) return null;
+  if (placeGhost && placeGhostFor !== state.placeAsset.id) {
+    try { placeGhost.parent?.remove(placeGhost); placeGhost.geometry.dispose(); placeGhost.material.dispose(); } catch { /* ignore */ }
+    placeGhost = null;
+  }
+  if (placeGhost && placeGhost.parent !== running.scene) {
+    try { placeGhost.parent?.remove(placeGhost); } catch { /* ignore */ }
+    running.scene.add(placeGhost);
+  }
+  if (!placeGhost) {
+    const b = Array.isArray(state.placeAsset.boundsM) ? state.placeAsset.boundsM : [4, 4, 4];
+    const geo = new THREE.BoxGeometry(b[0], b[1], b[2]);
+    geo.translate(0, b[1] / 2, 0); // pivot at the base so the footprint sits ON the ground
+    const mat = new THREE.MeshBasicMaterial({ color: 0xe0552b, transparent: true, opacity: 0.28, depthTest: false });
+    placeGhost = new THREE.Mesh(geo, mat);
+    placeGhost.raycast = () => {}; // NEVER raycastable — else the ground raycast hits the ghost's own
+    // top face (nearer the camera than the terrain) and it re-positions onto itself every pointermove,
+    // walking toward the camera in a "growing" feedback loop.
+    placeGhost.renderOrder = 998;
+    placeGhost.visible = false;
+    placeGhostFor = state.placeAsset.id;
+    running.scene.add(placeGhost);
+  }
+  return placeGhost;
+}
+function updatePlaceGhost(event) {
+  const ghost = ensurePlaceGhost();
+  if (!ghost) return;
+  if (!state.editMode || state.brushTool !== "catalog") { ghost.visible = false; return; }
+  if (event) {
+    const p = raycastGround(event);
+    if (!p) { ghost.visible = false; return; }
+    ghost.position.set(p.x, p.y + 0.03, p.z);
+  }
+  ghost.rotation.y = state.placeYaw;
+  ghost.visible = true;
+}
+function hidePlaceGhost() { if (placeGhost) placeGhost.visible = false; }
+
+// One click = one recorded asset.place = one step in the existing per-stroke undo trail.
+async function placeCatalogAsset(event) {
+  if (state.placing) return;
+  const entry = state.placeAsset;
+  const p = raycastGround(event);
+  if (!entry || !p) return;
+  state.placing = true;
+  const before = state.commands.length;
+  try {
+    setStatus("placing", entry.title);
+    await placeAsset(entry.id, [p.x, 0, p.z], { rotation: [0, state.placeYaw, 0] });
+    await poll(); // pull the recorded placement straight back so it renders (or reboots to warm the GLB)
+    state.strokeStartLen = before;
+    recordStrokeBoundary();
+    setStatus("placed", entry.title);
+  } catch (e) {
+    resetWriter();
+    surfaceViewportWarning("asset place failed", e);
+  } finally {
+    state.placing = false;
+  }
+}
+
+// Catalog fetch + palette rendering. Thumbnails are the QC renders (served from /assets/qc/...) —
+// the same image the human approved in the queue, so the palette shows what was actually reviewed.
+let catalogFilter = "all";
+let catalogFetching = false;
+async function refreshCatalog() {
+  if (catalogFetching) return;
+  catalogFetching = true;
+  try {
+    const res = await fetchCatalog();
+    state.catalog = Array.isArray(res?.entries) ? res.entries : [];
+    renderCatalogChips();
+    renderCatalogGrid();
+  } catch (e) {
+    surfaceViewportWarning("asset catalog fetch failed", e);
+  } finally {
+    catalogFetching = false;
+  }
+}
+function renderCatalogChips() {
+  const row = hud?._catChips;
+  if (!row) return;
+  row.textContent = "";
+  const cats = ["all", ...new Set(state.catalog.map((e) => e.category).filter(Boolean))];
+  for (const c of cats) {
+    const chip = document.createElement("button");
+    chip.textContent = c;
+    const active = catalogFilter === c;
+    chip.style.cssText = "padding:2px 8px;border-radius:999px;font:11px system-ui;cursor:pointer;color:#fff;" +
+      "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
+    chip.onclick = () => { catalogFilter = c; renderCatalogChips(); renderCatalogGrid(); };
+    row.appendChild(chip);
+  }
+}
+function renderCatalogGrid() {
+  const grid = hud?._catGrid;
+  if (!grid) return;
+  const q = (hud._catSearch?.value || "").trim().toLowerCase();
+  grid.textContent = "";
+  for (const entry of state.catalog) {
+    if (catalogFilter !== "all" && entry.category !== catalogFilter) continue;
+    if (q && !(`${entry.title} ${entry.id} ${(entry.tags || []).join(" ")}`.toLowerCase().includes(q))) continue;
+    const active = state.placeAsset?.id === entry.id;
+    const card = document.createElement("div");
+    card.style.cssText = "cursor:pointer;border-radius:6px;overflow:hidden;background:#2a2a32;" +
+      "border:2px solid " + (active ? "#e0552b" : "#454550");
+    const img = document.createElement("img");
+    img.src = "/assets/" + String(entry.qcRender || "").replace(/^\/+/, "");
+    img.alt = entry.title;
+    img.style.cssText = "width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:#1c1c22";
+    img.onerror = () => { img.style.visibility = "hidden"; }; // missing QC render → neutral tile
+    const lab = document.createElement("div");
+    lab.textContent = entry.title;
+    lab.style.cssText = "padding:4px 6px;font:11px system-ui;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+    card.appendChild(img);
+    card.appendChild(lab);
+    card.onclick = () => {
+      state.placeAsset = active ? null : entry;
+      state.placeYaw = 0;
+      renderCatalogGrid();
+      if (state.placeAsset) setStatus("place: " + entry.title, "click ground to place · R rotates · Esc deselects");
+      else { hidePlaceGhost(); setStatus("place: off", ""); }
+    };
+    grid.appendChild(card);
+  }
+  if (!grid.children.length) {
+    const empty = document.createElement("div");
+    empty.textContent = "no approved assets";
+    empty.style.cssText = "grid-column:1/-1;color:#888;font:12px system-ui;padding:8px;text-align:center";
+    grid.appendChild(empty);
+  }
+}
+
 // The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
 // sliders, falloff, and undo/redo. It IS the can't-miss edit indicator (accent dot + outline + cursor).
 let hud = null;
-const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"], ["paint", "Paint"]];
+const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"], ["paint", "Paint"], ["catalog", "Catalog"]];
 const HUD_MATS = [["sand", "Sand", "#c4b68e"], ["grass", "Grass", "#5f7f3c"], ["rock", "Rock", "#756657"], ["dirt", "Dirt", "#6f5334"]];
 function styleToolBtn(b, active) {
   b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
@@ -739,6 +888,28 @@ function buildTerrainHud() {
   }
   hud._matRow = matRow;
   hud.appendChild(matRow);
+  // Asset catalog palette — only shown while the Catalog tool is active. Search + category chips +
+  // a thumbnail grid of QC-approved assets; clicking a card arms the ghost place tool.
+  const catPanel = document.createElement("div");
+  catPanel.style.cssText = "display:none;margin-bottom:10px";
+  const catSearch = document.createElement("input");
+  catSearch.type = "search";
+  catSearch.placeholder = "Search assets";
+  catSearch.style.cssText = "width:100%;box-sizing:border-box;background:#2a2a32;color:#eee;border:1px solid #454550;" +
+    "border-radius:5px;padding:5px 8px;font:12px system-ui;margin-bottom:8px";
+  catSearch.oninput = () => renderCatalogGrid();
+  catPanel.appendChild(catSearch);
+  const catChips = document.createElement("div");
+  catChips.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px";
+  catPanel.appendChild(catChips);
+  const catGrid = document.createElement("div");
+  catGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:7px;max-height:260px;overflow:auto";
+  catPanel.appendChild(catGrid);
+  hud._catPanel = catPanel;
+  hud._catSearch = catSearch;
+  hud._catChips = catChips;
+  hud._catGrid = catGrid;
+  hud.appendChild(catPanel);
   const mkSlider = (label, min, max, step, get, set, fmt) => {
     const wrap = document.createElement("div");
     wrap.style.margin = "0 0 8px";
@@ -797,6 +968,12 @@ function refreshHudTools() {
     const paint = state.brushTool === "paint";
     hud._matRow.style.display = paint ? "grid" : "none";
     if (paint) refreshHudMats();
+  }
+  if (hud._catPanel) {
+    const cat = state.brushTool === "catalog";
+    hud._catPanel.style.display = cat ? "block" : "none";
+    if (cat) { hideBrushRing(); void refreshCatalog(); }
+    else hidePlaceGhost();
   }
 }
 function updateEditModeIndicator() {
@@ -981,14 +1158,18 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 canvas.addEventListener("pointermove", (event) => {
   if (!event.isPrimary) return;
-  if (state.editMode) updateBrushRing(event); // ring tracks the cursor whenever edit mode is on
+  if (state.editMode) {
+    // The cursor overlay tracks the active tool: sculpt/paint → brush ring, catalog → footprint ghost.
+    if (state.brushTool === "catalog") updatePlaceGhost(event);
+    else updateBrushRing(event);
+  }
   if (!state.brushStroking) return;
   const now = performance.now();
   if (now - state.brushLast < 55) return; // throttle dabs so a drag doesn't flood the server
   state.brushLast = now;
   void brushDab(event);
 });
-canvas.addEventListener("pointerleave", () => hideBrushRing());
+canvas.addEventListener("pointerleave", () => { hideBrushRing(); hidePlaceGhost(); });
 canvas.addEventListener("pointerup", (event) => {
   if (!event.isPrimary || pointerClick.id !== event.pointerId) return;
   const dx = event.clientX - pointerClick.x;
@@ -1002,7 +1183,15 @@ canvas.addEventListener("pointerup", (event) => {
     if (state.strokeDid) void (async () => { await poll(); recordStrokeBoundary(); })();
     return; // a sculpt stroke never falls through to entity selection
   }
-  if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) pickEntity(event);
+  if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) {
+    // Catalog place tool: a click on the ground places the armed asset (a drag still orbits the
+    // camera — "catalog" is not in SCULPT_TOOLS, so no stroke ever starts).
+    if (state.editMode && !state.spaceNav && state.brushTool === "catalog" && state.placeAsset) {
+      void placeCatalogAsset(event);
+      return;
+    }
+    pickEntity(event);
+  }
 });
 canvas.addEventListener("pointercancel", (event) => {
   if (state.brushStroking) {
@@ -1061,15 +1250,34 @@ window.addEventListener("keydown", (event) => {
     state.editMode = !state.editMode;
     updateEditModeIndicator();
     setStatus(state.editMode ? "terrain edit: ON" : "terrain edit: off",
-      state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1/2/3 tool` : "");
+      state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1-6 tool` : "");
     return;
   }
-  if (state.editMode && (key === "1" || key === "2" || key === "3" || key === "4" || key === "5")) {
+  if (state.editMode && (key === "1" || key === "2" || key === "3" || key === "4" || key === "5" || key === "6")) {
     event.preventDefault();
-    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth" : key === "4" ? "flatten" : "paint";
+    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth"
+      : key === "4" ? "flatten" : key === "5" ? "paint" : "catalog";
     updateEditModeIndicator();
     setStatus("terrain edit", `tool: ${state.brushTool}`);
     return;
+  }
+  // Catalog place tool: R rotates the armed ghost 15°, Esc disarms it. Checked BEFORE the gizmo
+  // w/e/r modes below so R never falls through to "scale" while placing.
+  if (state.editMode && state.brushTool === "catalog" && state.placeAsset) {
+    if (key === "r") {
+      event.preventDefault();
+      state.placeYaw = (state.placeYaw + Math.PI / 12) % (Math.PI * 2);
+      updatePlaceGhost();
+      return;
+    }
+    if (key === "escape") {
+      event.preventDefault();
+      state.placeAsset = null;
+      hidePlaceGhost();
+      renderCatalogGrid();
+      setStatus("place: off", "");
+      return;
+    }
   }
   if (key === "s") {
     event.preventDefault();

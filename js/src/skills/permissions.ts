@@ -26,6 +26,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "progression.read", "progression.write", "progression.configure",
     "world.read", "world.write",
     "design.read", "design.write",
+    "catalog.read",
   ],
   // Full player character control (Part D).
   "player.full": [
@@ -114,8 +115,9 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
     "design.read", "design.write",
+    "catalog.read",
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read"],
+  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read"],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",

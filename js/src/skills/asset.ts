@@ -211,10 +211,13 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       // Content-addressed resolve: id -> bytes + stable hash (the asset's portable
       // identity). Same id -> same content address on every resolve/replay.
       const resolved = assets.resolve(input.assetId);
-      // Replay/pinned path: a committed hash MUST match the resolved bytes, else the
-      // authored asset was swapped/updated out from under the log — fail loudly.
+      // Content-hash pin: WARN (never THROW) on a mismatch — same rule as village.build. The committed
+      // hash may have been produced on a DIFFERENT HOST (Rust op_sha256 vs the browser's), so a
+      // cross-host replay of a perfectly healthy placement can mismatch. Throwing here quarantined the
+      // command in the live viewport: the entity existed server-side but its mesh never mounted
+      // ("placed but invisible"). Surface a genuinely swapped asset as a visible warning instead.
       if (input.hash !== undefined && input.hash !== resolved.hash) {
-        throw new Error(`asset.place: '${input.assetId}' content hash mismatch (committed ${input.hash}, resolved ${resolved.hash}) — authored asset identity changed`);
+        ctx.emit("asset.hash_mismatch", { assetId: input.assetId, committed: input.hash, resolved: resolved.hash });
       }
       // GROUND-CONFORM: `ground: true` means "sit on the ground", so when there is an editable terrain
       // we snap the base to the TERRAIN SURFACE at (x,z), not to the passed position.y — otherwise an
