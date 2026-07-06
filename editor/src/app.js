@@ -461,6 +461,28 @@ function stepLabel(ev) {
 // ---------------------------------------------------------------------------
 // (c) APPROVAL queue.
 // ---------------------------------------------------------------------------
+// QC-render lightbox: click a small approval thumbnail to review it near-fullscreen. Click
+// anywhere or press Esc to close. One shared overlay, lazily built.
+let qcLightbox = null;
+function openQcLightbox(src) {
+  if (!qcLightbox) {
+    qcLightbox = document.createElement("div");
+    qcLightbox.style.cssText = "position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;" +
+      "background:rgba(0,0,0,.82);cursor:zoom-out";
+    const big = document.createElement("img");
+    big.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.8)";
+    qcLightbox.appendChild(big);
+    qcLightbox._img = big;
+    qcLightbox.onclick = () => { qcLightbox.style.display = "none"; };
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && qcLightbox.style.display !== "none") qcLightbox.style.display = "none";
+    });
+    document.body.appendChild(qcLightbox);
+  }
+  qcLightbox._img.src = src;
+  qcLightbox.style.display = "flex";
+}
+
 function renderApprovals() {
   const root = $("approval-body");
   root.innerHTML = "";
@@ -492,7 +514,9 @@ function renderApprovals() {
       const img = document.createElement("img");
       img.src = "/assets/" + input.qcRender.replace(/^\/+/, "");
       img.alt = "QC render";
-      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;margin:6px 0;background:#0b0b0b";
+      img.title = "click to enlarge";
+      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;margin:6px 0;background:#0b0b0b;cursor:zoom-in";
+      img.onclick = () => openQcLightbox(img.src);
       card.appendChild(img);
     }
     if (input.qcChecks && typeof input.qcChecks === "object") {
