@@ -864,10 +864,10 @@ function renderRequestChips() {
 function openNewAssetDialog() {
   if (newAssetDialog) { newAssetDialog.style.display = "block"; return; }
   const d = document.createElement("div");
-  d.style.cssText = "position:absolute;top:10px;left:236px;z-index:31;width:250px;padding:12px;border-radius:8px;" +
+  d.style.cssText = "position:absolute;top:10px;left:696px;z-index:31;width:250px;padding:12px;border-radius:8px;" +
     "background:rgba(22,22,27,.97);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5)";
   const head = document.createElement("div");
-  head.style.cssText = "display:flex;align-items:center;margin-bottom:8px";
+  head.style.cssText = "display:flex;align-items:center;margin-bottom:8px;cursor:move";
   head.innerHTML = '<strong style="flex:1">New asset</strong>';
   const close = document.createElement("button");
   close.textContent = "✕";
@@ -917,6 +917,7 @@ function openNewAssetDialog() {
   const par = canvas.parentElement || document.body;
   if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
   par.appendChild(d);
+  makeDraggable(d, head);
   newAssetDialog = d;
 }
 
@@ -929,13 +930,42 @@ function styleToolBtn(b, active) {
   b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
     "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
 }
+// Drag support: grab `handle` to reposition `el` over the viewport. Buttons inside the handle keep
+// their clicks (a drag never starts on them). Coordinates are relative to the positioned parent.
+function makeDraggable(el, handle) {
+  let dragging = false, dx = 0, dy = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
+    dragging = true;
+    const r = el.getBoundingClientRect();
+    dx = e.clientX - r.left;
+    dy = e.clientY - r.top;
+    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const pr = el.offsetParent ? el.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+    el.style.left = Math.max(0, e.clientX - pr.left - dx) + "px";
+    el.style.top = Math.max(0, e.clientY - pr.top - dy) + "px";
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+  };
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
+}
+
 function buildTerrainHud() {
   if (hud) return;
   hud = document.createElement("div");
   hud.style.cssText = "position:absolute;top:10px;left:10px;z-index:30;width:216px;padding:12px;border-radius:8px;" +
     "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
   const head = document.createElement("div");
-  head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px";
+  head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:move";
   head.innerHTML = '<span style="width:9px;height:9px;border-radius:999px;background:#e0552b;box-shadow:0 0 6px #e0552b"></span>' +
     '<strong style="letter-spacing:.03em;flex:1">TERRAIN EDIT</strong>';
   const exit = document.createElement("button");
@@ -969,40 +999,50 @@ function buildTerrainHud() {
   }
   hud._matRow = matRow;
   hud.appendChild(matRow);
-  // Asset catalog palette — only shown while the Catalog tool is active. Search + category chips +
-  // a thumbnail grid of QC-approved assets; clicking a card arms the ghost place tool.
-  const catPanel = document.createElement("div");
-  catPanel.style.cssText = "display:none;margin-bottom:10px";
+  // Asset catalog — a SEPARATE, larger draggable modal (it was crushed inside the 216px HUD).
+  // Shown while the Catalog tool is active; drag it by its header, ✕ returns to the Raise tool.
+  const catModal = document.createElement("div");
+  catModal.style.cssText = "position:absolute;top:10px;left:240px;z-index:30;width:440px;padding:12px;border-radius:8px;" +
+    "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
+  const catHead = document.createElement("div");
+  catHead.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:move";
+  catHead.innerHTML = '<span style="width:9px;height:9px;border-radius:999px;background:#e0552b"></span>' +
+    '<strong style="letter-spacing:.03em;flex:1">ASSET CATALOG</strong>';
+  const catClose = document.createElement("button");
+  catClose.textContent = "✕";
+  catClose.style.cssText = "border:none;background:none;color:#bbb;font:14px system-ui;cursor:pointer";
+  catClose.onclick = () => { state.brushTool = "raise"; updateEditModeIndicator(); };
+  catHead.appendChild(catClose);
+  catModal.appendChild(catHead);
   const catSearch = document.createElement("input");
   catSearch.type = "search";
   catSearch.placeholder = "Search assets";
   catSearch.style.cssText = "width:100%;box-sizing:border-box;background:#2a2a32;color:#eee;border:1px solid #454550;" +
-    "border-radius:5px;padding:5px 8px;font:12px system-ui;margin-bottom:8px";
+    "border-radius:5px;padding:6px 9px;font:12px system-ui;margin-bottom:8px";
   catSearch.oninput = () => renderCatalogGrid();
-  catPanel.appendChild(catSearch);
+  catModal.appendChild(catSearch);
   const catChips = document.createElement("div");
   catChips.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px";
-  catPanel.appendChild(catChips);
+  catModal.appendChild(catChips);
   const catGrid = document.createElement("div");
-  catGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:7px;max-height:260px;overflow:auto";
-  catPanel.appendChild(catGrid);
+  catGrid.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:440px;overflow:auto";
+  catModal.appendChild(catGrid);
   // Session-submitted ＋New requests (chips) + the ＋New button. A chip is a local "sent" record;
   // the asset itself arrives later through the approve → catalog.publish → palette-refresh path.
   const catReqs = document.createElement("div");
   catReqs.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:8px";
-  catPanel.appendChild(catReqs);
+  catModal.appendChild(catReqs);
   const newBtn = document.createElement("button");
   newBtn.textContent = "＋ New asset";
   newBtn.style.cssText = "width:100%;margin-top:8px;padding:7px;border-radius:5px;border:1px solid #e0552b;" +
     "background:#e0552b;color:#fff;font:12px system-ui;cursor:pointer";
   newBtn.onclick = () => openNewAssetDialog();
-  catPanel.appendChild(newBtn);
-  hud._catPanel = catPanel;
+  catModal.appendChild(newBtn);
+  hud._catModal = catModal;
   hud._catSearch = catSearch;
   hud._catChips = catChips;
   hud._catGrid = catGrid;
   hud._catReqs = catReqs;
-  hud.appendChild(catPanel);
   const mkSlider = (label, min, max, step, get, set, fmt) => {
     const wrap = document.createElement("div");
     wrap.style.margin = "0 0 8px";
@@ -1044,6 +1084,9 @@ function buildTerrainHud() {
   const par = canvas.parentElement || document.body;
   if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
   par.appendChild(hud);
+  par.appendChild(catModal);
+  makeDraggable(hud, head);
+  makeDraggable(catModal, catHead);
 }
 function styleMatBtn(b, active) {
   const hex = b.dataset.hex || "#888";
@@ -1062,9 +1105,9 @@ function refreshHudTools() {
     hud._matRow.style.display = paint ? "grid" : "none";
     if (paint) refreshHudMats();
   }
-  if (hud._catPanel) {
+  if (hud._catModal) {
     const cat = state.brushTool === "catalog";
-    hud._catPanel.style.display = cat ? "block" : "none";
+    hud._catModal.style.display = cat && state.editMode ? "block" : "none";
     if (cat) { hideBrushRing(); void refreshCatalog(); }
     else hidePlaceGhost();
   }
@@ -1079,6 +1122,7 @@ function updateEditModeIndicator() {
     canvas.style.cursor = "crosshair";
   } else {
     hud.style.display = "none";
+    if (hud._catModal) hud._catModal.style.display = "none";
     canvas.style.outline = "";
     canvas.style.cursor = "";
     hideBrushRing();
