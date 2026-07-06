@@ -35,6 +35,7 @@ import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { applyAuthorCommandsIsolated, type AuthorCommandFailure } from "../kernel/apply-isolated.ts";
 import { LiminaTracer } from "../observability/event.ts";
+import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
 import { SharedTransformStorage } from "./sab-transforms.ts";
 import { InputRingBuffer, type InputFrame } from "./sab-ringbuffer.ts";
@@ -48,6 +49,7 @@ const DEFAULT_GRANTS: ReadonlySet<string> = new Set([
   "scene.write", "scene.read", "ecs.write", "ecs.read", "three.write", "three.read",
   "physics.write", "physics.read", "player.write", "player.read", "player.configure",
   "world.write", "world.read", "terrain.write", "terrain.read", "asset.write", "material.write",
+  "design.write", "design.read",
   "audio.write", "camera.write", "animation.write",
 ]);
 
@@ -285,6 +287,7 @@ export class SimWorkerController {
       spatial: new UniformGridSpatialIndex(),
       entities,
       tags: new Map(),
+      design: createDesignArtifactStore(),
       scene: stubScene(),
       camera: stubCamera(),
       ops,

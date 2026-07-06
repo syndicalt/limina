@@ -25,6 +25,7 @@ import { resolveProfile } from "../skills/permissions.ts";
 import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
 import { DurableWorldLog } from "../worldlog/durable.ts";
+import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
 import {
   captureWorldState,
@@ -238,6 +239,7 @@ export class AuthoritativeServer {
       spatial: new UniformGridSpatialIndex(),
       entities: new EntityTable(),
       tags: new Map(),
+      design: createDesignArtifactStore(),
       scene,
       camera,
       ops: this.recOps,

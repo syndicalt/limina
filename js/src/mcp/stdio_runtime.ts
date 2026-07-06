@@ -8,6 +8,7 @@ import { createEcsWorld } from "../ecs/world.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { Mcp, StdioMcpTransport } from "./mcp.ts";
 
 declare const Deno: { core: { ops: typeof ops & {
@@ -17,7 +18,7 @@ declare const Deno: { core: { ops: typeof ops & {
 
 const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
 const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
-const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), scene, camera, ops };
+const world: WorldContext = { ecs: createEcsWorld(), entities: new EntityTable(), tags: new Map(), design: createDesignArtifactStore(), scene, camera, ops };
 
 ops.op_physics_create_world(0);
 

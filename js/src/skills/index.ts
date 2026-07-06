@@ -58,6 +58,7 @@ import { registerVFXSkills, type VFXManager } from "./vfx.ts";
 import { registerSaveSkills, type SaveManager } from "./save.ts";
 import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
 import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMManager, type ReverbManager } from "./worldstate.ts";
+import { registerDesignSkills } from "./design.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -167,6 +168,7 @@ export function registerCoreSkills(
   registerSystemSkills(registry);
   registerApprovalSkills(registry);
   registerAuditSkills(registry);
+  registerDesignSkills(registry);
   // A4 UI surface: the `ui.*` skills author live containers against a shared
   // UiManager; the host ticks UiManager.update(camera,…) each frame.
   const ui = new UiManager();

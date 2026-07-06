@@ -10,8 +10,9 @@ import type { Tracer } from "../observability/event.ts";
 import type { MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEventType, policyEventPayload } from "../policy/engine.ts";
+import type { DesignArtifactStore } from "../world/design-artifacts.ts";
 
-export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "system" | "ui" | "social" | "audio" | "terrain" | "world" | "player" | "camera" | "animation" | "interaction" | "inventory" | "game" | "trigger" | "event" | "quest" | "stats" | "damage" | "status" | "combat" | "behavior" | "dialogue" | "nav" | "vfx" | "save" | "progression";
+export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "system" | "ui" | "social" | "audio" | "terrain" | "world" | "design" | "player" | "camera" | "animation" | "interaction" | "inventory" | "game" | "trigger" | "event" | "quest" | "stats" | "damage" | "status" | "combat" | "behavior" | "dialogue" | "nav" | "vfx" | "save" | "progression";
 
 /** Pick the tick to stamp on an APPLY-TIME event. The apply tick (the reviewer's
  *  current tick for an approval-gated action) is used ONLY when it is a finite number
@@ -39,6 +40,7 @@ export interface WorldContext {
   spatial?: UniformGridSpatialIndex;
   entities: EntityTable;
   tags: Map<number, Set<string>>;
+  design?: DesignArtifactStore;
   scene: SceneLike;
   camera: CameraLike;
   ops: EngineOps;

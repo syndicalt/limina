@@ -30,6 +30,7 @@ import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
 import { resolveProfile } from "./skills/permissions.ts";
+import { createDesignArtifactStore } from "./world/design-artifacts.ts";
 import { applyAuthorCommand } from "./kernel/authoring.ts";
 import {
   applyAuthorCommandsIsolated,
@@ -694,6 +695,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     spatial: new UniformGridSpatialIndex(),
     entities,
     tags: new Map(),
+    design: createDesignArtifactStore(),
     scene,
     camera,
     ops,

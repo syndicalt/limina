@@ -33,6 +33,7 @@ import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
 import type { PolicyEngine } from "../policy/engine.ts";
+import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 
 /** Opt-in world-log recording. Supply to capture a replay-complete command stream;
  *  omit (or pass `false`) for a zero-cost direct-path game. */
@@ -157,6 +158,7 @@ function assemble(p: AssembleParams): GameContext {
     spatial: p.spatial,
     entities: p.entities,
     tags: p.tags,
+    design: createDesignArtifactStore(),
     scene: p.scene,
     camera: p.camera,
     renderer: p.renderer,

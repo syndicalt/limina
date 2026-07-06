@@ -25,6 +25,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "save.write",
     "progression.read", "progression.write", "progression.configure",
     "world.read", "world.write",
+    "design.read", "design.write",
   ],
   // Full player character control (Part D).
   "player.full": [
@@ -72,6 +73,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   // Game rules and quest authoring
   "game.author": [
     "game.write", "game.configure",
+    "design.read", "design.write",
     "quest.read", "quest.write", "quest.configure",
     "trigger.configure", "event.read", "event.write",
     "stats.configure",
@@ -91,6 +93,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   // World dynamics (time, weather, spawn)
   "world.author": [
     "world.write", "checkpoint.read", "checkpoint.write",
+    "design.read", "design.write",
     "save.write",
     "scene.read", "ecs.read", "physics.read",
   ],
@@ -104,14 +107,15 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
   // Observer profiles (existing)
-  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read"],
+  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
   // Phase 7 human-in-the-loop (existing)
   "builder.review": [
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
+    "design.read", "design.write",
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read"],
+  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read"],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
