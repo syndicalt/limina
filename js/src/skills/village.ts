@@ -119,6 +119,16 @@ const SitingSchema = z.object({
   /** The path between buildings. dirt = a trodden earth lane; gravel = a crushed-stone path;
    *  cobble = paved setts; none = no lane. */
   lane: z.enum(["dirt", "gravel", "cobble", "none"]).default("dirt"),
+  /** The settlement CLEARING — how far the surrounding wild growth (a forest scattered BEFORE
+   *  this build) is pushed back from the hamlet as a whole. "none" (default) clears only each
+   *  building's own footprint, so a forest grows right between the buildings. "commons" registers
+   *  ONE keep-out disc covering all placements + a margin, so the settlement sits in an open
+   *  clearing ringed by the forest (the canonical hamlet-in-a-clearing read). The grass carpet
+   *  still fills the commons — it is cleared of TREES, not of ground cover. */
+  clearing: z.enum(["none", "commons"]).default("none"),
+  /** Extra world-XZ margin (m) the "commons" clearing adds beyond the outermost building, i.e.
+   *  how deep the open ring between the hamlet edge and the treeline is. Ignored for "none". */
+  clearingMargin: z.number().min(0).max(60).default(10),
 }).default({});
 
 const buildInput = z.object({
@@ -309,9 +319,16 @@ export function registerVillageSkills(
         }
         const assetId = spec.assetId as string; // guaranteed by the schema refine (assetId required unless kit)
         const resolved = assets.resolve(assetId);
+        // Content-hash pin: WARN (never THROW) on a mismatch. The committed hash may have been produced
+        // by a DIFFERENT host than the one now replaying (e.g. authored on the Rust host, replayed in the
+        // browser JS host) — op_sha256 is not guaranteed byte-identical across hosts, so a cross-host
+        // mismatch is expected and must NOT quarantine the whole settlement (that dropped EVERY building
+        // on browser replay while the procedural forest survived — the "no structures, trees fine" bug).
+        // The `assetId` already pins authored identity; the hash is a secondary integrity signal. A
+        // genuinely swapped asset surfaces as a visible mismatch warning without nuking the build.
         const committed = input.assetHashes?.[assetId];
         if (committed !== undefined && committed !== resolved.hash) {
-          throw new Error(`village.build: '${assetId}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) — authored asset identity changed`);
+          ctx.emit("village.asset_hash_mismatch", { assetId, committed, resolved: resolved.hash });
         }
         assetHashes[assetId] = resolved.hash;
         let r = radiusCache.get(assetId);
@@ -563,6 +580,24 @@ export function registerVillageSkills(
           : (k === 0 && (siting.yard === "earth" || siting.yard === "cobble-courtyard")) ? r + 16 + FOOTPRINT_TREE_MARGIN
             : r;
         exclusions.push({ x: p.x, z: p.z, r: clearR });
+      }
+      // SETTLEMENT COMMONS (siting.clearing === "commons"): push the surrounding forest back from the
+      // hamlet as a whole. One keep-out disc centered on the placements' centroid, sized to enclose the
+      // farthest building (center + its footprint) plus the clearing margin — so the settlement sits in an
+      // open ring of cleared ground, the treeline beyond it. A PURE function of the placements + radii,
+      // recomputed byte-identically on replay. The grass lawn/carpet still fills it (this clears TREES).
+      if (siting.clearing === "commons" && placements.length > 0) {
+        let cx = 0, cz = 0;
+        for (const p of placements) { cx += p.x; cz += p.z; }
+        cx /= placements.length; cz /= placements.length;
+        // Median distance to a building (not the MAX) so one deliberately-outlying building — a watchtower
+        // pushed to the frontier edge, an outlying cottage — doesn't balloon the clearing to swallow the
+        // whole map. The commons covers the hamlet CORE; outliers keep only their own footprint clearing
+        // and sit at the treeline. Capped absolutely so a sparse spread can't over-clear either.
+        const dists = placements.map((p, k) => Math.hypot(p.x - cx, p.z - cz) + radii[p.index]).sort((a, b) => a - b);
+        const core = dists[Math.floor(dists.length / 2)]; // median reach
+        const r = Math.min(core + siting.clearingMargin, 30);
+        exclusions.push({ x: cx, z: cz, r });
       }
       const laneCl = laneCenterline(heightAt, placed);
       if (laneCl !== null) {

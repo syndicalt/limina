@@ -109,6 +109,13 @@ const placeInput = z.object({
    *  the recorder. Present on REPLAY: the resolved bytes are verified against it so
    *  the authored asset identity is pinned (a swapped/updated asset is rejected). */
   hash: z.string().optional(),
+  /** REVIEW METADATA (not load-bearing — never touches the placed entity). When this placement is
+   *  PROPOSED under a review profile (builder.review) and HELD in the approval queue, these ride the
+   *  proposal so the reviewer approves what they can SEE. `qcRender` is an /assets-relative path to the
+   *  asset's GPU QC render (e.g. "qc/cottage-authored.png"); `qcChecks` flags the automated pre-checks
+   *  (textured/scale/integrity — theme stays the human's call). The editor's approval card renders them. */
+  qcRender: z.string().optional(),
+  qcChecks: z.record(z.string(), z.union([z.boolean(), z.null()])).optional(),
 });
 
 /** Permission scope for asset.place — also the scope handed to its nested

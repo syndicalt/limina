@@ -120,6 +120,20 @@ export function registerVegetationSkills(
       const assetHashes: Record<string, string> = {};
       for (const id of paletteIds) assetHashes[id] = assets.resolve(id).hash;
 
+      // Default the elevation FLOOR to the layer's sea level (exactly like grass, grass.ts) so a
+      // forest never wades into water — the low basins are lakebeds, not planting ground. An
+      // explicit `elevationMin` overrides. seaLevel = the generated waterline (elevationColors),
+      // or the terrain's lowest point for a plain slab with no generated sea. A pure function of
+      // the layer's heights, so replay recomputes the identical floor.
+      let loH = Infinity;
+      for (let i = 0; i < layer.tile.heights.length; i++) { const v = layer.tile.heights[i]; if (v < loH) loH = v; }
+      const seaLevel = layer.elevationColors?.seaLevel ?? (layer.tile.origin[1] + loH);
+      // Large conifers (spruce/pine/birch) must fully CLEAR the water — a whole-tree margin above the
+      // waterline, not just the trunk base, so no big trunk stands in a lake. (A future shallow-water
+      // species tier — reeds/mangrove/shrub — will floor LOWER, at ~seaLevel, so small growth can wade
+      // into the shallows; large-tree species keep this clearance.) Explicit elevationMin still overrides.
+      const elevationMinDefault = seaLevel + 1.5;
+
       // Placements are a PURE function of the terrain + the terrain's CURRENT footprints (unioned
       // with any explicit exclusions). Computing them fresh on each (re)mount means the SAME closure
       // grows the full forest when no village exists yet AND re-grows the CLEARED forest once
@@ -136,7 +150,7 @@ export function registerVegetationSkills(
           sizeRange: input.sizeRange,
           coverage: input.coverage,
           cluster: input.cluster,
-          ...(input.elevationMin !== undefined ? { elevationMin: input.elevationMin } : {}),
+          elevationMin: input.elevationMin ?? elevationMinDefault,
           ...(input.elevationMax !== undefined ? { elevationMax: input.elevationMax } : {}),
           ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
         };
@@ -144,6 +158,12 @@ export function registerVegetationSkills(
       };
 
       const scene = ctx.world.scene as SceneLike | undefined;
+      // Gated on NON-headless mode: the forest's per-archetype mount awaits nextFrame() (to avoid
+      // blocking the main thread / tripping the browser watchdog), which never fires on the headless
+      // authoritative server — so the server must NOT enter the mount path (it would hang). The browser
+      // re-authors from the RETURNED placements, so the carve must be baked into computePlacements at
+      // author time (scatter reads the terrain's already-registered settlement footprints), NOT deferred
+      // to the post-village subtractive remount. See build order: register footprints before scattering.
       const canRender = ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function";
       // Live set of this forest's instanced meshes — mutated in place by (re)mount so the removal
       // closure + the clear closure both see the current set.

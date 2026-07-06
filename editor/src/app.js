@@ -477,6 +477,29 @@ function renderApprovals() {
     top.appendChild(el("span", "tag", a.profile ?? "?"));
     card.appendChild(top);
     card.appendChild(el("div", "dim", `proposed by ${a.agentId} • tick ${a.tick}`));
+    // Visual QC: when a proposal carries a QC render + automated pre-checks (an asset review
+    // proposed under builder.review), SHOW the render + flag badges so the reviewer approves what
+    // they can SEE, not just an input blob. `qcRender` is an /assets-relative path (e.g.
+    // "qc/cottage-authored.png"); `qcChecks` flags the objective axes (theme is the human's call).
+    const input = a.input && typeof a.input === "object" ? a.input : {};
+    if (typeof input.qcRender === "string" && input.qcRender.length > 0) {
+      const img = document.createElement("img");
+      img.src = "/assets/" + input.qcRender.replace(/^\/+/, "");
+      img.alt = "QC render";
+      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;margin:6px 0;background:#0b0b0b";
+      card.appendChild(img);
+    }
+    if (input.qcChecks && typeof input.qcChecks === "object") {
+      const row = el("div", "approval-qc-checks");
+      row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin:4px 0";
+      for (const [axis, val] of Object.entries(input.qcChecks)) {
+        const pass = val === true, fail = val === false;
+        const b = el("span", "tag", `${pass ? "✓" : fail ? "✗" : "?"} ${axis}`);
+        b.style.cssText = `font-size:11px;padding:1px 6px;border-radius:4px;background:${pass ? "#14401f" : fail ? "#4a1616" : "#333"};color:${pass ? "#7fe39a" : fail ? "#ff9a9a" : "#bbb"}`;
+        row.appendChild(b);
+      }
+      card.appendChild(row);
+    }
     const pre = el("pre", "approval-input");
     pre.textContent = JSON.stringify(a.input, null, 2);
     card.appendChild(pre);

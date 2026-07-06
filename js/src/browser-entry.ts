@@ -965,8 +965,19 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         if (LIVE_IN_PLACE_SKILLS.has(cmd.tool)) continue;
         if (LIVE_RENDER_ONLY_SKILLS.has(cmd.tool)) continue; // render-thread scene mutation (lights), no reboot
         if (LIVE_REMOVE_SKILLS.has(cmd.tool)) continue; // hot removal, no reboot
-        if (LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)) structuralAdds++;
-        else unsupportedStructuralTools.push(cmd.tool);
+        if (LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)) {
+          // In-place GLB mount is safe ONLY when the asset's parse cache was PRE-WARMED at load (runLive
+          // warms the load-time command set before renderer.init, so parseGltfScene returns a sync clone).
+          // An asset first appearing MID-SESSION — an approved/authored GLB placed after boot — has NO
+          // cached clone, so mounting it in place would parse on the render thread (macrotask → WebGL2
+          // corruption / invisible mesh) or fall back to the blocking sync-XHR read (garbled placeholder —
+          // the "spiral tower" bug). Force a REBOOT: runLive re-pre-warms EVERY asset (incl. this one)
+          // before renderer.init, then it mounts from a synchronous clone. Already-warmed assets (the
+          // load-time set, tree palette) keep the fast in-place path.
+          const unwarmed = gltfAssetIdsForCommand(cmd).filter((id) => !hasGltfScene(id));
+          if (unwarmed.length > 0) { unsupportedStructuralTools.push(`${cmd.tool} (unwarmed asset: ${unwarmed.join(", ")})`); continue; }
+          structuralAdds++;
+        } else unsupportedStructuralTools.push(cmd.tool);
       }
       if (unsupportedStructuralTools.length > 0) {
         console.warn(
