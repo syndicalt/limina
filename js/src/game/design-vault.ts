@@ -311,6 +311,59 @@ export interface BuildLink {
   buildId: string | null;
 }
 
+// ---- mind-map graph (generated from the docs' relationships) ---------------
+
+export interface GraphNode { id: string; label: string; type: string; }
+export interface GraphEdge { from: string; to: string; label: string; }
+export interface VaultGraph { nodes: GraphNode[]; edges: GraphEdge[]; }
+
+/** Build the mind-map graph from the vault's own relationships: regions, locations,
+ *  cast, and beats become nodes; the typed references between them (location in region,
+ *  npc lives-in location, beat occurs-at location, creature emerges-from region) become
+ *  edges. This is both the design graph and the cascade/impact graph. */
+export function vaultGraph(docs: VaultDoc[]): VaultGraph {
+  const byKind = new Map<string, Frontmatter>();
+  for (const d of docs) {
+    try { byKind.set(str(parseFrontmatter(d.content).kind), parseFrontmatter(d.content)); } catch { /* skip */ }
+  }
+  const world = byKind.get("world-bible") ?? {};
+  const cast = byKind.get("cast") ?? {};
+  const story = byKind.get("storyboard") ?? {};
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  const seen = new Set<string>();
+  const add = (id: string, label: string, type: string) => {
+    if (id.length === 0 || seen.has(id)) return;
+    seen.add(id); nodes.push({ id, label, type });
+  };
+  for (const r of arr(world.regions)) add(str(r.id), str(r.name), "region");
+  for (const l of arr(world.locations)) {
+    add(str(l.id), str(l.name), "location");
+    const reg = str(l.region ?? l.regionId);
+    if (reg) edges.push({ from: str(l.id), to: reg, label: "in" });
+  }
+  const p = (cast.player ?? {}) as Record<string, unknown>;
+  if (p.id) add(str(p.id), str(p.name), "player");
+  for (const n of arr(cast.npcs)) {
+    add(str(n.id), str(n.name), "npc");
+    const h = str(n.home ?? n.locationId);
+    if (h) edges.push({ from: str(n.id), to: h, label: "lives-in" });
+  }
+  for (const c of arr(cast.creatures)) {
+    add(str(c.id), str(c.name), "creature");
+    const h = str(c.home ?? c.locationId);
+    if (h) edges.push({ from: str(c.id), to: h, label: "emerges-from" });
+  }
+  for (const b of arr(story.beats)) {
+    add(str(b.id), str(b.name ?? b.title), "beat");
+    const at = str(b.at ?? b.locationId);
+    if (at) edges.push({ from: str(b.id), to: at, label: "occurs-at" });
+  }
+  // keep only edges whose endpoints both exist
+  const ids = new Set(nodes.map((n) => n.id));
+  return { nodes, edges: edges.filter((e) => ids.has(e.from) && ids.has(e.to)) };
+}
+
 // ---- top-level: vault -> design store --------------------------------------
 
 export interface VaultDoc { name: string; content: string; }

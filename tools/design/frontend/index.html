@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Design Space</title>
+<style>
+  :root {
+    --bg:#e9edf1; --panel:#ffffff; --panel-2:#f5f7f9; --ink:#1b2126; --muted:#5c6773;
+    --line:#d7dee6; --accent:#2f6f7a; --accent-soft:#e2eef0; --amber:#b9772b; --amber-soft:#f6ecdd;
+    --violet:#6d5f7a; --ok:#3f7d57;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body { background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  .app { display:grid; grid-template-rows:auto 1fr; height:100vh; }
+
+  /* top bar */
+  .topbar { display:flex; align-items:center; gap:18px; padding:10px 18px; background:var(--panel);
+    border-bottom:1px solid var(--line); }
+  .brand { display:flex; align-items:baseline; gap:10px; }
+  .brand .mark { font-family:var(--serif); font-weight:600; font-size:17px; letter-spacing:.2px; }
+  .brand .sub { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted); }
+  .tabs { display:flex; gap:2px; margin-left:8px; }
+  .tab { padding:6px 12px; border-radius:7px; color:var(--muted); cursor:pointer; font-weight:500; }
+  .tab:hover { background:var(--panel-2); }
+  .tab.active { background:var(--accent-soft); color:var(--accent); }
+  .topbar .spacer { flex:1; }
+  .status { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); display:inline-block; }
+  .dot.shell { background:var(--amber); }
+  .btn { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:7px;
+    padding:6px 11px; cursor:pointer; font:inherit; font-size:12px; }
+  .btn:hover { background:var(--panel-2); }
+
+  /* body columns */
+  .body { display:grid; grid-template-columns:250px 1fr 288px; overflow:hidden; }
+  .col { overflow:auto; height:100%; }
+  .sidebar { background:var(--panel); border-right:1px solid var(--line); padding:16px 10px; }
+  .rail { background:var(--panel); border-left:1px solid var(--line); padding:16px 14px; }
+  .center { padding:0; }
+
+  .eyebrow { font-size:10.5px; text-transform:uppercase; letter-spacing:.16em; color:var(--muted);
+    margin:2px 8px 10px; font-weight:600; }
+  .navitem { display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:7px; cursor:pointer; color:var(--ink); }
+  .navitem:hover { background:var(--panel-2); }
+  .navitem.active { background:var(--accent-soft); }
+  .navitem .ic { width:22px; height:22px; border-radius:6px; display:grid; place-items:center; font-size:12px;
+    background:var(--panel-2); color:var(--accent); flex:none; }
+  .navitem .t { font-weight:500; }
+  .navitem .k { font-size:10.5px; color:var(--muted); margin-left:auto; }
+
+  /* document view */
+  .doc-wrap { max-width:720px; margin:0 auto; padding:36px 40px 90px; }
+  .props { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px; }
+  .prop { font-size:11px; background:var(--panel-2); border:1px solid var(--line); border-radius:20px;
+    padding:3px 10px; color:var(--muted); }
+  .prop b { color:var(--ink); font-weight:600; }
+  .doc { font-family:var(--serif); font-size:16px; line-height:1.72; color:#20262c; }
+  .doc h1 { font-size:30px; line-height:1.2; margin:.2em 0 .5em; font-weight:600; letter-spacing:.2px; }
+  .doc h2 { font-size:21px; margin:1.5em 0 .5em; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:.24em; }
+  .doc h3 { font-size:16.5px; margin:1.4em 0 .4em; font-weight:600; color:#2b3138; }
+  .doc p { margin:.7em 0; }
+  .doc ul,.doc ol { margin:.6em 0; padding-left:1.4em; }
+  .doc li { margin:.24em 0; }
+  .doc blockquote { margin:1em 0; padding:.4em 1em; border-left:3px solid var(--accent); background:var(--panel-2);
+    color:var(--muted); border-radius:0 6px 6px 0; }
+  .doc code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--panel-2); padding:1.5px 5px; border-radius:5px; }
+  .doc pre { background:#1e262d; color:#dbe4ea; padding:14px 16px; border-radius:9px; overflow:auto; font-size:13px; }
+  .doc pre code { background:none; padding:0; color:inherit; }
+  .doc table { border-collapse:collapse; width:100%; margin:1em 0; font-family:var(--sans); font-size:13.5px; }
+  .doc th,.doc td { border:1px solid var(--line); padding:7px 11px; text-align:left; }
+  .doc th { background:var(--panel-2); font-weight:600; }
+  .doc hr { border:none; border-top:1px solid var(--line); margin:1.6em 0; }
+  .doc a.wl { background:var(--accent-soft); border-radius:5px; padding:0 4px; color:var(--accent);
+    font-family:var(--sans); font-size:.9em; white-space:nowrap; }
+  .doc a.wl.missing { background:var(--amber-soft); color:var(--amber); }
+
+  /* mind-map */
+  .graph-wrap { height:100%; display:flex; flex-direction:column; }
+  .graph-head { padding:16px 24px 4px; }
+  .graph-head h2 { font-family:var(--serif); margin:0 0 3px; font-size:19px; font-weight:600; }
+  .graph-head p { margin:0; color:var(--muted); font-size:12.5px; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; padding:10px 24px; font-size:11.5px; color:var(--muted); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  svg { width:100%; flex:1; display:block; }
+  .gnode rect { rx:7; stroke:var(--line); stroke-width:1; }
+  .gnode text { font-family:var(--sans); font-size:11px; fill:var(--ink); }
+  .gedge { stroke:#b9c4cf; stroke-width:1.3; fill:none; }
+  .gedge-label { font-family:var(--sans); font-size:9px; fill:#8b97a3; }
+
+  /* build view */
+  .build-wrap { max-width:820px; margin:0 auto; padding:30px 34px 90px; }
+  .build-wrap h2 { font-family:var(--serif); font-weight:600; }
+  .kpis { display:flex; gap:12px; margin:14px 0 22px; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 16px; flex:1; }
+  .kpi .n { font-size:23px; font-weight:650; }
+  .kpi .l { font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  table.build { border-collapse:collapse; width:100%; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; overflow:hidden; font-size:13px; }
+  table.build th,table.build td { padding:9px 13px; border-bottom:1px solid var(--line); text-align:left; }
+  table.build th { background:var(--panel-2); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  table.build tr:last-child td { border-bottom:none; }
+  .bid { font-family:ui-monospace,monospace; font-size:12px; color:var(--accent); }
+  .bid.unbuilt { color:var(--amber); }
+
+  /* team rail */
+  .rail h3 { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted); margin:2px 0 12px; }
+  .agent { display:flex; gap:10px; padding:10px; border:1px solid var(--line); border-radius:10px; margin-bottom:8px;
+    background:var(--panel-2); }
+  .agent .av { width:30px; height:30px; border-radius:8px; flex:none; display:grid; place-items:center;
+    font-family:var(--serif); font-weight:600; color:#fff; font-size:13px; }
+  .agent .nm { font-weight:600; font-size:13px; }
+  .agent .rl { font-size:11.5px; color:var(--muted); }
+  .agent .owns { font-size:10.5px; color:var(--accent); margin-top:2px; }
+  .rail .note { font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5;
+    background:var(--amber-soft); border:1px solid #ecdcc2; border-radius:9px; padding:9px 11px; }
+  .loading { padding:40px; text-align:center; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand"><span class="mark" id="projname">Design Space</span><span class="sub">Design Space</span></div>
+    <div class="tabs">
+      <div class="tab active" data-view="docs">Documents</div>
+      <div class="tab" data-view="graph">Mind-map</div>
+      <div class="tab" data-view="build">Build</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="status"><span class="dot shell"></span>shell — agents not yet live</div>
+    <button class="btn" id="refresh">Refresh</button>
+  </div>
+  <div class="body">
+    <div class="col sidebar">
+      <div class="eyebrow">Map of content</div>
+      <div id="nav"></div>
+    </div>
+    <div class="col center" id="center"><div class="loading">Loading the vault…</div></div>
+    <div class="col rail">
+      <h3>The team</h3>
+      <div id="team"></div>
+      <div class="note">This is the frontend <b>shell</b>. The expert agents are shown here but are not
+        wired live yet — that's the next slice (cascade engine + agent comms).</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", cast:"☗", storyboard:"❧", "build-map":"⚑" };
+const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
+const NODE_COLOR = { region:"#dfeadf", location:"#e2eef0", player:"#e7e0f0", npc:"#f6ecdd", creature:"#f0dede", beat:"#e6ecf2" };
+const NODE_STROKE = { region:"#3f7d57", location:"#2f6f7a", player:"#6d5f7a", npc:"#b9772b", creature:"#a25151", beat:"#5c6773" };
+const TEAM = [
+  { nm:"Game Designer", rl:"Concept & pillars", owns:"concept.md", c:"#2f6f7a" },
+  { nm:"Art Director", rl:"Look, palette, mood", owns:"art-direction.md", c:"#b9772b" },
+  { nm:"Worldbuilder", rl:"Regions, locations, map", owns:"world-bible.md", c:"#3f7d57" },
+  { nm:"Casting Director", rl:"Player, NPCs, creatures", owns:"cast.md", c:"#a25151" },
+  { nm:"Narrative Designer", rl:"Beats & journey", owns:"storyboard.md", c:"#6d5f7a" },
+  { nm:"Architect", rl:"Global coherence · routes cascades", owns:"— watches all —", c:"#1b2126" },
+];
+
+let STATE = null, activeDoc = null, activeView = "docs";
+
+function frontmatter(content) {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const props = {};
+  if (m) for (const line of m[1].split("\n")) {
+    const mm = line.match(/^([A-Za-z0-9_-]+):\s*(.+)$/);
+    if (mm && !/^\s/.test(line)) props[mm[1]] = mm[2].replace(/^["']|["']$/g, "");
+  }
+  return { props, body: m ? content.slice(m[0].length) : content };
+}
+function kindOf(content) { return frontmatter(content).props.kind || "doc"; }
+
+// ---- compact markdown renderer ----
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function inline(s){
+  s = esc(s);
+  s = s.replace(/`([^`]+)`/g,(_,c)=>"<code>"+c+"</code>");
+  s = s.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g,(_,t,a)=>wl(t,a));
+  s = s.replace(/\[\[([^\]]+)\]\]/g,(_,t)=>wl(t,t));
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*]+)\*/g,"$1<em>$2</em>");
+  return s;
+}
+function wl(target, alias){
+  const doc = target.split("#")[0].trim();
+  const file = /\.md$/.test(doc) ? doc : doc + ".md";
+  const exists = STATE && STATE.docs.some(d=>d.name===file || d.name===doc || d.name.replace(/\.md$/,"")===doc);
+  return '<a class="wl'+(exists?"":" missing")+'" data-doc="'+esc(file)+'">'+esc(alias.replace(/\\\|/g,"|"))+"</a>";
+}
+function renderMd(src){
+  const lines = src.replace(/^---\r?\n[\s\S]*?\r?\n---/, "").split("\n");
+  let html="", i=0;
+  const closeList=()=>{ if(list){ html+="</"+list+">"; list=null; } };
+  let list=null;
+  while(i<lines.length){
+    let ln = lines[i];
+    if(/^```/.test(ln)){ closeList(); let code=""; i++; while(i<lines.length && !/^```/.test(lines[i])){ code+=esc(lines[i])+"\n"; i++; } html+="<pre><code>"+code+"</code></pre>"; i++; continue; }
+    if(/^\s*$/.test(ln)){ closeList(); i++; continue; }
+    let h = ln.match(/^(#{1,4})\s+(.*)$/);
+    if(h){ closeList(); html+="<h"+h[1].length+">"+inline(h[2])+"</h"+h[1].length+">"; i++; continue; }
+    if(/^>\s?/.test(ln)){ closeList(); let q=""; while(i<lines.length && /^>\s?/.test(lines[i])){ q+=lines[i].replace(/^>\s?/,"")+" "; i++; } html+="<blockquote>"+inline(q.trim())+"</blockquote>"; continue; }
+    if(/^(-{3,}|\*{3,})\s*$/.test(ln)){ closeList(); html+="<hr>"; i++; continue; }
+    if(/^\s*\|.*\|\s*$/.test(ln) && i+1<lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i+1])){
+      closeList();
+      const row=(r)=>r.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      const head=row(ln); i+=2; let body="";
+      while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){ body+="<tr>"+row(lines[i]).map(c=>"<td>"+inline(c)+"</td>").join("")+"</tr>"; i++; }
+      html+="<table><thead><tr>"+head.map(c=>"<th>"+inline(c)+"</th>").join("")+"</tr></thead><tbody>"+body+"</tbody></table>";
+      continue;
+    }
+    let ul = ln.match(/^\s*[-*]\s+(.*)$/), ol = ln.match(/^\s*\d+\.\s+(.*)$/);
+    if(ul){ if(list!=="ul"){ closeList(); html+="<ul>"; list="ul"; } html+="<li>"+inline(ul[1])+"</li>"; i++; continue; }
+    if(ol){ if(list!=="ol"){ closeList(); html+="<ol>"; list="ol"; } html+="<li>"+inline(ol[1])+"</li>"; i++; continue; }
+    closeList(); html+="<p>"+inline(ln)+"</p>"; i++;
+  }
+  closeList(); return html;
+}
+
+// ---- views ----
+function renderNav(){
+  const nav = document.getElementById("nav");
+  const order = ["home","concept","art-direction","world-bible","cast","storyboard","build-map"];
+  const docs = [...STATE.docs].sort((a,b)=> order.indexOf(kindOf(a.content)) - order.indexOf(kindOf(b.content)));
+  nav.innerHTML = docs.map(d=>{
+    const k = kindOf(d.content);
+    return '<div class="navitem'+(d.name===activeDoc?" active":"")+'" data-doc="'+d.name+'">'
+      +'<span class="ic">'+(KIND_ICON[k]||"◦")+'</span><span class="t">'+titleOf(d)+'</span>'
+      +'<span class="k">'+(KIND_LABEL[k]||"")+'</span></div>';
+  }).join("");
+  nav.querySelectorAll(".navitem").forEach(el=>el.onclick=()=>openDoc(el.dataset.doc));
+}
+function titleOf(d){ const p=frontmatter(d.content).props; return p.title || p.name || d.name.replace(/\.md$/,"").replace(/(^|-)([a-z])/g,(_,a,b)=>(a?" ":"")+b.toUpperCase()); }
+
+function openDoc(name){
+  activeView="docs"; setTabs(); activeDoc=name;
+  const d = STATE.docs.find(x=>x.name===name) || STATE.docs[0];
+  if(!d){ return; }
+  activeDoc = d.name;
+  const { props } = frontmatter(d.content);
+  const chips = Object.entries(props).filter(([k])=>k!=="note").slice(0,6)
+    .map(([k,v])=>'<span class="prop"><b>'+k+'</b> '+esc(String(v)).slice(0,42)+'</span>').join("");
+  document.getElementById("center").innerHTML =
+    '<div class="doc-wrap"><div class="props">'+chips+'</div><div class="doc">'+renderMd(d.content)+'</div></div>';
+  document.querySelectorAll(".doc a.wl").forEach(a=>{ if(a.dataset.doc) a.onclick=(e)=>{e.preventDefault(); openDoc(a.dataset.doc);}; });
+  renderNav();
+}
+
+function renderGraph(){
+  const g = STATE.graph || {nodes:[],edges:[]};
+  const W=900,H=560,cx=W/2,cy=H/2+10,R=Math.min(W,H)/2-90;
+  const order=["region","location","player","npc","creature","beat"];
+  const nodes=[...g.nodes].sort((a,b)=>order.indexOf(a.type)-order.indexOf(b.type));
+  const pos={}; nodes.forEach((n,k)=>{ const a=(k/nodes.length)*2*Math.PI - Math.PI/2; pos[n.id]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)}; });
+  const edges = (g.edges||[]).map(e=>{ const A=pos[e.from],B=pos[e.to]; if(!A||!B) return "";
+    const mx=(A.x+B.x)/2,my=(A.y+B.y)/2;
+    return '<path class="gedge" d="M'+A.x+' '+A.y+' Q '+cx+' '+cy+' '+B.x+' '+B.y+'"/>'
+      +'<text class="gedge-label" x="'+((A.x+cx)/2*0+mx)+'" y="'+my+'">'+esc(e.label)+'</text>'; }).join("");
+  const gn = nodes.map(n=>{ const p=pos[n.id]; const w=Math.min(150,28+n.label.length*6.6);
+    return '<g class="gnode" transform="translate('+(p.x-w/2)+','+(p.y-13)+')">'
+      +'<rect width="'+w+'" height="26" fill="'+(NODE_COLOR[n.type]||"#eee")+'" stroke="'+(NODE_STROKE[n.type]||"#999")+'"/>'
+      +'<text x="'+w/2+'" y="17" text-anchor="middle">'+esc(n.label)+'</text></g>'; }).join("");
+  const legend = order.filter(t=>nodes.some(n=>n.type===t)).map(t=>'<span><i style="background:'+NODE_COLOR[t]+';border:1px solid '+NODE_STROKE[t]+'"></i>'+t+'</span>').join("");
+  document.getElementById("center").innerHTML =
+    '<div class="graph-wrap"><div class="graph-head"><h2>Mind-map</h2>'
+    +'<p>Generated from the vault’s own links — '+nodes.length+' nodes, '+(g.edges||[]).length+' typed relationships. This is also the cascade graph.</p></div>'
+    +'<div class="legend">'+legend+'</div>'
+    +'<svg viewBox="0 0 '+W+' '+H+'">'+edges+gn+'</svg></div>';
+}
+
+function renderBuild(){
+  const b = STATE.build || {placements:[],links:[]};
+  const built = (b.links||[]).filter(l=>l.buildId).length;
+  const rows = (b.links||[]).map(l=>'<tr><td>'+esc(l.name)+'</td><td>'+esc(l.doc)+'</td><td>'
+    +(l.buildId?'<span class="bid">'+esc(l.buildId)+'</span>':'<span class="bid unbuilt">unbuilt</span>')+'</td></tr>').join("");
+  document.getElementById("center").innerHTML =
+    '<div class="build-wrap"><h2>Build</h2>'
+    +'<div class="kpis">'
+    +'<div class="kpi"><div class="n">'+(b.placements||[]).length+'</div><div class="l">placements</div></div>'
+    +'<div class="kpi"><div class="n">'+built+'/'+(b.links||[]).length+'</div><div class="l">doc ↔ build links</div></div>'
+    +'<div class="kpi"><div class="n">'+(b.ok?"✓":"—")+'</div><div class="l">compiles</div></div></div>'
+    +'<table class="build"><thead><tr><th>Design entity</th><th>From</th><th>Where in the build</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    +'<p style="color:var(--muted);font-size:12.5px;margin-top:16px">These are the compiled placements — where each thing goes. The buildings are still <b>unbuilt</b> GLBs until the 3D build step renders them.</p></div>';
+}
+
+function renderTeam(){
+  document.getElementById("team").innerHTML = TEAM.map(a=>
+    '<div class="agent"><div class="av" style="background:'+a.c+'">'+a.nm[0]+'</div>'
+    +'<div><div class="nm">'+a.nm+'</div><div class="rl">'+a.rl+'</div><div class="owns">'+a.owns+'</div></div></div>').join("");
+}
+
+function setTabs(){ document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.view===activeView)); }
+function showView(){
+  if(activeView==="docs") openDoc(activeDoc || (STATE.docs[0]&&STATE.docs[0].name));
+  else if(activeView==="graph") renderGraph();
+  else renderBuild();
+}
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{ activeView=t.dataset.view; setTabs(); showView(); });
+document.getElementById("refresh").onclick=load;
+
+async function load(){
+  const r = await fetch("/api/state"); STATE = await r.json();
+  document.getElementById("projname").textContent = (STATE.project||"Design Space").replace(/(^|-)([a-z])/g,(_,a,b)=>(a?" ":"")+b.toUpperCase());
+  document.title = document.getElementById("projname").textContent + " — Design Space";
+  renderTeam(); renderNav();
+  const home = STATE.docs.find(d=>kindOf(d.content)==="home");
+  if(!activeDoc) activeDoc = home ? home.name : (STATE.docs[0]&&STATE.docs[0].name);
+  showView();
+}
+load();
+</script>
+</body>
+</html>

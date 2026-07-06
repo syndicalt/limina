@@ -10,7 +10,7 @@
 // the TRANSLATION, not a pre-canonicalized shortcut.
 
 import { ops } from "../src/engine.ts";
-import { vaultToStore, parseFrontmatter } from "../src/game/design-vault.ts";
+import { vaultToStore, parseFrontmatter, vaultGraph } from "../src/game/design-vault.ts";
 import { compileDesignToGds } from "../src/game/design-compile.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -151,6 +151,19 @@ const link = links.find((l) => l.entity === "watchtower");
 assert(link !== undefined, "watchtower has a build-link stub");
 const resolved = placements.find((p) => p.id === `location-${link!.entity}`);
 assert(resolved !== undefined, "watchtower build link resolves to its placement (doc -> build)");
+
+// 8. Mind-map graph is generated FROM the docs' own links (nodes + typed edges).
+const graph = vaultGraph([
+  { name: "world-bible.md", content: WORLD },
+  { name: "cast.md", content: CAST },
+  { name: "storyboard.md", content: STORY },
+]);
+assert(graph.nodes.some((n) => n.id === "watchtower" && n.type === "location"), "graph: watchtower location node");
+assert(graph.nodes.some((n) => n.id === "grundir" && n.type === "npc"), "graph: grundir npc node");
+assert(graph.edges.some((e) => e.from === "watchtower" && e.to === "the-hamlet" && e.label === "in"), "graph: location-in-region edge");
+assert(graph.edges.some((e) => e.from === "grundir" && e.to === "longhall" && e.label === "lives-in"), "graph: npc-lives-in-location edge");
+assert(graph.edges.some((e) => e.from === "the-overlook" && e.to === "watchtower" && e.label === "occurs-at"), "graph: beat-occurs-at-location edge");
+assert(graph.edges.every((e) => graph.nodes.some((n) => n.id === e.from) && graph.nodes.some((n) => n.id === e.to)), "graph: no dangling edges");
 
 ops.op_log(
   "[js] p_design_vault OK: readable vault docs parse (nested maps, list-of-maps, inline arrays), " +
