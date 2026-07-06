@@ -8,10 +8,16 @@
   :root {
     --bg:#e9edf1; --panel:#ffffff; --panel-2:#f5f7f9; --ink:#1b2126; --muted:#5c6773;
     --line:#d7dee6; --accent:#2f6f7a; --accent-soft:#e2eef0; --amber:#b9772b; --amber-soft:#f6ecdd;
-    --violet:#6d5f7a; --ok:#3f7d57;
+    --violet:#6d5f7a; --ok:#3f7d57; --doc-ink:#20262c; --note-bd:#ecdcc2;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
   }
+  body.dark {
+    --bg:#11151a; --panel:#191e25; --panel-2:#232a33; --ink:#e6ebf1; --muted:#93a0ad;
+    --line:#2b333d; --accent:#5fb3c2; --accent-soft:#183036; --amber:#d59551; --amber-soft:#33291b;
+    --violet:#a394b8; --ok:#63a97e; --doc-ink:#dbe3ea; --note-bd:#4a3c26;
+  }
+  body { transition:background .18s ease, color .18s ease; }
   * { box-sizing:border-box; }
   html,body { margin:0; height:100%; }
   body { background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5; }
@@ -61,10 +67,10 @@
   .prop { font-size:11px; background:var(--panel-2); border:1px solid var(--line); border-radius:20px;
     padding:3px 10px; color:var(--muted); }
   .prop b { color:var(--ink); font-weight:600; }
-  .doc { font-family:var(--serif); font-size:16px; line-height:1.72; color:#20262c; }
+  .doc { font-family:var(--serif); font-size:16px; line-height:1.72; color:var(--doc-ink); }
   .doc h1 { font-size:30px; line-height:1.2; margin:.2em 0 .5em; font-weight:600; letter-spacing:.2px; }
   .doc h2 { font-size:21px; margin:1.5em 0 .5em; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:.24em; }
-  .doc h3 { font-size:16.5px; margin:1.4em 0 .4em; font-weight:600; color:#2b3138; }
+  .doc h3 { font-size:16.5px; margin:1.4em 0 .4em; font-weight:600; color:var(--doc-ink); }
   .doc p { margin:.7em 0; }
   .doc ul,.doc ol { margin:.6em 0; padding-left:1.4em; }
   .doc li { margin:.24em 0; }
@@ -92,7 +98,7 @@
   .legend i { width:10px; height:10px; border-radius:3px; display:inline-block; }
   svg { width:100%; flex:1; display:block; }
   .gnode rect { rx:7; stroke:var(--line); stroke-width:1; }
-  .gnode text { font-family:var(--sans); font-size:11px; fill:var(--ink); }
+  .gnode text { font-family:var(--sans); font-size:11px; fill:#20262c; }
   .gedge { stroke:#b9c4cf; stroke-width:1.3; fill:none; }
   .gedge-label { font-family:var(--sans); font-size:9px; fill:#8b97a3; }
 
@@ -121,7 +127,7 @@
   .agent .rl { font-size:11.5px; color:var(--muted); }
   .agent .owns { font-size:10.5px; color:var(--accent); margin-top:2px; }
   .rail .note { font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5;
-    background:var(--amber-soft); border:1px solid #ecdcc2; border-radius:9px; padding:9px 11px; }
+    background:var(--amber-soft); border:1px solid var(--note-bd); border-radius:9px; padding:9px 11px; }
   .loading { padding:40px; text-align:center; color:var(--muted); }
 </style>
 </head>
@@ -136,6 +142,7 @@
     </div>
     <div class="spacer"></div>
     <div class="status"><span class="dot shell"></span>shell — agents not yet live</div>
+    <button class="btn" id="theme" title="Toggle light / dark">🌙</button>
     <button class="btn" id="refresh">Refresh</button>
   </div>
   <div class="body">
@@ -307,6 +314,12 @@ function showView(){
 }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{ activeView=t.dataset.view; setTabs(); showView(); });
 document.getElementById("refresh").onclick=load;
+
+const themeBtn=document.getElementById("theme");
+function applyTheme(t){ document.body.classList.toggle("dark",t==="dark"); themeBtn.textContent=t==="dark"?"☀":"🌙"; }
+let theme=localStorage.getItem("design-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+applyTheme(theme);
+themeBtn.onclick=()=>{ theme=document.body.classList.contains("dark")?"light":"dark"; localStorage.setItem("design-theme",theme); applyTheme(theme); };
 
 async function load(){
   const r = await fetch("/api/state"); STATE = await r.json();
