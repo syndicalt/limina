@@ -214,7 +214,16 @@ export class AuthoritativeServer {
     let persisted: WorldCommand[] | undefined;
     if (opts.worldLog !== undefined) {
       this.durableLog = new DurableWorldLog(this.recorder, opts.worldLog.name, { compactFlushed: opts.worldLog.compactFlushed });
-      const existing = defaultOps.op_read_trace(opts.worldLog.name);
+      // A brand-new project has NO durable log file yet (the create-limina-app /
+      // first-boot case): op_read_trace throws on a missing file, so a missing log
+      // must read as EMPTY -> fresh open(), not a boot crash. Only a present,
+      // non-empty file drives the rehydrate path.
+      let existing = "";
+      try {
+        existing = defaultOps.op_read_trace(opts.worldLog.name);
+      } catch {
+        existing = "";
+      }
       if (existing.length > 0) {
         persisted = parseWorldLog(existing, {
           recoverCorruptLines: true,

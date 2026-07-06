@@ -31,6 +31,7 @@ import { reviewProfileGate } from "../../js/src/skills/approval.ts";
 import type { NetOps } from "../../js/src/net/protocol.ts";
 import { installCottageScenario } from "../../js/src/demos/coordinator_cottage.ts";
 import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
+import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
 import { resolveProfile } from "../../js/src/skills/permissions.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
@@ -71,7 +72,36 @@ function persistChat(record: ChatTurnPersistRecord): void {
   ops.op_append_trace("editor_host_chat.jsonl", JSON.stringify(record) + "\n");
 }
 
-const listenerId = await net.op_net_listen(PORT);
+// KERNEL K3 -- daemon reuse. The project's kernel port IS the liveness lock: the
+// first surface to bind it OWNS the kernel and records its port + capability token
+// in a per-project lock file; a concurrent second surface (another `npm run editor`,
+// the CLI, a board) cannot bind, so it ATTACHES to the running kernel instead of
+// spawning a second authoritative server on a second workspace (the "new workspace
+// every time" pain). K2 already made a serial RESTART resume the same durable log.
+const KERNEL_LOCK_FILE = "editor_host_kernel.lock.json";
+const kernelLock: LockIO = {
+  read: () => { try { const t = net.op_read_trace(KERNEL_LOCK_FILE); return t.length > 0 ? t : null; } catch { return null; } },
+  write: (text) => net.op_write_trace(KERNEL_LOCK_FILE, text),
+};
+const acq = await acquireKernel({
+  port: PORT,
+  token: EDITOR_AUTH_TOKEN,
+  worldlog: "editor_host_worldlog.jsonl",
+  lock: kernelLock,
+  listen: (p) => net.op_net_listen(p),
+});
+if (acq.role === "attached") {
+  // A kernel is already live for this project. Point the surface at it and exit
+  // (the module falls through with no keep-alive) -- do NOT double-spawn.
+  ops.op_log(
+    `editor_host: a kernel is ALREADY running for this project on ws://localhost:${acq.record.port}/ -- ` +
+      `attach your surface there (token ${acq.record.token}). Not spawning a second server or workspace.`,
+  );
+} else {
+  if (acq.reclaimedStaleLock) {
+    ops.op_log("editor_host: reclaimed a stale kernel lock (a prior daemon exited without releasing the port).");
+  }
+const listenerId = acq.handle as number;
 const port = net.op_net_listener_port(listenerId);
 const editorTransport = {
   accept: () => net.op_net_accept_allowed_origins(listenerId, JSON.stringify(EDITOR_ALLOWED_ORIGINS)),
@@ -201,3 +231,4 @@ ops.op_log(
 
 // Keep the process alive; the accept + tick loops run in the background.
 await new Promise<void>(() => {});
+} // end: we own the kernel (acq.role === "spawned")
