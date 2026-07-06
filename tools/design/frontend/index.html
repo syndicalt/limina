@@ -550,7 +550,14 @@ let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mou
 const SVGNS="http://www.w3.org/2000/svg";
 function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
 function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
-function evtVB(e,svg){ const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640]; }
+function evtVB(e,svg){
+  // Map client px -> viewBox coords via the SVG's own transform, so it stays exact
+  // regardless of the letterboxing preserveAspectRatio adds when the element's aspect
+  // ratio differs from the viewBox (1000:640). A naive rect-ratio mapping drifts.
+  const m=svg.getScreenCTM();
+  if(m){ const p=svg.createSVGPoint(); p.x=e.clientX; p.y=e.clientY; const q=p.matrixTransform(m.inverse()); return [q.x,q.y]; }
+  const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640];
+}
 function primaryMapId(){ return (STATE.maps&&STATE.maps[0]&&STATE.maps[0].id)||"primary"; }
 function activeMap(){ return (STATE.maps||[]).find(m=>m.id===activeMapId) || (STATE.maps||[])[0] || {id:"primary",features:[]}; }
 function curFeatures(){ const m=activeMap(); if(!Array.isArray(m.features)) m.features=[]; return m.features; }
