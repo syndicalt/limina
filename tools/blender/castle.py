@@ -175,42 +175,52 @@ def bake_tile(res=1024):
     pl = bpy.context.active_object
     m = bpy.data.materials.new("proc"); m.use_nodes = True; nt = m.node_tree; nds = nt.nodes; lk = nt.links
     bsdf = nds["Principled BSDF"]
-    # Depth comes from DARK CAVITY MORTAR (fake AO in albedo) + a strong multi-octave normal + per-block
-    # tonal variation + weathering — NOT a flat 2-tone paint with a weak bump.
+    # Irregular hand-laid ASHLAR (not subway tile): DOMAIN-WARPED joints + dressed calm faces + dark cavity
+    # mortar (fake AO) + strong recess normal + subtle per-cell tone. See tools/blender/bake_test.py.
+    def mix(a, b, fac, blend="MIX"):
+        x = nds.new("ShaderNodeMixRGB"); x.blend_type = blend; x.inputs["Fac"].default_value = fac
+        if isinstance(a, float): x.inputs["Color1"].default_value = (a, a, a, 1)
+        else: lk.new(a, x.inputs["Color1"])
+        if isinstance(b, tuple): x.inputs["Color2"].default_value = (*b, 1)
+        elif isinstance(b, float): x.inputs["Color2"].default_value = (b, b, b, 1)
+        else: lk.new(b, x.inputs["Color2"])
+        return x.outputs["Color"]
+    tc = nds.new("ShaderNodeTexCoord")
+    wn = nds.new("ShaderNodeTexNoise"); wn.inputs["Scale"].default_value = 5.0; wn.inputs["Detail"].default_value = 3.0
+    wsc = nds.new("ShaderNodeVectorMath"); wsc.operation = "SCALE"
+    lk.new(wn.outputs["Color"], wsc.inputs[0]); wsc.inputs["Scale"].default_value = 0.065
+    warp = nds.new("ShaderNodeVectorMath"); warp.operation = "ADD"
+    lk.new(tc.outputs["UV"], warp.inputs[0]); lk.new(wsc.outputs["Vector"], warp.inputs[1]); WV = warp.outputs["Vector"]
     brick = nds.new("ShaderNodeTexBrick"); brick.inputs["Scale"].default_value = 3.0
-    brick.inputs["Mortar Size"].default_value = 0.045; brick.inputs["Mortar Smooth"].default_value = 0.1
-    brick.inputs["Brick Width"].default_value = 0.52; brick.inputs["Row Height"].default_value = 0.26
-    brick.inputs["Color1"].default_value = (0.33, 0.29, 0.23, 1)      # warm mid stone (not near-white)
-    brick.inputs["Color2"].default_value = (0.41, 0.37, 0.29, 1)
-    brick.inputs["Mortar"].default_value = (0.09, 0.085, 0.075, 1)    # near-black cavity
-    fac = brick.outputs["Fac"]                                        # ~1 in mortar, ~0 on block faces
-    # weathering / grime patches
+    brick.inputs["Mortar Size"].default_value = 0.05; brick.inputs["Mortar Smooth"].default_value = 0.22
+    brick.inputs["Brick Width"].default_value = 0.58; brick.inputs["Row Height"].default_value = 0.27
+    brick.inputs["Color1"].default_value = (0.33, 0.29, 0.23, 1); brick.inputs["Color2"].default_value = (0.41, 0.37, 0.29, 1)
+    brick.inputs["Mortar"].default_value = (0.08, 0.075, 0.065, 1)
+    lk.new(WV, brick.inputs["Vector"]); fac = brick.outputs["Fac"]
+    cells = nds.new("ShaderNodeTexVoronoi"); cells.inputs["Scale"].default_value = 4.0; lk.new(WV, cells.inputs["Vector"])
+    cellv = nds.new("ShaderNodeRGBToBW"); lk.new(cells.outputs["Color"], cellv.inputs["Color"])
+    cmap = nds.new("ShaderNodeMapRange"); lk.new(cellv.outputs["Val"], cmap.inputs["Value"])
+    cmap.inputs["To Min"].default_value = 0.76; cmap.inputs["To Max"].default_value = 1.07
     weath = nds.new("ShaderNodeTexNoise"); weath.inputs["Scale"].default_value = 2.3; weath.inputs["Detail"].default_value = 8
-    stain = nds.new("ShaderNodeValToRGB")
-    stain.color_ramp.elements[0].position = 0.4; stain.color_ramp.elements[1].position = 0.75
+    stain = nds.new("ShaderNodeValToRGB"); stain.color_ramp.elements[0].position = 0.4; stain.color_ramp.elements[1].position = 0.78
     lk.new(weath.outputs["Fac"], stain.inputs["Fac"])
-    grime = nds.new("ShaderNodeMixRGB"); grime.blend_type = "MULTIPLY"
-    lk.new(stain.outputs["Color"], grime.inputs["Fac"]); lk.new(brick.outputs["Color"], grime.inputs["Color1"])
-    grime.inputs["Color2"].default_value = (0.62, 0.60, 0.55, 1)      # stained areas darker
-    cav = nds.new("ShaderNodeMixRGB"); cav.blend_type = "MULTIPLY"
-    lk.new(fac, cav.inputs["Fac"]); lk.new(grime.outputs["Color"], cav.inputs["Color1"])
-    cav.inputs["Color2"].default_value = (0.30, 0.28, 0.24, 1)        # hard-darken the mortar cavity
+    tint = mix(brick.outputs["Color"], cmap.outputs["Result"], 1.0, "MULTIPLY")
+    grime = nds.new("ShaderNodeMixRGB"); grime.blend_type = "MULTIPLY"; lk.new(stain.outputs["Color"], grime.inputs["Fac"])
+    lk.new(tint, grime.inputs["Color1"]); grime.inputs["Color2"].default_value = (0.72, 0.70, 0.64, 1)
+    cav = nds.new("ShaderNodeMixRGB"); cav.blend_type = "MULTIPLY"; lk.new(fac, cav.inputs["Fac"])
+    lk.new(grime.outputs["Color"], cav.inputs["Color1"]); cav.inputs["Color2"].default_value = (0.28, 0.26, 0.22, 1)
     lk.new(cav.outputs["Color"], bsdf.inputs["Base Color"])
-    # roughness: stone vs rougher mortar
-    rgh = nds.new("ShaderNodeMixRGB"); rgh.inputs["Color1"].default_value = (0.82,)*3+(1,)
-    lk.new(fac, rgh.inputs["Fac"]); rgh.inputs["Color2"].default_value = (0.96,)*3+(1,)
-    lk.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
-    # normal: blocks raised over recessed mortar (strong) + fine grit/pitting
+    rgh = nds.new("ShaderNodeMixRGB"); rgh.inputs["Color1"].default_value = (0.84,)*3+(1,)
+    lk.new(fac, rgh.inputs["Fac"]); rgh.inputs["Color2"].default_value = (0.97,)*3+(1,); lk.new(rgh.outputs["Color"], bsdf.inputs["Roughness"])
     inv = nds.new("ShaderNodeInvert"); lk.new(fac, inv.inputs["Color"])
-    grit = nds.new("ShaderNodeTexNoise"); grit.inputs["Scale"].default_value = 42; grit.inputs["Detail"].default_value = 6
-    pit = nds.new("ShaderNodeTexVoronoi"); pit.inputs["Scale"].default_value = 26
-    b1 = nds.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.3; b1.inputs["Distance"].default_value = 0.1
-    lk.new(inv.outputs["Color"], b1.inputs["Height"])
-    gm = nds.new("ShaderNodeMixRGB"); gm.inputs["Fac"].default_value = 0.5
-    lk.new(grit.outputs["Fac"], gm.inputs["Color1"]); lk.new(pit.outputs["Distance"], gm.inputs["Color2"])
-    b2 = nds.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.32
-    lk.new(gm.outputs["Color"], b2.inputs["Height"]); lk.new(b1.outputs["Normal"], b2.inputs["Normal"])
-    lk.new(b2.outputs["Normal"], bsdf.inputs["Normal"])
+    dome = nds.new("ShaderNodeTexVoronoi"); dome.feature = "DISTANCE_TO_EDGE"; dome.inputs["Scale"].default_value = 3.0; lk.new(WV, dome.inputs["Vector"])
+    undul = nds.new("ShaderNodeTexNoise"); undul.inputs["Scale"].default_value = 13.0; undul.inputs["Detail"].default_value = 4
+    grit = nds.new("ShaderNodeTexNoise"); grit.inputs["Scale"].default_value = 40; grit.inputs["Detail"].default_value = 6
+    h1 = mix(inv.outputs["Color"], dome.outputs["Distance"], 0.14)
+    b1 = nds.new("ShaderNodeBump"); b1.inputs["Strength"].default_value = 1.4; b1.inputs["Distance"].default_value = 0.13; lk.new(h1, b1.inputs["Height"])
+    h2 = mix(undul.outputs["Fac"], grit.outputs["Fac"], 0.5)
+    b2 = nds.new("ShaderNodeBump"); b2.inputs["Strength"].default_value = 0.22
+    lk.new(h2, b2.inputs["Height"]); lk.new(b1.outputs["Normal"], b2.inputs["Normal"]); lk.new(b2.outputs["Normal"], bsdf.inputs["Normal"])
     pl.data.materials.append(m)
     sc = bpy.context.scene; sc.render.engine = "CYCLES"; sc.cycles.device = "CPU"; sc.cycles.samples = 16
     imgs = {}
