@@ -51,6 +51,15 @@ export async function writeUpdate(entity, component, value) {
   return result;
 }
 
+// In-game terrain brush (Slice 1): stamp a terrain.deform through the SAME recorded command path an
+// AI builder uses. The server records + broadcasts it; the viewport's poll() pulls it back and applies
+// it in place. `center` is world [x,z]; mode is raise|lower|smooth|flatten. terrain.deform defaults to
+// the most-recently-created terrain layer when `entity` is omitted.
+export async function deformTerrain(center, radius, delta, mode, falloff) {
+  const client = await ensureWriter();
+  return client.callTool("terrain.deform", { center, radius, delta, mode, falloff });
+}
+
 export async function writeMaterial(entity, material) {
   const client = await ensureWriter();
   const result = await client.callTool("three.setMaterial", { entity, ...material });

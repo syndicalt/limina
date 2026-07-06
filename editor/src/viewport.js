@@ -25,7 +25,7 @@
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
-import { destroyEntity, resetWriter, writeUpdate } from "./write-client.js";
+import { destroyEntity, resetWriter, writeUpdate, deformTerrain } from "./write-client.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -135,6 +135,21 @@ const state = {
   // independently after 1500ms; a single shared RAF loop keeps every helper glued to its mesh.
   agentHighlights: new Map(),
   agentHighlightFrame: undefined,
+  // In-game terrain editor (Slice 1). F4 toggles edit mode; while on, drag on the ground sculpts via
+  // terrain.deform through the recorded command path. brushTool: raise | lower | smooth (1/2/3).
+  editMode: false,
+  brushTool: "raise",
+  brush: { radius: 12, strength: 1.2, falloff: "smooth" },
+  brushStroking: false,
+  brushLast: 0,
+  polling: false,
+  // Undo trail (per-stroke). undoMarks = worldlog command counts at edit boundaries: undoMarks[0] is
+  // "before the first stroke", each later entry is "after a completed stroke". undoAt indexes the point
+  // currently in view (undoMarks.length-1 = live). Ctrl+Z walks back through strokes via the scrub view.
+  undoMarks: [],
+  undoAt: 0,
+  strokeDid: false,
+  strokeStartLen: 0,
 };
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -333,7 +348,8 @@ async function tryConnect() {
 
 async function poll() {
   const c = state.client;
-  if (!c) return;
+  if (!c || state.polling) return; // re-entrancy guard: a brush dab triggers an immediate poll(); it
+  state.polling = true;            // must not race the scheduled poll and double-apply an additive deform.
   try {
     const res = await c.callTool("worldlog.tail", { since: state.cursor });
     if (res) {
@@ -362,6 +378,8 @@ async function poll() {
     console.warn("viewport poll failed", e);
     logConsolePanel("viewport poll failed: " + message, "err");
     setStatus("poll error", message);
+  } finally {
+    state.polling = false;
   }
 }
 
@@ -592,6 +610,94 @@ function pickEntity(event) {
   if (!controls.axis) deselectEntity();
 }
 
+// --- In-game terrain brush (Slice 1) ---------------------------------------------------------------
+// Raycast the ground under the cursor, then stamp a terrain.deform through the recorded command path
+// (write-client -> server -> worldlog broadcast -> live in-place apply). NO optimistic pre-apply:
+// terrain.deform is ADDITIVE, so applying locally AND via the broadcast-back would double every dab.
+const SCULPT_TOOLS = new Set(["raise", "lower", "smooth"]);
+function raycastGround(event) {
+  const running = state.running;
+  if (!running?.camera || !running?.scene) return null;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  pointerNdc.set(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  raycaster.setFromCamera(pointerNdc, running.camera);
+  const hits = raycaster.intersectObjects(running.scene.children, true);
+  return hits.length ? hits[0].point : null; // nearest surface point (the ground on open terrain)
+}
+async function brushDab(event) {
+  const p = raycastGround(event);
+  if (!p) return;
+  let mode = state.brushTool;
+  if (event.ctrlKey && mode === "raise") mode = "lower"; // Ctrl inverts raise<->lower
+  else if (event.ctrlKey && mode === "lower") mode = "raise";
+  try {
+    await deformTerrain([p.x, p.z], state.brush.radius, state.brush.strength, mode, state.brush.falloff);
+    state.strokeDid = true;
+    await poll(); // pull the recorded deform straight back (localhost round-trip) so it renders now
+  } catch (e) {
+    surfaceViewportWarning("terrain brush failed", e);
+  }
+}
+
+// A can't-miss badge + accent outline + crosshair cursor while terrain edit mode is on. The subtle
+// status-line text alone was too easy to miss.
+let editBadge = null;
+function updateEditModeIndicator() {
+  if (!editBadge) {
+    editBadge = document.createElement("div");
+    editBadge.style.cssText =
+      "position:absolute;top:10px;left:10px;z-index:30;padding:6px 12px;border-radius:6px;font-weight:700;" +
+      "letter-spacing:.03em;font-size:13px;color:#fff;background:#e0552b;box-shadow:0 2px 10px rgba(0,0,0,.4);pointer-events:none";
+    const par = canvas.parentElement || document.body;
+    if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
+    par.appendChild(editBadge);
+  }
+  if (state.editMode) {
+    const label = { raise: "Raise", lower: "Lower", smooth: "Smooth" }[state.brushTool] || state.brushTool;
+    editBadge.textContent = `● TERRAIN EDIT — ${label} · r${state.brush.radius}m · drag · Ctrl invert · Ctrl+Z undo`;
+    editBadge.style.display = "block";
+    canvas.style.outline = "2px solid #e0552b";
+    canvas.style.outlineOffset = "-2px";
+    canvas.style.cursor = "crosshair";
+  } else {
+    editBadge.style.display = "none";
+    canvas.style.outline = "";
+    canvas.style.cursor = "";
+  }
+}
+
+// --- Per-stroke undo trail (Ctrl+Z / Ctrl+Shift+Z) -------------------------------------------------
+// Undo is non-destructive time-travel: we scrub the world to the command prefix BEFORE a stroke (the
+// same mechanism the History panel uses). A stroke is one press-drag-release, so one Ctrl+Z undoes a
+// whole stroke's worth of dabs, not one dab.
+function scrubTo(limit) {
+  window.dispatchEvent(new CustomEvent("limina:scrub-to", { detail: { limit: limit == null ? null : limit } }));
+}
+function recordStrokeBoundary() {
+  // Called after a stroke's dabs have flushed. If we had undone strokes, a fresh edit branches: drop
+  // the redo tail. Then mark the new live boundary.
+  if (state.undoMarks.length === 0) state.undoMarks.push(state.strokeStartLen ?? state.commands.length);
+  if (state.undoAt < state.undoMarks.length - 1) state.undoMarks.length = state.undoAt + 1;
+  state.undoMarks.push(state.commands.length);
+  state.undoAt = state.undoMarks.length - 1;
+}
+function undoStroke() {
+  if (state.undoAt <= 0) { setStatus("nothing to undo", ""); return; }
+  state.undoAt -= 1;
+  scrubTo(state.undoMarks[state.undoAt]);
+  setStatus("undo", `${state.undoAt}/${state.undoMarks.length - 1} strokes`);
+}
+function redoStroke() {
+  if (state.undoAt >= state.undoMarks.length - 1) { setStatus("nothing to redo", ""); return; }
+  state.undoAt += 1;
+  scrubTo(state.undoAt >= state.undoMarks.length - 1 ? null : state.undoMarks[state.undoAt]);
+  setStatus("redo", `${state.undoAt}/${state.undoMarks.length - 1} strokes`);
+}
+
 export async function applyOptimisticUpdate(entity, component, value) {
   const running = state.running;
   if (!running || typeof running.applyAuthorCommands !== "function") {
@@ -715,15 +821,44 @@ canvas.addEventListener("pointerdown", (event) => {
   pointerClick.id = event.pointerId;
   pointerClick.x = event.clientX;
   pointerClick.y = event.clientY;
+  // Terrain edit mode: a drag on the ground sculpts instead of orbiting the camera / selecting.
+  if (state.editMode && SCULPT_TOOLS.has(state.brushTool)) {
+    state.brushStroking = true;
+    state.strokeStartLen = state.commands.length; // command count before this stroke (for undo)
+    state.strokeDid = false;
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+    state.running?.setCameraControlsEnabled?.(false); // suppress orbit while sculpting
+    event.preventDefault();
+    void brushDab(event);
+  }
+});
+canvas.addEventListener("pointermove", (event) => {
+  if (!state.brushStroking || !event.isPrimary) return;
+  const now = performance.now();
+  if (now - state.brushLast < 55) return; // throttle dabs so a drag doesn't flood the server
+  state.brushLast = now;
+  void brushDab(event);
 });
 canvas.addEventListener("pointerup", (event) => {
   if (!event.isPrimary || pointerClick.id !== event.pointerId) return;
   const dx = event.clientX - pointerClick.x;
   const dy = event.clientY - pointerClick.y;
   pointerClick.id = undefined;
+  if (state.brushStroking) {
+    state.brushStroking = false;
+    try { canvas.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
+    state.running?.setCameraControlsEnabled?.(true);
+    // Close the undo boundary once the stroke's dabs have flushed back through the poll.
+    if (state.strokeDid) void (async () => { await poll(); recordStrokeBoundary(); })();
+    return; // a sculpt stroke never falls through to entity selection
+  }
   if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) pickEntity(event);
 });
 canvas.addEventListener("pointercancel", (event) => {
+  if (state.brushStroking) {
+    state.brushStroking = false;
+    state.running?.setCameraControlsEnabled?.(true);
+  }
   if (pointerClick.id === event.pointerId) pointerClick.id = undefined;
 });
 window.addEventListener(SELECT_ENTITY_EVENT, (event) => {
@@ -743,12 +878,39 @@ window.addEventListener("limina:scrub-to", (event) => {
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
   if (isTextInputTarget(event.target)) return;
+  // Undo trail: Ctrl+Z undoes the last terrain stroke, Ctrl+Shift+Z redoes. Intercept before the
+  // Ctrl-rotate handler below (which returns early on any ctrlKey press).
+  if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
+    event.preventDefault();
+    if (event.shiftKey) redoStroke(); else undoStroke();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && (event.key === "y" || event.key === "Y")) {
+    event.preventDefault();
+    redoStroke();
+    return;
+  }
   if (controls && (event.key === "Control" || event.ctrlKey)) {
     state.ctrlRotateDown = true;
     reconcileCtrlRotateMode();
     return;
   }
   const key = event.key.toLowerCase();
+  if (key === "f4") {
+    event.preventDefault();
+    state.editMode = !state.editMode;
+    updateEditModeIndicator();
+    setStatus(state.editMode ? "terrain edit: ON" : "terrain edit: off",
+      state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1/2/3 tool` : "");
+    return;
+  }
+  if (state.editMode && (key === "1" || key === "2" || key === "3")) {
+    event.preventDefault();
+    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : "smooth";
+    updateEditModeIndicator();
+    setStatus("terrain edit", `tool: ${state.brushTool}`);
+    return;
+  }
   if (key === "s") {
     event.preventDefault();
     toggleSnapping();
