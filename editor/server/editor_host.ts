@@ -149,6 +149,7 @@ installCottageScenario(server.registry, { world: server.world });
 registerWorldlogSkills(server.registry, { recorder: server.recorder });
 
 server.start();
+await server.ready;
 
 // Author the whole starting scene THROUGH the recorded registry so worldlog.tail carries real,
 // material-editable geometry the moment the viewport connects — and any further authoring (an
@@ -174,18 +175,20 @@ async function seedEntity(
   for (const tag of tags) await server.registry.invoke("ecs.addComponent", { entity: id, component: tag }, seedBase);
   if (scale) await server.registry.invoke("ecs.updateComponent", { entity: id, component: "scale", value: scale }, seedBase);
 }
-// ent_0 ground slab (also the spawn marker), ent_1 crate, ent_2 barrel — the tagged starters.
-await seedEntity({ shape: "box", size: 1, position: [0, 0, 0], color: 0x6b7280 }, ["ground", "spawn"], [16, 0.2, 16]);
-await seedEntity({ shape: "box", size: 1, position: [3, 0.6, 0], color: 0xb08968 }, ["prop", "crate"]);
-await seedEntity({ shape: "box", size: 1, position: [-3, 0.6, 2], color: 0x8d6e63 }, ["prop", "barrel"]);
-// ent_3..6 — a few colored demo boxes resting above the ground.
-for (const box of [
-  { position: [0, 1, 0] as [number, number, number], color: 0x4ade80 },
-  { position: [3, 1, 0] as [number, number, number], color: 0x60a5fa },
-  { position: [-3, 1, 2] as [number, number, number], color: 0xf472b6 },
-  { position: [0, 1, -4] as [number, number, number], color: 0xfacc15 },
-]) {
-  await seedEntity({ shape: "box", size: 1, position: box.position, color: box.color });
+if (!server.rehydrated) {
+  // ent_0 ground slab (also the spawn marker), ent_1 crate, ent_2 barrel — the tagged starters.
+  await seedEntity({ shape: "box", size: 1, position: [0, 0, 0], color: 0x6b7280 }, ["ground", "spawn"], [16, 0.2, 16]);
+  await seedEntity({ shape: "box", size: 1, position: [3, 0.6, 0], color: 0xb08968 }, ["prop", "crate"]);
+  await seedEntity({ shape: "box", size: 1, position: [-3, 0.6, 2], color: 0x8d6e63 }, ["prop", "barrel"]);
+  // ent_3..6 — a few colored demo boxes resting above the ground.
+  for (const box of [
+    { position: [0, 1, 0] as [number, number, number], color: 0x4ade80 },
+    { position: [3, 1, 0] as [number, number, number], color: 0x60a5fa },
+    { position: [-3, 1, 2] as [number, number, number], color: 0xf472b6 },
+    { position: [0, 1, -4] as [number, number, number], color: 0xfacc15 },
+  ]) {
+    await seedEntity({ shape: "box", size: 1, position: box.position, color: box.color });
+  }
 }
 
 ops.op_log(

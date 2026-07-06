@@ -26,7 +26,15 @@ import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/eng
 import { WorldRecorder } from "../worldlog/recorder.ts";
 import { DurableWorldLog } from "../worldlog/durable.ts";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
-import { captureWorldState, syncAllBodies, type EntityState } from "../worldlog/log.ts";
+import {
+  captureWorldState,
+  parseWorldLog,
+  PHYSICS_OP_FN,
+  PHYSICS_OP_OUT_BUFFER,
+  syncAllBodies,
+  type EntityState,
+  type WorldCommand,
+} from "../worldlog/log.ts";
 import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type MCPResponse } from "../mcp/protocol.ts";
 import { inAoi, parseAoi, SYNC_METHODS, type AreaOfInterest, type NetOps } from "./protocol.ts";
 
@@ -174,6 +182,12 @@ export class AuthoritativeServer {
 
   /** Tick at which the last broadcast happened (for tests). */
   lastBroadcastTick = 0;
+  /** Resolves after any durable boot rehydrate has fully replayed. */
+  readonly ready: Promise<void>;
+  /** True when this server found a non-empty durable world log at boot. */
+  readonly rehydrated: boolean;
+  /** Number of commands parsed from the durable world log at boot. */
+  readonly rehydratedCommands: number;
 
   constructor(transport: NetServerTransport, opts: AuthoritativeServerOptions) {
     this.transport = transport;
@@ -196,12 +210,23 @@ export class AuthoritativeServer {
     registerCoreSkills(this.registry);
 
     this.recorder = new WorldRecorder(opts.sessionId);
+    let persisted: WorldCommand[] | undefined;
     if (opts.worldLog !== undefined) {
       this.durableLog = new DurableWorldLog(this.recorder, opts.worldLog.name, { compactFlushed: opts.worldLog.compactFlushed });
-      this.durableLog.open();
+      const existing = defaultOps.op_read_trace(opts.worldLog.name);
+      if (existing.length > 0) {
+        persisted = parseWorldLog(existing, {
+          recoverCorruptLines: true,
+          onRecoverableError: (message) => defaultOps.op_log(`AuthoritativeServer: skipping corrupt world-log line in ${opts.worldLog!.name}: ${message}`),
+        }).commands;
+      }
+      if (persisted !== undefined && persisted.length > 0) this.durableLog.resume(persisted.length);
+      else this.durableLog.open();
     }
+    this.rehydrated = persisted !== undefined && persisted.length > 0;
+    this.rehydratedCommands = persisted?.length ?? 0;
     this.recorder.attach(this.registry);
-    this.recorder.seed(opts.seed ?? 0x10ca1ed);
+    this.recorder.seed(opts.seed ?? 0x10ca1ed, { forceInstall: this.rehydrated });
     this.recOps = this.recorder.wrapOps(baseOps);
 
     const ecs = createEcsWorld();
@@ -224,9 +249,27 @@ export class AuthoritativeServer {
     if (opts.bootstrap !== undefined) {
       opts.bootstrap({ world: this.world, recordedOps: this.recOps, registry: this.registry });
     }
-    this.flushDurableLog();
-    // Seed the change baseline so tick 1 deltas are computed against bootstrap.
-    this.prev = this.snapshotMap();
+
+    if (persisted !== undefined && persisted.length > 0) {
+      const prefixCount = this.recorder.commandCount;
+      if (prefixCount > persisted.length) {
+        defaultOps.op_log(
+          `AuthoritativeServer: durable world-log ${opts.worldLog!.name} recovered only ${persisted.length} commands, ` +
+            `shorter than the deterministic boot prefix ${prefixCount}; continuing without re-appending the prefix`,
+        );
+        this.durableLog?.resume(prefixCount);
+      }
+      const tail = prefixCount <= persisted.length ? persisted.slice(prefixCount) : [];
+      this.ready = Promise.resolve().then(async () => {
+        await this.rehydrate(tail);
+        this.prev = this.snapshotMap();
+      });
+    } else {
+      this.ready = Promise.resolve();
+      this.flushDurableLog();
+      // Seed the change baseline so tick 1 deltas are computed against bootstrap.
+      this.prev = this.snapshotMap();
+    }
   }
 
   /** Number of intents the server has APPLIED (recorded skill commands). */
@@ -251,6 +294,16 @@ export class AuthoritativeServer {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.bgLoops.push(this.ready.then(() => {
+      if (!this.running) return;
+      this.startLoops();
+    }, (err) => {
+      this.running = false;
+      defaultOps.op_log(`AuthoritativeServer rehydrate failed; not starting loops: ${err instanceof Error ? err.message : String(err)}`);
+    }));
+  }
+
+  private startLoops(): void {
     // The accept loop blocks on accept(); it is NOT awaited at shutdown (the
     // owner closes the listener to release it). The tick + per-connection loops
     // ARE awaited so a test drains cleanly.
@@ -565,6 +618,7 @@ export class AuthoritativeServer {
   }
 
   private async doTick(): Promise<void> {
+    await this.ready;
     // An authoritative world with no participants and no pending input has
     // nothing to advance -- skip the step (and its world-log entry) so an idle
     // server does not accumulate state unbounded.
@@ -682,6 +736,40 @@ export class AuthoritativeServer {
     }
     await Promise.allSettled(sends);
     if (broadcast) this.lastBroadcastTick = this.tick;
+  }
+
+  private async rehydrate(commands: WorldCommand[]): Promise<void> {
+    for (const cmd of commands) {
+      if (cmd.kind === "seed") {
+        throw new Error(`AuthoritativeServer rehydrate: unexpected seed command in replay tail at seq ${cmd.seq}`);
+      }
+      if (cmd.kind === "physics") {
+        const op = this.recOps[PHYSICS_OP_FN[cmd.op]] as (...a: unknown[]) => unknown;
+        const outLen = PHYSICS_OP_OUT_BUFFER[cmd.op];
+        if (outLen === undefined) op(...cmd.args);
+        else op(...cmd.args, new Float32Array(outLen));
+        if (cmd.op === "step") syncAllBodies(this.world);
+        continue;
+      }
+      const response = await this.registry.invoke(cmd.tool, cmd.input, {
+        agentId: cmd.actorId,
+        sessionId: cmd.sessionId,
+        permissions: new Set(cmd.perms),
+        tick: cmd.tick,
+        world: this.world,
+        causedBy: [],
+      });
+      if (!response.success) {
+        const code = response.error?.code ?? "unknown";
+        const message = response.error?.message ?? "skill invocation failed";
+        throw new Error(`AuthoritativeServer rehydrate: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+      }
+    }
+    if (this.recorder.commandCount !== this.rehydratedCommands) {
+      throw new Error(
+        `AuthoritativeServer rehydrate: recorder has ${this.recorder.commandCount} commands after replay, expected ${this.rehydratedCommands}`,
+      );
+    }
   }
 
   // ---- snapshot / state helpers -------------------------------------------

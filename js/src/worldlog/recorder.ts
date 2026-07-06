@@ -134,13 +134,13 @@ export class WorldRecorder {
 
   /** Record + install the deterministic PRNG seed. Call once, before any
    *  command that could consume randomness. */
-  seed(seed: number): () => number {
+  seed(seed: number, opts: { forceInstall?: boolean } = {}): () => number {
     if (this.seeded) throw new Error("WorldRecorder: seed already recorded");
     this.seeded = true;
     const seq = this.seq++;
     this.commands.push({ kind: "seed", seq, seed: seed >>> 0 });
     this.markFinalized(seq);
-    return installSeededRandom(seed);
+    return installSeededRandom(seed, opts.forceInstall === true);
   }
 
   /** Wrap an EngineOps so mutating physics ops issued at depth 0 are recorded.

@@ -179,6 +179,14 @@ export interface ParsedWorldLog {
   commands: WorldCommand[];
 }
 
+export interface ParseWorldLogOptions {
+  /** Skip malformed lines and report them to the caller. Intended for boot
+   *  recovery from a possibly torn append log; strict verification/replay should
+   *  leave this disabled so bad persisted input fails closed. */
+  recoverCorruptLines?: boolean;
+  onRecoverableError?: (message: string) => void;
+}
+
 /** JSONL: meta header line, then one command per line (seq order preserved). */
 export function serializeWorldLog(meta: WorldLogMeta, commands: WorldCommand[]): string {
   const lines: string[] = [JSON.stringify(meta)];
@@ -212,9 +220,10 @@ const lineSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-/** Parse a persisted world log. Tolerates a trailing newline; rejects a torn
- *  final line (partial JSON) loudly rather than silently dropping a command. */
-export function parseWorldLog(jsonl: string): ParsedWorldLog {
+/** Parse a persisted world log. Tolerates a trailing newline; by default rejects
+ *  malformed lines loudly. Boot recovery may pass recoverCorruptLines to skip a
+ *  torn/corrupt line while logging the exact recovery decision. */
+export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): ParsedWorldLog {
   const out: WorldCommand[] = [];
   let meta: WorldLogMeta | undefined;
   const rawLines = jsonl.split("\n");
@@ -225,11 +234,21 @@ export function parseWorldLog(jsonl: string): ParsedWorldLog {
     try {
       json = JSON.parse(line);
     } catch (err) {
-      throw new Error(`world log: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = `world log: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`;
+      if (opts.recoverCorruptLines === true) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
     }
     const result = lineSchema.safeParse(json);
     if (!result.success) {
-      throw new Error(`world log: malformed command on line ${i + 1}: ${result.error.message}`);
+      const message = `world log: malformed command on line ${i + 1}: ${result.error.message}`;
+      if (opts.recoverCorruptLines === true) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
     }
     if (result.data.kind === "meta") {
       meta = result.data;

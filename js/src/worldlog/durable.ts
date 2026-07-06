@@ -27,6 +27,7 @@ const ops: TraceOps = engineOps;
 export class DurableWorldLog {
   private flushed = 0;
   private opened = false;
+  private resumed = false;
 
   constructor(
     readonly recorder: WorldRecorder,
@@ -39,6 +40,19 @@ export class DurableWorldLog {
     ops.op_write_trace(this.name, "");
     this.flushed = 0;
     this.opened = true;
+    this.resumed = false;
+  }
+
+  /** Resume streaming after an existing on-disk segment. Unlike open(), this
+   *  never truncates or writes the segment; it only advances the durable cursor
+   *  so flush() appends commands recorded after the recovered prefix. */
+  resume(persistedCount: number): void {
+    if (!Number.isSafeInteger(persistedCount) || persistedCount < 0) {
+      throw new Error(`DurableWorldLog: invalid resume count ${persistedCount}`);
+    }
+    this.flushed = persistedCount;
+    this.opened = true;
+    this.resumed = true;
   }
 
   /** Append every command recorded since the last flush as JSONL lines, in one
@@ -69,7 +83,9 @@ export class DurableWorldLog {
     if (this.recorder.flushableCount() !== this.recorder.commandCount) {
       throw new Error("DurableWorldLog: cannot close while recorder commands are still pending");
     }
-    ops.op_append_trace(this.name, JSON.stringify(this.recorder.meta()) + "\n");
+    if (!this.resumed || tail > 0) {
+      ops.op_append_trace(this.name, JSON.stringify(this.recorder.meta()) + "\n");
+    }
     return { name: this.name, commands: this.recorder.commandCount, segments: tail };
   }
 
