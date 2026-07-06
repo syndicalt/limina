@@ -194,6 +194,11 @@
   svg.map.grabbing { cursor:grabbing; }
   .map-grid { stroke:var(--line); stroke-width:.5; }
   .map-axis { stroke:var(--muted); stroke-width:.8; stroke-dasharray:3 3; opacity:.6; }
+  .map-tick { font-family:var(--sans); font-size:10px; fill:var(--muted); opacity:.85;
+    paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
+  .map-scalebar { stroke:var(--ink); stroke-width:2; opacity:.75; }
+  .map-scalebar-label { font-family:var(--sans); font-size:11px; fill:var(--ink); opacity:.85;
+    paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
   .pin { cursor:grab; }
   .pin circle { stroke:#fff; stroke-width:1.5; }
   .pin text { font-family:var(--sans); font-size:11px; fill:var(--ink); paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
@@ -656,6 +661,20 @@ function redrawMap(){
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="640"/>'; }
   for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="1000" y2="'+sy+'"/>'; }
   const [ax]=w2s(0,0),[,ay]=w2s(0,0); g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
+  // Scale indication: the map's world units ARE engine meters, so say so on the frame.
+  // (a) axis tick labels at every gridline — x values along the bottom edge, z along the left;
+  // (b) a zoom-adaptive scale bar (1/2/5×10^n meters, 60-150px) bottom-right, m→km rollover.
+  const fmtM=(v)=>Math.abs(v)>=1000?(Math.round(v/100)/10)+"km":Math.round(v)+"m";
+  for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0);
+    if(sx>28&&sx<972) g+='<text class="map-tick" x="'+(sx+3)+'" y="634">'+fmtM(x)+'</text>'; }
+  for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z);
+    if(sy>16&&sy<628) g+='<text class="map-tick" x="4" y="'+(sy-3)+'">'+fmtM(z)+'</text>'; }
+  let bar=step; while(bar*mapScale<60) bar*=2; while(bar*mapScale>150) bar/=2;
+  const bpx=bar*mapScale, bx1=1000-24-bpx, by=622;
+  g+='<line class="map-scalebar" x1="'+bx1+'" y1="'+by+'" x2="'+(bx1+bpx)+'" y2="'+by+'"/>'
+    +'<line class="map-scalebar" x1="'+bx1+'" y1="'+(by-4)+'" x2="'+bx1+'" y2="'+(by+4)+'"/>'
+    +'<line class="map-scalebar" x1="'+(bx1+bpx)+'" y1="'+(by-4)+'" x2="'+(bx1+bpx)+'" y2="'+(by+4)+'"/>'
+    +'<text class="map-scalebar-label" x="'+(bx1+bpx/2)+'" y="'+(by-8)+'" text-anchor="middle">'+fmtM(bar)+'</text>';
   // features (outline first, then areas, lines, glyphs)
   const feats=curFeatures();
   const poly=(pts)=>pts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return sx+","+sy;}).join(" ");
