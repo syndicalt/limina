@@ -754,11 +754,13 @@ function bindMap(){
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
     const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
-  svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
+  svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; if(e.detail>=2) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
     if(spaceDown||e.button===1){ mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ curFeatures().push({id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)}); saveMaps(); redrawMap(); return; }
-    if(["river","road","area","outline","border"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
+    if(["river","road","area","outline","border"].includes(mapTool)){
+      for(let i=0;i<drawPts.length;i++){ const [px,py]=w2s(drawPts[i][0],drawPts[i][1]); if(Math.hypot(px-mx,py-my)<9){ drawPts.splice(i,1); redrawMap(); return; } }
+      drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
     if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
     if(mapTool==="select"&&selFeat){ selFeat=null; redrawMap(); }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
@@ -774,11 +776,14 @@ function mapKey(e){ if(activeView!=="map") return;
   else if(e.key==="Enter"&&drawPts.length&&!typing) finishDraw();
   else if((e.key==="Delete"||e.key==="Backspace")&&selFeat&&!typing){ e.preventDefault(); deleteFeatById(selFeat,true); } }
 function mapKeyUp(e){ if(e.key===" "||e.code==="Space"){ spaceDown=false; document.getElementById("map-svg")?.classList.remove("space"); } }
-function finishDraw(){ if(drawPts.length<2){ drawPts=[]; redrawMap(); return; }
-  if(["river","road","border"].includes(mapTool)) curFeatures().push({id:fid(),type:"line",kind:mapTool,points:drawPts.slice(),color:drawColor});
-  else if(mapTool==="area") curFeatures().push({id:fid(),type:"area",kind:"biome",biome:biomeKind,points:drawPts.slice()});
-  else curFeatures().push({id:fid(),type:"area",kind:"outline",points:drawPts.slice(),fill:drawColor});
-  drawPts=[]; saveMaps(); redrawMap(); }
+function finishDraw(){
+  const pts=drawPts.filter((p,i)=> i===0 || p[0]!==drawPts[i-1][0] || p[1]!==drawPts[i-1][1]);
+  drawPts=[];
+  if(pts.length<2){ redrawMap(); return; }
+  if(["river","road","border"].includes(mapTool)) curFeatures().push({id:fid(),type:"line",kind:mapTool,points:pts,color:drawColor});
+  else if(mapTool==="area") curFeatures().push({id:fid(),type:"area",kind:"biome",biome:biomeKind,points:pts});
+  else curFeatures().push({id:fid(),type:"area",kind:"outline",points:pts,fill:drawColor});
+  saveMaps(); redrawMap(); }
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
