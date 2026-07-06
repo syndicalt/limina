@@ -22,6 +22,19 @@ const APP = readFileSync(join(__dirname, "frontend", "index.html"), "utf8");
 const vaultDir = resolve(process.argv[2] || process.cwd());
 const port = Number(process.argv[3]) || 4321;
 
+// The expert agents talk through the model. Key from the environment or the project .env.
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
+function loadProjectEnv() {
+  try {
+    const txt = readFileSync(join(vaultDir, "..", ".env"), "utf8");
+    for (const line of txt.split("\n")) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  } catch { /* no project .env */ }
+}
+loadProjectEnv();
+
 function readDocs() {
   return readdirSync(vaultDir)
     .filter((f) => f.endsWith(".md"))
@@ -64,7 +77,69 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build }) + "${END}");
   return { project: vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project", docs, ...extra };
 }
 
+// Assemble the FULL role context for an agent (persona + documents + screen) via the engine.
+const ABEGIN = "===AGENT_BEGIN===", AEND = "===AGENT_END===";
+function assembleContext(agentId, screen) {
+  const docs = readDocs();
+  const harness = `
+import { vaultToStore } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { assembleAgentContext } from "${LIMINA_HOME}/js/src/game/design-agents.ts";
+import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
+const docs = ${JSON.stringify(docs)};
+const { store } = vaultToStore(docs);
+const ctx = assembleAgentContext(${JSON.stringify(String(agentId))}, store, ${JSON.stringify(screen || {})});
+ops.op_log("${ABEGIN}" + JSON.stringify({ role: ctx.role, title: ctx.title, systemPrompt: ctx.systemPrompt }) + "${AEND}");
+`;
+  const tmp = mkdtempSync(join(tmpdir(), "limina-agent-"));
+  const hp = join(tmp, "a.ts");
+  writeFileSync(hp, harness);
+  const res = spawnSync(LIMINA_BIN, [hp], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  rmSync(tmp, { recursive: true, force: true });
+  const out = (res.stdout || "") + (res.stderr || "");
+  const m = out.match(new RegExp(ABEGIN + "([\\s\\S]*?)" + AEND));
+  if (!m) throw new Error("context assembly failed: " + out.slice(-400));
+  return JSON.parse(m[1]);
+}
+
+async function callModel(system, history, message) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) {
+    return { ok: false, reply:
+      "⚠ No ANTHROPIC_API_KEY found — add it to the project .env to get a live reply. " +
+      "Your full role context IS assembled and ready: this expert already knows its persona, the documents " +
+      "it owns and depends on, and which document you have open. Wire the key and it speaks." };
+  }
+  const messages = [...(history || []).map((h) => ({ role: h.role, content: h.content })), { role: "user", content: message }];
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: MODEL, max_tokens: 1024, system, messages }),
+    });
+    if (!r.ok) return { ok: false, reply: `⚠ model error ${r.status}: ${(await r.text()).slice(0, 300)}` };
+    const j = await r.json();
+    return { ok: true, reply: (j.content || []).map((c) => c.text || "").join("").trim() || "(no reply)" };
+  } catch (e) { return { ok: false, reply: "⚠ request failed: " + String(e) }; }
+}
+
 createServer((req, res) => {
+  if (req.method === "POST" && req.url === "/api/agent") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { agentId, message, screen, history } = JSON.parse(body || "{}");
+        const ctx = assembleContext(agentId, screen || {});
+        const out = await callModel(ctx.systemPrompt, history || [], String(message || ""));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ role: ctx.role, title: ctx.title, model: MODEL, ...out }));
+      } catch (e) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, reply: "⚠ " + String(e) }));
+      }
+    });
+    return;
+  }
   if (req.url === "/" || req.url === "/index.html") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(APP);
