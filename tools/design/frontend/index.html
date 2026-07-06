@@ -511,7 +511,21 @@ const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", mi
 const KINDS = ["civic","dwelling","religious","military","marker","landmark","camp","ruin","wild"];
 const GLYPHS = ["mountain","hills","forest","desert","marsh","water","peak"];
 const GLYPH_LABEL = { mountain:"⛰ Mountains", hills:"⌒ Hills", forest:"♣ Forest", desert:"≈ Desert", marsh:"⍦ Marsh", water:"≋ Water", peak:"▲ Peak" };
-let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", drawColor="#5b7d9a", drawPts=[], activeMapId=null;
+const BIOME_LIST = ["grass","forest","mountain","desert","tundra","swamp","water"];
+const BIOME_BASE = { grass:"#8aa85f", forest:"#4a7a45", mountain:"#8f8d88", desert:"#d9c48f", tundra:"#dbe4ea", swamp:"#6b7a55", water:"#3f6ea5" };
+function biomeDefs(){
+  const p=(id,base,ex)=>'<pattern id="biome-'+id+'" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="'+base+'"/>'+ex+'</pattern>';
+  return '<defs>'
+   +p("grass",BIOME_BASE.grass,'<path d="M3 12 v-3 M8 14 v-3 M13 11 v-3" stroke="#6e8a48" stroke-width="1"/>')
+   +p("forest",BIOME_BASE.forest,'<circle cx="4" cy="5" r="2" fill="#365f32"/><circle cx="11" cy="9" r="2.4" fill="#2f5a2c"/><circle cx="8" cy="13" r="1.8" fill="#3a6636"/>')
+   +p("mountain",BIOME_BASE.mountain,'<path d="M0 12 L4 5 L8 12 M8 13 L12 6 L16 13" stroke="#6f6d69" stroke-width="1" fill="none"/><path d="M4 6 l1.6 2 M12 7 l1.6 2" stroke="#efefec" stroke-width="1"/>')
+   +p("desert",BIOME_BASE.desert,'<circle cx="4" cy="4" r=".9" fill="#bfa876"/><circle cx="11" cy="7" r=".9" fill="#bfa876"/><circle cx="7" cy="12" r=".9" fill="#bfa876"/>')
+   +p("tundra",BIOME_BASE.tundra,'<circle cx="5" cy="6" r=".8" fill="#c3d0d8"/><circle cx="12" cy="11" r=".8" fill="#c3d0d8"/>')
+   +p("swamp",BIOME_BASE.swamp,'<path d="M3 11 q2 -2 4 0 M9 13 q2 -2 4 0" stroke="#556442" stroke-width="1" fill="none"/>')
+   +p("water",BIOME_BASE.water,'<path d="M0 5 q4 -2 8 0 t8 0 M0 11 q4 -2 8 0 t8 0" stroke="#5b86b8" stroke-width="1" fill="none"/>')
+   +'</defs>';
+}
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null;
 function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
 function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
 function evtVB(e,svg){ const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640]; }
@@ -537,14 +551,17 @@ function glyphSVG(kind,x,y,s){
 function renderMap(){
   if(!activeMapId) activeMapId = STATE.activeMapId || primaryMapId();
   const opts=(STATE.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
-  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["glyph","Glyph"],["river","River"],["road","Road"],["area","Area"],["outline","Outline"]];
+  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
+  const sea=!!activeMap().sea;
   document.getElementById("center").innerHTML =
     '<div class="map-wrap"><div class="map-head">'
     +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
+    +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊 Sea</button>'
     +'<span style="width:1px;height:22px;background:var(--line)"></span>'
     +tools.map(t=>'<button class="tool'+(mapTool===t[0]?" on":"")+'" data-tool="'+t[0]+'">'+t[1]+'</button>').join("")
     +'<select class="sw" id="glyph-pick" style="'+(mapTool==="glyph"?"":"display:none")+'">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>'
-    +'<input type="color" id="draw-color" value="'+drawColor+'" title="Area / line color" style="'+(["area","outline","river","road"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
+    +'<select class="sw" id="biome-pick" style="'+(mapTool==="area"?"":"display:none")+'">'+BIOME_LIST.map(b=>'<option value="'+b+'"'+(b===biomeKind?" selected":"")+'>'+b+'</option>').join("")+'</select>'
+    +'<input type="color" id="draw-color" value="'+drawColor+'" title="Line / coast color" style="'+(["outline","river","road","border"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
     +'<span class="coord" id="map-coord">—</span></div>'
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
     +'<div class="map-hint" id="map-hint"></div></div></div>';
@@ -557,11 +574,13 @@ function renderMap(){
 }
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom",
+    lasso:"drag a box to select features + markers, then delete them",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
+    area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
     river:"click to add river points · double-click to finish · Esc to cancel",
     road:"click to add road points · double-click to finish · Esc to cancel",
-    area:"click to outline an area · double-click to close · Esc to cancel",
-    outline:"click to trace the land outline · double-click to close · Esc to cancel"}[mapTool];
+    border:"click to trace a political border · double-click to finish · Esc to cancel",
+    outline:"click to trace the coastline (land) · double-click to close · Esc to cancel"}[mapTool];
   h.textContent=t||""; }
 function redrawMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
@@ -574,15 +593,22 @@ function redrawMap(){
   // features (outline first, then areas, lines, glyphs)
   const feats=curFeatures();
   const poly=(pts)=>pts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return sx+","+sy;}).join(" ");
-  const fsvg=(f)=>{ if(f.type==="area"){ const isOut=f.kind==="outline";
-      return '<polygon class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="'+(f.fill||"#88a")+'" fill-opacity="'+(isOut?0.35:0.28)+'" stroke="'+(f.fill||"#88a")+'" stroke-width="'+(isOut?2:1.2)+'"/>'; }
-    if(f.type==="line"){ const road=f.kind==="road";
+  const fsvg=(f)=>{
+    if(f.type==="area"){
+      if(f.kind==="outline") return '<polygon class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="'+(f.fill||"#dccfa6")+'" fill-opacity="0.95" stroke="#b89b6a" stroke-width="3" stroke-linejoin="round"/>';
+      const b=f.biome||"grass";
+      return '<polygon class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="url(#biome-'+b+')" fill-opacity="0.9" stroke="'+(BIOME_BASE[b]||"#888")+'" stroke-opacity=".45" stroke-width="1" stroke-linejoin="round"/>'; }
+    if(f.type==="line"){
+      if(f.kind==="border") return '<polyline class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="none" stroke="'+(f.color||"#b23838")+'" stroke-width="2.4" stroke-dasharray="8 4" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>';
+      const road=f.kind==="road";
       return '<polyline class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="none" stroke="'+(f.color||(road?"#8a6f4a":"#5b7d9a"))+'" stroke-width="'+(road?2:2.4)+'"'+(road?' stroke-dasharray="6 5"':'')+' stroke-linejoin="round" stroke-linecap="round"/>'; }
     if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
     return ""; };
+  const ocean=activeMap().sea ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
   const outlines=feats.filter(f=>f.type==="area"&&f.kind==="outline").map(fsvg).join("");
   const areas=feats.filter(f=>f.type==="area"&&f.kind!=="outline").map(fsvg).join("");
-  const lines=feats.filter(f=>f.type==="line").map(fsvg).join("");
+  const lines=feats.filter(f=>f.type==="line"&&f.kind!=="border").map(fsvg).join("");
+  const borders=feats.filter(f=>f.type==="line"&&f.kind==="border").map(fsvg).join("");
   const glyphs=feats.filter(f=>f.type==="glyph").map(fsvg).join("");
   // in-progress drawing
   let draw="";
@@ -595,7 +621,7 @@ function redrawMap(){
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
-  svg.innerHTML = g + outlines + areas + lines + glyphs + draw + pins + compass;
+  svg.innerHTML = biomeDefs() + ocean + g + outlines + areas + lines + borders + glyphs + draw + pins + compass;
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") svg.querySelectorAll(".feat").forEach(f=>f.addEventListener("mousedown",(e)=>{ e.stopPropagation(); if(confirm("Delete this feature?")){ const i=curFeatures().findIndex(x=>x.id===f.dataset.fid); if(i>=0){ curFeatures().splice(i,1); saveMaps(); redrawMap(); } } }));
   hint();
@@ -606,25 +632,28 @@ function bindMap(){
   document.getElementById("map-new").onclick=newMap;
   document.querySelectorAll(".map-head .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
   const gp=document.getElementById("glyph-pick"); if(gp) gp.onchange=(e)=>{ glyphKind=e.target.value; hint(); };
+  const bp=document.getElementById("biome-pick"); if(bp) bp.onchange=(e)=>{ biomeKind=e.target.value; hint(); };
   const dc=document.getElementById("draw-color"); if(dc) dc.oninput=(e)=>{ drawColor=e.target.value; redrawMap(); };
+  const seaBtn=document.getElementById("map-sea"); if(seaBtn) seaBtn.onclick=()=>{ activeMap().sea=!activeMap().sea; saveMaps(); renderMap(); };
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
     const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
   svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ curFeatures().push({id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)}); saveMaps(); redrawMap(); return; }
-    if(["river","road","area","outline"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
+    if(["river","road","area","outline","border"].includes(mapTool)){ drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
     if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
-  svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline"].includes(mapTool)) finishDraw(); });
+  svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline","border"].includes(mapTool)) finishDraw(); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
   svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my); const c=document.getElementById("map-coord"); if(c) c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz); });
   window.addEventListener("keydown",mapKey);
 }
 function mapKey(e){ if(activeView!=="map") return; if(e.key==="Escape"){ drawPts=[]; redrawMap(); } else if(e.key==="Enter"&&drawPts.length) finishDraw(); }
 function finishDraw(){ if(drawPts.length<2){ drawPts=[]; redrawMap(); return; }
-  if(mapTool==="river"||mapTool==="road") curFeatures().push({id:fid(),type:"line",kind:mapTool,points:drawPts.slice(),color:drawColor});
-  else curFeatures().push({id:fid(),type:"area",kind:mapTool==="outline"?"outline":"area",points:drawPts.slice(),fill:drawColor});
+  if(["river","road","border"].includes(mapTool)) curFeatures().push({id:fid(),type:"line",kind:mapTool,points:drawPts.slice(),color:drawColor});
+  else if(mapTool==="area") curFeatures().push({id:fid(),type:"area",kind:"biome",biome:biomeKind,points:drawPts.slice()});
+  else curFeatures().push({id:fid(),type:"area",kind:"outline",points:drawPts.slice(),fill:drawColor});
   drawPts=[]; saveMaps(); redrawMap(); }
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
