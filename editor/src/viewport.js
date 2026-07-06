@@ -150,6 +150,8 @@ const state = {
   undoAt: 0,
   strokeDid: false,
   strokeStartLen: 0,
+  flattenTarget: 0, // world height the flatten tool drives toward (captured at stroke start)
+  spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
 };
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -614,7 +616,7 @@ function pickEntity(event) {
 // Raycast the ground under the cursor, then stamp a terrain.deform through the recorded command path
 // (write-client -> server -> worldlog broadcast -> live in-place apply). NO optimistic pre-apply:
 // terrain.deform is ADDITIVE, so applying locally AND via the broadcast-back would double every dab.
-const SCULPT_TOOLS = new Set(["raise", "lower", "smooth"]);
+const SCULPT_TOOLS = new Set(["raise", "lower", "smooth", "flatten"]);
 function raycastGround(event) {
   const running = state.running;
   if (!running?.camera || !running?.scene) return null;
@@ -634,8 +636,10 @@ async function brushDab(event) {
   let mode = state.brushTool;
   if (event.ctrlKey && mode === "raise") mode = "lower"; // Ctrl inverts raise<->lower
   else if (event.ctrlKey && mode === "lower") mode = "raise";
+  // Flatten drives toward a target height (captured at stroke start); other modes use brush strength.
+  const delta = mode === "flatten" ? state.flattenTarget : state.brush.strength;
   try {
-    await deformTerrain([p.x, p.z], state.brush.radius, state.brush.strength, mode, state.brush.falloff);
+    await deformTerrain([p.x, p.z], state.brush.radius, delta, mode, state.brush.falloff);
     state.strokeDid = true;
     await poll(); // pull the recorded deform straight back (localhost round-trip) so it renders now
   } catch (e) {
@@ -643,30 +647,136 @@ async function brushDab(event) {
   }
 }
 
-// A can't-miss badge + accent outline + crosshair cursor while terrain edit mode is on. The subtle
-// status-line text alone was too easy to miss.
-let editBadge = null;
-function updateEditModeIndicator() {
-  if (!editBadge) {
-    editBadge = document.createElement("div");
-    editBadge.style.cssText =
-      "position:absolute;top:10px;left:10px;z-index:30;padding:6px 12px;border-radius:6px;font-weight:700;" +
-      "letter-spacing:.03em;font-size:13px;color:#fff;background:#e0552b;box-shadow:0 2px 10px rgba(0,0,0,.4);pointer-events:none";
-    const par = canvas.parentElement || document.body;
-    if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
-    par.appendChild(editBadge);
+// Brush ring: an accent ring lying on the terrain under the cursor, scaled to the brush radius, so the
+// footprint is legible (the OS crosshair alone gave no sense of size). Re-parents itself after a reboot
+// (undo/scrub rebuilds the scene).
+let brushRing = null;
+function ensureBrushRing() {
+  const running = state.running;
+  if (!running?.scene || typeof THREE !== "object") return null;
+  if (brushRing && brushRing.parent !== running.scene) {
+    try { brushRing.parent?.remove(brushRing); } catch { /* ignore */ }
+    running.scene.add(brushRing);
   }
+  if (!brushRing) {
+    const geo = new THREE.RingGeometry(0.94, 1.0, 56); // unit ring in XY...
+    geo.rotateX(-Math.PI / 2);                          // ...laid flat into the XZ ground plane
+    const mat = new THREE.MeshBasicMaterial({ color: 0xe0552b, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthTest: false });
+    brushRing = new THREE.Mesh(geo, mat);
+    brushRing.renderOrder = 999; // draw over the terrain
+    brushRing.visible = false;
+    running.scene.add(brushRing);
+  }
+  return brushRing;
+}
+function updateBrushRing(event) {
+  const ring = ensureBrushRing();
+  if (!ring) return;
+  if (!state.editMode) { ring.visible = false; return; }
+  const p = event ? raycastGround(event) : null;
+  if (event) {
+    if (!p) { ring.visible = false; return; }
+    ring.position.set(p.x, p.y + 0.06, p.z); // lift slightly off the surface to avoid z-fighting
+  }
+  const r = state.brush.radius;
+  ring.scale.set(r, r, r);
+  ring.visible = true;
+}
+function hideBrushRing() { if (brushRing) brushRing.visible = false; }
+
+// The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
+// sliders, falloff, and undo/redo. It IS the can't-miss edit indicator (accent dot + outline + cursor).
+let hud = null;
+const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"]];
+function styleToolBtn(b, active) {
+  b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
+    "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
+}
+function buildTerrainHud() {
+  if (hud) return;
+  hud = document.createElement("div");
+  hud.style.cssText = "position:absolute;top:10px;left:10px;z-index:30;width:216px;padding:12px;border-radius:8px;" +
+    "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px";
+  head.innerHTML = '<span style="width:9px;height:9px;border-radius:999px;background:#e0552b;box-shadow:0 0 6px #e0552b"></span>' +
+    '<strong style="letter-spacing:.03em;flex:1">TERRAIN EDIT</strong>';
+  const exit = document.createElement("button");
+  exit.textContent = "F4 exit";
+  exit.style.cssText = "padding:3px 8px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#bbb;font:11px system-ui;cursor:pointer";
+  exit.onclick = () => { state.editMode = false; updateEditModeIndicator(); };
+  head.appendChild(exit);
+  hud.appendChild(head);
+  const tools = document.createElement("div");
+  tools.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px";
+  hud._toolBtns = {};
+  for (const [id, label] of HUD_TOOLS) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => { state.brushTool = id; refreshHudTools(); setStatus("terrain edit", "tool: " + id); };
+    tools.appendChild(b);
+    hud._toolBtns[id] = b;
+  }
+  hud.appendChild(tools);
+  const mkSlider = (label, min, max, step, get, set, fmt) => {
+    const wrap = document.createElement("div");
+    wrap.style.margin = "0 0 8px";
+    const lab = document.createElement("label");
+    lab.style.cssText = "display:flex;justify-content:space-between;font-size:12px;opacity:.85;margin-bottom:2px";
+    const valSpan = document.createElement("span");
+    lab.append(label + " ");
+    lab.appendChild(valSpan);
+    const inp = document.createElement("input");
+    inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = get(); inp.style.width = "100%";
+    valSpan.textContent = fmt(get());
+    inp.oninput = () => { const v = parseFloat(inp.value); set(v); valSpan.textContent = fmt(v); };
+    wrap.appendChild(lab); wrap.appendChild(inp); hud.appendChild(wrap);
+  };
+  mkSlider("Radius", 2, 60, 1, () => state.brush.radius, (v) => { state.brush.radius = v; if (brushRing?.visible) brushRing.scale.set(v, v, v); }, (v) => v + " m");
+  mkSlider("Strength", 0.2, 4, 0.1, () => state.brush.strength, (v) => { state.brush.strength = v; }, (v) => v.toFixed(1));
+  const fWrap = document.createElement("div");
+  fWrap.style.margin = "0 0 4px";
+  const fLab = document.createElement("label");
+  fLab.textContent = "Falloff";
+  fLab.style.cssText = "display:block;font-size:12px;opacity:.85;margin-bottom:2px";
+  const fSel = document.createElement("select");
+  fSel.style.cssText = "width:100%;background:#2a2a32;color:#eee;border:1px solid #454550;border-radius:5px;padding:4px";
+  for (const o of ["smooth", "linear", "constant"]) {
+    const opt = document.createElement("option"); opt.value = o; opt.textContent = o; fSel.appendChild(opt);
+  }
+  fSel.value = state.brush.falloff;
+  fSel.onchange = () => { state.brush.falloff = fSel.value; };
+  fWrap.appendChild(fLab); fWrap.appendChild(fSel); hud.appendChild(fWrap);
+  const ur = document.createElement("div");
+  ur.style.cssText = "display:flex;gap:6px;margin-top:10px";
+  const undoB = document.createElement("button"); undoB.textContent = "↶ Undo"; undoB.onclick = () => undoStroke();
+  const redoB = document.createElement("button"); redoB.textContent = "↷ Redo"; redoB.onclick = () => redoStroke();
+  for (const b of [undoB, redoB]) {
+    b.style.cssText = "flex:1;padding:6px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#eee;font:12px system-ui;cursor:pointer";
+    ur.appendChild(b);
+  }
+  hud.appendChild(ur);
+  const par = canvas.parentElement || document.body;
+  if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
+  par.appendChild(hud);
+}
+function refreshHudTools() {
+  if (!hud?._toolBtns) return;
+  for (const [id] of HUD_TOOLS) styleToolBtn(hud._toolBtns[id], id === state.brushTool);
+}
+function updateEditModeIndicator() {
+  buildTerrainHud();
   if (state.editMode) {
-    const label = { raise: "Raise", lower: "Lower", smooth: "Smooth" }[state.brushTool] || state.brushTool;
-    editBadge.textContent = `● TERRAIN EDIT — ${label} · r${state.brush.radius}m · drag · Ctrl invert · Ctrl+Z undo`;
-    editBadge.style.display = "block";
+    refreshHudTools();
+    hud.style.display = "block";
     canvas.style.outline = "2px solid #e0552b";
     canvas.style.outlineOffset = "-2px";
     canvas.style.cursor = "crosshair";
   } else {
-    editBadge.style.display = "none";
+    hud.style.display = "none";
     canvas.style.outline = "";
     canvas.style.cursor = "";
+    hideBrushRing();
   }
 }
 
@@ -821,11 +931,13 @@ canvas.addEventListener("pointerdown", (event) => {
   pointerClick.id = event.pointerId;
   pointerClick.x = event.clientX;
   pointerClick.y = event.clientY;
-  // Terrain edit mode: a drag on the ground sculpts instead of orbiting the camera / selecting.
-  if (state.editMode && SCULPT_TOOLS.has(state.brushTool)) {
+  // Terrain edit mode: a drag on the ground sculpts — UNLESS Space is held, which hands the drag to the
+  // camera so you can reframe and keep editing without leaving edit mode.
+  if (state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)) {
     state.brushStroking = true;
     state.strokeStartLen = state.commands.length; // command count before this stroke (for undo)
     state.strokeDid = false;
+    if (state.brushTool === "flatten") { const g = raycastGround(event); state.flattenTarget = g ? g.y : 0; }
     try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
     state.running?.setCameraControlsEnabled?.(false); // suppress orbit while sculpting
     event.preventDefault();
@@ -833,12 +945,15 @@ canvas.addEventListener("pointerdown", (event) => {
   }
 });
 canvas.addEventListener("pointermove", (event) => {
-  if (!state.brushStroking || !event.isPrimary) return;
+  if (!event.isPrimary) return;
+  if (state.editMode) updateBrushRing(event); // ring tracks the cursor whenever edit mode is on
+  if (!state.brushStroking) return;
   const now = performance.now();
   if (now - state.brushLast < 55) return; // throttle dabs so a drag doesn't flood the server
   state.brushLast = now;
   void brushDab(event);
 });
+canvas.addEventListener("pointerleave", () => hideBrushRing());
 canvas.addEventListener("pointerup", (event) => {
   if (!event.isPrimary || pointerClick.id !== event.pointerId) return;
   const dx = event.clientX - pointerClick.x;
@@ -890,6 +1005,16 @@ window.addEventListener("keydown", (event) => {
     redoStroke();
     return;
   }
+  // Hold Space in edit mode: a drag navigates the camera (reframe) instead of sculpting.
+  if (state.editMode && (event.key === " " || event.code === "Space")) {
+    event.preventDefault(); // Space would otherwise scroll/click
+    if (!state.spaceNav) {
+      state.spaceNav = true;
+      state.running?.setCameraControlsEnabled?.(true);
+      canvas.style.cursor = "grab";
+    }
+    return;
+  }
   if (controls && (event.key === "Control" || event.ctrlKey)) {
     state.ctrlRotateDown = true;
     reconcileCtrlRotateMode();
@@ -904,9 +1029,9 @@ window.addEventListener("keydown", (event) => {
       state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1/2/3 tool` : "");
     return;
   }
-  if (state.editMode && (key === "1" || key === "2" || key === "3")) {
+  if (state.editMode && (key === "1" || key === "2" || key === "3" || key === "4")) {
     event.preventDefault();
-    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : "smooth";
+    state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth" : "flatten";
     updateEditModeIndicator();
     setStatus("terrain edit", `tool: ${state.brushTool}`);
     return;
@@ -953,13 +1078,20 @@ window.addEventListener("keydown", (event) => {
   });
 });
 window.addEventListener("keyup", (event) => {
+  if ((event.key === " " || event.code === "Space") && state.spaceNav) {
+    state.spaceNav = false;
+    if (state.editMode) canvas.style.cursor = "crosshair";
+    return;
+  }
   if (event.key !== "Control") return;
   state.ctrlRotateDown = false;
   reconcileCtrlRotateMode();
 });
 window.addEventListener("blur", () => {
   state.ctrlRotateDown = false;
+  state.spaceNav = false; // dropping focus mid-hold must not leave nav stuck on
   reconcileCtrlRotateMode();
+  if (state.editMode) canvas.style.cursor = "crosshair";
 });
 
 // Re-fit the canvas to its container when the layout changes size (a sidebar collapses/expands) or
