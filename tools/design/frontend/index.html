@@ -205,6 +205,18 @@
   svg.map.adding { cursor:crosshair; }
   svg.map.lassoing { cursor:crosshair; }
   .lasso-rect { fill:var(--accent); fill-opacity:.08; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
+  .map-layers { position:absolute; top:12px; left:14px; width:210px; max-height:calc(100% - 60px); overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12.5px; }
+  .map-layers.empty { display:none; }
+  .map-layers .lh { display:flex; align-items:center; gap:8px; padding:9px 11px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
+  .map-layers .lh b { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .map-layers .lh .clr { margin-left:auto; font-size:11px; color:var(--amber); background:none; border:none; cursor:pointer; }
+  .map-layers .lr { display:flex; align-items:center; gap:8px; padding:6px 11px; cursor:default; }
+  .map-layers .lr:hover { background:var(--panel-2); }
+  .map-layers .lr .sw { width:11px; height:11px; border-radius:3px; flex:none; }
+  .map-layers .lr .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .map-layers .lr .x { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; line-height:1; }
+  .map-layers .lr .x:hover { color:var(--amber); }
   .insp { position:fixed; top:120px; right:26px; width:294px; background:var(--panel); border:1px solid var(--line);
     border-radius:12px; box-shadow:0 12px 34px rgba(0,0,0,.22); padding:14px 16px; z-index:55; }
   .insp h4 { margin:0 0 2px; font-size:14px; display:flex; align-items:center; }
@@ -564,6 +576,7 @@ function renderMap(){
     +'<input type="color" id="draw-color" value="'+drawColor+'" title="Line / coast color" style="'+(["outline","river","road","border"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
     +'<span class="coord" id="map-coord">—</span></div>'
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
+    +'<div class="map-layers" id="map-layers"></div>'
     +'<div class="map-hint" id="map-hint"></div></div></div>';
   const marks=mapMarkers();
   if(marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
@@ -622,10 +635,37 @@ function redrawMap(){
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   svg.innerHTML = biomeDefs() + ocean + g + outlines + areas + lines + borders + glyphs + draw + pins + compass;
+  renderLayers();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") svg.querySelectorAll(".feat").forEach(f=>f.addEventListener("mousedown",(e)=>{ e.stopPropagation(); if(confirm("Delete this feature?")){ const i=curFeatures().findIndex(x=>x.id===f.dataset.fid); if(i>=0){ curFeatures().splice(i,1); saveMaps(); redrawMap(); } } }));
   hint();
 }
+function featLabel(f){
+  if(f.type==="area") return f.kind==="outline"?"Coast (land)":((f.biome||"biome")+" region");
+  if(f.type==="line") return f.kind==="border"?"Border":f.kind==="road"?"Road":"River";
+  if(f.type==="glyph") return (f.glyph||"glyph")+" glyph";
+  return f.type; }
+function featSwatch(f){
+  if(f.type==="area") return f.kind==="outline"?"#dccfa6":(BIOME_BASE[f.biome]||"#8a8a86");
+  if(f.type==="line") return f.kind==="border"?"#b23838":f.kind==="road"?"#8a6f4a":(f.color||"#5b7d9a");
+  return "#6b6459"; }
+function renderLayers(){
+  const el=document.getElementById("map-layers"); if(!el) return;
+  const f=curFeatures();
+  if(!f.length){ el.className="map-layers empty"; el.innerHTML=""; return; }
+  el.className="map-layers";
+  el.innerHTML='<div class="lh"><b>Features ('+f.length+')</b><button class="clr" id="lyr-clear">Clear all</button></div>'
+    +f.map((x,i)=>'<div class="lr" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
+  document.getElementById("lyr-clear").onclick=clearMapFeatures;
+  el.querySelectorAll(".lr .x").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); curFeatures().splice(+b.dataset.i,1); saveMaps(); redrawMap(); });
+  el.querySelectorAll(".lr").forEach(r=>{ r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
+}
+function hlFeat(i,on){ const f=curFeatures()[i]; if(!f) return; const svg=document.getElementById("map-svg"); if(!svg) return;
+  const el=svg.querySelector('[data-fid="'+f.id+'"]'); if(el) el.style.filter=on?"drop-shadow(0 0 5px var(--accent))":""; }
+function clearMapFeatures(){ if(!curFeatures().length) return;
+  if(!confirm("Clear all "+curFeatures().length+" drawn feature(s) on this map? (Markers are not affected.)")) return;
+  activeMap().features=[]; saveMaps(); redrawMap(); }
+
 function bindMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
   document.getElementById("map-sw").onchange=(e)=>switchMap(e.target.value);
