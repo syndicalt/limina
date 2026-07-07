@@ -24,7 +24,7 @@ const BIOME_LIST = ["grass","forest","mountain","desert","tundra","swamp","water
 const BIOME_BASE = { grass:"#8aa85f", forest:"#4a7a45", mountain:"#8f8d88", desert:"#d9c48f", tundra:"#dbe4ea", swamp:"#6b7a55", water:"#3f6ea5" };
 const SVGNS = "http://www.w3.org/2000/svg";
 
-let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest",
+let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select",
   drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
 // Elevation brush state (S1). A stroke = one undo step: full-buffer snapshot at stroke start,
 // bbox-union of every dab, ONE cmdPatchRaster pushed {applied:true} at stroke end.
@@ -114,7 +114,9 @@ export function renderMap(){
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
   // The outline/biome click-to-trace tools are RETIRED (locked P2 decision): painting owns land
   // and ground cover. Legacy traced features still render read-only and seed the paint layers.
-  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["glyph","▲","Stamp relief glyph"],["river","〜","Draw river"],["road","🛤","Draw road"],["border","┅","Draw border"]];
+  // Glyphs are retired with the trace tools: painted elevation replaced their relief meaning,
+  // the terrain palette their decorative one. Existing glyph features render read-only.
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["river","〜","Draw river"],["road","🛤","Draw road"],["border","┅","Draw border"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -129,11 +131,9 @@ export function renderMap(){
   const terrainControls = mapTool!=="terrain" ? "" :
     '<select class="sw" id="ter-kind">'+["grass","forest","mountain","desert","tundra","swamp"].map(k=>'<option value="'+k+'"'+(k===terKind?" selected":"")+'>'+k+'</option>').join("")+'<option value="erase"'+(terKind==="erase"?" selected":"")+'>erase</option></select>'
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="ter-radius" min="8" max="300" step="4" value="'+terRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="ter-radius-val" style="margin-left:0">'+terRadius+'m</span>';
-  const glyphPick = mapTool!=="glyph" ? "" :
-    '<select class="sw" id="glyph-pick">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>';
   const colorPick = !["river","road","border"].includes(mapTool) ? "" :
     '<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">';
-  const props = glyphPick+colorPick+elevControls+landControls+terrainControls;
+  const props = colorPick+elevControls+landControls+terrainControls;
   document.getElementById("center").innerHTML =
     '<div class="map-wrap"><div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
     +'<div class="fi fi-corner">'
@@ -164,8 +164,7 @@ function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
     elev:"drag anywhere to "+elevMode+" terrain (one stroke = one undo step) · digging below sea level CARVES WATER · [ ] resizes the brush · painting REPLACES glyph/biome relief at build time",
     land:"drag anywhere to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · painting REPLACES the traced coast at build time",
     terrain:"drag to paint "+(terKind==="erase"?"(erase ground cover)":terKind)+" (one stroke = one undo step) · ground shows on land only · painting REPLACES drawn biome regions at build time",
-    marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
-    area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
+    marker:"click the map to place a marker",
     river:"click to add river points · double-click to finish · Esc to cancel",
     road:"click to add road points · double-click to finish · Esc to cancel",
     border:"click to trace a political border · double-click to finish · Esc to cancel",
@@ -422,8 +421,6 @@ function bindMap(){
   document.getElementById("map-undo").onclick=doUndo;
   document.getElementById("map-redo").onclick=doRedo;
   document.querySelectorAll(".fi-tools .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
-  const gp=document.getElementById("glyph-pick"); if(gp) gp.onchange=(e)=>{ glyphKind=e.target.value; hint(); };
-  const bp=document.getElementById("biome-pick"); if(bp) bp.onchange=(e)=>{ biomeKind=e.target.value; hint(); };
   const dc=document.getElementById("draw-color"); if(dc) dc.oninput=(e)=>{ drawColor=e.target.value; redrawMap(); };
   const seaBtn=document.getElementById("map-sea"); if(seaBtn) seaBtn.onclick=()=>{
     const m=activeMap();
@@ -493,7 +490,6 @@ function bindMap(){
       if(created) redrawMap();
       return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
-    if(mapTool==="glyph"){ commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)})); return; }
     if(["river","road","border"].includes(mapTool)){
       for(let i=0;i<drawPts.length;i++){ const [px,py]=w2s(drawPts[i][0],drawPts[i][1]); if(Math.hypot(px-mx,py-my)<9){ drawPts.splice(i,1); redrawMap(); return; } }
       drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
