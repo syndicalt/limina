@@ -37,6 +37,18 @@ let terKind="grass", terRadius=60;
 let catalog=null, stampAssetId=null, selStamp=null;
 // Layer visibility (P4): session-only view state — hiding a layer never touches the doc.
 const hiddenLayers=new Set();
+// World scale (zone.size_m) lives in the World Bible frontmatter — the Atlas surfaces and edits
+// it in place, because it gates the Compile button (the no-silent-fitting scale contract).
+function worldBibleDoc(){ return (S.state.docs||[]).find(d=>d.name==="world-bible.md"); }
+function zoneSizeM(){ const d=worldBibleDoc(); const m=d&&d.content.match(/^\s*size_m:\s*(\d+(?:\.\d+)?)/m); return m?Number(m[1]):null; }
+async function setZoneSizeM(v){
+  const d=worldBibleDoc(); if(!d) return false;
+  const next=d.content.replace(/^(\s*size_m:\s*)\d+(?:\.\d+)?/m, "$1"+Math.round(v));
+  if(next===d.content) return false;
+  await postJSON("/api/save",{name:d.name,content:next});
+  d.content=next;
+  return true;
+}
 const catalogById=()=>{ const m=new Map(); for(const c of catalog||[]) m.set(c.id,c); return m; };
 async function loadCatalog(){
   if(catalog) return;
@@ -173,6 +185,7 @@ export function renderMap(){
       +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊</button>'
       +'<button class="tool" id="map-import" title="Import a compiled world map as paint layers"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v11"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>'
       +'<button class="tool" id="map-compile" title="Compile this map to a world asset (buildable + importable)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 21V10"/><path d="M7 14l5-5 5 5"/><path d="M4 3h16"/></svg></button>'
+      +(zoneSizeM()!==null?'<input type="number" id="zone-size" class="sw" value="'+zoneSizeM()+'" min="50" step="50" style="width:76px" title="World size in meters (zone.size_m in the World Bible) — compile refuses maps larger than 2x this"><span class="coord">m</span>':'')
       +'<span class="fi-sep"></span>'
       +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
       +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
@@ -528,13 +541,11 @@ function bindMap(){
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
   const imp=document.getElementById("map-import"); if(imp) imp.onclick=showImportMenu;
-  const cmp=document.getElementById("map-compile"); if(cmp) cmp.onclick=async()=>{
-    await flushMapSave(); // compile what's on disk = what you see
-    try{
-      const j=await postJSON("/api/compile-map",{mapId:activeMapId});
-      if(j.error){ toast("compile failed: "+j.error, 5000); return; }
-      toast("compiled → "+j.file+((j.warnings||[]).length?" ("+j.warnings.length+" warnings)":""), 4500);
-    }catch(e){ toast("compile failed: "+String(e), 5000); }
+  const cmp=document.getElementById("map-compile"); if(cmp) cmp.onclick=()=>doCompile(false);
+  const zs=document.getElementById("zone-size"); if(zs) zs.onchange=async(e)=>{
+    const v=Number(e.target.value);
+    if(!(v>=50)){ e.target.value=zoneSizeM(); return; }
+    if(await setZoneSizeM(v)) toast("world size → "+Math.round(v)+"m (World Bible updated)");
   };
   document.querySelectorAll("#stamp-catalog .cat-item").forEach(b=>b.onclick=()=>{ stampAssetId=b.dataset.asset; renderMap(); });
   if(mapTool==="stamp"&&catalog===null) loadCatalog();
@@ -682,6 +693,31 @@ function decimatePts(pts,minD){
   out.push(pts[pts.length-1]);
   return out;
 }
+/** Compile the active map to a world asset. On a scale-contract refusal, offer to grow the
+ *  declared world size to fit and retry ONCE — assisted, never silent. */
+async function doCompile(retried){
+  await flushMapSave(); // compile what's on disk = what you see
+  let msg="";
+  try{
+    const j=await postJSON("/api/compile-map",{mapId:activeMapId});
+    if(!j.error){
+      toast("compiled → "+j.file+((j.warnings||[]).length?" ("+j.warnings.length+" warnings)":""), 4500);
+      return;
+    }
+    msg=String(j.error);
+  }catch(e){ msg=String(e); }
+  const mm=/bbox ([\d.]+)x([\d.]+)m exceeds 2x world-bible zone\.size_m=([\d.]+)m/.exec(msg);
+  if(mm&&!retried){
+    const span=Math.max(Number(mm[1]),Number(mm[2]));
+    const need=Math.ceil(span*1.1/100)*100;
+    if(confirm("The map is ~"+Math.round(span)+"m across but the world is declared "+mm[3]+"m.\nGrow the world to "+need+"m (updates the World Bible) and compile again?")){
+      if(await setZoneSizeM(need)){ renderMap(); return doCompile(true); }
+    }
+    return;
+  }
+  toast("compile failed: "+msg, 6000);
+}
+
 // ── WorldMap IR import (P4): compiled/FMG maps become editable paint layers ─────────────────
 async function showImportMenu(){
   let files=[];
