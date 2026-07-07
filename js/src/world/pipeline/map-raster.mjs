@@ -322,21 +322,20 @@ export function rasterizeWorldMap(worldMap, opts) {
       let h;
       let localAmp = 0;
       // Painted-elevation LAKES: the painted raster is authoritative (the elevation-carves-water
-      // contract), so a land cell the author dug DECISIVELY below the water plane keeps its sub-sea
-      // depth — the clamp below flips it to the sea ceiling instead of the land floor, and the
-      // water plane fills it. Enclosed pits thereby render as lakes (the 2D hillshade already
-      // shows them submerged). The 0.5 threshold matches the sea ceiling: shallower digs stay
-      // land, so noise can never flicker a cell across the plane.
+      // contract), so ANY land cell painted below the water plane renders submerged — the SAME
+      // <seaLevel rule the 2D hillshade tints by, so the lake the author sees is the lake that
+      // builds, full extent. Cells in the shallow rim (0 to -0.5) are pushed DOWN to the -0.5
+      // sea ceiling below so nothing sits within z-fighting range of the plane.
       let paintedSubSea = false;
       if (gridSample) {
         h = gridSample(wx, wz);
-        paintedSubSea = inLand && h < seaLevel - 0.5;
+        paintedSubSea = inLand && h < seaLevel - 0.05;
         // SEA cells with no authored seabed (the raster reads at/above the plane out there —
         // typically the unpainted default): fall back to the classic deepening shore falloff.
         // Without this the whole open sea rides the -0.5 clamp ceiling and renders as a BRIGHT
-        // SAND SHELF around the island. A decisively sub-sea painted value IS an authored
-        // seabed (e.g. a dug bay) and is honored as-is.
-        if (!inLand && h >= seaLevel - 0.5) {
+        // SAND SHELF around the island. A painted sub-sea value IS an authored seabed
+        // (e.g. a dug bay) and is honored (subject to the same -0.5 ceiling below).
+        if (!inLand && h >= seaLevel - 0.05) {
           const t = smoothstep01(coastD / shoreBand);
           h = lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
         }
@@ -387,6 +386,12 @@ export function rasterizeWorldMap(worldMap, opts) {
       //    the crossing itself stays a narrow ~shoreBand-wide surf strip, not a wide dead band. ─
       if (coastD > shoreBand) {
         if (inLand && !paintedSubSea) { if (h < seaLevel + 0.8) h = seaLevel + 0.8; }
+        else if (paintedSubSea) {
+          // Lake basins sink to >= 2m depth across their FULL painted extent: the water plane's
+          // depth shading is nearly clear in the first ~1m of column, so a shallow painted rim
+          // read as wet sand and the lake looked half its drawn size (a real UAT complaint).
+          if (h > seaLevel - 2.0) h = seaLevel - 2.0;
+        }
         else { if (h > seaLevel - 0.5) h = seaLevel - 0.5; }
       }
 
@@ -469,7 +474,13 @@ export function rasterizeWorldMap(worldMap, opts) {
         if (ct > carve) carve = ct;
       }
       if (carve > 0) {
-        const target = lerp(heights[i], channelFloor, carve);
+        // RELATIVE gully, not an absolute floor: through elevated ground the channel cuts ~3m
+        // into the LOCAL surface (an absolute seaLevel-0.6 floor cut slot canyons through a
+        // painted mountain — walls hid the water and the "river" read as a dry crack). Where
+        // the ground is already low the absolute flood floor still wins, so river mouths and
+        // lake links stay below the plane and fill.
+        const floorHere = Math.max(channelFloor, heights[i] - 3);
+        const target = lerp(heights[i], floorHere, carve);
         heights[i] = Math.min(heights[i], target);
       }
     }

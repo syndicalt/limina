@@ -730,7 +730,14 @@ function peekOverlay(){
   closePeekBox();
   const d=document.createElement("div"); d.id="peek-box";
   d.style.cssText="position:fixed;inset:0;background:rgba(12,11,9,.82);display:flex;align-items:center;justify-content:center;z-index:60";
-  d.addEventListener("mousedown",ev=>{ if(ev.target===d) closePeekBox(); });
+  // Deliberate close only (the X, or Esc in the viewer) — a stray click must not destroy a
+  // render that took a minute to make.
+  const x=document.createElement("button");
+  x.title="Close";
+  x.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>';
+  x.style.cssText="position:absolute;top:18px;right:22px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;background:rgba(30,28,24,.85);color:#d8d2c6;border:1px solid rgba(216,210,198,.25);border-radius:10px;cursor:pointer;z-index:61";
+  x.onclick=closePeekBox;
+  d.appendChild(x);
   document.body.appendChild(d);
   return d;
 }

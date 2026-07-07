@@ -313,3 +313,77 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   mesh.name = "limina:water";
   return mesh;
 }
+
+/** Options for one river ribbon (see buildRiverRibbon). */
+export interface RiverOptions {
+  /** Channel centerline in world meters, [[x,z], ...] (>= 2 points). */
+  points: [number, number][];
+  /** Water surface width (meters). Slightly narrower than the terrain carve so the
+   *  ribbon's edges tuck into the banks instead of floating past them. */
+  widthM: number;
+  /** Tint (sRGB hex). Default: the sea surface color. */
+  color?: number;
+  /** Terrain surface height at (x,z) — the CARVED channel floor along the centerline. */
+  sampleHeight: (x: number, z: number) => number;
+  /** Sea plane Y. Near/below it the ribbon drops to just above the plane (no lip at the mouth). */
+  seaLevel: number;
+}
+
+/** Build a RENDER-ONLY river: a triangle-strip ribbon draped along the channel the map
+ *  rasterizer carved, its surface floating ~1.2 m above the LOCAL channel floor (i.e. below
+ *  the banks), descending with the terrain. Same contract as buildWaterSurface: purely
+ *  cosmetic, recomputed from the logged request on replay, never sim state. A flat sea
+ *  plane cannot render a river crossing elevated ground — this is the water system's
+ *  terrain-following counterpart. */
+export function buildRiverRibbon(opts: RiverOptions): WaterMesh {
+  const pts = opts.points;
+  const halfW = opts.widthM / 2;
+  const positions = new Float32Array(pts.length * 2 * 3);
+  for (let i = 0; i < pts.length; i++) {
+    const [x, z] = pts[i];
+    const [px, pz] = pts[Math.max(0, i - 1)];
+    const [nx, nz] = pts[Math.min(pts.length - 1, i + 1)];
+    let dx = nx - px, dz = nz - pz;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len; dz /= len;
+    // Water level: 2.2 m above the carved floor — 0.8 m below the rim of the ~3 m gully.
+    // Any deeper and oblique views occlude the ribbon behind its own banks (the river reads
+    // as a dry sand path from a distant orbit — a real UAT miss at 1.2 m). Near the sea
+    // plane, sit just above it so the mouth meets the sea flush.
+    let y = opts.sampleHeight(x, z) + 2.2;
+    if (y < opts.seaLevel + 0.45) y = opts.seaLevel + 0.03;
+    positions[(i * 2) * 3 + 0] = x - dz * halfW;
+    positions[(i * 2) * 3 + 1] = y;
+    positions[(i * 2) * 3 + 2] = z + dx * halfW;
+    positions[(i * 2 + 1) * 3 + 0] = x + dz * halfW;
+    positions[(i * 2 + 1) * 3 + 1] = y;
+    positions[(i * 2 + 1) * 3 + 2] = z - dx * halfW;
+  }
+  const indices: number[] = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    // Winding chosen so face normals point +Y (water seen from ABOVE) — the reverse order
+    // faced the ribbon downward and backface culling erased the whole river from the render
+    // while the scene graph reported it present-and-visible.
+    indices.push(a, c, b, b, c, d);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const material = new THREE.MeshStandardNodeMaterial({
+    color: opts.color ?? DEFAULT_WATER_COLOR,
+    roughness: 0.12,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.82,
+    // DoubleSide: a reversed polyline flips the strip's winding — the river must never
+    // vanish because the author drew it downstream-first.
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.name = "limina:river";
+  return mesh;
+}

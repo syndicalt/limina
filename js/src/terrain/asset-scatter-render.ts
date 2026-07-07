@@ -125,8 +125,16 @@ export function buildAssetInstancedMeshes(
   for (const { geometry, material, local } of nodes) {
     const placed = new THREE.Matrix4().copy(local).premultiply(offset);
     if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
+    // ALPHA-CUTOUT FOLIAGE AT DISTANCE: leaf-card materials bake alphaMode MASK (cutoff ~0.3).
+    // Mip-averaged alpha falls below that cutoff a few hundred metres out, so a whole canopy
+    // erodes to bare trunks — a forest reads DEAD from any aerial/orbit view. Lower the test on
+    // a CLONE (render-side only; never mutates the shared/loaded asset material) so distant
+    // foliage survives mipping. 0.08 keeps edges acceptable at eye level.
+    const instMaterial = ((material as unknown as { alphaTest?: number }).alphaTest ?? 0) > 0.1
+      ? (() => { const c = (material as unknown as { clone(): THREE.Material }).clone(); (c as unknown as { alphaTest: number }).alphaTest = 0.08; return c; })()
+      : material;
     for (const bucket of buckets) {
-      const inst = new THREE.InstancedMesh(geometry, material, bucket.length);
+      const inst = new THREE.InstancedMesh(geometry, instMaterial, bucket.length);
       for (let i = 0; i < bucket.length; i++) {
         const p = bucket[i];
         pos.set(p.x, p.y, p.z);

@@ -27,7 +27,7 @@
 // traced (emits `world.water.added` with the level so the request is on the trace).
 
 import { z } from "../../build/zod.bundle.mjs";
-import { buildWaterSurface, DEFAULT_WATER_COLOR, DEFAULT_WATER_SIZE, type WaterDepthOptions } from "../water.ts";
+import { buildRiverRibbon, buildWaterSurface, DEFAULT_WATER_COLOR, DEFAULT_WATER_SIZE, type WaterDepthOptions } from "../water.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { isTerrainType, terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { TerrainSource } from "../terrain/types.ts";
@@ -215,8 +215,10 @@ export function registerWaterSkills(
    *  its LEVEL from the layer's `elevationColors.seaLevel` and bakes its depth-fade from the layer's
    *  heightfield. Read-only — never mutated. */
   terrainLayers?: Map<string, EditableTerrain>,
-): { surfaces: WaterSurfaceState[] } {
+): { surfaces: WaterSurfaceState[]; rivers: unknown[] } {
   const surfaces: WaterSurfaceState[] = [];
+  /** River ribbon meshes currently in the scene (render-only, like `surfaces`). */
+  const rivers: unknown[] = [];
 
   const addWater: SkillDefinition<z.infer<typeof addWaterInput>, z.infer<typeof addWaterOutput>> = {
     name: "world.addWater",
@@ -279,6 +281,58 @@ export function registerWaterSkills(
     },
   };
 
+  // world.addRiver — the water system's TERRAIN-FOLLOWING counterpart to the flat sea plane:
+  // a render-only ribbon draped along a carved channel (a map's waterway), descending with
+  // the ground. Same contract as addWater: cosmetic, no sim state, recomputed on replay.
+  const addRiverInput = z.object({
+    /** Channel centerline in world meters (>= 2 points). Typically a WorldMap waterway. */
+    points: z.array(z.tuple([z.number(), z.number()])).min(2),
+    /** Water surface width (meters) — match the map waterway's widthM. */
+    widthM: z.number().positive().default(6),
+    /** Tint (sRGB hex). Default: the sea surface color. */
+    color: z.number().int().optional(),
+    /** Sea plane Y (the ribbon meets it flush at the mouth). Default: the layer's waterline. */
+    level: z.number().optional(),
+    /** Terrain layer to drape on (explicit, else most-recent). */
+    terrainEntity: z.string().optional(),
+  });
+  const addRiverOutput = z.object({ points: z.number().int(), widthM: z.number(), level: z.number() });
+  const addRiver: SkillDefinition<z.infer<typeof addRiverInput>, z.infer<typeof addRiverOutput>> = {
+    name: "world.addRiver",
+    version: "1.0.0",
+    description:
+      "Add a RENDER-ONLY river: a water ribbon draped along a carved channel polyline, following the terrain (a flat sea plane cannot render a river crossing elevated ground). Cosmetic only — no physics body, no ECS entity, replay rebuilds it from the logged request.",
+    category: "world",
+    permissions: ["scene.write"],
+    input: addRiverInput,
+    output: addRiverOutput,
+    handler: (input, ctx) => {
+      const layer = pickLayer(terrainLayers, input.terrainEntity);
+      const level = input.level ?? layer?.elevationColors?.seaLevel ?? 0;
+      // Bilinear surface sample over the layer's heightfield (the CARVED channel floor along
+      // the centerline). With no terrain layer the ribbon lies flat just above `level`.
+      const sampleHeight = layer === undefined ? () => level - 1.2 : (x: number, z: number): number => {
+        const t = layer.tile;
+        const fc = ((x - (t.origin[0] - t.scale[0] / 2)) / t.scale[0]) * (t.ncols - 1);
+        const fr = ((z - (t.origin[2] - t.scale[2] / 2)) / t.scale[2]) * (t.nrows - 1);
+        const c0 = Math.max(0, Math.min(t.ncols - 2, Math.floor(fc)));
+        const r0 = Math.max(0, Math.min(t.nrows - 2, Math.floor(fr)));
+        const tc = Math.max(0, Math.min(1, fc - c0));
+        const tr = Math.max(0, Math.min(1, fr - r0));
+        const h00 = t.heights[r0 * t.ncols + c0], h01 = t.heights[r0 * t.ncols + c0 + 1];
+        const h10 = t.heights[(r0 + 1) * t.ncols + c0], h11 = t.heights[(r0 + 1) * t.ncols + c0 + 1];
+        return t.origin[1] + (h00 * (1 - tc) + h01 * tc) * (1 - tr) + (h10 * (1 - tc) + h11 * tc) * tr;
+      };
+      const mesh = buildRiverRibbon({ points: input.points as [number, number][], widthM: input.widthM, color: input.color, sampleHeight, seaLevel: level });
+      // Render-only: scene graph ONLY (no ECS entity, no physics body) — same as addWater.
+      ctx.world.scene.add(mesh);
+      rivers.push(mesh);
+      ctx.emit("world.river.added", { points: input.points.length, widthM: input.widthM, level });
+      return { points: input.points.length, widthM: input.widthM, level };
+    },
+  };
+
   registry.register(addWater);
-  return { surfaces };
+  registry.register(addRiver);
+  return { surfaces, rivers };
 }

@@ -202,3 +202,36 @@ ops.op_log(
   `replay-safe: sim WITH vs WITHOUT water BIT-IDENTICAL over ${cmp.comparisons} fields (sphere rests y=${restY.toFixed(3)}); ` +
   `region depth-shading is RENDER-ONLY: addWater({region}) bit-identical to no-water over ${cmpRegion.comparisons} fields.`,
 );
+
+// ── world.addRiver: the terrain-following ribbon (same render-only contract) ────────────────────
+function riverMeshes(scene: unknown): SceneChild[] {
+  return (scene as { children: SceneChild[] }).children.filter((c) => c.name === "limina:river");
+}
+assert(registry.has("world.addRiver"), "world.addRiver not registered");
+assert(registry.describe("world.addRiver")?.permissions.includes("scene.write") === true, "world.addRiver not gated by scene.write");
+
+const riverDeny = await registry.invoke("world.addRiver", { points: [[0, 0], [50, 0]] }, denied);
+assert(!riverDeny.success && riverDeny.error?.code === "forbidden", "player.limited was NOT denied world.addRiver");
+assert(riverMeshes(world.scene).length === 0, "denied call must not add a river mesh");
+
+const riverAddsBefore = counter.adds;
+const riverEntitiesBefore = world.entities.ids().length;
+const riverRes = await registry.invoke("world.addRiver", { points: [[0, 0], [30, 5], [60, 0]], widthM: 8, level: 0 }, author);
+assert(riverRes.success, `world.addRiver failed: ${JSON.stringify(riverRes.error)}`);
+const riverOut = riverRes.result as { points: number; widthM: number; level: number };
+assert(riverOut.points === 3 && riverOut.widthM === 8, `river output mismatch: ${JSON.stringify(riverOut)}`);
+assert(riverMeshes(world.scene).length === 1, `expected exactly one river mesh, got ${riverMeshes(world.scene).length}`);
+assert(counter.adds === riverAddsBefore, "world.addRiver created a physics body (must be render-only)");
+assert(world.entities.ids().length === riverEntitiesBefore, "world.addRiver created an ECS entity (must be render-only)");
+const riverEvt = tracer.trace("limina:builder").find((e) => e.type === "world.river.added");
+assert(riverEvt !== undefined, "world.river.added not emitted on the trace");
+
+// Falsifiability: a single-point polyline is REJECTED by the schema, adds nothing.
+const riverBad = await registry.invoke("world.addRiver", { points: [[0, 0]] }, author);
+assert(!riverBad.success, "a 1-point river must fail schema validation");
+assert(riverMeshes(world.scene).length === 1, "failed validation must not add a mesh");
+
+ops.op_log(
+  `p11_water addRiver OK: registered + scene.write-gated (player denied); one RENDER-ONLY ribbon ` +
+  `(no physics body, no ECS entity); world.river.added traced; 1-point polyline rejected (falsifiable).`,
+);

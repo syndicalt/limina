@@ -577,6 +577,33 @@ console.log("river width:");
   check("(falsifiability) a fixed default would be DETECTED (big-zone river must widen)", wBig > wSmall);
   const wExplicit = compileDesignMap({ mapsJsonText: doc(9), worldBibleText: WB_BIG }).worldMap.waterways[0].widthM;
   check("river: an explicit per-feature widthM wins over the scaled default", wExplicit === 9);
+
+  // RELATIVE carve: a river crossing ELEVATED ground cuts a ~3m gully into the local surface,
+  // not a slot canyon down to the absolute seaLevel-0.6 floor (walls hid the water — the
+  // "river never renders" UAT bug). Across low ground the absolute flood floor still wins.
+  const docHill = JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      features: [
+        { id: "o1", type: "area", kind: "outline", points: [[-350, -350], [350, -350], [350, 350], [-350, 350]] },
+        { id: "mt", type: "area", kind: "biome", biome: "mountain", points: [[-150, -150], [150, -150], [150, 150], [-150, 150]] },
+        { id: "r1", type: "line", kind: "river", points: [[-340, 0], [340, 0]], widthM: 10 },
+      ],
+    }],
+  });
+  const WB_800 = WB_TEXT.replace("size_m: 200", "size_m: 800");
+  const { worldMap: hillMap } = compileDesignMap({ mapsJsonText: docHill, worldBibleText: WB_800 });
+  const noRiverMap = { ...hillMap, waterways: [] };
+  const { heights: rh } = rasterizeWorldMap(hillMap, { size: 800, resolution: 201, seed: 7 });
+  const { heights: nh } = rasterizeWorldMap(noRiverMap, { size: 800, resolution: 201, seed: 7 });
+  const mid = Math.round(400 / 4) * 201 + Math.round(400 / 4); // (0,0): river center on the mountain
+  check(`carve: on high ground the channel is a ~3m gully (orig ${nh[mid].toFixed(1)}m -> ${rh[mid].toFixed(1)}m)`,
+    nh[mid] > 6 && rh[mid] >= nh[mid] - 3.5 && rh[mid] <= nh[mid] - 2);
+  const low = Math.round(400 / 4) * 201 + Math.round((-330 + 400) / 4); // near the coast, low ground
+  check(`carve: across low ground the flood floor still wins (got ${rh[low].toFixed(1)}m)`, rh[low] <= -0.5);
+  check("(falsifiability) an absolute-floor carve would be DETECTED (high-ground channel above sea)", rh[mid] > 0);
 }
 
 // ---- 6b. P3: stamps -> asset anchors (schema + hash, three-place rule) --------------------------

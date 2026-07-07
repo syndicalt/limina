@@ -381,13 +381,29 @@ createServer((req, res) => {
               ...(forestDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
                 // ~8m candidate spacing regardless of tile size — painted woods read as CANOPY
                 // from the orbit, not a dozen specks (the density knob is per-axis over the tile).
-                species: ["pine", "spruce"], density: Math.min(192, Math.max(32, Math.round(size / 8))),
-                coverage: 0.75, cluster: 0.5, seed: 11,
-                elevationMin: 1.0, inclusions: forestDiscs,
+                // slopeMax 1.4: painted forest often climbs the mountain flanks — the default
+                // 0.85 slope gate stripped those candidates and left a thin line at the base.
+                species: ["pine", "spruce", "birch"], density: Math.min(192, Math.max(32, Math.round(size / 6))),
+                // elevationMin 0.5, NOT 1.0: un-sculpted land sits at the rasterizer's +0.8m
+                // floor, so a 1.0 floor silently excluded almost the whole painted forest
+                // (155 of 917 trees survived — the "thin line at the mountain base" UAT bug).
+                coverage: 0.9, cluster: 0.45, seed: 11, slopeMax: 1.4, sizeRange: [0.95, 1.6],
+                elevationMin: 0.5, inclusions: forestDiscs,
               } }] : []),
               // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
               // reads as a sparkling seam against the void.
               { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 4), color: 2841970 } },
+              // Terrain-following river ribbons along each waterway (deduped — a doc can carry
+              // exact-duplicate river features). Slightly narrower than the carve so the edges
+              // tuck into the banks.
+              ...[...new Map((worldMap.waterways || []).map((w) => [JSON.stringify(w.points), w])).values()]
+                .filter((w) => w.points.length >= 2)
+                // 1.7x the channel width: the carve's smoothstepped banks slope outward, so the
+                // near-rim water surface must overshoot the floor width to meet them — edges tuck
+                // into the bank slope instead of leaving dry shoulders.
+                .map((w) => ({ kind: "skill", tool: "world.addRiver", input: {
+                  points: w.points, widthM: Math.max(4, (w.widthM || 6) * 1.7), color: 2841970,
+                } })),
             ],
             // Rotating setpiece: the orbit camera auto-spins (default 0.004 rad/frame ≈ one full
             // revolution / ~26s) and engine-shots.mjs captures evenly-spaced yaw frames the Atlas
