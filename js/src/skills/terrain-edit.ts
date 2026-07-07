@@ -14,6 +14,8 @@ import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.t
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 import { applyElevationColors, applyPaintOverlay, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
+import { TileGrass } from "../terrain/grass-render.ts";
+import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
 import { WorldMapSchema, verifyWorldMap } from "../world/worldmap.ts";
@@ -25,7 +27,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: TileGrass; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -224,6 +226,13 @@ export function registerTerrainEditSkills(
   registry: SkillRegistry,
   layers: Map<string, EditableTerrain> = new Map(),
   assets?: AssetRegistry,
+  /** Shared settlement-footprint registry (keyed by terrain id) that village.build fills.
+   *  The paint-driven grass reads it LIVE (via a provider) so blades stop at building pads /
+   *  courtyards / lanes — the same exclusion seam vegetation.scatter / vegetation.grass honour. */
+  footprints: Map<string, ScatterExclusion[]> = new Map(),
+  /** Shared VEGETATION-CLEAR registry (keyed by terrain id). The paint-grass registers a
+   *  refresh closure so village.build's footprint registration carves already-grown blades. */
+  vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
 ): { layers: Map<string, EditableTerrain> } {
   const create: SkillDefinition<z.infer<typeof createInput>, { entity: string; mapHash?: string }> = {
     name: "terrain.create",
@@ -352,7 +361,32 @@ export function registerTerrainEditSkills(
       // that levels a terrace would otherwise drop the vertex colors → a white patch). Also stash
       // the entity id + physics bodyId so terrain.deform can REBUILD the heightfield collider to
       // follow the reshaped heights (see the deform handler — the sink-through fix).
-      layers.set(entity, { tile, mesh, eid, entity, bodyId, ...(elevationColors !== undefined ? { elevationColors } : {}) });
+      const layer: EditableTerrain = { tile, mesh, eid, entity, bodyId, ...(elevationColors !== undefined ? { elevationColors } : {}) };
+      layers.set(entity, layer);
+      // PAINT-DRIVEN GRASS (render context only): grow real instanced blades wherever the tile's
+      // paint channel says grass (density ∝ paintW — a map-rasterized slab arrives painted; a
+      // flat/procedural slab grows blades as terrain.paint strokes land). Scene-direct chunked
+      // InstancedMeshes — ZERO entity slots, nothing recorded; replay re-mounts identically from
+      // the recorded create/paint ops (grass-render.ts / render/grass-source.ts). The exclusion
+      // provider reads the terrain's CURRENT settlement footprints, and the registered clear
+      // closure lets village.build carve blades off its pads after it registers them (the same
+      // "veg grows first, civilization clears" order vegetation.scatter/grass follow).
+      if (ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function") {
+        const grassSeed = input.generate?.seed ?? 1337;
+        const seaLevel = elevationColors?.seaLevel;
+        layer.grass = new TileGrass(
+          scene as unknown as ConstructorParameters<typeof TileGrass>[0],
+          tile,
+          () => ({
+            seed: grassSeed,
+            ...(seaLevel !== undefined ? { elevationMin: seaLevel + 0.05 } : {}),
+            exclusions: footprints.get(entity) ?? [],
+          }),
+        );
+        const clears = vegetationClears.get(entity) ?? [];
+        clears.push(() => { layer.grass?.refreshAll(); });
+        vegetationClears.set(entity, clears);
+      }
       ctx.emit("terrain.created", { entity, size: input.size, resolution: n, ...(mapHash !== undefined ? { mapHash } : {}) });
       return { entity, ...(mapHash !== undefined ? { mapHash } : {}) };
     },
@@ -404,6 +438,8 @@ export function registerTerrainEditSkills(
         (layer.mesh as unknown as { geometry: unknown }).geometry = next;
         old.dispose?.();
       }
+      // Re-seat the grass blades the brush moved (their Y is baked from the pre-deform surface).
+      layer.grass?.refreshCircle(input.center[0], input.center[1], input.radius + 3);
       ctx.emit("terrain.deformed", { entity: id, mode: input.mode });
       return { ok: true };
     },
@@ -430,6 +466,10 @@ export function registerTerrainEditSkills(
         if (layer.elevationColors !== undefined) applyElevationColors(g, layer.tile, layer.elevationColors);
         applyPaintOverlay(g, layer.tile);
       }
+      // Refresh the grass chunks the stamp touched (render context only — layer.grass exists only
+      // there). Padded by the paint's bilinear reach (~one grid step) + the placement jitter so a
+      // stroke's density change lands on every affected blade. Cheap: a few chunks per stamp.
+      layer.grass?.refreshCircle(input.center[0], input.center[1], input.radius + 3);
       ctx.emit("terrain.painted", { entity: id, material: input.material });
       return { ok: true };
     },

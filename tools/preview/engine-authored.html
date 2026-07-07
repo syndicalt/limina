@@ -34,6 +34,7 @@ try {
     }
     if (running && running.scene) { let m = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; }); window.__log.push("scene meshes=" + m); }
     if (running && running.terrainStream) window.__log.push("terrainStream settled: mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending() + " keys=" + running.terrainStream.mounted().slice(0, 12).join(" "));
+    if (running && running.grassStream) window.__log.push("grassStream: tiles=" + running.grassStream.tiles() + " blades=" + running.grassStream.blades());
     window.__done = true;
   }
 } catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }

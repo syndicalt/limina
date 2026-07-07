@@ -1,0 +1,31 @@
+{
+  "_comment": "Paint-driven grass proof (streamed path): the fmg-1km CLIENT-streamed world at EYE LEVEL on the main island's grass biome. Expect: real instanced blades near the camera (dense, wind-swayed, fading out by ~110 m into the painted ground tint), NONE on the sand fringe / water.",
+  "commands": [
+    {
+      "kind": "physics",
+      "op": "op_physics_create_world",
+      "args": [
+        -9.81
+      ]
+    },
+    {
+      "kind": "skill",
+      "tool": "world.setTerrainSource",
+      "input": {
+        "kind": "map",
+        "mapAssetId": "maps/fmg-1km.worldmap.json"
+      }
+    }
+  ],
+  "camera": {
+    "center": [
+      -90,
+      13,
+      -40
+    ],
+    "radius": 16,
+    "height": 3,
+    "autoSpin": 0,
+    "far": 1500
+  }
+}

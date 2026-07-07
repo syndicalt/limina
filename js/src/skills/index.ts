@@ -210,10 +210,6 @@ export function registerCoreSkills(
   // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
   registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions, assets);
-  // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
-  // terrain.deform (brush sculpt). Records ops, not bytes — replay reconstructs the heights.
-  // vegetation.scatter reads the SAME live terrain-layer map to scatter a forest on the sculpt.
-  registerTerrainEditSkills(registry, terrainLayers, assets);
   // Shared settlement-footprint registry (keyed by terrain id): village.build fills it with the
   // built ground's keep-out discs and vegetation.scatter auto-excludes them, so "build a village
   // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors
@@ -229,6 +225,13 @@ export function registerCoreSkills(
   // byte on replay. (When veg runs AFTER village.build, the footprints already exist at mount time,
   // so the initial mount is already cleared and the closure is a harmless no-op re-mount.)
   const vegetationClears = new Map<string, Array<() => void | Promise<void>>>();
+  // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
+  // terrain.deform (brush sculpt) + terrain.paint (surface material). Records ops, not bytes —
+  // replay reconstructs the heights/paint. vegetation.scatter reads the SAME live terrain-layer
+  // map to scatter a forest on the sculpt. The footprint + clear registries are shared so the
+  // PAINT-DRIVEN grass (blades wherever the paint channel says grass) honours settlement
+  // footprints exactly like vegetation.scatter / vegetation.grass.
+  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears);
   registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears);
   // village.build: ONE skill that lays a terrain-aware settlement onto an editable
   // terrain layer by placing curated library GLBs (via asset.place) at transforms from

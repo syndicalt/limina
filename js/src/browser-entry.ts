@@ -69,6 +69,7 @@ import type { TerrainTile } from "./terrain/types.ts";
 // Map Phase 3.3 — client-side (view) terrain streaming for the LIVE viewport: the stream loop
 // (pure set math + budget, headless-gated in p_stream_client) + the map-backed source it follows.
 import { ClientTerrainStream } from "./terrain/stream-client.ts";
+import { StreamedGrassManager } from "./terrain/grass-render.ts";
 import type { TileCoord } from "./terrain/stream.ts";
 import { MapTerrainSource } from "./terrain/map-source.ts";
 import { SwappableTerrainSource } from "./terrain/swappable.ts";
@@ -493,6 +494,8 @@ export interface RunningLive {
   /** Map Phase 3.3 — introspection over the client-side (view) terrain stream. Present only on a
    *  map-streamed world (the recorded log bound world.setTerrainSource {kind:"map"}). */
   terrainStream?: { mounted(): string[]; pending(): number };
+  /** Paint-driven streamed grass introspection (proof harnesses/UAT) — present with terrainStream. */
+  grassStream?: { tiles(): number; blades(): number };
   setCameraControlsEnabled(on: boolean): void;
   setSyncSuppressed(eid: number, on: boolean): void;
   stop(): void;
@@ -853,6 +856,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // p_stream_client.ts. Mounts run inside frame() below — synchronous math only, so the
   // forceWebGL init-collapse window (no macrotask between init() and first render) is untouched.
   let terrainStream: ClientTerrainStream | undefined;
+  let grassStream: StreamedGrassManager | undefined;
   {
     const holder = core.terrain.source;
     const mapSource = holder instanceof SwappableTerrainSource && holder.current instanceof MapTerrainSource
@@ -905,6 +909,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         }
         return false;
       };
+      // PAINT-DRIVEN STREAMED GRASS (view state, like the tile stream itself): real instanced
+      // blades on the near tiles wherever the map's paint channel says grass (density ∝ paintW;
+      // none on sand/rock/underwater). Tiles register on mount and the manager grows/drops grass
+      // around the camera (≤1 tile-grass build per frame, radius 2 + hysteresis 1) inside frame()
+      // below — synchronous math + GPU upload only, no fetch/macrotask, ZERO entity slots. The
+      // 60→110 m camera fade in the TSL material shrinks far blades into the painted ground tint,
+      // so the grass edge never pops at the grow radius.
+      grassStream = new StreamedGrassManager(scene, {
+        tileSize: TILE_SIZE,
+        source: () => ({ seed: 1337, elevationMin: mapSource.seaLevelM + 0.05, spacing: 0.34 }),
+      });
+      const grassStreamRef = grassStream;
       terrainStream = new ClientTerrainStream({
         tileSize: TILE_SIZE,
         radius,
@@ -912,11 +928,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         maxLoadsPerUpdate: 2, // ≤2 tile builds/frame — no hitch (33×33 mesh + collider ≈ sub-ms each)
         getTile: (c) => mapSource.generateTile({ seed: 0, tx: c.tx, tz: c.tz, lod: 0 }),
         isExternal: tileExternallyOwned,
-        mount: (key, _c, tile) => {
+        mount: (key, c, tile) => {
           const mesh = buildTerrainMesh(tile, { elevationColors });
           applyPaintOverlay(mesh.geometry, tile);
           scene.add(mesh);
           tileMeshes.set(key, mesh);
+          grassStreamRef.noteTile(key, c, tile);
           // Local collider + the sim-worker mirror, so raycasts here AND the locally-simulated
           // player over there both stand on the streamed ground. Keyed view-support state.
           const [ox, oy, oz] = tile.origin;
@@ -926,6 +943,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           worker.postMessage({ type: "streamTileColliders", add: [add], remove: [] });
         },
         unmount: (key) => {
+          grassStreamRef.dropTile(key);
           const mesh = tileMeshes.get(key);
           if (mesh !== undefined) {
             scene.remove(mesh);
@@ -1152,6 +1170,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (terrainStream !== undefined) {
         const camPos = (camera as unknown as { position: { x: number; z: number } }).position;
         terrainStream.update(camPos.x, camPos.z);
+        // Grass follows the same camera anchor, one budgeted tile-grass build per frame.
+        grassStream?.update(camPos.x, camPos.z);
       }
       renderer.render(scene, camera);
     },
@@ -1262,6 +1282,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       mounted: (): string[] => [...stream.mountedKeys()],
       pending: (): number => stream.pendingCount(),
     })(terrainStream),
+    grassStream: ((g) => g === undefined ? undefined : {
+      tiles: (): number => g.grassKeys().size,
+      blades: (): number => g.bladeCount(),
+    })(grassStream),
     setCameraControlsEnabled: (on: boolean): void => {
       if (cameraControls !== undefined) cameraControls.enabled = on;
     },
@@ -1273,6 +1297,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       loop.stop();
       // Tear the view stream down BEFORE the worker dies: unmount disposes every tile mesh +
       // local collider (the worker-side mirror colliders die with the terminated worker).
+      grassStream?.clear();
       terrainStream?.clear();
       cameraControls?.dispose();
       try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }

@@ -77,6 +77,11 @@ export interface GrassMeshOptions {
   /** Hard cap on rendered blade instances (bounded draw cost) — placements above it are decimated
    *  by a deterministic uniform stride. */
   maxBlades: number;
+  /** OPT-IN camera-distance density falloff (the streamed-grass LOD): blades shrink to the ground
+   *  from `start` m and are gone by `end` m, so an unbounded streamed world renders blades only
+   *  near the camera while the painted ground tint carries the colour beyond. Render-graph only
+   *  (camera-relative; never sim/log state). Absent → node graph byte-identical to before. */
+  fade?: { start: number; end: number };
 }
 
 /** A curved, tapered grass blade in local space (adapted from the MIT procedural-grass skill's
@@ -201,7 +206,21 @@ export function buildGrassMaterial(opts: GrassMeshOptions): THREE.MeshStandardNo
   // Layer 3 — per-blade turbulence (high freq flutter, off the per-blade phase).
   const turb = t.mul(3.0).add(phase.mul(1.9)).sin().mul(opts.windStrength * 0.35);
 
-  const swayAmt = global.add(gust).add(turb).mul(h2);
+  let swayAmt = global.add(gust).add(turb).mul(h2);
+
+  // OPT-IN distance fade: shrink the blade (and its sway) toward the ground by the camera's
+  // horizontal distance to the blade's BAKED world root (aWind.xy) — far blades sink into the
+  // painted ground tint instead of popping. Skipped entirely when absent (graph unchanged).
+  // deno-lint-ignore no-explicit-any
+  let heightFade: any | undefined;
+  if (opts.fade !== undefined) {
+    const dfx = wx.sub(T.cameraPosition.x);
+    const dfz = wz.sub(T.cameraPosition.z);
+    const dist = T.sqrt(dfx.mul(dfx).add(dfz.mul(dfz)));
+    heightFade = T.oneMinus(T.smoothstep(opts.fade.start, opts.fade.end, dist));
+    swayAmt = swayAmt.mul(heightFade);
+  }
+
   // Counter-rotate the WORLD wind offset by the blade's yaw into local space so that AFTER the
   // instance yaw it points along the SAME world direction for every blade (coherent field).
   const cy = yaw.cos(), sy = yaw.sin();
@@ -209,7 +228,8 @@ export function buildGrassMaterial(opts: GrassMeshOptions): THREE.MeshStandardNo
   const windLX = cy.mul(wWX).sub(sy.mul(wWZ));
   const windLZ = sy.mul(wWX).add(cy.mul(wWZ));
 
-  material.positionNode = T.vec3(px.add(windLX), py, pl.z.add(windLZ));
+  const pyOut = heightFade === undefined ? py : py.mul(heightFade);
+  material.positionNode = T.vec3(px.add(windLX), pyOut, pl.z.add(windLZ));
 
   // ── COLOUR: base→tip gradient + per-blade hue/shade jitter + dry golden tips on some blades ──────
   const shade = rS.sub(0.5).mul(0.18);                    // ±0.09 brightness
