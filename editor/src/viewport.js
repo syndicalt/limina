@@ -1476,6 +1476,45 @@ window.addEventListener("blur", () => {
   if (state.editMode) canvas.style.cursor = "crosshair";
 });
 
+// --- North compass ---------------------------------------------------------------------------------
+// The map tool is north-up (+z); the 3D orbit camera is not. Without a compass, a yawed viewport
+// reads as a MIRRORED world when compared against the drawn map (a real UAT confusion — the island
+// was reported "inverted" when the camera was simply facing south). The needle points at world
+// north (+z) as seen on screen: θ = atan2(-forward.x, forward.z), CSS-clockwise.
+let compassEl = null, compassNeedle = null, compassLast = 999;
+function ensureCompass() {
+  if (compassEl) return;
+  compassEl = document.createElement("div");
+  compassEl.style.cssText = "position:absolute;top:10px;right:10px;z-index:29;width:44px;height:44px;border-radius:999px;" +
+    "background:rgba(22,22,27,.85);border:1px solid #454550;display:flex;align-items:center;justify-content:center;" +
+    "pointer-events:none;font:11px system-ui,sans-serif;color:#bbb";
+  compassNeedle = document.createElement("div");
+  compassNeedle.style.cssText = "position:relative;width:100%;height:100%;display:flex;align-items:flex-start;justify-content:center;" +
+    "transition:transform .12s linear";
+  compassNeedle.innerHTML = '<span style="margin-top:3px;font-weight:600;color:#e0552b">N</span>' +
+    '<span style="position:absolute;top:17px;left:50%;width:2px;height:12px;margin-left:-1px;background:#e0552b;border-radius:1px"></span>';
+  compassEl.appendChild(compassNeedle);
+  const par = canvas.parentElement || document.body;
+  if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
+  par.appendChild(compassEl);
+}
+(function compassTick() {
+  const cam = state.running?.camera;
+  if (cam && typeof cam.getWorldDirection === "function") {
+    ensureCompass();
+    const d = cam.getWorldDirection(new THREE.Vector3());
+    // Degenerate straight-down view: fall back to camera up for the screen frame.
+    const fx = Math.abs(d.x) + Math.abs(d.z) < 1e-4 ? cam.up.x : d.x;
+    const fz = Math.abs(d.x) + Math.abs(d.z) < 1e-4 ? cam.up.z : d.z;
+    const deg = Math.atan2(-fx, fz) * 180 / Math.PI;
+    if (Math.abs(deg - compassLast) > 0.5) {
+      compassNeedle.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+      compassLast = deg;
+    }
+  }
+  requestAnimationFrame(compassTick);
+})();
+
 // Re-fit the canvas to its container when the layout changes size (a sidebar collapses/expands) or
 // the window resizes. The canvas is otherwise only sized at reboot (runLive), so a docked-sidebar
 // toggle would leave it stretched until the next re-author. Resizes the drawing buffer + the live

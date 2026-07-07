@@ -188,45 +188,9 @@ registerAssetCatalogSkills(server.registry);
 server.start();
 await server.ready;
 
-// Author the whole starting scene THROUGH the recorded registry so worldlog.tail carries real,
-// material-editable geometry the moment the viewport connects — and any further authoring (an
-// approved edit, a builder client, a coordinator worker) appends to the same stream. Previously
-// ground/crate/barrel were un-recorded, mesh-less STUB spawns: they showed in the World panel but
-// were invisible in the 3D viewport and un-editable (three.setMaterial had no mesh to touch). Every
-// starter entity is now a first-class recorded primitive with a real mesh + material.
-const seedBase = {
-  agentId: "editor_host", sessionId: "editor_host",
-  permissions: resolveProfile("builder.readWrite"), tick: 0, world: server.world,
-};
-async function seedEntity(
-  input: Record<string, unknown>,
-  tags: string[] = [],
-  scale?: [number, number, number],
-): Promise<void> {
-  const res = await server.registry.invoke("scene.createEntity", input, seedBase);
-  if (!res.success) {
-    ops.op_log(`editor_host: starting-scene authoring failed: ${JSON.stringify(res.error)}`);
-    return;
-  }
-  const id = (res.result as { entity: string }).entity;
-  for (const tag of tags) await server.registry.invoke("ecs.addComponent", { entity: id, component: tag }, seedBase);
-  if (scale) await server.registry.invoke("ecs.updateComponent", { entity: id, component: "scale", value: scale }, seedBase);
-}
-if (!server.rehydrated) {
-  // ent_0 ground slab (also the spawn marker), ent_1 crate, ent_2 barrel — the tagged starters.
-  await seedEntity({ shape: "box", size: 1, position: [0, 0, 0], color: 0x6b7280 }, ["ground", "spawn"], [16, 0.2, 16]);
-  await seedEntity({ shape: "box", size: 1, position: [3, 0.6, 0], color: 0xb08968 }, ["prop", "crate"]);
-  await seedEntity({ shape: "box", size: 1, position: [-3, 0.6, 2], color: 0x8d6e63 }, ["prop", "barrel"]);
-  // ent_3..6 — a few colored demo boxes resting above the ground.
-  for (const box of [
-    { position: [0, 1, 0] as [number, number, number], color: 0x4ade80 },
-    { position: [3, 1, 0] as [number, number, number], color: 0x60a5fa },
-    { position: [-3, 1, 2] as [number, number, number], color: 0xf472b6 },
-    { position: [0, 1, -4] as [number, number, number], color: 0xfacc15 },
-  ]) {
-    await seedEntity({ shape: "box", size: 1, position: box.position, color: box.color });
-  }
-}
+// A fresh (un-rehydrated) world boots EMPTY. The old demo starter scene (ground slab, crate,
+// barrel, colored boxes) predates the map-driven build pipeline — a real world now arrives via
+// tools/design/build-world.mjs (or any builder client), and demo blocks only polluted it.
 
 ops.op_log(
   `editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:${port}/ ` +

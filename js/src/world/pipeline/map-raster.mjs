@@ -14,13 +14,21 @@
 // therefore expected to be authored at world origin [0,0,0] (the default), so the rasterized
 // grid's local frame lines up with the WorldMap's own coordinate space.
 //
-// LAYERING (outside -> in): sea/shore falloff by distance-to-coast -> relief hints (mountain/
-// hills/plateau/peak raise, depression lowers, smoothstep falloff from each hint's shape) ->
-// seeded value-noise/fBm texture (bounded to `noiseFrac` x the LOCAL authored relief amplitude,
-// so it stays legible: this bound is what keeps the land-mask IoU >= 0.85) -> waterway carve
-// (depresses a channel along each polyline, clamped so it never breaches below seaLevel-3) ->
-// biome regions painted onto the tile's paintMat/paintW overlay channel (terrain.paint's SAME
-// channel — reused, not reinvented) with a coastal sand fringe on both sides of the shoreline.
+// LAYERING (outside -> in): sea/shore falloff by distance-to-coast (a TIGHT band so the
+// rendered coast tracks the drawn polygon, incl. concavities like a pinched waist, instead of
+// blurring it) -> a hard vertical-separation clamp outside that same narrow band (underwater
+// terrain tops out at seaLevel-0.5, land floors at seaLevel+0.8 — only the band itself, the
+// "surf zone", is allowed to cross the water plane — so the water plane never z-fights a
+// near-flat run of terrain) -> relief hints (mountain/hills/plateau/peak raise, depression
+// lowers, smoothstep falloff from each hint's shape) -> seeded value-noise/fBm texture (bounded
+// to `noiseFrac` x the LOCAL authored relief amplitude, so it stays legible: this bound is what
+// keeps the land-mask IoU >= 0.85) -> waterway carve (a shallow channel floor at seaLevel-0.6,
+// so the water plane visibly fills it — rivers read as channels, not craters — clamped to only
+// ever LOWER the surface, never raise it) -> biome regions painted onto the tile's
+// paintMat/paintW overlay channel (terrain.paint's SAME channel — reused, not reinvented) with
+// a narrow coastal sand fringe, sand river banks, and a full seabed paint (sand near shore ->
+// dirt/rock deeper) so no tile cell is left with paintW===0 (which would fall back to a bare
+// checker material).
 
 // ── deterministic value noise + fBm (verbatim technique from terrain-heightfield.mjs, kept
 // local to this module so map-raster.mjs has zero cross-file coupling with the procedural
@@ -232,7 +240,11 @@ export function rasterizeWorldMap(worldMap, opts) {
 
   // Scale-relative bands (deterministic functions of `size` only, so a bigger tile gets a
   // proportionally wider shore/relief falloff instead of a fixed-meter band reading too sharp).
-  const shoreBand = Math.max(4, size * 0.04);
+  // shoreBand is deliberately TIGHT (a real-world "surf zone" width, ~2.5-4m, not a fraction of
+  // the whole tile) — it doubles as BOTH the coastline-shape falloff (so drawn concavities like
+  // a pinched waist survive) AND the vertical-separation surf-zone threshold below: only within
+  // this band of the true coast may the terrain cross the water plane.
+  const shoreBand = Math.min(6, Math.max(2.5, size * 0.015));
   const reliefBand = Math.max(4, size * 0.06);
   const seaFarDepth = Math.max(2, baseAmplitude * 0.5);
   const flatNoiseAmp = baseAmplitude * 0.15; // ambient roughness where no relief hint applies.
@@ -290,6 +302,17 @@ export function rasterizeWorldMap(worldMap, opts) {
         h += nv * noiseFrac * effAmp;
       }
 
+      // ── 3b. Vertical-separation clamp: outside the narrow shoreBand "surf zone" around the
+      //    TRUE coast, hard-floor land at seaLevel+0.8 and hard-ceiling sea at seaLevel-0.5 —
+      //    relief/noise may shape the surface freely but must never bring a far-from-coast cell
+      //    back within z-fighting range of the water plane. Only cells inside shoreBand of the
+      //    actual shoreline (where the lerp above legitimately crosses the plane) are exempt, so
+      //    the crossing itself stays a narrow ~shoreBand-wide surf strip, not a wide dead band. ─
+      if (coastD > shoreBand) {
+        if (inLand) { if (h < seaLevel + 0.8) h = seaLevel + 0.8; }
+        else { if (h > seaLevel - 0.5) h = seaLevel - 0.5; }
+      }
+
       heights[i] = h;
 
       // ── 5. Biome -> paint (computed here so it shares the coastD already known; carving
@@ -309,16 +332,48 @@ export function rasterizeWorldMap(worldMap, opts) {
         const sandW = 0.8 * (1 - smoothstep01(coastD / coastalBand));
         if (sandW > matW) { matId = 1; matW = sandW; }
       }
+
+      // River banks: sand along each waterway's channel + bank falloff (peaking at the
+      // channel/bank edge — the same halfWidth/bankBand geometry the carve pass uses below —
+      // so the painted strip matches the carved channel exactly).
+      for (const w of waterways) {
+        if (w.points.length < 2) continue;
+        const halfWidth = w.widthM / 2;
+        const bankBand = Math.max(halfWidth, 2);
+        const reach = halfWidth + bankBand;
+        const d = distToPolyline(wx, wz, w.points);
+        if (d >= reach) continue;
+        const bankW = 0.85 * (1 - smoothstep01(d / reach));
+        if (bankW > matW) { matId = 1; matW = bankW; }
+      }
+
+      // Full seabed paint: every OPEN-SEA cell gets a material (sand near shore -> dirt at
+      // mid-depth -> rock in the deep) so paintW is never ~0 out there — an unpainted cell
+      // falls back to a bare checker material, which is the "checkerboard seabed" defect this
+      // kills. (Land cells with no biome/coastal hit stay unpainted; the elevation-color ramp
+      // already gives them a sensible grass/rock base, so there's no bare-checker risk on land.)
+      if (!inLand) {
+        let seabedId, seabedW;
+        if (coastD < coastalBand) { seabedId = 1; seabedW = 0.85; } // sand shallows
+        else if (coastD < coastalBand * 3) { seabedId = 4; seabedW = 0.65; } // dirt mid-depth
+        else { seabedId = 3; seabedW = 0.65; } // rock, deep open sea
+        if (seabedW > matW) { matId = seabedId; matW = seabedW; }
+      }
+
       paintMat[i] = matId;
       paintW[i] = matW;
     }
   }
 
-  // ── 4. Waterway carve (second pass: depresses a channel along each polyline, clamped so it
-  //    never breaches below seaLevel-3). Runs after the base+relief+noise pass so the carve is
-  //    a clean depression relative to the already-shaped surface, not fighting it. ─────────────
-  const carveDepth = 1.5;
-  const floor = seaLevel - 3;
+  // ── 4. Waterway carve (second pass: pulls the surface DOWN toward a shallow channel floor
+  //    along each polyline so rivers read as WATER CHANNELS the water plane visibly fills, not
+  //    craters — a fixed subtract-with-floor previously dug to seaLevel-3, rendering as a dark
+  //    pit wherever the local terrain was already low, e.g. near a river mouth at the coast).
+  //    `Math.min` makes this a one-way clamp: it can only lower a cell toward channelFloor,
+  //    never raise one that is already lower (e.g. open sea past a river mouth stays untouched
+  //    instead of getting an underwater ridge). Runs after the base+relief+noise(+clamp) pass so
+  //    the carve reads relative to the already-shaped surface, not fighting it. ─────────────────
+  const channelFloor = seaLevel - 0.6;
   for (let row = 0; row < n; row++) {
     const wz = -half + row * step;
     for (let col = 0; col < n; col++) {
@@ -337,8 +392,8 @@ export function rasterizeWorldMap(worldMap, opts) {
         if (ct > carve) carve = ct;
       }
       if (carve > 0) {
-        const next = Math.max(floor, heights[i] - carveDepth * carve);
-        heights[i] = next;
+        const target = lerp(heights[i], channelFloor, carve);
+        heights[i] = Math.min(heights[i], target);
       }
     }
   }
