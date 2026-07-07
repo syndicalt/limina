@@ -52,10 +52,41 @@ function creationRect(map, markers) {
     else if (typeof f.x === "number") eat(f.x, f.z);
   }
   for (const m of markers || []) eat(m.x, m.z);
-  if (minX === Infinity) { minX = -400; maxX = 400; minZ = -400; maxZ = 400; }
+  if (minX === Infinity) { minX = -1000; maxX = 1000; minZ = -1000; maxZ = 1000; }
   const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-  const span = Math.max(800, (maxX - minX) * 1.5, (maxZ - minZ) * 1.5);
+  const span = Math.max(2000, (maxX - minX) * 1.5, (maxZ - minZ) * 1.5);
   return { x0: Math.round(cx - span / 2), z0: Math.round(cz - span / 2), w: Math.round(span), h: Math.round(span) };
+}
+
+/** Auto-grow the mask rect so a stroke STARTING outside (or near the edge of) the current
+ *  region just works — the region is a working extent, never a wall. Existing cells resample
+ *  (nearest) into the grown grid; called at stroke START only, so the stroke's undo snapshot
+ *  is taken against the final grid. The slight coarsening of old paint is not undoable. */
+export function growRasterToInclude(e, wx, wz, radiusM, fillValue = 0) {
+  const pad = radiusM * 1.5;
+  const nx0 = Math.min(e.rect.x0, wx - pad), nz0 = Math.min(e.rect.z0, wz - pad);
+  const nx1 = Math.max(e.rect.x0 + e.rect.w, wx + pad), nz1 = Math.max(e.rect.z0 + e.rect.h, wz + pad);
+  if (nx0 === e.rect.x0 && nz0 === e.rect.z0 && nx1 === e.rect.x0 + e.rect.w && nz1 === e.rect.z0 + e.rect.h) return false;
+  const rect = { x0: Math.round(nx0), z0: Math.round(nz0), w: Math.round(nx1 - nx0), h: Math.round(nz1 - nz0) };
+  const { w, h } = e;
+  const next = new Uint8Array(w * h);
+  if (fillValue) next.fill(fillValue); // e.g. elevation's flat-y=0 value; landmass fills ocean (0)
+  const osx = e.rect.w / (w - 1), osz = e.rect.h / (h - 1);
+  const nsx = rect.w / (w - 1), nsz = rect.h / (h - 1);
+  for (let r = 0; r < h; r++) {
+    const wz2 = rect.z0 + r * nsz;
+    const or = Math.round((wz2 - e.rect.z0) / osz);
+    if (or < 0 || or > h - 1) continue;
+    for (let c = 0; c < w; c++) {
+      const wx2 = rect.x0 + c * nsx;
+      const oc = Math.round((wx2 - e.rect.x0) / osx);
+      if (oc >= 0 && oc <= w - 1) next[r * w + c] = e.cells[or * w + oc];
+    }
+  }
+  e.rect = rect;
+  e.cells = next;
+  e.dirty = true; e.rev = (e.rev || 0) + 1;
+  return true;
 }
 
 /** Create the mask (first stroke only). Seeds LAND from any hand-traced outline features via

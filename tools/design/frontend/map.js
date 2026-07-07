@@ -49,8 +49,8 @@ function commit(cmd, opts) {
 }
 // Undo/redo announce what they touched: deep undo silently crossing from raster strokes into
 // feature adds (deleting them) is how a held Ctrl+Z ate saved features.
-function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
-function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
+function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
+function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
 
 // Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
 bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); LM.syncLandmassIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
@@ -111,7 +111,7 @@ export function renderMap(){
   if(!activeMapId) activeMapId = S.state.activeMapId || primaryMapId();
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
   const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["land","🏝 Land"],["elev","⛰ Elevation"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
-  const sea=!!activeMap().sea;
+  const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
     '<select class="sw" id="elev-mode">'+[["raise","Raise"],["lower","Lower"],["smooth","Smooth"],["level","Level"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===elevMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
@@ -203,7 +203,7 @@ function redrawMap(){
       return '<polyline class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="none" stroke="'+(f.color||(road?"#8a6f4a":"#5b7d9a"))+'" stroke-width="'+(road?2:2.4)+'"'+(road?' stroke-dasharray="6 5"':'')+' stroke-linejoin="round" stroke-linecap="round"/>'; }
     if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
     return ""; };
-  const ocean=activeMap().sea ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
+  const ocean=activeMap().sea!==false ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
   // Painted landmass (Painter P1): the land image blits over the mask rect (soft alpha shore),
   // the coastline polygon on top is derived by the SAME marching-squares code the compiler runs.
   // While a mask with land exists, hand-traced outline features are hidden — the compiler
@@ -295,15 +295,44 @@ function featSwatch(f){
   return "#6b6459"; }
 function renderLayers(){
   const el=document.getElementById("map-layers"); if(!el) return;
+  const m=activeMap();
   const f=curFeatures();
-  if(!f.length){ el.className="map-layers empty"; el.innerHTML=""; return; }
+  // Painted layers are first-class: visible in the panel, deletable (undoable) — a stuck
+  // hillshade slab with no way to remove it was the P1-UAT complaint.
+  const paints=[];
+  if((m.rasters&&m.rasters.landmass)||LM.landmassOf(m.id)) paints.push(["landmass","Landmass (painted)","#dccfa6"]);
+  if((m.rasters&&m.rasters.elevation)||EL.elevationOf(m.id)) paints.push(["elevation","Elevation (painted)","#8fae7a"]);
+  if(!f.length&&!paints.length){ el.className="map-layers empty"; el.innerHTML=""; return; }
   el.className="map-layers";
-  el.innerHTML='<div class="lh"><b>Features ('+f.length+')</b><button class="clr" id="lyr-clear">Clear all</button></div>'
+  el.innerHTML='<div class="lh"><b>Layers ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
+    +paints.map(p=>'<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span><button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button></div>').join("")
     +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
-  document.getElementById("lyr-clear").onclick=clearMapFeatures;
-  el.querySelectorAll(".lr .x").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteFeatById(curFeatures()[+b.dataset.i].id,false); });
-  el.querySelectorAll(".lr").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
+  const clr=document.getElementById("lyr-clear"); if(clr) clr.onclick=clearMapFeatures;
+  el.querySelectorAll(".lr .x[data-paint]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deletePaintLayer(b.dataset.paint); });
+  el.querySelectorAll(".lr .x[data-i]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteFeatById(curFeatures()[+b.dataset.i].id,false); });
+  el.querySelectorAll(".lr[data-i]").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
     r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
+}
+/** Delete a painted layer (landmass/elevation) as ONE undoable command. Dirty caches sync into
+ *  the doc first so undo restores the user's LATEST paint, then the cache drops so the display
+ *  reflects the doc immediately. */
+function deletePaintLayer(key){
+  const m=activeMap();
+  if(!confirm("Delete the painted "+key+" layer? (Ctrl+Z restores it)")) return;
+  EL.syncElevationIntoDoc(S.state.maps); LM.syncLandmassIntoDoc(S.state.maps);
+  const cmd=H.cmdSetRasterLayer(activeMapId, m, key, undefined);
+  if(key==="landmass") LM.dropLandmassCache(m.id); else EL.dropElevationCache(m.id);
+  elevRev++;
+  commit(cmd);
+}
+/** After undo/redo of a raster-layer command the doc is authoritative: a CLEAN cache whose doc
+ *  raster is gone must drop (redo of delete), and a missing cache re-decodes from the restored
+ *  doc on the next redraw (undo of delete). Dirty caches (mid-stroke state) are never touched. */
+function reconcilePaintCaches(mapId){
+  const m=resolveMap(mapId); if(!m) return;
+  const doc=m.rasters||{};
+  const lm=LM.landmassOf(mapId); if(lm&&!lm.dirty&&!doc.landmass) LM.dropLandmassCache(mapId);
+  const ev=EL.elevationOf(mapId); if(ev&&!ev.dirty&&!doc.elevation) EL.dropElevationCache(mapId);
 }
 function hlFeat(i,on){ const f=curFeatures()[i]; if(!f) return; const svg=document.getElementById("map-svg"); if(!svg) return;
   const el=svg.querySelector('[data-fid="'+f.id+'"]'); if(el) el.style.filter=on?"drop-shadow(0 0 5px var(--accent))":""; }
@@ -387,7 +416,7 @@ function bindMap(){
   const dc=document.getElementById("draw-color"); if(dc) dc.oninput=(e)=>{ drawColor=e.target.value; redrawMap(); };
   const seaBtn=document.getElementById("map-sea"); if(seaBtn) seaBtn.onclick=()=>{
     const m=activeMap();
-    commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!m.sea));
+    commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
   const lmm=document.getElementById("lm-mode"); if(lmm) lmm.onchange=(e)=>{ lmMode=e.target.value; hint(); };
   const lmr=document.getElementById("lm-radius"); if(lmr) lmr.oninput=(e)=>{ lmRadius=Number(e.target.value);
@@ -418,7 +447,12 @@ function bindMap(){
       const em=activeMap();
       const created=!EL.hasStoredElevation(em);
       const er=EL.ensureElevation(em, mapMarkers());
-      if(created) redrawMap(); // first stroke: the hillshade layer appears under the cursor
+      // The region is a working extent, never a wall: a stroke starting outside auto-grows it
+      // (new cells fill with the flat-y=0 value so growth doesn't dig pits).
+      const flat=Math.round((0-er.minY)/(er.maxY-er.minY)*255);
+      const grew=LM.growRasterToInclude(er,x,z,elevRadius,flat);
+      if(grew) elevRev++;
+      if(created||grew) redrawMap(); // layer + region overlay reflect the new extent
       mapDrag={type:"elev",mapId:activeMapId,raster:er,before:er.cells.slice(),bbox:null,lastW:[x,z]};
       elevDab(er,x,z,mapDrag); return; }
     if(mapTool==="land"){
@@ -426,6 +460,7 @@ function bindMap(){
       let lm=LM.landmassOf(em.id)||LM.ensureLandmass(em);
       let created=false;
       if(!lm){ lm=LM.createLandmass(em, mapMarkers()); created=true; }
+      const grew=!created&&LM.growRasterToInclude(lm,x,z,lmRadius,0);
       // First stroke = ONE command carrying the whole grid: `before` is the EMPTY mask, so the
       // outline seed rasterized by createLandmass undoes together with the stroke (the doc
       // returns to pure-vector precedence — no un-commanded mutation survives).
@@ -433,7 +468,7 @@ function bindMap(){
       mapDrag={type:"land",mapId:activeMapId,raster:lm,before,
         bbox:created?{c0:0,r0:0,c1:lm.w-1,r1:lm.h-1}:null,lastW:[x,z]};
       landDabAt(lm,x,z,mapDrag);
-      if(created) redrawMap(); // the land layer + region overlay appear under the cursor
+      if(created||grew) redrawMap(); // the land layer + region overlay appear under the cursor
       return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)})); return; }
@@ -621,7 +656,7 @@ async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]
 async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
   const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||("map"+(S.state.maps.length+1));
   if(S.state.maps.some(m=>m.id===id)){ alert("a map with that id exists"); return; }
-  S.state.maps.push({id,name,scope:"region",parent:activeMapId,features:[],units:{kind:"m",unitsPerMeter:1,origin:[0,0]}}); await flushMapSave(); switchMap(id); }
+  S.state.maps.push({id,name,scope:"region",parent:activeMapId,sea:true,features:[],units:{kind:"m",unitsPerMeter:1,origin:[0,0]}}); await flushMapSave(); switchMap(id); }
 
 // ---- marker inspector: create / edit / tag / link / delete (spawns at the mouse) ----
 function openInspector(marker, pos, cx, cy){

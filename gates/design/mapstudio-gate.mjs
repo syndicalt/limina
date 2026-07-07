@@ -409,6 +409,26 @@ console.log("data safety:");
   check("repairedIds reported for the server warn", repairedIds === 1);
   check("(falsifiability) the unrepaired input FAILS the uniqueness check", new Set(dupDoc.maps[0].features.map((f) => f.id)).size !== dupDoc.maps[0].features.length);
 
+  // (b2) raster-layer delete/restore inversion (the layers panel's × on painted layers).
+  const rmap = { id: "m1", features: [], rasters: {
+    elevation: { w: 2, h: 2, rect: { x0: 0, z0: 0, w: 10, h: 10 }, minY: 0, maxY: 1, data: "AAAA" },
+    landmass: { w: 2, h: 2, rect: { x0: 0, z0: 0, w: 10, h: 10 }, enc: "rle8", data: "BAA=" },
+  } };
+  {
+    const orig = clone(rmap);
+    const hh = H.createHistory();
+    H.push(hh, H.cmdSetRasterLayer("m1", rmap, "elevation", undefined), {}, rmap);
+    check("layer delete removes exactly that raster", rmap.rasters.elevation === undefined && !!rmap.rasters.landmass);
+    H.push(hh, H.cmdSetRasterLayer("m1", rmap, "landmass", undefined), {}, rmap);
+    check("deleting the last layer removes map.rasters entirely", rmap.rasters === undefined);
+    H.undo(hh, () => rmap); H.undo(hh, () => rmap);
+    // Key ORDER may differ after re-insertion; per-layer content must be byte-identical.
+    check("undo x2 restores both layers (content-identical)",
+      !!rmap.rasters && Object.keys(rmap.rasters).length === 2
+      && eq(rmap.rasters.elevation, orig.rasters.elevation) && eq(rmap.rasters.landmass, orig.rasters.landmass));
+    check("(falsifiability) a lying restore would be DETECTED", !eq(undefined, orig.rasters.elevation));
+  }
+
   // (b) delete-undo existence guard: if the feature is already back (conflict reload,
   // interleaved edit), undo must NOT insert the snapshot again and mint a duplicate id.
   const map = fixtureMap();

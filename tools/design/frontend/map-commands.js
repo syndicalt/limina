@@ -186,6 +186,30 @@ export function rasterBboxSnapshot(raster, bbox) {
   return out;
 }
 
+/** Set/delete a whole paint layer under map.rasters (Painter P1: the layers panel's ×).
+ *  `next === undefined` deletes the layer; undo restores the exact serialized raster. The
+ *  caller is responsible for syncing dirty caches into the doc BEFORE constructing this, so
+ *  the captured `before` is the user's latest paint. */
+export function cmdSetRasterLayer(mapId, map, key, next) {
+  const before = clone(map.rasters ? map.rasters[key] : undefined);
+  const after = clone(next);
+  if (before === undefined && after === undefined) return null;
+  const apply = (m, v) => {
+    if (v === undefined) {
+      if (m.rasters) { delete m.rasters[key]; if (Object.keys(m.rasters).length === 0) delete m.rasters; }
+    } else {
+      m.rasters = m.rasters || {};
+      m.rasters[key] = clone(v);
+    }
+  };
+  return {
+    label: (after === undefined ? "delete " : "set ") + key + " layer",
+    mapId,
+    redo(m) { apply(m, after); },
+    undo(m) { apply(m, before); },
+  };
+}
+
 /** Map-level scalar prop (e.g. the sea toggle). */
 export function cmdSetMapProp(mapId, key, before, after) {
   const b = clone(before), a = clone(after);
