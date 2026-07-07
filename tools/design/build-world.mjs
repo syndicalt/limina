@@ -155,9 +155,21 @@ ws.addEventListener("open", async () => {
       if (!KIND_TO_GLB[a.kind] && !KNOWN_MARKER_KINDS.has(a.kind) && a.kind !== "asset") {
         console.warn(`  ⚠ UNPLACED anchor "${a.id}" (kind=${a.kind}) — no GLB mapping; it will NOT appear in the world`);
       }
-      if (a.kind === "asset") {
-        console.warn(`  ⚠ stamp anchor "${a.id}" (${a.assetId}) — stamp placement lands with the P3 build integration; not placed yet`);
-      }
+    }
+    // Atlas STAMPS (P3): every "asset" anchor names its exact catalog GLB — it flows through the
+    // SAME village.build steering as planned buildings (terracing, lawn, footprint + scatter
+    // exclusion), matched by exact assetId. One buildingSpec per distinct stamped asset; one
+    // steering anchor per stamp. NOTE: a stamp's authored rot/scale ride the IR but are NOT yet
+    // applied at placement — village.build's locked rule is "anchors pin WHERE, the solver
+    // decides HOW (facing)"; honoring stamp rotation needs that rule revised deliberately.
+    const stampAnchors = worldMap.anchors.filter((a) => a.kind === "asset" && a.assetId);
+    const stampCounts = new Map();
+    for (const s of stampAnchors) stampCounts.set(s.assetId, (stampCounts.get(s.assetId) || 0) + 1);
+    for (const [assetId, count] of stampCounts) {
+      buildings.push({ assetId, role: "stamp:" + assetId, style: "authored", count });
+    }
+    if (stampAnchors.length > 0) {
+      console.log("stamps (asset anchors):", stampAnchors.map((s) => `${s.id}(${s.assetId})@[${s.position[0]},${s.position[1]}]`).join(", "));
     }
     const anchors = worldMap.anchors
       .filter((a) => KIND_TO_GLB[a.kind])
@@ -167,7 +179,9 @@ ws.addEventListener("open", async () => {
         role: KIND_TO_GLB[a.kind].role,
         count: countByKind.get(a.kind) ?? 1,
       }));
-    console.log("map anchors (siting pins):", anchors.map((a) => `${a.id}@[${a.position[0]},${a.position[1]}](${a.role}x${a.count})`).join(", "));
+    // Stamp anchors bind by EXACT assetId (village.build's first-priority match), one per stamp.
+    for (const s of stampAnchors) anchors.push({ id: s.id, position: s.position, assetId: s.assetId, count: 1 });
+    console.log("map anchors (siting pins):", anchors.map((a) => `${a.id}@[${a.position[0]},${a.position[1]}](${a.role || a.assetId}x${a.count})`).join(", "));
 
     // 1. TERRAIN — MAP-DRIVEN (Phase 1.3): rasterize the compiled WorldMap IR (land/sea mask,
     //    relief, rivers carved, biomes painted) instead of a free-floating procedural island.
