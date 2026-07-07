@@ -47,12 +47,17 @@ export async function flushMapSave() {
   await doSave();
 }
 
+// The close-tab safety net. Primary: flush with a NORMAL fetch when the tab goes hidden —
+// browsers cap sendBeacon payloads at 64 KiB, which a single paint raster already exceeds, so
+// the beacon alone silently drops big saves. The beacon stays as a last-resort fallback for
+// small payloads on an instant close (it carries baseRev, so a late/unordered delivery can't
+// clobber a newer session — compare-and-set refuses it).
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && saveTimer) flushMapSave();
+});
 window.addEventListener("beforeunload", () => {
   if (!saveTimer || !getPayload) return;
   clearTimeout(saveTimer); saveTimer = null;
-  // sendBeacon survives tab close where fetch may not; the server JSON-parses the body
-  // regardless of the beacon's text/plain content-type. It carries baseRev too: beacons are
-  // delivered late and unordered, so without compare-and-set a dying tab's beacon could land
-  // AFTER a newer session's saves and clobber them.
-  navigator.sendBeacon("/api/map-save", JSON.stringify({ ...getPayload(), baseRev: mapsRev }));
+  const body = JSON.stringify({ ...getPayload(), baseRev: mapsRev });
+  if (body.length < 60000) navigator.sendBeacon("/api/map-save", body);
 });

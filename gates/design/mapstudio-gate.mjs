@@ -317,7 +317,83 @@ function rasterDoc(elev) {
   check("(falsifiability) un-painting the hill is DETECTED by the same sample", Math.abs(flatHill - 24.5) >= 2.0);
 }
 
-// ---- 5. Data-safety fixes (phantom feature loss) ------------------------------------------------
+// ---- 5. P1: painted landmass (mask -> land[] via marching squares) ------------------------------
+console.log("landmass mask (painter P1):");
+{
+  const { rleEncodeU8, rleDecodeU8, encodeRasterCells, decodeRasterCells } =
+    await import(join(ROOT, "js/src/world/pipeline/raster-codec.mjs"));
+  const { maskToLandPolygons } = await import(join(ROOT, "js/src/world/pipeline/marching-squares.mjs"));
+
+  // Codec: canonical round-trip + the size claim (masks are runny).
+  const W = 512, R = 90; // cells; blob radius in CELLS on an 800m rect (=> ~141m world radius)
+  const blob = (cx, cr) => {
+    const cells = new Uint8Array(W * W);
+    for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
+      const d = Math.hypot(c - cx, r - cr);
+      cells[r * W + c] = d <= R ? 255 : (d <= R + 2 ? 128 : 0);
+    }
+    return cells;
+  };
+  const cells = blob(256, 256);
+  const rt = rleDecodeU8(rleEncodeU8(cells), cells.length);
+  check("rle8 round-trips the mask byte-identically", rt.length === cells.length && rt.every((v, i) => v === cells[i]));
+  const enc = encodeRasterCells(cells);
+  check("rle8 mask is <10% of raw base64 size", enc.data.length < (cells.length * 4 / 3) * 0.1);
+  check("(falsifiability) corrupted rle stream is REJECTED", (() => {
+    try { rleDecodeU8(rleEncodeU8(cells).slice(0, 40), cells.length); return false; } catch { return true; }
+  })());
+
+  // Marching squares: geometry + performance budget on the real 512² size.
+  const rect = { x0: -400, z0: -400, w: 800, h: 800 };
+  const t0 = performance.now();
+  const polys = maskToLandPolygons({ w: W, h: W, rect, cells });
+  const msMs = performance.now() - t0;
+  check(`contour extraction on 512² within the 50ms budget (${msMs.toFixed(1)}ms)`, msMs < 50);
+  check("blob yields exactly one land polygon", polys.length === 1);
+  const shoelace = (pts) => Math.abs(pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+  const cellM = 800 / (W - 1);
+  const wantArea = Math.PI * (R * cellM) * (R * cellM);
+  const gotArea = shoelace(polys[0].points);
+  check(`polygon area matches the painted disc within 5% (got ${(gotArea / wantArea * 100).toFixed(1)}%)`, Math.abs(gotArea - wantArea) / wantArea < 0.05);
+  const cen = polys[0].points.reduce((a, p) => [a[0] + p[0], a[1] + p[1]], [0, 0]).map((v) => v / polys[0].points.length);
+  check(`centroid within one cell of the painted center (off by ${Math.hypot(cen[0], cen[1]).toFixed(2)}m)`, Math.hypot(cen[0], cen[1]) < cellM);
+  check("vertex count bounded (<=400)", polys[0].points.length <= 400);
+  check("empty mask yields no land", maskToLandPolygons({ w: 8, h: 8, rect, cells: new Uint8Array(64) }).length === 0);
+  // Land painted to the rect edge closes at the border (virtual ocean padding).
+  const full = maskToLandPolygons({ w: 8, h: 8, rect: { x0: 0, z0: 0, w: 70, h: 70 }, cells: new Uint8Array(64).fill(255) });
+  check("edge-to-edge land closes into a border coast", full.length === 1 && shoelace(full[0].points) > 70 * 70 * 0.8);
+
+  // Compile: mask -> land[] in the EXISTING IR field, precedence over outline, hash determinism.
+  const lmDoc = (lmCells, extraFeature) => JSON.stringify({
+    version: 2, activeMapId: "m", axes: "north-negz",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      rasters: { landmass: { w: W, h: W, rect, ...encodeRasterCells(lmCells) } },
+      features: [
+        { id: "decoy", type: "area", kind: "outline", points: [[60, 60], [95, 60], [95, 95], [60, 95]] },
+        ...(extraFeature ? [extraFeature] : []),
+      ],
+    }],
+  });
+  // zone.size_m 200 in WB_TEXT would trip the scale check on a ~280m-wide painted island — use a
+  // fixture bible sized for the painted world (the check still runs against the derived land).
+  const WB_BIG = WB_TEXT.replace("size_m: 200", "size_m: 800");
+  const { worldMap: lmMap, warnings: lmWarn } = compileDesignMap({ mapsJsonText: lmDoc(cells), worldBibleText: WB_BIG });
+  check("compile: mask emits land[] polygons (existing IR field)", Array.isArray(lmMap.land) && lmMap.land.length === 1);
+  check("compile: PRECEDENCE — outline feature ignored with a warning", lmWarn.some((w) => w.includes("decoy") && w.includes("landmass")));
+  const inBlob = (p) => Math.hypot(p[0], p[1]) < (R + 6) * cellM;
+  check("compile: no land vertex comes from the decoy outline", lmMap.land.every((l) => l.points.every(inBlob)));
+  check("compile: recomputed content hash verifies (no schema change)", worldMapContentHash(lmMap) === lmMap.provenance.contentHash);
+  const again = compileDesignMap({ mapsJsonText: lmDoc(cells), worldBibleText: WB_BIG });
+  check("compile: deterministic (same doc -> identical contentHash)", again.worldMap.provenance.contentHash === lmMap.provenance.contentHash);
+  // Falsifiability: shifting the painted blob 100 cells east MUST move the compiled centroid.
+  const { worldMap: shifted } = compileDesignMap({ mapsJsonText: lmDoc(blob(356, 256)), worldBibleText: WB_BIG });
+  const cen2 = shifted.land[0].points.reduce((a, p) => [a[0] + p[0], a[1] + p[1]], [0, 0]).map((v) => v / shifted.land[0].points.length);
+  check("(falsifiability) a shifted blob is DETECTED by the same centroid check", Math.hypot(cen2[0], cen2[1]) >= cellM);
+}
+
+// ---- 6. Data-safety fixes (phantom feature loss) ------------------------------------------------
 // Three proven loss mechanisms, each locked here: (a) colliding feature ids repaired on read,
 // (b) delete-undo can't mint a duplicate, (c) the server refuses a stale wholesale save (CAS).
 console.log("data safety:");

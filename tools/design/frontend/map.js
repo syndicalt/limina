@@ -13,6 +13,7 @@ import { S } from "./store.js";
 import { postJSON, bindMapSaver, bindSaveConflict, scheduleMapSave, flushMapSave } from "./net.js";
 import * as H from "./map-commands.js";
 import * as EL from "./map-elevation.js";
+import * as LM from "./map-paint.js";
 
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
@@ -28,6 +29,8 @@ let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mou
 // Elevation brush state (S1). A stroke = one undo step: full-buffer snapshot at stroke start,
 // bbox-union of every dab, ONE cmdPatchRaster pushed {applied:true} at stroke end.
 let elevMode="raise", elevRadius=12, elevStrength=0.6, elevLevelY=4;
+// Landmass brush state (Painter P1). Same one-stroke-one-undo model as elevation.
+let lmMode="land", lmRadius=100;
 let elevShadeUrl=null, elevShadeFor=null; // cached hillshade data-URL + "mapId:seaLevel:rev" key
 let elevRev=0; // bumped on every raster mutation (stroke dab, undo, redo)
 // Collision-proof feature ids. The old counter (seeded off performance.now's STRING LENGTH) made
@@ -50,7 +53,7 @@ function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = nu
 function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
 
 // Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
-bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
+bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); LM.syncLandmassIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
 
 // A save bounced 409: another session saved since this tab loaded. Reload the authoritative
 // state instead of clobbering it — this tab's unsaved edits are dropped, visibly. Stale caches
@@ -58,6 +61,7 @@ bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); return { maps: S.sta
 bindSaveConflict(() => {
   history.undo.length = 0; history.redo.length = 0;
   for (const m of S.state.maps || []) EL.dropElevationCache(m.id);
+  LM.dropAllLandmassCaches();
   elevRev++;
   toast("Map changed in another session — reloading its version", 4000);
   S.fn.reload();
@@ -106,7 +110,7 @@ function glyphSVG(kind,x,y,s){
 export function renderMap(){
   if(!activeMapId) activeMapId = S.state.activeMapId || primaryMapId();
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
-  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["elev","⛰ Elevation"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
+  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["land","🏝 Land"],["elev","⛰ Elevation"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
   const sea=!!activeMap().sea;
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -115,6 +119,9 @@ export function renderMap(){
     +'<label class="coord" style="margin-left:0">str</label><input type="range" id="elev-strength" min="0.05" max="1" step="0.05" value="'+elevStrength+'" style="width:64px" title="Brush strength">'
     +(elevMode==="level"?'<input type="number" id="elev-levely" value="'+elevLevelY+'" step="0.5" style="width:56px" class="sw" title="Level target (m)">':'')
     +'<label class="coord" style="margin-left:0">sea</label><input type="range" id="elev-sea" min="-12" max="12" step="0.5" value="'+seaY+'" style="width:80px" title="Sea level (m)"><span class="coord" id="elev-sea-val" style="margin-left:0">'+seaY+'m</span>';
+  const landControls = mapTool!=="land" ? "" :
+    '<select class="sw" id="lm-mode">'+[["land","Raise land"],["ocean","Carve ocean"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===lmMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
+    +'<label class="coord" style="margin-left:0">r</label><input type="range" id="lm-radius" min="10" max="400" step="5" value="'+lmRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="lm-radius-val" style="margin-left:0">'+lmRadius+'m</span>';
   document.getElementById("center").innerHTML =
     '<div class="map-wrap"><div class="map-head">'
     +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
@@ -127,7 +134,7 @@ export function renderMap(){
     +'<select class="sw" id="glyph-pick" style="'+(mapTool==="glyph"?"":"display:none")+'">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>'
     +'<select class="sw" id="biome-pick" style="'+(mapTool==="area"?"":"display:none")+'">'+BIOME_LIST.map(b=>'<option value="'+b+'"'+(b===biomeKind?" selected":"")+'>'+b+'</option>').join("")+'</select>'
     +'<input type="color" id="draw-color" value="'+drawColor+'" title="Line / coast color" style="'+(["outline","river","road","border"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
-    +elevControls
+    +elevControls+landControls
     +'<span class="coord" id="map-coord">—</span></div>'
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
     +'<div class="map-layers" id="map-layers"></div>'
@@ -145,6 +152,7 @@ function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
     lasso:"drag a box to select features + markers, then delete them",
     elev:"drag to "+elevMode+" terrain (one stroke = one undo step) · drag the dashed border to move the region, corners to resize · unpainted terrain stays invisible · painting REPLACES glyph/biome relief at build time",
+    land:"drag to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · drag the dashed border to move the region, corners to resize · painting REPLACES the traced coast at build time",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
     area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
     river:"click to add river points · double-click to finish · Esc to cancel",
@@ -196,6 +204,22 @@ function redrawMap(){
     if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
     return ""; };
   const ocean=activeMap().sea ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
+  // Painted landmass (Painter P1): the land image blits over the mask rect (soft alpha shore),
+  // the coastline polygon on top is derived by the SAME marching-squares code the compiler runs.
+  // While a mask with land exists, hand-traced outline features are hidden — the compiler
+  // ignores them (precedence), so showing both would draw a coast the build won't have.
+  let landLayer="", coastLayer="", maskHasLand=false;
+  {
+    const em=activeMap();
+    const lm=LM.landmassOf(em.id) || (em.rasters&&em.rasters.landmass ? LM.ensureLandmass(em) : null);
+    if(lm){
+      const coast=LM.coastPolygons(lm, em.id);
+      maskHasLand=coast.length>0;
+      const [lx,ly]=w2s(lm.rect.x0,lm.rect.z0);
+      landLayer='<image id="land-img" href="'+LM.renderLandImage(lm, em.id)+'" x="'+lx+'" y="'+ly+'" width="'+(lm.rect.w*mapScale)+'" height="'+(lm.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
+      coastLayer=coast.map(p=>'<polygon points="'+poly(p.points)+'" fill="none" stroke="'+LM.coastStroke+'" stroke-width="2.5" stroke-linejoin="round" opacity=".9" style="pointer-events:none"/>').join("");
+    }
+  }
   // Painted elevation hillshade: rendered between the land fill and the semantic layers, so
   // relief reads as the terrain base while biomes/lines/pins stay legible on top. The raster is
   // only CREATED by an actual brush stroke (never by merely selecting the tool — creation flips
@@ -212,7 +236,7 @@ function redrawMap(){
       elevLayer='<image id="elev-img" href="'+elevShadeUrl+'" x="'+ex+'" y="'+ey+'" width="'+(e.rect.w*mapScale)+'" height="'+(e.rect.h*mapScale)+'" preserveAspectRatio="none" opacity="0.8" style="pointer-events:none"/>';
     }
   }
-  const outlines=feats.filter(f=>f.type==="area"&&f.kind==="outline").map(fsvg).join("");
+  const outlines=maskHasLand ? "" : feats.filter(f=>f.type==="area"&&f.kind==="outline").map(fsvg).join("");
   const areas=feats.filter(f=>f.type==="area"&&f.kind!=="outline").map(fsvg).join("");
   const lines=feats.filter(f=>f.type==="line"&&f.kind!=="border").map(fsvg).join("");
   const borders=feats.filter(f=>f.type==="line"&&f.kind==="border").map(fsvg).join("");
@@ -228,13 +252,14 @@ function redrawMap(){
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
-  const elevCursor = mapTool==="elev" ? '<circle id="elev-cursor" r="'+(elevRadius*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
-  // The elevation REGION is user-adjustable while the tool is armed: dashed outline drags to
-  // move, corner handles resize (both one undo step). Cells never change — the rect is pure
-  // world-space metadata, so moving slides the painted terrain and resizing stretches it.
+  const elevCursor = (mapTool==="elev"||mapTool==="land") ? '<circle id="elev-cursor" r="'+((mapTool==="land"?lmRadius:elevRadius)*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
+  // The active paint layer's REGION is user-adjustable while its tool is armed: dashed outline
+  // drags to move, corner handles resize (both one undo step). Cells never change — the rect is
+  // pure world-space metadata, so moving slides the painted layer and resizing stretches it.
+  // Elevation and landmass share the overlay (only one tool is armed at a time).
   let elevRegion="";
-  if(mapTool==="elev"){
-    const er=EL.elevationOf(activeMap().id);
+  if(mapTool==="elev"||mapTool==="land"){
+    const er=regionRaster();
     if(er){
       const [rx,ry]=w2s(er.rect.x0,er.rect.z0);
       const rw=er.rect.w*mapScale, rh=er.rect.h*mapScale;
@@ -252,7 +277,7 @@ function redrawMap(){
         +'</g>';
     }
   }
-  svg.innerHTML = biomeDefs() + ocean + g + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevRegion + elevCursor;
+  svg.innerHTML = biomeDefs() + ocean + landLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevRegion + elevCursor;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") bindFeatureEditing(svg);
@@ -364,6 +389,10 @@ function bindMap(){
     const m=activeMap();
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!m.sea));
     renderMap(); };
+  const lmm=document.getElementById("lm-mode"); if(lmm) lmm.onchange=(e)=>{ lmMode=e.target.value; hint(); };
+  const lmr=document.getElementById("lm-radius"); if(lmr) lmr.oninput=(e)=>{ lmRadius=Number(e.target.value);
+    const lab=document.getElementById("lm-radius-val"); if(lab) lab.textContent=lmRadius+"m";
+    const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",lmRadius*mapScale); };
   const em1=document.getElementById("elev-mode"); if(em1) em1.onchange=(e)=>{ elevMode=e.target.value; renderMap(); };
   const er1=document.getElementById("elev-radius"); if(er1) er1.oninput=(e)=>{ elevRadius=Number(e.target.value); const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",elevRadius*mapScale); };
   const es1=document.getElementById("elev-strength"); if(es1) es1.oninput=(e)=>{ elevStrength=Number(e.target.value); };
@@ -392,6 +421,20 @@ function bindMap(){
       if(created) redrawMap(); // first stroke: the hillshade layer appears under the cursor
       mapDrag={type:"elev",mapId:activeMapId,raster:er,before:er.cells.slice(),bbox:null,lastW:[x,z]};
       elevDab(er,x,z,mapDrag); return; }
+    if(mapTool==="land"){
+      const em=activeMap();
+      let lm=LM.landmassOf(em.id)||LM.ensureLandmass(em);
+      let created=false;
+      if(!lm){ lm=LM.createLandmass(em, mapMarkers()); created=true; }
+      // First stroke = ONE command carrying the whole grid: `before` is the EMPTY mask, so the
+      // outline seed rasterized by createLandmass undoes together with the stroke (the doc
+      // returns to pure-vector precedence — no un-commanded mutation survives).
+      const before=created?new Uint8Array(lm.w*lm.h):lm.cells.slice();
+      mapDrag={type:"land",mapId:activeMapId,raster:lm,before,
+        bbox:created?{c0:0,r0:0,c1:lm.w-1,r1:lm.h-1}:null,lastW:[x,z]};
+      landDabAt(lm,x,z,mapDrag);
+      if(created) redrawMap(); // the land layer + region overlay appear under the cursor
+      return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)})); return; }
     if(["river","road","area","outline","border"].includes(mapTool)){
@@ -430,6 +473,27 @@ function finishDraw(){
   else if(mapTool==="area") feature={id:fid(),type:"area",kind:"biome",biome:biomeKind,points:pts};
   else feature={id:fid(),type:"area",kind:"outline",points:pts,fill:drawColor};
   commit(H.cmdAddFeature(activeMapId, feature)); }
+// ── landmass stroke helpers (Painter P1) ─────────────────────────────────────────────────────
+function landDabAt(lm,wx,wz,drag){
+  const bb=LM.landDab(lm,wx,wz,{mode:lmMode,radiusM:lmRadius});
+  if(bb){
+    drag.bbox = drag.bbox
+      ? {c0:Math.min(drag.bbox.c0,bb.c0),r0:Math.min(drag.bbox.r0,bb.r0),c1:Math.max(drag.bbox.c1,bb.c1),r1:Math.max(drag.bbox.r1,bb.r1)}
+      : bb;
+    refreshLandImage();
+  }
+}
+let landRafPending=false;
+function refreshLandImage(){
+  // During a stroke only the soft mask-alpha image updates per frame; the marching-squares
+  // coastline recomputes at stroke end (commit -> redrawMap), keeping dabs cheap.
+  if(landRafPending) return; landRafPending=true;
+  requestAnimationFrame(()=>{ landRafPending=false;
+    const em=activeMap(); const lm=LM.landmassOf(em.id); if(!lm) return;
+    const img=document.getElementById("land-img");
+    if(img) img.setAttribute("href",LM.renderLandImage(lm, em.id)); else redrawMap();
+  });
+}
 // ── elevation stroke helpers ─────────────────────────────────────────────────────────────────
 function elevDab(er,wx,wz,drag){
   const bb=EL.brushDab(er,wx,wz,{mode:elevMode,radiusM:elevRadius,strength:elevStrength,levelY:elevLevelY});
@@ -440,14 +504,20 @@ function elevDab(er,wx,wz,drag){
     elevRev++; refreshElevImage();
   }
 }
+// The raster whose region overlay/drag the armed tool controls (elev + land share the UI).
+function regionRaster(){
+  if(mapTool==="elev") return EL.elevationOf(activeMap().id);
+  if(mapTool==="land") return LM.landmassOf(activeMap().id);
+  return null;
+}
 function bindElevRegion(svg){
   const hit=svg.querySelector("#elev-rect-hit");
   if(hit) hit.addEventListener("mousedown",(e)=>{ e.stopPropagation();
-    const er=EL.elevationOf(activeMap().id); if(!er) return;
+    const er=regionRaster(); if(!er) return;
     const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     mapDrag={type:"elevrect-move",mapId:activeMapId,raster:er,start:{...er.rect},wx0:wx,wz0:wz}; });
   svg.querySelectorAll(".elev-hn").forEach(hn=>hn.addEventListener("mousedown",(e)=>{ e.stopPropagation();
-    const er=EL.elevationOf(activeMap().id); if(!er) return;
+    const er=regionRaster(); if(!er) return;
     mapDrag={type:"elevrect-size",mapId:activeMapId,raster:er,start:{...er.rect},corner:hn.dataset.corner}; }));
 }
 let elevRafPending=false;
@@ -470,6 +540,12 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
     const dist=Math.hypot(wx-lx,wz-lz), stepM=Math.max(1,elevRadius/3);
     const steps=Math.max(1,Math.ceil(dist/stepM));
     for(let k=1;k<=steps;k++) elevDab(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
+    mapDrag.lastW=[wx,wz]; }
+  else if(mapDrag.type==="land"){
+    const [wx,wz]=s2w(mx,my); const [lx,lz]=mapDrag.lastW;
+    const dist=Math.hypot(wx-lx,wz-lz), stepM=Math.max(2,lmRadius/3);
+    const steps=Math.max(1,Math.ceil(dist/stepM));
+    for(let k=1;k<=steps;k++) landDabAt(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
     mapDrag.lastW=[wx,wz]; }
   else if(mapDrag.type==="elevrect-move"){
     const [wx,wz]=s2w(mx,my); const er=mapDrag.raster;
@@ -519,13 +595,13 @@ async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementByI
       commit(H.cmdSetRasterRect(d.mapId,d.raster,d.start,{...d.raster.rect}),{applied:true});
     }
     return; }
-  if(d.type==="elev"){
+  if(d.type==="elev"||d.type==="land"){
     // One stroke = one undo step: bbox slices of the pre-stroke snapshot vs the current cells.
     if(d.bbox){
       const beforeRaster={w:d.raster.w,h:d.raster.h,cells:d.before};
       const before=H.rasterBboxSnapshot(beforeRaster,d.bbox);
       const after=H.rasterBboxSnapshot(d.raster,d.bbox);
-      commit(H.cmdPatchRaster(d.mapId,d.raster,d.bbox,before,after),{applied:true});
+      commit(H.cmdPatchRaster(d.mapId,d.raster,d.bbox,before,after,d.type==="land"?"landmass stroke":"elevation stroke"),{applied:true});
     }
     return; }
   if(d.type==="vertex"||d.type==="featmove"){

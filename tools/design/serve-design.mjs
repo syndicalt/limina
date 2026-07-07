@@ -22,6 +22,10 @@ const LIMINA_BIN = process.env.LIMINA_BIN || join(LIMINA_HOME, "target", "releas
 // The frontend is served from disk PER REQUEST (no boot cache — caching index.html at startup
 // meant every frontend edit needed a server restart, a repeated debugging trap).
 const FRONTEND_DIR = join(__dirname, "frontend");
+const SHARED_MODULES = {
+  "/shared/marching-squares.mjs": join(LIMINA_HOME, "js/src/world/pipeline/marching-squares.mjs"),
+  "/shared/raster-codec.mjs": join(LIMINA_HOME, "js/src/world/pipeline/raster-codec.mjs"),
+};
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -361,6 +365,17 @@ createServer((req, res) => {
     } catch (e) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(e) }));
+    }
+  } else if (req.method === "GET" && SHARED_MODULES[req.url.split("?")[0]]) {
+    // Engine-shared pure modules: the SAME marching-squares/codec code the compiler runs is
+    // served to the frontend, so the coast the user sees while painting IS the compiled coast.
+    // Explicit allow-list only — never a generic js/src mount.
+    try {
+      res.writeHead(200, { "content-type": "text/javascript", "cache-control": "no-cache" });
+      res.end(readFileSync(SHARED_MODULES[req.url.split("?")[0]], "utf8"));
+    } catch (e) {
+      if (!res.headersSent) res.writeHead(500);
+      res.end(String(e));
     }
   } else if (req.method === "GET") {
     // Generic frontend static dispatch (the SPA is ES modules now, not one cached HTML blob).

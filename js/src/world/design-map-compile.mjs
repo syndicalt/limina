@@ -20,6 +20,8 @@
 
 import { sha256 } from "./sha256.mjs";
 import { worldMapContentHash } from "./worldmap-hash.mjs";
+import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
+import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 
 const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 const RIVER_DEFAULT_WIDTH_M = 3;
@@ -122,6 +124,17 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     }
   }
 
+  // A painted landmass mask (Map Painter P1, map.rasters.landmass) compiles to the IR's EXISTING
+  // land[] polygons via marching squares — no IR schema change; the rasterizer can't tell a
+  // painted coast from a traced one. PRECEDENCE CONTRACT (mirrors reliefGrid): when a mask is
+  // present, hand-traced outline features are ignored entirely, with a warning per feature.
+  const landmass = map.rasters && map.rasters.landmass ? map.rasters.landmass : undefined;
+  if (landmass) {
+    for (const k of ["w", "h", "data", "rect"]) {
+      if (landmass[k] === undefined) throw new Error(`compile-designmap: rasters.landmass is missing '${k}'`);
+    }
+  }
+
   const fm = frontmatterBlock(worldBibleText);
   const sizeM = readZoneSizeM(fm);
   const locations = readLocations(fm);
@@ -132,8 +145,17 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
   const waterways = [];
   const routes = [];
 
+  if (landmass) {
+    const cells = decodeRasterCells(landmass, Number(landmass.w) * Number(landmass.h));
+    const rect = { x0: Number(landmass.rect.x0), z0: Number(landmass.rect.z0), w: Number(landmass.rect.w), h: Number(landmass.rect.h) };
+    for (const poly of maskToLandPolygons({ w: Number(landmass.w), h: Number(landmass.h), rect, cells })) {
+      land.push(poly);
+    }
+  }
+
   for (const f of map.features) {
     if (f.type === "area" && f.kind === "outline") {
+      if (landmass) { warnings.push(`ignored outline feature "${f.id}" (a painted landmass mask is authoritative)`); continue; }
       land.push({ points: toPoints(f.points) });
     } else if (f.type === "area" && f.kind === "biome") {
       const points = toPoints(f.points);

@@ -145,7 +145,7 @@ export function cmdMoveFeature(mapId, fid, before, after) {
  *  closure — the raster lives OUTSIDE the doc (decoded once per map), so this command targets it
  *  directly rather than re-resolving through the map. Stays pure/DOM-free: the gate constructs a
  *  raster object and property-tests inversion exactly like the feature commands. */
-export function cmdPatchRaster(mapId, raster, bbox, before, after) {
+export function cmdPatchRaster(mapId, raster, bbox, before, after, label = "elevation stroke") {
   const { c0, r0, c1, r1 } = bbox;
   const bw = c1 - c0 + 1, bh = r1 - r0 + 1;
   if (before.length !== bw * bh || after.length !== bw * bh) return null;
@@ -153,9 +153,10 @@ export function cmdPatchRaster(mapId, raster, bbox, before, after) {
   const write = (patch) => {
     for (let r = 0; r < bh; r++) raster.cells.set(patch.subarray(r * bw, (r + 1) * bw), (r0 + r) * raster.w + c0);
     raster.dirty = true;
+    raster.rev = (raster.rev || 0) + 1; // invalidates rev-keyed render caches (land image, coast)
   };
   return {
-    label: "elevation stroke",
+    label,
     mapId,
     redo() { write(a); },
     undo() { write(b); },

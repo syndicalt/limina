@@ -6,10 +6,10 @@
 // v1 (implicit, no `version` field): { activeMapId, maps:[{ id, name, scope, parent, features,
 //   sea?, units? }] } — units was itself a migration-on-read addition (the scale contract).
 // v2: adds a top-level `version: 2` and guarantees per-map invariants (units present, features
-//   an array, id/name strings). v2 is the substrate the studio slices build on: S1 adds per-map
-//   `rasters.elevation`, S2 `rasters.biome`, S3 stamp anchors — each lands as an OPTIONAL field
-//   so v2 stays a single version (absent field = feature not authored), with its own migration
-//   defaults added here.
+//   an array, id/name strings). v2 is the substrate the painter slices build on: `rasters.elevation`
+//   (S1), `rasters.landmass` (P1), `rasters.biomes` (P2), `stamps` (P3) — each lands as an
+//   OPTIONAL field so v2 stays a single version (absent field = layer not authored), with its
+//   own migration defaults added here.
 
 export const MAPDOC_VERSION = 2;
 
