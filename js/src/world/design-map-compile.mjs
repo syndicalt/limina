@@ -22,6 +22,7 @@ import { sha256 } from "./sha256.mjs";
 import { worldMapContentHash } from "./worldmap-hash.mjs";
 import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
 import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
+import { reliefGridSampler } from "./pipeline/map-raster.mjs";
 
 const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
@@ -161,9 +162,41 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
   const routes = [];
 
   if (landmass) {
-    const cells = decodeRasterCells(landmass, Number(landmass.w) * Number(landmass.h));
+    const lw = Number(landmass.w), lh = Number(landmass.h);
+    const cells = decodeRasterCells(landmass, lw * lh);
     const rect = { x0: Number(landmass.rect.x0), z0: Number(landmass.rect.z0), w: Number(landmass.rect.w), h: Number(landmass.rect.h) };
-    for (const poly of maskToLandPolygons({ w: Number(landmass.w), h: Number(landmass.h), rect, cells })) {
+    // ELEVATION CARVES WATER: painted elevation below sea level removes land from the mask —
+    // digging at the coast extends the sea (the Atlas display applies the identical rule, so
+    // the coast the user sees is the coast that builds). Enclosed sub-sea pits become polygon
+    // holes and are dropped (lakes arrive with the water tools); the display shows them as
+    // land, matching. Only points INSIDE the elevation extent can carve (the sampler clamps to
+    // its edge — without the bounds check, an edge dig would smear water outward forever).
+    if (elevation) {
+      const sampler = reliefGridSampler({
+        reliefGrid: {
+          w: Number(elevation.w), h: Number(elevation.h),
+          rect: { x0: Number(elevation.rect.x0), z0: Number(elevation.rect.z0), w: Number(elevation.rect.w), h: Number(elevation.rect.h) },
+          minY: Number(elevation.minY), maxY: Number(elevation.maxY),
+          data: String(elevation.data),
+        },
+        origin: [0, 0], unitsPerMeter: 1,
+      });
+      const seaY = typeof map.seaLevel === "number" ? map.seaLevel : 0;
+      const er = elevation.rect;
+      const sx = rect.w / (lw - 1), sz = rect.h / (lh - 1);
+      for (let r = 0; r < lh; r++) {
+        const wz = rect.z0 + r * sz;
+        if (wz < er.z0 || wz > er.z0 + er.h) continue;
+        for (let c = 0; c < lw; c++) {
+          const i = r * lw + c;
+          if (cells[i] < 128) continue;
+          const wx = rect.x0 + c * sx;
+          if (wx < er.x0 || wx > er.x0 + er.w) continue;
+          if (sampler(wx, wz) < seaY - 0.01) cells[i] = 0;
+        }
+      }
+    }
+    for (const poly of maskToLandPolygons({ w: lw, h: lh, rect, cells })) {
       land.push(poly);
     }
   }

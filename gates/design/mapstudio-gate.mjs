@@ -393,6 +393,56 @@ console.log("landmass mask (painter P1):");
   check("(falsifiability) a shifted blob is DETECTED by the same centroid check", Math.hypot(cen2[0], cen2[1]) >= cellM);
 }
 
+// ---- 5b. Elevation carves water (UAT: digging below sea level must BE water) --------------------
+console.log("elevation carves water:");
+{
+  const { encodeRasterCells } = await import(join(ROOT, "js/src/world/pipeline/raster-codec.mjs"));
+  const W = 128, rect = { x0: -400, z0: -400, w: 800, h: 800 };
+  const landDisc = new Uint8Array(W * W);
+  for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) { if (Math.hypot(c - 64, r - 64) <= 50) landDisc[r * W + c] = 255; }
+  // Elevation raster: flat at y=+2 except a -12m trench from the disc's edge to its center
+  // (connected to the sea, so the carve is a bay, not a dropped hole).
+  const EW = 64;
+  const mkElev = (trench) => {
+    const cells = new Uint8Array(EW * EW);
+    const minY = -16, maxY = 48;
+    const flat = Math.round((2 - minY) / (maxY - minY) * 255);
+    const deep = Math.round((-12 - minY) / (maxY - minY) * 255);
+    cells.fill(flat);
+    if (trench) {
+      for (let c = 32; c < EW; c++) for (let r = 30; r <= 34; r++) cells[r * EW + c] = deep; // center -> east edge
+    }
+    const raw = String.fromCharCode(...cells);
+    return { w: EW, h: EW, rect, minY, maxY, data: btoa(raw) };
+  };
+  const doc = (elev) => JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      rasters: { landmass: { w: W, h: W, rect, ...encodeRasterCells(landDisc) }, elevation: elev },
+      features: [],
+    }],
+  });
+  const WB_BIG = WB_TEXT.replace("size_m: 200", "size_m: 800");
+  const shoelace = (pts) => Math.abs(pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+  const { worldMap: flatMap } = compileDesignMap({ mapsJsonText: doc(mkElev(false)), worldBibleText: WB_BIG });
+  const { worldMap: dugMap } = compileDesignMap({ mapsJsonText: doc(mkElev(true)), worldBibleText: WB_BIG });
+  const aFlat = flatMap.land.reduce((a, l) => a + shoelace(l.points), 0);
+  const aDug = dugMap.land.reduce((a, l) => a + shoelace(l.points), 0);
+  check(`sub-sea trench removes land (${(100 - aDug / aFlat * 100).toFixed(1)}% carved)`, aDug < aFlat * 0.97);
+  // The rasterized world agrees: terrain in the trench sits BELOW sea level.
+  const { heights: dh } = rasterizeWorldMap(dugMap, { size: 800, resolution: 201, seed: 7 });
+  const at = (wx, wz) => dh[Math.round((wz + 400) / 4) * 201 + Math.round((wx + 400) / 4)];
+  check(`terrain: trench builds below sea level (got ${at(120, 0).toFixed(1)}m)`, at(120, 0) < -1);
+  check(`terrain: un-dug land still builds above sea (got ${at(0, -100).toFixed(1)}m)`, at(0, -100) > 0);
+  // Falsifiability of the carver itself: flat above-sea elevation must carve NOTHING (the land
+  // area matches a compile with no elevation raster at all).
+  const { worldMap: noneMap } = compileDesignMap({ mapsJsonText: doc(undefined), worldBibleText: WB_BIG });
+  const aNone = noneMap.land.reduce((a, l) => a + shoelace(l.points), 0);
+  check("(falsifiability) flat above-sea elevation carves nothing", Math.abs(aFlat - aNone) / aNone < 0.005);
+}
+
 // ---- 6. P2: painted biomes (raster -> per-class polygons -> ground paint) -----------------------
 console.log("biome raster (painter P2):");
 {

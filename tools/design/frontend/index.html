@@ -197,7 +197,8 @@
   .fi .tool { width:36px; height:36px; display:flex; align-items:center; justify-content:center; border:none; background:none; border-radius:9px; font-size:16px; line-height:1; cursor:pointer; color:var(--ink); padding:0; }
   .fi .tool:hover { background:var(--panel-2); }
   .fi .tool.on { background:var(--accent); color:#fff; }
-  .fi .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 8px; font:inherit; font-size:12.5px; max-width:150px; }
+  .fi .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 8px; font:inherit; font-size:12.5px; }
+  .fi-corner .sw { max-width:240px; min-width:110px; }
   .fi .coord { font-family:ui-monospace,monospace; font-size:11.5px; color:var(--muted); white-space:nowrap; }
   .fi-sep { width:1px; height:22px; background:var(--line); margin:0 3px; }
   .fi-tools { top:12px; left:50%; transform:translateX(-50%); }
@@ -227,7 +228,7 @@
   svg.map.adding { cursor:crosshair; }
   svg.map.lassoing { cursor:crosshair; }
   .lasso-rect { fill:var(--accent); fill-opacity:.08; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
-  .map-layers { position:absolute; top:64px; left:14px; width:210px; max-height:calc(100% - 120px); overflow:auto;
+  .map-layers { position:absolute; bottom:48px; right:14px; width:210px; max-height:calc(100% - 130px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12.5px; }
   .map-layers.empty { display:none; }
   .map-layers .lh { display:flex; align-items:center; gap:8px; padding:9px 11px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }

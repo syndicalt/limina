@@ -161,7 +161,7 @@ export function renderMap(){
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
     lasso:"drag a box to select features + markers, then delete them",
-    elev:"drag anywhere to "+elevMode+" terrain (one stroke = one undo step) · unpainted terrain stays invisible · painting REPLACES glyph/biome relief at build time",
+    elev:"drag anywhere to "+elevMode+" terrain (one stroke = one undo step) · digging below sea level CARVES WATER · [ ] resizes the brush · painting REPLACES glyph/biome relief at build time",
     land:"drag anywhere to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · painting REPLACES the traced coast at build time",
     terrain:"drag to paint "+(terKind==="erase"?"(erase ground cover)":terKind)+" (one stroke = one undo step) · ground shows on land only · painting REPLACES drawn biome regions at build time",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
@@ -224,10 +224,11 @@ function redrawMap(){
     const em=activeMap();
     const lm=LM.landmassOf(em.id) || (em.rasters&&em.rasters.landmass ? LM.ensureLandmass(em) : null);
     if(lm){
-      const coast=LM.coastPolygons(lm, em.id);
+      const eff=currentEff(em, lm);
+      const coast=LM.coastPolygons(lm, em.id, eff);
       maskHasLand=coast.length>0;
       const [lx,ly]=w2s(lm.rect.x0,lm.rect.z0);
-      landLayer='<image id="land-img" href="'+LM.renderLandImage(lm, em.id)+'" x="'+lx+'" y="'+ly+'" width="'+(lm.rect.w*mapScale)+'" height="'+(lm.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
+      landLayer='<image id="land-img" href="'+LM.renderLandImage(lm, em.id, eff)+'" x="'+lx+'" y="'+ly+'" width="'+(lm.rect.w*mapScale)+'" height="'+(lm.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
       coastLayer=coast.map(p=>'<polygon points="'+poly(p.points)+'" fill="none" stroke="'+LM.coastStroke+'" stroke-width="2.5" stroke-linejoin="round" opacity=".9" style="pointer-events:none"/>').join("");
     }
   }
@@ -241,8 +242,9 @@ function redrawMap(){
     if(bio){
       bioHasContent=LM.biomesHaveContent(bio);
       if(bioHasContent){
+        const lm2=LM.landmassOf(em.id);
         const [bx,by]=w2s(bio.rect.x0,bio.rect.z0);
-        terrainLayer='<image id="terrain-img" href="'+LM.renderBiomesImage(bio, em.id, LM.landmassOf(em.id))+'" x="'+bx+'" y="'+by+'" width="'+(bio.rect.w*mapScale)+'" height="'+(bio.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
+        terrainLayer='<image id="terrain-img" href="'+LM.renderBiomesImage(bio, em.id, (lm2&&currentEff(em,lm2))||lm2)+'" x="'+bx+'" y="'+by+'" width="'+(bio.rect.w*mapScale)+'" height="'+(bio.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
       }
     }
   }
@@ -441,7 +443,7 @@ function bindMap(){
   const el1=document.getElementById("elev-levely"); if(el1) el1.onchange=(e)=>{ elevLevelY=Number(e.target.value)||0; };
   const sea1=document.getElementById("elev-sea"); if(sea1){
     const seaBefore=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
-    sea1.oninput=(e)=>{ const v=Number(e.target.value); activeMap().seaLevel=v; const lab=document.getElementById("elev-sea-val"); if(lab) lab.textContent=v+"m"; elevRev++; refreshElevImage(); };
+    sea1.oninput=(e)=>{ const v=Number(e.target.value); activeMap().seaLevel=v; const lab=document.getElementById("elev-sea-val"); if(lab) lab.textContent=v+"m"; elevRev++; refreshElevImage(); refreshLandImage(); };
     // Commit ONE undoable step per slider release (the live oninput preview already applied it).
     sea1.onchange=(e)=>{ const v=Number(e.target.value); if(v!==seaBefore) commit(H.cmdSetMapProp(activeMapId,"seaLevel",seaBefore,v),{applied:true}); };
   }
@@ -545,6 +547,15 @@ function finishDraw(){
   // Only line features are drawn point-by-point now — land and ground cover are painted.
   if(!["river","road","border"].includes(mapTool)){ redrawMap(); return; }
   commit(H.cmdAddFeature(activeMapId, {id:fid(),type:"line",kind:mapTool,points:pts,color:drawColor})); }
+/** ELEVATION CARVES WATER: the effective land mask for display = painted land minus painted
+ *  sub-sea elevation (see map-paint.effectiveLand — the compiler applies the identical rule).
+ *  Null when the map has no painted elevation. */
+function currentEff(em, lm){
+  const er=EL.elevationOf(em.id) || (em.rasters&&em.rasters.elevation ? EL.ensureElevation(em, mapMarkers()) : null);
+  if(!er) return null;
+  const seaY=typeof em.seaLevel==="number"?em.seaLevel:0;
+  return LM.effectiveLand(lm, em.id, er, seaY, elevRev);
+}
 // ── landmass stroke helpers (Painter P1) ─────────────────────────────────────────────────────
 function landDabAt(lm,wx,wz,drag){
   // The extent is never a wall: a dab outside it grows the raster mid-stroke, co-resampling
@@ -581,7 +592,8 @@ function refreshTerrainImage(){
   requestAnimationFrame(()=>{ terRafPending=false;
     const em=activeMap(); const bio=LM.biomesOf(em.id); if(!bio) return;
     const img=document.getElementById("terrain-img");
-    if(img) img.setAttribute("href",LM.renderBiomesImage(bio, em.id, LM.landmassOf(em.id))); else redrawMap();
+    const lm=LM.landmassOf(em.id);
+    if(img) img.setAttribute("href",LM.renderBiomesImage(bio, em.id, (lm&&currentEff(em,lm))||lm)); else redrawMap();
   });
 }
 let landRafPending=false;
@@ -592,7 +604,7 @@ function refreshLandImage(){
   requestAnimationFrame(()=>{ landRafPending=false;
     const em=activeMap(); const lm=LM.landmassOf(em.id); if(!lm) return;
     const img=document.getElementById("land-img");
-    if(img) img.setAttribute("href",LM.renderLandImage(lm, em.id)); else redrawMap();
+    if(img) img.setAttribute("href",LM.renderLandImage(lm, em.id, currentEff(em, lm))); else redrawMap();
   });
 }
 // ── elevation stroke helpers ─────────────────────────────────────────────────────────────────
@@ -610,6 +622,7 @@ function elevDab(er,wx,wz,drag){
       ? {c0:Math.min(drag.bbox.c0,bb.c0),r0:Math.min(drag.bbox.r0,bb.r0),c1:Math.max(drag.bbox.c1,bb.c1),r1:Math.max(drag.bbox.r1,bb.r1)}
       : bb;
     elevRev++; refreshElevImage();
+    refreshLandImage(); // digging below sea level carves water — the land layer follows live
   }
 }
 let elevRafPending=false;

@@ -11,6 +11,7 @@
 
 import { encodeRasterCells, decodeRasterCells } from "/shared/raster-codec.mjs";
 import { maskToLandPolygons } from "/shared/marching-squares.mjs";
+import * as EL from "./map-elevation.js";
 
 export const LAND_SIZE = 512; // cells per side — ~5m cells on a 2.6km map (locked decision)
 const LAND_FILL = "#dccfa6"; // matches the legacy traced-outline land fill
@@ -20,9 +21,40 @@ const cache = new Map(); // mapId -> {w, h, rect, cells, dirty, rev}
 const imgCache = new Map(); // mapId -> {rev, url}
 const coastCache = new Map(); // mapId -> {rev, polys}
 
+const effCache = new Map(); // mapId -> {key, cells, w, h, rect, rev}
+
 export function landmassOf(mapId) { return cache.get(mapId) || null; }
 export function hasLandmass(map) { return !!(map.rasters && map.rasters.landmass) || cache.has(map.id); }
-export function dropLandmassCache(mapId) { cache.delete(mapId); imgCache.delete(mapId); coastCache.delete(mapId); }
+export function dropLandmassCache(mapId) { cache.delete(mapId); imgCache.delete(mapId); coastCache.delete(mapId); effCache.delete(mapId); }
+
+/** ELEVATION CARVES WATER: the effective land mask = painted land MINUS anywhere the painted
+ *  elevation dips below sea level (inside the elevation extent). Digging at the coast extends
+ *  the sea — display, coastline, and compile all read this SAME rule (the compiler applies it
+ *  identically). Returns null when there's no painted elevation (mask is authoritative alone). */
+export function effectiveLand(lm, mapId, elevEntry, seaLevel, elevKey) {
+  if (!elevEntry) return null;
+  const key = (lm.rev || 0) + ":" + elevKey + ":" + seaLevel + ":" + lm.rect.x0 + "," + lm.rect.w;
+  const hit = effCache.get(mapId);
+  if (hit && hit.key === key) return hit;
+  const { w, h, rect } = lm;
+  const cells = lm.cells.slice();
+  const sx = rect.w / (w - 1), sz = rect.h / (h - 1);
+  const er = elevEntry.rect;
+  for (let r = 0; r < h; r++) {
+    const wz = rect.z0 + r * sz;
+    if (wz < er.z0 || wz > er.z0 + er.h) continue;
+    for (let c = 0; c < w; c++) {
+      const i = r * w + c;
+      if (cells[i] < 128) continue;
+      const wx = rect.x0 + c * sx;
+      if (wx < er.x0 || wx > er.x0 + er.w) continue;
+      if (EL.sampleY(elevEntry, wx, wz) < seaLevel - 0.01) cells[i] = 0;
+    }
+  }
+  const out = { key, cells, w, h, rect, rev: key };
+  effCache.set(mapId, out);
+  return out;
+}
 export function dropAllLandmassCaches() { cache.clear(); imgCache.clear(); coastCache.clear(); }
 
 /** Decode the doc's stored mask into the cache (display path for already-painted maps). */
@@ -184,18 +216,21 @@ function borderOcean(e) {
   return ocean;
 }
 
-/** The land layer as a data-URL image covering the mask rect (soft alpha shoreline). */
-export function renderLandImage(e, mapId) {
+/** The land layer as a data-URL image covering the mask rect (soft alpha shoreline). `eff`
+ *  (from effectiveLand) substitutes the elevation-carved cells so dug water shows as sea. */
+export function renderLandImage(e, mapId, eff) {
+  const rev = eff ? eff.rev : e.rev;
   const hit = imgCache.get(mapId);
-  if (hit && hit.rev === e.rev) return hit.url;
+  if (hit && hit.rev === rev) return hit.url;
+  const src = eff || e;
   const cv = document.createElement("canvas");
   cv.width = e.w; cv.height = e.h;
   const ctx = cv.getContext("2d");
   const img = ctx.createImageData(e.w, e.h);
   const R = parseInt(LAND_FILL.slice(1, 3), 16), G = parseInt(LAND_FILL.slice(3, 5), 16), B = parseInt(LAND_FILL.slice(5, 7), 16);
-  const ocean = borderOcean(e);
-  for (let i = 0; i < e.cells.length; i++) {
-    const v = e.cells[i];
+  const ocean = borderOcean(src);
+  for (let i = 0; i < src.cells.length; i++) {
+    const v = src.cells[i];
     const o = i * 4;
     img.data[o] = R; img.data[o + 1] = G; img.data[o + 2] = B;
     if (!ocean[i]) {
@@ -210,19 +245,20 @@ export function renderLandImage(e, mapId) {
   }
   ctx.putImageData(img, 0, 0);
   const url = cv.toDataURL("image/png");
-  imgCache.set(mapId, { rev: e.rev, url });
+  imgCache.set(mapId, { rev, url });
   return url;
 }
 
 /** The derived coastline polygons in world coords — cached per mask revision AND rect (a region
  *  move/resize changes world coords without touching cells). Recomputed at stroke end / undo /
  *  redo, never per dab (the <50ms budget lives in the gate). */
-export function coastPolygons(e, mapId) {
+export function coastPolygons(e, mapId, eff) {
+  const rev = eff ? eff.rev : e.rev;
   const rectKey = e.rect.x0 + "," + e.rect.z0 + "," + e.rect.w + "," + e.rect.h;
   const hit = coastCache.get(mapId);
-  if (hit && hit.rev === e.rev && hit.rectKey === rectKey) return hit.polys;
-  const polys = maskToLandPolygons(e, {});
-  coastCache.set(mapId, { rev: e.rev, rectKey, polys });
+  if (hit && hit.rev === rev && hit.rectKey === rectKey) return hit.polys;
+  const polys = maskToLandPolygons(eff || e, {});
+  coastCache.set(mapId, { rev, rectKey, polys });
   return polys;
 }
 
@@ -266,7 +302,7 @@ const bioImgCache = new Map(); // mapId -> {key, url}
 export function biomesOf(mapId) { return bioCache.get(mapId) || null; }
 export function dropBiomesCache(mapId) { bioCache.delete(mapId); bioImgCache.delete(mapId); }
 export function dropAllPaintCaches() {
-  cache.clear(); imgCache.clear(); coastCache.clear();
+  cache.clear(); imgCache.clear(); coastCache.clear(); effCache.clear();
   bioCache.clear(); bioImgCache.clear();
 }
 
