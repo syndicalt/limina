@@ -352,7 +352,23 @@ createServer((req, res) => {
               } },
               { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 2.1), color: 2841970 } },
             ],
-            camera: { center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2], radius: 15, height: Math.round(span * 0.6), autoSpin: 0 },
+            // Whole-island aerial: camera at ~0.45/0.5 span with an explicit far (the default far
+            // plane clipped everything and the peek showed pure sky), and FogExp2 density scaled
+            // 1/distance so the far shore keeps ~80% clarity (transmittance exp(-(d*dist)^2)).
+            // 0.30/0.32 keeps the camera-to-terrain distance under the engine's ~600m fog knee,
+            // so the near island reads vivid and the far shore dissolves (the house look).
+            camera: {
+              center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
+              radius: Math.round(span * 0.30), height: Math.round(span * 0.32),
+              far: Math.round(span * 2.0), autoSpin: 0,
+            },
+            renderBaseline: {
+              exposure: 1.05,
+              sun: { color: 16770744, intensity: 4.6, direction: [-52, 34, 22] },
+              hemisphere: { skyColor: 12374271, groundColor: 4872752, intensity: 1.8 },
+              ambientIntensity: 0.66, ambientColor: 7036501,
+              fog: { color: 12242631, density: Math.round(0.45 / (span * 1.2) * 1e6) / 1e6 },
+            },
           };
           const sceneName = `peek-${project}-${worldMap.id}`;
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
