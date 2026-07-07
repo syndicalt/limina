@@ -172,6 +172,7 @@ export function renderMap(){
       +'<button class="tool" id="map-new" title="New map">＋</button>'
       +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊</button>'
       +'<button class="tool" id="map-import" title="Import a compiled world map as paint layers"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v11"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>'
+      +'<button class="tool" id="map-compile" title="Compile this map to a world asset (buildable + importable)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 21V10"/><path d="M7 14l5-5 5 5"/><path d="M4 3h16"/></svg></button>'
       +'<span class="fi-sep"></span>'
       +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
       +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
@@ -527,6 +528,14 @@ function bindMap(){
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
   const imp=document.getElementById("map-import"); if(imp) imp.onclick=showImportMenu;
+  const cmp=document.getElementById("map-compile"); if(cmp) cmp.onclick=async()=>{
+    await flushMapSave(); // compile what's on disk = what you see
+    try{
+      const j=await postJSON("/api/compile-map",{mapId:activeMapId});
+      if(j.error){ toast("compile failed: "+j.error, 5000); return; }
+      toast("compiled → "+j.file+((j.warnings||[]).length?" ("+j.warnings.length+" warnings)":""), 4500);
+    }catch(e){ toast("compile failed: "+String(e), 5000); }
+  };
   document.querySelectorAll("#stamp-catalog .cat-item").forEach(b=>b.onclick=()=>{ stampAssetId=b.dataset.asset; renderMap(); });
   if(mapTool==="stamp"&&catalog===null) loadCatalog();
   const tk=document.getElementById("ter-kind"); if(tk) tk.onchange=(e)=>{ terKind=e.target.value; hint(); };

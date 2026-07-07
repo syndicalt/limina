@@ -302,7 +302,7 @@ function moveLocation(id, x, z) {
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/compile-map", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -316,6 +316,20 @@ createServer((req, res) => {
         if (req.url === "/api/move-location") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(moveLocation(p.id, p.x, p.z)));
+          return;
+        }
+        if (req.url === "/api/compile-map") {
+          // Compile the ACTIVE Atlas map (vault maps.json + world-bible) into a world asset the
+          // build consumes and the import list shows — the same pure compiler the gates run.
+          const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
+          const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
+          const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
+          const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
+          const { worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId });
+          const file = `${project}-${worldMap.id}.worldmap.json`;
+          writeFileSync(join(LIMINA_HOME, "assets", "maps", file), JSON.stringify(worldMap, null, 2));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ file, contentHash: worldMap.provenance.contentHash, warnings }));
           return;
         }
         if (req.url === "/api/map-save") {
