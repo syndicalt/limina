@@ -11,8 +11,12 @@ import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { connect as netConnect } from "node:net";
+
+// 3D-peek render jobs (Painter P5): jobId -> {status, png?, error?}. In-memory, best-effort.
+const peekJobs = new Map();
 import { createServer } from "node:http";
 import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
 
@@ -302,7 +306,7 @@ function moveLocation(id, x, z) {
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/compile-map", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -316,6 +320,63 @@ createServer((req, res) => {
         if (req.url === "/api/move-location") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(moveLocation(p.id, p.x, p.z)));
+          return;
+        }
+        if (req.url === "/api/peek") {
+          // 3D PEEK (Painter P5): compile the active map, then render ONE real-GPU frame of the
+          // resulting terrain through the EXISTING proof harness (tools/preview/engine-authored.mjs
+          // — runLive + terrain.create source:"map", ANGLE GL, never swiftshader) as an async job.
+          // GPU CAUTION (failure mode #14): the UI warns the user to close the 3D editor first;
+          // we also report whether the editor host port is up so the client can warn harder.
+          const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
+          const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
+          const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
+          const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
+          const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId });
+          const mapFile = `${project}-${worldMap.id}.worldmap.json`;
+          writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
+          // Frame the camera on the compiled land.
+          let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+          for (const l of worldMap.land) for (const [x, z] of l.points) {
+            if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+          }
+          if (minX === Infinity) { minX = -100; maxX = 100; minZ = -100; maxZ = 100; }
+          const span = Math.max(maxX - minX, maxZ - minZ, 100);
+          const size = Math.ceil(span * 1.25 / 50) * 50;
+          const scene = {
+            commands: [
+              { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
+              { kind: "skill", tool: "terrain.create", input: {
+                size, resolution: size > 600 ? 257 : 129, origin: [0, 0, 0], color: 5926970,
+                generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: 12 },
+              } },
+              { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 2.1), color: 2841970 } },
+            ],
+            camera: { center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2], radius: 15, height: Math.round(span * 0.6), autoSpin: 0 },
+          };
+          const sceneName = `peek-${project}-${worldMap.id}`;
+          const outDir = join(LIMINA_HOME, "tools", "preview", "out");
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
+          const png = join(outDir, sceneName + ".png");
+          const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-authored.mjs"), png, "/tools/preview/out/" + sceneName + ".json"], { stdio: ["ignore", "pipe", "pipe"] });
+          let errTail = "";
+          child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
+          child.stdout.on("data", (c) => { errTail = (errTail + c).slice(-800); });
+          child.on("exit", (code) => {
+            peekJobs.set(jobId, code === 0 && existsSync(png)
+              ? { status: "done", png: sceneName + ".png" }
+              : { status: "error", error: "render exited " + code + ": " + errTail.slice(-300) });
+          });
+          peekJobs.set(jobId, { status: "running" });
+          const editorHostUp = await new Promise((resolveUp) => {
+            const s = netConnect({ port: 8787, host: "127.0.0.1" }, () => { s.destroy(); resolveUp(true); });
+            s.on("error", () => resolveUp(false));
+            s.setTimeout(400, () => { s.destroy(); resolveUp(false); });
+          });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ job: jobId, editorHostUp }));
           return;
         }
         if (req.url === "/api/compile-map") {
@@ -380,6 +441,21 @@ createServer((req, res) => {
     } catch (e) {
       res.writeHead(500); res.end(String(e));
     }
+    return;
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/peek/")) {
+    const job = peekJobs.get(basename(req.url.split("?")[0]));
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+    res.end(JSON.stringify(job ? { ...job, url: job.png ? "/api/peek-image/" + job.png : undefined } : { status: "unknown" }));
+    return;
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/peek-image/")) {
+    try {
+      const name = basename(req.url.split("?")[0]);
+      if (!/^[\w.-]+\.png$/.test(name)) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "content-type": "image/png", "cache-control": "no-cache" });
+      res.end(readFileSync(join(LIMINA_HOME, "tools", "preview", "out", name)));
+    } catch { res.writeHead(404); res.end(); }
     return;
   }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/worldmaps") {
