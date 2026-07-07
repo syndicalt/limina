@@ -250,3 +250,197 @@ export function syncLandmassIntoDoc(maps) {
     e.dirty = false;
   }
 }
+
+// ─── Biome paint layer (Painter P2) ─────────────────────────────────────────────────────────────
+// A paletted u8 raster: cell = BIOME_CLASSES index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS in
+// js/src/world/worldmap.ts and BIOME_CLASSES in design-map-compile.mjs (the gate asserts the
+// sync). Fixed enum indices — no per-map palette array a reorder could silently repaint.
+
+export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"];
+export const BIOME_SIZE = 256;
+const BIOME_BASE = { grass: "#8aa85f", forest: "#4a7a45", mountain: "#8f8d88", desert: "#d9c48f", tundra: "#dbe4ea", swamp: "#6b7a55", water: "#3f6ea5" };
+
+const bioCache = new Map(); // mapId -> {w, h, rect, cells, dirty, rev}
+const bioImgCache = new Map(); // mapId -> {key, url}
+
+export function biomesOf(mapId) { return bioCache.get(mapId) || null; }
+export function dropBiomesCache(mapId) { bioCache.delete(mapId); bioImgCache.delete(mapId); }
+export function dropAllPaintCaches() {
+  cache.clear(); imgCache.clear(); coastCache.clear();
+  bioCache.clear(); bioImgCache.clear();
+}
+
+export function ensureBiomes(map) {
+  let e = bioCache.get(map.id);
+  if (e) return e;
+  const b = map.rasters && map.rasters.biomes;
+  if (!b) return null;
+  e = { w: b.w, h: b.h, rect: { ...b.rect }, cells: decodeRasterCells(b, b.w * b.h), dirty: false, rev: 0 };
+  bioCache.set(map.id, e);
+  return e;
+}
+
+/** Create the biome raster (first terrain stroke only). Rect aligns with the landmass extent
+ *  when one exists. Seeds from legacy hand-traced biome polygons — the caller bundles the seed
+ *  into the first stroke's command (the landmass pattern), so conversion is one undoable act. */
+export function createBiomes(map, markers) {
+  const lm = cache.get(map.id);
+  const rect = lm ? { ...lm.rect } : creationRect(map, markers);
+  const e = { w: BIOME_SIZE, h: BIOME_SIZE, rect, cells: new Uint8Array(BIOME_SIZE * BIOME_SIZE), dirty: false, rev: 0 };
+  for (const f of (map.features || [])) {
+    if (f.type === "area" && f.kind === "biome" && Array.isArray(f.points) && f.points.length >= 3) {
+      const idx = BIOME_CLASSES.indexOf(f.biome);
+      if (idx >= 0) scanlineFillValue(e, f.points, idx + 1);
+    }
+  }
+  bioCache.set(map.id, e);
+  return e;
+}
+
+function scanlineFillValue(e, points, value) {
+  const { w, h, rect } = e;
+  const sx = rect.w / (w - 1), sz = rect.h / (h - 1);
+  for (let r = 0; r < h; r++) {
+    const wz = rect.z0 + r * sz;
+    const xs = [];
+    for (let i = 0; i < points.length; i++) {
+      const [x1, z1] = points[i], [x2, z2] = points[(i + 1) % points.length];
+      if ((z1 <= wz && z2 > wz) || (z2 <= wz && z1 > wz)) xs.push(x1 + ((wz - z1) / (z2 - z1)) * (x2 - x1));
+    }
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const c0 = Math.max(0, Math.ceil((xs[k] - rect.x0) / sx));
+      const c1 = Math.min(w - 1, Math.floor((xs[k + 1] - rect.x0) / sx));
+      for (let c = c0; c <= c1; c++) e.cells[r * w + c] = value;
+    }
+  }
+}
+
+/** One terrain dab: writes the class value (0 erases) hard within the radius — a paletted
+ *  raster has no per-cell alpha; the soft look comes from the textured, dithered render. */
+export function biomeDab(e, wx, wz, { value, radiusM }) {
+  const { w, h, rect } = e;
+  const sx = rect.w / (w - 1), sz = rect.h / (h - 1);
+  const c0 = Math.max(0, Math.floor((wx - radiusM - rect.x0) / sx));
+  const c1 = Math.min(w - 1, Math.ceil((wx + radiusM - rect.x0) / sx));
+  const r0 = Math.max(0, Math.floor((wz - radiusM - rect.z0) / sz));
+  const r1 = Math.min(h - 1, Math.ceil((wz + radiusM - rect.z0) / sz));
+  if (c0 > c1 || r0 > r1) return null;
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const dx = rect.x0 + c * sx - wx, dz = rect.z0 + r * sz - wz;
+      if (dx * dx + dz * dz <= radiusM * radiusM) e.cells[r * w + c] = value;
+    }
+  }
+  e.dirty = true; e.rev = (e.rev || 0) + 1;
+  return { c0, r0, c1, r1 };
+}
+
+// Procedural texture tiles (32², canvas-generated — no external images). Deterministic per
+// class via a tiny seeded xorshift so redraws are stable.
+const tileCache = new Map();
+function biomeTile(kind) {
+  let t = tileCache.get(kind);
+  if (t) return t;
+  const cv = document.createElement("canvas");
+  cv.width = 32; cv.height = 32;
+  const ctx = cv.getContext("2d");
+  const base = BIOME_BASE[kind] || "#888888";
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, 32, 32);
+  let s = 0; for (const ch of kind) s = (s * 31 + ch.charCodeAt(0)) | 0;
+  const rnd = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return ((s >>> 0) % 1000) / 1000; };
+  const shade = (hex, f) => {
+    const n = parseInt(hex.slice(1), 16);
+    const ch2 = (v) => Math.max(0, Math.min(255, Math.round(v * f)));
+    return `rgb(${ch2(n >> 16)},${ch2((n >> 8) & 255)},${ch2(n & 255)})`;
+  };
+  // Per-class grain: speckle for grass/desert/tundra, blobs for forest/swamp, hatch for
+  // mountain. Contrast is deliberately strong — the tile is sampled at raster scale, so faint
+  // grain disappears into mush at map zoom.
+  if (kind === "mountain") {
+    ctx.strokeStyle = shade(base, 0.68); ctx.lineWidth = 1.4;
+    for (let i = 0; i < 9; i++) { const x = rnd() * 32, y = rnd() * 32; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 4 + rnd() * 6, y + 2 - rnd() * 5); ctx.stroke(); }
+    ctx.fillStyle = shade(base, 1.28);
+    for (let i = 0; i < 12; i++) ctx.fillRect(rnd() * 32, rnd() * 32, 2, 2);
+  } else if (kind === "forest" || kind === "swamp") {
+    for (let i = 0; i < 18; i++) {
+      ctx.fillStyle = shade(base, 0.62 + rnd() * 0.3);
+      ctx.beginPath(); ctx.arc(rnd() * 32, rnd() * 32, 1.8 + rnd() * 2.6, 0, 7); ctx.fill();
+    }
+  } else {
+    for (let i = 0; i < 34; i++) {
+      ctx.fillStyle = shade(base, 0.74 + rnd() * 0.5);
+      ctx.fillRect(rnd() * 32, rnd() * 32, 1.8, 1.8);
+    }
+  }
+  t = ctx.getImageData(0, 0, 32, 32);
+  tileCache.set(kind, t);
+  return t;
+}
+
+export function biomesHaveContent(e) { return e.cells.some((v) => v !== 0); }
+
+/** The biome layer as a data-URL image (2px per cell, dithered class lookup so boundaries read
+ *  organic, textured from the class tiles, alpha-clipped to the landmass so paint never floats
+ *  on open ocean). */
+export function renderBiomesImage(e, mapId, landEntry) {
+  const key = e.rev + ":" + (landEntry ? landEntry.rev + "/" + landEntry.rect.x0 + "," + landEntry.rect.w : "-") + ":" + e.rect.x0 + "," + e.rect.w;
+  const hit = bioImgCache.get(mapId);
+  if (hit && hit.key === key) return hit.url;
+  const S = 3, W = e.w * S, H = e.h * S;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  const img = ctx.createImageData(W, H);
+  const tiles = BIOME_CLASSES.map((k) => biomeTile(k));
+  const sx = e.rect.w / (e.w - 1), sz = e.rect.h / (e.h - 1);
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      // Dithered class lookup: a small deterministic jitter breaks the raster staircase.
+      const jx = (((px * 73856093) ^ (py * 19349663)) >>> 16) % 100 / 100 - 0.5;
+      const jz = (((px * 83492791) ^ (py * 2971215073)) >>> 16) % 100 / 100 - 0.5;
+      const c = Math.max(0, Math.min(e.w - 1, Math.round(px / S + jx * 1.6)));
+      const r = Math.max(0, Math.min(e.h - 1, Math.round(py / S + jz * 1.6)));
+      const v = e.cells[r * e.w + c];
+      const o = (py * W + px) * 4;
+      if (v === 0) { img.data[o + 3] = 0; continue; }
+      const tile = tiles[v - 1];
+      const ti = ((py % 32) * 32 + (px % 32)) * 4;
+      img.data[o] = tile.data[ti]; img.data[o + 1] = tile.data[ti + 1]; img.data[o + 2] = tile.data[ti + 2];
+      let a = 225;
+      if (landEntry) {
+        // Clip to land: transform this biome cell's world position into the landmass grid.
+        const wx = e.rect.x0 + c * sx, wz = e.rect.z0 + r * sz;
+        const lc = Math.round((wx - landEntry.rect.x0) / (landEntry.rect.w / (landEntry.w - 1)));
+        const lr = Math.round((wz - landEntry.rect.z0) / (landEntry.rect.h / (landEntry.h - 1)));
+        const lv = (lc >= 0 && lc < landEntry.w && lr >= 0 && lr < landEntry.h) ? landEntry.cells[lr * landEntry.w + lc] : 0;
+        a = lv >= 128 ? 225 : Math.round((lv / 128) * 90);
+      }
+      img.data[o + 3] = a;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const url = cv.toDataURL("image/png");
+  bioImgCache.set(mapId, { key, url });
+  return url;
+}
+
+export function syncBiomesIntoDoc(maps) {
+  for (const map of maps || []) {
+    const e = bioCache.get(map.id);
+    if (!e || !e.dirty) continue;
+    map.rasters = map.rasters || {};
+    if (biomesHaveContent(e)) {
+      map.rasters.biomes = {
+        w: e.w, h: e.h,
+        rect: { x0: e.rect.x0, z0: e.rect.z0, w: e.rect.w, h: e.rect.h },
+        ...encodeRasterCells(e.cells),
+      };
+    } else {
+      delete map.rasters.biomes;
+      if (Object.keys(map.rasters).length === 0) delete map.rasters;
+    }
+    e.dirty = false;
+  }
+}

@@ -393,7 +393,75 @@ console.log("landmass mask (painter P1):");
   check("(falsifiability) a shifted blob is DETECTED by the same centroid check", Math.hypot(cen2[0], cen2[1]) >= cellM);
 }
 
-// ---- 6. Data-safety fixes (phantom feature loss) ------------------------------------------------
+// ---- 6. P2: painted biomes (raster -> per-class polygons -> ground paint) -----------------------
+console.log("biome raster (painter P2):");
+{
+  const { encodeRasterCells } = await import(join(ROOT, "js/src/world/pipeline/raster-codec.mjs"));
+  const { BIOME_CLASSES } = await import(join(ROOT, "js/src/world/design-map-compile.mjs"));
+
+  // The fixed cell vocabulary must equal worldmap.ts's BIOME_KINDS (the .mjs compiler can't
+  // import the .ts, so the gate is the sync point).
+  const wmSrc = readFileSync(join(ROOT, "js/src/world/worldmap.ts"), "utf8");
+  const m = wmSrc.match(/BIOME_KINDS = \[([^\]]+)\]/);
+  const kinds = m[1].split(",").map((s) => s.trim().replace(/["']/g, "")).filter(Boolean);
+  check("BIOME_CLASSES matches worldmap.ts BIOME_KINDS exactly", eq(kinds, BIOME_CLASSES));
+  check("(falsifiability) a reordered vocabulary would be DETECTED", !eq([...kinds].reverse(), BIOME_CLASSES));
+
+  // Paint three patches (grass disc, tundra disc, mountain disc) into a 256² raster.
+  const BW = 256;
+  const cells = new Uint8Array(BW * BW);
+  const disc = (cx, cr, R, v) => { for (let r = 0; r < BW; r++) for (let c = 0; c < BW; c++) { if (Math.hypot(c - cx, r - cr) <= R) cells[r * BW + c] = v; } };
+  disc(80, 80, 40, BIOME_CLASSES.indexOf("grass") + 1);
+  disc(180, 80, 30, BIOME_CLASSES.indexOf("tundra") + 1);
+  disc(120, 180, 30, BIOME_CLASSES.indexOf("mountain") + 1);
+  const rect = { x0: -400, z0: -400, w: 800, h: 800 };
+  const doc = (extraFeature) => JSON.stringify({
+    version: 2, activeMapId: "m", axes: "north-negz",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      rasters: { biomes: { w: BW, h: BW, rect, ...encodeRasterCells(cells) } },
+      features: [
+        // Land under the painted biomes — the rasterizer only paints ground on land.
+        { id: "land-sq", type: "area", kind: "outline", points: [[-380, -380], [380, -380], [380, 380], [-380, 380]] },
+        { id: "decoy-b", type: "area", kind: "biome", biome: "swamp", points: [[300, 300], [380, 300], [380, 380]] },
+        ...(extraFeature ? [extraFeature] : []),
+      ],
+    }],
+  });
+  const WB_BIG = WB_TEXT.replace("size_m: 200", "size_m: 800");
+  const { worldMap: bm, warnings: bw } = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_BIG });
+  const byKind = (k) => bm.biomes.filter((b) => b.biome === k);
+  check("compile: three painted classes emit three biome polygons", byKind("grass").length === 1 && byKind("tundra").length === 1 && byKind("mountain").length === 1);
+  check("compile: PRECEDENCE — vector biome feature ignored with a warning", bw.some((w) => w.includes("decoy-b") && w.includes("biome raster")) && byKind("swamp").length === 0);
+  check("compile: painted mountain hints relief (no painted elevation)", bm.relief.some((r) => r.kind === "mountain" && r.shape.polygon));
+  const cellM = 800 / (BW - 1);
+  const shoelace = (pts) => Math.abs(pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+  const wantGrass = Math.PI * (40 * cellM) ** 2;
+  check(`compile: grass polygon area within 6% of the painted disc (got ${(shoelace(byKind("grass")[0].points) / wantGrass * 100).toFixed(1)}%)`, Math.abs(shoelace(byKind("grass")[0].points) - wantGrass) / wantGrass < 0.06);
+  check("compile: recomputed content hash verifies", worldMapContentHash(bm) === bm.provenance.contentHash);
+
+  // MAP-MATCH through the REAL rasterizer: the painted tundra disc must produce SNOW paint
+  // (id 5) — a palette chip that compiles to nothing is a silent UI lie.
+  const { heights: _h, cfg, paintMat } = rasterizeWorldMap(bm, { size: 800, resolution: 201, seed: 7 });
+  let snow = 0, grassPaint = 0;
+  if (paintMat) {
+    for (const v of paintMat) { if (v === 5) snow++; if (v === 2) grassPaint++; }
+  }
+  check(`terrain: painted tundra rasterizes as SNOW paint (${snow} cells)`, snow > 50);
+  check(`terrain: painted grass rasterizes as grass paint (${grassPaint} cells)`, grassPaint > 100);
+  // Falsifiability: an all-grass raster must produce ZERO snow at the same sampler.
+  const flatCells = new Uint8Array(BW * BW).fill(BIOME_CLASSES.indexOf("grass") + 1);
+  const { worldMap: gm } = compileDesignMap({
+    mapsJsonText: JSON.stringify({ version: 2, activeMapId: "m", maps: [{ id: "m", name: "m", scope: "site", parent: null, seaLevel: 0, units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] }, rasters: { biomes: { w: BW, h: BW, rect, ...encodeRasterCells(flatCells) } }, features: [{ id: "land-sq", type: "area", kind: "outline", points: [[-380, -380], [380, -380], [380, 380], [-380, 380]] }] }] }),
+    worldBibleText: WB_BIG,
+  });
+  const { paintMat: gp } = rasterizeWorldMap(gm, { size: 800, resolution: 201, seed: 7 });
+  let snow2 = 0; if (gp) for (const v of gp) { if (v === 5) snow2++; }
+  check("(falsifiability) un-painting tundra removes ALL snow at the same probe", snow2 === 0);
+}
+
+// ---- 7. Data-safety fixes (phantom feature loss) ------------------------------------------------
 // Three proven loss mechanisms, each locked here: (a) colliding feature ids repaired on read,
 // (b) delete-undo can't mint a duplicate, (c) the server refuses a stale wholesale save (CAS).
 console.log("data safety:");

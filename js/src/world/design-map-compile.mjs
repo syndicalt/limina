@@ -24,6 +24,10 @@ import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
 import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 
 const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
+// The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
+// in js/src/world/worldmap.ts (this pure .mjs can't import the .ts — the mapstudio gate asserts
+// the two stay identical) and the frontend palette in tools/design/frontend/map-paint.js.
+export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"];
 const RIVER_DEFAULT_WIDTH_M = 3;
 const MOUNTAIN_BIOME_AMPLITUDE = 12;
 const GLYPH_AMPLITUDE = { mountain: 12, peak: 15, hills: 5 };
@@ -135,6 +139,17 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     }
   }
 
+  // A painted biome raster (Map Painter P2, map.rasters.biomes) vectorizes per class into the
+  // IR's EXISTING biome polygons. Cell values are FIXED indices into BIOME_CLASSES + 1 (0 =
+  // unpainted) — no per-map palette array to reorder. Same precedence contract as the other
+  // paint layers: when present, vector biome features are ignored with a warning.
+  const biomesRaster = map.rasters && map.rasters.biomes ? map.rasters.biomes : undefined;
+  if (biomesRaster) {
+    for (const k of ["w", "h", "data", "rect"]) {
+      if (biomesRaster[k] === undefined) throw new Error(`compile-designmap: rasters.biomes is missing '${k}'`);
+    }
+  }
+
   const fm = frontmatterBlock(worldBibleText);
   const sizeM = readZoneSizeM(fm);
   const locations = readLocations(fm);
@@ -153,11 +168,32 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     }
   }
 
+  if (biomesRaster) {
+    const bw = Number(biomesRaster.w), bh = Number(biomesRaster.h);
+    const cells = decodeRasterCells(biomesRaster, bw * bh);
+    const rect = { x0: Number(biomesRaster.rect.x0), z0: Number(biomesRaster.rect.z0), w: Number(biomesRaster.rect.w), h: Number(biomesRaster.rect.h) };
+    for (let k = 0; k < BIOME_CLASSES.length; k++) {
+      const bin = new Uint8Array(bw * bh);
+      let any = false;
+      for (let i = 0; i < cells.length; i++) if (cells[i] === k + 1) { bin[i] = 255; any = true; }
+      if (!any) continue;
+      for (const poly of maskToLandPolygons({ w: bw, h: bh, rect, cells: bin })) {
+        biomes.push({ biome: BIOME_CLASSES[k], points: poly.points });
+        // Parity with the vector path: painted mountains hint relief unless painted elevation
+        // is authoritative.
+        if (BIOME_CLASSES[k] === "mountain" && !elevation) {
+          relief.push({ kind: "mountain", shape: { polygon: poly.points }, amplitude: MOUNTAIN_BIOME_AMPLITUDE });
+        }
+      }
+    }
+  }
+
   for (const f of map.features) {
     if (f.type === "area" && f.kind === "outline") {
       if (landmass) { warnings.push(`ignored outline feature "${f.id}" (a painted landmass mask is authoritative)`); continue; }
       land.push({ points: toPoints(f.points) });
     } else if (f.type === "area" && f.kind === "biome") {
+      if (biomesRaster) { warnings.push(`ignored biome feature "${f.id}" (a painted biome raster is authoritative)`); continue; }
       const points = toPoints(f.points);
       biomes.push({ biome: f.biome, points });
       if (f.biome === "mountain" && !elevation) {
