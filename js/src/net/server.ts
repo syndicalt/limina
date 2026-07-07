@@ -100,6 +100,13 @@ export interface AuthoritativeServerOptions {
     name: string;
     compactFlushed?: boolean;
   };
+  /** Record every per-tick `step` command even when the tick provably changed nothing.
+   *  Default FALSE (kernel K-compaction): idle steps are still APPLIED every tick, but only
+   *  steps that moved a dynamic body (plus a short post-activity grace window) are RECORDED.
+   *  Without the cut a long-lived session's log is ~99.98% idle step records and boot rehydrate
+   *  replays them all, so boot cost grows with session time. See worldlog/step-filter.ts for the
+   *  replay-correctness argument. Set true only to reproduce the legacy record-every-step logs. */
+  recordIdleSteps?: boolean;
   /** Optional host hook for application-specific JSON-RPC methods. Server core
    *  remains generic: known protocol methods are handled above; unknown methods
    *  reach this hook and fall back to method-not-found when unhandled. */
@@ -210,7 +217,7 @@ export class AuthoritativeServer {
     this.registry = new SkillRegistry(tracer, opts.policy);
     registerCoreSkills(this.registry);
 
-    this.recorder = new WorldRecorder(opts.sessionId);
+    this.recorder = new WorldRecorder(opts.sessionId, { filterIdleSteps: opts.recordIdleSteps !== true });
     let persisted: WorldCommand[] | undefined;
     if (opts.worldLog !== undefined) {
       this.durableLog = new DurableWorldLog(this.recorder, opts.worldLog.name, { compactFlushed: opts.worldLog.compactFlushed });
@@ -272,7 +279,22 @@ export class AuthoritativeServer {
       }
       const tail = prefixCount <= persisted.length ? persisted.slice(prefixCount) : [];
       this.ready = Promise.resolve().then(async () => {
-        await this.rehydrate(tail);
+        const droppedSteps = await this.rehydrate(tail);
+        // LEGACY-LOG SELF-COMPACTION: a log recorded before the idle-step cut carries per-tick
+        // step records; rehydrate still APPLIED them all (faithful physics), but the filter
+        // re-recorded only the ones that mattered (bit-identical decision: replayed physics is
+        // deterministic, so "changed nothing" replays as "changed nothing"). When any were
+        // dropped, the on-disk segment no longer matches the recorder's seq stream -- appending
+        // to it would corrupt seq contiguity -- so rewrite it once from the recorder's full
+        // in-memory history. One slow boot compacts the log permanently; a log recorded after
+        // the cut drops nothing here and the segment is left byte-untouched.
+        if (droppedSteps > 0 && this.durableLog !== undefined) {
+          const kept = this.durableLog.rewriteFromRecorder();
+          defaultOps.op_log(
+            `AuthoritativeServer: compacted durable world log ${opts.worldLog!.name}: ` +
+              `dropped ${droppedSteps} idle step records, kept ${kept} commands`,
+          );
+        }
         this.prev = this.snapshotMap();
       });
     } else {
@@ -749,11 +771,19 @@ export class AuthoritativeServer {
     if (broadcast) this.lastBroadcastTick = this.tick;
   }
 
-  private async rehydrate(commands: WorldCommand[]): Promise<void> {
+  /** Replay the persisted tail through the RECORDING ops so the recorder repopulates its
+   *  in-memory history. Returns how many replayed step records the idle-step filter dropped
+   *  from re-recording (legacy logs only; a post-cut log re-records 1:1 and returns 0). */
+  private async rehydrate(commands: WorldCommand[]): Promise<number> {
+    const droppedBefore = this.recorder.droppedIdleSteps;
     for (const cmd of commands) {
       if (cmd.kind === "seed") {
         throw new Error(`AuthoritativeServer rehydrate: unexpected seed command in replay tail at seq ${cmd.seq}`);
       }
+      // Thread the ORIGINAL tick into the recorder so a re-recorded physics command keeps its
+      // historical tick (the ops proxy stamps rec.tick). Required for a faithful compacted
+      // rewrite; previously the in-memory twin re-recorded rehydrated physics with tick 0.
+      this.recorder.tick = cmd.tick;
       if (cmd.kind === "physics") {
         const op = this.recOps[PHYSICS_OP_FN[cmd.op]] as (...a: unknown[]) => unknown;
         const outLen = PHYSICS_OP_OUT_BUFFER[cmd.op];
@@ -776,11 +806,18 @@ export class AuthoritativeServer {
         throw new Error(`AuthoritativeServer rehydrate: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
       }
     }
-    if (this.recorder.commandCount !== this.rehydratedCommands) {
+    // Every replayed command must re-record exactly once -- except a legacy idle step the filter
+    // provably-safely dropped from re-recording (it was still APPLIED above). Strict accounting:
+    // re-recorded + dropped must equal the persisted count, so a double-record or a silent miss
+    // still fails loudly.
+    const droppedSteps = this.recorder.droppedIdleSteps - droppedBefore;
+    if (this.recorder.commandCount + droppedSteps !== this.rehydratedCommands) {
       throw new Error(
-        `AuthoritativeServer rehydrate: recorder has ${this.recorder.commandCount} commands after replay, expected ${this.rehydratedCommands}`,
+        `AuthoritativeServer rehydrate: recorder has ${this.recorder.commandCount} commands after replay ` +
+          `(+${droppedSteps} idle steps dropped), expected ${this.rehydratedCommands}`,
       );
     }
+    return droppedSteps;
   }
 
   // ---- snapshot / state helpers -------------------------------------------

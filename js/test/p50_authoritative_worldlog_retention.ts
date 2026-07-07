@@ -57,8 +57,12 @@ const server = new AuthoritativeServer(transport, {
   sessionId: "p50_authoritative_worldlog_retention",
   tickMs: 8,
   worldLog: { name: LOG_NAME, compactFlushed: true },
-  bootstrap: ({ world }) => {
+  bootstrap: ({ world, recordedOps }) => {
     marker = spawnMarker(world);
+    // A falling dynamic body: since the idle-step cut (kernel K-compaction, worldlog/step-filter.ts)
+    // only steps that MOVE something are recorded, so the ticks need real motion for the durable
+    // stream to carry the step records the retention assertions below count on.
+    recordedOps.op_physics_add_box(0, 5, 0, 0.5);
   },
 });
 

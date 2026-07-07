@@ -76,6 +76,37 @@ export class DurableWorldLog {
     return n;
   }
 
+  /** Rewrite the on-disk segment from the recorder's FULL in-memory history (kernel
+   *  K-compaction). Used exactly once at boot, after a rehydrate of a legacy log dropped idle
+   *  step records from re-recording: the recorder then holds a shorter, freshly-renumbered
+   *  (contiguous-seq) command stream that no longer matches the segment, and APPENDING to the
+   *  old segment would corrupt seq contiguity -- so the segment is replaced wholesale. The whole
+   *  compacted history is written in ONE op_write_trace host call (no truncate-then-append
+   *  window); a crash mid-write leaves a clean-lined prefix that the boot parser's
+   *  recoverCorruptLines path can still load. Requires the full history in memory (no prior
+   *  hot-memory compaction) and a fully-settled recorder. Returns the command count written. */
+  rewriteFromRecorder(): number {
+    if (!this.opened) throw new Error("DurableWorldLog: open()/resume() before rewriteFromRecorder()");
+    if (this.recorder.compactedCommandCount > 0) {
+      throw new Error("DurableWorldLog: cannot rewrite after hot-memory compaction (full history is no longer in memory)");
+    }
+    const limit = this.recorder.flushableCount();
+    if (limit !== this.recorder.commandCount) {
+      throw new Error("DurableWorldLog: cannot rewrite while recorder commands are still pending");
+    }
+    let chunk = "";
+    for (let i = 0; i < limit; i++) {
+      chunk += JSON.stringify(this.recorder.commandAt(i)) + "\n";
+    }
+    ops.op_write_trace(this.name, chunk);
+    this.flushed = limit;
+    // The segment is now a fresh recording, not a resumed one: close() must append a new meta
+    // trailer describing the compacted stream.
+    this.resumed = false;
+    if (this.opts.compactFlushed === true) this.recorder.compactFinalizedPrefix(this.flushed);
+    return limit;
+  }
+
   /** Final flush + append the meta trailer. After this the persisted segment is
    *  a complete, replayable world log. */
   close(): { name: string; commands: number; segments: number } {

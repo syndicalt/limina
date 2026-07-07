@@ -28,6 +28,7 @@ import {
   type WorldCommand,
   type WorldLogMeta,
 } from "./log.ts";
+import { IdleStepFilter } from "./step-filter.ts";
 
 // Pure READ-ONLY skills the live editor polls every tick — recording them bloats the
 // world log ~25x (2500+ reads vs ~100 mutations in a dev session) and, with the editor
@@ -110,10 +111,24 @@ function cloneInput(value: unknown, seen: Set<object> = new Set()): unknown {
   return out;
 }
 
+export interface WorldRecorderOptions {
+  /** Idle-step cut (kernel K-compaction): when true, a depth-0 `step` op is APPLIED as always but
+   *  RECORDED only if it could have changed replay-relevant state (any tracked dynamic body's
+   *  transform changed bit-wise, or within a short grace window after activity -- see
+   *  step-filter.ts for the full correctness argument). Long-lived servers enable this so an idle
+   *  session stops appending one step record per tick to the durable log (measured: 99.98% of a
+   *  real editor session's log was idle steps, and boot rehydrate replays the whole history).
+   *  Default false: scenario/test recorders keep the historical record-every-step behavior. */
+  filterIdleSteps?: boolean;
+}
+
 export class WorldRecorder {
   readonly commands: WorldCommand[] = [];
   /** Current simulation tick; the scenario updates it each loop iteration. */
   tick = 0;
+  /** Depth-0 steps applied but NOT recorded by the idle-step filter (see filterIdleSteps). */
+  droppedIdleSteps = 0;
+  private readonly stepFilter?: IdleStepFilter;
   private seq = 0;
   private depth = 0;
   /** Chain-id minted per TOP-LEVEL invocation; a nested re-invoke inherits its
@@ -130,7 +145,9 @@ export class WorldRecorder {
   private maxTick = 0;
   private seeded = false;
 
-  constructor(readonly sessionId: string) {}
+  constructor(readonly sessionId: string, opts: WorldRecorderOptions = {}) {
+    if (opts.filterIdleSteps === true) this.stepFilter = new IdleStepFilter();
+  }
 
   /** Record + install the deterministic PRNG seed. Call once, before any
    *  command that could consume randomness. */
@@ -162,6 +179,32 @@ export class WorldRecorder {
           return bound;
         }
         const wrapped = (...args: number[]): unknown => {
+          const filter = rec.stepFilter;
+          if (filter !== undefined && opName === "step") {
+            // IDLE-STEP CUT (kernel K-compaction): a step is pure sim output, so unlike every
+            // other op it is applied FIRST and recorded only if the post-step world says the tick
+            // could matter to replay (a tracked dynamic body moved bit-wise, or we are inside the
+            // post-activity grace window). A dropped step leaves replay bit-identical -- see the
+            // correctness argument in step-filter.ts. Live behavior is untouched either way: the
+            // native step always runs; only its LOG RECORD is conditional.
+            const result = method.apply(target, args);
+            if (rec.depth === 0) {
+              const tick = rec.tick;
+              if (tick > rec.maxTick) rec.maxTick = tick;
+              if (filter.shouldRecordStep(target)) {
+                const seq = rec.seq++;
+                rec.commands.push({ kind: "physics", seq, tick, op: "step", args: [] });
+                rec.markFinalized(seq);
+              } else {
+                rec.droppedIdleSteps++;
+              }
+            } else {
+              // A nested (in-skill) step is reproduced by its skill command, not recorded here --
+              // but it advanced the sim behind the filter's cache, so signal activity.
+              filter.observe("step", args, result);
+            }
+            return result;
+          }
           if (rec.depth === 0) {
             const tick = rec.tick;
             if (tick > rec.maxTick) rec.maxTick = tick;
@@ -174,7 +217,11 @@ export class WorldRecorder {
             rec.commands.push({ kind: "physics", seq, tick, op: opName, args: args2 });
             rec.markFinalized(seq);
           }
-          return method.apply(target, args);
+          const result = method.apply(target, args);
+          // The filter tracks dynamic bodies across EVERY wrapped op at ANY depth (skills call
+          // this same proxy), so its body set stays complete even for ops the log doesn't record.
+          filter?.observe(opName, args, result);
+          return result;
         };
         methods.set(prop, wrapped);
         return wrapped;
