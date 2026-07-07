@@ -167,6 +167,10 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no c
 # roughness) HARD-FAILS. Pure color/param geometry — no GPU/chromium, so it runs even headless.
 if node gates/design/style-conformance-check.mjs >/dev/null 2>&1; then echo "   design-gate (style conformance): PASS"
 else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (style conformance): SKIP"; else echo "   design-gate (style conformance): FAIL"; hostfail=1; fi; fi
+# Map Studio gate: MapDoc v2 migration round-trip + undo-command inversion property + the v2->
+# WorldMap compile bridge, each with a falsifiability self-check. Pure Node — runs even headless.
+if node gates/design/mapstudio-gate.mjs >/dev/null 2>&1; then echo "   design-gate (map studio): PASS"
+else echo "   design-gate (map studio): FAIL"; hostfail=1; fi
 # GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
 if [ "$HEADLESS" = 1 ]; then echo "   design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
 elif node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"

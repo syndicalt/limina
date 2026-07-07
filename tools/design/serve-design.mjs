@@ -13,11 +13,24 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIMINA_HOME = resolve(__dirname, "..", "..");
 const LIMINA_BIN = process.env.LIMINA_BIN || join(LIMINA_HOME, "target", "release", "limina");
-const APP = readFileSync(join(__dirname, "frontend", "index.html"), "utf8");
+// The frontend is served from disk PER REQUEST (no boot cache — caching index.html at startup
+// meant every frontend edit needed a server restart, a repeated debugging trap).
+const FRONTEND_DIR = join(__dirname, "frontend");
+const MIME = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+};
 
 const vaultDir = resolve(process.argv[2] || process.cwd());
 const port = Number(process.argv[3]) || 4321;
@@ -88,25 +101,24 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
 }
 
 // Multiple hierarchical maps (world -> region -> city) + a cartographic feature layer (glyphs,
-// rivers/roads, areas, outline) per map. The map owns maps.json (wholesale save). Markers stay
-// world-bible locations (buildable + cascade); features are pure cartography.
+// rivers/roads, areas, outline) per map. The map owns maps.json (wholesale save, debounced on the
+// client). Markers stay world-bible locations (buildable + cascade); features are pure cartography.
+// The doc shape + migration-on-read (v1 -> v2, scale-contract units) is owned by map-doc.mjs —
+// the mapstudio gate imports the same module, so server and gate can't drift apart.
 function loadMaps(project) {
   let data;
   try { data = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")); } catch { data = null; }
-  if (!data || !Array.isArray(data.maps) || data.maps.length === 0) {
-    data = { activeMapId: "primary", maps: [{ id: "primary", name: project + " — Hamlet", scope: "site", parent: null, features: [] }] };
-  }
-  // SCALE CONTRACT migration-on-read: every map carries units so world coordinates translate
-  // to real-world meters (units.kind === "m" -> worldUnits * unitsPerMeter = meters).
-  for (const m of data.maps) {
-    if (!m.units) m.units = { kind: "m", unitsPerMeter: 1, origin: [0, 0] };
-  }
-  return { maps: data.maps, activeMapId: data.activeMapId || data.maps[0].id };
+  const { doc } = migrateMapDoc(data, project);
+  return { maps: doc.maps, activeMapId: doc.activeMapId };
 }
 function saveMaps(maps, activeMapId) {
-  const clean = Array.isArray(maps) ? maps : [];
-  writeFileSync(join(vaultDir, "maps.json"), JSON.stringify({ activeMapId: activeMapId || (clean[0] && clean[0].id), maps: clean }, null, 2));
-  return { saved: true, maps: clean.length };
+  // The client only round-trips maps + activeMapId; re-read the on-disk doc so top-level markers
+  // it doesn't know about (e.g. axes:"north-negz") survive every save.
+  let prev = {};
+  try { prev = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")) || {}; } catch { /* first save */ }
+  const doc = serializeMapDoc(maps, activeMapId, prev);
+  writeFileSync(join(vaultDir, "maps.json"), JSON.stringify(doc, null, 2));
+  return { saved: true, maps: doc.maps.length };
 }
 
 // Create a new vault document (a readable, linkable markdown note).
@@ -308,10 +320,7 @@ createServer((req, res) => {
     });
     return;
   }
-  if (req.url === "/" || req.url === "/index.html") {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(APP);
-  } else if (req.url === "/api/state") {
+  if (req.url === "/api/state") {
     try {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(computeState()));
@@ -319,6 +328,22 @@ createServer((req, res) => {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(e) }));
     }
+  } else if (req.method === "GET") {
+    // Generic frontend static dispatch (the SPA is ES modules now, not one cached HTML blob).
+    // Resolve inside FRONTEND_DIR only; anything else (traversal, unknown type) is a 404.
+    const clean = (req.url.split("?")[0] || "/").replace(/\/+$/, "") || "/";
+    const rel = clean === "/" ? "index.html" : clean.replace(/^\/+/, "");
+    const fp = resolve(FRONTEND_DIR, rel);
+    const ext = fp.slice(fp.lastIndexOf("."));
+    if (fp.startsWith(FRONTEND_DIR + "/") || fp === join(FRONTEND_DIR, "index.html")) {
+      try {
+        const body = readFileSync(fp);
+        res.writeHead(200, { "content-type": MIME[ext] || "application/octet-stream", "cache-control": "no-cache" });
+        res.end(body);
+        return;
+      } catch { /* fall through to 404 */ }
+    }
+    res.writeHead(404); res.end("not found");
   } else {
     res.writeHead(404); res.end("not found");
   }
