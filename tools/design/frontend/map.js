@@ -114,7 +114,7 @@ export function renderMap(){
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
   // The outline/biome click-to-trace tools are RETIRED (locked P2 decision): painting owns land
   // and ground cover. Legacy traced features still render read-only and seed the paint layers.
-  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["land","🏝 Land"],["terrain","🖌 Terrain"],["elev","⛰ Elevation"],["glyph","Glyph"],["river","River"],["road","Road"],["border","Border"]];
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["glyph","▲","Stamp relief glyph"],["river","〜","Draw river"],["road","🛤","Draw road"],["border","┅","Draw border"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -129,21 +129,25 @@ export function renderMap(){
   const terrainControls = mapTool!=="terrain" ? "" :
     '<select class="sw" id="ter-kind">'+["grass","forest","mountain","desert","tundra","swamp"].map(k=>'<option value="'+k+'"'+(k===terKind?" selected":"")+'>'+k+'</option>').join("")+'<option value="erase"'+(terKind==="erase"?" selected":"")+'>erase</option></select>'
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="ter-radius" min="8" max="300" step="4" value="'+terRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="ter-radius-val" style="margin-left:0">'+terRadius+'m</span>';
+  const glyphPick = mapTool!=="glyph" ? "" :
+    '<select class="sw" id="glyph-pick">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>';
+  const colorPick = !["river","road","border"].includes(mapTool) ? "" :
+    '<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">';
+  const props = glyphPick+colorPick+elevControls+landControls+terrainControls;
   document.getElementById("center").innerHTML =
-    '<div class="map-wrap"><div class="map-head">'
-    +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
-    +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊 Sea</button>'
-    +'<span style="width:1px;height:22px;background:var(--line)"></span>'
-    +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
-    +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
-    +'<span style="width:1px;height:22px;background:var(--line)"></span>'
-    +tools.map(t=>'<button class="tool'+(mapTool===t[0]?" on":"")+'" data-tool="'+t[0]+'">'+t[1]+'</button>').join("")
-    +'<select class="sw" id="glyph-pick" style="'+(mapTool==="glyph"?"":"display:none")+'">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>'
-    +'<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="'+(["river","road","border"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
-    +elevControls+landControls+terrainControls
-    +'<span class="coord" id="map-coord">—</span></div>'
-    +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
+    '<div class="map-wrap"><div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
+    +'<div class="fi fi-corner">'
+      +'<select class="sw" id="map-sw" title="Switch map">'+opts+'</select>'
+      +'<button class="tool" id="map-new" title="New map">＋</button>'
+      +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊</button>'
+      +'<span class="fi-sep"></span>'
+      +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
+      +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
+    +'</div>'
+    +'<div class="fi fi-tools">'+tools.map(t=>'<button class="tool'+(mapTool===t[0]?" on":"")+'" data-tool="'+t[0]+'" title="'+t[2]+'">'+t[1]+'</button>').join("")+'</div>'
+    +(props?'<div class="fi fi-props">'+props+'</div>':'')
     +'<div class="map-layers" id="map-layers"></div>'
+    +'<div class="fi fi-coord" id="map-coord">—</div>'
     +'<div class="map-hint" id="map-hint"></div></div></div>';
   // Fit the view to content only when first opening this map — NOT on every re-render
   // (tool change, sea toggle, edit), so the pan/zoom stays put while you work.
@@ -415,7 +419,7 @@ function bindMap(){
   document.getElementById("map-new").onclick=newMap;
   document.getElementById("map-undo").onclick=doUndo;
   document.getElementById("map-redo").onclick=doRedo;
-  document.querySelectorAll(".map-head .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
+  document.querySelectorAll(".fi-tools .tool[data-tool]").forEach(b=>b.onclick=()=>{ mapTool=b.dataset.tool; drawPts=[]; renderMap(); });
   const gp=document.getElementById("glyph-pick"); if(gp) gp.onchange=(e)=>{ glyphKind=e.target.value; hint(); };
   const bp=document.getElementById("biome-pick"); if(bp) bp.onchange=(e)=>{ biomeKind=e.target.value; hint(); };
   const dc=document.getElementById("draw-color"); if(dc) dc.oninput=(e)=>{ drawColor=e.target.value; redrawMap(); };
@@ -510,11 +514,30 @@ function mapKey(e){ if(S.activeView!=="map") return;
   // deleting features added hours earlier. One press = one step.
   if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.repeat) return; if(e.shiftKey) doRedo(); else doUndo(); return; }
   if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); if(e.repeat) return; doRedo(); return; }
+  // Photoshop-style brush sizing: [ shrinks, ] grows the ACTIVE brush (~12% steps).
+  if((e.key==="["||e.key==="]")&&!typing&&["land","terrain","elev"].includes(mapTool)){
+    e.preventDefault();
+    const dir=e.key==="]"?1:-1;
+    const bump=(v,min,max)=>Math.max(min,Math.min(max,Math.round(v+dir*Math.max(1,v*0.12))));
+    if(mapTool==="land") lmRadius=bump(lmRadius,10,400);
+    else if(mapTool==="terrain") terRadius=bump(terRadius,8,300);
+    else elevRadius=bump(elevRadius,2,200);
+    syncBrushUI(); return;
+  }
   if((e.key===" "||e.code==="Space")&&!typing){ if(!spaceDown){ spaceDown=true; document.getElementById("map-svg")?.classList.add("space"); } e.preventDefault(); return; }
   if(e.key==="Escape"){ drawPts=[]; selFeat=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
   else if(e.key==="Enter"&&drawPts.length&&!typing) finishDraw();
   else if((e.key==="Delete"||e.key==="Backspace")&&selFeat&&!typing){ e.preventDefault(); deleteFeatById(selFeat,true); } }
 function mapKeyUp(e){ if(e.key===" "||e.code==="Space"){ spaceDown=false; document.getElementById("map-svg")?.classList.remove("space"); } }
+/** Reflect a keyboard brush-size change in the props island (slider + label) and the cursor. */
+function syncBrushUI(){
+  const r = mapTool==="land"?lmRadius:mapTool==="terrain"?terRadius:elevRadius;
+  const slider = document.getElementById(mapTool==="land"?"lm-radius":mapTool==="terrain"?"ter-radius":"elev-radius");
+  if(slider) slider.value=String(r);
+  const lab = document.getElementById(mapTool==="land"?"lm-radius-val":mapTool==="terrain"?"ter-radius-val":null);
+  if(lab) lab.textContent=r+"m";
+  const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",r*mapScale);
+}
 function finishDraw(){
   const pts=drawPts.filter((p,i)=> i===0 || p[0]!==drawPts[i-1][0] || p[1]!==drawPts[i-1][1]);
   drawPts=[];

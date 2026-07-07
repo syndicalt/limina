@@ -47,6 +47,11 @@
 
   /* body columns */
   .body { display:grid; grid-template-columns:250px 1fr 288px; overflow:hidden; }
+  /* Atlas is full-bleed: the doc nav and team rail collapse so the canvas owns the screen.
+     (Hidden panels leave the grid, so the track list must shrink to ONE column — with three
+     tracks kept, #center auto-places into the first, zero-width track.) */
+  .body.atlas { grid-template-columns:1fr; }
+  .body.atlas .sidebar, .body.atlas .rail { display:none; }
   .col { overflow:auto; height:100%; }
   .sidebar { background:var(--panel); border-right:1px solid var(--line); padding:16px 10px; }
   .rail { background:var(--panel); border-left:1px solid var(--line); padding:16px 14px; }
@@ -185,15 +190,20 @@
 
   /* map editor */
   .map-wrap { height:100%; display:flex; flex-direction:column; }
-  /* The coord readout is FIXED-width: its text changes on every mousemove, and any layout
-     feedback from it (re-wrap or scrollbar flicker) resizes the map svg under the user's brush.
-     Wrapping is allowed — with the coord width pinned, the row only re-wraps when the TOOLSET
-     changes (stable per mode), and narrow windows keep every tool reachable. */
-  .map-head { padding:12px 20px 8px; display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; flex:0 0 auto; }
-  .map-head h2 { font-family:var(--serif); margin:0; font-size:19px; font-weight:600; }
-  .map-head .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 9px; font:inherit; font-size:12.5px; }
-  .map-head .coord { font-family:ui-monospace,monospace; font-size:12px; color:var(--muted); white-space:nowrap; }
-  .map-head #map-coord { margin-left:auto; flex:0 0 185px; text-align:right; overflow:hidden; }
+  /* Excalidraw-style floating islands over the canvas: a centered tool island, a top-left map
+     island, a contextual props island beneath the tools, and a coord chip bottom-right. All are
+     ABSOLUTE overlays — nothing about them can resize the canvas, ever. */
+  .fi { position:absolute; display:flex; align-items:center; gap:4px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:5px 6px; box-shadow:0 6px 22px rgba(20,18,12,.16); z-index:6; }
+  .fi .tool { width:36px; height:36px; display:flex; align-items:center; justify-content:center; border:none; background:none; border-radius:9px; font-size:16px; line-height:1; cursor:pointer; color:var(--ink); padding:0; }
+  .fi .tool:hover { background:var(--panel-2); }
+  .fi .tool.on { background:var(--accent); color:#fff; }
+  .fi .sw { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:8px; padding:5px 8px; font:inherit; font-size:12.5px; max-width:150px; }
+  .fi .coord { font-family:ui-monospace,monospace; font-size:11.5px; color:var(--muted); white-space:nowrap; }
+  .fi-sep { width:1px; height:22px; background:var(--line); margin:0 3px; }
+  .fi-tools { top:12px; left:50%; transform:translateX(-50%); }
+  .fi-props { top:62px; left:50%; transform:translateX(-50%); gap:8px; padding:6px 10px; }
+  .fi-corner { top:12px; left:14px; }
+  .fi-coord { bottom:12px; right:14px; min-width:150px; justify-content:flex-end; font-family:ui-monospace,monospace; font-size:11.5px; color:var(--muted); padding:5px 10px; }
   .map-svg-wrap { flex:1; position:relative; overflow:hidden; }
   svg.map { width:100%; height:100%; display:block; background:var(--panel-2); cursor:default; touch-action:none; }
   svg.map.space { cursor:grab; }
@@ -217,7 +227,7 @@
   svg.map.adding { cursor:crosshair; }
   svg.map.lassoing { cursor:crosshair; }
   .lasso-rect { fill:var(--accent); fill-opacity:.08; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
-  .map-layers { position:absolute; top:12px; left:14px; width:210px; max-height:calc(100% - 60px); overflow:auto;
+  .map-layers { position:absolute; top:64px; left:14px; width:210px; max-height:calc(100% - 120px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12.5px; }
   .map-layers.empty { display:none; }
   .map-layers .lh { display:flex; align-items:center; gap:8px; padding:9px 11px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
@@ -256,7 +266,7 @@
     <div class="brand"><span class="mark" id="projname">Design Space</span><span class="sub">Design Space</span></div>
     <div class="tabs">
       <div class="tab active" data-view="docs">Documents</div>
-      <div class="tab" data-view="map">Map</div>
+      <div class="tab" data-view="map">Atlas</div>
       <div class="tab" data-view="graph">Mind-map</div>
       <div class="tab" data-view="build">Build</div>
     </div>

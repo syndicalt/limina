@@ -270,6 +270,8 @@ function surfaceCascade(impacts){
 
 function setTabs(){ document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.view===S.activeView)); }
 function showView(){
+  // Atlas is full-bleed: collapse the doc nav + team rail while the canvas is up.
+  document.querySelector(".body").classList.toggle("atlas", S.activeView==="map");
   if(S.activeView==="docs") openDoc(S.activeDoc || (S.state.docs[0]&&S.state.docs[0].name));
   else if(S.activeView==="map") renderMap();
   else if(S.activeView==="graph") renderGraph();
