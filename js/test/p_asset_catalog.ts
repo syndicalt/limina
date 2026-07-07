@@ -29,7 +29,7 @@ function makeHeadlessWorld(): WorldContext {
 const perms = resolveProfile("builder.readWrite");
 
 const STONE_WELL: CatalogEntry = {
-  id: "stone-well.glb",
+  id: "gate-test-well.glb",
   title: "Stone well",
   category: "prop",
   boundsM: [1.4, 1.6, 1.4],
@@ -53,14 +53,18 @@ async function readCatalog(registry: SkillRegistry, at: (tick: number) => Parame
   return (rc.result as { entries: CatalogEntry[] }).entries;
 }
 
-// 1. asset.catalog returns the 4 seed entries from assets/catalog.json with correct ids.
-const SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-manor-building.glb", "norman-church.glb"];
+// 1. asset.catalog returns the seed entries from assets/catalog.json — the four originals must be
+//    present (the manifest GROWS as approved session publishes are promoted into it; the gate is
+//    relative to the file, not a frozen count).
+const CORE_SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-manor-building.glb", "norman-church.glb"];
+let seedCount = 0;
 {
   const { registry, at } = freshCatalog("ses_catalog_seed");
   const entries = await readCatalog(registry, at, 1);
-  assert(entries.length === 4, `seed catalog must have 4 entries (got ${entries.length})`);
-  assert(entries.every((e) => SEED_IDS.includes(e.id)), `seed ids must match assets/catalog.json (got ${entries.map((e) => e.id).join(", ")})`);
-  assert(new Set(entries.map((e) => e.id)).size === 4, "seed ids must be unique");
+  seedCount = entries.length;
+  assert(seedCount >= 4, `seed catalog must have at least the 4 core entries (got ${seedCount})`);
+  assert(CORE_SEED_IDS.every((id) => entries.some((e) => e.id === id)), `core seed ids missing from assets/catalog.json (got ${entries.map((e) => e.id).join(", ")})`);
+  assert(new Set(entries.map((e) => e.id)).size === seedCount, "seed ids must be unique");
 }
 
 // 2. catalog.publish of a new entry -> asset.catalog now returns 5, with the new entry's fields intact.
@@ -69,11 +73,11 @@ const SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-man
   const pub = await registry.invoke("catalog.publish", STONE_WELL, at(1));
   assert(pub.success, `catalog.publish must succeed: ${JSON.stringify(pub.error)}`);
   assert((pub.result as { published: boolean }).published, "catalog.publish must report published:true");
-  assert((pub.result as { count: number }).count === 5, `catalog.publish count must be 5 (got ${(pub.result as { count: number }).count})`);
+  assert((pub.result as { count: number }).count === seedCount + 1, `catalog.publish count must be seed+1 (got ${(pub.result as { count: number }).count})`);
 
   const entries = await readCatalog(registry, at, 2);
-  assert(entries.length === 5, `catalog must have 5 entries after publish (got ${entries.length})`);
-  const well = entries.find((e) => e.id === "stone-well.glb");
+  assert(entries.length === seedCount + 1, `catalog must have seed+1 entries after publish (got ${entries.length})`);
+  const well = entries.find((e) => e.id === "gate-test-well.glb");
   assert(well !== undefined, "the published entry must appear in asset.catalog");
   assert(well!.title === STONE_WELL.title && well!.category === STONE_WELL.category, "published entry's fields must be intact");
   assert(well!.authoredBy === "claude-test-model", "authoredBy provenance must survive publish → catalog");
@@ -87,12 +91,12 @@ const SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-man
   const renamed: CatalogEntry = { ...STONE_WELL, title: "Old stone well" };
   const rep = await registry.invoke("catalog.publish", renamed, at(2));
   assert(rep.success, `re-publish must succeed: ${JSON.stringify(rep.error)}`);
-  assert((rep.result as { count: number }).count === 5, `re-publish must NOT duplicate (count still 5, got ${(rep.result as { count: number }).count})`);
+  assert((rep.result as { count: number }).count === seedCount + 1, `re-publish must NOT duplicate (got ${(rep.result as { count: number }).count})`);
 
   const entries = await readCatalog(registry, at, 3);
-  assert(entries.length === 5, `catalog must still have 5 entries after re-publish (got ${entries.length})`);
-  const matches = entries.filter((e) => e.id === "stone-well.glb");
-  assert(matches.length === 1, `re-publishing must replace, not duplicate (found ${matches.length} entries for stone-well.glb)`);
+  assert(entries.length === seedCount + 1, `catalog must still have seed+1 entries after re-publish (got ${entries.length})`);
+  const matches = entries.filter((e) => e.id === "gate-test-well.glb");
+  assert(matches.length === 1, `re-publishing must replace, not duplicate (found ${matches.length} entries for gate-test-well.glb)`);
   assert(matches[0].title === "Old stone well", `re-publish must update the title (got '${matches[0].title}')`);
 }
 

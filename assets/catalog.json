@@ -3,36 +3,173 @@
     "id": "cottage-authored.glb",
     "title": "Timber cottage",
     "category": "dwelling",
-    "boundsM": [7.16, 5.4, 5.336],
+    "boundsM": [
+      7.16,
+      5.4,
+      5.336
+    ],
     "qcRender": "qc/cottage-authored.png",
-    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
-    "tags": ["building", "medieval"]
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "tags": [
+      "building",
+      "medieval"
+    ]
   },
   {
     "id": "watchtower-authored.glb",
     "title": "Frontier watchtower",
     "category": "military",
-    "boundsM": [4.1, 9.4, 4.61],
+    "boundsM": [
+      4.1,
+      9.4,
+      4.61
+    ],
     "qcRender": "qc/watchtower-authored.png",
-    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
-    "tags": ["building", "medieval"]
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "tags": [
+      "building",
+      "medieval"
+    ]
   },
   {
     "id": "norman-manor-building.glb",
     "title": "Norman manor (muster hall)",
     "category": "civic",
-    "boundsM": [11.091, 13.451, 12.625],
+    "boundsM": [
+      11.091,
+      13.451,
+      12.625
+    ],
     "qcRender": "qc/norman-manor-building.png",
-    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
-    "tags": ["building", "medieval"]
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "tags": [
+      "building",
+      "medieval"
+    ]
   },
   {
     "id": "norman-church.glb",
     "title": "Norman parish church",
     "category": "religious",
-    "boundsM": [9.8, 19.35, 21.2],
+    "boundsM": [
+      9.8,
+      19.35,
+      21.2
+    ],
     "qcRender": "qc/norman-church.png",
-    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
-    "tags": ["building", "medieval"]
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "tags": [
+      "building",
+      "medieval"
+    ]
+  },
+  {
+    "id": "stone-well.glb",
+    "title": "Stone village well",
+    "category": "prop",
+    "boundsM": [
+      2.084,
+      2.55,
+      1.849
+    ],
+    "qcRender": "qc/stone-well.png",
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "authoredBy": "claude-sonnet-5",
+    "tags": [
+      "prop",
+      "medieval"
+    ]
+  },
+  {
+    "id": "tudor-cottage.glb",
+    "title": "Tudor cottage",
+    "category": "dwelling",
+    "boundsM": [
+      7.76,
+      10.763,
+      6.789
+    ],
+    "qcRender": "qc/tudor-cottage.png",
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "authoredBy": "claude-sonnet-5",
+    "tags": [
+      "building",
+      "medieval"
+    ]
+  },
+  {
+    "id": "veilstone-monolith.glb",
+    "title": "Veilstone monolith",
+    "category": "prop",
+    "boundsM": [
+      6.7,
+      12.523,
+      6.7
+    ],
+    "qcRender": "qc/veilstone-monolith.png",
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "authoredBy": "claude-sonnet-5",
+    "tags": [
+      "prop",
+      "fantasy",
+      "landmark"
+    ]
+  },
+  {
+    "id": "whisperlight-lantern.glb",
+    "title": "Whisperlight lantern post",
+    "category": "prop",
+    "boundsM": [
+      1.011,
+      5.201,
+      1.083
+    ],
+    "qcRender": "qc/whisperlight-lantern.png",
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "authoredBy": "claude-fable-5",
+    "tags": [
+      "prop",
+      "fantasy"
+    ]
   }
 ]

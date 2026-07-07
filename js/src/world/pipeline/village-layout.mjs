@@ -265,25 +265,36 @@ export function planVillage(sampler, direction, steering, radii, anchors) {
   //         farEnough() check — no separate "occupied" plumbing needed.
   const anchoredIdx = new Set();
   if (Array.isArray(anchors) && anchors.length > 0) {
+    // Flatten to (anchor, instance) pairs and site LARGEST footprints first: a church with an
+    // 11.7m footprint radius must claim its ground before 4.4m cottages hem it in — anchor
+    // iteration order must never decide whether a big building fits.
+    const jobs = [];
     for (const a of anchors) {
-      const [ax, az] = a.position;
       const isCluster = a.instanceIndices.length > 1;
-      const maxR = isCluster ? 16 : 8;
       for (const idx of a.instanceIndices) {
         const inst = instances[idx];
         if (inst === undefined) continue; // defensive: caller-resolved index out of range
-        const site = siteNearAnchor(sampler, ax, az, inst.radius, maxR, placed, isCluster ? [6, 14] : null);
-        if (site === null) {
-          throw new Error(
-            `village.build: anchor '${a.id}' at [${ax}, ${az}] has no buildable site within ${maxR} m ` +
-            `(sea level / slope reject, or footprint overlap) — refusing to silently relocate it`,
-          );
-        }
-        site.inst = inst;
-        site.anchorId = a.id;
-        anchoredIdx.add(idx);
-        placed.push(site);
+        jobs.push({ a, idx, inst, isCluster });
       }
+    }
+    jobs.sort((x, y) => y.inst.radius - x.inst.radius || x.idx - y.idx); // radius desc, idx tiebreak (deterministic)
+    for (const { a, idx, inst, isCluster } of jobs) {
+      const [ax, az] = a.position;
+      // The search radius scales with the building's OWN footprint: a fixed 8m can never site a
+      // building whose footprint radius exceeds 8m (the map-proof monastery: church r≈11.7m).
+      // Shifting ≤1.25× its own radius still reads as "at the anchor" on the map.
+      const maxR = Math.max(isCluster ? 16 : 8, inst.radius * 1.25);
+      const site = siteNearAnchor(sampler, ax, az, inst.radius, maxR, placed, isCluster ? [6, 14] : null);
+      if (site === null) {
+        throw new Error(
+          `village.build: anchor '${a.id}' at [${ax}, ${az}] has no buildable site within ${maxR.toFixed(1)} m ` +
+          `(footprint r=${inst.radius.toFixed(1)}m; sea level / slope reject, or footprint overlap) — refusing to silently relocate it`,
+        );
+      }
+      site.inst = inst;
+      site.anchorId = a.id;
+      anchoredIdx.add(idx);
+      placed.push(site);
     }
   }
 

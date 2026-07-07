@@ -18,7 +18,7 @@ try {
       canvas, width: 1280, height: 800, commands: scene.commands,
       forceWebGL: true,
       renderBaseline: scene.renderBaseline,
-      orbit: { center: cam.center, radius: cam.radius, height: cam.height },
+      orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin },
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
