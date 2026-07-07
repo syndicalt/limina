@@ -16,12 +16,25 @@ export async function postJSON(url, body) {
 const SAVE_DEBOUNCE_MS = 750;
 let saveTimer = null;
 let getPayload = null; // bound once by map.js: () => ({ maps, activeMapId })
+let mapsRev = null; // the on-disk revision this client's state derives from (compare-and-set)
+let onConflict = null; // bound by map.js: another session saved first → reload, don't clobber
 
 export function bindMapSaver(payloadFn) { getPayload = payloadFn; }
+export function bindSaveConflict(fn) { onConflict = fn; }
+export function setMapsRev(rev) { mapsRev = typeof rev === "string" ? rev : null; }
 
 async function doSave() {
   if (!getPayload) return;
-  try { await postJSON("/api/map-save", getPayload()); } catch { /* next schedule retries */ }
+  try {
+    const r = await fetch("/api/map-save", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...getPayload(), baseRev: mapsRev }),
+    });
+    const j = await r.json();
+    if (r.status === 409) { if (onConflict) onConflict(j); return; }
+    if (j && typeof j.mapsRev === "string") mapsRev = j.mapsRev;
+  } catch { /* next schedule retries */ }
 }
 
 export function scheduleMapSave() {
@@ -38,6 +51,8 @@ window.addEventListener("beforeunload", () => {
   if (!saveTimer || !getPayload) return;
   clearTimeout(saveTimer); saveTimer = null;
   // sendBeacon survives tab close where fetch may not; the server JSON-parses the body
-  // regardless of the beacon's text/plain content-type.
-  navigator.sendBeacon("/api/map-save", JSON.stringify(getPayload()));
+  // regardless of the beacon's text/plain content-type. It carries baseRev too: beacons are
+  // delivered late and unordered, so without compare-and-set a dying tab's beacon could land
+  // AFTER a newer session's saves and clobber them.
+  navigator.sendBeacon("/api/map-save", JSON.stringify({ ...getPayload(), baseRev: mapsRev }));
 });

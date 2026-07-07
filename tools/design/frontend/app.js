@@ -5,7 +5,7 @@
 
 import { esc, titleCaseName } from "./util.js";
 import { S } from "./store.js";
-import { postJSON } from "./net.js";
+import { postJSON, setMapsRev } from "./net.js";
 import { renderMap } from "./map.js";
 
 const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", cast:"☗", storyboard:"❧", "build-map":"⚑" };
@@ -294,6 +294,7 @@ document.getElementById("chat-input").addEventListener("keydown",e=>{ if(e.key==
 
 async function load(){
   const r = await fetch("/api/state"); S.state = await r.json();
+  setMapsRev(S.state.mapsRev); // compare-and-set token: every map save echoes the rev it derives from
   document.getElementById("projname").textContent = titleCaseName(S.state.project||"Design Space");
   document.title = document.getElementById("projname").textContent + " — Design Space";
   renderTeam(); renderNav();

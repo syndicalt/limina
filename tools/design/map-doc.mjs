@@ -35,9 +35,10 @@ export function defaultMapDoc(project) {
  *  otherwise (migratedFrom === MAPDOC_VERSION means the doc was already current). */
 export function migrateMapDoc(raw, project) {
   if (!raw || typeof raw !== "object" || !Array.isArray(raw.maps) || raw.maps.length === 0) {
-    return { doc: defaultMapDoc(project), migratedFrom: 0 };
+    return { doc: defaultMapDoc(project), migratedFrom: 0, repairedIds: 0 };
   }
   const migratedFrom = Number.isInteger(raw.version) ? raw.version : 1;
+  const repaired = { n: 0 };
   const maps = raw.maps
     .filter((m) => m && typeof m === "object")
     .map((m) => ({
@@ -46,7 +47,7 @@ export function migrateMapDoc(raw, project) {
       name: typeof m.name === "string" && m.name ? m.name : String(m.id || "map"),
       scope: typeof m.scope === "string" ? m.scope : "site",
       parent: m.parent ?? null,
-      features: Array.isArray(m.features) ? m.features : [],
+      features: repairFeatureIds(Array.isArray(m.features) ? m.features : [], repaired),
       units:
         m.units && typeof m.units === "object" && typeof m.units.unitsPerMeter === "number"
           ? m.units
@@ -61,7 +62,26 @@ export function migrateMapDoc(raw, project) {
   for (const [k, v] of Object.entries(raw)) {
     if (k !== "version" && k !== "activeMapId" && k !== "maps") extras[k] = v;
   }
-  return { doc: { version: MAPDOC_VERSION, activeMapId, maps, ...extras }, migratedFrom };
+  return { doc: { version: MAPDOC_VERSION, activeMapId, maps, ...extras }, migratedFrom, repairedIds: repaired.n };
+}
+
+/** Feature ids must be unique per map — sessions used to mint colliding ids
+ *  (performance.now-string-length seed), and every id-addressed operation (select, delete,
+ *  undo, lasso) resolves by FIRST match, so a collision makes editing the new feature destroy
+ *  the old one. Repair on read: the first holder keeps the id, later duplicates get a
+ *  deterministic `~n` suffix. Both features are kept; the input array is never mutated. */
+function repairFeatureIds(features, repaired) {
+  const seen = new Set();
+  return features.map((f) => {
+    if (!f || typeof f !== "object" || typeof f.id !== "string" || !seen.has(f.id)) {
+      if (f && typeof f === "object" && typeof f.id === "string") seen.add(f.id);
+      return f;
+    }
+    let id = f.id;
+    do { id = id + "~" + ++repaired.n; } while (seen.has(id));
+    seen.add(id);
+    return { ...f, id };
+  });
 }
 
 /** Serialize a doc for saving: always stamps the current version so every write upgrades the

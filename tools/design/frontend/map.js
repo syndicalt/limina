@@ -8,9 +8,9 @@
 // North draws UP on screen, so screen-y grows as z grows: w2s's z term is `320 + (z-panz)*scale`
 // (a `-` there is the old, mirrored +z=north convention that shipped a bug).
 
-import { esc } from "./util.js";
+import { esc, toast } from "./util.js";
 import { S } from "./store.js";
-import { postJSON, bindMapSaver, scheduleMapSave, flushMapSave } from "./net.js";
+import { postJSON, bindMapSaver, bindSaveConflict, scheduleMapSave, flushMapSave } from "./net.js";
 import * as H from "./map-commands.js";
 import * as EL from "./map-elevation.js";
 
@@ -30,8 +30,10 @@ let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mou
 let elevMode="raise", elevRadius=12, elevStrength=0.6, elevLevelY=4;
 let elevShadeUrl=null, elevShadeFor=null; // cached hillshade data-URL + "mapId:seaLevel:rev" key
 let elevRev=0; // bumped on every raster mutation (stroke dab, undo, redo)
-let uid = Math.floor(1e6*(''+performance.now()).length);
-const fid = () => "f" + (uid++);
+// Collision-proof feature ids. The old counter (seeded off performance.now's STRING LENGTH) made
+// separate sessions mint identical id sequences, so editing a new feature destroyed an old one
+// sharing its id — one of the three phantom-feature-loss causes. Never mint sequential ids here.
+const fid = () => "f-" + crypto.randomUUID();
 
 // One history for the whole session; each command carries its mapId (undo on map A while viewing
 // map B resolves A by id and still applies).
@@ -42,11 +44,24 @@ function commit(cmd, opts) {
   H.push(history, cmd, opts, resolveMap(cmd.mapId));
   scheduleMapSave(); redrawMap();
 }
-function doUndo() { if (H.undo(history, resolveMap)) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); } }
-function doRedo() { if (H.redo(history, resolveMap)) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); } }
+// Undo/redo announce what they touched: deep undo silently crossing from raster strokes into
+// feature adds (deleting them) is how a held Ctrl+Z ate saved features.
+function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
+function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
 
 // Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
 bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
+
+// A save bounced 409: another session saved since this tab loaded. Reload the authoritative
+// state instead of clobbering it — this tab's unsaved edits are dropped, visibly. Stale caches
+// (decoded rasters, session history) must go with them.
+bindSaveConflict(() => {
+  history.undo.length = 0; history.redo.length = 0;
+  for (const m of S.state.maps || []) EL.dropElevationCache(m.id);
+  elevRev++;
+  toast("Map changed in another session — reloading its version", 4000);
+  S.fn.reload();
+});
 
 function biomeDefs(){
   const p=(id,base,ex)=>'<pattern id="biome-'+id+'" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="'+base+'"/>'+ex+'</pattern>';
@@ -397,8 +412,10 @@ function bindMap(){
 }
 function mapKey(e){ if(S.activeView!=="map") return;
   const typing=/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||"");
-  if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) doRedo(); else doUndo(); return; }
-  if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); doRedo(); return; }
+  // No key-repeat undo: a held Ctrl+Z fires ~30/s and silently walks past raster strokes into
+  // deleting features added hours earlier. One press = one step.
+  if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.repeat) return; if(e.shiftKey) doRedo(); else doUndo(); return; }
+  if((e.ctrlKey||e.metaKey)&&!typing&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); if(e.repeat) return; doRedo(); return; }
   if((e.key===" "||e.code==="Space")&&!typing){ if(!spaceDown){ spaceDown=true; document.getElementById("map-svg")?.classList.add("space"); } e.preventDefault(); return; }
   if(e.key==="Escape"){ drawPts=[]; selFeat=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
   else if(e.key==="Enter"&&drawPts.length&&!typing) finishDraw();

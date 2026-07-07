@@ -317,5 +317,72 @@ function rasterDoc(elev) {
   check("(falsifiability) un-painting the hill is DETECTED by the same sample", Math.abs(flatHill - 24.5) >= 2.0);
 }
 
+// ---- 5. Data-safety fixes (phantom feature loss) ------------------------------------------------
+// Three proven loss mechanisms, each locked here: (a) colliding feature ids repaired on read,
+// (b) delete-undo can't mint a duplicate, (c) the server refuses a stale wholesale save (CAS).
+console.log("data safety:");
+{
+  // (a) id-collision repair: the live vault really held two features both named f18000000.
+  const dupDoc = clone(V1_FIXTURE);
+  dupDoc.maps[0].features.push({ id: "f1", type: "area", kind: "biome", biome: "forest", points: [[1, 1], [2, 1], [2, 2]] });
+  const { doc, repairedIds } = migrateMapDoc(dupDoc, "proj");
+  const ids = doc.maps[0].features.map((f) => f.id);
+  check("colliding ids repaired on read (all unique)", new Set(ids).size === ids.length);
+  check("both colliding features are KEPT (repair, not drop)", doc.maps[0].features.length === V1_FIXTURE.maps[0].features.length + 1);
+  check("first holder keeps its id; duplicate gets the suffix", ids[0] === "f1" && ids[ids.length - 1] !== "f1" && ids[ids.length - 1].startsWith("f1~"));
+  check("repairedIds reported for the server warn", repairedIds === 1);
+  check("(falsifiability) the unrepaired input FAILS the uniqueness check", new Set(dupDoc.maps[0].features.map((f) => f.id)).size !== dupDoc.maps[0].features.length);
+
+  // (b) delete-undo existence guard: if the feature is already back (conflict reload,
+  // interleaved edit), undo must NOT insert the snapshot again and mint a duplicate id.
+  const map = fixtureMap();
+  const h = H.createHistory();
+  const del = H.cmdDeleteFeature("m1", map, "f2");
+  H.push(h, del, {}, map);
+  map.features.push({ id: "f2", type: "line", kind: "road", points: [[0, 0], [1, 1]], color: "#111111" });
+  H.undo(h, () => map);
+  check("delete-undo skips re-insert when the id already exists", map.features.filter((f) => f.id === "f2").length === 1);
+}
+{
+  // (c) compare-and-set on /api/map-save — the PRIMARY loss cause (stale wholesale save
+  // clobbering newer disk state). Run the REAL server on a temp vault: a save echoing the
+  // current rev lands; a save with a stale rev is refused 409 and the disk stays untouched.
+  const { mkdtempSync: mkTmp, writeFileSync: wf, readFileSync: rf, rmSync: rm } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { spawn } = await import("node:child_process");
+  const vault = mkTmp(join(tmpdir(), "mapstudio-cas-"));
+  wf(join(vault, "maps.json"), JSON.stringify(serializeMapDoc(clone(V1_FIXTURE.maps), "primary"), null, 2));
+  const port = 41870 + (process.pid % 100);
+  const srv = spawn("node", [join(ROOT, "tools/design/serve-design.mjs"), vault, String(port)], { stdio: "ignore" });
+  try {
+    let rev = null;
+    for (let i = 0; i < 50 && rev === null; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      try { rev = (await (await fetch(`http://localhost:${port}/api/state`)).json()).mapsRev ?? null; } catch { /* booting */ }
+    }
+    check("server: /api/state carries mapsRev", typeof rev === "string" && rev.length > 0);
+    // Fresh-rev save (drops a feature deliberately — a LEGITIMATE newer-state write) lands.
+    const newer = clone(V1_FIXTURE.maps); newer[0].features = newer[0].features.slice(0, 2);
+    const ok = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: newer, activeMapId: "primary", baseRev: rev }) });
+    const okJ = await ok.json();
+    check("server: matching baseRev save lands (200 + new rev)", ok.status === 200 && okJ.saved === true && typeof okJ.mapsRev === "string" && okJ.mapsRev !== rev);
+    // THE BUG, replayed: a client still holding the OLD rev posts its stale full doc (which
+    // lacks nothing here — worse, it would RESURRECT/clobber). Must bounce 409, disk unchanged.
+    const stale = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary", baseRev: rev }) });
+    const staleJ = await stale.json();
+    const onDisk = JSON.parse(rf(join(vault, "maps.json"), "utf8"));
+    check("server: STALE baseRev save is refused with 409 + conflict + current rev", stale.status === 409 && staleJ.conflict === true && staleJ.mapsRev === okJ.mapsRev);
+    check("server: refused save left the disk untouched (2 features, not 4)", onDisk.maps[0].features.length === 2);
+    // A save with NO baseRev (old client / late beacon from a dead session) is also refused.
+    const bare = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary" }) });
+    check("server: rev-less save (late beacon shape) is refused", bare.status === 409);
+    // Falsifiability: the pre-CAS behavior — stale save landing — would flip the disk check.
+    check("(falsifiability) had the stale save landed, the disk check would FAIL", clone(V1_FIXTURE.maps)[0].features.length !== 2);
+  } finally {
+    srv.kill();
+    rm(vault, { recursive: true, force: true });
+  }
+}
+
 if (failures) { console.error(`\nmapstudio-gate: ${failures} FAILURE(S)`); process.exit(1); }
 console.log("\nmapstudio-gate: PASS");

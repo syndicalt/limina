@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
 
@@ -108,10 +109,24 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
 function loadMaps(project) {
   let data;
   try { data = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")); } catch { data = null; }
-  const { doc } = migrateMapDoc(data, project);
-  return { maps: doc.maps, activeMapId: doc.activeMapId };
+  const { doc, repairedIds } = migrateMapDoc(data, project);
+  if (repairedIds > 0) console.warn(`maps.json: repaired ${repairedIds} colliding feature id(s) on read`);
+  return { maps: doc.maps, activeMapId: doc.activeMapId, mapsRev: mapsRev() };
 }
-function saveMaps(maps, activeMapId) {
+// Opaque revision token for maps.json — a hash of the current file bytes. Every /api/state
+// response carries it and every save must echo it back (compare-and-set below).
+function mapsRev() {
+  try { return createHash("sha1").update(readFileSync(join(vaultDir, "maps.json"))).digest("hex").slice(0, 16); }
+  catch { return "0"; }
+}
+function saveMaps(maps, activeMapId, baseRev) {
+  // COMPARE-AND-SET: saves are wholesale (the client posts its entire in-memory doc), so a
+  // client holding stale state would silently clobber every feature saved since it loaded —
+  // the proven root cause of the phantom feature loss. A save whose baseRev doesn't match the
+  // on-disk revision is refused with a conflict; the client reloads and the stale tab's
+  // unsaved edits are dropped VISIBLY instead of newer disk state dying silently.
+  const cur = mapsRev();
+  if (typeof baseRev !== "string" || baseRev !== cur) return { conflict: true, mapsRev: cur };
   // The client only round-trips maps + activeMapId; re-read the on-disk doc so top-level markers
   // it doesn't know about (e.g. axes:"north-negz") survive every save.
   let prev = {};
@@ -136,7 +151,7 @@ function saveMaps(maps, activeMapId) {
     }
   } catch { /* evidence only — never block a save */ }
   writeFileSync(join(vaultDir, "maps.json"), JSON.stringify(doc, null, 2));
-  return { saved: true, maps: doc.maps.length };
+  return { saved: true, maps: doc.maps.length, mapsRev: mapsRev() };
 }
 
 // Create a new vault document (a readable, linkable markdown note).
@@ -300,8 +315,9 @@ createServer((req, res) => {
           return;
         }
         if (req.url === "/api/map-save") {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(saveMaps(p.maps, p.activeMapId)));
+          const r = saveMaps(p.maps, p.activeMapId, p.baseRev);
+          res.writeHead(r.conflict ? 409 : 200, { "content-type": "application/json" });
+          res.end(JSON.stringify(r));
           return;
         }
         if (req.url === "/api/doc-create") {

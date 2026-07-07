@@ -56,7 +56,7 @@ export function cmdAddFeature(mapId, feature) {
   return {
     label: "add " + (feature.kind || feature.type),
     mapId,
-    redo(map) { map.features.push(clone(snap)); },
+    redo(map) { if (idx(map, snap.id) < 0) map.features.push(clone(snap)); },
     undo(map) { const i = idx(map, snap.id); if (i >= 0) map.features.splice(i, 1); },
   };
 }
@@ -69,7 +69,9 @@ export function cmdDeleteFeature(mapId, map, fid) {
     label: "delete " + (snap.kind || snap.type),
     mapId,
     redo(m) { const j = idx(m, fid); if (j >= 0) m.features.splice(j, 1); },
-    undo(m) { m.features.splice(Math.min(i, m.features.length), 0, clone(snap)); },
+    // Existence guards on re-insert: after a conflict reload or interleaved edits the feature
+    // may already be back — inserting the snapshot anyway would mint a duplicate id.
+    undo(m) { if (idx(m, snap.id) < 0) m.features.splice(Math.min(i, m.features.length), 0, clone(snap)); },
   };
 }
 
@@ -81,7 +83,7 @@ export function cmdDeleteFeatures(mapId, map, fids) {
     label: "delete " + snaps.length + " features",
     mapId,
     redo(m) { m.features = m.features.filter((f) => !set.has(f.id)); },
-    undo(m) { for (const s of snaps) m.features.splice(Math.min(s.i, m.features.length), 0, clone(s.f)); },
+    undo(m) { for (const s of snaps) { if (idx(m, s.f.id) < 0) m.features.splice(Math.min(s.i, m.features.length), 0, clone(s.f)); } },
   };
 }
 
