@@ -29,7 +29,12 @@ const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 // in js/src/world/worldmap.ts (this pure .mjs can't import the .ts — the mapstudio gate asserts
 // the two stay identical) and the frontend palette in tools/design/frontend/map-paint.js.
 export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"];
-const RIVER_DEFAULT_WIDTH_M = 3;
+// River width scales with the zone span (clamped): a fixed 3m channel is narrower than one
+// rasterizer cell on a km-scale map — it aliases away entirely and the drawn river never renders.
+// ~0.8% of span reads as a proper river at the map's own scale (1400m zone -> ~11m channel).
+const RIVER_MIN_WIDTH_M = 3;
+const RIVER_MAX_WIDTH_M = 16;
+const riverWidthM = (sizeM) => Math.min(RIVER_MAX_WIDTH_M, Math.max(RIVER_MIN_WIDTH_M, Math.round(sizeM * 0.008)));
 const MOUNTAIN_BIOME_AMPLITUDE = 12;
 const GLYPH_AMPLITUDE = { mountain: 12, peak: 15, hills: 5 };
 
@@ -168,8 +173,10 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     // ELEVATION CARVES WATER: painted elevation below sea level removes land from the mask —
     // digging at the coast extends the sea (the Atlas display applies the identical rule, so
     // the coast the user sees is the coast that builds). Enclosed sub-sea pits become polygon
-    // holes and are dropped (lakes arrive with the water tools); the display shows them as
-    // land, matching. Only points INSIDE the elevation extent can carve (the sampler clamps to
+    // holes and are dropped from the land VECTORS — but they still render as LAKES: the
+    // rasterizer keeps decisively-sub-sea painted cells below the water plane (map-raster's
+    // paintedSubSea exemption), matching the hillshade's submerged tint. Only points INSIDE
+    // the elevation extent can carve (the sampler clamps to
     // its edge — without the bounds check, an edge dig would smear water outward forever).
     if (elevation) {
       const sampler = reliefGridSampler({
@@ -233,7 +240,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
         relief.push({ kind: "mountain", shape: { polygon: points }, amplitude: MOUNTAIN_BIOME_AMPLITUDE });
       }
     } else if (f.type === "line" && f.kind === "river") {
-      waterways.push({ points: toPoints(f.points), widthM: RIVER_DEFAULT_WIDTH_M, class: "river" });
+      waterways.push({ points: toPoints(f.points), widthM: Number(f.widthM) > 0 ? Number(f.widthM) : riverWidthM(sizeM), class: "river" });
     } else if (f.type === "line" && f.kind === "road") {
       routes.push({ points: toPoints(f.points), class: "road" });
     } else if (f.type === "line" && f.kind === "border") {

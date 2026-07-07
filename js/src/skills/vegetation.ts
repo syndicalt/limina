@@ -52,8 +52,10 @@ const scatterInput = z.object({
   terrain: z.string().optional(),
   /** Species to include (weighted equally). Defaults to all. */
   species: z.array(z.enum(["spruce", "pine", "birch"])).optional(),
-  /** Candidate samples per grid axis (placement density). */
-  density: z.number().int().min(1).max(64).default(16),
+  /** Candidate samples per grid axis (placement density). The ceiling matters on LARGE tiles:
+   *  at 64 a 1.4km tile gets ~24m candidate spacing — a painted forest region can never reach
+   *  canopy density. 192 allows ~7m spacing there; placements are instanced, thousands are cheap. */
+  density: z.number().int().min(1).max(192).default(16),
   /** Scatter salt — same seed reproduces the same forest; a new seed reshuffles it. */
   seed: z.number().int().default(1337),
   /** World-Y floor: no trees below this (e.g. above water). */
@@ -72,6 +74,10 @@ const scatterInput = z.object({
    *  settlement footprints village.build auto-registers for this terrain, so "scatter a
    *  forest and it avoids the village" just works with no manual data-flow. */
   exclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
+  /** Keep-IN discs (world XZ) — when set, a tree spawns ONLY inside at least one disc (the same
+   *  scatter region gate the lawn/grass skills use). Confines a forest to authored regions (e.g.
+   *  a map's painted forest polygons, disc-covered by the caller) instead of the whole tile. */
+  inclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
   /** Extra tags for the forest entity (it is always tagged "forest" + "vegetation"). */
   tags: z.array(z.string()).optional(),
 });
@@ -153,6 +159,7 @@ export function registerVegetationSkills(
           elevationMin: input.elevationMin ?? elevationMinDefault,
           ...(input.elevationMax !== undefined ? { elevationMax: input.elevationMax } : {}),
           ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
+          ...(input.inclusions !== undefined && input.inclusions.length > 0 ? { inclusions: input.inclusions } : {}),
         };
         return scatterAssets(layer.tile, input.seed, config);
       };

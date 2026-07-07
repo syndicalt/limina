@@ -343,46 +343,91 @@ createServer((req, res) => {
           if (minX === Infinity) { minX = -100; maxX = 100; minZ = -100; maxZ = 100; }
           const span = Math.max(maxX - minX, maxZ - minZ, 100);
           const size = Math.ceil(span * 1.25 / 50) * 50;
+          // Confine the peek's forest to the PAINTED forest polygons: disc-cover each polygon on a
+          // grid (the vegetation.scatter inclusion gate takes discs) so trees stand where the
+          // author painted woods and nowhere else.
+          const inRing = (x, z, ring) => {
+            let inside = false;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+              const [xi, zi] = ring[i], [xj, zj] = ring[j];
+              if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+            }
+            return inside;
+          };
+          const forestDiscs = [];
+          const discStep = Math.max(18, Math.round(span * 0.02));
+          for (const b of worldMap.biomes || []) {
+            if (b.biome !== "forest") continue;
+            let bMinX = Infinity, bMaxX = -Infinity, bMinZ = Infinity, bMaxZ = -Infinity;
+            for (const [x, z] of b.points) {
+              if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
+            }
+            for (let z = bMinZ; z <= bMaxZ; z += discStep) {
+              for (let x = bMinX; x <= bMaxX; x += discStep) {
+                if (inRing(x, z, b.points)) forestDiscs.push({ x: Math.round(x), z: Math.round(z), r: Math.round(discStep * 0.72) });
+              }
+            }
+          }
           const scene = {
             commands: [
               { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
               { kind: "skill", tool: "terrain.create", input: {
-                size, resolution: size > 600 ? 257 : 129, origin: [0, 0, 0], color: 5926970,
+                // 385 on big maps: a span-scaled river channel (~11m on a 1.4km zone) needs the
+                // cell size under its half-width or the carve aliases away (the 257 grid's ~7m
+                // cells swallowed every drawn river).
+                size, resolution: size > 600 ? 385 : 129, origin: [0, 0, 0], color: 5926970,
                 generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: 12 },
               } },
-              { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 2.1), color: 2841970 } },
+              ...(forestDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
+                // ~8m candidate spacing regardless of tile size — painted woods read as CANOPY
+                // from the orbit, not a dozen specks (the density knob is per-axis over the tile).
+                species: ["pine", "spruce"], density: Math.min(192, Math.max(32, Math.round(size / 8))),
+                coverage: 0.75, cluster: 0.5, seed: 11,
+                elevationMin: 1.0, inclusions: forestDiscs,
+              } }] : []),
+              // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
+              // reads as a sparkling seam against the void.
+              { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 4), color: 2841970 } },
             ],
-            // Whole-island aerial: camera at ~0.45/0.5 span with an explicit far (the default far
-            // plane clipped everything and the peek showed pure sky), and FogExp2 density scaled
-            // 1/distance so the far shore keeps ~80% clarity (transmittance exp(-(d*dist)^2)).
-            // 0.30/0.32 keeps the camera-to-terrain distance under the engine's ~600m fog knee,
-            // so the near island reads vivid and the far shore dissolves (the house look).
+            // Rotating setpiece: the orbit camera auto-spins (default 0.004 rad/frame ≈ one full
+            // revolution / ~26s) and engine-shots.mjs captures evenly-spaced yaw frames the Atlas
+            // lightbox cycles. 0.62/0.38 span frames the WHOLE island; the explicit far plane +
+            // FogExp2 density scaled 1/distance keep it vivid (transmittance ~0.93 at the center,
+            // far shore dissolving — the house look).
             camera: {
               center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
-              radius: Math.round(span * 0.30), height: Math.round(span * 0.32),
-              far: Math.round(span * 2.0), autoSpin: 0,
+              radius: Math.round(span * 0.62), height: Math.round(span * 0.38),
+              far: Math.round(span * 2.5), autoSpin: 0.004,
             },
             renderBaseline: {
               exposure: 1.05,
               sun: { color: 16770744, intensity: 4.6, direction: [-52, 34, 22] },
               hemisphere: { skyColor: 12374271, groundColor: 4872752, intensity: 1.8 },
               ambientIntensity: 0.66, ambientColor: 7036501,
-              fog: { color: 12242631, density: Math.round(0.45 / (span * 1.2) * 1e6) / 1e6 },
+              // `atmosphere.density` is the baseline's REAL haze knob (a `fog:` key is silently
+              // ignored by the deep-partial merge — the default 0.0011 haze then drowns the whole
+              // island at orbit distance). 0.5/span: ~88% clarity at the camera, far shore at
+              // ~65% — aerial depth without the milk. FogExp2: transmittance = exp(-(d*density)²).
+              atmosphere: { density: Math.round(0.5 / span * 1e6) / 1e6 },
             },
           };
           const sceneName = `peek-${project}-${worldMap.id}`;
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
-          const png = join(outDir, sceneName + ".png");
           const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
-          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-authored.mjs"), png, "/tools/preview/out/" + sceneName + ".json"], { stdio: ["ignore", "pipe", "pipe"] });
+          // 12 yaw frames × ~2.2s ≈ one full autoSpin revolution — the lightbox cycles them into
+          // a rotating setpiece. engine-shots.mjs shares engine-authored's harness (real GPU).
+          const FRAMES = 12;
+          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "2200", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
           let errTail = "";
           child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
           child.stdout.on("data", (c) => { errTail = (errTail + c).slice(-800); });
           child.on("exit", (code) => {
-            peekJobs.set(jobId, code === 0 && existsSync(png)
-              ? { status: "done", png: sceneName + ".png" }
+            const frames = [];
+            for (let i = 1; i <= FRAMES; i++) if (existsSync(join(outDir, `${sceneName}-${i}.png`))) frames.push(`${sceneName}-${i}.png`);
+            peekJobs.set(jobId, code === 0 && frames.length > 0
+              ? { status: "done", png: frames[0], frames }
               : { status: "error", error: "render exited " + code + ": " + errTail.slice(-300) });
           });
           peekJobs.set(jobId, { status: "running" });
@@ -462,7 +507,11 @@ createServer((req, res) => {
   if (req.method === "GET" && req.url.startsWith("/api/peek/")) {
     const job = peekJobs.get(basename(req.url.split("?")[0]));
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
-    res.end(JSON.stringify(job ? { ...job, url: job.png ? "/api/peek-image/" + job.png : undefined } : { status: "unknown" }));
+    res.end(JSON.stringify(job ? {
+      ...job,
+      url: job.png ? "/api/peek-image/" + job.png : undefined,
+      frameUrls: job.frames ? job.frames.map((f) => "/api/peek-image/" + f) : undefined,
+    } : { status: "unknown" }));
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/api/peek-image/")) {

@@ -441,6 +441,30 @@ console.log("elevation carves water:");
   const { worldMap: noneMap } = compileDesignMap({ mapsJsonText: doc(undefined), worldBibleText: WB_BIG });
   const aNone = noneMap.land.reduce((a, l) => a + shoelace(l.points), 0);
   check("(falsifiability) flat above-sea elevation carves nothing", Math.abs(aFlat - aNone) / aNone < 0.005);
+
+  // LAKES: an ENCLOSED sub-sea pit (not connected to the sea) stays inside the land polygon
+  // (holes are dropped) but must still RASTERIZE below the water plane — the paintedSubSea
+  // exemption from the vertical-separation land floor. Without it the pit is silently flattened
+  // to seaLevel+0.8 and the drawn lake never renders (the P5 UAT bug).
+  const mkLake = () => {
+    const cells = new Uint8Array(EW * EW);
+    const minY = -16, maxY = 48;
+    cells.fill(Math.round((2 - minY) / (maxY - minY) * 255));
+    const deep = Math.round((-6 - minY) / (maxY - minY) * 255);
+    for (let r = 26; r <= 32; r++) for (let c = 26; c <= 32; c++) cells[r * EW + c] = deep; // pit near the disc center
+    return { w: EW, h: EW, rect, minY, maxY, data: btoa(String.fromCharCode(...cells)) };
+  };
+  const { worldMap: lakeMap } = compileDesignMap({ mapsJsonText: doc(mkLake()), worldBibleText: WB_BIG });
+  const aLake = lakeMap.land.reduce((a, l) => a + shoelace(l.points), 0);
+  check("lake: enclosed pit does NOT change the land polygon (hole dropped)", Math.abs(aLake - aFlat) / aFlat < 0.01);
+  const { heights: lh, paintMat: lp } = rasterizeWorldMap(lakeMap, { size: 800, resolution: 201, seed: 7 });
+  const lakeIdx = (wx, wz) => Math.round((wz + 400) / 4) * 201 + Math.round((wx + 400) / 4);
+  // Pit rows 26-32 of a 64² raster over [-400,400] -> world ≈ [-70..-4]; probe its middle.
+  const li = lakeIdx(-35, -35);
+  check(`lake: enclosed sub-sea pit rasterizes BELOW the water plane (got ${lh[li].toFixed(1)}m)`, lh[li] < -1);
+  check("lake: lake floor gets seabed paint (no bare checker under water)", lp[li] === 1);
+  const { heights: fh2 } = rasterizeWorldMap(flatMap, { size: 800, resolution: 201, seed: 7 });
+  check(`(falsifiability) same cell WITHOUT the pit stays land above sea (got ${fh2[li].toFixed(1)}m)`, fh2[li] > 0);
 }
 
 // ---- 6. P2: painted biomes (raster -> per-class polygons -> ground paint) -----------------------
@@ -464,6 +488,7 @@ console.log("biome raster (painter P2):");
   disc(80, 80, 40, BIOME_CLASSES.indexOf("grass") + 1);
   disc(180, 80, 30, BIOME_CLASSES.indexOf("tundra") + 1);
   disc(120, 180, 30, BIOME_CLASSES.indexOf("mountain") + 1);
+  disc(60, 190, 25, BIOME_CLASSES.indexOf("swamp") + 1);
   const rect = { x0: -400, z0: -400, w: 800, h: 800 };
   const doc = (extraFeature) => JSON.stringify({
     version: 2, activeMapId: "m", axes: "north-negz",
@@ -483,7 +508,8 @@ console.log("biome raster (painter P2):");
   const { worldMap: bm, warnings: bw } = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_BIG });
   const byKind = (k) => bm.biomes.filter((b) => b.biome === k);
   check("compile: three painted classes emit three biome polygons", byKind("grass").length === 1 && byKind("tundra").length === 1 && byKind("mountain").length === 1);
-  check("compile: PRECEDENCE — vector biome feature ignored with a warning", bw.some((w) => w.includes("decoy-b") && w.includes("biome raster")) && byKind("swamp").length === 0);
+  // (the ONE swamp polygon is the PAINTED disc; the vector decoy contributed nothing)
+  check("compile: PRECEDENCE — vector biome feature ignored with a warning", bw.some((w) => w.includes("decoy-b") && w.includes("biome raster")) && byKind("swamp").length === 1);
   check("compile: painted mountain hints relief (no painted elevation)", bm.relief.some((r) => r.kind === "mountain" && r.shape.polygon));
   const cellM = 800 / (BW - 1);
   const shoelace = (pts) => Math.abs(pts.reduce((a, p, i) => { const q = pts[(i + 1) % pts.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
@@ -500,6 +526,15 @@ console.log("biome raster (painter P2):");
   }
   check(`terrain: painted tundra rasterizes as SNOW paint (${snow} cells)`, snow > 50);
   check(`terrain: painted grass rasterizes as grass paint (${grassPaint} cells)`, grassPaint > 100);
+  // Swamp must rasterize as its OWN murk paint (id 6) — aliased to dirt it was invisible as
+  // wetland (the P5 UAT bug). The gate is also the .ts/.mjs sync point for the new id.
+  let murk = 0;
+  if (paintMat) for (const v of paintMat) { if (v === 6) murk++; }
+  check(`terrain: painted swamp rasterizes as MURK paint (${murk} cells)`, murk > 50);
+  const renderSrc = readFileSync(join(ROOT, "js/src/terrain/render.ts"), "utf8");
+  const editSrc = readFileSync(join(ROOT, "js/src/skills/terrain-edit.ts"), "utf8");
+  check("sync: PAINT_ALBEDO has a 6-indexed murk entry (render.ts)", /\/\/ 6 murk/.test(renderSrc));
+  check("sync: PAINT_MATERIALS maps murk: 6 (terrain-edit.ts)", /murk: 6/.test(editSrc));
   // Falsifiability: an all-grass raster must produce ZERO snow at the same sampler.
   const flatCells = new Uint8Array(BW * BW).fill(BIOME_CLASSES.indexOf("grass") + 1);
   const { worldMap: gm } = compileDesignMap({
@@ -509,6 +544,29 @@ console.log("biome raster (painter P2):");
   const { paintMat: gp } = rasterizeWorldMap(gm, { size: 800, resolution: 201, seed: 7 });
   let snow2 = 0; if (gp) for (const v of gp) { if (v === 5) snow2++; }
   check("(falsifiability) un-painting tundra removes ALL snow at the same probe", snow2 === 0);
+}
+
+// ---- 6a. River width scales with the zone span --------------------------------------------------
+console.log("river width:");
+{
+  const doc = (widthM) => JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      features: [
+        { id: "o1", type: "area", kind: "outline", points: [[-90, -90], [90, -90], [90, 90], [-90, 90]] },
+        { id: "r1", type: "line", kind: "river", points: [[-80, 0], [80, 0]], ...(widthM ? { widthM } : {}) },
+      ],
+    }],
+  });
+  const WB_BIG = WB_TEXT.replace("size_m: 200", "size_m: 1400");
+  const wSmall = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_TEXT }).worldMap.waterways[0].widthM;
+  const wBig = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_BIG }).worldMap.waterways[0].widthM;
+  check(`river: default width scales with the zone span (200m -> ${wSmall}m, 1400m -> ${wBig}m)`, wSmall === 3 && wBig === 11);
+  check("(falsifiability) a fixed default would be DETECTED (big-zone river must widen)", wBig > wSmall);
+  const wExplicit = compileDesignMap({ mapsJsonText: doc(9), worldBibleText: WB_BIG }).worldMap.waterways[0].widthM;
+  check("river: an explicit per-feature widthM wins over the scaled default", wExplicit === 9);
 }
 
 // ---- 6b. P3: stamps -> asset anchors (schema + hash, three-place rule) --------------------------

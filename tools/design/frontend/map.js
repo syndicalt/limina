@@ -186,7 +186,7 @@ export function renderMap(){
       +'<button class="tool" id="map-import" title="Import a compiled world map as paint layers"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v11"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>'
       +'<button class="tool" id="map-compile" title="Compile this map to a world asset (buildable + importable)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 21V10"/><path d="M7 14l5-5 5 5"/><path d="M4 3h16"/></svg></button>'
       +(zoneSizeM()!==null?'<input type="number" id="zone-size" class="sw" value="'+zoneSizeM()+'" min="50" step="50" style="width:76px" title="World size in meters (zone.size_m in the World Bible) — compile refuses maps larger than 2x this"><span class="coord">m</span>':'')
-      +'<button class="tool" id="map-peek" title="Peek in 3D — compile + render one real-GPU frame of this map"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 17l6-8 4 5 3-3 5 6z"/><circle cx="8.5" cy="6.5" r="1.6"/></svg></button>'
+      +'<button class="tool" id="map-peek" title="Peek in 3D — compile + render a rotating real-GPU setpiece of this map"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 17l6-8 4 5 3-3 5 6z"/><circle cx="8.5" cy="6.5" r="1.6"/></svg></button>'
       +'<span class="fi-sep"></span>'
       +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
       +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
@@ -723,29 +723,39 @@ async function doCompile(retried){
 // ── 3D peek (P5): compile + render one real-GPU frame of this map, shown in a lightbox ──────
 let peekPoll=null;
 async function doPeek(){
-  if(!confirm("Render a 3D peek of this map? (~15–60s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
+  if(!confirm("Render a 3D peek of this map? (~30–90s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
   await flushMapSave();
   let j;
   try{ j=await postJSON("/api/peek",{mapId:activeMapId}); }
   catch(e){ toast("peek failed: "+String(e), 6000); return; }
   if(j.error){ toast("peek failed: "+j.error, 6000); return; }
   if(j.editorHostUp) toast("rendering… note: the editor host is running — if its browser tab is open, the render may destabilize it", 6000);
-  else toast("rendering 3D peek… (15–60s)", 5000);
+  else toast("rendering 3D peek… (30–90s)", 5000);
   if(peekPoll) clearInterval(peekPoll);
   peekPoll=setInterval(async()=>{
     try{
       const s=await (await fetch("/api/peek/"+j.job)).json();
-      if(s.status==="done"){ clearInterval(peekPoll); peekPoll=null; showPeek(s.url); }
+      if(s.status==="done"){ clearInterval(peekPoll); peekPoll=null; showPeek(s.frameUrls&&s.frameUrls.length?s.frameUrls:[s.url]); }
       else if(s.status==="error"||s.status==="unknown"){ clearInterval(peekPoll); peekPoll=null; toast("peek failed: "+(s.error||s.status), 7000); }
     }catch{ /* keep polling */ }
   }, 2500);
 }
-function showPeek(url){
+// Rotating setpiece: the job pre-renders evenly-spaced yaw frames of the auto-spinning orbit;
+// cycle them (preloaded) so the peek reads as a turntable, not a single oddball still.
+function showPeek(urls){
   document.getElementById("peek-box")?.remove();
+  const t=Date.now();
+  const imgs=urls.map(u=>{ const im=new Image(); im.src=u+"?t="+t; return im; });
   const d=document.createElement("div"); d.id="peek-box";
   d.style.cssText="position:fixed;inset:0;background:rgba(12,11,9,.75);display:flex;align-items:center;justify-content:center;z-index:60;cursor:zoom-out";
-  d.innerHTML='<img src="'+url+'?t='+Date.now()+'" style="max-width:92%;max-height:92%;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.55)" alt="3D peek render">';
-  d.onclick=()=>d.remove();
+  const img=document.createElement("img");
+  img.src=imgs[0].src;
+  img.style.cssText="max-width:92%;max-height:92%;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.55)";
+  img.alt="3D peek render";
+  d.appendChild(img);
+  let k=0, spin=null;
+  if(imgs.length>1) spin=setInterval(()=>{ k=(k+1)%imgs.length; if(imgs[k].complete) img.src=imgs[k].src; }, 220);
+  d.onclick=()=>{ if(spin) clearInterval(spin); d.remove(); };
   document.body.appendChild(d);
 }
 

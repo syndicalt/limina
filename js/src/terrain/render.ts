@@ -357,6 +357,7 @@ const PAINT_ALBEDO: (THREE.Color | null)[] = [
   new THREE.Color(0x756657),  // 3 rock
   new THREE.Color(0x6f5334),  // 4 dirt
   new THREE.Color(0xe2e7ec),  // 5 snow (matches the eroded pipeline's snow band)
+  new THREE.Color(0x49512e),  // 6 murk — dark wet olive for marsh/swamp ground
 ];
 
 /** Blend a tile's paint channel into an existing per-vertex `color` attribute (the one

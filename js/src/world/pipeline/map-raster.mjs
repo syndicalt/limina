@@ -249,7 +249,7 @@ function biomePaintId(biome) {
     case "grass": return 2;
     case "forest": return 2;
     case "mountain": return 3;
-    case "swamp": return 4;
+    case "swamp": return 6; // murk (PAINT_ALBEDO[6] / PAINT_MATERIALS.murk) — dirt read as generic brown, invisible as wetland
     case "desert": return 1;
     case "tundra": return 5; // snow (PAINT_ALBEDO[5] / PAINT_MATERIALS.snow)
     case "water": return undefined; // never paints; it's below sea level anyway.
@@ -321,8 +321,16 @@ export function rasterizeWorldMap(worldMap, opts) {
       if (!Number.isFinite(coastD)) coastD = shoreBand; // no land at all: treat as "at the shore".
       let h;
       let localAmp = 0;
+      // Painted-elevation LAKES: the painted raster is authoritative (the elevation-carves-water
+      // contract), so a land cell the author dug DECISIVELY below the water plane keeps its sub-sea
+      // depth — the clamp below flips it to the sea ceiling instead of the land floor, and the
+      // water plane fills it. Enclosed pits thereby render as lakes (the 2D hillshade already
+      // shows them submerged). The 0.5 threshold matches the sea ceiling: shallower digs stay
+      // land, so noise can never flicker a cell across the plane.
+      let paintedSubSea = false;
       if (gridSample) {
         h = gridSample(wx, wz);
+        paintedSubSea = inLand && h < seaLevel - 0.5;
       } else {
         const t = smoothstep01(coastD / shoreBand);
         h = inLand ? lerp(seaLevel + 0.4, landBase, t) : lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
@@ -369,7 +377,7 @@ export function rasterizeWorldMap(worldMap, opts) {
       //    actual shoreline (where the lerp above legitimately crosses the plane) are exempt, so
       //    the crossing itself stays a narrow ~shoreBand-wide surf strip, not a wide dead band. ─
       if (coastD > shoreBand) {
-        if (inLand) { if (h < seaLevel + 0.8) h = seaLevel + 0.8; }
+        if (inLand && !paintedSubSea) { if (h < seaLevel + 0.8) h = seaLevel + 0.8; }
         else { if (h > seaLevel - 0.5) h = seaLevel - 0.5; }
       }
 
@@ -414,8 +422,8 @@ export function rasterizeWorldMap(worldMap, opts) {
       // water shader's job, not the terrain paint's. Weight only tapers slightly with depth.
       // (Land cells with no biome/coastal hit stay unpainted; the elevation-color ramp already
       // gives them a sensible grass/rock base, so there's no bare-checker risk on land.)
-      if (!inLand) {
-        const seabedId = 1; // sand, uniform across shallows and deep open sea
+      if (!inLand || paintedSubSea) {
+        const seabedId = 1; // sand, uniform across shallows, deep open sea AND painted lake floors
         const seabedW = coastD < coastalBand ? 0.85 : 0.55;
         if (seabedW > matW) { matId = seabedId; matW = seabedW; }
       }
