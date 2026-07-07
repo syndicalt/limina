@@ -61,3 +61,7 @@ assets/trees/manifest.json
 # Preview render outputs (binary screenshots)
 tools/preview/out/
 /quarantine/*.glb
+/fable-findings.md
+
+# Alpha packaging output (tools/package/make-alpha.mjs)
+dist-alpha/
