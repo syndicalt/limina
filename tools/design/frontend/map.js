@@ -35,6 +35,8 @@ let lmMode="land", lmRadius=100;
 let terKind="grass", terRadius=60;
 // Stamp tool state (Painter P3): the REAL asset catalog, fetched once; the armed assetId.
 let catalog=null, stampAssetId=null, selStamp=null;
+// Layer visibility (P4): session-only view state — hiding a layer never touches the doc.
+const hiddenLayers=new Set();
 const catalogById=()=>{ const m=new Map(); for(const c of catalog||[]) m.set(c.id,c); return m; };
 async function loadCatalog(){
   if(catalog) return;
@@ -259,9 +261,11 @@ function redrawMap(){
       const eff=currentEff(em, lm);
       const coast=LM.coastPolygons(lm, em.id, eff);
       maskHasLand=coast.length>0;
-      const [lx,ly]=w2s(lm.rect.x0,lm.rect.z0);
-      landLayer='<image id="land-img" href="'+LM.renderLandImage(lm, em.id, eff)+'" x="'+lx+'" y="'+ly+'" width="'+(lm.rect.w*mapScale)+'" height="'+(lm.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
-      coastLayer=coast.map(p=>'<polygon points="'+poly(p.points)+'" fill="none" stroke="'+LM.coastStroke+'" stroke-width="2.5" stroke-linejoin="round" opacity=".9" style="pointer-events:none"/>').join("");
+      if(!hiddenLayers.has("landmass")){
+        const [lx,ly]=w2s(lm.rect.x0,lm.rect.z0);
+        landLayer='<image id="land-img" href="'+LM.renderLandImage(lm, em.id, eff)+'" x="'+lx+'" y="'+ly+'" width="'+(lm.rect.w*mapScale)+'" height="'+(lm.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
+        coastLayer=coast.map(p=>'<polygon points="'+poly(p.points)+'" fill="none" stroke="'+LM.coastStroke+'" stroke-width="2.5" stroke-linejoin="round" opacity=".9" style="pointer-events:none"/>').join("");
+      }
     }
   }
   // Painted biome ground cover (Painter P2): textured, dithered, alpha-clipped to the landmass.
@@ -273,7 +277,7 @@ function redrawMap(){
     const bio=LM.biomesOf(em.id) || (em.rasters&&em.rasters.biomes ? LM.ensureBiomes(em) : null);
     if(bio){
       bioHasContent=LM.biomesHaveContent(bio);
-      if(bioHasContent){
+      if(bioHasContent&&!hiddenLayers.has("biomes")){
         const lm2=LM.landmassOf(em.id);
         const [bx,by]=w2s(bio.rect.x0,bio.rect.z0);
         terrainLayer='<image id="terrain-img" href="'+LM.renderBiomesImage(bio, em.id, (lm2&&currentEff(em,lm2))||lm2)+'" x="'+bx+'" y="'+by+'" width="'+(bio.rect.w*mapScale)+'" height="'+(bio.rect.h*mapScale)+'" preserveAspectRatio="none" style="pointer-events:none"/>';
@@ -285,7 +289,7 @@ function redrawMap(){
   // only CREATED by an actual brush stroke (never by merely selecting the tool — creation flips
   // build-time precedence away from glyph/biome relief hints, so it must be an explicit act).
   let elevLayer="";
-  {
+  if(!hiddenLayers.has("elevation")){
     const em=activeMap();
     const e=EL.elevationOf(em.id) || (em.rasters&&em.rasters.elevation ? EL.ensureElevation(em, mapMarkers()) : null);
     if(e){
@@ -306,7 +310,7 @@ function redrawMap(){
   if((activeMap().stamps||[]).length>0 && catalog===null) loadCatalog();
   const byId=catalogById();
   const stampPx=(s)=>{ const c=byId.get(s.assetId); const wm=(c&&c.boundsM?Math.max(c.boundsM[0],c.boundsM[2]):16)*(s.scale||1); return Math.max(14,wm*mapScale); };
-  const stampsLayer=(activeMap().stamps||[]).map(s=>{
+  const stampsLayer=hiddenLayers.has("stamps")?"":(activeMap().stamps||[]).map(s=>{
     const [sx,sy]=w2s(s.x,s.z);
     const c=byId.get(s.assetId);
     const px=stampPx(s);
@@ -372,6 +376,7 @@ function renderLayers(){
   if((m.rasters&&m.rasters.landmass)||LM.landmassOf(m.id)) paints.push(["landmass","Landmass (painted)","#dccfa6"]);
   if((m.rasters&&m.rasters.biomes)||LM.biomesOf(m.id)) paints.push(["biomes","Terrain (painted)","#4a7a45"]);
   if((m.rasters&&m.rasters.elevation)||EL.elevationOf(m.id)) paints.push(["elevation","Elevation (painted)","#8fae7a"]);
+  if((m.stamps||[]).length>0) paints.push(["stamps","Stamps ("+m.stamps.length+")","#a25151"]);
   // Always name the active map — landing on an empty child map with a bare canvas and no
   // label reads as data loss (it happened).
   el.className="map-layers";
@@ -380,9 +385,15 @@ function renderLayers(){
     return;
   }
   el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+' ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
-    +paints.map(p=>'<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span><button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button></div>').join("")
+    +paints.map(p=>'<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span>'
+      +'<button class="eye'+(hiddenLayers.has(p[0])?" off":"")+'" data-eye="'+p[0]+'" title="Show / hide this layer (view only)">'+(hiddenLayers.has(p[0])?"◌":"👁")+'</button>'
+      +(p[0]==="stamps"?"":'<button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button>')+'</div>').join("")
     +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
   const clr=document.getElementById("lyr-clear"); if(clr) clr.onclick=clearMapFeatures;
+  el.querySelectorAll(".lr .eye[data-eye]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation();
+    const k=b.dataset.eye;
+    if(hiddenLayers.has(k)) hiddenLayers.delete(k); else hiddenLayers.add(k);
+    redrawMap(); });
   el.querySelectorAll(".lr .x[data-paint]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deletePaintLayer(b.dataset.paint); });
   el.querySelectorAll(".lr .x[data-i]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteFeatById(curFeatures()[+b.dataset.i].id,false); });
   el.querySelectorAll(".lr[data-i]").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
