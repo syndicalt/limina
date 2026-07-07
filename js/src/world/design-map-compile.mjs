@@ -9,6 +9,9 @@
 // authoring convention), scaled by the map's own `units` metadata if present (default
 // {units:"m", unitsPerMeter:1} — i.e. raw coordinate == meters). meters = raw / unitsPerMeter.
 //
+// AXIS CONVENTION: +x = east, NORTH = -z (right-handed y-up — see worldmap.ts's header). The
+// map tool still draws north as screen-up; only the world-space sign of "north" is -z, not +z.
+//
 // DETERMINISM: no provenance.compiledAt timestamp is stamped by default — a real wall-clock
 // value would make "compile the same vault twice" produce two different files, which is exactly
 // what p_worldmap_compile.ts proves does NOT happen. provenance.sourceHash instead pins identity

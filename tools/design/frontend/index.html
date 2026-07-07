@@ -587,8 +587,12 @@ function biomeDefs(){
 }
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest", drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
 const SVGNS="http://www.w3.org/2000/svg";
-function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 - (z-mapPan.z)*mapScale]; }
-function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z - (sy-320)/mapScale]; }
+// COORDINATE CONVENTION: north = -z, east = +x (right-handed, matches THREE's -z-forward
+// default). North still draws UP on screen, so screen-y must grow as z grows (not shrink):
+// w2s's z term is `320 + (z-panz)*scale` (was `320 - ...` under the old, mirrored +z=north
+// convention), and s2w's inverse flips sign to match.
+function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 + (z-mapPan.z)*mapScale]; }
+function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z + (sy-320)/mapScale]; }
 function evtVB(e,svg){
   // Map client px -> viewBox coords via the SVG's own transform, so it stays exact
   // regardless of the letterboxing preserveAspectRatio adds when the element's aspect

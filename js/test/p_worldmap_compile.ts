@@ -77,15 +77,15 @@ assert(goodVerify.expected === worldMapA.provenance.contentHash, "verifyWorldMap
   assert(tamperedVerify.actual !== tamperedVerify.expected, "tampered actual (recomputed) hash must differ from the stale embedded hash");
 }
 
-// ── 5. Anchors include the watchtower at its world-bible position [30, 12]. ────────────────────
+// ── 5. Anchors include the watchtower at its world-bible position [30, -12] (north = -z). ──────
 {
   const watchtower = parsed.anchors.find((a) => a.id === "watchtower");
   assert(watchtower !== undefined, "anchors must include a 'watchtower' entry sourced from world-bible locations");
   assert(watchtower!.kind === "military", `watchtower anchor kind must be "military" (got ${watchtower!.kind})`);
   assert(watchtower!.source === "world-bible", `watchtower anchor source must be "world-bible" (got ${watchtower!.source})`);
   assert(
-    watchtower!.position[0] === 30 && watchtower!.position[1] === 12,
-    `watchtower anchor position must match world-bible.md's [30, 12] (got ${JSON.stringify(watchtower!.position)})`,
+    watchtower!.position[0] === 30 && watchtower!.position[1] === -12,
+    `watchtower anchor position must match world-bible.md's [30, -12] (got ${JSON.stringify(watchtower!.position)})`,
   );
 }
 
@@ -95,5 +95,5 @@ ops.op_log(
   "contentHash across repeated compiles); the compiled output zod-parses as WorldMap v1 (1 land ring, 3 biomes, " +
   "3 waterways, 2 routes) and verifyWorldMap reports ok:true against its own embedded provenance.contentHash; " +
   "a one-byte tamper of a land point flips verifyWorldMap to ok:false; and anchors carry the watchtower at its " +
-  "world-bible position [30, 12] with kind=military, source=world-bible.",
+  "world-bible position [30, -12] with kind=military, source=world-bible.",
 );

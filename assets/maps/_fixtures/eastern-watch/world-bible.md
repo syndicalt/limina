@@ -6,7 +6,7 @@ setting:
   premise: The last manned waypost on the frontier holds the line out of habit and duty while the Blight presses against its perimeter.
 zone:
   size_m: 200
-  origin: hamlet center [0,0]; +x = east (toward the Blight), +z = north
+  origin: hamlet center [0,0]; north = -z (screen-up in the map tool); +x = east (toward the Blight)
 regions:
   - id: the-hamlet
     name: The Hamlet
@@ -32,28 +32,28 @@ locations:
     name: Cottages
     kind: dwelling
     region: the-hamlet
-    position: [-19, 8]
+    position: [-19, -8]
     build: unbuilt
     note: A small cluster west of the hall, where the few remaining families live.
   - id: monastery
     name: Monastery
     kind: religious
     region: the-hamlet
-    position: [-35, 25]
+    position: [-35, -25]
     build: unbuilt
     note: A quiet order that stayed when the rest left. Set apart to the northwest.
   - id: watchtower
     name: Watchtower
     kind: military
     region: the-hamlet
-    position: [30, 12]
+    position: [30, -12]
     build: unbuilt
     note: On the east rise. The focal vertical; overlooks the Blight frontier.
   - id: signal-fire
     name: Signal Fire
     kind: marker
     region: the-blight-edge
-    position: [55, 5]
+    position: [55, -5]
     build: unbuilt
     note: The last warning beacon, kept lit by rota. The edge of the settled world.
   - id: perimeter
@@ -91,15 +91,15 @@ and a warden who still walks the rounds. See [[concept]] for why we're here and
 
 ## Locations
 
-Positions are meters from the hamlet center (`+x` east toward the Blight, `+z` north).
+Positions are meters from the hamlet center (`+x` east toward the Blight, north = `-z`).
 
 | Location | Kind | Where | Role |
 | --- | --- | --- | --- |
 | [[world-bible#Longhall\|Longhall]] | civic | center `[0,0]` | Grundir's hall, the anchor |
-| [[world-bible#Cottages\|Cottages]] | dwelling | west `[-25,8]` | the remaining families |
-| [[world-bible#Monastery\|Monastery]] | religious | NW `[-35,25]` | the order that stayed |
-| [[world-bible#Watchtower\|Watchtower]] | military | E rise `[30,12]` | overlooks the frontier |
-| [[world-bible#Signal Fire\|Signal Fire]] | marker | E perimeter `[55,5]` | the warning beacon |
+| [[world-bible#Cottages\|Cottages]] | dwelling | west `[-25,-8]` | the remaining families |
+| [[world-bible#Monastery\|Monastery]] | religious | NW `[-35,-25]` | the order that stayed |
+| [[world-bible#Watchtower\|Watchtower]] | military | E rise `[30,-12]` | overlooks the frontier |
+| [[world-bible#Signal Fire\|Signal Fire]] | marker | E perimeter `[55,-5]` | the warning beacon |
 | [[world-bible#Perimeter Markers\|Perimeter]] | marker | E edge `[60,0]` | the line itself |
 
 ### Longhall

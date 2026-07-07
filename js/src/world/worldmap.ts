@@ -9,6 +9,11 @@
 // compiler (tools/map/compile-designmap.mjs) is the only thing that should ever produce one of
 // these; the terrain/vegetation/structure build pipeline consumes it read-only.
 //
+// THE AXIS CONVENTION: +x = east, NORTH = -z (right-handed, y-up — matches THREE's default
+// -z-forward camera and east × north = up: (1,0,0) × (0,0,-1) = (0,1,0)). A +z=north pairing
+// would be left-handed and renders every north-up 2D map as an exact MIRROR of its 3D build —
+// the bug this convention was locked to prevent. The map tool still draws north as screen-UP.
+//
 // PROVENANCE + THE HASH SEAM: stableStringifyWorldMap / worldMapContentHash live in
 // worldmap-hash.mjs (a plain .mjs, not here) because they must be byte-identical whether called
 // from this engine module (.ts importing .mjs — the established terrain-heightfield.mjs pattern)

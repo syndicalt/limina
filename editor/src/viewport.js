@@ -1477,10 +1477,10 @@ window.addEventListener("blur", () => {
 });
 
 // --- North compass ---------------------------------------------------------------------------------
-// The map tool is north-up (+z); the 3D orbit camera is not. Without a compass, a yawed viewport
-// reads as a MIRRORED world when compared against the drawn map (a real UAT confusion — the island
-// was reported "inverted" when the camera was simply facing south). The needle points at world
-// north (+z) as seen on screen: θ = atan2(-forward.x, forward.z), CSS-clockwise.
+// The map tool is north-up (north = -z, east = +x); the 3D orbit camera is not. Without a compass, a
+// yawed viewport reads as a MIRRORED world when compared against the drawn map (a real UAT confusion
+// — the island was reported "inverted" when the camera was simply facing south). The needle points at
+// world north (-z) as seen on screen: θ = atan2(-forward.x, -forward.z), CSS-clockwise.
 let compassEl = null, compassNeedle = null, compassLast = 999;
 function ensureCompass() {
   if (compassEl) return;
@@ -1506,7 +1506,7 @@ function ensureCompass() {
     // Degenerate straight-down view: fall back to camera up for the screen frame.
     const fx = Math.abs(d.x) + Math.abs(d.z) < 1e-4 ? cam.up.x : d.x;
     const fz = Math.abs(d.x) + Math.abs(d.z) < 1e-4 ? cam.up.z : d.z;
-    const deg = Math.atan2(-fx, fz) * 180 / Math.PI;
+    const deg = Math.atan2(-fx, -fz) * 180 / Math.PI;
     if (Math.abs(deg - compassLast) > 0.5) {
       compassNeedle.style.transform = `rotate(${deg.toFixed(1)}deg)`;
       compassLast = deg;

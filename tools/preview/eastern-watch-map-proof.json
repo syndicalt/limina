@@ -33,14 +33,14 @@
           "siting": { "terrace": "minimal", "yard": "lawn", "lane": "dirt", "clearing": "commons", "clearingMargin": 15 },
           "anchors": [
             { "id": "longhall", "position": [0, 0], "role": "hall", "count": 1 },
-            { "id": "cottages", "position": [-19, 8], "role": "cottage", "count": 3 },
-            { "id": "monastery", "position": [-35, 25], "role": "monastery", "count": 1 },
-            { "id": "watchtower", "position": [30, 12], "role": "watchtower", "count": 1 }
+            { "id": "cottages", "position": [-19, -8], "role": "cottage", "count": 3 },
+            { "id": "monastery", "position": [-35, -25], "role": "monastery", "count": 1 },
+            { "id": "watchtower", "position": [30, -12], "role": "watchtower", "count": 1 }
           ]
         },
         "seed": 11
       }
     }
   ],
-  "camera": { "center": [26, 0, 20], "radius": 15, "height": 130, "autoSpin": 0 }
+  "camera": { "center": [26, 0, -20], "radius": 15, "height": 130, "autoSpin": 0 }
 }

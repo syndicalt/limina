@@ -347,16 +347,16 @@ export function rasterizeWorldMap(worldMap, opts) {
         if (bankW > matW) { matId = 1; matW = bankW; }
       }
 
-      // Full seabed paint: every OPEN-SEA cell gets a material (sand near shore -> dirt at
-      // mid-depth -> rock in the deep) so paintW is never ~0 out there — an unpainted cell
-      // falls back to a bare checker material, which is the "checkerboard seabed" defect this
-      // kills. (Land cells with no biome/coastal hit stay unpainted; the elevation-color ramp
-      // already gives them a sensible grass/rock base, so there's no bare-checker risk on land.)
+      // Full seabed paint: every OPEN-SEA cell gets a material so paintW is never ~0 out there —
+      // an unpainted cell falls back to a bare checker material, which is the "checkerboard
+      // seabed" defect this kills. UNIFORM sand (not dirt/rock) — dirt/rock read as gray blobs
+      // through the water (a real UAT complaint, "gray platform"); depth darkening is the
+      // water shader's job, not the terrain paint's. Weight only tapers slightly with depth.
+      // (Land cells with no biome/coastal hit stay unpainted; the elevation-color ramp already
+      // gives them a sensible grass/rock base, so there's no bare-checker risk on land.)
       if (!inLand) {
-        let seabedId, seabedW;
-        if (coastD < coastalBand) { seabedId = 1; seabedW = 0.85; } // sand shallows
-        else if (coastD < coastalBand * 3) { seabedId = 4; seabedW = 0.65; } // dirt mid-depth
-        else { seabedId = 3; seabedW = 0.65; } // rock, deep open sea
+        const seabedId = 1; // sand, uniform across shallows and deep open sea
+        const seabedW = coastD < coastalBand ? 0.85 : 0.55;
         if (seabedW > matW) { matId = seabedId; matW = seabedW; }
       }
 
