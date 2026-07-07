@@ -337,7 +337,10 @@ function bindMap(){
   }
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
-    const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
+    // Keep the world point under the cursor fixed: sy = 320+(z-panz)*scale, so BOTH axes correct
+    // with += (a -= on z was a leftover mirror from the +z=north era — it made zoom drift and
+    // pan feel inverted vertically after the north=-z convention fix).
+    const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z+=(ny-my)/mapScale; redrawMap(); },{passive:false});
   svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; if(e.detail>=2) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
     if(spaceDown||e.button===1){ mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); return; }
     if(mapTool==="elev"){
@@ -406,7 +409,7 @@ function refreshElevImage(){
 }
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
-  if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
+  if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz-(my-mapDrag.my)/mapScale; redrawMap(); }
   else if(mapDrag.type==="elev"){
     // Interpolate dabs between the last and current pointer position so fast strokes stay solid.
     const [wx,wz]=s2w(mx,my); const [lx,lz]=mapDrag.lastW;
