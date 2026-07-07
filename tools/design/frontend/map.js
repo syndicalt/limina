@@ -151,8 +151,8 @@ export function renderMap(){
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
     lasso:"drag a box to select features + markers, then delete them",
-    elev:"drag to "+elevMode+" terrain (one stroke = one undo step) · drag the dashed border to move the region, corners to resize · unpainted terrain stays invisible · painting REPLACES glyph/biome relief at build time",
-    land:"drag to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · drag the dashed border to move the region, corners to resize · painting REPLACES the traced coast at build time",
+    elev:"drag anywhere to "+elevMode+" terrain (one stroke = one undo step) · unpainted terrain stays invisible · painting REPLACES glyph/biome relief at build time",
+    land:"drag anywhere to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · painting REPLACES the traced coast at build time",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
     area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
     river:"click to add river points · double-click to finish · Esc to cancel",
@@ -253,35 +253,14 @@ function redrawMap(){
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   const elevCursor = (mapTool==="elev"||mapTool==="land") ? '<circle id="elev-cursor" r="'+((mapTool==="land"?lmRadius:elevRadius)*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
-  // The active paint layer's REGION is user-adjustable while its tool is armed: dashed outline
-  // drags to move, corner handles resize (both one undo step). Cells never change — the rect is
-  // pure world-space metadata, so moving slides the painted layer and resizing stretches it.
-  // Elevation and landmass share the overlay (only one tool is armed at a time).
-  let elevRegion="";
-  if(mapTool==="elev"||mapTool==="land"){
-    const er=regionRaster();
-    if(er){
-      const [rx,ry]=w2s(er.rect.x0,er.rect.z0);
-      const rw=er.rect.w*mapScale, rh=er.rect.h*mapScale;
-      const corners=[["nw",rx,ry],["ne",rx+rw,ry],["sw",rx,ry+rh],["se",rx+rw,ry+rh]];
-      elevRegion='<g id="elev-region">'
-        // The hit stroke must be PAINTED (opacity 0.004, imperceptible): Chrome's real-event hit
-        // testing skips a fully-transparent stroke even under pointer-events:stroke, while
-        // elementFromPoint honors it — a genuinely painted stroke hits in both paths.
-        +'<rect id="elev-rect-hit" x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'" fill="none" stroke="#000" stroke-opacity="0.004" stroke-width="14" style="cursor:move;pointer-events:stroke"/>'
-        +'<rect x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="8 5" opacity=".8" style="pointer-events:none"/>'
-        +corners.map(c=>'<g class="elev-hn" data-corner="'+c[0]+'" style="cursor:'+(c[0]==="nw"||c[0]==="se"?"nwse-resize":"nesw-resize")+'">'
-          // painted near-invisible halo = a ~13px grab radius around each corner handle
-          +'<circle cx="'+c[1]+'" cy="'+c[2]+'" r="13" fill="#000" fill-opacity="0.004"/>'
-          +'<rect x="'+(c[1]-6)+'" y="'+(c[2]-6)+'" width="12" height="12" fill="#fff" stroke="var(--accent)" stroke-width="1.5"/></g>').join("")
-        +'</g>';
-    }
-  }
-  svg.innerHTML = biomeDefs() + ocean + landLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevRegion + elevCursor;
+  // No visible paint-region chrome: the raster's world rect is INTERNAL bookkeeping (it maps
+  // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
+  // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons
+  // for user-managed extent are gone.
+  svg.innerHTML = biomeDefs() + ocean + landLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevCursor;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") bindFeatureEditing(svg);
-  bindElevRegion(svg);
   hint();
 }
 function featLabel(f){
@@ -447,12 +426,7 @@ function bindMap(){
       const em=activeMap();
       const created=!EL.hasStoredElevation(em);
       const er=EL.ensureElevation(em, mapMarkers());
-      // The region is a working extent, never a wall: a stroke starting outside auto-grows it
-      // (new cells fill with the flat-y=0 value so growth doesn't dig pits).
-      const flat=Math.round((0-er.minY)/(er.maxY-er.minY)*255);
-      const grew=LM.growRasterToInclude(er,x,z,elevRadius,flat);
-      if(grew) elevRev++;
-      if(created||grew) redrawMap(); // layer + region overlay reflect the new extent
+      if(created) redrawMap(); // first stroke: the hillshade layer appears under the cursor
       mapDrag={type:"elev",mapId:activeMapId,raster:er,before:er.cells.slice(),bbox:null,lastW:[x,z]};
       elevDab(er,x,z,mapDrag); return; }
     if(mapTool==="land"){
@@ -460,7 +434,6 @@ function bindMap(){
       let lm=LM.landmassOf(em.id)||LM.ensureLandmass(em);
       let created=false;
       if(!lm){ lm=LM.createLandmass(em, mapMarkers()); created=true; }
-      const grew=!created&&LM.growRasterToInclude(lm,x,z,lmRadius,0);
       // First stroke = ONE command carrying the whole grid: `before` is the EMPTY mask, so the
       // outline seed rasterized by createLandmass undoes together with the stroke (the doc
       // returns to pure-vector precedence — no un-commanded mutation survives).
@@ -468,7 +441,7 @@ function bindMap(){
       mapDrag={type:"land",mapId:activeMapId,raster:lm,before,
         bbox:created?{c0:0,r0:0,c1:lm.w-1,r1:lm.h-1}:null,lastW:[x,z]};
       landDabAt(lm,x,z,mapDrag);
-      if(created||grew) redrawMap(); // the land layer + region overlay appear under the cursor
+      if(created) redrawMap(); // the land layer appears under the cursor
       return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)})); return; }
@@ -510,6 +483,12 @@ function finishDraw(){
   commit(H.cmdAddFeature(activeMapId, feature)); }
 // ── landmass stroke helpers (Painter P1) ─────────────────────────────────────────────────────
 function landDabAt(lm,wx,wz,drag){
+  // The extent is never a wall: a dab outside it grows the raster mid-stroke, co-resampling
+  // the stroke's undo snapshot so undo stays exact; the bbox widens to the full grid.
+  if(LM.growRasterToInclude(lm,wx,wz,lmRadius,0,[drag.before])){
+    drag.bbox={c0:0,r0:0,c1:lm.w-1,r1:lm.h-1};
+    redrawMap();
+  }
   const bb=LM.landDab(lm,wx,wz,{mode:lmMode,radiusM:lmRadius});
   if(bb){
     drag.bbox = drag.bbox
@@ -531,6 +510,13 @@ function refreshLandImage(){
 }
 // ── elevation stroke helpers ─────────────────────────────────────────────────────────────────
 function elevDab(er,wx,wz,drag){
+  // Same never-a-wall contract as landmass; new cells fill with the flat-y=0 value so growth
+  // never digs pits at the old edge.
+  const flat=Math.round((0-er.minY)/(er.maxY-er.minY)*255);
+  if(LM.growRasterToInclude(er,wx,wz,elevRadius,flat,[drag.before])){
+    drag.bbox={c0:0,r0:0,c1:er.w-1,r1:er.h-1};
+    elevRev++; redrawMap();
+  }
   const bb=EL.brushDab(er,wx,wz,{mode:elevMode,radiusM:elevRadius,strength:elevStrength,levelY:elevLevelY});
   if(bb){
     drag.bbox = drag.bbox
@@ -538,22 +524,6 @@ function elevDab(er,wx,wz,drag){
       : bb;
     elevRev++; refreshElevImage();
   }
-}
-// The raster whose region overlay/drag the armed tool controls (elev + land share the UI).
-function regionRaster(){
-  if(mapTool==="elev") return EL.elevationOf(activeMap().id);
-  if(mapTool==="land") return LM.landmassOf(activeMap().id);
-  return null;
-}
-function bindElevRegion(svg){
-  const hit=svg.querySelector("#elev-rect-hit");
-  if(hit) hit.addEventListener("mousedown",(e)=>{ e.stopPropagation();
-    const er=regionRaster(); if(!er) return;
-    const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
-    mapDrag={type:"elevrect-move",mapId:activeMapId,raster:er,start:{...er.rect},wx0:wx,wz0:wz}; });
-  svg.querySelectorAll(".elev-hn").forEach(hn=>hn.addEventListener("mousedown",(e)=>{ e.stopPropagation();
-    const er=regionRaster(); if(!er) return;
-    mapDrag={type:"elevrect-size",mapId:activeMapId,raster:er,start:{...er.rect},corner:hn.dataset.corner}; }));
 }
 let elevRafPending=false;
 function refreshElevImage(){
@@ -582,21 +552,6 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
     const steps=Math.max(1,Math.ceil(dist/stepM));
     for(let k=1;k<=steps;k++) landDabAt(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
     mapDrag.lastW=[wx,wz]; }
-  else if(mapDrag.type==="elevrect-move"){
-    const [wx,wz]=s2w(mx,my); const er=mapDrag.raster;
-    er.rect.x0=mapDrag.start.x0+Math.round(wx-mapDrag.wx0);
-    er.rect.z0=mapDrag.start.z0+Math.round(wz-mapDrag.wz0);
-    redrawMap(); }
-  else if(mapDrag.type==="elevrect-size"){
-    const [wx,wz]=s2w(mx,my); const er=mapDrag.raster; const s=mapDrag.start;
-    // Anchor the opposite corner; clamp the span so the region can't collapse.
-    const ax=mapDrag.corner.includes("w")?s.x0+s.w:s.x0;
-    const az=mapDrag.corner.includes("n")?s.z0+s.h:s.z0;
-    const w=Math.max(40,Math.round(Math.abs(wx-ax))), h=Math.max(40,Math.round(Math.abs(wz-az)));
-    er.rect.x0=Math.round(Math.min(ax, mapDrag.corner.includes("w")?ax-w:ax+w));
-    er.rect.z0=Math.round(Math.min(az, mapDrag.corner.includes("n")?az-h:az+h));
-    er.rect.w=w; er.rect.h=h;
-    redrawMap(); }
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
   else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.points.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
@@ -624,12 +579,6 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
-  if(d.type==="elevrect-move"||d.type==="elevrect-size"){
-    if(JSON.stringify(d.raster.rect)!==JSON.stringify(d.start)){
-      d.raster.dirty=true;
-      commit(H.cmdSetRasterRect(d.mapId,d.raster,d.start,{...d.raster.rect}),{applied:true});
-    }
-    return; }
   if(d.type==="elev"||d.type==="land"){
     // One stroke = one undo step: bbox slices of the pre-stroke snapshot vs the current cells.
     if(d.bbox){
