@@ -163,12 +163,43 @@ function startPolling() {
     }
   };
   void loop();
+  startApprovalBadgePoll();
 }
 
 function stopPolling() {
   state.pollActive = false;
   if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = undefined; }
   if (state.polling) { clearInterval(state.polling); state.polling = undefined; }
+  stopApprovalBadgePoll();
+}
+
+// Approval BADGE poll — runs on a slow fixed cadence (10s) for as long as a client is connected,
+// REGARDLESS of whether the Approval panel is open. refreshAll's fast poll only fetches
+// approval.list while the panel is open (cheap-when-idle), which means a proposal that lands while
+// the panel is collapsed was invisible until the user happened to open it. This loop keeps the
+// header's count badge (#approval-count, already rendered in the collapsed accordion head) current
+// so a new pending proposal is visible without opening the panel — the whole point of a badge.
+const APPROVAL_BADGE_POLL_MS = 10_000;
+function startApprovalBadgePoll() {
+  stopApprovalBadgePoll();
+  state.badgePollActive = true;
+  const loop = async () => {
+    if (!state.badgePollActive || !state.client) return;
+    try {
+      const list = await state.client.callTool("approval.list", {});
+      state.approvals = (list && list.pending) || [];
+      renderApprovals();
+    } catch (e) {
+      logLine("approval badge poll error: " + (e && e.message ? e.message : String(e)), "err");
+    } finally {
+      if (state.badgePollActive) state.badgePollTimer = setTimeout(() => { void loop(); }, APPROVAL_BADGE_POLL_MS);
+    }
+  };
+  void loop();
+}
+function stopApprovalBadgePoll() {
+  state.badgePollActive = false;
+  if (state.badgePollTimer) { clearTimeout(state.badgePollTimer); state.badgePollTimer = undefined; }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,25 +493,92 @@ function stepLabel(ev) {
 // (c) APPROVAL queue.
 // ---------------------------------------------------------------------------
 // QC-render lightbox: click a small approval thumbnail to review it near-fullscreen. Click
-// anywhere or press Esc to close. One shared overlay, lazily built.
+// anywhere (without dragging) or press Esc to close. One shared overlay, lazily built.
+//
+// Task #66 (360° turntable): when the proposal carries qcTurntable (8 yaw-rotated frames from
+// architect-run.mjs --turntable), the SAME lightbox becomes a turntable viewer — ←/→ and
+// drag-to-rotate cycle through the frames, which are preloaded up front so cycling is instant.
 let qcLightbox = null;
-function openQcLightbox(src) {
-  if (!qcLightbox) {
-    qcLightbox = document.createElement("div");
-    qcLightbox.style.cssText = "position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;" +
-      "background:rgba(0,0,0,.82);cursor:zoom-out";
-    const big = document.createElement("img");
-    big.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.8)";
-    qcLightbox.appendChild(big);
-    qcLightbox._img = big;
-    qcLightbox.onclick = () => { qcLightbox.style.display = "none"; };
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && qcLightbox.style.display !== "none") qcLightbox.style.display = "none";
-    });
-    document.body.appendChild(qcLightbox);
+function ensureQcLightbox() {
+  if (qcLightbox) return qcLightbox;
+  qcLightbox = document.createElement("div");
+  qcLightbox.style.cssText = "position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;" +
+    "background:rgba(0,0,0,.82);cursor:zoom-out";
+  const big = document.createElement("img");
+  big.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.8)";
+  qcLightbox.appendChild(big);
+  qcLightbox._img = big;
+  qcLightbox._frames = null;
+  qcLightbox._idx = 0;
+  qcLightbox._dragged = false;
+  qcLightbox.onclick = () => {
+    // A drag ending over the overlay also fires a click — swallow that one so rotating the
+    // turntable doesn't also close it. A plain click (no drag) closes, as before.
+    if (qcLightbox._dragged) { qcLightbox._dragged = false; return; }
+    qcLightbox.style.display = "none";
+  };
+  window.addEventListener("keydown", (e) => {
+    if (qcLightbox.style.display === "none") return;
+    if (e.key === "Escape") { qcLightbox.style.display = "none"; return; }
+    if (!qcLightbox._frames) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); qcShowFrame(qcLightbox._idx + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); qcShowFrame(qcLightbox._idx - 1); }
+  });
+  // Drag-to-rotate: horizontal drag steps through frames like spinning a physical turntable.
+  const DRAG_STEP_PX = 24;
+  let dragging = false, dragStartX = 0, dragStartIdx = 0;
+  big.addEventListener("pointerdown", (e) => {
+    if (!qcLightbox._frames) return;
+    dragging = true;
+    qcLightbox._dragged = false;
+    dragStartX = e.clientX;
+    dragStartIdx = qcLightbox._idx;
+    big.style.cursor = "grabbing";
+    big.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  });
+  big.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - dragStartX;
+    if (Math.abs(dx) >= DRAG_STEP_PX) qcLightbox._dragged = true;
+    qcShowFrame(dragStartIdx - Math.trunc(dx / DRAG_STEP_PX));
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    big.style.cursor = qcLightbox._frames ? "grab" : "";
+    try { big.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+  };
+  big.addEventListener("pointerup", endDrag);
+  big.addEventListener("pointercancel", endDrag);
+  document.body.appendChild(qcLightbox);
+  return qcLightbox;
+}
+
+function qcShowFrame(idx) {
+  const frames = qcLightbox?._frames;
+  if (!frames || frames.length === 0) return;
+  const n = ((idx % frames.length) + frames.length) % frames.length;
+  qcLightbox._idx = n;
+  qcLightbox._img.src = frames[n];
+}
+
+// `frames`, when a non-empty array of resolved image URLs, turns this open into a turntable
+// (←/→ + drag cycle through them, preloaded so cycling never blocks on the network); otherwise
+// this is the plain single-image lightbox it always was.
+function openQcLightbox(startSrc, frames) {
+  const box = ensureQcLightbox();
+  if (Array.isArray(frames) && frames.length > 0) {
+    for (const src of frames) { const preload = new Image(); preload.src = src; }
+    box._frames = frames;
+    box._img.style.cursor = "grab";
+    qcShowFrame(0);
+  } else {
+    box._frames = null;
+    box._img.style.cursor = "";
+    box._img.src = startSrc;
   }
-  qcLightbox._img.src = src;
-  qcLightbox.style.display = "flex";
+  box.style.display = "flex";
 }
 
 function renderApprovals() {
@@ -511,13 +609,28 @@ function renderApprovals() {
     // "qc/cottage-authored.png"); `qcChecks` flags the objective axes (theme is the human's call).
     const input = a.input && typeof a.input === "object" ? a.input : {};
     if (typeof input.qcRender === "string" && input.qcRender.length > 0) {
+      // Task #66: a non-empty qcTurntable means this proposal has a full 360° set (architect-run
+      // --turntable) — the thumbnail gets a ⟳ badge and the lightbox becomes a turntable viewer.
+      const turntableFrames = Array.isArray(input.qcTurntable) && input.qcTurntable.length > 0
+        ? input.qcTurntable.map((p) => "/assets/" + String(p).replace(/^\/+/, ""))
+        : undefined;
+      const wrap = el("div", null);
+      wrap.style.cssText = "position:relative;margin:6px 0";
       const img = document.createElement("img");
       img.src = "/assets/" + input.qcRender.replace(/^\/+/, "");
       img.alt = "QC render";
-      img.title = "click to enlarge";
-      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;margin:6px 0;background:#0b0b0b;cursor:zoom-in";
-      img.onclick = () => openQcLightbox(img.src);
-      card.appendChild(img);
+      img.title = turntableFrames ? "click to enlarge — 360° turntable (←/→ or drag to rotate)" : "click to enlarge";
+      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;background:#0b0b0b;cursor:zoom-in";
+      img.onclick = () => openQcLightbox(img.src, turntableFrames);
+      wrap.appendChild(img);
+      if (turntableFrames) {
+        const badge = el("span", null, "⟳");
+        badge.title = `${turntableFrames.length}-frame 360° turntable`;
+        badge.style.cssText = "position:absolute;top:4px;right:4px;background:rgba(0,0,0,.7);color:#fff;" +
+          "font-size:13px;line-height:1;padding:3px 5px;border-radius:10px;pointer-events:none";
+        wrap.appendChild(badge);
+      }
+      card.appendChild(wrap);
     }
     if (input.qcChecks && typeof input.qcChecks === "object") {
       const row = el("div", "approval-qc-checks");

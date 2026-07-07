@@ -27,6 +27,10 @@ const catalogEntrySchema = z.object({
   boundsM: z.tuple([z.number(), z.number(), z.number()]),
   /** /assets-relative path to the asset's GPU QC render (falls back gracefully if it 404s). */
   qcRender: z.string().optional(),
+  /** 360° turntable frames (task #66): /assets-relative paths to 8 yaw-rotated QC renders shot by
+   *  architect-run.mjs --turntable, in rotation order. Optional — most entries only have the one
+   *  hero qcRender; when present, the approval card's lightbox cycles through these on ←/→ or drag. */
+  qcTurntable: z.array(z.string()).max(16).optional(),
   /** Automated QC pre-check flags (e.g. textured/scale/integrity/theme); null = not run. */
   qcChecks: z.record(z.string(), z.union([z.boolean(), z.null()])).optional(),
   /** Provenance: which model/agent authored the asset (e.g. "claude-fable-5"). The reviewer sees

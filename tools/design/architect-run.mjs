@@ -9,6 +9,9 @@
 //   3. render  — generate a QC scene spec (terrain + the placed asset, camera framed from the
 //                measured bounds), shoot assets/qc/<base><sfx>.png on the real GPU through
 //                tools/preview/engine-authored.mjs, and fail if the PNG is missing/tiny.
+//   3b. turntable (opt-in, --turntable) — reuse the same framed spec but rotate asset.place's
+//                yaw by k*45° for k in 0..7, shooting 8 more frames assets/qc/<base><sfx>-a{k}.png.
+//                Gives the reviewer a 360° look at the bake instead of one hero angle.
 //   4. propose — connect to the live editor host as profile "builder.review" and call
 //                catalog.publish. That profile's mutating calls are HELD by the approval queue,
 //                so the EXPECTED outcome is a pending_approval rejection: the proposal now sits
@@ -17,10 +20,12 @@
 // Stages run in order and stop on the first failure (non-zero exit). Nothing is published
 // directly — a human approves the held catalog.publish in the editor.
 //
-// Usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>]
+// Usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--turntable]
 //   category: prop|dwelling|civic|military|religious (catalog.publish enum)
 //   --out-suffix: appended to the qc-spec + PNG basenames only (e.g. -piperun), so a dry run
 //                 never overwrites the asset's real QC render.
+//   --turntable: also shoot 8 yaw frames (task #66) and include their paths as qcTurntable on
+//                 the proposed catalog entry. Opt-in — adds ~8 renders to the run.
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,14 +42,16 @@ const args = process.argv.slice(2);
 const positional = [];
 let sfx = "";
 let authoredBy = "";
+let turntable = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--out-suffix") { sfx = args[++i] ?? ""; continue; }
   if (args[i] === "--authored-by") { authoredBy = args[++i] ?? ""; continue; }
+  if (args[i] === "--turntable") { turntable = true; continue; }
   positional.push(args[i]);
 }
 const [assetId, title, category] = positional;
 if (!assetId || !title || !category) {
-  console.error("usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--authored-by <model>]");
+  console.error("usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--authored-by <model>] [--turntable]");
   process.exit(2);
 }
 const base = basename(assetId, ".glb");
@@ -103,6 +110,38 @@ const pngBytes = statSync(pngPath).size;
 if (pngBytes < MIN_PNG_BYTES) fail("qc render", `${pngRel} is only ${pngBytes} bytes (<${MIN_PNG_BYTES}) — blank/failed render`);
 console.log(`      ${pngRel} (${(pngBytes / 1024).toFixed(0)} KB)`);
 
+// ---- 3b/4 turntable (opt-in) -----------------------------------------------------------------
+// Same framed spec, asset.place's yaw rotated by k*45° for k in 0..7 — a 360° look at the bake
+// for the reviewer, instead of one hero angle. Each frame goes through the same missing/tiny
+// checks as the hero render; any failure stops the pipeline (a partial turntable is not shipped).
+let qcTurntable;
+if (turntable) {
+  console.log("[3b/4] turntable — 8 yaw frames");
+  qcTurntable = [];
+  for (let k = 0; k < 8; k++) {
+    const yaw = r3((k * Math.PI) / 4);
+    const tSpec = {
+      ...spec,
+      commands: spec.commands.map((c) =>
+        c.kind === "skill" && c.tool === "asset.place" ? { ...c, input: { ...c.input, rotation: [0, yaw, 0] } } : c,
+      ),
+    };
+    const tSpecRel = `tools/preview/${base}${sfx}-a${k}-qc.json`;
+    writeFileSync(join(ROOT, tSpecRel), JSON.stringify(tSpec) + "\n");
+    const tPngRel = `assets/qc/${base}${sfx}-a${k}.png`;
+    const tPngPath = join(ROOT, tPngRel);
+    const tShot = spawnSync(process.execPath, [join(ROOT, "tools/preview/engine-authored.mjs"), tPngPath, `/${tSpecRel}`], {
+      cwd: ROOT, stdio: "inherit", timeout: 120_000,
+    });
+    if (tShot.status !== 0) fail("turntable", `frame a${k}: engine-authored.mjs exited ${tShot.status ?? `(signal ${tShot.signal})`}`);
+    if (!existsSync(tPngPath)) fail("turntable", `frame a${k}: no PNG at ${tPngRel}`);
+    const tBytes = statSync(tPngPath).size;
+    if (tBytes < MIN_PNG_BYTES) fail("turntable", `frame a${k}: ${tPngRel} is only ${tBytes} bytes (<${MIN_PNG_BYTES}) — blank/failed render`);
+    qcTurntable.push(`qc/${base}${sfx}-a${k}.png`);
+    console.log(`      ${tPngRel} (${(tBytes / 1024).toFixed(0)} KB)  yaw=${Math.round((k * 45))}°`);
+  }
+}
+
 // ---- 4/4 propose ---------------------------------------------------------------------------
 // builder.review's mutating calls are HELD by the approval queue — pending_approval IS success.
 console.log(`[4/4] propose — catalog.publish as builder.review`);
@@ -115,6 +154,8 @@ const entry = {
   qcChecks: { textured: null, scale: true, integrity: true, theme: null },
   // Provenance for the reviewer: which model authored the GLB (model tier is a quality signal).
   ...(authoredBy ? { authoredBy } : {}),
+  // 360° turntable frames (task #66) — only present when --turntable ran.
+  ...(qcTurntable ? { qcTurntable } : {}),
   tags: ["building"],
 };
 const TOKEN = process.env.LIMINA_EDITOR_TOKEN || FALLBACK_TOKEN;

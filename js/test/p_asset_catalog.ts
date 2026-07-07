@@ -34,6 +34,7 @@ const STONE_WELL: CatalogEntry = {
   category: "prop",
   boundsM: [1.4, 1.6, 1.4],
   authoredBy: "claude-test-model", // provenance must round-trip to the reviewer + catalog
+  qcTurntable: ["qc/gate-test-well-a0.png", "qc/gate-test-well-a1.png"], // task #66: turntable frames must round-trip too
   tags: ["prop", "medieval"],
 };
 
@@ -82,6 +83,8 @@ let seedCount = 0;
   assert(well!.title === STONE_WELL.title && well!.category === STONE_WELL.category, "published entry's fields must be intact");
   assert(well!.authoredBy === "claude-test-model", "authoredBy provenance must survive publish → catalog");
   assert(well!.boundsM[0] === STONE_WELL.boundsM[0] && well!.boundsM[2] === STONE_WELL.boundsM[2], "published entry's boundsM must be intact");
+  assert(Array.isArray(well!.qcTurntable) && well!.qcTurntable.length === 2 && well!.qcTurntable[0] === "qc/gate-test-well-a0.png",
+    `qcTurntable frames must survive publish → catalog (got ${JSON.stringify(well!.qcTurntable)})`);
 }
 
 // 3. Idempotency: publishing the same id again with a changed title -> still 5 entries, title updated.
