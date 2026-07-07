@@ -279,6 +279,26 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     source: "world-bible",
   }));
 
+  // Map Painter P3 stamps: each placed stamp compiles 1:1 into an "asset" anchor that names its
+  // exact catalog asset — the build sites it through the same steering path as planned buildings
+  // (never raw asset.place around the planner). A dangling assetId still compiles (with a
+  // warning downstream at render/build time) — stamps must never vanish silently.
+  for (const s of Array.isArray(map.stamps) ? map.stamps : []) {
+    if (!s || typeof s !== "object" || !s.id || !s.assetId) {
+      warnings.push(`skipped malformed stamp ${JSON.stringify(s && s.id ? s.id : s)}`);
+      continue;
+    }
+    anchors.push({
+      id: String(s.id),
+      kind: "asset",
+      position: [Number(s.x), Number(s.z)],
+      assetId: String(s.assetId),
+      ...(typeof s.rot === "number" && s.rot !== 0 ? { rot: Number(s.rot) } : {}),
+      ...(typeof s.scale === "number" && s.scale !== 1 ? { scale: Number(s.scale) } : {}),
+      source: "map",
+    });
+  }
+
   const sourceHash = sha256(mapsJsonText + " " + worldBibleText);
 
   const worldMap = {

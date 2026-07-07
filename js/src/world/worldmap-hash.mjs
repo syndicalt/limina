@@ -67,6 +67,10 @@ function anchor(a) {
   const out = { id: a.id, kind: a.kind, position: point(a.position) };
   if (a.count !== undefined) out.count = a.count;
   if (a.name !== undefined) out.name = a.name;
+  // P3 stamp fields: emitted ONLY when present, so every pre-stamp map hashes byte-identically.
+  if (a.assetId !== undefined) out.assetId = a.assetId;
+  if (a.rot !== undefined) out.rot = a.rot;
+  if (a.scale !== undefined) out.scale = a.scale;
   out.source = a.source;
   return out;
 }

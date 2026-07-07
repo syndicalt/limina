@@ -94,6 +94,12 @@ const AnchorSchema = z.object({
   position: PointSchema,
   count: z.number().int().positive().optional(),
   name: z.string().min(1).optional(),
+  // Map Painter P3 stamps: an anchor that names its EXACT catalog asset (kind "asset"), with an
+  // optional yaw (radians) and uniform scale. Optional so legacy anchors (and their content
+  // hashes — worldmap-hash emits these only-when-present) are untouched.
+  assetId: z.string().min(1).optional(),
+  rot: z.number().optional(),
+  scale: z.number().positive().optional(),
   source: z.enum(ANCHOR_SOURCES),
 }).strict();
 

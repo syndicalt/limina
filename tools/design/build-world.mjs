@@ -148,6 +148,17 @@ ws.addEventListener("open", async () => {
     // Map-driven placement (Phase 1.3): every building-kind anchor from the COMPILED map
     // becomes a village.build steering anchor — the drawn pin, not a solver guess. Marker
     // kinds (signal-fire, perimeter) have no KIND_TO_GLB entry and are skipped, same as above.
+    // FAIL-LOUD (plan-8df2466225bf4213 review finding #2): an anchor kind nothing maps is a
+    // build defect the author must see, never a silent skip.
+    const KNOWN_MARKER_KINDS = new Set(["signal-fire", "perimeter", "marker", "landmark", "camp", "ruin", "wild"]);
+    for (const a of worldMap.anchors) {
+      if (!KIND_TO_GLB[a.kind] && !KNOWN_MARKER_KINDS.has(a.kind) && a.kind !== "asset") {
+        console.warn(`  ⚠ UNPLACED anchor "${a.id}" (kind=${a.kind}) — no GLB mapping; it will NOT appear in the world`);
+      }
+      if (a.kind === "asset") {
+        console.warn(`  ⚠ stamp anchor "${a.id}" (${a.assetId}) — stamp placement lands with the P3 build integration; not placed yet`);
+      }
+    }
     const anchors = worldMap.anchors
       .filter((a) => KIND_TO_GLB[a.kind])
       .map((a) => ({

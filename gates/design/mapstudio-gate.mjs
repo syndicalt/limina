@@ -511,6 +511,37 @@ console.log("biome raster (painter P2):");
   check("(falsifiability) un-painting tundra removes ALL snow at the same probe", snow2 === 0);
 }
 
+// ---- 6b. P3: stamps -> asset anchors (schema + hash, three-place rule) --------------------------
+console.log("stamps (painter P3):");
+{
+  const doc = (stamps) => JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      features: [{ id: "o1", type: "area", kind: "outline", points: [[-45, -45], [45, -45], [45, 45], [-45, 45]] }],
+      ...(stamps ? { stamps } : {}),
+    }],
+  });
+  const S1 = [
+    { id: "s1", assetId: "cottage-authored.glb", x: 10, z: -20, rot: 1.5, scale: 1.2 },
+    { id: "s2", assetId: "watchtower-authored.glb", x: -30, z: 5 },
+    { id: "bad" }, // malformed: no assetId — must warn, never vanish silently into nothing
+  ];
+  const { worldMap: sm, warnings: sw } = compileDesignMap({ mapsJsonText: doc(S1), worldBibleText: WB_TEXT });
+  const stampAnchors = sm.anchors.filter((a) => a.kind === "asset");
+  check("stamps compile 1:1 into asset anchors", stampAnchors.length === 2);
+  const s1 = stampAnchors.find((a) => a.id === "s1"), s2 = stampAnchors.find((a) => a.id === "s2");
+  check("anchor carries assetId + position + source map", s1.assetId === "cottage-authored.glb" && eq(s1.position, [10, -20]) && s1.source === "map");
+  check("rot/scale present only when set", s1.rot === 1.5 && s1.scale === 1.2 && s2.rot === undefined && s2.scale === undefined);
+  check("malformed stamp warns instead of vanishing", sw.some((w) => w.includes("malformed stamp")));
+  check("HASH: recomputed hash covers the new anchor fields", worldMapContentHash(sm) === sm.provenance.contentHash);
+  const { worldMap: sm2 } = compileDesignMap({ mapsJsonText: doc([{ ...S1[0], rot: 2.5 }, S1[1]]), worldBibleText: WB_TEXT });
+  check("(falsifiability) rotating a stamp changes the contentHash", sm2.provenance.contentHash !== sm.provenance.contentHash);
+  const { worldMap: sm0 } = compileDesignMap({ mapsJsonText: doc(undefined), worldBibleText: WB_TEXT });
+  check("no stamps -> no asset anchors, and the hash walk emits nothing new", sm0.anchors.every((a) => a.kind !== "asset") && worldMapContentHash(sm0) === sm0.provenance.contentHash);
+}
+
 // ---- 7. Data-safety fixes (phantom feature loss) ------------------------------------------------
 // Three proven loss mechanisms, each locked here: (a) colliding feature ids repaired on read,
 // (b) delete-undo can't mint a duplicate, (c) the server refuses a stale wholesale save (CAS).
