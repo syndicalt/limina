@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>limina — showcase shoot</title>
+<style>
+  body { background: #14161a; color: #d7dae0; font-family: system-ui, sans-serif; margin: 0; }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 4px; }
+  p.sub { color: #8b93a1; margin: 0 0 40px; font-size: 0.95rem; }
+  h2 { font-size: 1.05rem; font-weight: 600; margin: 48px 0 4px; }
+  p.cap { color: #9aa2b0; margin: 0 0 12px; font-size: 0.9rem; line-height: 1.45; }
+  code { color: #b8c2d4; background: #1e2229; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  img { width: 100%; display: block; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>limina — built 2026-07-06/07</h1>
+  <p class="sub">The showcase shoot: everything from the last day, rendered in the real engine on the real GPU (runLive, engine-authored harness). Commits <code>88dd1a1 &rarr; ab22dca</code>.</p>
+
+  <h2>1. Eastern Watch — the map-driven island</h2>
+  <p class="cap">The drawn design map rasterized straight into terrain (<code>terrain.create source:"map"</code>), water, the village built at its authored anchors (longhall, cottage row, church, watchtower), forest scattered around the clearing — river channel and shorelines from the map. Commits <code>5986f75</code>, <code>86b2d95</code>, <code>f33c201</code>, <code>02e49e0</code>.</p>
+  <img src="01-eastern-watch-aerial.png" alt="Eastern Watch island aerial">
+
+  <h2>2. The hamlet meadow at eye level</h2>
+  <p class="cap">Same world from the ground by the longhall — paint-driven grass blades and meadow flowers in the foreground, the dirt lane leading to the cottages and church. Commit <code>02e49e0</code>.</p>
+  <img src="02-hamlet-meadow-eye.png" alt="Hamlet meadow at eye level">
+
+  <h2>3. The churchyard well</h2>
+  <p class="cap">The stone village well (<code>stone-well.glb</code>, the &#65291;New generative-asset loop's approved output) placed in the lee of the Norman church, stone path underfoot, the sea behind. Commit <code>a5e05f8</code>.</p>
+  <img src="03-churchyard-well.png" alt="Stone well beside the church">
+
+  <h2>4. Tudor cottage v2</h2>
+  <p class="cap">The re-authored tudor cottage as a whole Blender-baked GLB — cross-wing gable, herringbone brick nogging, jettied timber floors — low 3/4 hero on a painted grass tile. Commit <code>475cc31</code>.</p>
+  <img src="04-tudor-v2-hero.png" alt="Tudor cottage v2 hero">
+
+  <h2>5. Set-dressing props</h2>
+  <p class="cap">The prop set dressing a cottage: oak barrels by the door, a crate stack at the corner, the leaning signpost, and three post-and-rail fence sections tiled along the lane. Commit <code>de3640f</code>.</p>
+  <img src="05-props-dressed.png" alt="Cottage dressed with props">
+
+  <h2>6. The Whisperlight Lantern Post at dusk</h2>
+  <p class="cap">The lantern post shot with a dusk render-baseline override (low warm sun, darkened sky) so the gold crystal, drifting motes, and blue runes carry the frame. Asset commit <code>88dd1a1</code>; dusk is a per-scene <code>renderBaseline</code> preset, no engine change.</p>
+  <img src="06-whisperlight-dusk.png" alt="Whisperlight lantern post at dusk">
+
+  <h2>7. The Veilstone monolith</h2>
+  <p class="cap">The veilstone monolith from a low angle — veined dark stone, the cyan band, orbiting shards. Approved through the &#65291;New loop. Commit <code>a5e05f8</code>.</p>
+  <img src="07-veilstone.png" alt="Veilstone monolith low angle">
+
+  <h2>8. The 1 km&sup2; streamed world</h2>
+  <p class="cap">The FMG-compiled 1 km&sup2; map streamed live around the camera (<code>world.setTerrainSource</code>, no pre-generated region) — the Highkeep manor GLB grounded at its burg anchor, the hill ridge and river channels behind, distance dissolving into the fog band. An honestly plain world at this vantage; Fisherton's cottage sits 380 m south, beyond frame. Commits <code>1771fb4</code>, <code>cd11c0a</code>, <code>28a8847</code>.</p>
+  <img src="08-1km-streamed.png" alt="1km streamed world with Highkeep burg">
+
+  <h2>9. Azgaar region crop — the organic coastline</h2>
+  <p class="cap">A real Azgaar Fantasy-Map-Generator export cropped to a region and compiled to a WorldMap — the winding coastline at native scale, beach falling into the sea. Aerial chosen over the eye-level variant (the meadow-level frame had nothing to hold it). Commit <code>ab22dca</code>.</p>
+  <img src="09-azgaar-organic.png" alt="Azgaar organic coastline aerial">
+
+  <h2>10. Painted grass</h2>
+  <p class="cap">The <code>terrain.paint</code> brush growing real instanced grass blades on bare dirt — dense inside the painted discs, nothing outside the stroke (far disc visible upper right). Commit <code>02e49e0</code>.</p>
+  <img src="10-paint-grass.png" alt="Brush-painted grass discs on dirt">
+</main>
+</body>
+</html>

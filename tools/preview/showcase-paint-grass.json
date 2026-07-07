@@ -1,0 +1,11 @@
+{
+  "_comment": "Showcase #10: terrain.paint grass — brush-painted grass discs growing real instanced blades on bare dirt, nothing outside the stroke. Reframed from grass-paint-proof for presentation.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 80, "resolution": 129, "origin": [0, 0, 0], "color": 7295796 } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [6, 0], "radius": 10, "strength": 1, "material": "grass" } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [-14, -8], "radius": 6, "strength": 0.5, "material": "grass" } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [2, 12], "radius": 5, "strength": 0.75, "material": "grass" } }
+  ],
+  "camera": { "center": [2, 0.3, -1], "radius": 11, "height": 1.5, "autoSpin": 0 }
+}

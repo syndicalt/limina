@@ -1,0 +1,20 @@
+{
+  "_comment": "Showcase #6: the Whisperlight Lantern Post at dusk — renderBaseline overridden toward a low warm sun + darkening blue sky so the gold crystal reads against the gloom. Close hero at head height.",
+  "renderBaseline": {
+    "exposure": 0.92,
+    "sun": { "color": 16756838, "intensity": 2.0, "direction": [6, 3.5, 5] },
+    "hemisphere": { "skyColor": 3489899, "groundColor": 2366482, "intensity": 0.85 },
+    "ambientIntensity": 0.2,
+    "ambientColor": 4608122,
+    "sky": { "top": 1845834, "horizon": 14253887, "bottom": 1314828 },
+    "environmentIntensity": 0.55,
+    "atmosphere": { "enabled": true, "color": null, "density": 0.003 },
+    "ground": { "enabled": true, "color": 2366482, "size": 80, "y": 0, "roughness": 0.95 }
+  },
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 40, "resolution": 48, "color": 3817520 } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "whisperlight-lantern.glb", "position": [0, 0, 0], "rotation": [0, 0.5, 0], "ground": true } }
+  ],
+  "camera": { "center": [0, 4.55, 0.9], "radius": 2.0, "height": -0.45, "autoSpin": 0 }
+}

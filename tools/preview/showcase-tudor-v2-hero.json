@@ -1,0 +1,11 @@
+{
+  "_comment": "Showcase #4: tudor-cottage.glb v2 hero — alone on a grass tile (paint-driven blades), low 3/4 front angle showing the cross-wing + herringbone brick. Front faces -Z at rotation 0; yaw -1.05 turns it 3/4 toward the fixed east camera.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 50, "resolution": 65, "origin": [0, 0, 0], "color": 5926970 } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [8, 2], "radius": 9, "strength": 0.9, "material": "grass" } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [4, -8], "radius": 6, "strength": 0.6, "material": "grass" } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "tudor-cottage.glb", "position": [0, 0, 0], "rotation": [0, -1.05, 0], "ground": true } }
+  ],
+  "camera": { "center": [0, 4.4, 0], "radius": 12.5, "height": 1.6, "autoSpin": 0 }
+}

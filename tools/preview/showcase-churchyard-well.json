@@ -1,0 +1,53 @@
+{
+  "_comment": "Showcase #3: the churchyard vignette — stone-well.glb placed beside the Norman church in the Eastern Watch world, eye level.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    {
+      "kind": "skill",
+      "tool": "terrain.create",
+      "input": {
+        "size": 200,
+        "resolution": 129,
+        "origin": [0, 0, 0],
+        "color": 5926970,
+        "generate": { "source": "map", "mapAssetId": "maps/primary.worldmap.json", "seed": 11, "amplitude": 12 }
+      }
+    },
+    { "kind": "skill", "tool": "world.addWater", "input": { "size": 420, "color": 2841970 } },
+    {
+      "kind": "skill",
+      "tool": "village.build",
+      "input": {
+        "direction": { "setting": "medieval", "mood": "weathered frontier watch, the Blight at the edge" },
+        "steering": {
+          "buildings": [
+            { "assetId": "norman-manor-building.glb", "role": "hall", "style": "cut-stone", "count": 1 },
+            { "assetId": "cottage-authored.glb", "role": "cottage", "style": "timber", "count": 3 },
+            { "assetId": "norman-church.glb", "role": "monastery", "style": "cut-stone", "count": 1 },
+            { "assetId": "watchtower-authored.glb", "role": "watchtower", "style": "timber", "count": 1 }
+          ],
+          "layout": { "focal": "the muster longhall at the settlement heart", "density": "loose" },
+          "siting": { "terrace": "minimal", "yard": "lawn", "lane": "dirt", "clearing": "commons", "clearingMargin": 15 },
+          "anchors": [
+            { "id": "longhall", "position": [0, 0], "role": "hall", "count": 1 },
+            { "id": "cottages", "position": [-19, -8], "role": "cottage", "count": 3 },
+            { "id": "monastery", "position": [-35, -25], "role": "monastery", "count": 1 },
+            { "id": "watchtower", "position": [30, -12], "role": "watchtower", "count": 1 }
+          ]
+        },
+        "seed": 11
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "vegetation.scatter",
+      "input": { "species": ["pine", "spruce"], "density": 26, "coverage": 0.7, "cluster": 0.55, "seed": 11 }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": { "assetId": "stone-well.glb", "position": [-23.5, 0, -17.5], "rotation": [0, 0.7, 0], "ground": true }
+    }
+  ],
+  "camera": { "center": [-26, 2.2, -18.5], "radius": 10, "height": 1.7, "autoSpin": 0 }
+}
