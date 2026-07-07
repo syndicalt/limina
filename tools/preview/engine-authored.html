@@ -18,13 +18,15 @@ try {
       canvas, width: 1280, height: 800, commands: scene.commands,
       forceWebGL: true,
       renderBaseline: scene.renderBaseline,
-      orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin },
+      orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin, far: cam.far },
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
+    if (running && running.terrainStream) window.__log.push("terrainStream mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending());
     if (running && running.authoringFailures && running.authoringFailures.length) window.__log.push("authoringFailures=" + JSON.stringify(running.authoringFailures).slice(0, 500));
     await new Promise((r) => setTimeout(r, 3000));
     if (running && running.scene) { let m = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; }); window.__log.push("scene meshes=" + m); }
+    if (running && running.terrainStream) window.__log.push("terrainStream settled: mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending() + " keys=" + running.terrainStream.mounted().slice(0, 12).join(" "));
     window.__done = true;
   }
 } catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }

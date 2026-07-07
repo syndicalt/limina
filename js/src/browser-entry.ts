@@ -57,9 +57,22 @@ import { exportAssetBundle, loadExport, type LoadedExport } from "./export/packa
 import { AssetRegistry } from "./asset-registry.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
 import { ReplayPlayer } from "./browser/player.ts";
-import { TerrainStreamRenderer, type TerrainStreamRendererOptions } from "./terrain/render.ts";
+import {
+  applyPaintOverlay,
+  buildTerrainMesh,
+  disposeTerrainMesh,
+  TerrainStreamRenderer,
+  type TerrainStreamRendererOptions,
+} from "./terrain/render.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "./terrain/procedural.ts";
 import type { TerrainTile } from "./terrain/types.ts";
+// Map Phase 3.3 — client-side (view) terrain streaming for the LIVE viewport: the stream loop
+// (pure set math + budget, headless-gated in p_stream_client) + the map-backed source it follows.
+import { ClientTerrainStream } from "./terrain/stream-client.ts";
+import type { TileCoord } from "./terrain/stream.ts";
+import { MapTerrainSource } from "./terrain/map-source.ts";
+import { SwappableTerrainSource } from "./terrain/swappable.ts";
+import type { StreamTileColliderAdd } from "./browser/sim-worker.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
 import { LAWN_DECO_ASSETS } from "./skills/village.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
@@ -440,8 +453,10 @@ export interface RunLiveOptions {
   workerUrl?: unknown;
   /** Authoring permission profile (default "builder.readWrite" — the broad authoring grant). */
   profile?: string;
-  /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future). */
-  orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number };
+  /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future).
+   *  `far` pushes the camera far plane out (a map-STREAMED world is bigger than the default
+   *  200 m frustum — mirrors run()'s orbit.far). */
+  orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number; far?: number };
   /** Opt-in browser camera controls for editor-style viewports. Falsy preserves the legacy auto-spin. */
   orbitControls?: boolean;
   /** Scene-level render-baseline override (lights/tonemapping/atmosphere/ground/camera). A world can
@@ -475,12 +490,29 @@ export interface RunningLive {
    *  a `null` return, which means the environment could not host the viewport at all. */
   authoringFailures?: AuthorCommandFailure[];
   applyAuthorCommands(cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }>;
+  /** Map Phase 3.3 — introspection over the client-side (view) terrain stream. Present only on a
+   *  map-streamed world (the recorded log bound world.setTerrainSource {kind:"map"}). */
+  terrainStream?: { mounted(): string[]; pending(): number };
   setCameraControlsEnabled(on: boolean): void;
   setSyncSuppressed(eid: number, on: boolean): void;
   stop(): void;
 }
 
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint", "catalog.publish", "asset.request"]);
+// Map Phase 3.3 — live handling of the STREAMED-terrain commands (decided, not defaulted):
+//   • world.setTerrainSource → REBOOT (deliberately NOT in any live set). It is world-DEFINING
+//     (the whole tile field derives from it) and the skill itself rejects once regions exist, so
+//     the only correct live application is a fresh boot where it authors before everything else.
+//     The reboot's pre-warm seeds the map IR bytes before renderer.init() (mapAssetIdsForCommand).
+//   • world.generateRegion → REBOOT (also not in any live set): a region is bulk structural
+//     world state (colliders + tile entities + meshes); a reboot re-authors it deterministically.
+//   • world.streamFollow → applied IN PLACE (below) and forwarded to the sim worker. NOT a no-op:
+//     the skill allocates tile ENTITIES (EntityTable ids + eids + body ids are sequential), so a
+//     client that skipped it would drift its id counters from the authoritative record and every
+//     LATER command referencing a newer entity id would hit the wrong entity until reboot. The
+//     CLIENT's own view window stays independent: the view stream never records anything, and it
+//     treats recorded-region tiles as externally owned (reconciled right after the apply), so an
+//     authoritative window and the camera window coexist without double-mounting.
+const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint", "catalog.publish", "asset.request", "world.streamFollow"]);
 // Structural adds applied INCREMENTALLY on the live scene (no reboot) — including the GLB-mounting
 // skills. Their mid-session mount is safe because runLive PRE-WARMS the glTF parse cache (the tree
 // palette + the scene's assets) BEFORE renderer.init(), so parseGltfScene returns a synchronous clone
@@ -517,6 +549,25 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
   if (cmd.tool === "vegetation.scatter") {
     const species = Array.isArray(input.species) ? (input.species as string[]) : ["spruce", "pine", "birch"];
     return [...new Set(species.flatMap((s) => SPECIES_ARCHETYPES[s] ?? []))];
+  }
+  return [];
+}
+
+/** The WorldMap IR asset ids a command RESOLVES (world.setTerrainSource kind "map",
+ *  terrain.create generate.source "map"). Pre-fetched + seeded into the live AssetRegistry
+ *  BEFORE renderer.init() so authoring resolves them from memory — never the blocking
+ *  main-thread sync-XHR op_read_asset fallback, and never inside the forceWebGL
+ *  init-collapse window. Resolved ONCE per boot: streamed tiles are pure math over the
+ *  rasterized master field, so no per-tile asset I/O ever happens. */
+function mapAssetIdsForCommand(cmd: AuthorCommand): string[] {
+  if (cmd.kind !== "skill") return [];
+  const input = (cmd.input ?? {}) as Record<string, unknown>;
+  if (cmd.tool === "world.setTerrainSource") {
+    return input.kind === "map" && typeof input.mapAssetId === "string" ? [input.mapAssetId] : [];
+  }
+  if (cmd.tool === "terrain.create") {
+    const g = (input.generate ?? {}) as { source?: unknown; mapAssetId?: unknown };
+    return g.source === "map" && typeof g.mapAssetId === "string" ? [g.mapAssetId] : [];
   }
   return [];
 }
@@ -663,24 +714,50 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     const gltfIds = new Set<string>(TREE_ARCHETYPE_IDS);
     for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd)) gltfIds.add(id);
     const cold = [...gltfIds].filter((id) => !hasGltfScene(id));
-    if (cold.length > 0) {
-      status("loading", `loading ${cold.length} asset${cold.length === 1 ? "" : "s"}`);
-      await Promise.all(cold.map(async (id) => {
-        try {
-          const res = await fetch("/assets/" + id);
-          if (!res.ok) return;
-          const bytes = new Uint8Array(await res.arrayBuffer());
-          liveAssets.seed(id, bytes);        // sync resolve() during apply (no host XHR)
-          await prewarmGltfScene(id, bytes); // parse into the clone cache (no macrotask at mount)
-        } catch { /* a missing/failed asset surfaces when the mount runs */ }
-      }));
+    // Map Phase 3.3: the WorldMap IR assets the log resolves (setTerrainSource / terrain.create map
+    // path) are seeded the same way — bytes only (JSON, not GLB: no parse cache). Resolved ONCE here;
+    // without the seed the skill handler would fall back to a blocking main-thread sync XHR.
+    const mapIds = new Set<string>();
+    for (const cmd of opts.commands) for (const id of mapAssetIdsForCommand(cmd)) mapIds.add(id);
+    if (cold.length > 0 || mapIds.size > 0) {
+      status("loading", `loading ${cold.length + mapIds.size} asset${cold.length + mapIds.size === 1 ? "" : "s"}`);
+      await Promise.all([
+        ...cold.map(async (id) => {
+          try {
+            const res = await fetch("/assets/" + id);
+            if (!res.ok) return;
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            liveAssets.seed(id, bytes);        // sync resolve() during apply (no host XHR)
+            await prewarmGltfScene(id, bytes); // parse into the clone cache (no macrotask at mount)
+          } catch { /* a missing/failed asset surfaces when the mount runs */ }
+        }),
+        ...[...mapIds].map(async (id) => {
+          try {
+            const res = await fetch("/assets/" + id);
+            if (!res.ok) return;
+            liveAssets.seed(id, new Uint8Array(await res.arrayBuffer())); // sync resolve() during apply
+          } catch { /* falls back to the sync-XHR op_read_asset inside the skill */ }
+        }),
+      ]);
     }
   }
 
   // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
+  // Map Phase 3.3: a map-STREAMED world renders its own ground wherever the camera goes, and its
+  // sea floor sits BELOW y=0 — the baseline's flat ground plane would roof the whole ocean. Same
+  // policy as run()'s terrain mode: suppress the baseline ground when the recorded log binds a
+  // map terrain source (known from the commands up front). An explicit renderBaseline override
+  // still wins (spread last).
+  const streamingPlanned = opts.commands.some((cmd) =>
+    cmd.kind === "skill" && cmd.tool === "world.setTerrainSource" &&
+    (cmd.input as { kind?: unknown } | undefined)?.kind === "map"
+  );
+  const liveBaseline: RenderBaselineOverride = streamingPlanned
+    ? { ground: { enabled: false }, ...(opts.renderBaseline ?? {}) }
+    : (opts.renderBaseline ?? {});
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
-    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, opts.renderBaseline ?? {}, opts.renderScale ?? 1,
+    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, liveBaseline, opts.renderScale ?? 1,
   );
 
   // ── Re-author the SAME command log on the render-main thread against the REAL scene so meshes
@@ -744,6 +821,105 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   if (opts.toon) {
     const n = applyToonStyle(scene, typeof opts.toon === "object" ? opts.toon : {});
     console.info(`limina toon style: converted ${n} material(s) to cel shading`);
+  }
+
+  // ── Map Phase 3.3: CLIENT-SIDE terrain streaming around the ACTIVE CAMERA. ──────────────────
+  // Activates ONLY when the recorded log bound a map terrain source (world.setTerrainSource
+  // {kind:"map"} — checked on the LIVE holder, so a failed/absent bind streams nothing). This is
+  // VIEW state, never world state: the window follows whatever the local camera does, generates
+  // tiles by PURE MATH from the already-rasterized master field (no fetch — the IR was seeded
+  // before renderer.init()), mounts meshes SCENE-DIRECT (raycastable for the editor brush/ghost
+  // tools; NO entity slots — MAX_ENTITIES untouched) plus a local heightfield collider, mirrors
+  // that collider into the sim worker (keyed, so removal needs no cross-thread body-id
+  // agreement), and writes NOTHING to the world log. Recorded terrain (generateRegion /
+  // streamFollow region tiles, editable terrain.create slabs) stays authoritative: tiles the
+  // record owns are treated as externally resident and never double-mounted. Full contract +
+  // budget rationale in terrain/stream-client.ts; the loop is gated headlessly in
+  // p_stream_client.ts. Mounts run inside frame() below — synchronous math only, so the
+  // forceWebGL init-collapse window (no macrotask between init() and first render) is untouched.
+  let terrainStream: ClientTerrainStream | undefined;
+  {
+    const holder = core.terrain.source;
+    const mapSource = holder instanceof SwappableTerrainSource && holder.current instanceof MapTerrainSource
+      ? holder.current
+      : undefined;
+    if (mapSource !== undefined) {
+      // Window config: honor the LAST recorded world.streamFollow radius as the authored window
+      // intent, else a 3-tile default (7×7 ≈ 336 m across at the 48 m tile). Keep-margin +1 —
+      // the same load-at-r / drop-beyond-r+1 hysteresis the authoritative skill uses.
+      let radius = 3;
+      for (const cmd of opts.commands) {
+        if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") {
+          const r = (cmd.input as { radius?: unknown } | undefined)?.radius;
+          if (typeof r === "number" && r >= 1 && r <= 8) radius = Math.floor(r);
+        }
+      }
+      // Streamed-tile look: the SAME elevation-banded vertex colors + terrain.paint overlay the
+      // editable map slab (terrain.create source:"map") renders with, so both paths read as one
+      // world. Bands resolve against the source's FIELD-WIDE relief (seam-consistent by design).
+      const elevationColors = {
+        seaLevel: mapSource.seaLevelM,
+        amplitude: Math.max(1, mapSource.floorY + mapSource.spanY - mapSource.seaLevelM),
+        snowFrac: 1.0,
+      };
+      const tileMeshes = new Map<string, ReturnType<typeof buildTerrainMesh>>();
+      const tileBodies = new Map<string, number>();
+      // A tile the RECORDED world already covers: any applied region tile (generateRegion /
+      // streamFollow) at the same coord, or a tile fully inside an editable terrain.create
+      // slab's footprint. Boundary tiles that only PARTIALLY overlap a slab still stream (no
+      // window gaps); their overlap passes under the slab and sits at/below sea level in
+      // practice. O(recorded tiles) per query, called ≤ budget times per frame.
+      const tileExternallyOwned = (c: TileCoord): boolean => {
+        for (const region of core.terrain.regions.values()) {
+          for (const t of region.tiles.values()) {
+            if (t.tx === c.tx && t.tz === c.tz) return true;
+          }
+        }
+        const tMinX = c.tx * TILE_SIZE, tMaxX = tMinX + TILE_SIZE;
+        const tMinZ = c.tz * TILE_SIZE, tMaxZ = tMinZ + TILE_SIZE;
+        for (const layer of core.terrain.layers.values()) {
+          const [lox, , loz] = layer.tile.origin;
+          const [lsx, , lsz] = layer.tile.scale;
+          if (tMinX >= lox - lsx / 2 && tMaxX <= lox + lsx / 2 && tMinZ >= loz - lsz / 2 && tMaxZ <= loz + lsz / 2) return true;
+        }
+        return false;
+      };
+      terrainStream = new ClientTerrainStream({
+        tileSize: TILE_SIZE,
+        radius,
+        hysteresis: 1,
+        maxLoadsPerUpdate: 2, // ≤2 tile builds/frame — no hitch (33×33 mesh + collider ≈ sub-ms each)
+        getTile: (c) => mapSource.generateTile({ seed: 0, tx: c.tx, tz: c.tz, lod: 0 }),
+        isExternal: tileExternallyOwned,
+        mount: (key, _c, tile) => {
+          const mesh = buildTerrainMesh(tile, { elevationColors });
+          applyPaintOverlay(mesh.geometry, tile);
+          scene.add(mesh);
+          tileMeshes.set(key, mesh);
+          // Local collider + the sim-worker mirror, so raycasts here AND the locally-simulated
+          // player over there both stand on the streamed ground. Keyed view-support state.
+          const [ox, oy, oz] = tile.origin;
+          const [sx, sy, sz] = tile.scale;
+          tileBodies.set(key, ops.op_physics_add_heightfield(ox, oy, oz, tile.nrows, tile.ncols, sx, sy, sz, tile.heights));
+          const add: StreamTileColliderAdd = { key, ox, oy, oz, nrows: tile.nrows, ncols: tile.ncols, sx, sy, sz, heights: tile.heights };
+          worker.postMessage({ type: "streamTileColliders", add: [add], remove: [] });
+        },
+        unmount: (key) => {
+          const mesh = tileMeshes.get(key);
+          if (mesh !== undefined) {
+            scene.remove(mesh);
+            disposeTerrainMesh(mesh);
+            tileMeshes.delete(key);
+          }
+          const bodyId = tileBodies.get(key);
+          if (bodyId !== undefined) {
+            ops.op_physics_remove_body(bodyId);
+            tileBodies.delete(key);
+          }
+          worker.postMessage({ type: "streamTileColliders", add: [], remove: [key] });
+        },
+      });
+    }
   }
 
   // The authored entity eids = the render set; capture their (static) authored scale
@@ -834,6 +1010,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let angle = 0;
   const radius = opts.orbit?.radius ?? 16;
   const camHeight = opts.orbit?.height ?? 8;
+  if (opts.orbit?.far !== undefined) {
+    // Push the far plane out for large (map-streamed) worlds — mirrors run()'s orbit.far.
+    const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
+    cam.far = opts.orbit.far;
+    cam.updateProjectionMatrix();
+  }
   let cameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
   if (opts.orbitControls === true) {
     camera.position.set(
@@ -939,6 +1121,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         );
         camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
       }
+      // Map Phase 3.3: stream terrain around wherever the ACTIVE camera actually is this frame
+      // (player eye, OrbitControls, or auto-orbit — the pose was just set above). Budgeted pure
+      // math + synchronous mounts only (no fetch/macrotask — the map IR was resolved at boot),
+      // so the forceWebGL init-collapse window stays untouched.
+      if (terrainStream !== undefined) {
+        const camPos = (camera as unknown as { position: { x: number; z: number } }).position;
+        terrainStream.update(camPos.x, camPos.z);
+      }
       renderer.render(scene, camera);
     },
   });
@@ -1010,6 +1200,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           throw new Error(authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
         }
         syncAuthoredScaleMutation(cmd);
+        // A live world.streamFollow just changed which tiles the RECORDED world owns — hand any
+        // now-region-owned tiles back (and re-queue any released ones) so the camera window and
+        // the authoritative window never double-mount the same ground.
+        if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") terrainStream?.reconcileExternal();
         if (removedEid !== undefined) removedEids.push(removedEid);
         if (beforeIds !== undefined) {
           const newEids = captureNewEids(beforeIds, res.result);
@@ -1040,6 +1234,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       }
       return { applied, needsReboot: false, structural: structuralAdds };
     },
+    terrainStream: ((stream) => stream === undefined ? undefined : {
+      mounted: (): string[] => [...stream.mountedKeys()],
+      pending: (): number => stream.pendingCount(),
+    })(terrainStream),
     setCameraControlsEnabled: (on: boolean): void => {
       if (cameraControls !== undefined) cameraControls.enabled = on;
     },
@@ -1049,6 +1247,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     },
     stop: (): void => {
       loop.stop();
+      // Tear the view stream down BEFORE the worker dies: unmount disposes every tile mesh +
+      // local collider (the worker-side mirror colliders die with the terminated worker).
+      terrainStream?.clear();
       cameraControls?.dispose();
       try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }
       worker.terminate();

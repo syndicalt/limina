@@ -61,6 +61,25 @@ export type AuthorCommand =
   | { kind: "physics"; op: keyof PhysicsOps; args: unknown[] }
   | { kind: "skill"; tool: string; input: unknown; agentId?: string; perms?: Iterable<string> };
 
+/** Map Phase 3.3 — ONE client-streamed terrain tile's heightfield collider, mirrored into the
+ *  sim. VIEW-SUPPORT state: the render thread streams tiles around ITS camera (terrain/
+ *  stream-client.ts — never the world log) and mirrors each resident tile's collider here so
+ *  the locally-simulated player/props stand on the streamed ground. Keyed by tile key so the
+ *  matching remove never needs cross-thread body-id agreement (each world numbers its own
+ *  bodies); NEVER an entity (no EntityTable/eid slot), NEVER recorded. */
+export interface StreamTileColliderAdd {
+  key: string;
+  ox: number;
+  oy: number;
+  oz: number;
+  nrows: number;
+  ncols: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  heights: Float32Array;
+}
+
 /** Buffers handed across the worker<->main handshake. */
 export interface SimWorkerBuffers {
   /** The transform SAB (M2) — render-main JOINs it to read poses zero-copy. */
@@ -350,6 +369,30 @@ export class SimWorkerController {
     return (await this.loadWorldIsolated(commands)).results;
   }
 
+  /** Map Phase 3.3 — apply a client-stream collider diff (removes, then adds; idempotent per
+   *  key). VIEW-SUPPORT state driven by the render thread's camera-following terrain stream:
+   *  it keeps the local sim's ground under the streamed meshes, but is NOT part of the
+   *  recorded/authored world (see StreamTileColliderAdd). Processed between fixed steps
+   *  (worker messages interleave the self-drive interval), so a tick never sees a half-diff. */
+  private readonly streamTileBodies = new Map<string, number>();
+  applyStreamTileColliders(add: readonly StreamTileColliderAdd[], remove: readonly string[]): void {
+    if (this.disposed) return;
+    for (const key of remove) {
+      const bodyId = this.streamTileBodies.get(key);
+      if (bodyId !== undefined) {
+        this.world.ops.op_physics_remove_body(bodyId);
+        this.streamTileBodies.delete(key);
+      }
+    }
+    for (const t of add) {
+      if (this.streamTileBodies.has(t.key)) continue;
+      this.streamTileBodies.set(
+        t.key,
+        this.world.ops.op_physics_add_heightfield(t.ox, t.oy, t.oz, t.nrows, t.ncols, t.sx, t.sy, t.sz, t.heights),
+      );
+    }
+  }
+
   /** Advance the simulation ONE fixed step:
    *    1. read the most-recently-published input frame (1-frame latency by design),
    *    2. drive the player character controller (if one is spawned) with it,
@@ -505,7 +548,9 @@ type InitMessage = {
 type StepMessage = { type: "step" };
 type StopMessage = { type: "stop" };
 type ApplyCommandsMessage = { type: "applyCommands"; commands?: AuthorCommand[] };
-type ShellMessage = InitMessage | StepMessage | StopMessage | ApplyCommandsMessage;
+/** Map Phase 3.3 — client-stream collider mirroring (view-support; see StreamTileColliderAdd). */
+type StreamTileCollidersMessage = { type: "streamTileColliders"; add?: StreamTileColliderAdd[]; remove?: string[] };
+type ShellMessage = InitMessage | StepMessage | StopMessage | ApplyCommandsMessage | StreamTileCollidersMessage;
 
 /** Install the Worker message wiring on a worker global. `init` builds the
  *  controller (importing rapier-compat — resolved by the browser bundle, never the
@@ -575,6 +620,8 @@ export function installSimWorker(scope: WorkerScopeLike): void {
         if (controller !== null && msg.commands !== undefined) {
           postAuthoringFailures("applyCommands", (await controller.loadWorldIsolated(msg.commands)).failures);
         }
+      } else if (msg.type === "streamTileColliders") {
+        if (controller !== null) controller.applyStreamTileColliders(msg.add ?? [], msg.remove ?? []);
       } else if (msg.type === "stop") {
         teardown();
       }

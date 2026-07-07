@@ -70,7 +70,10 @@ export interface CoreSkills {
   audio: AudioManager;
   locomotion: Locomotion;
   social: SocialRuntime;
-  terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState> };
+  /** `layers` = the editable terrain.create slabs (terrain-edit state), exposed alongside the
+   *  streamed-path state so a client (runLive's Map Phase 3.3 view streaming) can see EVERY
+   *  recorded-terrain footprint and never double-mount ground the world already owns. */
+  terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
   assets: AssetRegistry;
   materials: MaterialRegistry;
   water: { surfaces: WaterSurfaceState[] };
@@ -288,7 +291,7 @@ export function registerCoreSkills(
   const worldstate = registerWorldAudioExtensionSkills(registry);
   return {
     packages, ui, locomotion, social, audio,
-    terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions },
+    terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
     assets, materials, water,
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
