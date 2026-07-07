@@ -69,6 +69,9 @@ import type { TerrainTile } from "./terrain/types.ts";
 // Map Phase 3.3 — client-side (view) terrain streaming for the LIVE viewport: the stream loop
 // (pure set math + budget, headless-gated in p_stream_client) + the map-backed source it follows.
 import { ClientTerrainStream } from "./terrain/stream-client.ts";
+// Task #78 — placed-entity residency streaming (view state, like the tile stream): detach
+// far props' RETAINED meshes, re-attach on approach; ids/eids/counters untouched.
+import { createEntityResidencyWiring, EntityResidencyStream } from "./browser/entity-stream.ts";
 import { StreamedGrassManager } from "./terrain/grass-render.ts";
 import type { TileCoord } from "./terrain/stream.ts";
 import { MapTerrainSource } from "./terrain/map-source.ts";
@@ -473,6 +476,12 @@ export interface RunLiveOptions {
    *  and the only thing that resolves sub-pixel detail (a character's face at distance). 2 is a good hero
    *  value; cost is ~scale² fragment work + VRAM, so leave at 1 for the interactive editor. */
   renderScale?: number;
+  /** Task #78 — placed-entity residency streaming overrides. Default policy: active on a
+   *  map-streamed world, or when the authored world carries > `threshold` (512) streamable
+   *  placed entities; window `radius` defaults to 600 m (map-streamed; past the fog knee so
+   *  nothing pops in visible air) / 300 m otherwise, `hysteresis` 50 m, `budget` 4 ops/frame.
+   *  `enabled` forces it on/off regardless of the policy. */
+  entityStream?: { enabled?: boolean; radius?: number; hysteresis?: number; budget?: number; threshold?: number };
 }
 
 export interface RunningLive {
@@ -496,6 +505,14 @@ export interface RunningLive {
   terrainStream?: { mounted(): string[]; pending(): number };
   /** Paint-driven streamed grass introspection (proof harnesses/UAT) — present with terrainStream. */
   grassStream?: { tiles(): number; blades(): number };
+  /** Task #78 — placed-entity residency stream introspection + the editor-selection hook.
+   *  Present only when the stream activated (map-streamed world or > threshold placed props).
+   *  `setProtected(id, true)` pins an entity resident (re-materializing it IMMEDIATELY if
+   *  dormant — the viewport gizmo must never attach a detached mesh); the editor calls it on
+   *  select/deselect. A dormant entity is intentionally absent from the scene graph, so it is
+   *  unpickable by the viewport raycast until the camera comes back (the World panel, which
+   *  lists server-side inspector.snapshot state, still sees it and can select it via this hook). */
+  entityStream?: { resident(): number; dormant(): number; isDormant(id: string): boolean; setProtected(id: string, on: boolean): void };
   setCameraControlsEnabled(on: boolean): void;
   setSyncSuppressed(eid: number, on: boolean): void;
   stop(): void;
@@ -973,6 +990,40 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     }
   }
 
+  // ── Task #78: PLACED-ENTITY residency streaming around the ACTIVE CAMERA. ─────────────────
+  // View state, exactly like the tile/grass streams above: far placed props' RETAINED meshes
+  // are DETACHED from the scene graph and re-attached on approach — the EntityTable slot, eid,
+  // SoA transform, renderables binding, SAB lane and colliders all stay as authored, so ids
+  // stay deterministic and an unloaded prop re-materializes byte-identical (contract + what
+  // this does/doesn't bound: browser/entity-stream.ts; gated in p_entity_stream). ACTIVE only
+  // on a map-streamed world (unbounded roaming) or when the log carries > threshold streamable
+  // props; small orbit scenes keep every mesh resident, unchanged. Dormant edits need no
+  // special path — setMaterial mutates the retained mesh, moves write the SoA renderSyncSystem
+  // keeps copying onto the detached object — so live in-place commands apply as-is.
+  let entityStream: EntityResidencyStream | undefined;
+  const entityStreamProtected = new Set<string>();
+  const entityWiring = createEntityResidencyWiring(entities, entityStreamProtected);
+  {
+    const es = opts.entityStream ?? {};
+    const candidates = entities.ids().filter((id) => entityWiring.eligible(id));
+    const active = es.enabled ?? (streamingPlanned || candidates.length > (es.threshold ?? 512));
+    if (active) {
+      entityStream = new EntityResidencyStream({
+        // Map-streamed default 600 m: at the Phase-3.4 haze (FogExp2 density 1/600) a prop at
+        // 600 m is ~63% faded, so the de/re-materialization edge sits in air the fog already
+        // owns. Non-streamed (>threshold) worlds default tighter — their far plane is nearer.
+        radiusM: es.radius ?? (streamingPlanned ? 600 : 300),
+        hysteresisM: es.hysteresis ?? 50,
+        maxOpsPerUpdate: es.budget ?? 4,
+        getPosition: entityWiring.getPosition,
+        isProtected: entityWiring.isProtected,
+        dematerialize: entityWiring.dematerialize,
+        rematerialize: entityWiring.rematerialize,
+      });
+      for (const id of candidates) entityStream.register(id);
+    }
+  }
+
   // The authored entity eids = the render set; capture their (static) authored scale
   // so the interpolator keeps meshes at size (the worker syncs position+rotation only).
   const eids: number[] = [];
@@ -1179,11 +1230,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // (player eye, OrbitControls, or auto-orbit — the pose was just set above). Budgeted pure
       // math + synchronous mounts only (no fetch/macrotask — the map IR was resolved at boot),
       // so the forceWebGL init-collapse window stays untouched.
-      if (terrainStream !== undefined) {
+      if (terrainStream !== undefined || entityStream !== undefined) {
         const camPos = (camera as unknown as { position: { x: number; z: number } }).position;
-        terrainStream.update(camPos.x, camPos.z);
+        terrainStream?.update(camPos.x, camPos.z);
         // Grass follows the same camera anchor, one budgeted tile-grass build per frame.
         grassStream?.update(camPos.x, camPos.z);
+        // Task #78: placed-entity residency follows the same anchor — ≤4 detach/attach ops of
+        // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
+        entityStream?.update(camPos.x, camPos.z);
       }
       renderer.render(scene, camera);
     },
@@ -1251,6 +1305,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         const removedEid = cmd.kind === "skill" && LIVE_REMOVE_SKILLS.has(cmd.tool)
           ? entities.resolve(String((cmd.input as { entity?: unknown })?.entity ?? ""))?.eid
           : undefined;
+        // Task #78: untrack a to-be-destroyed entity BEFORE the skill runs. unregister
+        // re-materializes a dormant mesh first, so teardownEntity's scene.remove path is
+        // byte-identical to the never-streamed world.
+        if (removedEid !== undefined && entityStream !== undefined) {
+          const removedId = String((cmd.input as { entity?: unknown })?.entity ?? "");
+          entityStream.unregister(removedId);
+          entityStreamProtected.delete(removedId);
+        }
         const res = await applyOne(cmd);
         if (!res.success) {
           throw new Error(authoringFailureMessage(cmd, res.error?.message ?? "unknown"));
@@ -1270,6 +1332,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
             syncAuthoredScaleForEid(eid);
             seedJoinedTransformForEid(eid);
             if (!addedEids.includes(eid)) addedEids.push(eid);
+          }
+          // Task #78: a live structural add tracks its new streamable (bodiless placed) entities
+          // so a big live-built world stays bounded too. They start materialized (just mounted).
+          if (entityStream !== undefined) {
+            for (const id of entities.ids()) {
+              if (!beforeIds.has(id) && entityWiring.eligible(id)) entityStream.register(id);
+            }
           }
         }
         if (cmd.kind === "skill" && (LIVE_IN_PLACE_SKILLS.has(cmd.tool) || LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool) || LIVE_REMOVE_SKILLS.has(cmd.tool))) {
@@ -1298,6 +1367,21 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       tiles: (): number => g.grassKeys().size,
       blades: (): number => g.bladeCount(),
     })(grassStream),
+    entityStream: ((s) => s === undefined ? undefined : {
+      resident: (): number => s.residentCount(),
+      dormant: (): number => s.dormantCount(),
+      isDormant: (id: string): boolean => s.isDormant(id),
+      setProtected: (id: string, on: boolean): void => {
+        if (on) {
+          entityStreamProtected.add(id);
+          // Selection must take effect NOW: the editor gizmo attaches (and its selection guard
+          // scene-graph check runs) this same frame, before the next budgeted update().
+          s.forceMaterialize(id);
+        } else {
+          entityStreamProtected.delete(id);
+        }
+      },
+    })(entityStream),
     setCameraControlsEnabled: (on: boolean): void => {
       if (cameraControls !== undefined) cameraControls.enabled = on;
     },

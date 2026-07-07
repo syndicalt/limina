@@ -1,0 +1,767 @@
+{
+  "_comment": "Task #78 GPU proof — 40 placed props (2 clusters of 20 whole-GLB buildings, ~695 m apart) on the streamed fmg-1km map. Same commands in A and B; ONLY the camera differs. With the entity-residency stream (radius 450 m override — the clusters are only ~695 m apart — active because the world is map-streamed), the far cluster's props must be DORMANT (absent) in each shot while the near cluster renders fully, terrain/grass untouched.",
+  "commands": [
+    {
+      "kind": "physics",
+      "op": "op_physics_create_world",
+      "args": [
+        -9.81
+      ]
+    },
+    {
+      "kind": "skill",
+      "tool": "world.setTerrainSource",
+      "input": {
+        "kind": "map",
+        "mapAssetId": "maps/fmg-1km.worldmap.json"
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "world.streamFollow",
+      "input": {
+        "regionId": "no-such-region",
+        "anchor": [
+          -165,
+          0,
+          -290
+        ],
+        "radius": 8
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -148,
+          1.9903279013103914,
+          -284.5
+        ],
+        "rotation": [
+          0,
+          2,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -139.5,
+          1.9374990860621137,
+          -272
+        ],
+        "rotation": [
+          0,
+          2.31,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -138.5,
+          1.9640970230102552,
+          -255
+        ],
+        "rotation": [
+          0,
+          2.63,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -146.5,
+          3.340205616421168,
+          -236
+        ],
+        "rotation": [
+          0,
+          2.94,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -164.5,
+          2.058921813964844,
+          -272
+        ],
+        "rotation": [
+          0,
+          3.26,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -174,
+          1.8971945842107139,
+          -260.5
+        ],
+        "rotation": [
+          0,
+          3.57,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -190.5,
+          1.9199872016906745,
+          -254
+        ],
+        "rotation": [
+          0,
+          3.88,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -210.5,
+          1.8507508304384022,
+          -256
+        ],
+        "rotation": [
+          0,
+          4.2,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -182,
+          1.8850476874245539,
+          -284
+        ],
+        "rotation": [
+          0,
+          4.51,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -196,
+          2.103135426839192,
+          -289.5
+        ],
+        "rotation": [
+          0,
+          4.83,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -207,
+          2.1097917556762695,
+          -303
+        ],
+        "rotation": [
+          0,
+          5.14,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -211.5,
+          2.075248956680298,
+          -323
+        ],
+        "rotation": [
+          0,
+          5.46,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -176,
+          1.976301431655884,
+          -304.5
+        ],
+        "rotation": [
+          0,
+          5.77,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -175,
+          2.081924359003703,
+          -319.5
+        ],
+        "rotation": [
+          0,
+          6.08,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -165.5,
+          1.9865062236785895,
+          -334
+        ],
+        "rotation": [
+          0,
+          0.12,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -148,
+          2.1647709740532775,
+          -344.5
+        ],
+        "rotation": [
+          0,
+          0.43,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -154.5,
+          2.0678789615631104,
+          -304.5
+        ],
+        "rotation": [
+          0,
+          0.75,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -140,
+          2.089999781714546,
+          -308.5
+        ],
+        "rotation": [
+          0,
+          1.06,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          -123.5,
+          1.9276024765438509,
+          -304
+        ],
+        "rotation": [
+          0,
+          1.37,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          -108,
+          3.9585061073303223,
+          -291
+        ],
+        "rotation": [
+          0,
+          1.69,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          193,
+          2.0329603619045695,
+          326
+        ],
+        "rotation": [
+          0,
+          2.8,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          190,
+          2.121004184087117,
+          340.5
+        ],
+        "rotation": [
+          0,
+          3.11,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          178,
+          2.159880770577325,
+          353.5
+        ],
+        "rotation": [
+          0,
+          3.43,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          159,
+          2.0960427125295,
+          361
+        ],
+        "rotation": [
+          0,
+          3.74,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          172.5,
+          2.1585183143615723,
+          322.5
+        ],
+        "rotation": [
+          0,
+          4.06,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          157.5,
+          2.162919282913208,
+          324
+        ],
+        "rotation": [
+          0,
+          4.37,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          141.5,
+          2.0782871511247425,
+          317
+        ],
+        "rotation": [
+          0,
+          4.68,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          128.5,
+          1.8539544343948364,
+          301
+        ],
+        "rotation": [
+          0,
+          5,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          169,
+          1.914719714058772,
+          302
+        ],
+        "rotation": [
+          0,
+          5.31,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          163,
+          1.9724555810292566,
+          288
+        ],
+        "rotation": [
+          0,
+          5.63,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          165,
+          1.8846216996510827,
+          271
+        ],
+        "rotation": [
+          0,
+          5.94,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          176,
+          2.0839622020721436,
+          253.5
+        ],
+        "rotation": [
+          0,
+          6.26,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          188,
+          2.0189403692881274,
+          292
+        ],
+        "rotation": [
+          0,
+          0.29,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          199,
+          1.8910045491324523,
+          282.5
+        ],
+        "rotation": [
+          0,
+          0.6,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          216,
+          1.9467805624008179,
+          279
+        ],
+        "rotation": [
+          0,
+          0.92,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          236,
+          2.1416537761688232,
+          284
+        ],
+        "rotation": [
+          0,
+          1.23,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          203,
+          2.0558696852789993,
+          307
+        ],
+        "rotation": [
+          0,
+          1.55,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          215.5,
+          1.9394441843032844,
+          315
+        ],
+        "rotation": [
+          0,
+          1.86,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          224,
+          1.960521459579467,
+          330
+        ],
+        "rotation": [
+          0,
+          2.17,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          225.5,
+          2.11584292517768,
+          350.5
+        ],
+        "rotation": [
+          0,
+          2.49,
+          0
+        ],
+        "ground": true
+      }
+    }
+  ],
+  "entityStream": {
+    "radius": 450
+  },
+  "camera": {
+    "center": [
+      185,
+      4.885243071450128,
+      310
+    ],
+    "radius": 95,
+    "height": 45,
+    "autoSpin": 0,
+    "far": 1500
+  }
+}

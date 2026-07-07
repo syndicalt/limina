@@ -654,6 +654,12 @@ function startSelectionGuardLoop() {
 function selectEntity(id, running) {
   const entry = running?.entities?.resolve?.(id);
   if (!entry?.mesh || typeof entry.eid !== "number") return false;
+  // Task #78: pin the selection RESIDENT in the placed-entity residency stream BEFORE the gizmo
+  // attaches — setProtected(true) re-materializes a dormant mesh immediately, so the selection
+  // guard's scene-graph check never fires on a detached target (e.g. a far entity chosen from
+  // the World panel). Release the previous selection's pin so it can stream out again.
+  if (state.selected && state.selected.id !== id) running?.entityStream?.setProtected(state.selected.id, false);
+  running?.entityStream?.setProtected(id, true);
   state.selected = { id, eid: entry.eid, mesh: entry.mesh };
   state.transformControls?.attach(entry.mesh);
   startSelectionGuardLoop();
@@ -663,6 +669,8 @@ function selectEntity(id, running) {
 
 function deselectEntity() {
   stopSelectionGuardLoop();
+  // Task #78: release the residency pin — an unselected far entity may stream out again.
+  if (state.selected) state.running?.entityStream?.setProtected(state.selected.id, false);
   try { state.transformControls?.detach(); } catch { /* ignore — object may already be gone */ }
   state.selected = undefined;
   state.ctrlRotateActive = false;
