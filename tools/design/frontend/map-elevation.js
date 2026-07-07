@@ -34,27 +34,22 @@ function u8ToB64(u8) {
 // mapId -> { w, h, rect, minY, maxY, cells: Uint8Array, dirty: boolean }
 const cache = new Map();
 
-/** The world rect a NEW raster should span: a square centered on the SETTLED content — the
- *  markers' bbox when the map has markers, else the features' — padded 1.5x, min 120m, and
- *  CAPPED at 512m (so 256² stays ≥ 2m/cell and a brush stroke always moves many cells; a
- *  continental coast outline must not stretch the paintable area to uselessness). Terrain
- *  outside the rect stays polygon/clamp-driven in the rasterizer (clamp-to-edge sampling +
- *  the land/sea vertical-separation clamp), so a big island still builds sanely. Fixed at
- *  creation — it never shifts afterward. */
+/** The world rect a NEW raster should span: a square covering ALL the map's drawn content
+ *  (features incl. the coast outline + markers) padded 1.15x, min 120m. NOT fixed — the region
+ *  is user-adjustable afterward (drag the dashed outline to move, corner handles to resize, both
+ *  undoable), so the default only needs to be sensible, not perfect. On a big map 256² gets
+ *  coarse (~10m/cell at 2.6km) — shrink the region over the area that needs detail. */
 function creationRect(map, markers) {
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   const feed = (x, z) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; };
-  if (markers && markers.length) {
-    for (const m of markers) feed(m.x, m.z);
-  } else {
-    for (const f of map.features || []) {
-      if (f.type === "glyph") feed(f.x, f.z);
-      else for (const p of f.points || []) feed(p[0], p[1]);
-    }
+  for (const f of map.features || []) {
+    if (f.type === "glyph") feed(f.x, f.z);
+    else for (const p of f.points || []) feed(p[0], p[1]);
   }
+  for (const m of markers || []) feed(m.x, m.z);
   if (minX === Infinity) { minX = maxX = minZ = maxZ = 0; }
   const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-  const span = Math.min(512, Math.max(120, Math.ceil(Math.max(maxX - minX, maxZ - minZ) * 1.5)));
+  const span = Math.max(120, Math.ceil(Math.max(maxX - minX, maxZ - minZ) * 1.15));
   return { x0: Math.round(cx - span / 2), z0: Math.round(cz - span / 2), w: span, h: span };
 }
 
@@ -176,19 +171,26 @@ export function renderHillshade(e, seaLevel = SEA_DEFAULT) {
     for (let c = 0; c < e.w; c++) {
       const y = yAt(c, r);
       let rgb;
-      if (y <= seaLevel) {
+      if (y < seaLevel - 0.05) {
         const depth = Math.min(1, (seaLevel - y) / 12);
         rgb = [127 - 60 * depth, 176 - 78 * depth, 212 - 74 * depth];
       } else {
-        rgb = landColor(Math.min(1, (y - seaLevel) / (e.maxY - seaLevel)));
+        rgb = landColor(Math.min(1, Math.max(0, y - seaLevel) / (e.maxY - seaLevel)));
       }
       // central-difference normal -> lambert shade
       const gx = (yAt(c + 1, r) - yAt(c - 1, r)) / (2 * cellM);
       const gz = (yAt(c, r + 1) - yAt(c, r - 1)) / (2 * cellM);
       const inv = 1 / Math.hypot(gx, gz, 1);
       const shade = 0.62 + 0.38 * Math.max(0, (-gx * inv) * lx + (-gz * inv) * lz + inv * ly);
+      // PER-PIXEL ALPHA: unpainted terrain (flat at 0m, above sea) renders INVISIBLE — the layer
+      // shows relief only where the user actually sculpted (UAT: an opaque flat plain read as a
+      // "static green square" pasted over the map). Alpha ramps in over ~2m of deviation from
+      // the flat seed; submerged cells always read (painted depressions / raised sea level).
+      const dev = Math.abs(y);
+      let a = Math.min(1, dev / 2) * 0.85;
+      if (y < seaLevel - 0.05) a = Math.max(a, Math.min(1, 0.35 + (seaLevel - y) / 8) * 0.85);
       const i = (r * e.w + c) * 4;
-      d[i] = rgb[0] * shade; d[i + 1] = rgb[1] * shade; d[i + 2] = rgb[2] * shade; d[i + 3] = 255;
+      d[i] = rgb[0] * shade; d[i + 1] = rgb[1] * shade; d[i + 2] = rgb[2] * shade; d[i + 3] = Math.round(a * 255);
     }
   }
   ctx.putImageData(img, 0, 0);

@@ -96,7 +96,7 @@ export function renderMap(){
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
     '<select class="sw" id="elev-mode">'+[["raise","Raise"],["lower","Lower"],["smooth","Smooth"],["level","Level"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===elevMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
-    +'<label class="coord" style="margin-left:0">r</label><input type="range" id="elev-radius" min="2" max="60" step="1" value="'+elevRadius+'" style="width:80px" title="Brush radius (m)">'
+    +'<label class="coord" style="margin-left:0">r</label><input type="range" id="elev-radius" min="2" max="200" step="1" value="'+elevRadius+'" style="width:80px" title="Brush radius (m)">'
     +'<label class="coord" style="margin-left:0">str</label><input type="range" id="elev-strength" min="0.05" max="1" step="0.05" value="'+elevStrength+'" style="width:64px" title="Brush strength">'
     +(elevMode==="level"?'<input type="number" id="elev-levely" value="'+elevLevelY+'" step="0.5" style="width:56px" class="sw" title="Level target (m)">':'')
     +'<label class="coord" style="margin-left:0">sea</label><input type="range" id="elev-sea" min="-12" max="12" step="0.5" value="'+seaY+'" style="width:80px" title="Sea level (m)"><span class="coord" id="elev-sea-val" style="margin-left:0">'+seaY+'m</span>';
@@ -129,7 +129,7 @@ export function renderMap(){
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
     lasso:"drag a box to select features + markers, then delete them",
-    elev:"drag to "+elevMode+" terrain (one stroke = one undo step) · first stroke starts a flat 0m plain and REPLACES glyph/biome relief at build time",
+    elev:"drag to "+elevMode+" terrain (one stroke = one undo step) · drag the dashed border to move the region, corners to resize · unpainted terrain stays invisible · painting REPLACES glyph/biome relief at build time",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
     area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
     river:"click to add river points · double-click to finish · Esc to cancel",
@@ -214,10 +214,34 @@ function redrawMap(){
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   const elevCursor = mapTool==="elev" ? '<circle id="elev-cursor" r="'+(elevRadius*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
-  svg.innerHTML = biomeDefs() + ocean + g + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevCursor;
+  // The elevation REGION is user-adjustable while the tool is armed: dashed outline drags to
+  // move, corner handles resize (both one undo step). Cells never change — the rect is pure
+  // world-space metadata, so moving slides the painted terrain and resizing stretches it.
+  let elevRegion="";
+  if(mapTool==="elev"){
+    const er=EL.elevationOf(activeMap().id);
+    if(er){
+      const [rx,ry]=w2s(er.rect.x0,er.rect.z0);
+      const rw=er.rect.w*mapScale, rh=er.rect.h*mapScale;
+      const corners=[["nw",rx,ry],["ne",rx+rw,ry],["sw",rx,ry+rh],["se",rx+rw,ry+rh]];
+      elevRegion='<g id="elev-region">'
+        // The hit stroke must be PAINTED (opacity 0.004, imperceptible): Chrome's real-event hit
+        // testing skips a fully-transparent stroke even under pointer-events:stroke, while
+        // elementFromPoint honors it — a genuinely painted stroke hits in both paths.
+        +'<rect id="elev-rect-hit" x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'" fill="none" stroke="#000" stroke-opacity="0.004" stroke-width="14" style="cursor:move;pointer-events:stroke"/>'
+        +'<rect x="'+rx+'" y="'+ry+'" width="'+rw+'" height="'+rh+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="8 5" opacity=".8" style="pointer-events:none"/>'
+        +corners.map(c=>'<g class="elev-hn" data-corner="'+c[0]+'" style="cursor:'+(c[0]==="nw"||c[0]==="se"?"nwse-resize":"nesw-resize")+'">'
+          // painted near-invisible halo = a ~13px grab radius around each corner handle
+          +'<circle cx="'+c[1]+'" cy="'+c[2]+'" r="13" fill="#000" fill-opacity="0.004"/>'
+          +'<rect x="'+(c[1]-6)+'" y="'+(c[2]-6)+'" width="12" height="12" fill="#fff" stroke="var(--accent)" stroke-width="1.5"/></g>').join("")
+        +'</g>';
+    }
+  }
+  svg.innerHTML = biomeDefs() + ocean + g + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevRegion + elevCursor;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") bindFeatureEditing(svg);
+  bindElevRegion(svg);
   hint();
 }
 function featLabel(f){
@@ -336,7 +360,10 @@ function bindMap(){
     sea1.onchange=(e)=>{ const v=Number(e.target.value); if(v!==seaBefore) commit(H.cmdSetMapProp(activeMapId,"seaLevel",seaBefore,v),{applied:true}); };
   }
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
-    mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
+    // Min zoom 0.05 (was 0.4): a km-scale map (FMG import / continental coast) must be able to
+    // fit the viewport — at 0.4 a 2.6km island could never be seen whole, so its elevation
+    // region's edges were unreachable.
+    mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.05,Math.min(80,mapScale));
     // Keep the world point under the cursor fixed: sy = 320+(z-panz)*scale, so BOTH axes correct
     // with += (a -= on z was a leftover mirror from the +z=north era — it made zoom drift and
     // pan feel inverted vertically after the north=-z convention fix).
@@ -396,6 +423,16 @@ function elevDab(er,wx,wz,drag){
     elevRev++; refreshElevImage();
   }
 }
+function bindElevRegion(svg){
+  const hit=svg.querySelector("#elev-rect-hit");
+  if(hit) hit.addEventListener("mousedown",(e)=>{ e.stopPropagation();
+    const er=EL.elevationOf(activeMap().id); if(!er) return;
+    const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
+    mapDrag={type:"elevrect-move",mapId:activeMapId,raster:er,start:{...er.rect},wx0:wx,wz0:wz}; });
+  svg.querySelectorAll(".elev-hn").forEach(hn=>hn.addEventListener("mousedown",(e)=>{ e.stopPropagation();
+    const er=EL.elevationOf(activeMap().id); if(!er) return;
+    mapDrag={type:"elevrect-size",mapId:activeMapId,raster:er,start:{...er.rect},corner:hn.dataset.corner}; }));
+}
 let elevRafPending=false;
 function refreshElevImage(){
   if(elevRafPending) return; elevRafPending=true;
@@ -417,6 +454,21 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
     const steps=Math.max(1,Math.ceil(dist/stepM));
     for(let k=1;k<=steps;k++) elevDab(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
     mapDrag.lastW=[wx,wz]; }
+  else if(mapDrag.type==="elevrect-move"){
+    const [wx,wz]=s2w(mx,my); const er=mapDrag.raster;
+    er.rect.x0=mapDrag.start.x0+Math.round(wx-mapDrag.wx0);
+    er.rect.z0=mapDrag.start.z0+Math.round(wz-mapDrag.wz0);
+    redrawMap(); }
+  else if(mapDrag.type==="elevrect-size"){
+    const [wx,wz]=s2w(mx,my); const er=mapDrag.raster; const s=mapDrag.start;
+    // Anchor the opposite corner; clamp the span so the region can't collapse.
+    const ax=mapDrag.corner.includes("w")?s.x0+s.w:s.x0;
+    const az=mapDrag.corner.includes("n")?s.z0+s.h:s.z0;
+    const w=Math.max(40,Math.round(Math.abs(wx-ax))), h=Math.max(40,Math.round(Math.abs(wz-az)));
+    er.rect.x0=Math.round(Math.min(ax, mapDrag.corner.includes("w")?ax-w:ax+w));
+    er.rect.z0=Math.round(Math.min(az, mapDrag.corner.includes("n")?az-h:az+h));
+    er.rect.w=w; er.rect.h=h;
+    redrawMap(); }
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
   else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.points.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
@@ -444,6 +496,12 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
+  if(d.type==="elevrect-move"||d.type==="elevrect-size"){
+    if(JSON.stringify(d.raster.rect)!==JSON.stringify(d.start)){
+      d.raster.dirty=true;
+      commit(H.cmdSetRasterRect(d.mapId,d.raster,d.start,{...d.raster.rect}),{applied:true});
+    }
+    return; }
   if(d.type==="elev"){
     // One stroke = one undo step: bbox slices of the pre-stroke snapshot vs the current cells.
     if(d.bbox){

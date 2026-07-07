@@ -168,6 +168,15 @@ inversionTest("cmdSetMapProp (sea)", (m) => H.cmdSetMapProp("m1", "sea", m.sea, 
   check("cmdPatchRaster: patch marks the raster dirty (save picks it up)", raster.dirty === true);
   const bad = H.cmdPatchRaster("m1", raster, bbox, new Uint8Array(3), postSnap);
   check("cmdPatchRaster: mismatched snapshot sizes are rejected", bad === null);
+
+  // cmdSetRasterRect (region move/resize): rect metadata inversion, cells untouched.
+  const r2 = { w: 16, h: 16, rect: { x0: 0, z0: 0, w: 100, h: 100 }, cells: new Uint8Array(256).fill(9), dirty: false };
+  const h2 = H.createHistory();
+  H.push(h2, H.cmdSetRasterRect("m1", r2, { x0: 0, z0: 0, w: 100, h: 100 }, { x0: -50, z0: 20, w: 200, h: 160 }), {}, null);
+  check("cmdSetRasterRect: redo applies the new rect + marks dirty", eq(r2.rect, { x0: -50, z0: 20, w: 200, h: 160 }) && r2.dirty);
+  H.undo(h2, () => ({}));
+  check("cmdSetRasterRect: undo restores the original rect", eq(r2.rect, { x0: 0, z0: 0, w: 100, h: 100 }));
+  check("cmdSetRasterRect: cells untouched by region edits", r2.cells.every((v) => v === 9));
 }
 {
   // Falsifiability: a command whose undo LIES (doesn't invert) must be caught by the same check.

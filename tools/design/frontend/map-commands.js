@@ -160,6 +160,20 @@ export function cmdPatchRaster(mapId, raster, bbox, before, after) {
   };
 }
 
+/** Move/resize the elevation region (Map Studio S1 UAT: the region must be user-adjustable).
+ *  Same closure-held raster-store pattern as cmdPatchRaster; the cells are untouched — the rect
+ *  is pure world-space metadata, so moving it slides the painted terrain and resizing stretches
+ *  it (predictable, and exactly what the rasterizer's rect projection does). */
+export function cmdSetRasterRect(mapId, raster, before, after) {
+  const b = clone(before), a = clone(after);
+  return {
+    label: "move/resize elevation region",
+    mapId,
+    redo() { raster.rect = clone(a); raster.dirty = true; },
+    undo() { raster.rect = clone(b); raster.dirty = true; },
+  };
+}
+
 /** Snapshot a raster bbox (row-major slice) — the capture half of cmdPatchRaster. */
 export function rasterBboxSnapshot(raster, bbox) {
   const { c0, r0, c1, r1 } = bbox;

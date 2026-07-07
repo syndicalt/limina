@@ -9,7 +9,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -117,6 +117,24 @@ function saveMaps(maps, activeMapId) {
   let prev = {};
   try { prev = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")) || {}; } catch { /* first save */ }
   const doc = serializeMapDoc(maps, activeMapId, prev);
+  // TRIPWIRE (phantom feature loss under investigation): whenever a save DROPS features that the
+  // on-disk doc has, snapshot both sides so the culprit interaction can be reconstructed. Legit
+  // deletes trip this too — it's evidence, not a refusal.
+  try {
+    for (const pm of prev.maps || []) {
+      const nm = doc.maps.find((m) => m.id === pm.id);
+      const prevIds = new Set((pm.features || []).map((f) => f.id));
+      const nextIds = new Set(((nm && nm.features) || []).map((f) => f.id));
+      const dropped = [...prevIds].filter((id) => !nextIds.has(id));
+      if (dropped.length > 0) {
+        const evDir = join(vaultDir, ".map-save-drops");
+        mkdirSync(evDir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        writeFileSync(join(evDir, `${stamp}-${pm.id}.json`), JSON.stringify({ droppedIds: dropped, prevMap: pm, nextMap: nm ?? null }, null, 2));
+        console.warn(`map-save DROPPED ${dropped.length} feature(s) from "${pm.id}" (${dropped.join(", ")}) — evidence in ${evDir}`);
+      }
+    }
+  } catch { /* evidence only — never block a save */ }
   writeFileSync(join(vaultDir, "maps.json"), JSON.stringify(doc, null, 2));
   return { saved: true, maps: doc.maps.length };
 }
