@@ -162,7 +162,11 @@ export function renderMap(){
     '<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">';
   const props = colorPick+elevControls+landControls+terrainControls;
   document.getElementById("center").innerHTML =
-    '<div class="map-wrap"><div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
+    // The svg is REBUILT on every render — it must carry the CURRENT viewBox, not a hardcoded
+    // default: syncViewBox caches the container size and early-returns when unchanged, so a
+    // hardcoded default here survives every re-render after the first (the recurring
+    // letterbox-margin bug).
+    '<div class="map-wrap"><div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 '+VBW+' '+VBH+'"></svg>'
     +'<div class="fi fi-corner">'
       +'<select class="sw" id="map-sw" title="Switch map">'+opts+'</select>'
       +'<button class="tool" id="map-new" title="New map">＋</button>'
@@ -482,7 +486,8 @@ function showFeatMenu(featId,cx,cy){
   document.body.appendChild(m);
   m.querySelector('[data-a="props"]').onclick=()=>{ m.remove(); const f=curFeatures().find(x=>x.id===featId); if(f) openFeatInspector(f,cx,cy); };
   m.querySelector('[data-a="del"]').onclick=()=>{ m.remove(); deleteFeatById(featId,false); };
-  setTimeout(()=>document.addEventListener("mousedown",function h(){ m.remove(); document.removeEventListener("mousedown",h); }),0);
+  // Only OUTSIDE mousedowns close the menu — removing it on an inside mousedown kills the click.
+  setTimeout(()=>document.addEventListener("mousedown",function h(ev){ if(m.contains(ev.target)) return; m.remove(); document.removeEventListener("mousedown",h); }),0);
 }
 function openFeatInspector(f,cx,cy){
   document.getElementById("insp")?.remove();
@@ -679,8 +684,11 @@ async function showImportMenu(){
   const btn=document.getElementById("map-import").getBoundingClientRect();
   m.style.left=btn.left+"px"; m.style.top=(btn.bottom+6)+"px";
   document.body.appendChild(m);
-  m.querySelectorAll(".ci").forEach(d=>d.onclick=(e)=>{ e.stopPropagation(); m.remove(); importWorldMap(d.dataset.f); });
-  setTimeout(()=>document.addEventListener("mousedown",function h(){ m.remove(); document.removeEventListener("mousedown",h); }),0);
+  // Bind on mousedown with stopPropagation: the close-on-outside-mousedown handler below would
+  // otherwise remove the menu BEFORE a click event can fire on the item (mousedown bubbles to
+  // document first, the element leaves the DOM, and the click never dispatches).
+  m.querySelectorAll(".ci").forEach(d=>d.addEventListener("mousedown",(e)=>{ e.stopPropagation(); m.remove(); importWorldMap(d.dataset.f); }));
+  setTimeout(()=>document.addEventListener("mousedown",function h(ev){ if(m.contains(ev.target)) return; m.remove(); document.removeEventListener("mousedown",h); }),0);
 }
 async function importWorldMap(file){
   if(!confirm('Import "'+file+'" into this map? Painted layers and stamps will be REPLACED (Ctrl+Z restores).')) return;
