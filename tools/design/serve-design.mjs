@@ -96,6 +96,11 @@ function loadMaps(project) {
   if (!data || !Array.isArray(data.maps) || data.maps.length === 0) {
     data = { activeMapId: "primary", maps: [{ id: "primary", name: project + " — Hamlet", scope: "site", parent: null, features: [] }] };
   }
+  // SCALE CONTRACT migration-on-read: every map carries units so world coordinates translate
+  // to real-world meters (units.kind === "m" -> worldUnits * unitsPerMeter = meters).
+  for (const m of data.maps) {
+    if (!m.units) m.units = { kind: "m", unitsPerMeter: 1, origin: [0, 0] };
+  }
   return { maps: data.maps, activeMapId: data.activeMapId || data.maps[0].id };
 }
 function saveMaps(maps, activeMapId) {

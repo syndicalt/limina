@@ -661,10 +661,12 @@ function redrawMap(){
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="640"/>'; }
   for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="1000" y2="'+sy+'"/>'; }
   const [ax]=w2s(0,0),[,ay]=w2s(0,0); g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
-  // Scale indication: the map's world units ARE engine meters, so say so on the frame.
+  // Scale indication: the map's world units convert to real meters via its SCALE CONTRACT
+  // (units.unitsPerMeter — 1 for plain engine-meter maps, so behavior is unchanged by default).
   // (a) axis tick labels at every gridline — x values along the bottom edge, z along the left;
   // (b) a zoom-adaptive scale bar (1/2/5×10^n meters, 60-150px) bottom-right, m→km rollover.
-  const fmtM=(v)=>Math.abs(v)>=1000?(Math.round(v/100)/10)+"km":Math.round(v)+"m";
+  const upm=(activeMap().units&&activeMap().units.unitsPerMeter)||1;
+  const fmtM=(v)=>{ const m=v*upm; return Math.abs(m)>=1000?(Math.round(m/100)/10)+"km":Math.round(m)+"m"; };
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0);
     if(sx>28&&sx<972) g+='<text class="map-tick" x="'+(sx+3)+'" y="634">'+fmtM(x)+'</text>'; }
   for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z);
@@ -880,7 +882,7 @@ function switchMap(id){ activeMapId=id; STATE.activeMapId=id; drawPts=[]; saveMa
 async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
   const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||("map"+(STATE.maps.length+1));
   if(STATE.maps.some(m=>m.id===id)){ alert("a map with that id exists"); return; }
-  STATE.maps.push({id,name,scope:"region",parent:activeMapId,features:[]}); await saveMaps(); switchMap(id); }
+  STATE.maps.push({id,name,scope:"region",parent:activeMapId,features:[],units:{kind:"m",unitsPerMeter:1,origin:[0,0]}}); await saveMaps(); switchMap(id); }
 
 // ---- marker inspector: create / edit / tag / link / delete (spawns at the mouse) ----
 function openInspector(marker, pos, cx, cy){
