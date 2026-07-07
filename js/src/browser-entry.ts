@@ -752,8 +752,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cmd.kind === "skill" && cmd.tool === "world.setTerrainSource" &&
     (cmd.input as { kind?: unknown } | undefined)?.kind === "map"
   );
+  // Map Phase 3.4: an honest DISTANCE TREATMENT for kilometer-scale streamed worlds. A hand-tuned demo
+  // far plane (run()'s fly-cam far=900, or a proof's own hard-coded orbit.far) clips client-streamed
+  // terrain with a hard edge — no atmosphere to hide it. Only for map-streamed worlds (the same
+  // `streamingPlanned` signal that suppresses the baseline ground): widen the far plane to 1500 m and
+  // hand-tune the DEFAULT atmosphere's density so the haze reads as real by ~600 m out. The haze colour
+  // is left at `atmosphere.color: null` (untouched, inherited from base) — see render-baseline.ts:
+  // that auto-matches `sky.horizon`, i.e. the SAME colour already painted as `scene.background`, so
+  // distant terrain melts into the sky instead of hitting a grey wall. Non-streamed worlds: this
+  // object is never constructed, so nothing about their camera/fog changes.
+  // FogExp2's "characteristic distance" (where 1-exp(-(density*d)^2) reaches the 1/e point, i.e.
+  // ~63% faded) at density = 1/600 sits at d=600 m — the requested "fog from ~600 m" read literally.
+  // By the 1500 m far plane distance*density ≈ 2.5, i.e. >99% faded: geometry is already the fog
+  // colour (which matches the sky/horizon — see the doc above) well before the clip plane, so nothing
+  // pops when it's culled by `far`.
+  const streamedAtmosphere: RenderBaselineOverride = { camera: { far: 1500 }, atmosphere: { density: 1 / 600 } };
   const liveBaseline: RenderBaselineOverride = streamingPlanned
-    ? { ground: { enabled: false }, ...(opts.renderBaseline ?? {}) }
+    ? { ground: { enabled: false }, ...streamedAtmosphere, ...(opts.renderBaseline ?? {}) }
     : (opts.renderBaseline ?? {});
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
@@ -1011,9 +1026,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const radius = opts.orbit?.radius ?? 16;
   const camHeight = opts.orbit?.height ?? 8;
   if (opts.orbit?.far !== undefined) {
-    // Push the far plane out for large (map-streamed) worlds — mirrors run()'s orbit.far.
     const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
-    cam.far = opts.orbit.far;
+    // Map Phase 3.4: a map-streamed world's far plane floors at 1500 m (applied above via
+    // liveBaseline.camera.far) — an explicit orbit.far only WIDENS that floor, never narrows it back
+    // down (a proof authored before this policy existed, e.g. stream-proof.json's far:700, must not
+    // undo it). Non-streamed worlds: unchanged — exactly `cam.far = opts.orbit.far` as before.
+    cam.far = streamingPlanned ? Math.max(opts.orbit.far, 1500) : opts.orbit.far;
     cam.updateProjectionMatrix();
   }
   let cameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;

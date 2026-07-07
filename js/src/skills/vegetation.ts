@@ -199,7 +199,12 @@ export function registerVegetationSkills(
           ctx.emit("vegetation.mounting", { archetype: id, index: idx, total: totalArchetypes, instances: list.length });
           try {
             const root = await parseGltfScene(id, assets.resolve(id).bytes);
-            for (const mesh of buildAssetInstancedMeshes(root, list)) {
+            // Chunk this archetype's instances into 96 m cells — a forest can span an entire terrain
+            // layer/map, and without chunking one whole-scatter bounding sphere would (almost) always
+            // intersect the frustum, defeating culling even once the sphere itself is correct (see
+            // asset-scatter-render.ts's chunkSize doc). Other buildAssetInstancedMeshes callers
+            // (asset.scatter props, village dressing) are already spatially bounded and don't opt in.
+            for (const mesh of buildAssetInstancedMeshes(root, list, { chunkSize: 96 })) {
               (mesh as unknown as InstMesh).castShadow = true;
               (mesh as unknown as InstMesh).receiveShadow = true;
               scene!.add(mesh);

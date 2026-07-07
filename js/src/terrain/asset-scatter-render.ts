@@ -20,8 +20,9 @@ const Y_AXIS = new THREE.Vector3(0, 1, 0);
 /**
  * Build the InstancedMesh(es) that render `instances` of ONE asset, given its loaded
  * glTF `root`. Returns one InstancedMesh per renderable mesh in the asset (so a
- * multi-part asset places all parts); an empty list when there are no instances or
- * the asset has no meshes. The caller adds the meshes to the scene + disposes them.
+ * multi-part asset places all parts) — or, with `opts.chunkSize` set, one per renderable
+ * mesh PER SPATIAL CELL (see the chunkSize doc below); an empty list when there are no
+ * instances or the asset has no meshes. The caller adds the meshes to the scene + disposes them.
  */
 export function buildAssetInstancedMeshes(
   root: SceneObject,
@@ -33,6 +34,15 @@ export function buildAssetInstancedMeshes(
      *  height is degenerate (≈0) are skipped (empty list). Omit to keep the asset's own size
      *  (trees/rocks, where the intrinsic metre scale is meaningful). */
     normalizeHeight?: number;
+    /** Spatial CHUNKING (metres) for a scatter that can span a large area (a forest laid across a
+     *  whole map): bucket instances into a fixed XZ grid of this cell size and mount ONE InstancedMesh
+     *  per (mesh node × cell) instead of one per node for the whole flat list. Each chunk gets its own
+     *  tight bounding sphere (see below), so a far chunk can be frustum-culled independently of a near
+     *  one — without chunking, a map-spanning scatter's single bounding sphere would cover the entire
+     *  span and the frustum would almost always intersect it, i.e. no culling GRANULARITY even once the
+     *  sphere is correct. Omit (the default) for scatters that are already spatially bounded (per-region
+     *  props, per-building dressing) — one bucket, byte-identical mesh count/order to no chunking. */
+    chunkSize?: number;
   },
 ): THREE.InstancedMesh[] {
   if (instances.length === 0) return [];
@@ -86,8 +96,27 @@ export function buildAssetInstancedMeshes(
     offset.premultiply(new THREE.Matrix4().makeScale(s, s, s));
   }
 
-  // One InstancedMesh per mesh, all sharing the asset-level corrective offset (applied in asset-root
-  // space via premultiply → vertex path: instance × offset × local × vertex).
+  // Bucket instances into fixed-size spatial cells (opt-in via opts.chunkSize) so a map-spanning
+  // scatter gets one InstancedMesh PER AREA per mesh node, instead of one covering the whole span —
+  // see the chunkSize doc comment above for why. Chunking off (the default): one "bucket" holding every
+  // instance, in original order — byte-identical to the pre-chunking single-mesh-per-node behaviour.
+  const cellSize = opts?.chunkSize;
+  const buckets: AssetInstance[][] = [];
+  if (cellSize === undefined || !(cellSize > 0)) {
+    buckets.push(instances);
+  } else {
+    const cells = new Map<string, AssetInstance[]>();
+    for (const inst of instances) {
+      const key = `${Math.floor(inst.x / cellSize)}:${Math.floor(inst.z / cellSize)}`;
+      let list = cells.get(key);
+      if (list === undefined) { list = []; cells.set(key, list); }
+      list.push(inst);
+    }
+    buckets.push(...cells.values());
+  }
+
+  // One InstancedMesh per (mesh node × cell bucket), all sharing the asset-level corrective offset
+  // (applied in asset-root space via premultiply → vertex path: instance × offset × local × vertex).
   const meshes: THREE.InstancedMesh[] = [];
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -95,23 +124,30 @@ export function buildAssetInstancedMeshes(
   const scl = new THREE.Vector3();
   for (const { geometry, material, local } of nodes) {
     const placed = new THREE.Matrix4().copy(local).premultiply(offset);
-    const inst = new THREE.InstancedMesh(geometry, material, instances.length);
-    for (let i = 0; i < instances.length; i++) {
-      const p = instances[i];
-      pos.set(p.x, p.y, p.z);
-      q.setFromAxisAngle(Y_AXIS, p.yaw);
-      scl.set(p.scale, p.scale, p.scale);
-      m.compose(pos, q, scl).multiply(placed);
-      inst.setMatrixAt(i, m);
+    if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
+    for (const bucket of buckets) {
+      const inst = new THREE.InstancedMesh(geometry, material, bucket.length);
+      for (let i = 0; i < bucket.length; i++) {
+        const p = bucket[i];
+        pos.set(p.x, p.y, p.z);
+        q.setFromAxisAngle(Y_AXIS, p.yaw);
+        scl.set(p.scale, p.scale, p.scale);
+        m.compose(pos, q, scl).multiply(placed);
+        inst.setMatrixAt(i, m);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      inst.castShadow = false;
+      inst.receiveShadow = true;
+      // A REAL bounding sphere: THREE's InstancedMesh.computeBoundingSphere() (three ^0.184) unions the
+      // per-instance-matrix-transformed geometry bounding sphere across every instance — it already
+      // accounts for instance transforms, unlike a Mesh's plain (origin-only) bounding sphere. Compute
+      // it eagerly (rather than leaving the renderer to lazily compute it on first frustum test) so the
+      // cost is paid once at mount time. frustumCulled stays at THREE's default `true`: combined with
+      // the per-cell bucketing above, a chunk whose sphere sits outside the frustum is skipped whole —
+      // real culling, instead of every scatter submitting every frame regardless of camera.
+      inst.computeBoundingSphere();
+      meshes.push(inst);
     }
-    inst.instanceMatrix.needsUpdate = true;
-    inst.castShadow = false;
-    inst.receiveShadow = true;
-    // Instances spread far from the asset origin, but InstancedMesh frustum-culls against the base
-    // geometry's bounding sphere AT THE ORIGIN — so a scatter whose origin sits off-screen gets the
-    // WHOLE mesh culled (the forest vanishes). Disable per-mesh culling; the scatter is bounded.
-    inst.frustumCulled = false;
-    meshes.push(inst);
   }
   return meshes;
 }
