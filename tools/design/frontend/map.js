@@ -370,9 +370,14 @@ function renderLayers(){
   if((m.rasters&&m.rasters.landmass)||LM.landmassOf(m.id)) paints.push(["landmass","Landmass (painted)","#dccfa6"]);
   if((m.rasters&&m.rasters.biomes)||LM.biomesOf(m.id)) paints.push(["biomes","Terrain (painted)","#4a7a45"]);
   if((m.rasters&&m.rasters.elevation)||EL.elevationOf(m.id)) paints.push(["elevation","Elevation (painted)","#8fae7a"]);
-  if(!f.length&&!paints.length){ el.className="map-layers empty"; el.innerHTML=""; return; }
+  // Always name the active map — landing on an empty child map with a bare canvas and no
+  // label reads as data loss (it happened).
   el.className="map-layers";
-  el.innerHTML='<div class="lh"><b>Layers ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
+  if(!f.length&&!paints.length){
+    el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+'</b></div><div class="lr"><span class="nm" style="color:var(--muted)">empty map — paint or stamp to begin</span></div>';
+    return;
+  }
+  el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+' ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
     +paints.map(p=>'<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span><button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button></div>').join("")
     +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
   const clr=document.getElementById("lyr-clear"); if(clr) clr.onclick=clearMapFeatures;
