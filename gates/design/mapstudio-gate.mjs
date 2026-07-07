@@ -540,6 +540,20 @@ console.log("stamps (painter P3):");
   check("(falsifiability) rotating a stamp changes the contentHash", sm2.provenance.contentHash !== sm.provenance.contentHash);
   const { worldMap: sm0 } = compileDesignMap({ mapsJsonText: doc(undefined), worldBibleText: WB_TEXT });
   check("no stamps -> no asset anchors, and the hash walk emits nothing new", sm0.anchors.every((a) => a.kind !== "asset") && worldMapContentHash(sm0) === sm0.provenance.contentHash);
+
+  // Stamp command inversions (the tool's undo stack — same purity contract as features).
+  const smap = { id: "m1", features: [], stamps: [] };
+  const hh2 = H.createHistory();
+  H.push(hh2, H.cmdAddStamp("m1", { id: "st1", assetId: "cottage-authored.glb", x: 5, z: 6 }), {}, smap);
+  check("cmdAddStamp places", smap.stamps.length === 1 && smap.stamps[0].assetId === "cottage-authored.glb");
+  H.push(hh2, H.cmdMoveStamp("m1", "st1", { x: 5, z: 6, rot: undefined, scale: undefined }, { x: 9, z: 2, rot: 1.1, scale: undefined }), {}, smap);
+  check("cmdMoveStamp transforms (rot appears)", smap.stamps[0].x === 9 && smap.stamps[0].rot === 1.1);
+  H.push(hh2, H.cmdDeleteStamp("m1", smap, "st1"), {}, smap);
+  check("cmdDeleteStamp removes", smap.stamps.length === 0);
+  H.undo(hh2, () => smap); H.undo(hh2, () => smap);
+  check("undo restores position and DELETES the introduced rot", smap.stamps[0].x === 5 && smap.stamps[0].rot === undefined);
+  H.undo(hh2, () => smap);
+  check("full unwind returns the empty stamp list", eq(smap.stamps, []));
 }
 
 // ---- 7. Data-safety fixes (phantom feature loss) ------------------------------------------------

@@ -358,6 +358,28 @@ createServer((req, res) => {
     });
     return;
   }
+  if (req.method === "GET" && req.url.split("?")[0] === "/api/catalog") {
+    // The REAL asset catalog (read fresh — the architect daemon appends approved assets).
+    try {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+      res.end(readFileSync(join(LIMINA_HOME, "assets", "catalog.json"), "utf8"));
+    } catch (e) {
+      res.writeHead(500); res.end(String(e));
+    }
+    return;
+  }
+  if (req.method === "GET" && req.url.startsWith("/assets/qc/")) {
+    // QC-render thumbnails for the stamp tool — basename-only (traversal-safe), read-only.
+    try {
+      const name = basename(req.url.split("?")[0]);
+      if (!/^[\w.-]+\.(png|jpg|jpeg)$/i.test(name)) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg", "cache-control": "max-age=300" });
+      res.end(readFileSync(join(LIMINA_HOME, "assets", "qc", name)));
+    } catch {
+      res.writeHead(404); res.end();
+    }
+    return;
+  }
   if (req.url === "/api/state") {
     try {
       res.writeHead(200, { "content-type": "application/json" });

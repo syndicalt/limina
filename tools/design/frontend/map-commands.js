@@ -210,6 +210,53 @@ export function cmdSetRasterLayer(mapId, map, key, next) {
   };
 }
 
+// ---- stamp commands (Painter P3) — map.stamps is a sibling array to features: each stamp is
+// {id, assetId, x, z, rot?, scale?} and compiles 1:1 into an "asset" anchor. Same purity
+// contract as everything above.
+
+const sidx = (map, sid) => (map.stamps || []).findIndex((s) => s.id === sid);
+
+export function cmdAddStamp(mapId, stamp) {
+  const snap = clone(stamp);
+  return {
+    label: "place " + (stamp.assetId || "stamp"),
+    mapId,
+    redo(m) { m.stamps = m.stamps || []; if (sidx(m, snap.id) < 0) m.stamps.push(clone(snap)); },
+    undo(m) { const i = sidx(m, snap.id); if (i >= 0) m.stamps.splice(i, 1); },
+  };
+}
+
+export function cmdDeleteStamp(mapId, map, sid) {
+  const i = sidx(map, sid);
+  if (i < 0) return null;
+  const snap = clone(map.stamps[i]);
+  return {
+    label: "delete " + (snap.assetId || "stamp"),
+    mapId,
+    redo(m) { const j = sidx(m, sid); if (j >= 0) m.stamps.splice(j, 1); },
+    undo(m) { m.stamps = m.stamps || []; if (sidx(m, snap.id) < 0) m.stamps.splice(Math.min(i, m.stamps.length), 0, clone(snap)); },
+  };
+}
+
+/** Drag-commit move / transform: before/after are {x, z, rot?, scale?} snapshots. */
+export function cmdMoveStamp(mapId, sid, before, after) {
+  const b = clone(before), a = clone(after);
+  const applyTo = (m, g) => {
+    const j = sidx(m, sid);
+    if (j < 0) return;
+    for (const k of ["x", "z", "rot", "scale"]) {
+      if (g[k] === undefined) delete m.stamps[j][k];
+      else m.stamps[j][k] = g[k];
+    }
+  };
+  return {
+    label: "move stamp",
+    mapId,
+    redo(m) { applyTo(m, a); },
+    undo(m) { applyTo(m, b); },
+  };
+}
+
 /** Map-level scalar prop (e.g. the sea toggle). */
 export function cmdSetMapProp(mapId, key, before, after) {
   const b = clone(before), a = clone(after);

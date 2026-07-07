@@ -204,6 +204,13 @@
   .fi-tools { top:12px; left:50%; transform:translateX(-50%); }
   .fi-props { top:62px; left:50%; transform:translateX(-50%); gap:8px; padding:6px 10px; }
   .fi-corner { top:12px; left:14px; }
+  .fi-catalog { top:64px; left:14px; flex-direction:column; align-items:stretch; gap:4px; width:200px; max-height:calc(100% - 130px); overflow:auto; }
+  .fi-catalog .ci-note { font-size:12px; color:var(--muted); padding:8px; }
+  .fi-catalog .cat-item { display:flex; align-items:center; gap:8px; border:none; background:none; border-radius:8px; padding:5px 6px; cursor:pointer; color:var(--ink); font:inherit; font-size:12.5px; text-align:left; }
+  .fi-catalog .cat-item:hover { background:var(--panel-2); }
+  .fi-catalog .cat-item.on { background:var(--accent); color:#fff; }
+  .fi-catalog .cat-item img { width:40px; height:40px; object-fit:cover; border-radius:6px; background:var(--panel-2); flex:none; }
+  .fi-catalog .cat-item span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .fi-coord { bottom:12px; right:14px; min-width:150px; justify-content:flex-end; font-family:ui-monospace,monospace; font-size:11.5px; color:var(--muted); padding:5px 10px; }
   .map-svg-wrap { flex:1; position:relative; overflow:hidden; }
   svg.map { width:100%; height:100%; display:block; background:var(--panel-2); cursor:default; touch-action:none; }

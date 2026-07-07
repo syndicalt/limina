@@ -33,6 +33,14 @@ let elevMode="raise", elevRadius=12, elevStrength=0.6, elevLevelY=4;
 let lmMode="land", lmRadius=100;
 // Terrain (biome) brush state (Painter P2). Palette = the compiler's biome vocabulary.
 let terKind="grass", terRadius=60;
+// Stamp tool state (Painter P3): the REAL asset catalog, fetched once; the armed assetId.
+let catalog=null, stampAssetId=null, selStamp=null;
+const catalogById=()=>{ const m=new Map(); for(const c of catalog||[]) m.set(c.id,c); return m; };
+async function loadCatalog(){
+  if(catalog) return;
+  try{ catalog = await (await fetch("/api/catalog")).json(); }catch{ catalog = []; }
+  renderMap();
+}
 let elevShadeUrl=null, elevShadeFor=null; // cached hillshade data-URL + "mapId:seaLevel:rev" key
 let elevRev=0; // bumped on every raster mutation (stroke dab, undo, redo)
 // Collision-proof feature ids. The old counter (seeded off performance.now's STRING LENGTH) made
@@ -129,7 +137,7 @@ export function renderMap(){
   // and ground cover. Legacy traced features still render read-only and seed the paint layers.
   // Glyphs are retired with the trace tools: painted elevation replaced their relief meaning,
   // the terrain palette their decorative one. Existing glyph features render read-only.
-  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["river","〜","Draw river"],["road","🛤","Draw road"],["border","┅","Draw border"]];
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road","🛤","Draw road (drag)"],["border","┅","Draw border (drag)"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -159,6 +167,13 @@ export function renderMap(){
     +'</div>'
     +'<div class="fi fi-tools">'+tools.map(t=>'<button class="tool'+(mapTool===t[0]?" on":"")+'" data-tool="'+t[0]+'" title="'+t[2]+'">'+t[1]+'</button>').join("")+'</div>'
     +(props?'<div class="fi fi-props">'+props+'</div>':'')
+    +(mapTool!=="stamp"?"":'<div class="fi fi-catalog" id="stamp-catalog">'
+      +(catalog===null?'<div class="ci-note">loading catalog…</div>'
+        :(catalog.length===0?'<div class="ci-note">catalog is empty</div>'
+        :catalog.map(c=>'<button class="cat-item'+(c.id===stampAssetId?" on":"")+'" data-asset="'+esc(c.id)+'" title="'+esc(c.id)+'">'
+          +'<img src="/assets/qc/'+esc((c.qcRender||"").split("/").pop())+'" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
+          +'<span>'+esc(c.title||c.id)+'</span></button>').join("")))
+      +'</div>')
     +'<div class="map-layers" id="map-layers"></div>'
     +'<div class="fi fi-coord" id="map-coord">—</div>'
     +'<div class="map-hint" id="map-hint"></div></div></div>';
@@ -178,9 +193,10 @@ function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
     land:"drag anywhere to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · painting REPLACES the traced coast at build time",
     terrain:"drag to paint "+(terKind==="erase"?"(erase ground cover)":terKind)+" (one stroke = one undo step) · ground shows on land only · painting REPLACES drawn biome regions at build time",
     marker:"click the map to place a marker",
-    river:"click to add river points · double-click to finish · Esc to cancel",
-    road:"click to add road points · double-click to finish · Esc to cancel",
-    border:"click to trace a political border · double-click to finish · Esc to cancel",
+    stamp:(stampAssetId?"click to place "+stampAssetId:"pick an asset from the catalog, then click to place")+" · select tool moves stamps · Delete removes",
+    river:"drag to draw the river's course (smoothed on release)",
+    road:"drag to draw the road (smoothed on release)",
+    border:"drag to draw a political border (smoothed on release)",
     outline:"click to trace the coastline (land) · double-click to close · Esc to cancel"}[mapTool];
   h.textContent=t||""; }
 function syncUndoButtons(){
@@ -283,6 +299,28 @@ function redrawMap(){
   const lines=feats.filter(f=>f.type==="line"&&f.kind!=="border").map(fsvg).join("");
   const borders=feats.filter(f=>f.type==="line"&&f.kind==="border").map(fsvg).join("");
   const glyphs=feats.filter(f=>f.type==="glyph").map(fsvg).join("");
+  // Placed asset stamps (P3): each draws its QC render at TRUE world footprint (catalog
+  // boundsM x scale), rotatable; a dangling assetId draws a LOUD placeholder, never nothing.
+  if((activeMap().stamps||[]).length>0 && catalog===null) loadCatalog();
+  const byId=catalogById();
+  const stampPx=(s)=>{ const c=byId.get(s.assetId); const wm=(c&&c.boundsM?Math.max(c.boundsM[0],c.boundsM[2]):16)*(s.scale||1); return Math.max(14,wm*mapScale); };
+  const stampsLayer=(activeMap().stamps||[]).map(s=>{
+    const [sx,sy]=w2s(s.x,s.z);
+    const c=byId.get(s.assetId);
+    const px=stampPx(s);
+    const rot=s.rot?(' transform="rotate('+(s.rot*180/Math.PI).toFixed(1)+' '+sx+' '+sy+')"'):'';
+    const sel=s.id===selStamp?'<circle cx="'+sx+'" cy="'+sy+'" r="'+(px/2+5)+'" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" style="pointer-events:none"/>':'';
+    if(!c&&catalog!==null) return '<g class="stampf" data-sid="'+s.id+'"'+rot+'><rect x="'+(sx-9)+'" y="'+(sy-9)+'" width="18" height="18" fill="#b96a2b" opacity=".9" rx="4"/><text x="'+(sx+13)+'" y="'+(sy+4)+'" font-size="11" fill="#b96a2b">⚠ '+esc(s.assetId)+'</text>'+sel+'</g>';
+    if(!c) return "";
+    return '<g class="stampf" data-sid="'+s.id+'"'+rot+'><image href="/assets/qc/'+esc((c.qcRender||"").split("/").pop())+'" x="'+(sx-px/2)+'" y="'+(sy-px/2)+'" width="'+px+'" height="'+px+'" preserveAspectRatio="xMidYMid slice"/>'+sel+'</g>';
+  }).join("");
+  // Ghost preview of the armed stamp under the cursor.
+  let stampGhost="";
+  if(mapTool==="stamp"&&stampAssetId){
+    const c=byId.get(stampAssetId);
+    const gpx=Math.max(14,((c&&c.boundsM?Math.max(c.boundsM[0],c.boundsM[2]):16))*mapScale);
+    stampGhost=c?'<image id="stamp-ghost" data-px="'+gpx+'" href="/assets/qc/'+esc((c.qcRender||"").split("/").pop())+'" width="'+gpx+'" height="'+gpx+'" opacity="0" preserveAspectRatio="xMidYMid slice" style="pointer-events:none"/>':"";
+  }
   // in-progress drawing
   let draw="";
   if(drawPts.length){ const isArea=["area","outline"].includes(mapTool); const pp=poly(drawPts);
@@ -299,9 +337,17 @@ function redrawMap(){
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
   // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons
   // for user-managed extent are gone.
-  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevCursor;
+  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + compass + elevCursor + stampGhost;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
+  svg.querySelectorAll(".stampf").forEach(el=>{
+    el.style.cursor = mapTool==="select" ? "move" : "";
+    el.addEventListener("mousedown",(e)=>{ if(mapTool!=="select") return; e.stopPropagation();
+      const sid=el.dataset.sid; selStamp=sid; selFeat=null;
+      const s=(activeMap().stamps||[]).find(x=>x.id===sid); if(!s) return;
+      mapDrag={type:"stampmove",sid,start:{x:s.x,z:s.z,rot:s.rot,scale:s.scale},moved:false};
+      redrawMap(); });
+  });
   if(mapTool==="select") bindFeatureEditing(svg);
   hint();
 }
@@ -441,6 +487,8 @@ function bindMap(){
     const m=activeMap();
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
+  document.querySelectorAll("#stamp-catalog .cat-item").forEach(b=>b.onclick=()=>{ stampAssetId=b.dataset.asset; renderMap(); });
+  if(mapTool==="stamp"&&catalog===null) loadCatalog();
   const tk=document.getElementById("ter-kind"); if(tk) tk.onchange=(e)=>{ terKind=e.target.value; hint(); };
   const tr2=document.getElementById("ter-radius"); if(tr2) tr2.oninput=(e)=>{ terRadius=Number(e.target.value);
     const lab=document.getElementById("ter-radius-val"); if(lab) lab.textContent=terRadius+"m";
@@ -505,20 +553,26 @@ function bindMap(){
       if(created) redrawMap();
       return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
+    if(mapTool==="stamp"){
+      if(!stampAssetId){ toast("pick an asset from the catalog"); return; }
+      commit(H.cmdAddStamp(activeMapId,{id:fid(),assetId:stampAssetId,x:Math.round(x),z:Math.round(z)}));
+      return; }
     if(["river","road","border"].includes(mapTool)){
-      for(let i=0;i<drawPts.length;i++){ const [px,py]=w2s(drawPts[i][0],drawPts[i][1]); if(Math.hypot(px-mx,py-my)<9){ drawPts.splice(i,1); redrawMap(); return; } }
-      drawPts.push([Math.round(x),Math.round(z)]); redrawMap(); return; }
+      // Drag-stroke drawing (P3): the line follows the drag, Chaikin-smoothed on commit.
+      mapDrag={type:"draw",kind:mapTool,pts:[[Math.round(x),Math.round(z)]],lastW:[x,z]};
+      drawPts=mapDrag.pts; return; }
     if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
     if(mapTool==="select"&&selFeat){ selFeat=null; redrawMap(); }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
-  svg.addEventListener("dblclick",(e)=>{ if(["river","road","border"].includes(mapTool)) finishDraw(); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
   svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     const c=document.getElementById("map-coord");
     if(c){ const er=EL.elevationOf(activeMap().id);
       c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz)+(er?"  y "+EL.sampleY(er,wx,wz).toFixed(1)+"m":""); }
     const cur=document.getElementById("elev-cursor");
-    if(cur){ cur.setAttribute("cx",mx); cur.setAttribute("cy",my); cur.setAttribute("opacity","0.9"); } });
+    if(cur){ cur.setAttribute("cx",mx); cur.setAttribute("cy",my); cur.setAttribute("opacity","0.9"); }
+    const gh=document.getElementById("stamp-ghost");
+    if(gh){ const px=+gh.dataset.px; gh.setAttribute("x",mx-px/2); gh.setAttribute("y",my-px/2); gh.setAttribute("opacity","0.55"); } });
   window.addEventListener("keydown",mapKey); window.addEventListener("keyup",mapKeyUp);
   // Keep the 1:1 viewBox in lockstep with the container (window resize, panel collapse).
   if(vbObserver) vbObserver.disconnect();
@@ -543,9 +597,10 @@ function mapKey(e){ if(S.activeView!=="map") return;
     syncBrushUI(); return;
   }
   if((e.key===" "||e.code==="Space")&&!typing){ if(!spaceDown){ spaceDown=true; document.getElementById("map-svg")?.classList.add("space"); } e.preventDefault(); return; }
-  if(e.key==="Escape"){ drawPts=[]; selFeat=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
-  else if(e.key==="Enter"&&drawPts.length&&!typing) finishDraw();
-  else if((e.key==="Delete"||e.key==="Backspace")&&selFeat&&!typing){ e.preventDefault(); deleteFeatById(selFeat,true); } }
+  if(e.key==="Escape"){ drawPts=[]; selFeat=null; selStamp=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
+  else if((e.key==="Delete"||e.key==="Backspace")&&(selFeat||selStamp)&&!typing){ e.preventDefault();
+    if(selStamp){ commit(H.cmdDeleteStamp(activeMapId, activeMap(), selStamp)); selStamp=null; }
+    else deleteFeatById(selFeat,true); } }
 function mapKeyUp(e){ if(e.key===" "||e.code==="Space"){ spaceDown=false; document.getElementById("map-svg")?.classList.remove("space"); } }
 /** Reflect a keyboard brush-size change in the props island (slider + label) and the cursor. */
 function syncBrushUI(){
@@ -556,13 +611,28 @@ function syncBrushUI(){
   if(lab) lab.textContent=r+"m";
   const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",r*mapScale);
 }
-function finishDraw(){
-  const pts=drawPts.filter((p,i)=> i===0 || p[0]!==drawPts[i-1][0] || p[1]!==drawPts[i-1][1]);
-  drawPts=[];
-  if(pts.length<2){ redrawMap(); return; }
-  // Only line features are drawn point-by-point now — land and ground cover are painted.
-  if(!["river","road","border"].includes(mapTool)){ redrawMap(); return; }
-  commit(H.cmdAddFeature(activeMapId, {id:fid(),type:"line",kind:mapTool,points:pts,color:drawColor})); }
+// Open-polyline Chaikin (endpoints pinned) + min-distance decimation — drag-drawn rivers/roads
+// commit as smooth, bounded-vertex lines.
+function chaikinOpen(pts){
+  if(pts.length<3) return pts;
+  const out=[pts[0]];
+  for(let i=0;i<pts.length-1;i++){
+    const [x1,z1]=pts[i],[x2,z2]=pts[i+1];
+    out.push([x1*.75+x2*.25,z1*.75+z2*.25],[x1*.25+x2*.75,z1*.25+z2*.75]);
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+function decimatePts(pts,minD){
+  if(pts.length<3) return pts;
+  const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const l=out[out.length-1];
+    if(Math.hypot(pts[i][0]-l[0],pts[i][1]-l[1])>=minD) out.push(pts[i]);
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
 /** ELEVATION CARVES WATER: the effective land mask for display = painted land minus painted
  *  sub-sea elevation (see map-paint.effectiveLand — the compiler applies the identical rule).
  *  Null when the map has no painted elevation. */
@@ -674,6 +744,15 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
     const steps=Math.max(1,Math.ceil(dist/stepM));
     for(let k=1;k<=steps;k++) terDabAt(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
     mapDrag.lastW=[wx,wz]; }
+  else if(mapDrag.type==="draw"){
+    const [wx,wz]=s2w(mx,my); const [lx,lz]=mapDrag.lastW;
+    if(Math.hypot(wx-lx,wz-lz)>=4/mapScale){
+      mapDrag.pts.push([Math.round(wx),Math.round(wz)]); mapDrag.lastW=[wx,wz];
+      drawPts=mapDrag.pts; redrawMap();
+    } }
+  else if(mapDrag.type==="stampmove"){
+    const s=(activeMap().stamps||[]).find(x=>x.id===mapDrag.sid);
+    if(s){ const [wx,wz]=s2w(mx,my); s.x=Math.round(wx); s.z=Math.round(wz); mapDrag.moved=true; redrawMap(); } }
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
   else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.points.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
@@ -701,6 +780,19 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
+  if(d.type==="draw"){
+    drawPts=[];
+    let pts=d.pts;
+    if(pts.length>=2){
+      pts=decimatePts(chaikinOpen(chaikinOpen(pts)), Math.max(2,4/mapScale));
+      commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"line",kind:d.kind,points:pts.map(p=>[Math.round(p[0]),Math.round(p[1])]),color:drawColor}));
+    } else redrawMap();
+    return; }
+  if(d.type==="stampmove"){
+    const s=(activeMap().stamps||[]).find(x=>x.id===d.sid);
+    if(s&&d.moved) commit(H.cmdMoveStamp(activeMapId,d.sid,d.start,{x:s.x,z:s.z,rot:s.rot,scale:s.scale}),{applied:true});
+    else redrawMap();
+    return; }
   if(d.type==="elev"||d.type==="land"||d.type==="terrain"){
     // One stroke = one undo step: bbox slices of the pre-stroke snapshot vs the current cells.
     if(d.bbox){
