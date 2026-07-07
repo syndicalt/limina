@@ -385,9 +385,13 @@ function renderLayers(){
     return;
   }
   el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+' ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
-    +paints.map(p=>'<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span>'
-      +'<button class="eye'+(hiddenLayers.has(p[0])?" off":"")+'" data-eye="'+p[0]+'" title="Show / hide this layer (view only)">'+(hiddenLayers.has(p[0])?"◌":"👁")+'</button>'
-      +(p[0]==="stamps"?"":'<button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button>')+'</div>').join("")
+    +paints.map(p=>{
+      // currentColor SVG eye — the 👁 emoji is a dark glyph and vanishes on the dark theme.
+      const eyeOn='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/></svg>';
+      const eyeOff='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" opacity=".45"/><line x1="4" y1="20" x2="20" y2="4"/></svg>';
+      return '<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span>'
+      +'<button class="eye'+(hiddenLayers.has(p[0])?" off":"")+'" data-eye="'+p[0]+'" title="Show / hide this layer (view only)">'+(hiddenLayers.has(p[0])?eyeOff:eyeOn)+'</button>'
+      +(p[0]==="stamps"?"":'<button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button>')+'</div>';}).join("")
     +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
   const clr=document.getElementById("lyr-clear"); if(clr) clr.onclick=clearMapFeatures;
   el.querySelectorAll(".lr .eye[data-eye]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation();
