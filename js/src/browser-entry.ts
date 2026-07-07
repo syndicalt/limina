@@ -770,8 +770,20 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // colour (which matches the sky/horizon — see the doc above) well before the clip plane, so nothing
   // pops when it's culled by `far`.
   const streamedAtmosphere: RenderBaselineOverride = { camera: { far: 1500 }, atmosphere: { density: 1 / 600 } };
+  // Task #71: a world that AUTHORS real terrain (terrain.create editable layer, or generated
+  // regions) renders its own ground — the baseline's flat 80×80 slate plane at y=0 would sit
+  // ABOVE any seabed/river bed below y=0 and show through the transparent water as a dark
+  // square, with the water's wave vertex displacement dipping around the opaque plane into a
+  // dark "checkerboard/blob" pattern (the shallow-water artifact NE/SE of the map island).
+  // Same policy run()'s terrain mode and the map-streamed path already apply: suppress the
+  // baseline ground whenever the log builds terrain. An explicit override still wins.
+  const terrainAuthored = opts.commands.some((cmd) =>
+    cmd.kind === "skill" && (cmd.tool === "terrain.create" || cmd.tool === "world.generateRegion")
+  );
   const liveBaseline: RenderBaselineOverride = streamingPlanned
     ? { ground: { enabled: false }, ...streamedAtmosphere, ...(opts.renderBaseline ?? {}) }
+    : terrainAuthored
+    ? { ground: { enabled: false }, ...(opts.renderBaseline ?? {}) }
     : (opts.renderBaseline ?? {});
   status("loading", "starting WebGPU");
   const { renderer, scene, camera } = await buildRenderTarget(
