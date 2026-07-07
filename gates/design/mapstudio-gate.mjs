@@ -554,6 +554,22 @@ console.log("stamps (painter P3):");
   check("undo restores position and DELETES the introduced rot", smap.stamps[0].x === 5 && smap.stamps[0].rot === undefined);
   H.undo(hh2, () => smap);
   check("full unwind returns the empty stamp list", eq(smap.stamps, []));
+
+  // Import-layers inversion (P4): a wholesale layer swap + feature append undoes exactly.
+  const imap = { id: "m1", seaLevel: 2, features: [{ id: "keep", type: "line", kind: "road", points: [[0, 0], [1, 1]] }], rasters: { elevation: { w: 2, h: 2, rect: { x0: 0, z0: 0, w: 10, h: 10 }, minY: 0, maxY: 1, data: "AAAA" } } };
+  const iorig = clone(imap);
+  const hh3 = H.createHistory();
+  H.push(hh3, H.cmdImportLayers("m1", imap, {
+    rasters: { landmass: { w: 2, h: 2, rect: { x0: 0, z0: 0, w: 10, h: 10 }, enc: "rle8", data: "BAA=" } },
+    stamps: [{ id: "si", assetId: "cottage-authored.glb", x: 1, z: 2 }],
+    seaLevel: 0,
+    featuresAppend: [{ id: "f-imp-1", type: "line", kind: "river", points: [[3, 3], [4, 4]] }],
+  }), {}, imap);
+  check("import swaps rasters/stamps/seaLevel and appends features",
+    !!imap.rasters.landmass && !imap.rasters.elevation && imap.stamps.length === 1 && imap.seaLevel === 0 && imap.features.length === 2);
+  H.undo(hh3, () => imap);
+  check("import undo restores the ENTIRE prior state byte-identically", eq(imap, iorig));
+  check("(falsifiability) a lying import-undo would be DETECTED", !eq({ ...clone(iorig), seaLevel: 0 }, iorig));
 }
 
 // ---- 7. Data-safety fixes (phantom feature loss) ------------------------------------------------

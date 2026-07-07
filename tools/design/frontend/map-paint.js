@@ -462,6 +462,87 @@ export function renderBiomesImage(e, mapId, landEntry) {
   return url;
 }
 
+// ─── WorldMap IR importer (Painter P4) ──────────────────────────────────────────────────────────
+// A compiled WorldMap (design-space or FMG export) converts BACK into paint layers, so generated
+// or previously-compiled maps become hand-editable with the same brushes. Pure compute — returns
+// the serialized doc fields for cmdImportLayers; never mutates the map.
+
+import { u8ToB64 } from "/shared/raster-codec.mjs";
+
+export function importWorldMapIntoLayers(worldMap) {
+  const upm = worldMap.unitsPerMeter || 1;
+  // Extent: land ∪ biomes ∪ reliefGrid rect, padded — the world the IR describes.
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  const eat = (x, z) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; };
+  for (const l of worldMap.land || []) for (const p of l.points) eat(p[0], p[1]);
+  for (const b of worldMap.biomes || []) for (const p of b.points) eat(p[0], p[1]);
+  const g = worldMap.reliefGrid;
+  if (g) { eat(g.rect.x0, g.rect.z0); eat(g.rect.x0 + g.rect.w, g.rect.z0 + g.rect.h); }
+  if (minX === Infinity) throw new Error("worldmap has no spatial content to import");
+  const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+  const span = Math.max(200, (maxX - minX) * 1.15, (maxZ - minZ) * 1.15);
+  const rect = { x0: Math.round(cx - span / 2), z0: Math.round(cz - span / 2), w: Math.round(span), h: Math.round(span) };
+
+  const rasters = {};
+  // Landmass mask from the land polygons (holes carve back to ocean).
+  if ((worldMap.land || []).length > 0) {
+    const e = { w: LAND_SIZE, h: LAND_SIZE, rect, cells: new Uint8Array(LAND_SIZE * LAND_SIZE) };
+    for (const l of worldMap.land) {
+      scanlineFill(e, l.points);
+      for (const hole of l.holes || []) scanlineFillValue(e, hole, 0);
+    }
+    rasters.landmass = { w: e.w, h: e.h, rect: { ...rect }, ...encodeRasterCells(e.cells) };
+  }
+  // Biome raster from the biome polygons (array order wins on overlap, like the compiler's).
+  if ((worldMap.biomes || []).length > 0) {
+    const e = { w: BIOME_SIZE, h: BIOME_SIZE, rect, cells: new Uint8Array(BIOME_SIZE * BIOME_SIZE) };
+    for (const b of worldMap.biomes) {
+      const idx = BIOME_CLASSES.indexOf(b.biome);
+      if (idx >= 0) scanlineFillValue(e, b.points, idx + 1);
+    }
+    rasters.biomes = { w: e.w, h: e.h, rect: { ...rect }, ...encodeRasterCells(e.cells) };
+  }
+  // Elevation: resample the reliefGrid (bilinear) into the import extent, keeping its y range.
+  if (g) {
+    const src = decodeRasterCells(g, g.w * g.h);
+    const W = BIOME_SIZE, cells = new Uint8Array(W * W);
+    const gx0 = g.rect.x0, gz0 = g.rect.z0, gw = g.rect.w, gh = g.rect.h;
+    // Outside the source grid, terrain is flat y=0 — encode that value, not raw 0 (= minY pit).
+    const flat = Math.max(0, Math.min(255, Math.round((0 - g.minY) / (g.maxY - g.minY) * 255)));
+    for (let r = 0; r < W; r++) {
+      const wz = rect.z0 + r / (W - 1) * rect.h;
+      for (let c = 0; c < W; c++) {
+        const wx = rect.x0 + c / (W - 1) * rect.w;
+        if (wx < gx0 || wx > gx0 + gw || wz < gz0 || wz > gz0 + gh) { cells[r * W + c] = flat; continue; }
+        const u = Math.max(0, Math.min(g.w - 1, (wx - gx0) / gw * (g.w - 1)));
+        const v = Math.max(0, Math.min(g.h - 1, (wz - gz0) / gh * (g.h - 1)));
+        const c0 = Math.floor(u), r0 = Math.floor(v);
+        const c1 = Math.min(g.w - 1, c0 + 1), r1 = Math.min(g.h - 1, r0 + 1);
+        const fu = u - c0, fv = v - r0;
+        const a = src[r0 * g.w + c0], b = src[r0 * g.w + c1], d = src[r1 * g.w + c0], f = src[r1 * g.w + c1];
+        cells[r * W + c] = Math.round((a * (1 - fu) + b * fu) * (1 - fv) + (d * (1 - fu) + f * fu) * fv);
+      }
+    }
+    rasters.elevation = { w: W, h: W, rect: { ...rect }, minY: g.minY, maxY: g.maxY, data: u8ToB64(cells) };
+  }
+  // Asset anchors -> stamps; waterways/routes -> drawn line features.
+  const stamps = (worldMap.anchors || [])
+    .filter((a) => a.kind === "asset" && a.assetId)
+    .map((a) => ({ id: a.id, assetId: a.assetId, x: a.position[0], z: a.position[1], ...(a.rot !== undefined ? { rot: a.rot } : {}), ...(a.scale !== undefined ? { scale: a.scale } : {}) }));
+  const featuresAppend = [
+    ...(worldMap.waterways || []).map((w2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "river", points: w2.points.map((p) => [Math.round(p[0]), Math.round(p[1])]) })),
+    ...(worldMap.routes || []).map((r2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "road", points: r2.points.map((p) => [Math.round(p[0]), Math.round(p[1])]) })),
+  ];
+  return {
+    rasters,
+    ...(stamps.length ? { stamps } : {}),
+    ...(featuresAppend.length ? { featuresAppend } : {}),
+    seaLevel: typeof worldMap.seaLevel === "number" ? worldMap.seaLevel : 0,
+    rect,
+    _upm: upm,
+  };
+}
+
 export function syncBiomesIntoDoc(maps) {
   for (const map of maps || []) {
     const e = bioCache.get(map.id);

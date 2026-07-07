@@ -368,6 +368,25 @@ createServer((req, res) => {
     }
     return;
   }
+  if (req.method === "GET" && req.url.split("?")[0] === "/api/worldmaps") {
+    // Compiled WorldMap IR files available for import into the Atlas as paint layers.
+    try {
+      const dir = join(LIMINA_HOME, "assets", "maps");
+      const files = readdirSync(dir).filter((f) => f.endsWith(".worldmap.json"));
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+      res.end(JSON.stringify(files));
+    } catch { res.writeHead(200, { "content-type": "application/json" }); res.end("[]"); }
+    return;
+  }
+  if (req.method === "GET" && req.url.startsWith("/api/worldmaps/")) {
+    try {
+      const name = basename(req.url.split("?")[0]);
+      if (!/^[\w.-]+\.worldmap\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(readFileSync(join(LIMINA_HOME, "assets", "maps", name), "utf8"));
+    } catch { res.writeHead(404); res.end(); }
+    return;
+  }
   if (req.method === "GET" && req.url.startsWith("/assets/qc/")) {
     // QC-render thumbnails for the stamp tool — basename-only (traversal-safe), read-only.
     try {

@@ -61,8 +61,10 @@ function commit(cmd, opts) {
 }
 // Undo/redo announce what they touched: deep undo silently crossing from raster strokes into
 // feature adds (deleting them) is how a held Ctrl+Z ate saved features.
-function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
-function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
+function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
+function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
+/** Import swaps ENTIRE rasters wholesale — clean caches would go stale either direction. */
+function dropPaintCachesFor(mapId){ EL.dropElevationCache(mapId); LM.dropLandmassCache(mapId); LM.dropBiomesCache(mapId); }
 
 // Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
 bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); LM.syncLandmassIntoDoc(S.state.maps); LM.syncBiomesIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
@@ -165,6 +167,7 @@ export function renderMap(){
       +'<select class="sw" id="map-sw" title="Switch map">'+opts+'</select>'
       +'<button class="tool" id="map-new" title="New map">＋</button>'
       +'<button class="tool'+(sea?" on":"")+'" id="map-sea" title="Ocean background">🌊</button>'
+      +'<button class="tool" id="map-import" title="Import a compiled world map as paint layers"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v11"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg></button>'
       +'<span class="fi-sep"></span>'
       +'<button class="tool" id="map-undo" title="Undo (Ctrl+Z) — session only">↩</button>'
       +'<button class="tool" id="map-redo" title="Redo (Ctrl+Shift+Z)">↪</button>'
@@ -392,7 +395,11 @@ function renderLayers(){
       return '<div class="lr"><span class="sw" style="background:'+p[2]+'"></span><span class="nm">'+p[1]+'</span>'
       +'<button class="eye'+(hiddenLayers.has(p[0])?" off":"")+'" data-eye="'+p[0]+'" title="Show / hide this layer (view only)">'+(hiddenLayers.has(p[0])?eyeOff:eyeOn)+'</button>'
       +(p[0]==="stamps"?"":'<button class="x" data-paint="'+p[0]+'" title="Delete this painted layer (undoable)">×</button>')+'</div>';}).join("")
-    +f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join("");
+    +(f.length>12
+      // Imported maps carry hundreds of rivers/roads — group per kind instead of 500 rows.
+      ? Object.entries(f.reduce((acc,x)=>{ const k=featLabel(x); (acc[k]=acc[k]||[]).push(x.id); return acc; },{}))
+          .map(([label,ids])=>'<div class="lr"><span class="sw" style="background:'+featSwatch(f.find(x=>featLabel(x)===label))+'"></span><span class="nm">'+esc(label)+' ('+ids.length+')</span><button class="x" data-group="'+esc(label)+'" title="Delete all '+esc(label)+' features (undoable)">×</button></div>').join("")
+      : f.map((x,i)=>'<div class="lr'+(x.id===selFeat?" sel":"")+'" data-i="'+i+'"><span class="sw" style="background:'+featSwatch(x)+'"></span><span class="nm">'+esc(featLabel(x))+'</span><button class="x" data-i="'+i+'" title="Delete this feature">×</button></div>').join(""));
   const clr=document.getElementById("lyr-clear"); if(clr) clr.onclick=clearMapFeatures;
   el.querySelectorAll(".lr .eye[data-eye]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation();
     const k=b.dataset.eye;
@@ -400,6 +407,11 @@ function renderLayers(){
     redrawMap(); });
   el.querySelectorAll(".lr .x[data-paint]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deletePaintLayer(b.dataset.paint); });
   el.querySelectorAll(".lr .x[data-i]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); deleteFeatById(curFeatures()[+b.dataset.i].id,false); });
+  el.querySelectorAll(".lr .x[data-group]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation();
+    const label=b.dataset.group;
+    const ids=curFeatures().filter(x=>featLabel(x)===label).map(x=>x.id);
+    if(!confirm("Delete all "+ids.length+" "+label+" features? (Ctrl+Z restores)")) return;
+    commit(H.cmdDeleteFeatures(activeMapId, activeMap(), ids)); });
   el.querySelectorAll(".lr[data-i]").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
     r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
 }
@@ -509,6 +521,7 @@ function bindMap(){
     const m=activeMap();
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
+  const imp=document.getElementById("map-import"); if(imp) imp.onclick=showImportMenu;
   document.querySelectorAll("#stamp-catalog .cat-item").forEach(b=>b.onclick=()=>{ stampAssetId=b.dataset.asset; renderMap(); });
   if(mapTool==="stamp"&&catalog===null) loadCatalog();
   const tk=document.getElementById("ter-kind"); if(tk) tk.onchange=(e)=>{ terKind=e.target.value; hint(); };
@@ -654,6 +667,38 @@ function decimatePts(pts,minD){
   }
   out.push(pts[pts.length-1]);
   return out;
+}
+// ── WorldMap IR import (P4): compiled/FMG maps become editable paint layers ─────────────────
+async function showImportMenu(){
+  let files=[];
+  try{ files=await (await fetch("/api/worldmaps")).json(); }catch{ /* fall through */ }
+  if(!files.length){ toast("no compiled world maps found (assets/maps/*.worldmap.json)"); return; }
+  document.getElementById("feat-menu")?.remove();
+  const m=document.createElement("div"); m.className="ctx-menu"; m.id="feat-menu";
+  m.innerHTML=files.map(f=>'<div class="ci" data-f="'+esc(f)+'">'+esc(f)+'</div>').join("");
+  const btn=document.getElementById("map-import").getBoundingClientRect();
+  m.style.left=btn.left+"px"; m.style.top=(btn.bottom+6)+"px";
+  document.body.appendChild(m);
+  m.querySelectorAll(".ci").forEach(d=>d.onclick=(e)=>{ e.stopPropagation(); m.remove(); importWorldMap(d.dataset.f); });
+  setTimeout(()=>document.addEventListener("mousedown",function h(){ m.remove(); document.removeEventListener("mousedown",h); }),0);
+}
+async function importWorldMap(file){
+  if(!confirm('Import "'+file+'" into this map? Painted layers and stamps will be REPLACED (Ctrl+Z restores).')) return;
+  let wm;
+  try{ wm=await (await fetch("/api/worldmaps/"+encodeURIComponent(file))).json(); }
+  catch{ toast("failed to load "+file); return; }
+  let after;
+  try{ after=LM.importWorldMapIntoLayers(wm); }
+  catch(e){ toast(String(e.message||e)); return; }
+  const em=activeMap();
+  EL.dropElevationCache(em.id); LM.dropLandmassCache(em.id); LM.dropBiomesCache(em.id);
+  selStamp=null; elevRev++;
+  commit(H.cmdImportLayers(activeMapId, em, after));
+  // Fit the view to the imported extent.
+  mapPan={x:after.rect.x0+after.rect.w/2, z:after.rect.z0+after.rect.h/2};
+  mapScale=Math.max(0.05, Math.min((VBW-140)/after.rect.w, (VBH-140)/after.rect.h));
+  renderMap();
+  toast("imported "+file);
 }
 /** ELEVATION CARVES WATER: the effective land mask for display = painted land minus painted
  *  sub-sea elevation (see map-paint.effectiveLand — the compiler applies the identical rule).

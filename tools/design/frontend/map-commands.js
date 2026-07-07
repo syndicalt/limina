@@ -257,6 +257,32 @@ export function cmdMoveStamp(mapId, sid, before, after) {
   };
 }
 
+/** Import compiled-WorldMap layers (Painter P4) as ONE undoable step. `after` carries the new
+ *  serialized paint state: {rasters?, stamps?, seaLevel?, featuresAppend?}. Undo restores the
+ *  exact prior rasters/stamps/seaLevel and removes the appended features (they are appended
+ *  last, so a length slice is exact as long as undo happens through this stack — which it must). */
+export function cmdImportLayers(mapId, map, after) {
+  const before = { rasters: clone(map.rasters), stamps: clone(map.stamps), seaLevel: clone(map.seaLevel) };
+  const app = clone(after.featuresAppend || []);
+  const setOrDelete = (m, key, v) => { if (v === undefined) delete m[key]; else m[key] = clone(v); };
+  return {
+    label: "import map layers",
+    mapId,
+    redo(m) {
+      if (after.rasters !== undefined) setOrDelete(m, "rasters", after.rasters);
+      if (after.stamps !== undefined) setOrDelete(m, "stamps", after.stamps);
+      if (after.seaLevel !== undefined) setOrDelete(m, "seaLevel", after.seaLevel);
+      if (app.length) m.features = [...(m.features || []), ...clone(app)];
+    },
+    undo(m) {
+      if (after.rasters !== undefined) setOrDelete(m, "rasters", before.rasters);
+      if (after.stamps !== undefined) setOrDelete(m, "stamps", before.stamps);
+      if (after.seaLevel !== undefined) setOrDelete(m, "seaLevel", before.seaLevel);
+      if (app.length) m.features = (m.features || []).slice(0, Math.max(0, (m.features || []).length - app.length));
+    },
+  };
+}
+
 /** Map-level scalar prop (e.g. the sea toggle). */
 export function cmdSetMapProp(mapId, key, before, after) {
   const b = clone(before), a = clone(after);
