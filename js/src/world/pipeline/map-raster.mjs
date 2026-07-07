@@ -331,6 +331,15 @@ export function rasterizeWorldMap(worldMap, opts) {
       if (gridSample) {
         h = gridSample(wx, wz);
         paintedSubSea = inLand && h < seaLevel - 0.5;
+        // SEA cells with no authored seabed (the raster reads at/above the plane out there —
+        // typically the unpainted default): fall back to the classic deepening shore falloff.
+        // Without this the whole open sea rides the -0.5 clamp ceiling and renders as a BRIGHT
+        // SAND SHELF around the island. A decisively sub-sea painted value IS an authored
+        // seabed (e.g. a dug bay) and is honored as-is.
+        if (!inLand && h >= seaLevel - 0.5) {
+          const t = smoothstep01(coastD / shoreBand);
+          h = lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
+        }
       } else {
         const t = smoothstep01(coastD / shoreBand);
         h = inLand ? lerp(seaLevel + 0.4, landBase, t) : lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);

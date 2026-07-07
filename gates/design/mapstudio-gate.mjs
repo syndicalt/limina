@@ -465,6 +465,16 @@ console.log("elevation carves water:");
   check("lake: lake floor gets seabed paint (no bare checker under water)", lp[li] === 1);
   const { heights: fh2 } = rasterizeWorldMap(flatMap, { size: 800, resolution: 201, seed: 7 });
   check(`(falsifiability) same cell WITHOUT the pit stays land above sea (got ${fh2[li].toFixed(1)}m)`, fh2[li] > 0);
+
+  // OPEN SEA under a painted elevation raster: where the raster carries no authored seabed
+  // (unpainted default ≈ +2 out there), sea cells must fall back to the classic deepening
+  // falloff — NOT ride the -0.5 clamp ceiling (that renders as a bright sand shelf around
+  // the island). The dug trench (-12, an AUTHORED seabed now outside the land mask) must
+  // stay at its painted depth, deeper than the classic profile ever goes.
+  const farSea = lakeIdx(-380, -380); // corner of the tile, ~250m from the disc coast
+  check(`sea: un-authored seabed deepens away from the coast (got ${lh[farSea].toFixed(1)}m)`, lh[farSea] < -2);
+  const trenchSea = (() => { const i = lakeIdx(120, 0); return dh[i]; })(); // dug bay cell, sea side
+  check(`sea: an authored (painted) seabed keeps its depth (got ${trenchSea.toFixed(1)}m)`, trenchSea < -8);
 }
 
 // ---- 6. P2: painted biomes (raster -> per-class polygons -> ground paint) -----------------------

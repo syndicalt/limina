@@ -720,8 +720,50 @@ async function doCompile(retried){
   toast("compile failed: "+msg, 6000);
 }
 
-// ── 3D peek (P5): compile + render one real-GPU frame of this map, shown in a lightbox ──────
+// ── 3D peek (P5): compile + render a 12-frame orbit of this map through the real engine on the
+// real GPU. The lightbox opens IMMEDIATELY with an orbit loading animation, then becomes a
+// drag-to-scrub turntable viewer (the frames are pre-rendered yaw stills, not video — scrubbing
+// is the honest interaction).
 let peekPoll=null;
+function closePeekBox(){ if(peekPoll){ clearInterval(peekPoll); peekPoll=null; } document.getElementById("peek-box")?.remove(); }
+function peekOverlay(){
+  closePeekBox();
+  const d=document.createElement("div"); d.id="peek-box";
+  d.style.cssText="position:fixed;inset:0;background:rgba(12,11,9,.82);display:flex;align-items:center;justify-content:center;z-index:60";
+  d.addEventListener("mousedown",ev=>{ if(ev.target===d) closePeekBox(); });
+  document.body.appendChild(d);
+  return d;
+}
+function showPeekLoading(){
+  const d=peekOverlay();
+  d.style.cursor="progress";
+  const box=document.createElement("div");
+  box.style.cssText="display:flex;flex-direction:column;align-items:center;gap:14px;color:#d8d2c6;font:13px/1.4 system-ui;user-select:none";
+  box.innerHTML=
+    '<svg width="220" height="150" viewBox="0 0 220 150">'
+    +'<defs><radialGradient id="pkg" cx="50%" cy="42%" r="60%"><stop offset="0%" stop-color="#3f5a3a"/><stop offset="100%" stop-color="#2a3d2c"/></radialGradient></defs>'
+    // sea disc + island
+    +'<ellipse cx="110" cy="92" rx="72" ry="20" fill="#1d3340" opacity="0.9"/>'
+    +'<path d="M74 92 q10 -16 24 -13 q6 -18 20 -6 q12 -10 18 4 q12 2 8 15 q-36 8 -70 0 z" fill="url(#pkg)"/>'
+    +'<path d="M96 76 l7 -12 l7 12 z" fill="#6b6154"/><path d="M100 70 l3 -5 l3 5 z" fill="#e8ecef"/>'
+    // orbit path + the camera dot flying it (SMIL follows the ellipse)
+    +'<ellipse cx="110" cy="92" rx="94" ry="30" fill="none" stroke="rgba(216,210,198,.28)" stroke-dasharray="3 5"/>'
+    +'<circle r="5" fill="#e8b04c"><animateMotion dur="4.5s" repeatCount="indefinite" path="M 204 92 a 94 30 0 1 0 -188 0 a 94 30 0 1 0 188 0"/></circle>'
+    +'</svg>'
+    +'<div id="peek-phase" style="letter-spacing:.04em"></div>'
+    +'<div id="peek-clock" style="font-size:11px;opacity:.55"></div>';
+  d.appendChild(box);
+  const phases=["compiling the map…","raising terrain…","filling the seas…","growing the forest…","circling the camera…","almost there…"];
+  const t0=Date.now();
+  const tick=()=>{
+    if(!document.getElementById("peek-phase")) return;
+    const s=Math.floor((Date.now()-t0)/1000);
+    document.getElementById("peek-phase").textContent=phases[Math.min(phases.length-1, Math.floor(s/9))];
+    document.getElementById("peek-clock").textContent=s+"s";
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
 async function doPeek(){
   if(!confirm("Render a 3D peek of this map? (~30–90s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
   await flushMapSave();
@@ -729,34 +771,44 @@ async function doPeek(){
   try{ j=await postJSON("/api/peek",{mapId:activeMapId}); }
   catch(e){ toast("peek failed: "+String(e), 6000); return; }
   if(j.error){ toast("peek failed: "+j.error, 6000); return; }
-  if(j.editorHostUp) toast("rendering… note: the editor host is running — if its browser tab is open, the render may destabilize it", 6000);
-  else toast("rendering 3D peek… (30–90s)", 5000);
-  if(peekPoll) clearInterval(peekPoll);
+  if(j.editorHostUp) toast("note: the editor host is running — if its browser tab is open, the render may destabilize it", 6000);
+  showPeekLoading();
   peekPoll=setInterval(async()=>{
     try{
       const s=await (await fetch("/api/peek/"+j.job)).json();
-      if(s.status==="done"){ clearInterval(peekPoll); peekPoll=null; showPeek(s.frameUrls&&s.frameUrls.length?s.frameUrls:[s.url]); }
-      else if(s.status==="error"||s.status==="unknown"){ clearInterval(peekPoll); peekPoll=null; toast("peek failed: "+(s.error||s.status), 7000); }
+      if(s.status==="done"){ clearInterval(peekPoll); peekPoll=null; if(document.getElementById("peek-box")) showPeek(s.frameUrls&&s.frameUrls.length?s.frameUrls:[s.url]); }
+      else if(s.status==="error"||s.status==="unknown"){ closePeekBox(); toast("peek failed: "+(s.error||s.status), 7000); }
     }catch{ /* keep polling */ }
   }, 2500);
 }
-// Rotating setpiece: the job pre-renders evenly-spaced yaw frames of the auto-spinning orbit;
-// cycle them (preloaded) so the peek reads as a turntable, not a single oddball still.
+// Turntable viewer: drag horizontally to SCRUB through the pre-rendered yaw frames (or ←/→).
 function showPeek(urls){
-  document.getElementById("peek-box")?.remove();
-  const t=Date.now();
+  const d=peekOverlay();
+  const t=Date.now(), N=urls.length;
   const imgs=urls.map(u=>{ const im=new Image(); im.src=u+"?t="+t; return im; });
-  const d=document.createElement("div"); d.id="peek-box";
-  d.style.cssText="position:fixed;inset:0;background:rgba(12,11,9,.75);display:flex;align-items:center;justify-content:center;z-index:60;cursor:zoom-out";
   const img=document.createElement("img");
-  img.src=imgs[0].src;
-  img.style.cssText="max-width:92%;max-height:92%;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.55)";
-  img.alt="3D peek render";
+  img.src=imgs[0].src; img.alt="3D peek render"; img.draggable=false;
+  img.style.cssText="max-width:92%;max-height:88%;border-radius:10px;box-shadow:0 24px 70px rgba(0,0,0,.55);cursor:grab;user-select:none;touch-action:none";
   d.appendChild(img);
-  let k=0, spin=null;
-  if(imgs.length>1) spin=setInterval(()=>{ k=(k+1)%imgs.length; if(imgs[k].complete) img.src=imgs[k].src; }, 220);
-  d.onclick=()=>{ if(spin) clearInterval(spin); d.remove(); };
-  document.body.appendChild(d);
+  if(N>1){
+    const hint=document.createElement("div");
+    hint.textContent="drag to orbit";
+    hint.style.cssText="position:absolute;bottom:26px;left:50%;transform:translateX(-50%);color:#d8d2c6;opacity:.6;font:12px system-ui;letter-spacing:.06em;pointer-events:none";
+    d.appendChild(hint);
+  }
+  let k=0;
+  const setK=(n)=>{ k=((n%N)+N)%N; if(imgs[k].complete) img.src=imgs[k].src; };
+  let dragging=false, startX=0, startK=0;
+  img.addEventListener("pointerdown",ev=>{ dragging=true; startX=ev.clientX; startK=k; img.style.cursor="grabbing"; img.setPointerCapture(ev.pointerId); ev.preventDefault(); });
+  img.addEventListener("pointermove",ev=>{ if(!dragging) return; setK(startK+Math.round((ev.clientX-startX)/40)); });
+  img.addEventListener("pointerup",()=>{ dragging=false; img.style.cursor="grab"; });
+  const onKey=(ev)=>{
+    if(!document.getElementById("peek-box")){ document.removeEventListener("keydown",onKey); return; }
+    if(ev.key==="ArrowRight") setK(k+1);
+    else if(ev.key==="ArrowLeft") setK(k-1);
+    else if(ev.key==="Escape") { closePeekBox(); document.removeEventListener("keydown",onKey); }
+  };
+  document.addEventListener("keydown",onKey);
 }
 
 // ── WorldMap IR import (P4): compiled/FMG maps become editable paint layers ─────────────────
