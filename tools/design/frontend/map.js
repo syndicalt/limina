@@ -82,15 +82,28 @@ function biomeDefs(){
    +'</defs>';
 }
 
-function w2s(x,z){ return [500 + (x-mapPan.x)*mapScale, 320 + (z-mapPan.z)*mapScale]; }
-function s2w(sx,sy){ return [mapPan.x + (sx-500)/mapScale, mapPan.z + (sy-320)/mapScale]; }
+// The viewBox is 1:1 with the container's CSS pixels and re-syncs on resize — a fixed 1000x640
+// viewBox letterboxed on wide screens: content spilled into dead pillars past the coordinate
+// space, the ocean rect stopped short, and the left-edge z ticks landed in the dead band.
+let VBW=1000, VBH=640;
+function syncViewBox(){
+  const wrap=document.querySelector(".map-svg-wrap"), svg=document.getElementById("map-svg");
+  if(!wrap||!svg) return false;
+  const w=Math.max(200,wrap.clientWidth), h=Math.max(200,wrap.clientHeight);
+  if(w===VBW&&h===VBH) return false;
+  VBW=w; VBH=h;
+  svg.setAttribute("viewBox","0 0 "+VBW+" "+VBH);
+  return true;
+}
+function w2s(x,z){ return [VBW/2 + (x-mapPan.x)*mapScale, VBH/2 + (z-mapPan.z)*mapScale]; }
+function s2w(sx,sy){ return [mapPan.x + (sx-VBW/2)/mapScale, mapPan.z + (sy-VBH/2)/mapScale]; }
 function evtVB(e,svg){
   // Map client px -> viewBox coords via the SVG's own transform, so it stays exact regardless of
   // the letterboxing preserveAspectRatio adds when the element's aspect ratio differs from the
   // viewBox (1000:640). A naive rect-ratio mapping drifts.
   const m=svg.getScreenCTM();
   if(m){ const p=svg.createSVGPoint(); p.x=e.clientX; p.y=e.clientY; const q=p.matrixTransform(m.inverse()); return [q.x,q.y]; }
-  const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*1000, (e.clientY-r.top)/r.height*640];
+  const r=svg.getBoundingClientRect(); return [(e.clientX-r.left)/r.width*VBW, (e.clientY-r.top)/r.height*VBH];
 }
 function primaryMapId(){ return (S.state.maps&&S.state.maps[0]&&S.state.maps[0].id)||"primary"; }
 function activeMap(){ return (S.state.maps||[]).find(m=>m.id===activeMapId) || (S.state.maps||[])[0] || {id:"primary",features:[]}; }
@@ -155,8 +168,8 @@ export function renderMap(){
   if(fittedMap!==activeMapId && marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
     mapPan={x:(Math.min(...xs)+Math.max(...xs))/2, z:(Math.min(...zs)+Math.max(...zs))/2};
     const spanX=Math.max(30,Math.max(...xs)-Math.min(...xs)), spanZ=Math.max(30,Math.max(...zs)-Math.min(...zs));
-    mapScale=Math.max(1, Math.min(880/spanX, 520/spanZ)); fittedMap=activeMapId; }
-  bindMap(); redrawMap();
+    mapScale=Math.max(1, Math.min((VBW-120)/spanX, (VBH-120)/spanZ)); fittedMap=activeMapId; }
+  syncViewBox(); bindMap(); redrawMap();
 }
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
@@ -178,11 +191,13 @@ function syncUndoButtons(){
 function redrawMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
   let step=10; while(step*mapScale<40) step*=2; while(step*mapScale>140) step/=2;
-  const [wx0,wz1]=s2w(0,0), [wx1,wz0]=s2w(1000,640);
+  // Screen-top is the SMALLER z under north=-z (z grows downward on screen) — iterate zTop→zBot.
+  // The old loops ran max→min and silently produced zero horizontal gridlines and zero z ticks.
+  const [wx0,wzTop]=s2w(0,0), [wx1,wzBot]=s2w(VBW,VBH);
   let g="";
-  for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="640"/>'; }
-  for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="1000" y2="'+sy+'"/>'; }
-  const [ax]=w2s(0,0),[,ay]=w2s(0,0); g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="640"/><line class="map-axis" x1="0" y1="'+ay+'" x2="1000" y2="'+ay+'"/>';
+  for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0); g+='<line class="map-grid" x1="'+sx+'" y1="0" x2="'+sx+'" y2="'+VBH+'"/>'; }
+  for(let z=Math.ceil(wzTop/step)*step; z<=wzBot; z+=step){ const [,sy]=w2s(0,z); g+='<line class="map-grid" x1="0" y1="'+sy+'" x2="'+VBW+'" y2="'+sy+'"/>'; }
+  const [ax]=w2s(0,0),[,ay]=w2s(0,0); g+='<line class="map-axis" x1="'+ax+'" y1="0" x2="'+ax+'" y2="'+VBH+'"/><line class="map-axis" x1="0" y1="'+ay+'" x2="'+VBW+'" y2="'+ay+'"/>';
   // Scale indication: the map's world units convert to real meters via its SCALE CONTRACT
   // (units.unitsPerMeter — 1 for plain engine-meter maps, so behavior is unchanged by default).
   // (a) axis tick labels at every gridline — x values along the bottom edge, z along the left;
@@ -190,11 +205,11 @@ function redrawMap(){
   const upm=(activeMap().units&&activeMap().units.unitsPerMeter)||1;
   const fmtM=(v)=>{ const m=v*upm; return Math.abs(m)>=1000?(Math.round(m/100)/10)+"km":Math.round(m)+"m"; };
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0);
-    if(sx>28&&sx<972) g+='<text class="map-tick" x="'+(sx+3)+'" y="634">'+fmtM(x)+'</text>'; }
-  for(let z=Math.ceil(wz0/step)*step; z<=wz1; z+=step){ const [,sy]=w2s(0,z);
-    if(sy>16&&sy<628) g+='<text class="map-tick" x="4" y="'+(sy-3)+'">'+fmtM(z)+'</text>'; }
+    if(sx>28&&sx<VBW-28) g+='<text class="map-tick" x="'+(sx+3)+'" y="'+(VBH-6)+'">'+fmtM(x)+'</text>'; }
+  for(let z=Math.ceil(wzTop/step)*step; z<=wzBot; z+=step){ const [,sy]=w2s(0,z);
+    if(sy>16&&sy<VBH-12) g+='<text class="map-tick" x="4" y="'+(sy-3)+'">'+fmtM(z)+'</text>'; }
   let bar=step; while(bar*mapScale<60) bar*=2; while(bar*mapScale>150) bar/=2;
-  const bpx=bar*mapScale, bx1=1000-24-bpx, by=622;
+  const bpx=bar*mapScale, bx1=VBW-24-bpx, by=VBH-18;
   g+='<line class="map-scalebar" x1="'+bx1+'" y1="'+by+'" x2="'+(bx1+bpx)+'" y2="'+by+'"/>'
     +'<line class="map-scalebar" x1="'+bx1+'" y1="'+(by-4)+'" x2="'+bx1+'" y2="'+(by+4)+'"/>'
     +'<line class="map-scalebar" x1="'+(bx1+bpx)+'" y1="'+(by-4)+'" x2="'+(bx1+bpx)+'" y2="'+(by+4)+'"/>'
@@ -213,7 +228,7 @@ function redrawMap(){
       return '<polyline class="feat" data-fid="'+f.id+'" points="'+poly(f.points)+'" fill="none" stroke="'+(f.color||(road?"#8a6f4a":"#5b7d9a"))+'" stroke-width="'+(road?2:2.4)+'"'+(road?' stroke-dasharray="6 5"':'')+' stroke-linejoin="round" stroke-linecap="round"/>'; }
     if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
     return ""; };
-  const ocean=activeMap().sea!==false ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
+  const ocean=activeMap().sea!==false ? '<rect x="0" y="0" width="'+VBW+'" height="'+VBH+'" fill="url(#biome-water)"/>' : '';
   // Painted landmass (Painter P1): the land image blits over the mask rect (soft alpha shore),
   // the coastline polygon on top is derived by the SAME marching-squares code the compiler runs.
   // While a mask with land exists, hand-traced outline features are hidden — the compiler
@@ -278,7 +293,7 @@ function redrawMap(){
     return '<g class="pin" data-id="'+l.id+'" transform="translate('+sx+','+sy+')">'
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
-  const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
+  const compass='<g transform="translate('+(VBW-44)+',44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   const elevCursor = (mapTool==="elev"||mapTool==="land"||mapTool==="terrain") ? '<circle id="elev-cursor" r="'+((mapTool==="land"?lmRadius:mapTool==="terrain"?terRadius:elevRadius)*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
   // No visible paint-region chrome: the raster's world rect is INTERNAL bookkeeping (it maps
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
@@ -505,7 +520,12 @@ function bindMap(){
     const cur=document.getElementById("elev-cursor");
     if(cur){ cur.setAttribute("cx",mx); cur.setAttribute("cy",my); cur.setAttribute("opacity","0.9"); } });
   window.addEventListener("keydown",mapKey); window.addEventListener("keyup",mapKeyUp);
+  // Keep the 1:1 viewBox in lockstep with the container (window resize, panel collapse).
+  if(vbObserver) vbObserver.disconnect();
+  vbObserver=new ResizeObserver(()=>{ if(syncViewBox()) redrawMap(); });
+  const wrap=document.querySelector(".map-svg-wrap"); if(wrap) vbObserver.observe(wrap);
 }
+let vbObserver=null;
 function mapKey(e){ if(S.activeView!=="map") return;
   const typing=/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||"");
   // No key-repeat undo: a held Ctrl+Z fires ~30/s and silently walks past raster strokes into
