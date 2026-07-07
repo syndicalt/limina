@@ -1,0 +1,5 @@
+{ "commands": [
+  { "kind":"physics","op":"op_physics_create_world","args":[-9.81] },
+  { "kind":"skill","tool":"terrain.create","input":{ "size":24,"resolution":32,"color":5926970 } },
+  { "kind":"skill","tool":"asset.place","input":{ "assetId":"prop-fence-section.glb","position":[0,0,0],"rotation":[0,0.5,0],"ground":true } }
+], "camera":{ "center":[0,0.6,0],"radius":5,"height":1.8 } }
