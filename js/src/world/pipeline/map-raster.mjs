@@ -164,6 +164,52 @@ export function isLand(worldMap, x, z) {
   return landClassifier(worldMap).isLand(x, z);
 }
 
+// ── base64 -> Uint8Array, dependency-free (no Buffer/atob: this module must stay pure and run
+// identically in Node, the engine's V8, and the browser sim worker). ─────────────────────────
+const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const B64_LOOKUP = (() => { const t = new Int16Array(128).fill(-1); for (let i = 0; i < 64; i++) t[B64_ALPHABET.charCodeAt(i)] = i; return t; })();
+function b64ToU8(s) {
+  const clean = s.replace(/=+$/, "");
+  const out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+  let buf = 0, bits = 0, o = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const v = B64_LOOKUP[clean.charCodeAt(i) & 127];
+    if (v < 0) throw new Error("b64ToU8: invalid base64 character");
+    buf = (buf << 6) | v; bits += 6;
+    if (bits >= 8) { bits -= 8; out[o++] = (buf >> bits) & 0xff; }
+  }
+  return out;
+}
+
+/**
+ * Build a bilinear sampler over a WorldMap's painted elevation raster (reliefGrid), or null when
+ * the map has none. Returns sample(wx, wz) -> ABSOLUTE surface elevation in world meters.
+ * The grid's rect is in the map's local units (like every other IR coordinate) — projected to
+ * world meters here via origin/unitsPerMeter; sampling clamps to the grid edge outside the rect.
+ */
+export function reliefGridSampler(worldMap) {
+  const g = worldMap.reliefGrid;
+  if (!g) return null;
+  const { origin, unitsPerMeter } = worldMap;
+  const cells = b64ToU8(g.data);
+  if (cells.length !== g.w * g.h) throw new Error(`reliefGrid: data length ${cells.length} != w*h ${g.w * g.h}`);
+  const x0 = origin[0] + g.rect.x0 * unitsPerMeter;
+  const z0 = origin[1] + g.rect.z0 * unitsPerMeter;
+  const rw = g.rect.w * unitsPerMeter;
+  const rh = g.rect.h * unitsPerMeter;
+  const yOf = (v) => g.minY + (v / 255) * (g.maxY - g.minY);
+  return (wx, wz) => {
+    const u = Math.max(0, Math.min(g.w - 1, ((wx - x0) / rw) * (g.w - 1)));
+    const v = Math.max(0, Math.min(g.h - 1, ((wz - z0) / rh) * (g.h - 1)));
+    const c0 = Math.floor(u), r0 = Math.floor(v);
+    const c1 = Math.min(g.w - 1, c0 + 1), r1 = Math.min(g.h - 1, r0 + 1);
+    const fu = u - c0, fv = v - r0;
+    const a = cells[r0 * g.w + c0], b = cells[r0 * g.w + c1];
+    const c = cells[r1 * g.w + c0], d = cells[r1 * g.w + c1];
+    return yOf((a * (1 - fu) + b * fu) * (1 - fv) + (c * (1 - fu) + d * fu) * fv);
+  };
+}
+
 // Relief kinds that RAISE terrain (everything except "depression", which lowers it).
 const RAISING_RELIEF = new Set(["mountain", "hills", "plateau", "peak"]);
 
@@ -237,6 +283,11 @@ export function rasterizeWorldMap(worldMap, opts) {
   const reliefs = projectRelief(worldMap);
   const biomes = projectBiomes(worldMap);
   const waterways = projectWaterways(worldMap);
+  // PRECEDENCE: a painted elevation raster (reliefGrid) REPLACES the base shore-lerp + vector
+  // relief hints entirely — the painted surface is authoritative. Everything downstream of the
+  // base surface (bounded ambient noise, the vertical-separation clamp, waterway carve, paint)
+  // still applies, so the water plane can never z-fight a painted near-sea-level plain.
+  const gridSample = reliefGridSampler(worldMap);
 
   // Scale-relative bands (deterministic functions of `size` only, so a bigger tile gets a
   // proportionally wider shore/relief falloff instead of a fixed-meter band reading too sharp).
@@ -260,38 +311,45 @@ export function rasterizeWorldMap(worldMap, opts) {
       const wx = -half + col * step;
       const i = row * n + col;
 
-      // ── 1. Sea mask + shore falloff ─────────────────────────────────────────────────
+      // ── 1+2. Base surface: either the PAINTED raster (authoritative — replaces both the
+      //    shore-lerp base and the vector relief hints, per the reliefGrid precedence contract)
+      //    or the classic shore falloff + relief-hint composition. ───────────────────────────
       const inLand = isInsideLandPolys(landPolys, wx, wz);
       let coastD = distToLandBoundary(landPolys, wx, wz);
       if (!Number.isFinite(coastD)) coastD = shoreBand; // no land at all: treat as "at the shore".
-      const t = smoothstep01(coastD / shoreBand);
-      let h = inLand ? lerp(seaLevel + 0.4, landBase, t) : lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
-
-      // ── 2. Relief hints (polygon: smoothstep falloff from the edge inward; point: radial
-      //    bump). Mountain/hills/plateau/peak RAISE; depression LOWERS — regardless of the
-      //    hint's own stored sign, so authored data can carry either convention safely. ──────
-      let reliefSum = 0;
+      let h;
       let localAmp = 0;
-      for (const r of reliefs) {
-        let w = 0;
-        if (r.polygon !== undefined) {
-          if (pointInRing(wx, wz, r.polygon)) {
-            const edgeD = distToRing(wx, wz, r.polygon);
-            w = smoothstep01(edgeD / reliefBand);
+      if (gridSample) {
+        h = gridSample(wx, wz);
+      } else {
+        const t = smoothstep01(coastD / shoreBand);
+        h = inLand ? lerp(seaLevel + 0.4, landBase, t) : lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
+
+        // Relief hints (polygon: smoothstep falloff from the edge inward; point: radial bump).
+        // Mountain/hills/plateau/peak RAISE; depression LOWERS — regardless of the hint's own
+        // stored sign, so authored data can carry either convention safely.
+        let reliefSum = 0;
+        for (const r of reliefs) {
+          let w = 0;
+          if (r.polygon !== undefined) {
+            if (pointInRing(wx, wz, r.polygon)) {
+              const edgeD = distToRing(wx, wz, r.polygon);
+              w = smoothstep01(edgeD / reliefBand);
+            }
+          } else if (r.point !== undefined) {
+            const radius = Math.max(10, Math.min(60, Math.abs(r.amplitude) * 1.5));
+            const dist = Math.hypot(wx - r.point[0], wz - r.point[1]);
+            w = 1 - smoothstep01(dist / radius);
           }
-        } else if (r.point !== undefined) {
-          const radius = Math.max(10, Math.min(60, Math.abs(r.amplitude) * 1.5));
-          const dist = Math.hypot(wx - r.point[0], wz - r.point[1]);
-          w = 1 - smoothstep01(dist / radius);
+          if (w > 0) {
+            const signed = RAISING_RELIEF.has(r.kind) ? Math.abs(r.amplitude) : -Math.abs(r.amplitude);
+            reliefSum += signed * w;
+            const mag = Math.abs(r.amplitude) * w;
+            if (mag > localAmp) localAmp = mag;
+          }
         }
-        if (w > 0) {
-          const signed = RAISING_RELIEF.has(r.kind) ? Math.abs(r.amplitude) : -Math.abs(r.amplitude);
-          reliefSum += signed * w;
-          const mag = Math.abs(r.amplitude) * w;
-          if (mag > localAmp) localAmp = mag;
-        }
+        h += reliefSum;
       }
-      h += reliefSum;
 
       // ── 3. Seeded noise texture, bounded by noiseFrac x the LOCAL authored amplitude (the
       //    relief hint governing this cell, else a small ambient roughness on land — this bound

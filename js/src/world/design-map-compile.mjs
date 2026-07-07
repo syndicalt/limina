@@ -111,6 +111,17 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
   const units = map.units || DEFAULT_UNITS;
   const unitsPerMeter = units.unitsPerMeter || 1;
 
+  // A painted elevation raster (Map Studio S1, map.rasters.elevation in the MapDoc) compiles to
+  // the IR's reliefGrid. PRECEDENCE CONTRACT: when present, vector relief hints are NOT emitted
+  // at all (painted is authoritative; the rasterizer would ignore them anyway — this keeps the
+  // compiled IR honest about which authority produced the surface).
+  const elevation = map.rasters && map.rasters.elevation ? map.rasters.elevation : undefined;
+  if (elevation) {
+    for (const k of ["w", "h", "minY", "maxY", "data", "rect"]) {
+      if (elevation[k] === undefined) throw new Error(`compile-designmap: rasters.elevation is missing '${k}'`);
+    }
+  }
+
   const fm = frontmatterBlock(worldBibleText);
   const sizeM = readZoneSizeM(fm);
   const locations = readLocations(fm);
@@ -127,7 +138,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     } else if (f.type === "area" && f.kind === "biome") {
       const points = toPoints(f.points);
       biomes.push({ biome: f.biome, points });
-      if (f.biome === "mountain") {
+      if (f.biome === "mountain" && !elevation) {
         relief.push({ kind: "mountain", shape: { polygon: points }, amplitude: MOUNTAIN_BIOME_AMPLITUDE });
       }
     } else if (f.type === "line" && f.kind === "river") {
@@ -137,7 +148,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     } else if (f.type === "line" && f.kind === "border") {
       warnings.push(`skipped border feature "${f.id}" (political borders are out of scope for v1)`);
     } else if (f.type === "glyph" && (f.glyph === "mountain" || f.glyph === "peak" || f.glyph === "hills")) {
-      relief.push({ kind: f.glyph, shape: { point: [Number(f.x), Number(f.z)] }, amplitude: GLYPH_AMPLITUDE[f.glyph] });
+      if (!elevation) relief.push({ kind: f.glyph, shape: { point: [Number(f.x), Number(f.z)] }, amplitude: GLYPH_AMPLITUDE[f.glyph] });
     } else if (f.type === "glyph") {
       warnings.push(`skipped glyph "${f.glyph}" on feature "${f.id}" (no relief mapping for v1)`);
     } else {
@@ -185,9 +196,19 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     unitsPerMeter,
     origin: [0, 0],
     extent,
-    seaLevel: 0.0,
+    seaLevel: typeof map.seaLevel === "number" ? map.seaLevel : 0.0,
     land,
     relief,
+    ...(elevation ? {
+      reliefGrid: {
+        w: Number(elevation.w),
+        h: Number(elevation.h),
+        rect: { x0: Number(elevation.rect.x0), z0: Number(elevation.rect.z0), w: Number(elevation.rect.w), h: Number(elevation.rect.h) },
+        minY: Number(elevation.minY),
+        maxY: Number(elevation.maxY),
+        data: String(elevation.data),
+      },
+    } : {}),
     biomes,
     waterways,
     routes,

@@ -138,6 +138,37 @@ export function cmdMoveFeature(mapId, fid, before, after) {
   };
 }
 
+/** A raster brush stroke (Map Studio S1): before/after u8 snapshots of the cell BBOX the stroke
+ *  touched, applied to a live raster store entry ({w, h, cells: Uint8Array, dirty}) held by
+ *  closure — the raster lives OUTSIDE the doc (decoded once per map), so this command targets it
+ *  directly rather than re-resolving through the map. Stays pure/DOM-free: the gate constructs a
+ *  raster object and property-tests inversion exactly like the feature commands. */
+export function cmdPatchRaster(mapId, raster, bbox, before, after) {
+  const { c0, r0, c1, r1 } = bbox;
+  const bw = c1 - c0 + 1, bh = r1 - r0 + 1;
+  if (before.length !== bw * bh || after.length !== bw * bh) return null;
+  const b = before.slice(), a = after.slice();
+  const write = (patch) => {
+    for (let r = 0; r < bh; r++) raster.cells.set(patch.subarray(r * bw, (r + 1) * bw), (r0 + r) * raster.w + c0);
+    raster.dirty = true;
+  };
+  return {
+    label: "elevation stroke",
+    mapId,
+    redo() { write(a); },
+    undo() { write(b); },
+  };
+}
+
+/** Snapshot a raster bbox (row-major slice) — the capture half of cmdPatchRaster. */
+export function rasterBboxSnapshot(raster, bbox) {
+  const { c0, r0, c1, r1 } = bbox;
+  const bw = c1 - c0 + 1, bh = r1 - r0 + 1;
+  const out = new Uint8Array(bw * bh);
+  for (let r = 0; r < bh; r++) out.set(raster.cells.subarray((r0 + r) * raster.w + c0, (r0 + r) * raster.w + c1 + 1), r * bw);
+  return out;
+}
+
 /** Map-level scalar prop (e.g. the sea toggle). */
 export function cmdSetMapProp(mapId, key, before, after) {
   const b = clone(before), a = clone(after);

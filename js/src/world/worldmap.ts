@@ -54,6 +54,24 @@ const ReliefHintSchema = z.object({
   amplitude: z.number(),
 }).strict();
 
+// A painted elevation raster (Map Studio S1): ABSOLUTE surface elevation in world meters, u8
+// cells mapped linearly value/255 -> [minY, maxY], row-major with +col = +x (east) and
+// +row = +z (i.e. row 0 is the NORTHERNMOST row — north is -z), spanning the world-meter
+// `rect`. PRECEDENCE CONTRACT: when a WorldMap carries a reliefGrid, it REPLACES the vector
+// `relief` hints entirely (painted is authoritative; compilers emit hints only for maps
+// without a raster) — enforced by the rasterizer (map-raster.mjs), gated by mapstudio-gate.
+// HASH CONTRACT: this field is hashed via an explicit walk in worldmap-hash.mjs — adding a
+// field here without adding it there ships a silently-unhashed field (see that module's header).
+const ReliefGridSchema = z.object({
+  w: z.number().int().min(2).max(1024),
+  h: z.number().int().min(2).max(1024),
+  rect: z.object({ x0: z.number(), z0: z.number(), w: z.number().positive(), h: z.number().positive() }).strict(),
+  minY: z.number(),
+  maxY: z.number(),
+  /** base64 of w*h u8 cell values. */
+  data: z.string().min(1),
+}).strict();
+
 const BiomeRegionSchema = z.object({
   biome: z.enum(BIOME_KINDS),
   points: PointsSchema.min(3),
@@ -106,6 +124,7 @@ export const WorldMapSchema = z.object({
   seaLevel: z.number(),
   land: z.array(PolygonSchema),
   relief: z.array(ReliefHintSchema),
+  reliefGrid: ReliefGridSchema.optional(),
   biomes: z.array(BiomeRegionSchema),
   waterways: z.array(WaterwaySchema),
   routes: z.array(RouteSchema),
@@ -116,6 +135,7 @@ export const WorldMapSchema = z.object({
 export type Point = z.infer<typeof PointSchema>;
 export type Polygon = z.infer<typeof PolygonSchema>;
 export type ReliefHint = z.infer<typeof ReliefHintSchema>;
+export type ReliefGrid = z.infer<typeof ReliefGridSchema>;
 export type BiomeRegion = z.infer<typeof BiomeRegionSchema>;
 export type Waterway = z.infer<typeof WaterwaySchema>;
 export type Route = z.infer<typeof RouteSchema>;

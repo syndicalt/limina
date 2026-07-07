@@ -37,6 +37,17 @@ function reliefHint(r) {
   return { kind: r.kind, shape, amplitude: r.amplitude };
 }
 
+function reliefGrid(g) {
+  return {
+    w: g.w,
+    h: g.h,
+    rect: { x0: g.rect.x0, z0: g.rect.z0, w: g.rect.w, h: g.rect.h },
+    minY: g.minY,
+    maxY: g.maxY,
+    data: g.data,
+  };
+}
+
 function biomeRegion(b) {
   return { biome: b.biome, points: points(b.points) };
 }
@@ -86,6 +97,9 @@ export function stableStringifyWorldMap(map, opts = {}) {
     seaLevel: map.seaLevel,
     land: map.land.map(polygon),
     relief: map.relief.map(reliefHint),
+    // Optional additive fields are emitted ONLY when present, so every pre-reliefGrid map keeps
+    // its original bytes (and hash) unchanged.
+    ...(map.reliefGrid !== undefined ? { reliefGrid: reliefGrid(map.reliefGrid) } : {}),
     biomes: map.biomes.map(biomeRegion),
     waterways: map.waterways.map(waterway),
     routes: map.routes.map(route),

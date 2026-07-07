@@ -12,6 +12,7 @@ import { esc } from "./util.js";
 import { S } from "./store.js";
 import { postJSON, bindMapSaver, scheduleMapSave, flushMapSave } from "./net.js";
 import * as H from "./map-commands.js";
+import * as EL from "./map-elevation.js";
 
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
@@ -24,6 +25,11 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select", glyphKind="mountain", biomeKind="forest",
   drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
+// Elevation brush state (S1). A stroke = one undo step: full-buffer snapshot at stroke start,
+// bbox-union of every dab, ONE cmdPatchRaster pushed {applied:true} at stroke end.
+let elevMode="raise", elevRadius=12, elevStrength=0.6, elevLevelY=4;
+let elevShadeUrl=null, elevShadeFor=null; // cached hillshade data-URL + "mapId:seaLevel:rev" key
+let elevRev=0; // bumped on every raster mutation (stroke dab, undo, redo)
 let uid = Math.floor(1e6*(''+performance.now()).length);
 const fid = () => "f" + (uid++);
 
@@ -36,10 +42,11 @@ function commit(cmd, opts) {
   H.push(history, cmd, opts, resolveMap(cmd.mapId));
   scheduleMapSave(); redrawMap();
 }
-function doUndo() { if (H.undo(history, resolveMap)) { selFeat = null; scheduleMapSave(); redrawMap(); } }
-function doRedo() { if (H.redo(history, resolveMap)) { selFeat = null; scheduleMapSave(); redrawMap(); } }
+function doUndo() { if (H.undo(history, resolveMap)) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); } }
+function doRedo() { if (H.redo(history, resolveMap)) { selFeat = null; elevRev++; scheduleMapSave(); redrawMap(); } }
 
-bindMapSaver(() => ({ maps: S.state.maps, activeMapId }));
+// Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
+bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
 
 function biomeDefs(){
   const p=(id,base,ex)=>'<pattern id="biome-'+id+'" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="'+base+'"/>'+ex+'</pattern>';
@@ -84,8 +91,15 @@ function glyphSVG(kind,x,y,s){
 export function renderMap(){
   if(!activeMapId) activeMapId = S.state.activeMapId || primaryMapId();
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
-  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
+  const tools=[["select","Select"],["lasso","Lasso"],["marker","＋ Marker"],["elev","⛰ Elevation"],["glyph","Glyph"],["area","Biome"],["river","River"],["road","Road"],["border","Border"],["outline","Coast"]];
   const sea=!!activeMap().sea;
+  const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
+  const elevControls = mapTool!=="elev" ? "" :
+    '<select class="sw" id="elev-mode">'+[["raise","Raise"],["lower","Lower"],["smooth","Smooth"],["level","Level"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===elevMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
+    +'<label class="coord" style="margin-left:0">r</label><input type="range" id="elev-radius" min="2" max="60" step="1" value="'+elevRadius+'" style="width:80px" title="Brush radius (m)">'
+    +'<label class="coord" style="margin-left:0">str</label><input type="range" id="elev-strength" min="0.05" max="1" step="0.05" value="'+elevStrength+'" style="width:64px" title="Brush strength">'
+    +(elevMode==="level"?'<input type="number" id="elev-levely" value="'+elevLevelY+'" step="0.5" style="width:56px" class="sw" title="Level target (m)">':'')
+    +'<label class="coord" style="margin-left:0">sea</label><input type="range" id="elev-sea" min="-12" max="12" step="0.5" value="'+seaY+'" style="width:80px" title="Sea level (m)"><span class="coord" id="elev-sea-val" style="margin-left:0">'+seaY+'m</span>';
   document.getElementById("center").innerHTML =
     '<div class="map-wrap"><div class="map-head">'
     +'<select class="sw" id="map-sw">'+opts+'</select><button class="tool" id="map-new">＋ New map</button>'
@@ -98,6 +112,7 @@ export function renderMap(){
     +'<select class="sw" id="glyph-pick" style="'+(mapTool==="glyph"?"":"display:none")+'">'+GLYPHS.map(g=>'<option value="'+g+'"'+(g===glyphKind?" selected":"")+'>'+GLYPH_LABEL[g]+'</option>').join("")+'</select>'
     +'<select class="sw" id="biome-pick" style="'+(mapTool==="area"?"":"display:none")+'">'+BIOME_LIST.map(b=>'<option value="'+b+'"'+(b===biomeKind?" selected":"")+'>'+b+'</option>').join("")+'</select>'
     +'<input type="color" id="draw-color" value="'+drawColor+'" title="Line / coast color" style="'+(["outline","river","road","border"].includes(mapTool)?"":"display:none")+'; width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">'
+    +elevControls
     +'<span class="coord" id="map-coord">—</span></div>'
     +'<div class="map-svg-wrap"><svg class="map" id="map-svg" viewBox="0 0 1000 640"></svg>'
     +'<div class="map-layers" id="map-layers"></div>'
@@ -114,6 +129,7 @@ export function renderMap(){
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
   const t={select:"drag a marker to move · click to edit · drag empty space to pan · scroll to zoom · Ctrl+Z undo (this session)",
     lasso:"drag a box to select features + markers, then delete them",
+    elev:"drag to "+elevMode+" terrain (one stroke = one undo step) · first stroke starts a flat 0m plain and REPLACES glyph/biome relief at build time",
     marker:"click the map to place a marker", glyph:"click to stamp a "+glyphKind+" glyph",
     area:"click to trace a "+biomeKind+" region · double-click to close · Esc to cancel",
     river:"click to add river points · double-click to finish · Esc to cancel",
@@ -165,6 +181,22 @@ function redrawMap(){
     if(f.type==="glyph"){ const [sx,sy]=w2s(f.x,f.z); return '<g class="feat glyphf" data-fid="'+f.id+'">'+glyphSVG(f.glyph||"mountain",sx,sy,16)+'</g>'; }
     return ""; };
   const ocean=activeMap().sea ? '<rect x="0" y="0" width="1000" height="640" fill="url(#biome-water)"/>' : '';
+  // Painted elevation hillshade: rendered between the land fill and the semantic layers, so
+  // relief reads as the terrain base while biomes/lines/pins stay legible on top. The raster is
+  // only CREATED by an actual brush stroke (never by merely selecting the tool — creation flips
+  // build-time precedence away from glyph/biome relief hints, so it must be an explicit act).
+  let elevLayer="";
+  {
+    const em=activeMap();
+    const e=EL.elevationOf(em.id) || (em.rasters&&em.rasters.elevation ? EL.ensureElevation(em, mapMarkers()) : null);
+    if(e){
+      const seaY=typeof em.seaLevel==="number"?em.seaLevel:0;
+      const key=em.id+":"+seaY+":"+elevRev;
+      if(elevShadeFor!==key){ elevShadeUrl=EL.renderHillshade(e, seaY); elevShadeFor=key; }
+      const [ex,ey]=w2s(e.rect.x0,e.rect.z0);
+      elevLayer='<image id="elev-img" href="'+elevShadeUrl+'" x="'+ex+'" y="'+ey+'" width="'+(e.rect.w*mapScale)+'" height="'+(e.rect.h*mapScale)+'" preserveAspectRatio="none" opacity="0.8" style="pointer-events:none"/>';
+    }
+  }
   const outlines=feats.filter(f=>f.type==="area"&&f.kind==="outline").map(fsvg).join("");
   const areas=feats.filter(f=>f.type==="area"&&f.kind!=="outline").map(fsvg).join("");
   const lines=feats.filter(f=>f.type==="line"&&f.kind!=="border").map(fsvg).join("");
@@ -181,7 +213,8 @@ function redrawMap(){
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate(956,44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
-  svg.innerHTML = biomeDefs() + ocean + g + outlines + areas + lines + borders + glyphs + draw + pins + compass;
+  const elevCursor = mapTool==="elev" ? '<circle id="elev-cursor" r="'+(elevRadius*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
+  svg.innerHTML = biomeDefs() + ocean + g + outlines + elevLayer + areas + lines + borders + glyphs + draw + pins + compass + elevCursor;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
   if(mapTool==="select") bindFeatureEditing(svg);
@@ -292,11 +325,28 @@ function bindMap(){
     const m=activeMap();
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!m.sea));
     renderMap(); };
+  const em1=document.getElementById("elev-mode"); if(em1) em1.onchange=(e)=>{ elevMode=e.target.value; renderMap(); };
+  const er1=document.getElementById("elev-radius"); if(er1) er1.oninput=(e)=>{ elevRadius=Number(e.target.value); const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",elevRadius*mapScale); };
+  const es1=document.getElementById("elev-strength"); if(es1) es1.oninput=(e)=>{ elevStrength=Number(e.target.value); };
+  const el1=document.getElementById("elev-levely"); if(el1) el1.onchange=(e)=>{ elevLevelY=Number(e.target.value)||0; };
+  const sea1=document.getElementById("elev-sea"); if(sea1){
+    const seaBefore=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
+    sea1.oninput=(e)=>{ const v=Number(e.target.value); activeMap().seaLevel=v; const lab=document.getElementById("elev-sea-val"); if(lab) lab.textContent=v+"m"; elevRev++; refreshElevImage(); };
+    // Commit ONE undoable step per slider release (the live oninput preview already applied it).
+    sea1.onchange=(e)=>{ const v=Number(e.target.value); if(v!==seaBefore) commit(H.cmdSetMapProp(activeMapId,"seaLevel",seaBefore,v),{applied:true}); };
+  }
   svg.addEventListener("wheel",(e)=>{ e.preventDefault(); const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
     mapScale*=e.deltaY<0?1.12:1/1.12; mapScale=Math.max(.4,Math.min(80,mapScale));
     const [nx,ny]=w2s(wx,wz); mapPan.x+=(nx-mx)/mapScale; mapPan.z-=(ny-my)/mapScale; redrawMap(); },{passive:false});
   svg.addEventListener("mousedown",(e)=>{ if(mapDrag) return; if(e.detail>=2) return; const [mx,my]=evtVB(e,svg); const [x,z]=s2w(mx,my);
     if(spaceDown||e.button===1){ mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); return; }
+    if(mapTool==="elev"){
+      const em=activeMap();
+      const created=!EL.hasStoredElevation(em);
+      const er=EL.ensureElevation(em, mapMarkers());
+      if(created) redrawMap(); // first stroke: the hillshade layer appears under the cursor
+      mapDrag={type:"elev",mapId:activeMapId,raster:er,before:er.cells.slice(),bbox:null,lastW:[x,z]};
+      elevDab(er,x,z,mapDrag); return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
     if(mapTool==="glyph"){ commit(H.cmdAddFeature(activeMapId,{id:fid(),type:"glyph",glyph:glyphKind,x:Math.round(x),z:Math.round(z)})); return; }
     if(["river","road","area","outline","border"].includes(mapTool)){
@@ -307,7 +357,12 @@ function bindMap(){
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
   svg.addEventListener("dblclick",(e)=>{ if(["river","road","area","outline","border"].includes(mapTool)) finishDraw(); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
-  svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my); const c=document.getElementById("map-coord"); if(c) c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz); });
+  svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
+    const c=document.getElementById("map-coord");
+    if(c){ const er=EL.elevationOf(activeMap().id);
+      c.textContent="x "+Math.round(wx)+"  z "+Math.round(wz)+(er?"  y "+EL.sampleY(er,wx,wz).toFixed(1)+"m":""); }
+    const cur=document.getElementById("elev-cursor");
+    if(cur){ cur.setAttribute("cx",mx); cur.setAttribute("cy",my); cur.setAttribute("opacity","0.9"); } });
   window.addEventListener("keydown",mapKey); window.addEventListener("keyup",mapKeyUp);
 }
 function mapKey(e){ if(S.activeView!=="map") return;
@@ -328,9 +383,37 @@ function finishDraw(){
   else if(mapTool==="area") feature={id:fid(),type:"area",kind:"biome",biome:biomeKind,points:pts};
   else feature={id:fid(),type:"area",kind:"outline",points:pts,fill:drawColor};
   commit(H.cmdAddFeature(activeMapId, feature)); }
+// ── elevation stroke helpers ─────────────────────────────────────────────────────────────────
+function elevDab(er,wx,wz,drag){
+  const bb=EL.brushDab(er,wx,wz,{mode:elevMode,radiusM:elevRadius,strength:elevStrength,levelY:elevLevelY});
+  if(bb){
+    drag.bbox = drag.bbox
+      ? {c0:Math.min(drag.bbox.c0,bb.c0),r0:Math.min(drag.bbox.r0,bb.r0),c1:Math.max(drag.bbox.c1,bb.c1),r1:Math.max(drag.bbox.r1,bb.r1)}
+      : bb;
+    elevRev++; refreshElevImage();
+  }
+}
+let elevRafPending=false;
+function refreshElevImage(){
+  if(elevRafPending) return; elevRafPending=true;
+  requestAnimationFrame(()=>{ elevRafPending=false;
+    const em=activeMap(); const er=EL.elevationOf(em.id); if(!er) return;
+    const seaY=typeof em.seaLevel==="number"?em.seaLevel:0;
+    elevShadeUrl=EL.renderHillshade(er,seaY); elevShadeFor=em.id+":"+seaY+":"+elevRev;
+    const img=document.getElementById("elev-img");
+    if(img) img.setAttribute("href",elevShadeUrl); else redrawMap();
+  });
+}
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz+(my-mapDrag.my)/mapScale; redrawMap(); }
+  else if(mapDrag.type==="elev"){
+    // Interpolate dabs between the last and current pointer position so fast strokes stay solid.
+    const [wx,wz]=s2w(mx,my); const [lx,lz]=mapDrag.lastW;
+    const dist=Math.hypot(wx-lx,wz-lz), stepM=Math.max(1,elevRadius/3);
+    const steps=Math.max(1,Math.ceil(dist/stepM));
+    for(let k=1;k<=steps;k++) elevDab(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
+    mapDrag.lastW=[wx,wz]; }
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
   else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.points.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
@@ -358,6 +441,15 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
+  if(d.type==="elev"){
+    // One stroke = one undo step: bbox slices of the pre-stroke snapshot vs the current cells.
+    if(d.bbox){
+      const beforeRaster={w:d.raster.w,h:d.raster.h,cells:d.before};
+      const before=H.rasterBboxSnapshot(beforeRaster,d.bbox);
+      const after=H.rasterBboxSnapshot(d.raster,d.bbox);
+      commit(H.cmdPatchRaster(d.mapId,d.raster,d.bbox,before,after),{applied:true});
+    }
+    return; }
   if(d.type==="vertex"||d.type==="featmove"){
     // Drag-commit: geometry mutated live during the gesture; push ONE already-applied command
     // capturing start -> end so the whole drag is a single undo step.
