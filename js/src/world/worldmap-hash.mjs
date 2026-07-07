@@ -65,6 +65,7 @@ function provenance(p, omitContentHash) {
   if (p.sourceHash !== undefined) out.sourceHash = p.sourceHash;
   if (p.compiledAt !== undefined) out.compiledAt = p.compiledAt;
   if (!omitContentHash) out.contentHash = p.contentHash;
+  if (p.cropOf !== undefined) out.cropOf = { anchor: p.cropOf.anchor, anchorPx: point(p.cropOf.anchorPx), radiusM: p.cropOf.radiusM };
   return out;
 }
 

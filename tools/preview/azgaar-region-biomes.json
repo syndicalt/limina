@@ -1,0 +1,22 @@
+{
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    {
+      "kind": "skill",
+      "tool": "terrain.create",
+      "input": {
+        "size": 900,
+        "resolution": 257,
+        "origin": [0, 0, 0],
+        "color": 5926970,
+        "generate": { "source": "map", "mapAssetId": "maps/azgaar-region.worldmap.json", "seed": 11, "amplitude": 12 }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "world.addWater",
+      "input": { "size": 1800, "color": 2841970 }
+    }
+  ],
+  "camera": { "center": [300, 0, 100], "radius": 220, "height": 220, "far": 900, "autoSpin": 0 }
+}

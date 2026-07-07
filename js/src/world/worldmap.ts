@@ -79,11 +79,22 @@ const AnchorSchema = z.object({
   source: z.enum(ANCHOR_SOURCES),
 }).strict();
 
+// A REGION CROP descriptor (compile-fmg.mjs --crop/--radius): the crop anchor (a burg name or a
+// raw "x,y-px" label, human-readable) + its resolved pixel position in the SOURCE export + the
+// crop radius in meters. Present only when the compiled map is a cropped subset of a larger
+// export; optional so whole-map compiles (the common case) are unaffected.
+const CropOfSchema = z.object({
+  anchor: z.string().min(1),
+  anchorPx: PointSchema,
+  radiusM: z.number().positive(),
+}).strict();
+
 const ProvenanceSchema = z.object({
   tool: z.enum(PROVENANCE_TOOLS),
   sourceHash: z.string().optional(),
   compiledAt: z.string().optional(),
   contentHash: z.string().min(1),
+  cropOf: CropOfSchema.optional(),
 }).strict();
 
 export const WorldMapSchema = z.object({

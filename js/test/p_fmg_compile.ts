@@ -130,7 +130,106 @@ assert(
   );
 }
 
-// ── 7. Walkable-region check: the EXISTING map terrain path consumes the compiled IR headless
+// ── 7. REGION CROP (--crop/--radius): crop determinism, burg subset, and re-center correctness
+//    on the committed fixture with a tiny radius. Highkeep sits at px(260,180); Fisherton is
+//    126.49px (63.25m) away — a radiusM:50 crop keeps Highkeep only and pulls in the fixture's
+//    2x2 mountain block + 1 hills cell + 2 wetland cells, while truncating Silverrun (6pts -> 3,
+//    the disc-exit case of the crop's point-drop-and-split clip) and the road route (4pts -> 3)
+//    and leaving Eastbrook + the trail route untouched (already fully inside). ───────────────────
+{
+  const cropOpts = { mapId: "fmg-sample-crop", crop: { anchor: "Highkeep", radiusM: 50 } };
+  const cropA = compileFmgMap(fmgJsonText, cropOpts);
+  const cropB = compileFmgMap(fmgJsonText, cropOpts);
+  const cropMapA = cropA.worldMap as WorldMap;
+  const cropMapB = cropB.worldMap as WorldMap;
+  assert(
+    stableStringifyWorldMap(cropMapA) === stableStringifyWorldMap(cropMapB),
+    "compiling the same crop twice must yield byte-identical WorldMap output",
+  );
+  assert(cropMapA.provenance.contentHash === cropMapB.provenance.contentHash, "crop contentHash must be stable across repeated compiles");
+
+  assert(cropMapA.provenance.cropOf !== undefined, "a cropped compile must carry provenance.cropOf");
+  assert(
+    cropMapA.provenance.cropOf!.anchor === "Highkeep" &&
+    cropMapA.provenance.cropOf!.anchorPx[0] === 260 && cropMapA.provenance.cropOf!.anchorPx[1] === 180 &&
+    cropMapA.provenance.cropOf!.radiusM === 50,
+    `provenance.cropOf must record the resolved anchor/radius (got ${JSON.stringify(cropMapA.provenance.cropOf)})`,
+  );
+  assert(
+    cropMapA.extent.w === 100 && cropMapA.extent.h === 100,
+    `crop extent must be the disc bbox (2*radiusM square, got ${JSON.stringify(cropMapA.extent)})`,
+  );
+
+  // Burg subset + re-center: only Highkeep (Fisherton is 63.25m away, outside the 50m disc), and
+  // the anchor itself recenters to exactly world (0,0).
+  assert(cropMapA.anchors.length === 1, `crop must keep only Highkeep (Fisherton is outside radius), got ${cropMapA.anchors.length} anchors`);
+  assert(cropMapA.anchors[0].id === "burg-highkeep", `the surviving anchor must be Highkeep (got ${cropMapA.anchors[0].id})`);
+  assert(
+    cropMapA.anchors[0].position[0] === 0 && cropMapA.anchors[0].position[1] === 0,
+    `the crop anchor must recenter to world (0,0) (got ${JSON.stringify(cropMapA.anchors[0].position)})`,
+  );
+
+  // Cell subset carried through every region kind: relief (mountain block fully in, 1 hills cell
+  // partially in), biomes (grass default + the 2 in-range wetland cells; the forest patch and the
+  // custom "Faerie meadow" cell are both outside radiusM:50 so neither appears).
+  assert(cropMapA.land.length === 1, `crop must trace exactly 1 land ring, got ${cropMapA.land.length}`);
+  assert(cropMapA.land[0].points.length === 18, `crop coastline (island interior boundary + crop-rim cut) must have 18 points, got ${cropMapA.land[0].points.length}`);
+  assert(
+    cropMapA.relief.length === 2 && cropMapA.relief.some((r) => r.kind === "mountain") && cropMapA.relief.some((r) => r.kind === "hills"),
+    `crop must keep the in-range mountain block + hills cell, got ${JSON.stringify(cropMapA.relief.map((r) => r.kind))}`,
+  );
+  assert(
+    cropMapA.biomes.length === 2 && new Set(cropMapA.biomes.map((b) => b.biome)).size === 2 &&
+    cropMapA.biomes.some((b) => b.biome === "grass") && cropMapA.biomes.some((b) => b.biome === "swamp"),
+    `crop biomes must be exactly {grass, swamp} (forest + the unmapped biome are out of radius), got ${JSON.stringify(cropMapA.biomes.map((b) => b.biome))}`,
+  );
+
+  // Waterways/routes: clipped to the disc (points dropped past the radius, not interpolated) —
+  // Silverrun (6pts) truncates to 3, Eastbrook (3 cell-center pts, all in-range) stays at 3; the
+  // road (4pts) truncates to 3, the trail (2pts, both in-range) stays at 2; searoute stays skipped.
+  assert(cropMapA.waterways.length === 2, `crop must keep both rivers (clipped, not dropped), got ${cropMapA.waterways.length}`);
+  assert(
+    cropMapA.waterways.every((w) => w.points.length === 3),
+    `both crop-clipped rivers must resolve to 3 points, got ${JSON.stringify(cropMapA.waterways.map((w) => w.points.length))}`,
+  );
+  assert(cropMapA.routes.length === 2, `crop must keep road+trail (searoute still skipped), got ${cropMapA.routes.length}`);
+  const cropRoad = cropMapA.routes.find((r) => r.class === "road");
+  const cropTrail = cropMapA.routes.find((r) => r.class === "trail");
+  assert(cropRoad !== undefined && cropRoad.points.length === 3, `crop-clipped road must truncate to 3 points (got ${cropRoad?.points.length})`);
+  assert(cropTrail !== undefined && cropTrail.points.length === 2, `the fully-in-range trail must keep both points (got ${cropTrail?.points.length})`);
+
+  // The raw "x,y-px" anchor form must resolve to the SAME cell subset/geometry as the burg-name
+  // form (contentHash itself differs, by design — provenance.cropOf.anchor keeps the literal
+  // spec the user passed, "Highkeep" vs "260,180-px", and that label is part of the hashed shape).
+  const cropByPx = compileFmgMap(fmgJsonText, { mapId: "fmg-sample-crop", crop: { anchor: "260,180-px", radiusM: 50 } }).worldMap as WorldMap;
+  assert(
+    cropByPx.provenance.cropOf!.anchor === "260,180-px" &&
+    cropByPx.provenance.cropOf!.anchorPx[0] === 260 && cropByPx.provenance.cropOf!.anchorPx[1] === 180,
+    `the px-anchor form must record its own literal label (got ${JSON.stringify(cropByPx.provenance.cropOf)})`,
+  );
+  assert(
+    stableStringifyWorldMap(cropByPx, { omitContentHash: true }).replace(/"anchor":"[^"]*"/, "") ===
+    stableStringifyWorldMap(cropMapA, { omitContentHash: true }).replace(/"anchor":"[^"]*"/, ""),
+    "the px-anchor crop must resolve to the identical cell subset/geometry as the burg-name crop (modulo the anchor label)",
+  );
+
+  // An unresolvable burg name throws BY NAME, listing the closest match.
+  {
+    let threw: unknown;
+    try { compileFmgMap(fmgJsonText, { crop: { anchor: "Higkeep", radiusM: 50 } }); } catch (err) { threw = err; }
+    assert(threw !== undefined, "an unknown --crop burg name must throw");
+    assert(String(threw).includes("Higkeep") && String(threw).includes("Highkeep"), `the error must name the miss and suggest the near match (got: ${String(threw)})`);
+  }
+  // A non-positive --radius throws.
+  {
+    let threw: unknown;
+    try { compileFmgMap(fmgJsonText, { crop: { anchor: "Highkeep", radiusM: 0 } }); } catch (err) { threw = err; }
+    assert(threw !== undefined, "a --radius of 0 must throw");
+  }
+  ops.op_log("[js] p_fmg_compile: region crop ok (determinism, burg subset + re-center, cell-subset carried through relief/biomes/waterways/routes, px-anchor equivalence, near-match error)");
+}
+
+// ── 8. Walkable-region check: the EXISTING map terrain path consumes the compiled IR headless
 //    (mirrors p_map_terrain's harness) — succeeds, non-flat, land+sea, deterministic. ───────────
 function makeHeadlessWorld(): WorldContext {
   const ecs = createEcsWorld();
@@ -193,6 +292,10 @@ ops.op_log(
   "traced (1 polygon), 2 rivers (authored points + cell-center fallback, width km->m), road+trail kept with the " +
   "searoute skipped, burgs[0] placeholder skipped and the capital anchored as civic (source:map, recentered " +
   "position exact); the unmapped-biome warning fires and anchorMinPopulation filters; the committed " +
-  "fmg-sample.worldmap.json verifies and matches a fresh compile; and terrain.create generate.source='map' " +
-  "consumes the compiled IR headless — non-flat, land+sea, byte-identical across fresh invocations.",
+  "fmg-sample.worldmap.json verifies and matches a fresh compile; a --crop/--radius region crop (burg-name or " +
+  "raw x,y-px anchor) is deterministic, keeps only the in-disc burg re-centered to world (0,0), carries the " +
+  "cell subset through relief/biomes, clips waterways/routes at the disc rim, records provenance.cropOf, and " +
+  "rejects an unresolvable burg name BY NAME with a near-match suggestion; and terrain.create " +
+  "generate.source='map' consumes the compiled IR headless — non-flat, land+sea, byte-identical across fresh " +
+  "invocations.",
 );

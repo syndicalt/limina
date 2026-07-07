@@ -111,6 +111,71 @@ function slugify(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+// ── REGION CROP (compile-fmg.mjs --crop/--radius) ──────────────────────────────────────────
+// A crop takes a whole (possibly whole-planet-scale) FMG export and keeps only a disc of cells
+// around an anchor, re-centering the anchor to world (0,0). This is the only way a real export
+// (whose native px scale is often kilometers-per-cell) becomes a walkable region: rescaling the
+// WHOLE map to fit a small IR extent produces uniform biome/relief stripes (every land feature
+// shrinks by the same factor, so nothing reads as organic) — cropping keeps native meters/px and
+// throws away everything outside the disc instead.
+
+const PX_COORD_RE = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*-px\s*$/i;
+
+/** Levenshtein edit distance (small strings only — burg-name suggestion ranking, not a hot path). */
+function levenshtein(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+/**
+ * Resolve a --crop spec to a pixel anchor: either the literal "x,y-px" form (raw export pixel
+ * coordinates, no lookup) or a burg name (case-insensitive exact match against pack.burgs). An
+ * unresolved name throws BY NAME, listing the closest burg names (edit-distance ranked) so a typo
+ * doesn't dead-end into a silent empty crop.
+ */
+function resolveCropAnchor(spec, pack) {
+  const text = String(spec);
+  const pxMatch = PX_COORD_RE.exec(text);
+  if (pxMatch) {
+    return { x: Number(pxMatch[1]), y: Number(pxMatch[2]), label: `${Number(pxMatch[1])},${Number(pxMatch[2])}-px` };
+  }
+  const burgs = (pack.burgs ?? []).filter((b) => b && typeof b === "object" && b.i !== undefined && b.i !== 0 && !b.removed);
+  const needle = text.trim().toLowerCase();
+  const exact = burgs.find((b) => String(b.name ?? "").trim().toLowerCase() === needle);
+  if (exact) return { x: exact.x, y: exact.y, label: String(exact.name) };
+  const ranked = burgs
+    .map((b) => ({ name: String(b.name ?? `burg-${b.i}`), dist: levenshtein(needle, String(b.name ?? "").trim().toLowerCase()) }))
+    .sort((a, b) => a.dist - b.dist || a.name.localeCompare(b.name))
+    .slice(0, 8)
+    .map((b) => b.name);
+  throw new Error(
+    `compile-fmg: --crop burg "${spec}" not found among ${burgs.length} burgs. Near matches: ${ranked.join(", ") || "(none)"}`,
+  );
+}
+
+/** Split a polyline (already in world meters, anchor at origin) into runs of points within
+ *  radiusM of the origin, dropping out-of-disc points and splitting at each exit/re-entry. Runs
+ *  of fewer than 2 points (nothing left to draw a segment with) are dropped. */
+function clipPolylineToDisc(pointsM, radiusM) {
+  const runs = [];
+  let current = [];
+  for (const p of pointsM) {
+    if (Math.sqrt(p[0] * p[0] + p[1] * p[1]) <= radiusM) current.push(p);
+    else { if (current.length > 0) runs.push(current); current = []; }
+  }
+  if (current.length > 0) runs.push(current);
+  return runs.filter((r) => r.length >= 2);
+}
+
 // ── pack readers ────────────────────────────────────────────────────────────────────────────
 
 /** Normalize pack.cells to structure-of-arrays {p,h,biome,f,v,c}: the v1.134 exporter emits an
@@ -251,6 +316,15 @@ function traceBoundaryRings(cellIndices, cells) {
  * @param {number} [opts.anchorMinPopulation=0] skip burgs below this population (FMG
  *   "population points" — headcount is population x populationRate x urbanization; the
  *   threshold compares the raw points value as exported)
+ * @param {object} [opts.crop] a REGION CROP: keep only a disc of cells around an anchor,
+ *   re-centered to world (0,0), at the export's NATIVE meters/px (no rescale). This is how a
+ *   real (often whole-planet-scale) export becomes a walkable region — uniformly rescaling the
+ *   whole map instead would shrink every biome/relief feature by the same factor and produce
+ *   flat stripes, not organic terrain.
+ * @param {string} [opts.crop.anchor] a burg name (case-insensitive exact match; on a miss, throws
+ *   listing the closest names by edit distance) or a raw "x,y-px" pixel coordinate string
+ * @param {number} [opts.crop.radiusM] crop radius in METERS (converted to px via the export's
+ *   own distanceScale/distanceUnit)
  * @returns {{ worldMap: object, warnings: string[] }}
  */
 export function compileFmgMap(fmgJsonText, opts = {}) {
@@ -294,26 +368,57 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
   }
   const metersPerPx = distanceScale * unitM;
 
-  // Landmass centroid (mean of land-cell centers, h >= 20) -> the export's world (0,0).
+  // Landmass centroid (mean of land-cell centers, h >= 20) -> the export's world (0,0) for a
+  // WHOLE-map compile. Still computed even when cropping (cheap, and validates the export has
+  // any land at all) but cx/cy get overridden below to the crop anchor when opts.crop is set.
   let cxSum = 0, cySum = 0, landCount = 0;
   for (let i = 0; i < nCells; i++) {
     if (cells.h[i] >= SEA_LEVEL_H) { cxSum += cells.p[i][0]; cySum += cells.p[i][1]; landCount++; }
   }
   if (landCount === 0) throw new Error("compile-fmg: export contains no land cells (all h < 20)");
-  const cx = cxSum / landCount, cy = cySum / landCount;
+  let cx = cxSum / landCount, cy = cySum / landCount;
+
+  // ── REGION CROP: resolve the anchor + radius, override the recenter origin to the anchor, and
+  //    build the kept-cell subset (cell CENTER within radiusPx of the anchor). Every other section
+  //    below (land/relief/biomes/waterways/routes/anchors) filters against `subsetSet` when set. ──
+  let subsetSet = null;
+  let cropRadiusM = null;
+  let cropAnchorLabel = null;
+  if (opts.crop) {
+    const radiusM = Number(opts.crop.radiusM);
+    if (!(radiusM > 0)) throw new Error(`compile-fmg: --radius must be a positive number of meters (got ${JSON.stringify(opts.crop.radiusM)})`);
+    const resolved = resolveCropAnchor(opts.crop.anchor, pack);
+    cx = resolved.x; cy = resolved.y;
+    cropRadiusM = radiusM;
+    cropAnchorLabel = resolved.label;
+    const radiusPx = radiusM / metersPerPx;
+    subsetSet = new Set();
+    for (let i = 0; i < nCells; i++) {
+      const dx = cells.p[i][0] - cx, dy = cells.p[i][1] - cy;
+      if (Math.sqrt(dx * dx + dy * dy) <= radiusPx) subsetSet.add(i);
+    }
+    if (subsetSet.size === 0) {
+      throw new Error(`compile-fmg: --crop "${opts.crop.anchor}" --radius ${radiusM} produced an empty cell subset — increase --radius`);
+    }
+  }
   const toMeters = (p) => [(p[0] - cx) * metersPerPx, (p[1] - cy) * metersPerPx];
+  const inSubset = (i) => subsetSet === null || subsetSet.has(i);
 
   const neighborsOf = buildAdjacency(cells);
 
   // ── 3. LAND: per island feature, trace the coastline (boundary edges of the feature's cell
   //    set, chained into rings — exact cell geometry, not an approximation). Largest-|area|
-  //    ring is the outer coast; other rings inside it are holes (inland lakes). ───────────────
+  //    ring is the outer coast; other rings inside it are holes (inland lakes). When cropping,
+  //    memberCells is intersected with the crop subset FIRST — traceBoundaryRings then treats any
+  //    edge no longer shared with a kept neighbor (because that neighbor fell outside the disc) as
+  //    a boundary edge too, so the crop rim reads as coastline: the world just ends in sea at the
+  //    disc's edge. This is the simplest-correct v1 (no true clip-to-circle geometry). ───────────
   const land = [];
   const features = Array.isArray(pack.features) ? pack.features : [];
   const islands = features.filter((f) => f && f.type === "island");
   for (const island of islands) {
     const memberCells = [];
-    for (let i = 0; i < nCells; i++) if (cells.f[i] === island.i) memberCells.push(i);
+    for (let i = 0; i < nCells; i++) if (cells.f[i] === island.i && inSubset(i)) memberCells.push(i);
     if (memberCells.length === 0) { warnings.push(`island feature ${island.i} has no cells — skipped`); continue; }
     const rings = traceBoundaryRings(memberCells, cells)
       .map((ring) => ring.map((v) => toMeters(vertices.p[v])));
@@ -340,7 +445,7 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
   const relief = [];
   const reliefBand = (min, max, kind) => {
     const members = [];
-    for (let i = 0; i < nCells; i++) if (cells.h[i] >= min && cells.h[i] < max) members.push(i);
+    for (let i = 0; i < nCells; i++) if (cells.h[i] >= min && cells.h[i] < max && inSubset(i)) members.push(i);
     for (const group of contiguousGroups(members, neighborsOf)) {
       const hullPts = [];
       for (const i of group) for (const v of cells.v[i]) hullPts.push(toMeters(vertices.p[v]));
@@ -363,6 +468,7 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
   const cellsByBiome = new Map(); // IR biome -> cell indices
   for (let i = 0; i < nCells; i++) {
     if (cells.h[i] < SEA_LEVEL_H) continue; // water cells: never a biome region.
+    if (!inSubset(i)) continue;
     const name = biomeNames[cells.biome[i]] ?? `#${cells.biome[i]}`;
     let mapped = mapBiomeName(name);
     if (mapped === null) continue; // Marine on a land cell — ignore.
@@ -385,7 +491,10 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
   }
 
   // ── 6. WATERWAYS: rivers -> river polylines; width km -> m (>= 1m floor), else a discharge
-  //    heuristic, else 3m. rivers[].points when present, else the river cells' centers. ────────
+  //    heuristic, else 3m. rivers[].points when present, else the river cells' centers. When
+  //    cropping, each polyline is clipped to the crop disc AFTER recentering (so "inside" is just
+  //    distance-from-origin <= radiusM) and split into separate waterway entries at each exit/
+  //    re-entry — dropped points, not interpolated to the exact disc boundary (v1). ─────────────
   const waterways = [];
   for (const river of pack.rivers ?? []) {
     if (!river || typeof river !== "object" || river.i === undefined) continue;
@@ -403,10 +512,12 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
     if (Number(river.width) > 0) widthM = Number(river.width) * 1000; // FMG river width is km.
     else if (Number(river.discharge) > 0) widthM = Math.sqrt(Number(river.discharge)) * 0.1; // m³/s -> rough channel width
     else widthM = RIVER_FALLBACK_WIDTH_M;
-    waterways.push({ points: pts, widthM: Math.max(1, widthM), class: "river" });
+    const segments = subsetSet ? clipPolylineToDisc(pts, cropRadiusM) : [pts];
+    for (const seg of segments) waterways.push({ points: seg, widthM: Math.max(1, widthM), class: "river" });
   }
 
-  // ── 7. ROUTES: roads -> road, trails -> trail, searoutes skipped (the sea needs no paving). ─
+  // ── 7. ROUTES: roads -> road, trails -> trail, searoutes skipped (the sea needs no paving).
+  //    Crop-clipped the same way waterways are. ─────────────────────────────────────────────────
   const routes = [];
   for (const route of pack.routes ?? []) {
     if (!route || !Array.isArray(route.points) || route.points.length < 2) continue;
@@ -416,11 +527,15 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
       if (group !== "searoutes") warnings.push(`route ${route.i} group "${group}" has no mapping — skipped`);
       continue;
     }
-    routes.push({ points: route.points.map((p) => toMeters(p)), class: cls });
+    const pts = route.points.map((p) => toMeters(p));
+    const segments = subsetSet ? clipPolylineToDisc(pts, cropRadiusM) : [pts];
+    for (const seg of segments) routes.push({ points: seg, class: cls });
   }
 
   // ── 8. ANCHORS: burgs (skip the [0] placeholder + sub-threshold populations). Capital ->
-  //    "civic", the rest -> "dwelling". Ids are stable slugs; collisions get the burg index. ───
+  //    "civic", the rest -> "dwelling". Ids are stable slugs; collisions get the burg index.
+  //    Cropping keeps a burg by its own (px) position within the disc — NOT by cell membership,
+  //    since a burg can sit at a cell center that itself independently falls in/out. ─────────────
   const anchorMinPopulation = opts.anchorMinPopulation ?? 0;
   const anchors = [];
   const usedIds = new Set();
@@ -428,30 +543,38 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
     if (!burg || typeof burg !== "object" || burg.i === undefined || burg.i === 0) continue; // burgs[0] placeholder
     if (burg.removed) continue;
     if (Number(burg.population ?? 0) < anchorMinPopulation) continue;
+    const positionM = toMeters([burg.x, burg.y]);
+    if (subsetSet && Math.sqrt(positionM[0] * positionM[0] + positionM[1] * positionM[1]) > cropRadiusM) continue;
     let id = burg.name ? `burg-${slugify(burg.name)}` : `burg-${burg.i}`;
     if (usedIds.has(id) || id === "burg-") id = `burg-${burg.i}`;
     usedIds.add(id);
     anchors.push({
       id,
       kind: burg.capital ? "civic" : "dwelling",
-      position: toMeters([burg.x, burg.y]),
+      position: positionM,
       count: 1,
       ...(burg.name ? { name: String(burg.name) } : {}),
       source: "map",
     });
   }
 
-  // ── extent: the land bbox in meters (recentered frame). ────────────────────────────────────
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const poly of land) {
-    for (const [x, y] of poly.points) {
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
+  // ── extent: the crop disc's own bbox when cropping (2*radiusM square — independent of how
+  //    much of the disc actually came out as land); otherwise the land bbox in meters as before. ─
+  let extent;
+  if (subsetSet) {
+    extent = { w: cropRadiusM * 2, h: cropRadiusM * 2 };
+  } else {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const poly of land) {
+      for (const [x, y] of poly.points) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
     }
+    extent = { w: Math.max(maxX - minX, 1), h: Math.max(maxY - minY, 1) };
   }
-  const extent = { w: Math.max(maxX - minX, 1), h: Math.max(maxY - minY, 1) };
 
   const worldMap = {
     version: 1,
@@ -471,6 +594,7 @@ export function compileFmgMap(fmgJsonText, opts = {}) {
       sourceHash: sha256(fmgJsonText),
       // compiledAt intentionally omitted (determinism — see module header).
       contentHash: "", // placeholder; replaced below once the rest of the shape is final
+      ...(subsetSet ? { cropOf: { anchor: cropAnchorLabel, anchorPx: [cx, cy], radiusM: cropRadiusM } } : {}),
     },
   };
   worldMap.provenance.contentHash = worldMapContentHash(worldMap);
