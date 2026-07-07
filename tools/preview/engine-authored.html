@@ -25,6 +25,13 @@ try {
     if (running && running.terrainStream) window.__log.push("terrainStream mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending());
     if (running && running.authoringFailures && running.authoringFailures.length) window.__log.push("authoringFailures=" + JSON.stringify(running.authoringFailures).slice(0, 500));
     await new Promise((r) => setTimeout(r, 3000));
+    // A map-streamed world fills its window at ≤2 mounts/frame — wait (bounded) for the pending
+    // queue to drain so the screenshot shows the CONVERGED window, not a half-filled fill.
+    if (running && running.terrainStream) {
+      const t0 = Date.now();
+      while (running.terrainStream.pending() > 0 && Date.now() - t0 < 40000) await new Promise((r) => setTimeout(r, 250));
+      window.__log.push("stream drain waited " + (Date.now() - t0) + "ms · pending=" + running.terrainStream.pending());
+    }
     if (running && running.scene) { let m = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; }); window.__log.push("scene meshes=" + m); }
     if (running && running.terrainStream) window.__log.push("terrainStream settled: mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending() + " keys=" + running.terrainStream.mounted().slice(0, 12).join(" "));
     window.__done = true;

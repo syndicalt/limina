@@ -862,11 +862,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // Window config: honor the LAST recorded world.streamFollow radius as the authored window
       // intent, else a 3-tile default (7×7 ≈ 336 m across at the 48 m tile). Keep-margin +1 —
       // the same load-at-r / drop-beyond-r+1 hysteresis the authoritative skill uses.
+      // Cap 14 (window edge 672 m; Map Phase 3.5): the old ≤8 cap (≈384 m) put the streamed
+      // edge well inside the Phase-3.4 fog knee (63% at 600 m), so the edge popped through the
+      // haze on km-scale maps. At 14 the nearest window edge sits past the knee (~71% faded)
+      // and the corners (~950 m) are >90% gone — measured against the 1 km proof renders
+      // (tools/preview/stream-1km-proof-c.json). Still bounded: keep window (2·15+1)² = 961
+      // tiles ≈ 9.6 MB of 33×33 heightfields, amortized in at ≤2 mounts/frame.
       let radius = 3;
       for (const cmd of opts.commands) {
         if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") {
           const r = (cmd.input as { radius?: unknown } | undefined)?.radius;
-          if (typeof r === "number" && r >= 1 && r <= 8) radius = Math.floor(r);
+          if (typeof r === "number" && r >= 1 && r <= 14) radius = Math.floor(r);
         }
       }
       // Streamed-tile look: the SAME elevation-banded vertex colors + terrain.paint overlay the

@@ -1,0 +1,9 @@
+{
+  "_comment": "Map Phase 3.5 proof C — THE RADIUS-VS-FOG SHOT: low-altitude horizon view from just off the west coast looking WEST across open water toward the streamed window edge (orbit places the camera at center+[radius,height,0] looking at center, i.e. looking −x). With radius 14 the nearest window edge sits ~672 m out — past the Phase-3.4 fog knee (63% at 600 m) — so the edge must dissolve into the sky-matched haze instead of popping as a hard terrain rim (the ≤8-tile cap put that edge at ~384 m, only ~1/3 fogged). This is the render the 14-vs-fog decision was made against.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/fmg-1km.worldmap.json" } },
+    { "kind": "skill", "tool": "world.streamFollow", "input": { "regionId": "no-such-region", "anchor": [-450, 0, 0], "radius": 14 } }
+  ],
+  "camera": { "center": [-450, 2, 0], "radius": 120, "height": 9, "autoSpin": 0, "far": 1500 }
+}
