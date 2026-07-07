@@ -135,6 +135,55 @@ function pickSite(cands, placed, radius, minGap, score) {
   return null;
 }
 
+// ------------------------------------------------------------ authored anchors
+// THE RULE (map-driven placement): an anchor PINS WHERE a building goes; the solver still
+// decides HOW (facing, terrace order, cluster spread). siteNearAnchor runs the SAME
+// buildability checks surveySites uses (above sea level + slope) but scoped to a small
+// local search around the authored (ax,az) instead of the whole map — a spiral of rings
+// out to `maxR`, biased toward a target distance band (clusters) or simply the closest
+// buildable point (a lone pin). Mutual non-overlap with anything already placed (earlier
+// anchors, cluster mates) is enforced via the SAME farEnough() the map-wide solver uses, so
+// a cluster's members are guaranteed non-overlapping via their own footprint radii. Returns
+// null (never a relocated/guessed site) when nothing buildable exists within maxR — the
+// caller is expected to fail loudly, naming the anchor, rather than silently moving it.
+function siteNearAnchor(sampler, ax, az, radius, maxR, placed, preferBand) {
+  const sea = sampler.seaLevel ?? 0;
+  for (let relax = 0; relax < 4; relax++) {
+    // Same slope discipline as surveySites' `maxSlope = 0.28 * relax`, progressively relaxed —
+    // the SEARCH RADIUS never grows (that would drift away from the authored pin); only the
+    // terrain tolerance eases, exactly like the map-wide solver's own relaxation.
+    const maxSlope = 0.28 * (1 + relax * 0.6);
+    let best = null, bestScore = -Infinity;
+    const ringSteps = 14;
+    for (let ring = 0; ring <= ringSteps; ring++) {
+      const r = (ring / ringSteps) * maxR;
+      const angSteps = ring === 0 ? 1 : Math.max(6, Math.round(4 + ring * 1.6));
+      for (let i = 0; i < angSteps; i++) {
+        // Stagger each ring's phase so sample points don't align radially ring-to-ring.
+        const theta = (i / angSteps) * Math.PI * 2 + ring * 0.37;
+        const x = ax + r * Math.cos(theta);
+        const z = az + r * Math.sin(theta);
+        const h = sampler.heightAt(x, z);
+        if (h <= sea + 1.5) continue;
+        const sl = sampler.slopeAt(x, z);
+        if (sl > maxSlope) continue;
+        const site = { x, z, h, r: radius };
+        if (!farEnough(site, placed, 0)) continue;
+        const dist = Math.hypot(x - ax, z - az);
+        // Clusters (preferBand=[lo,hi]) bias toward a spread band around the anchor; a lone pin
+        // (preferBand=null) simply prefers the closest buildable point to its authored position.
+        const bandScore = preferBand
+          ? (dist < preferBand[0] ? -(preferBand[0] - dist) : dist > preferBand[1] ? -(dist - preferBand[1]) : 1)
+          : -dist * 0.1;
+        const sc = bandScore - sl * 2;
+        if (sc > bestScore) { bestScore = sc; best = site; }
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
 // Nearest-neighbour chain starting at the focal (placed[0]) — the SAME order the
 // preview lane threads, so chain-derived facing agrees with the drawn lane.
 function chainFrom(placed) {
@@ -163,11 +212,19 @@ function chainFrom(placed) {
  * @param {number[]} radii     Footprint radius PER INSTANCE, in the same order steering
  *                             expands (spec-by-spec, count times). `placements[k].index`
  *                             indexes this array.
- * @returns {{ placements: Array<{role:string,style:string,index:number,x:number,z:number,yaw:number}>,
+ * @param {Array<{id:string, position:[number,number], instanceIndices:number[]}>} [anchors]
+ *                             Authored placement pins (already resolved to instance indices by the
+ *                             caller — this module stays agnostic of assetId/role matching). THE
+ *                             RULE: an anchor pins WHERE; this solver still decides HOW (facing,
+ *                             terrace order). `instanceIndices.length > 1` = a tight cluster sited
+ *                             around the SAME anchor. Throws (naming the anchor id/position) if no
+ *                             buildable site exists within its local search radius — never silently
+ *                             relocated.
+ * @returns {{ placements: Array<{role:string,style:string,index:number,x:number,z:number,yaw:number,anchorId?:string}>,
  *             center: {x:number,z:number} }}
- *          placements[0] is always the focal building.
+ *          placements[0] is always the focal building (even when the focal itself is anchored).
  */
-export function planVillage(sampler, direction, steering, radii) {
+export function planVillage(sampler, direction, steering, radii, anchors) {
   void direction; // layout is driven by terrain + steering; direction only flavors materials
 
   // -- 1) Expand steering.buildings into concrete instances (spec-by-spec, count
@@ -196,28 +253,72 @@ export function planVillage(sampler, direction, steering, radii) {
   const hMax = Math.max(...cands.map((c) => c.h));
   const hSpan = Math.max(1, hMax - hMin);
   const spacing = spacingFor(steering?.layout?.density);
-  const placed = []; // [{x,z,h,r,inst}]
+  const placed = []; // [{x,z,h,r,inst,anchorId?}]
+
+  // -- 2.5) ANCHORS: site every anchored instance FIRST, at/near its authored position, before the
+  //         map-wide solver runs. A lone pin (instanceIndices.length===1) searches ≤8 m for the
+  //         closest buildable spot; a cluster (>1) searches ≤16 m, biasing each member into a 6–14 m
+  //         band around the anchor while staying mutually non-overlapping (farEnough, shared with
+  //         the solver below) with the anchor's own earlier members AND anything else already
+  //         placed. Once anchored instances occupy `placed`, every subsequent pickSite() call below
+  //         (focal/singles/cluster/edge) automatically avoids their footprints via the same
+  //         farEnough() check — no separate "occupied" plumbing needed.
+  const anchoredIdx = new Set();
+  if (Array.isArray(anchors) && anchors.length > 0) {
+    for (const a of anchors) {
+      const [ax, az] = a.position;
+      const isCluster = a.instanceIndices.length > 1;
+      const maxR = isCluster ? 16 : 8;
+      for (const idx of a.instanceIndices) {
+        const inst = instances[idx];
+        if (inst === undefined) continue; // defensive: caller-resolved index out of range
+        const site = siteNearAnchor(sampler, ax, az, inst.radius, maxR, placed, isCluster ? [6, 14] : null);
+        if (site === null) {
+          throw new Error(
+            `village.build: anchor '${a.id}' at [${ax}, ${az}] has no buildable site within ${maxR} m ` +
+            `(sea level / slope reject, or footprint overlap) — refusing to silently relocate it`,
+          );
+        }
+        site.inst = inst;
+        site.anchorId = a.id;
+        anchoredIdx.add(idx);
+        placed.push(site);
+      }
+    }
+  }
 
   // -- 3) Focal building: the wording of steering.layout.focal decides the terrain
   //       preference — "high/knoll/…" biases hard toward elevated flat ground;
-  //       otherwise central flat ground wins.
+  //       otherwise central flat ground wins. If the focal itself was already sited by an
+  //       anchor above, keep that site (an anchor pins WHERE even for the focal).
   const focalInst = instances.find((i) => i.focal) ?? instances[0];
-  const focalSite = pickSite(cands, placed, focalInst.radius, 0, (c, relax) => {
-    const hN = (c.h - hMin) / hSpan;
-    const flatness = 1 - Math.min(1, c.flat / (0.22 + relax * 0.05));
-    const centrality = 1 - Math.hypot(c.x, c.z) / sampler.halfSize;
-    return (wantsHigh ? hN * 2.2 : centrality * 0.8) + flatness * 1.4;
-  });
-  if (focalSite === null) return { placements: [], center: { x: 0, z: 0 } };
-  focalSite.inst = focalInst;
-  placed.push(focalSite);
+  let focalSite = placed.find((p) => p.inst === focalInst);
+  if (focalSite === undefined) {
+    focalSite = pickSite(cands, placed, focalInst.radius, 0, (c, relax) => {
+      const hN = (c.h - hMin) / hSpan;
+      const flatness = 1 - Math.min(1, c.flat / (0.22 + relax * 0.05));
+      const centrality = 1 - Math.hypot(c.x, c.z) / sampler.halfSize;
+      return (wantsHigh ? hN * 2.2 : centrality * 0.8) + flatness * 1.4;
+    });
+    if (focalSite === null) return { placements: [], center: { x: 0, z: 0 } };
+    focalSite.inst = focalInst;
+    placed.push(focalSite);
+  }
+  // Keep the documented invariant "placements[0] is the focal" even when it was anchored — an
+  // anchored focal may have landed anywhere in `placed` depending on anchor processing order.
+  {
+    const fi = placed.indexOf(focalSite);
+    if (fi > 0) { placed.splice(fi, 1); placed.unshift(focalSite); }
+  }
 
   // Placement ordering, derived from the steering list itself (role-agnostic):
   //   • singles (count==1) earlier in the list = closer to the focal (civic);
   //   • multi-count entries form the terraced cluster below the focal;
   //   • the LAST single is pushed to the settlement edge (out past the cluster).
-  const singles = instances.filter((i) => !i.focal && i.count === 1);
-  const cluster = instances.filter((i) => !i.focal && i.count > 1);
+  // Anchored (non-focal) instances are excluded here — they were already sited above, and already
+  // occupy `placed` so the solver's own pickSite() calls avoid them.
+  const singles = instances.filter((i) => !i.focal && i.count === 1 && !anchoredIdx.has(i.index));
+  const cluster = instances.filter((i) => !i.focal && i.count > 1 && !anchoredIdx.has(i.index));
   const edgeSingle = singles.length > 1 || cluster.length ? singles.pop() : null;
 
   // -- 3a) Inner singles: good flat ground on a ring just below the focal.
@@ -307,6 +408,7 @@ export function planVillage(sampler, direction, steering, radii) {
   const placements = placed.map((p) => ({
     role: p.inst.role, style: p.inst.style, index: p.inst.index,
     x: p.x, z: p.z, yaw: yawOf(p),
+    ...(p.anchorId !== undefined ? { anchorId: p.anchorId } : {}),
   }));
   return { placements, center };
 }

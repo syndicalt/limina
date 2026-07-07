@@ -1,0 +1,353 @@
+// map-raster — Phase 1.1 of "Map-Driven Worlds": rasterize a committed WorldMap IR
+// (js/src/world/worldmap.ts) into an editable terrain tile's heightfield + paint channel.
+// PURE, dependency-free (no THREE, no DOM, no Date/Math.random) — mirrors
+// terrain-heightfield.mjs's contract exactly: same (worldMap, params) -> byte-identical
+// {heights, paintMat, paintW}, so terrain.create's replay reconstructs identical bytes.
+//
+// THE COORDINATE CONTRACT: a WorldMap's land/relief/biome/waterway points are in the map's
+// OWN local units (`unitsPerMeter` scales them to meters; `origin` is where the map's local
+// (0,0) sits in WORLD space). This module maps every IR point to WORLD METERS
+// (worldX = origin[0] + x*unitsPerMeter, worldZ = origin[1] + y*unitsPerMeter) and rasterizes
+// a `size`x`size` grid CENTERED ON WORLD (0,0) — the same convention terrain-heightfield.mjs's
+// generateHeightfield uses (its shape is generated in a frame centered at its own origin;
+// terrain.create then places the tile at `input.origin`). A map-sourced terrain.create is
+// therefore expected to be authored at world origin [0,0,0] (the default), so the rasterized
+// grid's local frame lines up with the WorldMap's own coordinate space.
+//
+// LAYERING (outside -> in): sea/shore falloff by distance-to-coast -> relief hints (mountain/
+// hills/plateau/peak raise, depression lowers, smoothstep falloff from each hint's shape) ->
+// seeded value-noise/fBm texture (bounded to `noiseFrac` x the LOCAL authored relief amplitude,
+// so it stays legible: this bound is what keeps the land-mask IoU >= 0.85) -> waterway carve
+// (depresses a channel along each polyline, clamped so it never breaches below seaLevel-3) ->
+// biome regions painted onto the tile's paintMat/paintW overlay channel (terrain.paint's SAME
+// channel — reused, not reinvented) with a coastal sand fringe on both sides of the shoreline.
+
+// ── deterministic value noise + fBm (verbatim technique from terrain-heightfield.mjs, kept
+// local to this module so map-raster.mjs has zero cross-file coupling with the procedural
+// generator — the two sources are independent, swappable pipelines over the same tile shape). ─
+function hash2(ix, iz, seed) {
+  let h = (Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(seed, 2246822519)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+const smooth = (t) => t * t * (3 - 2 * t);
+function valueNoise(x, z, seed) {
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  const a = hash2(ix, iz, seed), b = hash2(ix + 1, iz, seed), c = hash2(ix, iz + 1, seed), d = hash2(ix + 1, iz + 1, seed);
+  const ux = smooth(fx), uz = smooth(fz);
+  return (a * (1 - ux) + b * ux) * (1 - uz) + (c * (1 - ux) + d * ux) * uz;
+}
+/** fBm in [-1, 1] (zero-mean-ish), deterministic per (x,z,seed). */
+function fbm(x, z, seed, oct = 4, lac = 2.0, gain = 0.5) {
+  let amp = 1, freq = 1, sum = 0, norm = 0;
+  for (let o = 0; o < oct; o++) {
+    sum += amp * (valueNoise(x * freq, z * freq, seed + o * 1013) * 2 - 1);
+    norm += amp;
+    amp *= gain;
+    freq *= lac;
+  }
+  return norm > 0 ? sum / norm : 0;
+}
+
+const clamp01 = (t) => Math.max(0, Math.min(1, t));
+const smoothstep01 = (t) => { const c = clamp01(t); return c * c * (3 - 2 * c); };
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// ── geometry primitives (pure, deterministic) ──────────────────────────────────────────────
+
+/** Even-odd point-in-ring test (ray casting), no holes — `ring` is an array of [x,z] pairs. */
+function pointInRing(x, z, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], zi = ring[i][1], xj = ring[j][0], zj = ring[j][1];
+    const denom = (zj - zi) || 1e-12;
+    const intersect = (zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / denom + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** Point-to-segment distance in the XZ plane. */
+function distPointSegment(px, pz, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  let t = len2 > 0 ? ((px - ax) * dx + (pz - az) * dz) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx, cz = az + t * dz;
+  return Math.hypot(px - cx, pz - cz);
+}
+
+/** Min distance from (x,z) to any edge of a CLOSED ring (wraps last->first). */
+function distToRing(x, z, ring) {
+  let d = Infinity;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const s = distPointSegment(x, z, ring[j][0], ring[j][1], ring[i][0], ring[i][1]);
+    if (s < d) d = s;
+  }
+  return d;
+}
+
+/** Min distance from (x,z) to any segment of an OPEN polyline (no wrap). */
+function distToPolyline(x, z, pts) {
+  let d = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const s = distPointSegment(x, z, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+    if (s < d) d = s;
+  }
+  return d;
+}
+
+/** Project an IR [x,y] point into WORLD METERS via the map's origin + unitsPerMeter. */
+function toWorld(origin, unitsPerMeter, p) {
+  return [origin[0] + p[0] * unitsPerMeter, origin[1] + p[1] * unitsPerMeter];
+}
+
+/** Normalize a WorldMap's land polygons into world-meter rings (outer + holes per polygon). */
+function projectLandPolys(worldMap) {
+  const { origin, unitsPerMeter } = worldMap;
+  return worldMap.land.map((poly) => ({
+    outer: poly.points.map((p) => toWorld(origin, unitsPerMeter, p)),
+    holes: (poly.holes ?? []).map((h) => h.map((p) => toWorld(origin, unitsPerMeter, p))),
+  }));
+}
+
+/** Whether (x,z) [world meters] is inside ANY land polygon (outer minus holes). */
+function isInsideLandPolys(landPolys, x, z) {
+  for (const poly of landPolys) {
+    if (!pointInRing(x, z, poly.outer)) continue;
+    let inHole = false;
+    for (const h of poly.holes) { if (pointInRing(x, z, h)) { inHole = true; break; } }
+    if (!inHole) return true;
+  }
+  return false;
+}
+
+/** Min distance from (x,z) to the nearest land-polygon boundary (outer ring or hole ring),
+ *  across every land polygon. Infinity when the map has no land at all. */
+function distToLandBoundary(landPolys, x, z) {
+  let d = Infinity;
+  for (const poly of landPolys) {
+    const o = distToRing(x, z, poly.outer);
+    if (o < d) d = o;
+    for (const h of poly.holes) { const hd = distToRing(x, z, h); if (hd < d) d = hd; }
+  }
+  return d;
+}
+
+/**
+ * Build a reusable land classifier + coast-distance sampler over a WorldMap's land polygons —
+ * the SAME point-in-polygon this module rasterizes with, exposed so a caller (e.g. the
+ * determinism/IoU gate) can build an independent "truth" mask without duplicating the PIP.
+ */
+export function landClassifier(worldMap) {
+  const landPolys = projectLandPolys(worldMap);
+  return {
+    isLand: (x, z) => isInsideLandPolys(landPolys, x, z),
+    distToCoast: (x, z) => {
+      const d = distToLandBoundary(landPolys, x, z);
+      return Number.isFinite(d) ? d : 0;
+    },
+  };
+}
+
+/** Convenience one-shot land test (rebuilds the classifier each call — fine for occasional use;
+ *  prefer `landClassifier(worldMap)` when testing many points). */
+export function isLand(worldMap, x, z) {
+  return landClassifier(worldMap).isLand(x, z);
+}
+
+// Relief kinds that RAISE terrain (everything except "depression", which lowers it).
+const RAISING_RELIEF = new Set(["mountain", "hills", "plateau", "peak"]);
+
+/** Project relief hints into world-meter shapes. */
+function projectRelief(worldMap) {
+  const { origin, unitsPerMeter } = worldMap;
+  return worldMap.relief.map((r) => ({
+    kind: r.kind,
+    amplitude: r.amplitude,
+    polygon: r.shape.polygon !== undefined ? r.shape.polygon.map((p) => toWorld(origin, unitsPerMeter, p)) : undefined,
+    point: r.shape.point !== undefined ? toWorld(origin, unitsPerMeter, r.shape.point) : undefined,
+  }));
+}
+
+/** Project biome regions into world-meter rings. */
+function projectBiomes(worldMap) {
+  const { origin, unitsPerMeter } = worldMap;
+  return worldMap.biomes.map((b) => ({ biome: b.biome, ring: b.points.map((p) => toWorld(origin, unitsPerMeter, p)) }));
+}
+
+/** Project waterways into world-meter polylines. */
+function projectWaterways(worldMap) {
+  const { origin, unitsPerMeter } = worldMap;
+  return worldMap.waterways.map((w) => ({
+    widthM: w.widthM ?? 3,
+    points: w.points.map((p) => toWorld(origin, unitsPerMeter, p)),
+  }));
+}
+
+// terrain.paint's material ids (MUST match PAINT_MATERIALS in terrain-edit.ts / PAINT_ALBEDO in
+// terrain/render.ts): 0 none, 1 sand, 2 grass, 3 rock, 4 dirt. Biome -> paint mapping is a
+// deliberate, sensible default (not load-bearing on exact ids beyond matching that channel).
+function biomePaintId(biome) {
+  switch (biome) {
+    case "grass": return 2;
+    case "forest": return 2;
+    case "mountain": return 3;
+    case "swamp": return 4;
+    case "desert": return 1;
+    case "tundra": return 0; // no dedicated snow/tundra paint material yet — leave unpainted.
+    case "water": return undefined; // never paints; it's below sea level anyway.
+    default: return undefined;
+  }
+}
+
+/**
+ * Rasterize a WorldMap IR into a square heightfield + paint overlay — PURE (no THREE/DOM,
+ * no Date/Math.random): identical (worldMap, params) -> byte-identical output, every run,
+ * every host.
+ *
+ * @param {import("../worldmap.ts").WorldMap} worldMap
+ * @param {{ size: number, resolution: number, seed?: number, noiseFrac?: number, baseAmplitude?: number }} opts
+ * @returns {{ heights: Float32Array, paintMat: Uint8Array, paintW: Float32Array, seaLevelM: number,
+ *             cfg: { seaLevelM: number, amplitude: number, noiseFrac: number, size: number, resolution: number, seed: number } }}
+ */
+export function rasterizeWorldMap(worldMap, opts) {
+  const size = opts.size;
+  const n = opts.resolution;
+  const seed = (opts.seed ?? 1) | 0;
+  const noiseFrac = opts.noiseFrac ?? 0.2;
+  const baseAmplitude = opts.baseAmplitude ?? 12;
+  if (!(size > 0)) throw new Error("rasterizeWorldMap: size must be > 0");
+  if (!(n >= 2)) throw new Error("rasterizeWorldMap: resolution must be >= 2");
+
+  const seaLevel = worldMap.seaLevel;
+  const landBase = seaLevel + 2;
+  const half = size / 2;
+  const step = size / (n - 1);
+
+  const landPolys = projectLandPolys(worldMap);
+  const reliefs = projectRelief(worldMap);
+  const biomes = projectBiomes(worldMap);
+  const waterways = projectWaterways(worldMap);
+
+  // Scale-relative bands (deterministic functions of `size` only, so a bigger tile gets a
+  // proportionally wider shore/relief falloff instead of a fixed-meter band reading too sharp).
+  const shoreBand = Math.max(4, size * 0.04);
+  const reliefBand = Math.max(4, size * 0.06);
+  const seaFarDepth = Math.max(2, baseAmplitude * 0.5);
+  const flatNoiseAmp = baseAmplitude * 0.15; // ambient roughness where no relief hint applies.
+  const noiseScale = 0.08; // fBm cycles/meter — a fixed implementation constant, not a knob.
+
+  const heights = new Float32Array(n * n);
+  const paintMat = new Uint8Array(n * n);
+  const paintW = new Float32Array(n * n);
+
+  for (let row = 0; row < n; row++) {
+    const wz = -half + row * step;
+    for (let col = 0; col < n; col++) {
+      const wx = -half + col * step;
+      const i = row * n + col;
+
+      // ── 1. Sea mask + shore falloff ─────────────────────────────────────────────────
+      const inLand = isInsideLandPolys(landPolys, wx, wz);
+      let coastD = distToLandBoundary(landPolys, wx, wz);
+      if (!Number.isFinite(coastD)) coastD = shoreBand; // no land at all: treat as "at the shore".
+      const t = smoothstep01(coastD / shoreBand);
+      let h = inLand ? lerp(seaLevel + 0.4, landBase, t) : lerp(seaLevel - 0.4, seaLevel - seaFarDepth, t);
+
+      // ── 2. Relief hints (polygon: smoothstep falloff from the edge inward; point: radial
+      //    bump). Mountain/hills/plateau/peak RAISE; depression LOWERS — regardless of the
+      //    hint's own stored sign, so authored data can carry either convention safely. ──────
+      let reliefSum = 0;
+      let localAmp = 0;
+      for (const r of reliefs) {
+        let w = 0;
+        if (r.polygon !== undefined) {
+          if (pointInRing(wx, wz, r.polygon)) {
+            const edgeD = distToRing(wx, wz, r.polygon);
+            w = smoothstep01(edgeD / reliefBand);
+          }
+        } else if (r.point !== undefined) {
+          const radius = Math.max(10, Math.min(60, Math.abs(r.amplitude) * 1.5));
+          const dist = Math.hypot(wx - r.point[0], wz - r.point[1]);
+          w = 1 - smoothstep01(dist / radius);
+        }
+        if (w > 0) {
+          const signed = RAISING_RELIEF.has(r.kind) ? Math.abs(r.amplitude) : -Math.abs(r.amplitude);
+          reliefSum += signed * w;
+          const mag = Math.abs(r.amplitude) * w;
+          if (mag > localAmp) localAmp = mag;
+        }
+      }
+      h += reliefSum;
+
+      // ── 3. Seeded noise texture, bounded by noiseFrac x the LOCAL authored amplitude (the
+      //    relief hint governing this cell, else a small ambient roughness on land — this bound
+      //    is what keeps the drawing legible / the land-mask IoU high). ──────────────────────
+      const effAmp = Math.max(localAmp, inLand ? flatNoiseAmp : 0);
+      if (effAmp > 0) {
+        const nv = fbm(wx * noiseScale, wz * noiseScale, seed, 4, 2.0, 0.5);
+        h += nv * noiseFrac * effAmp;
+      }
+
+      heights[i] = h;
+
+      // ── 5. Biome -> paint (computed here so it shares the coastD already known; carving
+      //    happens in a second pass below since it must clamp against the noised base height). ─
+      let matId = 0, matW = 0;
+      const edgeBand = Math.max(3, size * 0.03);
+      for (const b of biomes) {
+        if (!pointInRing(wx, wz, b.ring)) continue;
+        const id = biomePaintId(b.biome);
+        if (id === undefined) continue;
+        const bd = distToRing(wx, wz, b.ring);
+        const w = 0.8 * smoothstep01(bd / edgeBand);
+        if (w > matW) { matId = id; matW = w; }
+      }
+      const coastalBand = shoreBand * 1.5;
+      if (coastD < coastalBand) {
+        const sandW = 0.8 * (1 - smoothstep01(coastD / coastalBand));
+        if (sandW > matW) { matId = 1; matW = sandW; }
+      }
+      paintMat[i] = matId;
+      paintW[i] = matW;
+    }
+  }
+
+  // ── 4. Waterway carve (second pass: depresses a channel along each polyline, clamped so it
+  //    never breaches below seaLevel-3). Runs after the base+relief+noise pass so the carve is
+  //    a clean depression relative to the already-shaped surface, not fighting it. ─────────────
+  const carveDepth = 1.5;
+  const floor = seaLevel - 3;
+  for (let row = 0; row < n; row++) {
+    const wz = -half + row * step;
+    for (let col = 0; col < n; col++) {
+      const wx = -half + col * step;
+      const i = row * n + col;
+      let carve = 0;
+      for (const w of waterways) {
+        if (w.points.length < 2) continue;
+        const halfWidth = w.widthM / 2;
+        const bankBand = Math.max(halfWidth, 2);
+        const d = distToPolyline(wx, wz, w.points);
+        let ct;
+        if (d <= halfWidth) ct = 1;
+        else if (d >= halfWidth + bankBand) ct = 0;
+        else ct = 1 - smoothstep01((d - halfWidth) / bankBand);
+        if (ct > carve) carve = ct;
+      }
+      if (carve > 0) {
+        const next = Math.max(floor, heights[i] - carveDepth * carve);
+        heights[i] = next;
+      }
+    }
+  }
+
+  return {
+    heights,
+    paintMat,
+    paintW,
+    seaLevelM: seaLevel,
+    cfg: { seaLevelM: seaLevel, amplitude: baseAmplitude, noiseFrac, size, resolution: n, seed },
+  };
+}

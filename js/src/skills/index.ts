@@ -205,7 +205,7 @@ export function registerCoreSkills(
   // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
   // terrain.deform (brush sculpt). Records ops, not bytes — replay reconstructs the heights.
   // vegetation.scatter reads the SAME live terrain-layer map to scatter a forest on the sculpt.
-  registerTerrainEditSkills(registry, terrainLayers);
+  registerTerrainEditSkills(registry, terrainLayers, assets);
   // Shared settlement-footprint registry (keyed by terrain id): village.build fills it with the
   // built ground's keep-out discs and vegetation.scatter auto-excludes them, so "build a village
   // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors

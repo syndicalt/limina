@@ -131,6 +131,20 @@ const SitingSchema = z.object({
   clearingMargin: z.number().min(0).max(60).default(10),
 }).default({});
 
+// AUTHORED PLACEMENT ANCHORS — WorldMap-derived pins (js/src/world/worldmap.ts Anchor: {id, kind,
+// position, count?, name?, source}) reduced to what village.build needs to bind one to a buildingSpec:
+// THE RULE (locked): an anchor pins WHERE a building goes; the layout solver (planVillage) still
+// decides HOW (facing, terrace order, cluster spread). Matching is by `assetId` (exact) else `role`
+// (first UNCLAIMED buildingSpec occurrence, in steering.buildings order) — see the binding loop below.
+// `count > 1` clusters that many instances of the matched spec tightly around the SAME anchor.
+const AnchorSchema = z.object({
+  id: z.string(),
+  position: z.tuple([z.number(), z.number()]),
+  role: z.string().optional(),
+  assetId: z.string().optional(),
+  count: z.number().int().positive().optional(),
+});
+
 const buildInput = z.object({
   /** Art direction — flavors the placed assets' identity upstream; layout ignores it. */
   direction: z.object({
@@ -147,6 +161,10 @@ const buildInput = z.object({
     }).default({}),
     /** How buildings meet the ground (terrace/yard/lane). Defaults = the natural look. */
     siting: SitingSchema,
+    /** Authored placement anchors (from a compiled WorldMap) pinning specific buildings to specific
+     *  world positions. Optional — an unanchored steering behaves exactly as before (pure map-wide
+     *  solver). See AnchorSchema above for the matching + cluster semantics. */
+    anchors: z.array(AnchorSchema).optional(),
   }),
   /** Recorded for provenance; the layout is a pure function of terrain+steering, so the
    *  seed does not perturb placements (determinism holds for any seed). */
@@ -168,6 +186,8 @@ const buildOutput = z.object({
   placements: z.array(z.object({
     assetId: z.string(), role: z.string(), style: z.string(),
     x: z.number(), y: z.number(), z: z.number(), yaw: z.number(),
+    /** The authored anchor id this placement was pinned to (absent when unanchored). */
+    anchorId: z.string().optional(),
   })),
 });
 
@@ -298,8 +318,14 @@ export function registerVillageSkills(
       const instOf: InstPlan[] = [];
       const assetHashes: Record<string, string> = {};
       const radiusCache = new Map<string, number>();
+      // Per-spec instance-index RANGE (start + count) in the SAME spec-by-spec, count-times order as
+      // `radii`/`instOf` — recorded regardless of branch so anchor↔spec binding below (which only
+      // needs counts, not asset/kit/archetype identity) can resolve which flat instance index(es) an
+      // anchor claims.
+      const specRanges: Array<{ start: number; count: number }> = [];
       for (const spec of input.steering.buildings) {
         const count = Math.max(1, spec.count ?? 1);
+        specRanges.push({ start: radii.length, count });
         if (spec.archetype !== undefined) {
           const brief = archetypeBrief(spec.archetype);
           if (brief === undefined) throw new Error(`village.build: unknown archetype '${spec.archetype}' — not in the shipped building-brief library`);
@@ -336,10 +362,49 @@ export function registerVillageSkills(
         for (let i = 0; i < count; i++) { radii.push(r); instOf.push({ kind: "glb", assetId }); }
       }
 
+      // -- ANCHORS: bind each authored placement anchor to the buildingSpec instance slot(s) it pins —
+      //    by `assetId` (exact) else `role` (first UNCLAIMED occurrence, in steering.buildings order),
+      //    so two anchors referencing the same role/spec consume disjoint occurrence ranges. This is
+      //    the ONLY place assetId/role identity is resolved — planVillage stays agnostic and only ever
+      //    sees flat instance indices, keeping "matching" (here) cleanly separate from "siting" (there).
+      type AnchorBinding = { id: string; position: [number, number]; instanceIndices: number[] };
+      const anchorBindings: AnchorBinding[] = [];
+      const anchorsIn = input.steering.anchors ?? [];
+      if (anchorsIn.length > 0) {
+        const claimed = new Array(specRanges.length).fill(0) as number[];
+        for (const anchor of anchorsIn) {
+          let listIndex = -1;
+          if (anchor.assetId !== undefined) {
+            listIndex = input.steering.buildings.findIndex((b) => b.assetId === anchor.assetId);
+          }
+          if (listIndex === -1 && anchor.role !== undefined) {
+            listIndex = input.steering.buildings.findIndex(
+              (b, i) => b.role === anchor.role && claimed[i] < specRanges[i].count,
+            );
+          }
+          if (listIndex === -1) {
+            throw new Error(
+              `village.build: anchor '${anchor.id}' at [${anchor.position[0]}, ${anchor.position[1]}] matches ` +
+              `no buildingSpec (assetId='${anchor.assetId ?? ""}', role='${anchor.role ?? ""}')`,
+            );
+          }
+          const range = specRanges[listIndex];
+          const want = Math.max(1, Math.min(anchor.count ?? 1, range.count - claimed[listIndex]));
+          const instanceIndices: number[] = [];
+          for (let i = 0; i < want; i++) { instanceIndices.push(range.start + claimed[listIndex]); claimed[listIndex]++; }
+          anchorBindings.push({ id: anchor.id, position: anchor.position, instanceIndices });
+        }
+      }
+
       // -- Run the SHARED, pure layout (over the ORIGINAL terrain — sites are chosen on the real
-      //    eroded ground, keeping the flatness/contour preference).
-      const { placements } = planVillage(sampler, input.direction, input.steering, radii) as {
-        placements: Array<{ role: string; style: string; index: number; x: number; z: number; yaw: number }>;
+      //    eroded ground, keeping the flatness/contour preference). Anchored instances (if any) are
+      //    sited FIRST, at/near their authored positions; the map-wide solver then seats everything
+      //    else around them (planVillage throws, naming the anchor, if one has no buildable site).
+      const { placements } = planVillage(
+        sampler, input.direction, input.steering, radii,
+        anchorBindings.length > 0 ? anchorBindings : undefined,
+      ) as {
+        placements: Array<{ role: string; style: string; index: number; x: number; z: number; yaw: number; anchorId?: string }>;
       };
 
       // -- v2 TERRACING: LEVEL each footprint into a flat platform cut into the hillside BEFORE
@@ -396,12 +461,13 @@ export function registerVillageSkills(
         tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
       });
       const entities: string[] = [];
-      const outPlacements: Array<{ assetId: string; role: string; style: string; x: number; y: number; z: number; yaw: number }> = [];
+      const outPlacements: Array<{ assetId: string; role: string; style: string; x: number; y: number; z: number; yaw: number; anchorId?: string }> = [];
       for (const p of placements) {
         const inst = instOf[p.index];
         const y = heightAt(p.x, p.z);
         // Deterministic per-instance seed (village seed mixed with the instance index) — no RNG/clock.
         const kitSeed = (villageSeed + Math.imul(p.index + 1, 0x9e3779b1)) >>> 0;
+        const anchorId = p.anchorId; // present only when this placement was pinned to an authored anchor
         if (inst.kind === "brief") {
           // Per-TYPE building raised from its archetype brief through building.assemble (which carries the
           // craft fields: construction, base course, roof cover). The brief's own footprint + rotation are
@@ -412,7 +478,7 @@ export function registerVillageSkills(
           }, nestedCtx());
           if (!res.success) throw new Error(`village.build: building.assemble failed for archetype '${inst.brief.id}': ${JSON.stringify(res.error)}`);
           entities.push((res.result as { root: string }).root);
-          outPlacements.push({ assetId: `archetype:${inst.brief.id}`, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+          outPlacements.push({ assetId: `archetype:${inst.brief.id}`, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw, anchorId });
         } else if (inst.kind === "kit") {
           const [w, d, h] = inst.sizeM;
           const res = await registry.invoke("architecture.building", {
@@ -423,7 +489,7 @@ export function registerVillageSkills(
           }, nestedCtx());
           if (!res.success) throw new Error(`village.build: architecture.building failed for kit '${p.role}': ${JSON.stringify(res.error)}`);
           entities.push((res.result as { root: string }).root);
-          outPlacements.push({ assetId: "kit", role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+          outPlacements.push({ assetId: "kit", role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw, anchorId });
         } else {
           const assetId = inst.assetId;
           const res = await registry.invoke("asset.place", {
@@ -435,7 +501,7 @@ export function registerVillageSkills(
           }, nestedCtx());
           if (!res.success) throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
           entities.push((res.result as { entity: string }).entity);
-          outPlacements.push({ assetId, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw });
+          outPlacements.push({ assetId, role: p.role, style: p.style, x: p.x, y, z: p.z, yaw: p.yaw, anchorId });
         }
       }
 

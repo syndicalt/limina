@@ -15,6 +15,9 @@ import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 import { applyElevationColors, applyPaintOverlay, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
+import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
+import { WorldMapSchema, verifyWorldMap } from "../world/worldmap.ts";
+import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 /** An inert transform for the terrain entity's ECS slot (the mesh is world-fixed at its origin). */
@@ -65,7 +68,32 @@ const createInput = z.object({
       thermal: z.number().int().min(0).optional(),
       talus: z.number().min(0).optional(),
     }).optional(),
+    /**
+     * Generation SOURCE. "procedural" (default): the eroded-heightfield generator above.
+     * "map": rasterize a COMMITTED WorldMap IR (js/src/world/worldmap.ts) into the tile instead
+     * — its land polygons, relief hints, biomes, and waterways become the heightfield + paint
+     * overlay (world/pipeline/map-raster.mjs, a pure function of the map + these params). The
+     * other procedural-only fields above are ignored on this branch except `seed` and
+     * `amplitude` (reused as the map rasterizer's noise seed / base relief amplitude).
+     */
+    source: z.enum(["procedural", "map"]).default("procedural"),
+    /** Required when source==="map": the asset id of the compiled WorldMap JSON (e.g.
+     *  "maps/primary.worldmap.json"), resolved via the AssetRegistry threaded into
+     *  registerTerrainEditSkills. */
+    mapAssetId: z.string().optional(),
   }).optional(),
+  /**
+   * The COMMITTED content hash (the WorldMap's own provenance.contentHash) of the map used by
+   * generate.source==="map". Absent at authoring (resolved + returned as output.mapHash, then
+   * committed back into the recorded command by the WorldRecorder via commitFields — mirrors
+   * asset.place's `hash`). Present on REPLAY: the freshly-resolved map's contentHash is checked
+   * against it, and a MISMATCH THROWS (deliberately stricter than asset.place's warn-not-throw —
+   * maps are load-bearing, and cross-host safety here comes from the pure-JS sha256 in
+   * worldmap-hash.mjs, so the check IS host-stable). This pins the AUTHORED map version itself,
+   * distinct from verifyWorldMap's internal tamper check (which only proves the resolved bytes
+   * are SELF-consistent, not that they're the SAME map a replay was authored against).
+   */
+  mapHash: z.string().optional(),
 });
 
 const DEFORM_MODES = ["raise", "lower", "smooth", "flatten", "noise"] as const;
@@ -195,23 +223,63 @@ function applyBrush(tile: TerrainTile, input: z.infer<typeof deformInput>): void
 export function registerTerrainEditSkills(
   registry: SkillRegistry,
   layers: Map<string, EditableTerrain> = new Map(),
+  assets?: AssetRegistry,
 ): { layers: Map<string, EditableTerrain> } {
-  const create: SkillDefinition<z.infer<typeof createInput>, { entity: string }> = {
+  const create: SkillDefinition<z.infer<typeof createInput>, { entity: string; mapHash?: string }> = {
     name: "terrain.create",
     version: "1.0.0",
-    description: "Create an editable heightfield terrain layer — a flat, deformable/paintable ground grid — as a world entity. Reshape it with terrain.deform. Records its params so it replays; heights are meters relative to origin.y.",
+    description: "Create an editable heightfield terrain layer — a flat, deformable/paintable ground grid — as a world entity. Reshape it with terrain.deform. Records its params so it replays; heights are meters relative to origin.y. generate.source: 'map' rasterizes a committed WorldMap IR instead of the procedural generator.",
     category: "terrain",
     permissions: ["scene.write"],
+    // Pins the AUTHORED map version (generate.source==='map' only) into the replay log —
+    // mirrors asset.place's `hash` commitField. Absent for procedural/flat creates.
+    commitFields: ["mapHash"],
     input: createInput,
-    output: z.object({ entity: z.string() }),
+    output: z.object({ entity: z.string(), mapHash: z.string().optional() }),
     handler: (input, ctx) => {
       const n = input.resolution;
-      // Heights: a flat slab by default, OR a PURE eroded heightfield when `generate` is set.
-      // The generator produces an (n)×(n) grid over `size` meters (gridN = n-1 vertices/edge)
-      // deterministically from the recorded params, so replay reconstructs identical heights.
+      // Heights: a flat slab by default, OR a PURE eroded heightfield / rasterized WorldMap when
+      // `generate` is set. Both generators produce an n×n grid over `size` meters deterministically
+      // from the recorded params, so replay reconstructs identical heights.
       let heights: Float32Array;
       let elevationColors: { seaLevel: number; amplitude: number } | undefined;
-      if (input.generate !== undefined) {
+      let paintMat: Uint8Array | undefined;
+      let paintW: Float32Array | undefined;
+      let mapHash: string | undefined;
+      if (input.generate !== undefined && input.generate.source === "map") {
+        const g = input.generate;
+        if (assets === undefined) {
+          throw new Error("terrain.create: generate.source 'map' requires an AssetRegistry (thread one via registerTerrainEditSkills)");
+        }
+        if (g.mapAssetId === undefined) {
+          throw new Error("terrain.create: generate.source 'map' requires generate.mapAssetId");
+        }
+        const resolved = assets.resolve(g.mapAssetId);
+        let parsedJson: unknown;
+        try {
+          parsedJson = JSON.parse(new TextDecoder().decode(resolved.bytes));
+        } catch (e) {
+          throw new Error(`terrain.create: map asset '${g.mapAssetId}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        // Zod-parse as WorldMap v1 — THROWS on a malformed/non-WorldMap shape. Maps are
+        // load-bearing (unlike a cosmetic GLB), so a parse failure must fail loudly, not warn.
+        const worldMap = WorldMapSchema.parse(parsedJson);
+        const verify = verifyWorldMap(worldMap);
+        if (!verify.ok) {
+          throw new Error(`terrain.create: map asset '${g.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) — refusing a tampered/corrupted map`);
+        }
+        // Pin the AUTHORED map version: a different-but-still-internally-consistent map swapped
+        // in at the same assetId would pass verifyWorldMap above but must still be rejected.
+        if (input.mapHash !== undefined && input.mapHash !== worldMap.provenance.contentHash) {
+          throw new Error(`terrain.create: map asset '${g.mapAssetId}' identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this terrain was authored`);
+        }
+        mapHash = worldMap.provenance.contentHash;
+        const raster = rasterizeWorldMap(worldMap, { size: input.size, resolution: n, seed: g.seed, baseAmplitude: g.amplitude });
+        heights = raster.heights;
+        paintMat = raster.paintMat;
+        paintW = raster.paintW;
+        elevationColors = { seaLevel: input.origin[1] + raster.seaLevelM, amplitude: raster.cfg.amplitude, snowFrac: 1.0 };
+      } else if (input.generate !== undefined) {
         const g = input.generate;
         const gh = generateHeightfield({
           seed: g.seed,
@@ -240,6 +308,11 @@ export function registerTerrainEditSkills(
         if (input.baseHeight !== 0) heights.fill(input.baseHeight);
       }
       const tile: TerrainTile = { nrows: n, ncols: n, origin: [input.origin[0], input.origin[1], input.origin[2]], scale: [input.size, 1, input.size], heights };
+      // Install the map-rasterized paint overlay BEFORE geometry build so the mesh reads it
+      // immediately (terrain.paint installs this same channel later via brush strokes; a
+      // map-sourced tile starts already painted by its biome regions).
+      if (paintMat !== undefined) tile.paintMat = paintMat;
+      if (paintW !== undefined) tile.paintW = paintW;
 
       // GROUND COLLIDER (the load-bearing fix so a spawned player stands on this layer instead of
       // falling forever). MIRRORS world.generateRegion (terrain.ts applyTile): build a Rapier
@@ -257,6 +330,12 @@ export function registerTerrainEditSkills(
       const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
       if (scene !== undefined && typeof scene.add === "function") {
         const built = buildTerrainMesh(tile, elevationColors !== undefined ? { color: input.color, elevationColors } : { color: input.color });
+        // A map-rasterized tile arrives already painted (biome regions -> paintMat/paintW) —
+        // blend that overlay into the just-built elevation-color vertex attribute immediately,
+        // exactly like terrain.paint does for a brush stroke on an existing mesh.
+        if (tile.paintMat !== undefined) {
+          applyPaintOverlay(built.geometry, tile);
+        }
         scene.add(built);
         mesh = built as unknown as MeshLike;
       }
@@ -274,8 +353,8 @@ export function registerTerrainEditSkills(
       // the entity id + physics bodyId so terrain.deform can REBUILD the heightfield collider to
       // follow the reshaped heights (see the deform handler — the sink-through fix).
       layers.set(entity, { tile, mesh, eid, entity, bodyId, ...(elevationColors !== undefined ? { elevationColors } : {}) });
-      ctx.emit("terrain.created", { entity, size: input.size, resolution: n });
-      return { entity };
+      ctx.emit("terrain.created", { entity, size: input.size, resolution: n, ...(mapHash !== undefined ? { mapHash } : {}) });
+      return { entity, ...(mapHash !== undefined ? { mapHash } : {}) };
     },
   };
 

@@ -154,17 +154,27 @@ assert((replayedResource.meshCount as number) >= 1 && replayedResource.assetId =
 const replayRes2 = ok((await replayFromPackage(recorder.commands, new LiminaTracer("ses_p11_replay2")))!);
 assert(replayRes2.entity === ok(replayRes).entity && replayRes2.hash === r1.hash, "nondeterministic replay (entity/hash)");
 
-// 6. Replay VERIFIES the committed hash — a swapped asset is rejected --------------
+// 6. Replay VERIFIES the committed hash — a mismatch is DETECTED + SURFACED, never fatal ----------
+// Design decision (Slice-4 UAT fix, commit c21ab2d): op_sha256 is NOT byte-identical across hosts,
+// so a cross-host replay of a healthy placement can mismatch its committed hash. Throwing here
+// quarantined real placements in the live viewport ("placed but invisible"); asset.place therefore
+// WARNS via an asset.hash_mismatch event and continues — assetId still pins identity. A genuinely
+// swapped asset surfaces as that visible event, not a silent load. (WorldMap IR assets use the
+// stricter throw policy via a host-independent pure-JS sha256 — see js/src/world/worldmap.ts.)
 const pkgReg = AssetRegistry.fromBundle(exportAssetBundle(loaded), guardOps);
-const goodReg = new SkillRegistry(new LiminaTracer("ses_p11_pin"));
+const pinTracer = new LiminaTracer("ses_p11_pin");
+const goodReg = new SkillRegistry(pinTracer);
 registerCoreSkills(goodReg, { assets: pkgReg });
-// Correct committed hash -> loads.
+// Correct committed hash -> loads, no mismatch event.
 const pinOk = await goodReg.invoke("asset.place", { ...placeArgs, hash: r1.hash }, { agentId: "a", sessionId: "s", permissions: BUILDER, tick: 0, world: makeWorld(guardOps) });
 assert(pinOk.success, `pinned replay with the correct hash should load: ${JSON.stringify(pinOk.error)}`);
-// Wrong committed hash -> REJECTED (this is what pins authored identity on replay).
-// FALSIFIABLE — removing the handler's hash check makes this succeed.
+assert(!pinTracer.trace("a").some((e) => e.type === "asset.hash_mismatch"), "a matching hash must not emit asset.hash_mismatch");
+// Wrong committed hash -> still loads (assetId pins identity) BUT the mismatch is DETECTED.
+// FALSIFIABLE — removing the handler's hash check makes the event disappear.
 const pinBad = await goodReg.invoke("asset.place", { ...placeArgs, hash: glbHash }, { agentId: "a", sessionId: "s", permissions: BUILDER, tick: 0, world: makeWorld(guardOps) });
-assert(!pinBad.success && JSON.stringify(pinBad.error).includes("content hash mismatch"), "replay did NOT verify the committed hash (a swapped asset would load)");
+assert(pinBad.success, `mismatched hash must not quarantine the placement (warn-not-throw): ${JSON.stringify(pinBad.error)}`);
+const mismatchEvents = pinTracer.trace("a").filter((e) => e.type === "asset.hash_mismatch");
+assert(mismatchEvents.length === 1, `a swapped/mismatched hash MUST surface exactly one asset.hash_mismatch event (got ${mismatchEvents.length})`);
 
 // 7. loadExport + verifyExportAssets recompute from round-tripped bytes -----------
 const bundleOf = (id: string): Uint8Array => exportAssetBundle(loaded).find((e) => e.id === id)!.bytes;
@@ -183,4 +193,4 @@ const tornFiles = { ...files, "assets.jsonl": JSON.stringify(obj) + "\n" };
 try { loadExport(tornFiles, ops); } catch { assetBytesRejected = true; }
 assert(assetBytesRejected, "loadExport accepted a corrupted assets.jsonl (no byte integrity)");
 
-ops.op_log(`p11_asset_place OK: registry content-addresses assets (${r1.hash}); recorder commits the hash to the log (pinned); export serializes ${loaded.assets.length} asset's bytes (assets.jsonl); replay reloads from the SERIALIZED package (guarded vs native root) with correct metadata + deterministically; replay rejects a swapped/pinned-mismatch asset; loadExport+verifyExportAssets reject manifest + byte tampers.`);
+ops.op_log(`p11_asset_place OK: registry content-addresses assets (${r1.hash}); recorder commits the hash to the log (pinned); export serializes ${loaded.assets.length} asset's bytes (assets.jsonl); replay reloads from the SERIALIZED package (guarded vs native root) with correct metadata + deterministically; replay DETECTS a swapped/pinned-mismatch asset (asset.hash_mismatch event, warn-not-throw); loadExport+verifyExportAssets reject manifest + byte tampers.`);
