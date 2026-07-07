@@ -135,17 +135,24 @@ export class TileCache {
 
   /** Resolve a tile: a cache hit returns the stored bytes; a miss generates it
    *  via `source`, caches it, and returns it. The single seam where "model at
-   *  authoring / cache at replay / procedural offline" all flow through. */
+   *  authoring / cache at replay / procedural offline" all flow through.
+   *
+   *  DERIVED-SOURCE EXEMPTION (Map Phase 3.2): a source flagged `derived: true`
+   *  (MapTerrainSource) re-derives its tiles deterministically from a logged, hash-
+   *  pinned artifact, so its tiles are NEVER export-retained — transient LRU only
+   *  (the export ships the IR asset, not tiles), and the fail-closed retained limit
+   *  (ensureRetainedCapacity) is unreachable for them by construction. */
   async resolve(req: TileRequest, source: TerrainSource, opts: TileCachePutOptions = {}): Promise<TerrainTile> {
     const key = requestKey(req);
+    const retain = opts.retainForExport !== false && source.derived !== true;
     const hit = this.get(req);
     if (hit !== undefined) {
-      if (opts.retainForExport !== false && !this.retained.has(key)) this.store(key, hit, true);
+      if (retain && !this.retained.has(key)) this.store(key, hit, true);
       return hit;
     }
-    if (opts.retainForExport !== false) this.ensureRetainedCapacity(key);
+    if (retain) this.ensureRetainedCapacity(key);
     const tile = await source.generateTile(req);
-    this.store(key, tile, opts.retainForExport !== false);
+    this.store(key, tile, retain);
     return tile;
   }
 

@@ -23,7 +23,11 @@ import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainSource, TerrainTile, TileRequest } from "../terrain/types.ts";
-import { TILE_SIZE } from "../terrain/procedural.ts";
+import { ProceduralTerrainSource, TILE_SIZE } from "../terrain/procedural.ts";
+import { MapTerrainSource } from "../terrain/map-source.ts";
+import { SwappableTerrainSource } from "../terrain/swappable.ts";
+import { WorldMapSchema, verifyWorldMap } from "../world/worldmap.ts";
+import type { AssetRegistry } from "../asset-registry.ts";
 import { TERRAIN_TYPE_NAMES, terrainTypeHints, type RegionBounds, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
 import { buildTerrainMesh, disposeTerrainMesh, type TerrainMeshOptions } from "../terrain/render.ts";
@@ -207,12 +211,16 @@ function clearRegionRenderDisposables(region: RegionState): void {
 
 /** Register the terrain.* / world.* skills bound to a source + cache. The default
  *  core wiring passes a ProceduralTerrainSource; a runtime can pass the cached
- *  source (replay) or the model-backed source (authoring) instead. */
+ *  source (replay) or the model-backed source (authoring) instead. When `source` is
+ *  a SwappableTerrainSource (registerCoreSkills' default wrapping) the RECORDED
+ *  world.setTerrainSource skill can rebind it (e.g. to a MapTerrainSource) — `assets`
+ *  is the registry that resolves the map IR bytes for that command. */
 export function registerTerrainSkills(
   registry: SkillRegistry,
   source: TerrainSource,
   cache: TileCache = new TileCache(),
   regions: Map<string, RegionState> = new Map(),
+  assets?: AssetRegistry,
 ): { cache: TileCache; regions: Map<string, RegionState> } {
 
   /** Resolve + apply one tile: build the native heightfield collider, register a
@@ -379,6 +387,90 @@ export function registerTerrainSkills(
 
       ctx.emit("terrain.region.ready", { regionId, tiles: bodies.length, meshes: meshCount });
       return { regionId, tiles: bodies.length, bodies, keys, meshes: meshCount, relief: reliefOut, seaLevel: seaLevelOut };
+    },
+  };
+
+  // ---- world.setTerrainSource ------------------------------------------------
+  // Map Phase 3.2: binding a map to the STREAMED world is a RECORDED command, so the
+  // replay log is self-describing — replay re-invokes this skill, re-resolves the IR
+  // asset, re-verifies its content hash (pure-JS sha256 via verifyWorldMap; a mismatch
+  // THROWS — maps are load-bearing), and reconstructs the MapTerrainSource FROM the
+  // log, never out-of-band. The recorder COMMITS the resolved IR hash back into the
+  // recorded command (commitFields, like terrain.create's mapHash / asset.place's
+  // hash), so a different-but-internally-consistent map swapped in at the same asset
+  // id is rejected on replay. Requires the SwappableTerrainSource holder registerCore-
+  // Skills wraps the bound source in; rebinding propagates to generateRegion /
+  // streamFollow / asset.scatter / world.addWater at once (they share the holder).
+  //
+  // ORDERING RULE (documented + gated): the source must be set BEFORE any region is
+  // generated. Rebinding mid-session would mix two sources' tiles inside live regions
+  // AND serve stale tiles from the request-keyed cache (keys carry no source identity),
+  // so the command REJECTS when regions already exist — reset the world (or a fresh
+  // session) to change terrain sources.
+  const setTerrainSourceInput = z.object({
+    kind: z.enum(["procedural", "map"]),
+    /** The WorldMap IR asset id (kind "map" only), e.g. "maps/primary.worldmap.json". */
+    mapAssetId: z.string().min(1).optional(),
+    /** The IR's provenance.contentHash. Absent at authoring (resolved + returned as
+     *  output.hash, then committed into the recorded command); present on replay,
+     *  where a mismatch against the resolved IR THROWS (identity pin). */
+    hash: z.string().optional(),
+  });
+  const setTerrainSourceOutput = z.object({
+    kind: z.enum(["procedural", "map"]),
+    source: z.string(),
+    hash: z.string().optional(),
+  });
+  const setTerrainSource: SkillDefinition<z.infer<typeof setTerrainSourceInput>, z.infer<typeof setTerrainSourceOutput>> = {
+    name: "world.setTerrainSource",
+    version: "1.0.0",
+    description: "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset (content-hash pinned, THROWS on tamper/identity mismatch) and rebinds world.generateRegion/world.streamFollow/asset.scatter/water to a MapTerrainSource derived from it; kind 'procedural' restores the default generator. RECORDED — replay reconstructs the source from this command. Must run BEFORE any world.generateRegion (rejects once regions exist). Map tiles re-derive from the IR, so they are never export-retained (the export ships the IR asset, not tiles).",
+    category: "world",
+    permissions: ["scene.write"],
+    // Pin the AUTHORED map identity into the replay log (mirrors terrain.create's mapHash).
+    commitFields: ["hash"],
+    input: setTerrainSourceInput,
+    output: setTerrainSourceOutput,
+    handler: (input, ctx) => {
+      if (!(source instanceof SwappableTerrainSource)) {
+        throw new Error("world.setTerrainSource: this runtime binds a FIXED terrain source (no SwappableTerrainSource holder) — rebinding is unavailable");
+      }
+      if (regions.size > 0) {
+        throw new Error("world.setTerrainSource: terrain regions already exist in this session — reset the world, or set the terrain source BEFORE world.generateRegion (rebinding mid-session would mix sources under the same tile-cache keys)");
+      }
+      if (input.kind === "procedural") {
+        source.swap(new ProceduralTerrainSource());
+        ctx.emit("terrain.source_changed", { kind: "procedural", source: source.name });
+        return { kind: "procedural" as const, source: source.name };
+      }
+      if (input.mapAssetId === undefined) {
+        throw new Error("world.setTerrainSource: kind 'map' requires mapAssetId");
+      }
+      if (assets === undefined) {
+        throw new Error("world.setTerrainSource: kind 'map' requires an AssetRegistry (thread one via registerTerrainSkills)");
+      }
+      const resolved = assets.resolve(input.mapAssetId);
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(new TextDecoder().decode(resolved.bytes));
+      } catch (e) {
+        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      // Zod-parse as WorldMap v1 (THROWS on malformed shape), then verify the embedded
+      // content hash with the pure-JS sha256 path — a mismatch THROWS: maps are load-
+      // bearing (deliberately stricter than asset.place's warn-not-throw).
+      const worldMap = WorldMapSchema.parse(parsedJson);
+      const verify = verifyWorldMap(worldMap);
+      if (!verify.ok) {
+        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) — refusing a tampered/corrupted map`);
+      }
+      if (input.hash !== undefined && input.hash !== worldMap.provenance.contentHash) {
+        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this world was authored`);
+      }
+      const hash = worldMap.provenance.contentHash;
+      source.swap(new MapTerrainSource({ worldMap }));
+      ctx.emit("terrain.source_changed", { kind: "map", source: source.name, mapAssetId: input.mapAssetId, hash });
+      return { kind: "map" as const, source: source.name, hash };
     },
   };
 
@@ -581,6 +673,7 @@ export function registerTerrainSkills(
   };
 
   registry.register(generateRegion);
+  registry.register(setTerrainSource);
   registry.register(streamFollow);
   registry.register(sampleHeight);
   registry.register(sampleClimate);

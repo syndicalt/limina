@@ -128,7 +128,13 @@ const recTracer = new LiminaTracer("ses_p11model_record");
 const registry = new SkillRegistry(recTracer);
 const authModel = makeModelSource(mockTransport);
 const core = registerCoreSkills(registry, { terrainSource: authModel });
-assert(core.terrain.source === authModel, "the model source was not wired as the terrain source");
+// Map Phase 3.2: registerCoreSkills wraps the bound source in ONE SwappableTerrainSource
+// holder (so the recorded world.setTerrainSource can rebind it); the injected model source
+// must be the holder's CURRENT delegate.
+assert(
+  (core.terrain.source as { current?: unknown }).current === authModel,
+  "the model source was not wired as the terrain source (holder delegate)",
+);
 
 const recorder = new WorldRecorder("ses_p11model_record");
 recorder.attach(registry);

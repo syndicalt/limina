@@ -94,6 +94,12 @@ export interface ClimateSample {
 export interface TerrainSource {
   /** Stable identifier recorded for provenance (e.g. "procedural", "model:terrain-diffusion-30m"). */
   readonly name: string;
+  /** OPT-IN cache-retention exemption: true means this source's tiles RE-DERIVE
+   *  deterministically from a logged/pinned artifact (e.g. MapTerrainSource's WorldMap
+   *  IR, rebound by the recorded world.setTerrainSource), so TileCache keeps them
+   *  transient-LRU instead of export-retained — the export ships the artifact, never
+   *  the tiles. Absent/false (every pre-existing source) keeps retention unchanged. */
+  readonly derived?: boolean;
   /** Generate one tile. Deterministic per (seed, lod, tx, tz[, hints]). */
   generateTile(req: TileRequest): TerrainTile | Promise<TerrainTile>;
   /** O(1) point elevation query (snapping/queries). Deterministic per (seed, x, z, lod

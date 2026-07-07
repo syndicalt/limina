@@ -31,6 +31,7 @@ import { registerGrassSkill } from "./grass.ts";
 import { registerRenderSkills } from "./render.ts";
 import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
+import { SwappableTerrainSource } from "../terrain/swappable.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import { registerOrchestrationSkills } from "./orchestration.ts";
@@ -142,7 +143,11 @@ export function registerCoreSkills(
   // asset.scatter (registered below) shares the SAME deterministic source + cache the
   // terrain.* / world.* skills use — a scattered region matches the generated world,
   // and a replay re-resolves identical tiles. The terrain.* skills bind to them below.
-  const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  // Map Phase 3.2: the bound source is wrapped in ONE SwappableTerrainSource holder so
+  // the RECORDED world.setTerrainSource skill can rebind it (procedural ⇄ map) and the
+  // swap propagates to every consumer (terrain.*, asset.scatter, water) at once. A world
+  // whose log never issues that command behaves byte-identically (pure delegation).
+  const terrainSource: TerrainSource = new SwappableTerrainSource(opts?.terrainSource ?? new ProceduralTerrainSource());
   const terrainCache = opts?.terrainCache ?? new TileCache();
   // The region table is shared by the terrain.* skills (which populate it in
   // world.generateRegion) and asset.scatter (which binds a scatter to a region by id,
@@ -201,7 +206,7 @@ export function registerCoreSkills(
   // with asset.scatter, along with the region table). A runtime can override the
   // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
-  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions);
+  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions, assets);
   // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
   // terrain.deform (brush sculpt). Records ops, not bytes — replay reconstructs the heights.
   // vegetation.scatter reads the SAME live terrain-layer map to scatter a forest on the sculpt.
