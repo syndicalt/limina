@@ -18,12 +18,28 @@
 //   aoi/declare {center:[x,y,z], radius}             -> update the area-of-interest
 //                                                       (pushes a `removed` delta for
 //                                                       entities the new AoI drops)
+//   worldlog/subscribe {since}                       -> opt-in to the AUTHORING command-stream
+//                                                       push (K4): server computes the tail from
+//                                                       `since` (see skills/worldlog.ts
+//                                                       worldlogTail(), the SAME helper
+//                                                       worldlog.tail polls with) and pushes it
+//                                                       NOW as worldlog/append, then again after
+//                                                       every command that FINALIZES thereafter
+//                                                       (WorldRecorder.onFinalized) -- a live
+//                                                       viewport no longer has to poll
+//                                                       worldlog.tail on a timer to stay current.
 //   shutdown {}                                      -> close
 //
 // Server -> Client notifications (no `id`, only to SUBSCRIBED clients):
-//   state/snapshot {tick, entities[]}                -> AoI-filtered join view
-//   state/delta    {tick, causedBy[], changes[], removed[]} -> AoI-filtered changed
-//                                                       set + ids no longer relevant
+//   state/snapshot   {tick, entities[]}               -> AoI-filtered join view
+//   state/delta      {tick, causedBy[], changes[], removed[]} -> AoI-filtered changed
+//                                                        set + ids no longer relevant
+//   worldlog/append  {commands, next, reset}          -> an authoring-command batch for a
+//                                                        worldlog/subscribe connection; `next` is
+//                                                        the cursor to send back on the NEXT
+//                                                        worldlog/subscribe (a reconnect), `reset`
+//                                                        mirrors worldlog.tail's meaning (the
+//                                                        cursor fell behind a compacted prefix).
 //
 // A client that never subscribes (e.g. a plain MCP tool caller) receives no
 // pushes -- the existing single-client tools/call path is unchanged.
@@ -63,6 +79,15 @@ export const SYNC_METHODS = {
   delta: "state/delta",
   subscribe: "state/subscribe",
   declareAoi: "aoi/declare",
+} as const;
+
+/** K4 (worldlog poll -> subscribe): the authoring-stream push channel, separate from the
+ *  entity-transform sync channel above and from the `worldlog.tail` SKILL name (a dotted `tools/
+ *  call` name a client polls) -- these are raw top-level JSON-RPC methods dispatched directly by
+ *  AuthoritativeServer, mirroring the slash convention SYNC_METHODS uses. */
+export const WORLDLOG_METHODS = {
+  subscribe: "worldlog/subscribe",
+  append: "worldlog/append",
 } as const;
 
 /** The host net ops the server/client transports drive (real WebSocket sockets:

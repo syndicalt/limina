@@ -144,6 +144,8 @@ export class WorldRecorder {
   private compactedPrefix = 0;
   private maxTick = 0;
   private seeded = false;
+  /** K4 (worldlog poll -> subscribe) listener seam: see onFinalized(). */
+  private readonly finalizedListeners: Array<() => void> = [];
 
   constructor(readonly sessionId: string, opts: WorldRecorderOptions = {}) {
     if (opts.filterIdleSteps === true) this.stepFilter = new IdleStepFilter();
@@ -345,6 +347,25 @@ export class WorldRecorder {
       this.finalizedSeqs.delete(cmd.seq);
       this.finalizedPrefix += 1;
     }
+    // Notify AFTER the command has actually committed. A command that instead FAILS goes through
+    // discardCommand (never markFinalized), so a listener here can never observe a provisional
+    // command that later turns out not to have happened -- the seam a push subscriber needs.
+    for (const listener of this.finalizedListeners) listener();
+  }
+
+  /** K4 (worldlog poll -> subscribe): register a listener invoked once per command that
+   *  successfully FINALIZES (seed, a recorded physics op, or a top-level skill invocation that
+   *  settled and was not discarded). Multiple listeners may register; call the returned function
+   *  to unsubscribe. This is the seam AuthoritativeServer uses to PUSH worldlog/append
+   *  notifications to subscribed connections instead of requiring them to poll worldlog.tail --
+   *  since it fires only after markFinalized, a failed or still-pending (held-for-approval)
+   *  command never triggers a push. */
+  onFinalized(listener: () => void): () => void {
+    this.finalizedListeners.push(listener);
+    return () => {
+      const idx = this.finalizedListeners.indexOf(listener);
+      if (idx !== -1) this.finalizedListeners.splice(idx, 1);
+    };
   }
 
   private discardCommand(seq: number): void {

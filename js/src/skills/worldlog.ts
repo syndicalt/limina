@@ -56,6 +56,29 @@ export function worldCommandsToAuthor(commands: readonly WorldCommand[]): Author
   return out;
 }
 
+/** The authoring tail: every recorded command AFTER `since` that is authoring (per
+ *  isAuthoringCommand above), plus the next cursor and whether the caller's cursor had already
+ *  fallen behind a compacted prefix (a full resync is required). THE single implementation behind
+ *  both worldlog.tail (polled) and AuthoritativeServer's worldlog/subscribe push (net/server.ts) --
+ *  shared so the two delivery paths can never diverge on what "authoring since X" means; a client
+ *  mixing poll + push gets byte-identical batches for the same cursor either way. */
+export function worldlogTail(
+  recorder: WorldRecorder,
+  registry: SkillRegistry,
+  since: number,
+): { commands: WorldCommand[]; next: number; reset: boolean } {
+  const total = recorder.commandCount;
+  const compacted = recorder.compactedCommandCount;
+  const reset = since < compacted;
+  const start = reset ? compacted : since;
+  const commands: WorldCommand[] = [];
+  for (let i = start; i < total; i++) {
+    const cmd = recorder.commandAt(i);
+    if (cmd !== undefined && isAuthoringCommand(cmd, registry)) commands.push(cmd);
+  }
+  return { commands, next: total, reset };
+}
+
 export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder: WorldRecorder }): void {
   const recorder = opts.recorder;
   const tail: SkillDefinition<{ since: number }, { commands: WorldCommand[]; next: number; reset: boolean }> = {
@@ -66,18 +89,7 @@ export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder
     permissions: [],
     input: z.object({ since: z.number().int().min(0).default(0) }),
     output: z.object({ commands: z.array(z.any()), next: z.number().int(), reset: z.boolean() }),
-    handler: (input) => {
-      const total = recorder.commandCount;
-      const compacted = recorder.compactedCommandCount;
-      const reset = input.since < compacted;
-      const start = reset ? compacted : input.since;
-      const commands: WorldCommand[] = [];
-      for (let i = start; i < total; i++) {
-        const cmd = recorder.commandAt(i);
-        if (cmd !== undefined && isAuthoringCommand(cmd, registry)) commands.push(cmd);
-      }
-      return { commands, next: total, reset };
-    },
+    handler: (input) => worldlogTail(recorder, registry, input.since),
   };
   registry.register(tail);
 }

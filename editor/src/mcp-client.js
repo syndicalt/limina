@@ -53,6 +53,11 @@ export class McpClient {
     this.onChatMessage = undefined;
     /** @type {undefined | ((connected:boolean)=>void)} */
     this.onConnectionChange = undefined;
+    /** Generic router (K4) for server -> client notifications that aren't the built-in
+     *  state/snapshot, state/delta, or chat/* cases below -- e.g. worldlog/append. Method name ->
+     *  Set of callbacks, so more than one caller can listen to the same notification. */
+    /** @type {Map<string, Set<(params:any)=>void>>} */
+    this.notificationHandlers = new Map();
     this.session = undefined;
   }
 
@@ -111,6 +116,13 @@ export class McpClient {
     }
     if (typeof msg.method === "string" && msg.method.startsWith("chat/")) {
       if (this.onChatMessage) this.onChatMessage(msg.params);
+      return;
+    }
+    // Generic notification router (K4): any other named server->client push (e.g.
+    // worldlog/append) with a registered handler. A notification carries no `id`, so it must be
+    // routed here rather than falling into the id-correlated request/response branch below.
+    if (typeof msg.method === "string" && this.notificationHandlers.has(msg.method)) {
+      for (const cb of this.notificationHandlers.get(msg.method)) cb(msg.params);
       return;
     }
     if (typeof msg.id === "number") {
@@ -173,5 +185,27 @@ export class McpClient {
   /** Register a callback for `chat/*` server notifications. */
   onChat(cb) {
     this.onChatMessage = cb;
+  }
+
+  /** Register a callback for a named server notification (K4 generic router), e.g.
+   *  "worldlog/append". Returns an unsubscribe function. Multiple callers may listen to the
+   *  same method name. */
+  onNotification(method, cb) {
+    let set = this.notificationHandlers.get(method);
+    if (!set) { set = new Set(); this.notificationHandlers.set(method, set); }
+    set.add(cb);
+    return () => { set.delete(cb); };
+  }
+
+  /** K4: opt into the authoring-stream PUSH (worldlog/append) from `since`, instead of polling
+   *  worldlog.tail. The server pushes the tail from `since` immediately (before this request even
+   *  acks), then again after every command that finalizes thereafter — register the
+   *  "worldlog/append" notification handler via onNotification BEFORE calling this so the initial
+   *  push is not missed. Resolves with {ok, next} (the ack; the initial batch itself arrives as a
+   *  notification, not in this result). */
+  async worldlogSubscribe(since) {
+    const msg = await this._request("worldlog/subscribe", { since });
+    if (msg.error) throw new McpError(msg.error.code, msg.error.message, msg.error.data);
+    return msg.result;
   }
 }

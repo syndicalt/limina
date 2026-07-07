@@ -143,6 +143,16 @@ const state = {
   brushStroking: false,
   brushLast: 0,
   polling: false,
+  // K4 (worldlog poll -> subscribe): true once worldlog/subscribe has ack'd on the CURRENT
+  // client — the self-scheduling loop below degrades its poll cadence while this holds, since new
+  // authoring commands now arrive as a worldlog/append push instead. Reset to false on
+  // disconnect/subscribe-failure so the loop falls back to the original 1s poll.
+  subscribed: false,
+  // Serializes applyWorldlogBatch calls (poll() and the worldlog/append push both funnel through
+  // it) so two batches arriving close together (a push landing mid-reboot) are applied ONE AT A
+  // TIME instead of interleaving into state.commands / the reboot flags.
+  applyingBatch: false,
+  queuedBatches: [],
   // Undo trail (per-stroke). undoMarks = worldlog command counts at edit boundaries: undoMarks[0] is
   // "before the first stroke", each later entry is "after a completed stroke". undoAt indexes the point
   // currently in view (undoMarks.length-1 = live). Ctrl+Z walks back through strokes via the scrub view.
@@ -334,20 +344,51 @@ function bindViewportUi() {
   syncViewportUi();
 }
 
+// K4 (worldlog poll -> subscribe): the push notification method name. Mirrors
+// js/src/net/protocol.ts WORLDLOG_METHODS.append — duplicated here because this file is plain JS
+// outside the bundle (same reason PHYSICS_OP_FN above is duplicated from log.ts).
+const WORLDLOG_APPEND_METHOD = "worldlog/append";
+
 // Connect once the panels' inputs are populated (the user entered the URL + auth token and connected
-// the panels). Retries on a slow cadence until it succeeds, then switches to authoring-stream polling.
+// the panels). Retries on a slow cadence until it succeeds. Prefers worldlog/subscribe (K4: the
+// server PUSHES new authoring commands instead of us polling worldlog.tail every second); falls
+// back to polling if the server doesn't support it or the subscribe request itself fails.
 async function tryConnect() {
   if (state.client) return;
   const url = val("url");
   const authToken = val("auth-token") || undefined;
   if (!url) return; // wait until the user has set the server URL
   const client = new McpClient(url);
+  // The socket can drop later (server restart, network blip) without a clean close() call on our
+  // side — WebSocket.onclose still fires. Drop the dead client so the NEXT viewportTick() tick
+  // reconnects via tryConnect() again; that re-subscribes at the current state.cursor, so the
+  // resumed stream picks up exactly where it left off (worldlogTail from that cursor covers
+  // whatever was missed while disconnected — no gap, no replay of already-applied commands).
+  client.onConnectionChange = (connected) => {
+    if (connected || state.client !== client) return;
+    state.client = undefined;
+    state.subscribed = false;
+    setStatus("disconnected", "reconnecting…");
+  };
   try {
     await client.connect();
     await client.initialize("viewport_follower", "ses_viewport_" + Math.random().toString(36).slice(2, 8), "system.readonly", authToken);
     state.client = client;
-    setStatus("following", "authoring stream");
-    await poll();
+    // Register the push handler BEFORE subscribing so the server's immediate join-batch push
+    // (sent before the subscribe request's own ack) is never missed.
+    client.onNotification(WORLDLOG_APPEND_METHOD, (params) => { void applyWorldlogBatch(params); });
+    try {
+      await client.worldlogSubscribe(state.cursor);
+      state.subscribed = true;
+      setStatus("following", "authoring stream (push)");
+    } catch (subErr) {
+      // Older server / transient failure — degrade to the 1s poll loop below (state.subscribed
+      // stays false), rather than leaving the viewport with nothing at all.
+      state.subscribed = false;
+      console.warn("worldlog/subscribe failed, falling back to polling worldlog.tail", subErr);
+      setStatus("following", "authoring stream (poll fallback)");
+      await poll();
+    }
   } catch (e) {
     // Likely the panels aren't connected yet (auth token missing) — keep the poster, retry later.
     setStatus("waiting", "connect the panels first");
@@ -355,36 +396,66 @@ async function tryConnect() {
   }
 }
 
+// K4: dedupe guard + serialization for a worldlog batch ({commands, next, reset}), shared by
+// poll() (worldlog.tail) and the worldlog/append push (tryConnect's onNotification handler) — both
+// funnel through here so a batch delivered by BOTH paths (a poll racing a push, or the same push
+// re-sent) is applied EXACTLY ONCE, and two batches arriving close together (e.g. a push landing
+// mid-reboot) apply ONE AT A TIME instead of interleaving into state.commands / the reboot flags.
+async function applyWorldlogBatch(res) {
+  if (!res) return;
+  if (state.applyingBatch) { state.queuedBatches.push(res); return; }
+  state.applyingBatch = true;
+  try {
+    await applyWorldlogBatchInner(res);
+    while (state.queuedBatches.length > 0) {
+      await applyWorldlogBatchInner(state.queuedBatches.shift());
+    }
+  } finally {
+    state.applyingBatch = false;
+  }
+}
+
+async function applyWorldlogBatchInner(res) {
+  // Cursor dedupe guard: a batch whose `next` does not ADVANCE our cursor is a duplicate or stale
+  // delivery (a poll racing a push, a re-sent subscribe join batch, a push that arrived mid-
+  // reconnect) — applying it again would double-author every command it carries. `reset` always
+  // resyncs from scratch regardless of `next` (mirrors worldlog.tail's own reset meaning).
+  if (!res.reset && typeof res.next === "number" && res.next <= state.cursor) return;
+  if (res.reset) { state.commands = []; state.cursor = 0; state.quarantined.clear(); }
+  if (Array.isArray(res.commands) && res.commands.length > 0) {
+    const newCmds = res.commands;
+    const authorCmds = toAuthorCommands(newCmds);
+    for (const cmd of res.commands) state.commands.push(cmd);
+    // While scrubbed into the past, accumulate new commands but don't hot-apply them to the
+    // frozen past view (returning to live replays the full stream).
+    if (state.scrubLimit !== undefined) {
+      // no-op: the past view stays put; state.commands keeps growing in the background
+    } else if (state.running && !state.rebooting && !res.reset) {
+      const r = await state.running.applyAuthorCommands(authorCmds);
+      if (r.needsReboot) state.dirty = true;
+    } else {
+      state.dirty = true;
+    }
+    showActiveAgentTargets(authorCmds);
+    // A granted catalog.publish just landed in the log → the palette is stale; re-fetch so a
+    // freshly approved asset appears without reopening the panel.
+    if (hud && newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void refreshCatalog();
+  }
+  if (typeof res.next === "number") state.cursor = res.next;
+  if (state.dirty && !state.rebooting) await reboot();
+}
+
+// Explicit poll: worldlog.tail from the current cursor. Used as (a) the fallback loop when not
+// subscribed, (b) a slow liveness/resync check while subscribed (harmless — applyWorldlogBatch's
+// cursor guard makes a redundant poll a no-op), and (c) the immediate "pull the edit straight back"
+// call after a brush dab / catalog placement, regardless of subscription state.
 async function poll() {
   const c = state.client;
   if (!c || state.polling) return; // re-entrancy guard: a brush dab triggers an immediate poll(); it
-  state.polling = true;            // must not race the scheduled poll and double-apply an additive deform.
+  state.polling = true;            // must not race the scheduled poll and double-request worldlog.tail.
   try {
     const res = await c.callTool("worldlog.tail", { since: state.cursor });
-    if (res) {
-      if (res.reset) { state.commands = []; state.cursor = 0; state.quarantined.clear(); }
-      if (Array.isArray(res.commands) && res.commands.length > 0) {
-        const newCmds = res.commands;
-        const authorCmds = toAuthorCommands(newCmds);
-        for (const cmd of res.commands) state.commands.push(cmd);
-        // While scrubbed into the past, accumulate new commands but don't hot-apply them to the
-        // frozen past view (returning to live replays the full stream).
-        if (state.scrubLimit !== undefined) {
-          // no-op: the past view stays put; state.commands keeps growing in the background
-        } else if (state.running && !state.rebooting && !res.reset) {
-          const r = await state.running.applyAuthorCommands(authorCmds);
-          if (r.needsReboot) state.dirty = true;
-        } else {
-          state.dirty = true;
-        }
-        showActiveAgentTargets(authorCmds);
-        // A granted catalog.publish just landed in the log → the palette is stale; re-fetch so a
-        // freshly approved asset appears without reopening the panel.
-        if (hud && newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void refreshCatalog();
-      }
-      if (typeof res.next === "number") state.cursor = res.next;
-      if (state.dirty && !state.rebooting) await reboot();
-    }
+    await applyWorldlogBatch(res);
   } catch (e) {
     const message = e && e.message ? e.message : String(e);
     console.warn("viewport poll failed", e);
@@ -1538,11 +1609,21 @@ setStatus("waiting", "connect the panels to follow the authoring stream");
 // Self-scheduling loop (NOT a fixed setInterval): the next tick is scheduled AFTER the
 // current poll/reboot finishes, so a slow re-author can never overlap the next poll into a
 // compounding request flood that pegs the server.
+//
+// K4 (worldlog poll -> subscribe): once worldlog/subscribe is active, new authoring commands
+// arrive as a worldlog/append PUSH (registered in tryConnect), not via this loop — so it degrades
+// to a slow 10s liveness/resync poll instead of the original 1s cadence. Not connected, or
+// subscribe unavailable/failed (state.subscribed stays false), keeps the original 1s poll.
+const POLL_INTERVAL_MS = 1000;
+const SUBSCRIBED_LIVENESS_POLL_INTERVAL_MS = 10000;
 let viewportLoopStopped = false;
 const viewportTick = async () => {
   if (viewportLoopStopped) return;
   try { await (state.client ? poll() : tryConnect()); } finally {
-    if (!viewportLoopStopped) setTimeout(() => { void viewportTick(); }, 1000);
+    if (!viewportLoopStopped) {
+      const delay = state.client && state.subscribed ? SUBSCRIBED_LIVENESS_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+      setTimeout(() => { void viewportTick(); }, delay);
+    }
   }
 };
 void viewportTick();

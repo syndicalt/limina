@@ -37,7 +37,8 @@ import {
   type WorldCommand,
 } from "../worldlog/log.ts";
 import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type MCPResponse } from "../mcp/protocol.ts";
-import { inAoi, parseAoi, SYNC_METHODS, type AreaOfInterest, type NetOps } from "./protocol.ts";
+import { inAoi, parseAoi, SYNC_METHODS, WORLDLOG_METHODS, type AreaOfInterest, type NetOps } from "./protocol.ts";
+import { worldlogTail } from "../skills/worldlog.ts";
 
 /** op_net_accept returns this when its listener is closed (Rust u32::MAX). */
 export const ACCEPT_CLOSED = 0xffffffff;
@@ -136,6 +137,10 @@ interface ClientConn {
   subscribed: boolean;
   aoi?: AreaOfInterest;
   closing: boolean;
+  /** K4: set once this connection calls worldlog/subscribe; the cursor advances on every
+   *  worldlog/append push. undefined => not subscribed to the authoring-stream push (no listener
+   *  work is done for it in pushWorldlogAppends). */
+  worldlogCursor?: number;
 }
 
 interface QueuedIntent {
@@ -243,6 +248,11 @@ export class AuthoritativeServer {
     this.rehydrated = persisted !== undefined && persisted.length > 0;
     this.rehydratedCommands = persisted?.length ?? 0;
     this.recorder.attach(this.registry);
+    // K4 (worldlog poll -> subscribe): push worldlog/append to every worldlog/subscribe-d
+    // connection as soon as a command FINALIZES, instead of making the live viewport poll
+    // worldlog.tail on a timer. Wired unconditionally (cheap no-op with zero subscribers); a
+    // connection only starts costing anything here once it calls worldlog/subscribe.
+    this.recorder.onFinalized(() => this.pushWorldlogAppends());
     this.recorder.seed(opts.seed ?? 0x10ca1ed, { forceInstall: this.rehydrated });
     this.recOps = this.recorder.wrapOps(baseOps);
 
@@ -575,6 +585,25 @@ export class AuthoritativeServer {
         await this.reply(conn.connId, this.success(id, { ok: true, tick: this.tick }));
         return;
       }
+      case WORLDLOG_METHODS.subscribe: {
+        // K4: mirrors the state/subscribe pattern above -- push the join batch BEFORE the ack, so
+        // a client that only ever reacts to worldlog/append (no separate initial poll) still gets
+        // the tail from `since` immediately. worldlogTail is the SAME helper worldlog.tail (the
+        // skill) calls, so a client that mixes an occasional poll with this push can never see the
+        // two disagree on what "authoring since X" means.
+        const p = asRecord(params);
+        const rawSince = p?.since;
+        const since = typeof rawSince === "number" && Number.isFinite(rawSince) ? Math.max(0, Math.floor(rawSince)) : 0;
+        const initial = worldlogTail(this.recorder, this.registry, since);
+        conn.worldlogCursor = initial.next;
+        await this.sendSafe(conn.connId, JSON.stringify({
+          jsonrpc: "2.0",
+          method: WORLDLOG_METHODS.append,
+          params: initial,
+        }));
+        await this.reply(conn.connId, this.success(id, { ok: true, next: initial.next }));
+        return;
+      }
       case SYNC_METHODS.declareAoi: {
         const aoi = parseAoi(params);
         const prevAoi = conn.aoi;
@@ -859,6 +888,27 @@ export class AuthoritativeServer {
       method: SYNC_METHODS.snapshot,
       params: { tick: this.tick, entities },
     }));
+  }
+
+  /** K4 (worldlog poll -> subscribe): fired from WorldRecorder.onFinalized after every command
+   *  that commits. For each worldlog/subscribe-d connection, compute its authoring tail from its
+   *  stored cursor and push a batch -- but ONLY when there is something new to report, so an
+   *  otherwise-idle world never wakes a subscriber with an empty push every time an unrelated
+   *  command finalizes elsewhere (e.g. two independent agent chains). A dead connection is simply
+   *  absent from `this.conns` (connLoop's teardown / sendSafe's send-failure prune both delete it
+   *  synchronously), so this loop can never push to, or throw for, a disconnected client. */
+  private pushWorldlogAppends(): void {
+    for (const conn of this.conns.values()) {
+      if (conn.worldlogCursor === undefined) continue;
+      const tail = worldlogTail(this.recorder, this.registry, conn.worldlogCursor);
+      if (tail.commands.length === 0 && !tail.reset) continue;
+      conn.worldlogCursor = tail.next;
+      void this.sendSafe(conn.connId, JSON.stringify({
+        jsonrpc: "2.0",
+        method: WORLDLOG_METHODS.append,
+        params: tail,
+      }));
+    }
   }
 
   // ---- wire helpers --------------------------------------------------------
