@@ -78,7 +78,6 @@ import { MapTerrainSource } from "./terrain/map-source.ts";
 import { SwappableTerrainSource } from "./terrain/swappable.ts";
 import type { StreamTileColliderAdd } from "./browser/sim-worker.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
-import { LAWN_DECO_ASSETS } from "./skills/village.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
 export { createCharacterBody, type CharacterBody, type CharacterBodyOptions } from "./world/character-body.ts";
@@ -552,14 +551,14 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
   // village.build mounts a GLB per building (via nested asset.place); its ids live in
   // steering.buildings[].assetId, so pre-warm each one's parse cache before init().
   if (cmd.tool === "village.build") {
-    const steering = (input.steering ?? {}) as { buildings?: Array<{ assetId?: unknown }>; siting?: { yard?: unknown } };
+    const steering = (input.steering ?? {}) as { buildings?: Array<{ assetId?: unknown }>; siting?: { lawnVegetation?: Array<{ id?: unknown }> } };
     const bs = Array.isArray(steering.buildings) ? steering.buildings : [];
     const buildingIds = bs.map((b) => (typeof b.assetId === "string" ? b.assetId : "")).filter((s) => s.length > 0);
-    // A "lawn" yard (the default) scatters wildflower/tuft GLBs on the yard — pre-warm those too, else the
-    // render-thread scatter can't resolve them and the lawn stays bare.
-    const yard = steering.siting?.yard;
-    const wantLawn = yard === undefined || yard === "lawn";
-    return wantLawn ? [...buildingIds, ...LAWN_DECO_ASSETS.map((a) => a.id)] : buildingIds;
+    // A "lawn" yard scatters PROJECT-supplied wildflower/tuft GLBs (steering.siting.lawnVegetation) — pre-warm
+    // those too, else the render-thread scatter can't resolve them and the lawn stays bare.
+    const lawnVeg = Array.isArray(steering.siting?.lawnVegetation) ? steering.siting!.lawnVegetation : [];
+    const lawnIds = lawnVeg.map((a) => (typeof a.id === "string" ? a.id : "")).filter((s) => s.length > 0);
+    return [...buildingIds, ...lawnIds];
   }
   if (cmd.tool === "vegetation.plant") {
     const species = typeof input.species === "string" ? input.species : "spruce";

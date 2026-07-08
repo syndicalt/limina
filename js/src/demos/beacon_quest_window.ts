@@ -56,11 +56,13 @@ const q = await buildBeaconQuest({ world, registry, core, base });
 // ── RENDER-ONLY: rigged character models (the sim drives positions; these just follow). ───────
 const pPos = q.playerController.position;
 const playerModel = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [pPos[0], pPos[1] - q.playerController.groundOffset, pPos[2]],
 });
 const nPos = q.npcPos();
 const npcModel = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [nPos[0], nPos[1], nPos[2]],
   // The warden: a weathered brass tint, a touch shorter than the player.

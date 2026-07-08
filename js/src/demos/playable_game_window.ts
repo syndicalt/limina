@@ -89,6 +89,7 @@ ops.op_physics_step(); // build the broad-phase BVH so the first move_character 
 // VISIBLE CHARACTER — a rigged, animated glTF (robot.glb) replaces the old capsule.
 // Physics body unchanged; RENDER-ONLY (mesh + AnimationMixer), foot-placed each frame.
 const model = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [CENTER_X, controller.position[1] - controller.groundOffset, CENTER_Z],
 });

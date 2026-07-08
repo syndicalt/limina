@@ -77,6 +77,7 @@ engine.scene.add(fireLight);
 // ── Player model (the sim drives the capsule; this follows). ─────────────────────────────────────
 const p0 = game.player.position;
 const model = await attachCharacterModel({
+  assetId: "robot.glb",
   world: ctx.world, registry: ctx.registry, base: ctx.base,
   animationManager: ctx.core.animation.animationManager,
   position: [p0[0], p0[1] - game.player.groundOffset, p0[2]],

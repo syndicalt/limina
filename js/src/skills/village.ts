@@ -72,14 +72,6 @@ const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(
 /** Default KIT house size [width, depth, height] (meters) when a kit building omits `sizeM`. */
 const DEFAULT_KIT_SIZE: readonly [number, number, number] = [7, 6, 3.4];
 
-/** The curated GLBs a "lawn" yard sprinkles as vegetation features (wildflowers + tufts), by id + weight.
- *  Exported so the live runtime can PRE-WARM their glTF parse cache before render (else the render-thread
- *  scatter can't resolve them). Missing assets are skipped at build time — never fatal. */
-export const LAWN_DECO_ASSETS: readonly { id: string; weight: number }[] = [
-  { id: "vegetation-wildflowers-5.glb", weight: 3 },
-  { id: "vegetation-small-plant-leaves-5.glb", weight: 2 },
-];
-
 /** A building spec: what to place, how the agent describes it (role/style for the layout's
  *  focal-role + facing bookkeeping), and how many. A building is either GLB-backed (`assetId`)
  *  or KIT-backed (`kit: true`, optional `sizeM`) — the latter raises a procedural half-timber
@@ -116,6 +108,10 @@ const SitingSchema = z.object({
    *  confined to the yard, so settled ground reads as a kept lawn, not wild scrub or a bare scar. "none"
    *  leaves the natural terrain; "earth" = a bare trodden forecourt; "cobble-courtyard" = paved forecourt. */
   yard: z.enum(["lawn", "none", "earth", "cobble-courtyard"]).default("lawn"),
+  /** GLBs a "lawn" yard sprinkles as vegetation (wildflowers/tufts), by id + weight. PROJECT content —
+   *  the engine bakes in NO ids; empty by default (a bare turf lawn). A caller/project supplies ids; a
+   *  missing asset is skipped at build (never fatal). Pre-warmed by the live runtime from this list. */
+  lawnVegetation: z.array(z.object({ id: z.string(), weight: z.number().positive().default(1) })).default([]),
   /** The path between buildings. dirt = a trodden earth lane; gravel = a crushed-stone path;
    *  cobble = paved setts; none = no lane. */
   lane: z.enum(["dirt", "gravel", "cobble", "none"]).default("dirt"),
@@ -594,7 +590,7 @@ export function registerVillageSkills(
         // so it reads as sprinkled flowers, not a meadow. Instanced exactly like asset.scatter. GRACEFUL:
         // a curated GLB that doesn't resolve (bare checkout) is skipped, so this never fails a build.
         const decoAssets: { id: string; weight: number }[] = [];
-        for (const a of LAWN_DECO_ASSETS) {
+        for (const a of siting.lawnVegetation) {
           try { assets.resolve(a.id); decoAssets.push({ id: a.id, weight: a.weight }); } catch { /* asset absent — skip */ }
         }
         if (decoAssets.length > 0) {
