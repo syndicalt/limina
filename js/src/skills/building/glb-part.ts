@@ -139,7 +139,7 @@ function mergeFittedGlb(root: SceneObject, fit: THREE.Matrix4): THREE.Mesh {
  * (that is the whole point of the GLB tier), which is why a GLB part satisfies the identical signature.
  *
  * Usage — a GLB overrides a slot in the kit's part registry, no assembler change:
- *   const bytes = assets.resolve("window-lattice.glb").bytes; // AssetRegistry.resolve
+ *   const bytes = assets.resolve(partId).bytes;  // AssetRegistry.resolve — partId is caller/project data
  *   const part = glbPart(bytes);
  *   await glbPartReady(part);           // one-time pre-parse (async GLTFLoader → sync thereafter)
  *   parts["window-unit"] = part;        // now callable as a synchronous KitPart

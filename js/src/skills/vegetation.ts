@@ -28,30 +28,68 @@ const nextFrame = (): Promise<void> =>
     else setTimeout(resolve, 0);
   });
 
-/** Pick one archetype id for a species deterministically from `seed`. */
-export function pickArchetype(species: string, seed: number): string {
-  const palette = SPECIES_ARCHETYPES[species] ?? [];
-  if (palette.length === 0) throw new Error(`vegetation.plant: no archetypes for species '${species}'`);
+// ───────────────────────── THE ENGINE NEVER NAMES A TREE GLB ─────────────────────────
+// A species (spruce/pine/birch) is a semantic ROLE; a PROJECT supplies a VEGETATION PACK
+// (tree-pack.json) binding each species to concrete archetype asset ids. The engine ships NO pack
+// and bakes NO tree ids — an absent/invalid pack is GRACEFUL (empty), so an engine with no project
+// vegetation content plants nothing rather than naming a baked GLB. A caller may also pass an inline
+// `assets` palette per call, which wins over the pack.
+
+/** One weighted archetype binding in a project's VEGETATION PACK: a concrete tree asset id. */
+export interface VegetationPackEntry { id: string; weight?: number; }
+
+/** A project's binding of species → archetype asset ids. Read from tree-pack.json (the SAME sandboxed
+ *  host op asset-catalog.ts / the biome pack use). Partial: an unmapped species → empty palette. */
+export type VegetationPack = Record<string, VegetationPackEntry[]>;
+
+/** The empty pack — the default when a project supplies none. Every species unmapped → nothing plants. */
+export const EMPTY_VEGETATION_PACK: VegetationPack = {};
+
+const vegetationPackSchema = z.record(z.string(), z.array(z.object({ id: z.string().min(1), weight: z.number().positive().optional() })));
+
+/** Read + parse the project VEGETATION PACK (tree-pack.json) via the sandboxed host asset op.
+ *  Tolerates a missing/unreadable/unparsable file (→ empty pack), exactly like asset-catalog's seed
+ *  loader and the biome pack — an engine with no project pack degrades to "no species ids", never a
+ *  throw. Sync host op (no async I/O in a handler), static project content → deterministic on replay. */
+export function loadVegetationPack(ops: { op_read_asset(id: string): Uint8Array }): VegetationPack {
+  try {
+    const bytes = ops.op_read_asset("tree-pack.json");
+    const parsed = vegetationPackSchema.safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+    if (parsed.success) return parsed.data;
+  } catch {
+    // Missing/unreadable/unparsable pack — fall back to an empty pack.
+  }
+  return {};
+}
+
+/** Resolve a species selection (or an explicit inline palette) to a concrete, de-duplicated list of
+ *  archetype ids. An inline `assets` palette wins; otherwise each species is looked up in the pack;
+ *  an unmapped species contributes nothing (graceful). Order-preserving so the seed→variant pick and
+ *  the scatter placement stay deterministic. */
+export function speciesPaletteIds(species: string[], explicit: VegetationPackEntry[] | undefined, pack: VegetationPack): string[] {
+  const entries = explicit !== undefined && explicit.length > 0 ? explicit : species.flatMap((s) => pack[s] ?? []);
+  return [...new Set(entries.map((e) => e.id))];
+}
+
+/** Pick one archetype id from a resolved palette deterministically from `seed`. */
+export function pickArchetype(palette: string[], seed: number): string {
+  if (palette.length === 0) throw new Error("vegetation: empty archetype palette");
   const i = ((seed % palette.length) + palette.length) % palette.length;
   return palette[i];
 }
 
-/** Default boreal archetype palette — the textured GLBs from tools/bake-trees-browser.mjs. */
-export const SPECIES_ARCHETYPES: Record<string, string[]> = {
-  spruce: ["trees/spruce-1.glb", "trees/spruce-2.glb"],
-  pine: ["trees/pine-1.glb", "trees/pine-2.glb"],
-  birch: ["trees/birch-1.glb", "trees/birch-2.glb"],
-};
-
-/** Every tree archetype id (all species) — the set the live viewport pre-warms before init so a
- *  plant/scatter mounts from a cached clone (no macrotask) and renders on the WebGL2 backend. */
-export const TREE_ARCHETYPE_IDS: string[] = [...new Set(Object.values(SPECIES_ARCHETYPES).flat())];
+/** Inline per-call archetype palette — a caller-supplied binding that wins over the project pack. */
+const paletteAssetSchema = z.object({ id: z.string().min(1), weight: z.number().positive().optional() });
 
 const scatterInput = z.object({
   /** Terrain layer to scatter on. Defaults to the most recently created one. */
   terrain: z.string().optional(),
-  /** Species to include (weighted equally). Defaults to all. */
+  /** Species to include (weighted equally). Resolved to concrete archetype ids via the project
+   *  VEGETATION PACK (tree-pack.json). Defaults to all. Ignored when `assets` is supplied. */
   species: z.array(z.enum(["spruce", "pine", "birch"])).optional(),
+  /** Explicit archetype palette — a caller/project binding that WINS over the pack. When set, the
+   *  forest is scattered from these ids directly (the engine bakes no tree ids of its own). */
+  assets: z.array(paletteAssetSchema).optional(),
   /** Candidate samples per grid axis (placement density). The ceiling matters on LARGE tiles:
    *  at 64 a 1.4km tile gets ~24m candidate spacing — a painted forest region can never reach
    *  canopy density. 192 allows ~7m spacing there; placements are instanced, thousands are cheap. */
@@ -117,10 +155,14 @@ export function registerVegetationSkills(
       const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
       if (layer === undefined) throw new Error("vegetation.scatter: no terrain layer — create one with terrain.create first");
 
-      // Build the palette from the selected species.
+      // Resolve the archetype palette: an inline `assets` palette wins; otherwise the requested
+      // species are looked up in the project VEGETATION PACK (tree-pack.json). The engine bakes NO
+      // tree ids — with neither an inline palette nor a pack binding, the skill errors (no silent
+      // empty forest). The pack read is a sync host op over static content → deterministic on replay.
       const species = input.species ?? ["spruce", "pine", "birch"];
-      const paletteIds = [...new Set(species.flatMap((s) => SPECIES_ARCHETYPES[s] ?? []))];
-      if (paletteIds.length === 0) throw new Error("vegetation.scatter: no archetypes for the requested species");
+      const pack = input.assets !== undefined && input.assets.length > 0 ? EMPTY_VEGETATION_PACK : loadVegetationPack(ctx.world.ops);
+      const paletteIds = speciesPaletteIds(species, input.assets, pack);
+      if (paletteIds.length === 0) throw new Error("vegetation.scatter: no archetypes — pass assets:[...] or install a tree-pack.json binding the requested species");
 
       // Content-address (pin) every palette asset — a swapped archetype is rejected on replay.
       const assetHashes: Record<string, string> = {};
@@ -254,8 +296,12 @@ export function registerVegetationSkills(
   // compose a scene tree-by-tree. Deterministic + recorded: the archetype is chosen from `seed` and
   // its content hash is pinned.
   const plantInput = z.object({
-    /** Which tree to plant. */
+    /** Which tree to plant. Resolved to a concrete archetype via the project VEGETATION PACK
+     *  (tree-pack.json) unless an explicit `assets` palette is supplied. */
     species: z.enum(["spruce", "pine", "birch"]).default("spruce"),
+    /** Explicit archetype palette — a caller/project binding that WINS over the pack. When set, the
+     *  archetype is chosen from these ids (the engine bakes no tree ids of its own). */
+    assets: z.array(paletteAssetSchema).optional(),
     /** World position [x,y,z]. Defaults to the current terrain layer's origin (its flat surface). */
     position: z.tuple([z.number(), z.number(), z.number()]).optional(),
     /** Terrain layer whose origin is the default position. Defaults to the most recently created. */
@@ -280,7 +326,13 @@ export function registerVegetationSkills(
     input: plantInput,
     output: z.object({ entity: z.string(), assetId: z.string(), assetHash: z.string() }),
     handler: async (input, ctx) => {
-      const assetId = pickArchetype(input.species, input.seed);
+      // Resolve the archetype palette: an inline `assets` palette wins; otherwise the species is
+      // looked up in the project VEGETATION PACK (tree-pack.json). The engine bakes NO tree ids —
+      // with neither, the skill errors (no silent success). Pack read is a sync host op → replay-safe.
+      const pack = input.assets !== undefined && input.assets.length > 0 ? EMPTY_VEGETATION_PACK : loadVegetationPack(ctx.world.ops);
+      const paletteIds = speciesPaletteIds([input.species], input.assets, pack);
+      if (paletteIds.length === 0) throw new Error(`vegetation.plant: no archetypes for species '${input.species}' — pass assets:[...] or install a tree-pack.json binding it`);
+      const assetId = pickArchetype(paletteIds, input.seed);
       const resolved = assets.resolve(assetId);
 
       // Default the position to the CENTRE of the active terrain layer, on its surface (terrain is

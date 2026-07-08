@@ -48,8 +48,16 @@ async function buildForest(session: string): Promise<{ placements: Array<{ asset
   // Sculpt a hill so there's real relief + slope for the gates to bite on.
   await registry.invoke("terrain.deform", { entity: terrain, center: [0, 0], radius: 70, delta: 30, mode: "raise" }, at(2));
 
+  // Archetype ids now come from the caller/project, not a baked engine constant — the gate supplies
+  // an explicit `assets` palette (the engine ships no tree-pack.json). Ordered to match the historical
+  // species flatten so placements stay byte-identical to the recorded expectation.
   const rv = await registry.invoke("vegetation.scatter", {
     terrain, species: ["spruce", "pine", "birch"], density: 24, seed: 4242,
+    assets: [
+      { id: "trees/spruce-1.glb" }, { id: "trees/spruce-2.glb" },
+      { id: "trees/pine-1.glb" }, { id: "trees/pine-2.glb" },
+      { id: "trees/birch-1.glb" }, { id: "trees/birch-2.glb" },
+    ],
     elevationMax: 20, slopeMax: 0.6, coverage: 0.9,
   }, at(3));
   assert(rv.success, `vegetation.scatter must succeed: ${JSON.stringify(rv.error)}`);

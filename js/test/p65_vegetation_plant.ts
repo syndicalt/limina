@@ -37,8 +37,14 @@ assert(triBytes.byteLength > 0, "triangle.glb must be readable");
 const stubAssets = { resolve: (id: string) => ({ assetId: id, bytes: triBytes, hash: "sha256:stub-" + id }) } as never;
 
 const perms = resolveProfile("builder.readWrite");
-const SPRUCE = new Set(["trees/spruce-1.glb", "trees/spruce-2.glb"]);
-const PINE = new Set(["trees/pine-1.glb", "trees/pine-2.glb"]);
+// Archetype ids now come from the caller/project, not a baked engine constant — the gate supplies an
+// explicit `assets` palette per plant (the engine ships no tree-pack.json). Order fixes the seed→variant
+// pick (seed 0 → first id, seed 1 → second), so the determinism/variant assertions are unchanged.
+const SPRUCE_PALETTE = [{ id: "trees/spruce-1.glb" }, { id: "trees/spruce-2.glb" }];
+const PINE_PALETTE = [{ id: "trees/pine-1.glb" }, { id: "trees/pine-2.glb" }];
+const BIRCH_PALETTE = [{ id: "trees/birch-1.glb" }, { id: "trees/birch-2.glb" }];
+const SPRUCE = new Set(SPRUCE_PALETTE.map((e) => e.id));
+const PINE = new Set(PINE_PALETTE.map((e) => e.id));
 
 async function session(name: string): Promise<{ registry: SkillRegistry; world: WorldContext; layers: Map<string, EditableTerrain>; tracer: LiminaTracer }> {
   const world = makeHeadlessWorld();
@@ -55,7 +61,7 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
 // 1. Plant a single spruce at an explicit position — a real entity, palette archetype, pinned hash.
 {
   const { registry, world } = await session("ses_p65_a");
-  const r = await registry.invoke("vegetation.plant", { species: "spruce", position: [5, 0, -7], seed: 1 }, at(world, "ses_p65_a", 1));
+  const r = await registry.invoke("vegetation.plant", { species: "spruce", assets: SPRUCE_PALETTE, position: [5, 0, -7], seed: 1 }, at(world, "ses_p65_a", 1));
   assert(r.success, `vegetation.plant must succeed: ${JSON.stringify(r.error)}`);
   const res = r.result as { entity: string; assetId: string; assetHash: string };
   assert(typeof res.entity === "string" && res.entity.length > 0, "must return an entity handle");
@@ -69,7 +75,7 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
 // 1b. Custom tags merge with the auto tags.
 {
   const { registry, world } = await session("ses_p65_tags");
-  const r = await registry.invoke("vegetation.plant", { species: "pine", position: [0, 0, 0], seed: 0, tags: ["landmark", "old-growth"] }, at(world, "ses_p65_tags", 1));
+  const r = await registry.invoke("vegetation.plant", { species: "pine", assets: PINE_PALETTE, position: [0, 0, 0], seed: 0, tags: ["landmark", "old-growth"] }, at(world, "ses_p65_tags", 1));
   assert(r.success, "plant with custom tags must succeed");
   const tags = world.tags.get(world.entities.resolve((r.result as { entity: string }).entity)!.eid);
   assert(tags !== undefined && tags.has("tree") && tags.has("pine") && tags.has("landmark") && tags.has("old-growth"), `custom tags must merge with tree+species; got ${tags ? [...tags].join(",") : "none"}`);
@@ -78,10 +84,10 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
 // 2. Species selects the right palette; seed selects the variant deterministically.
 {
   const { registry, world } = await session("ses_p65_b");
-  const pine = await registry.invoke("vegetation.plant", { species: "pine", seed: 0 }, at(world, "ses_p65_b", 1));
+  const pine = await registry.invoke("vegetation.plant", { species: "pine", assets: PINE_PALETTE, seed: 0 }, at(world, "ses_p65_b", 1));
   assert(pine.success && PINE.has((pine.result as { assetId: string }).assetId), "pine species must pick a pine archetype");
-  const s0 = await registry.invoke("vegetation.plant", { species: "spruce", seed: 0 }, at(world, "ses_p65_b", 2));
-  const s1 = await registry.invoke("vegetation.plant", { species: "spruce", seed: 1 }, at(world, "ses_p65_b", 3));
+  const s0 = await registry.invoke("vegetation.plant", { species: "spruce", assets: SPRUCE_PALETTE, seed: 0 }, at(world, "ses_p65_b", 2));
+  const s1 = await registry.invoke("vegetation.plant", { species: "spruce", assets: SPRUCE_PALETTE, seed: 1 }, at(world, "ses_p65_b", 3));
   const a0 = (s0.result as { assetId: string }).assetId, a1 = (s1.result as { assetId: string }).assetId;
   assert(a0 === "trees/spruce-1.glb" && a1 === "trees/spruce-2.glb", `seed must select variant (got ${a0}, ${a1})`);
 }
@@ -91,7 +97,7 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
   const { registry, world, tracer } = await session("ses_p65_c");
   const rc = await registry.invoke("terrain.create", { size: 100, resolution: 33, baseHeight: 12 }, at(world, "ses_p65_c", 1));
   assert(rc.success, "terrain.create must succeed");
-  const rp = await registry.invoke("vegetation.plant", { species: "birch", seed: 3 }, at(world, "ses_p65_c", 2));
+  const rp = await registry.invoke("vegetation.plant", { species: "birch", assets: BIRCH_PALETTE, seed: 3 }, at(world, "ses_p65_c", 2));
   assert(rp.success, `plant on terrain must succeed: ${JSON.stringify(rp.error)}`);
   const planted = tracer.trace("agt_p65").filter((ev) => ev.type === "vegetation.planted");
   assert(planted.length === 1, `must emit exactly one vegetation.planted, got ${planted.length}`);
@@ -102,9 +108,17 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
 // 4. Determinism: same species + seed → same archetype across sessions.
 {
   const s1 = await session("ses_p65_d1"); const s2 = await session("ses_p65_d2");
-  const r1 = await s1.registry.invoke("vegetation.plant", { species: "spruce", seed: 7, position: [0, 0, 0] }, at(s1.world, "ses_p65_d1", 1));
-  const r2 = await s2.registry.invoke("vegetation.plant", { species: "spruce", seed: 7, position: [0, 0, 0] }, at(s2.world, "ses_p65_d2", 1));
+  const r1 = await s1.registry.invoke("vegetation.plant", { species: "spruce", assets: SPRUCE_PALETTE, seed: 7, position: [0, 0, 0] }, at(s1.world, "ses_p65_d1", 1));
+  const r2 = await s2.registry.invoke("vegetation.plant", { species: "spruce", assets: SPRUCE_PALETTE, seed: 7, position: [0, 0, 0] }, at(s2.world, "ses_p65_d2", 1));
   assert((r1.result as { assetId: string }).assetId === (r2.result as { assetId: string }).assetId, "same seed must pick the same archetype");
+}
+
+// 5. Decoupling: with NO inline palette AND no project tree-pack.json (the engine ships none), the
+// skill fails cleanly — it names no baked GLB and never silently succeeds.
+{
+  const { registry, world } = await session("ses_p65_e");
+  const r = await registry.invoke("vegetation.plant", { species: "spruce", position: [0, 0, 0], seed: 1 }, at(world, "ses_p65_e", 1));
+  assert(!r.success, "plant with no palette and no pack must fail (engine bakes no tree ids)");
 }
 
 ops.op_log("[js] p65_vegetation_plant OK: vegetation.plant places a single species tree (palette archetype chosen deterministically from seed, content hash pinned), at an explicit point or the active terrain layer's origin by default, replay-identical — the per-tree counterpart to vegetation.scatter.");

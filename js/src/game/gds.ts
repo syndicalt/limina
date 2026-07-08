@@ -51,8 +51,8 @@ export const ContentItemSchema = z.object({
   source: z.enum(["procedural", "poly-pizza", "3d-ai-studio", "generate"]),
   // ── Design-gate fields (the silhouette/readability gate scores against these). All OPTIONAL so
   //    existing specs stay valid; the silhouette gate skips items without a resolved `asset`. ──
-  /** The resolved glTF id once the asset pipeline has sourced it (e.g. "pine.glb"). The design gate
-   *  renders this to a silhouette; absent until sourcing runs. */
+  /** The resolved glTF id once the asset pipeline has sourced it (project/caller data, not a baked
+   *  engine id). The design gate renders this to a silhouette; absent until sourcing runs. */
   asset: z.string().min(1).optional(),
   /** Silhouette distinctness group — the gate checks sameness WITHIN a tier. Defaults to `kind`. */
   tier: z.string().min(1).optional(),

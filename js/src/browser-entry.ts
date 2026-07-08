@@ -21,7 +21,7 @@ export { TransformControls } from "../build/three.bundle.mjs";
 // can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
 export { parseGltfScene } from "./skills/three.ts";
 import { hasGltfScene, prewarmGltfScene } from "./skills/three.ts";
-import { SPECIES_ARCHETYPES, TREE_ARCHETYPE_IDS, pickArchetype } from "./skills/vegetation.ts";
+import { loadVegetationPack, speciesPaletteIds, type VegetationPack } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
@@ -541,8 +541,17 @@ const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity",
 // hard way — that is why prewarmAssets was removed).
 const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
 
-/** The GLB asset ids a command will MOUNT — used to pre-warm the parse cache before renderer.init(). */
-function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
+/** An inline `assets` palette off a command's input (vegetation.plant/scatter), sanitised to ids. */
+function inlinePaletteEntries(input: Record<string, unknown>): { id: string }[] {
+  return (Array.isArray(input.assets) ? input.assets : [])
+    .map((a) => (a && typeof (a as { id?: unknown }).id === "string" ? { id: (a as { id: string }).id } : { id: "" }))
+    .filter((e) => e.id.length > 0);
+}
+
+/** The GLB asset ids a command will MOUNT — used to pre-warm the parse cache before renderer.init().
+ *  Vegetation commands name no baked ids: their archetypes come from the command's inline `assets`
+ *  palette or the project VEGETATION PACK (tree-pack.json), so the pack is threaded in. */
+function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack = {}): string[] {
   if (cmd.kind !== "skill") return [];
   const input = (cmd.input ?? {}) as Record<string, unknown>;
   if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF") {
@@ -562,12 +571,12 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand): string[] {
   }
   if (cmd.tool === "vegetation.plant") {
     const species = typeof input.species === "string" ? input.species : "spruce";
-    const seed = typeof input.seed === "number" ? input.seed : 1;
-    try { return [pickArchetype(species, seed)]; } catch { return []; }
+    // Warm every variant of the species' palette (the seed picks one; warming all is cheap).
+    return speciesPaletteIds([species], inlinePaletteEntries(input), pack);
   }
   if (cmd.tool === "vegetation.scatter") {
     const species = Array.isArray(input.species) ? (input.species as string[]) : ["spruce", "pine", "birch"];
-    return [...new Set(species.flatMap((s) => SPECIES_ARCHETYPES[s] ?? []))];
+    return speciesPaletteIds(species, inlinePaletteEntries(input), pack);
   }
   return [];
 }
@@ -726,12 +735,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   installOps(ops); // complete global op surface for any engine code reaching module-level `ops`
 
   const liveAssets = new AssetRegistry(ops);
+  // The project VEGETATION PACK (species → archetype ids). Loaded once for the whole live session so
+  // both the boot pre-warm and the mid-session reboot check resolve vegetation archetypes identically.
+  const vegPack = loadVegetationPack(ops);
   if (typeof fetch === "function") {
     // Warm the tree palette (so a LATER incremental plant/scatter mounts from a clone) + this scene's
     // own GLB assets. Skip anything already cached — the module cache persists across reboots, so only
     // the first connect pays the fetch. All of this runs BEFORE renderer.init(), the only safe window.
-    const gltfIds = new Set<string>(TREE_ARCHETYPE_IDS);
-    for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd)) gltfIds.add(id);
+    // The project VEGETATION PACK (tree-pack.json) supplies the tree archetype ids; the engine bakes
+    // none. Read it once (sync host op, safe pre-init window) so species-based plant/scatter commands
+    // pre-warm their archetypes from a clone instead of a blocking main-thread read at mount.
+    const gltfIds = new Set<string>(Object.values(vegPack).flat().map((e) => e.id));
+    for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd, vegPack)) gltfIds.add(id);
     const cold = [...gltfIds].filter((id) => !hasGltfScene(id));
     // Map Phase 3.3: the WorldMap IR assets the log resolves (setTerrainSource / terrain.create map
     // path) are seeded the same way — bytes only (JSON, not GLB: no parse cache). Resolved ONCE here;
@@ -1278,7 +1293,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           // the "spiral tower" bug). Force a REBOOT: runLive re-pre-warms EVERY asset (incl. this one)
           // before renderer.init, then it mounts from a synchronous clone. Already-warmed assets (the
           // load-time set, tree palette) keep the fast in-place path.
-          const unwarmed = gltfAssetIdsForCommand(cmd).filter((id) => !hasGltfScene(id));
+          const unwarmed = gltfAssetIdsForCommand(cmd, vegPack).filter((id) => !hasGltfScene(id));
           if (unwarmed.length > 0) { unsupportedStructuralTools.push(`${cmd.tool} (unwarmed asset: ${unwarmed.join(", ")})`); continue; }
           structuralAdds++;
         } else unsupportedStructuralTools.push(cmd.tool);

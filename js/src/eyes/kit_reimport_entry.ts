@@ -16,10 +16,10 @@ declare const window: { __kitReady?: boolean; __kitErr?: string };
 
 async function main(): Promise<void> {
   // 1. Fetch + parse the exported GLB FIRST (all macrotasks before renderer.init()).
-  const res = await fetch("./kit-building.glb");
-  if (!res.ok) throw new Error(`fetch kit-building.glb: HTTP ${res.status}`);
+  const res = await fetch("fixtures/building.glb");
+  if (!res.ok) throw new Error(`fetch fixtures/building.glb: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const root = await parseGltfScene("kit-building.glb", bytes);
+  const root = await parseGltfScene("fixtures/building.glb", bytes);
 
   // 2. Renderer + scene identical to the source harness (kit_building_entry.ts).
   const canvas = document.getElementById("limina-canvas") as HTMLCanvasElement;

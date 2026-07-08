@@ -218,7 +218,13 @@ ws.addEventListener("open", async () => {
     //    the registered commons + footprints (the terrain unions them as exclusions) so the trees ring
     //    the hamlet and never grow in the commons. The forest floor auto-defaults to the waterline, so
     //    NO trees wade into the lakes.
-    const rf = await call("vegetation.scatter", { terrain, species: ["pine", "spruce"], density: 26, coverage: 0.7, cluster: 0.55, seed: 11 });
+    // The engine names no tree content, so this builder supplies its own conifer palette (a project
+    // authoring choice), rather than a baked species→GLB map. Ids resolve from the project's assets/.
+    const rf = await call("vegetation.scatter", {
+      terrain,
+      assets: [{ id: "trees/pine-1.glb" }, { id: "trees/pine-2.glb" }, { id: "trees/spruce-1.glb" }, { id: "trees/spruce-2.glb" }],
+      density: 26, coverage: 0.7, cluster: 0.55, seed: 11,
+    });
     console.log("3. forest:", (rf.result || {}).instances, "trees (ring around the cleared hamlet, above the waterline)");
 
     console.log("\n  built Eastern Watch (map-driven) into the live editor — open http://localhost:5173/\n");
