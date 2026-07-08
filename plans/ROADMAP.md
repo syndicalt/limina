@@ -31,20 +31,23 @@
 
 ## Beyond MVP (post-0.1.0)
 
-Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). **Also shipped since (polish + proof):** the default-render skill library (auto-surface terrain + biome scatter + post), the demo suite + materials showcase, a **rigged skinned-glTF player** (skeletal animation confirmed working on deno_webgpu), curvature-aware prop placement (no float/bury), and a public **`/examples` page whose flagship island runs LIVE in-browser** — a concrete proof of the Phase 8 export-playback path in a real browser tab. The remaining work:
+Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). **Also shipped since (polish + proof):** the default-render skill library (auto-surface terrain + biome scatter + post), the demo suite + materials showcase, a **rigged skinned-glTF player** (skeletal animation confirmed working on deno_webgpu), curvature-aware prop placement (no float/bury), and a public **`/examples` page whose flagship island runs LIVE in-browser** — a concrete proof of the Phase 8 export-playback path in a real browser tab.
+
+**Shipped on `feat/gamestack-refactor` since 2026-07-06 (post-dated this roadmap's last edit):** the **Map Studio + Map Painter** authoring surface (`plans/map-painter.md`, P1–P5 CLOSED) — paint landmass/terrain/elevation/biome/river/stamp layers → a pure compiler → the WorldMap IR → both terrain paths, with a real-GPU **3D peek**; the **streamed 1 km² world** milestone (`plans/map-driven-worlds-shipped.md`); the **in-game editor** with the ＋New describe→architect→QC→approve→catalog→place loop; the **architect daemon** (asset-authoring pipeline); **kernel push-subscribe** (K4, replaces 1 s polling); Blender-backed asset authoring with QC gates; and an **alpha outsider bundle** (`dist-alpha/`). The full remaining-roadmap execution plan is `plan-89ac14290cd84b65` (Tracks 0–4). The remaining work:
 
 | Phase / Item | Status | Plan |
 |---|---|---|
-| **13 — Ecosystem & Marketplace** | 🔲 Not started | Public registry + external memory adapters |
-| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | 🔲 Deferred | Sim-worker / SAB split (see `plans/phase-8-run-anywhere-plan.md`) |
-| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
+| **13 — Ecosystem & Marketplace** | 🔲 Not started — **asset repository first** (decision 2026-07-07) | `plans/skills-exchange-roadmap.md` · public registry + external memory adapters |
+| **Capstone game = Beacon Quest** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 Gaps G1–G3 (dialogue→UI, HUD, NPC provider) **CLOSED** since June; `p14_*` gates green. Waves W1–W5 open (paint-authored world, quest content, look push, site export) | `plans/phase-12-playable-game-skills.md` · `plans/implementation-plan.md` |
+| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | 🔲 Deferred — kernel plan lands first (fixes the coexistence bug) | Sim-worker / SAB split (`plans/phase-8-run-anywhere-plan.md`, `plans/kernel-plan.md`) |
+| **On-Ramp** (`create-limina-app`, one-command outsider start) | 🔲 Not started — alpha bundle is the O1 head start | `plans/implementation-plan.md` (Bet 2) |
+| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🔲 Deferred — folds into the capstone's W4 look push | `plans/worldgen-roadmap.md` |
+| **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 **Re-scoped 2026-07-07** — the authored-map path is superseded by the Map Painter; only the pure-procedural hint API remains | `plans/worldgen-roadmap.md` |
 | **Worldgen W5** (native wgpu model port) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Phase 12 capstone** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 First cut done (tiny game ships + passes `p12_capstone`); full Part-F open | `plans/phase-12-playable-game-skills.md` |
-| **bmap pipeline** (real-world geo → limina world) | 🔲 Parked | `plans/bmap-pipeline-spike.md` |
+| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🔲 Deferred — folds into the capstone's W4 look push | `plans/worldgen-roadmap.md` |
+| **bmap pipeline** (real-world geo → limina world) | 🔲 Parked — un-park via its S0 | `plans/bmap-pipeline-spike.md` |
 
-The **immediate next sequence** — the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md) (strategy), with the milestone-level execution detail (work units, acceptance gates, what's reuse vs gap) in [`plans/implementation-plan.md`](./implementation-plan.md). The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
+The **immediate next sequence** — the Capstone Game (Beacon Quest) → the On-Ramp → Live Authoring → *then* Phase 13 (asset repository first) — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md) (strategy), with the milestone-level execution detail (work units, acceptance gates, what's reuse vs gap) in [`plans/implementation-plan.md`](./implementation-plan.md) and the unified track plan in `plan-89ac14290cd84b65`. The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
 
 ## The arc
 

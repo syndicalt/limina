@@ -265,6 +265,16 @@ That product builds on this phase; it is never something the engine depends on a
 
 ---
 
+## Shipped since this roadmap was last edited (2026-07-06 → 07, `feat/gamestack-refactor`)
+
+Arcs delivered on the trunk that predate this file's last edit and aren't reflected in the phase table above. The unified plan for everything still open is `plan-89ac14290cd84b65` (Tracks 0–4); the four sequencing decisions (Beacon Quest capstone, asset-repository-first Phase 13, Track R dormant until the capstone closes, look/worldgen polish folded into the capstone's feel wave) were locked 2026-07-07.
+
+- **Map Studio + Map Painter (P1–P5, CLOSED)** — `plans/map-painter.md`. A paint-first authoring surface: brush landmass/terrain/elevation/biome layers + drag-stroke rivers/roads + catalog stamps → a pure compiler → the existing WorldMap IR → both terrain paths, with a real-GPU **3D peek** (compile the active map, render it on the real GPU, turntable). Stamped assets render in the peek as of the close-out; the one painted layer with no 3D form yet (roads) is the top P6 candidate.
+- **Streamed 1 km² worlds** — `plans/map-driven-worlds-shipped.md`. Map + FMG → WorldMap IR → streamed native-scale region; the 1 km² milestone measured and walked. Includes a headless Azgaar FMG exporter.
+- **In-game editor + architect daemon** — the ＋New loop (describe → architect authors a GLB → QC → approve → catalog → place), proven live; a background architect daemon runs authoring requests. Editor sculpt/paint brushes + QC asset catalog + ghost placement.
+- **Kernel push-subscribe (K4)** — worldlog push-subscribe replaces 1 s polling; part of the kernel formalization (`plans/kernel-plan.md`) that also structurally fixes the browser+bridge coexistence bug — the prerequisite for Phase 8 Mode B below.
+- **Alpha outsider bundle** — `dist-alpha/`, a first runnable outsider package; the O1 head start for the On-Ramp (Bet 2).
+
 ## Remaining & parked (sequenced after the phases they extend)
 
 These items were identified during phase delivery as follow-ups worth doing but deliberately deferred so each phase closed cleanly. They slot into the phase they extend.
@@ -279,15 +289,18 @@ These items were identified during phase delivery as follow-ups worth doing but 
 | Item | What | Cost | Plan |
 |---|---|---|---|
 | **W2 — Erosion bake pass** | Hydraulic + thermal erosion over the heightmap (carves realistic valleys + drainage); authoring-time only, baked into snapshots | bake-time | `plans/worldgen-roadmap.md` |
-| **W3 — Agent control + coarse→fine** | Steerable coarse continent/biome guide via `generateRegion` hints, detailed by noise + erosion; "agent sketches intent, generator builds it" | low | `plans/worldgen-roadmap.md` |
+| **W3 — Agent control + coarse→fine** | **Re-scoped 2026-07-07 — largely superseded** by the Map Painter (`plans/map-painter.md`) + WorldMap IR for the authored-map path; only the pure-procedural hint API remains | low | `plans/worldgen-roadmap.md` |
 | **W5 — Native wgpu model port** | Port the TerrainDiffusion model to native wgpu/burn (removes the Python service dependency) | high | `plans/worldgen-roadmap.md` |
 
-**Water rendering upgrade** *(deferred, companion to worldgen):* proper depth-buffer water with caustics/refraction (current is a camera-distance fade proxy; the surf transition is the visible artifact). Backend has no scene-depth texture yet. Plan: `plans/worldgen-roadmap.md` (Companion thread — liquid / water rendering).
+**W2 + water land inside the capstone (decision 2026-07-07):** the erosion bake and the depth-buffer water upgrade below are folded into Beacon Quest's W4 "feel" wave (the capstone world is the forcing function for the look), opened by a deep Three.js-ecosystem survey for best-in-class open implementations.
 
-### Phase 12 — Capstone demo *(first cut done; full Part-F open)*
-**Done (first cut):** `playable_game_window.ts` + the headless `p12_capstone.ts` prove an agent authors *and* plays a **tiny complete game** through skills only — `world.generateRegion` → `player.spawn` → an item (`scene.createEntity` + `interaction.register` + `inventory.create`) → a `game.condition` win rule → walk + `interaction.pickup` → `game.win` — deterministic (run-twice byte-identical), and it boots as a windowed demo.
-**Still open (full Part-F):** the *fully-featured* integrated demo — NPCs with navigation/dialogue/combat, a multi-objective quest line with triggers/rewards, equip-able inventory, save/load, win/lose — in one playable world. This is the headline adoption proof; see *what's next*.
-**Plan:** `plans/phase-12-playable-game-skills.md` (Part F — Acceptance Criteria).
+**Water rendering upgrade** *(companion to worldgen; lands in the capstone W4 look push):* proper depth-buffer water with caustics/refraction (current is a camera-distance fade proxy; the surf transition is the visible artifact). Backend has no scene-depth texture yet. Reference: threejs-water (jeantimex, MIT), needs a WebGL/GLSL → WebGPU/TSL port. Plan: `plans/worldgen-roadmap.md` (Companion thread — liquid / water rendering).
+
+### Phase 12 — Capstone demo → **Beacon Quest** *(gaps closed; waves open)*
+**The capstone game is Beacon Quest** (decision 2026-07-07) — one vanilla-WoW-style fetch quest, built element-by-element with GPU eyes, quality bar written down up front.
+**Done (first cut + the June pre-work gaps):** `playable_game_window.ts` + `p12_capstone.ts` prove an agent authors *and* plays a tiny complete game deterministically. The three June pre-work gaps are all **CLOSED** in code (`js/src/world/dialogue_runtime.ts`, `game_hud.ts`, `npc_runtime.ts` + the CharacterBrief→NpcSpec pipeline), each with a green `p14_*` gate (`p14_dialogue_ui`, `p14_hud`, `p14_npc`, `p14_capstone`, `p14_playability` — all exit 0): **G1** dialogue renders in-scene (speech bubble + choice HUD), **G2** the HUD updates live from stats/quest/inventory each frame, **G3** scripted NPCs patrol → animate → greet.
+**Still open (waves W1–W5):** the *fully-featured* integrated game — the world authored **through the Map Painter** (not `generateRegion`), NPCs with navigation/dialogue/combat, a multi-objective quest line with triggers/rewards, equippable inventory, save/load, win/lose — in one playable world, plus the W4 look push and a `p14_capstone` end-to-end + site export. This is the headline adoption proof.
+**Plan:** `plans/phase-12-playable-game-skills.md` (Part F) · `plans/implementation-plan.md` (Bet 1) · `plan-89ac14290cd84b65` (Track 1).
 
 ### bmap pipeline — Real-world geo → limina world *(parked)*
 **What:** a generation backend that turns a real-world location (bounding box) into a limina region — heightfield terrain from Copernicus DEM + buildings at true footprint/height from OSM/Overture + roads + shoreline + canopy, at 1:1 scale. Behind `world.generateRegion`, baked into the tile/asset cache, deterministic replay.
