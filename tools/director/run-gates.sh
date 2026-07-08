@@ -191,6 +191,15 @@ if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon window): SKIP (head
 elif node games/beacon-quest/smoke-playable.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon window): PASS"
 else echo "   playable-smoke (beacon window): FAIL"; hostfail=1; fi
 
+# Beacon Quest playable-render smoke: the "Light the Eastern Beacon" capstone on the MAP-PAINTER
+# world renders clean (painted terrain source + rigged models + HUD, N frames, zero errors). The
+# render sibling of js/test/p14_beacon_quest.ts (which proves the SIM + replay). Exit 2 = no GPU.
+if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon quest): SKIP (headless: needs GPU)"
+else
+  if node games/beacon-quest/smoke-quest.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon quest): PASS"
+  else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
+fi
+
 # DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
 # functional gate → design gate → export → package → render-verified release. Heavy (renders +
 # replays), so it's last and SKIPs without chromium/GPU. This is the end-to-end "the machine works" gate.
