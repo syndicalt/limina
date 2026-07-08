@@ -783,5 +783,49 @@ console.log("data safety:");
   }
 }
 
+// ---- 8. P5: peek scene assembly (buildPeekScene — everything painted appears in the peek) -------
+console.log("peek scene (painter P5):");
+{
+  const { buildPeekScene } = await import(join(ROOT, "tools/design/peek-scene.mjs"));
+  const WB_800 = WB_TEXT.replace("size_m: 200", "size_m: 800");
+  const doc = (opts = {}) => JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      features: [
+        { id: "o1", type: "area", kind: "outline", points: [[-350, -350], [350, -350], [350, 350], [-350, 350]] },
+        ...(opts.noForest ? [] : [{ id: "fw", type: "area", kind: "biome", biome: "forest", points: [[50, 50], [250, 50], [250, 250], [50, 250]] }]),
+        { id: "sw", type: "area", kind: "biome", biome: "swamp", points: [[-250, -250], [-50, -250], [-50, -50], [-250, -50]] },
+        { id: "rv", type: "line", kind: "river", points: [[0, -300], [0, 0], [40, 200]], widthM: 6 },
+      ],
+      ...(opts.noStamps ? {} : { stamps: [{ id: "s1", assetId: "tudor-cottage.glb", x: 10, z: -20, rot: 1.5, scale: 1.2 }] }),
+    }],
+  });
+  const { worldMap: pm } = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_800 });
+  const { scene, sceneName } = buildPeekScene(pm, { project: "gate", mapFile: "gate-m.worldmap.json" });
+  const tools = scene.commands.map((c) => c.tool || c.op);
+  const terrainIx = tools.indexOf("terrain.create");
+  check("peek: terrain.create drives the painted map source", terrainIx >= 0 && scene.commands[terrainIx].input.generate.source === "map" && scene.commands[terrainIx].input.generate.mapAssetId === "maps/gate-m.worldmap.json");
+  const scatters = scene.commands.filter((c) => c.tool === "vegetation.scatter");
+  check("peek: painted forest AND swamp each get a confined scatter", scatters.length === 2 && scatters.every((s) => (s.input.inclusions || []).length > 0));
+  check("peek: the sea plane is present", tools.includes("world.addWater"));
+  const river = scene.commands.find((c) => c.tool === "world.addRiver");
+  check("peek: the drawn river gets a ribbon (widthM overshoots the carve)", !!river && river.input.widthM >= 6 * 1.7 - 1e-9);
+  const places = scene.commands.filter((c) => c.tool === "asset.place");
+  check("peek: the stamped asset is PLACED (grounded, at the anchor, with rot+scale)", places.length === 1
+    && places[0].input.assetId === "tudor-cottage.glb" && eq(places[0].input.position, [10, 0, -20])
+    && places[0].input.ground === true && places[0].input.rotation[1] === 1.5 && eq(places[0].input.scale, [1.2, 1.2, 1.2]));
+  check("peek: placement happens AFTER the terrain exists (ground lift needs it)", tools.indexOf("asset.place") > terrainIx);
+  check("peek: sceneName is stable per project+map", sceneName === "peek-gate-m");
+  // Determinism: the builder is pure — same IR in, byte-identical scene out.
+  check("peek: scene assembly is deterministic", eq(buildPeekScene(pm, { project: "gate", mapFile: "gate-m.worldmap.json" }).scene, scene));
+  // Falsifiability: un-stamping removes the placement; un-painting the forest removes its scatter.
+  const { worldMap: pm0 } = compileDesignMap({ mapsJsonText: doc({ noStamps: true }), worldBibleText: WB_800 });
+  check("(falsifiability) no stamps -> no asset.place commands", buildPeekScene(pm0, { project: "gate", mapFile: "x" }).scene.commands.every((c) => c.tool !== "asset.place"));
+  const { worldMap: pmNf } = compileDesignMap({ mapsJsonText: doc({ noForest: true }), worldBibleText: WB_800 });
+  check("(falsifiability) un-painting the forest removes its scatter (swamp's remains)", buildPeekScene(pmNf, { project: "gate", mapFile: "x" }).scene.commands.filter((c) => c.tool === "vegetation.scatter").length === 1);
+}
+
 if (failures) { console.error(`\nmapstudio-gate: ${failures} FAILURE(S)`); process.exit(1); }
 console.log("\nmapstudio-gate: PASS");

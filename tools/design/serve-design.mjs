@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync }
 import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { buildPeekScene } from "./peek-scene.mjs";
 import { connect as netConnect } from "node:net";
 
 // 3D-peek render jobs (Painter P5): jobId -> {status, png?, error?}. In-memory, best-effort.
@@ -335,113 +336,9 @@ createServer((req, res) => {
           const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId });
           const mapFile = `${project}-${worldMap.id}.worldmap.json`;
           writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
-          // Frame the camera on the compiled land.
-          let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-          for (const l of worldMap.land) for (const [x, z] of l.points) {
-            if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-          }
-          if (minX === Infinity) { minX = -100; maxX = 100; minZ = -100; maxZ = 100; }
-          const span = Math.max(maxX - minX, maxZ - minZ, 100);
-          const size = Math.ceil(span * 1.25 / 50) * 50;
-          // Confine the peek's forest to the PAINTED forest polygons: disc-cover each polygon on a
-          // grid (the vegetation.scatter inclusion gate takes discs) so trees stand where the
-          // author painted woods and nowhere else.
-          const inRing = (x, z, ring) => {
-            let inside = false;
-            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-              const [xi, zi] = ring[i], [xj, zj] = ring[j];
-              if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
-            }
-            return inside;
-          };
-          const discStep = Math.max(18, Math.round(span * 0.02));
-          const biomeDiscs = (kind) => {
-            const discs = [];
-            for (const b of worldMap.biomes || []) {
-              if (b.biome !== kind) continue;
-              let bMinX = Infinity, bMaxX = -Infinity, bMinZ = Infinity, bMaxZ = -Infinity;
-              for (const [x, z] of b.points) {
-                if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
-              }
-              for (let z = bMinZ; z <= bMaxZ; z += discStep) {
-                for (let x = bMinX; x <= bMaxX; x += discStep) {
-                  if (inRing(x, z, b.points)) discs.push({ x: Math.round(x), z: Math.round(z), r: Math.round(discStep * 0.72) });
-                }
-              }
-            }
-            return discs;
-          };
-          const forestDiscs = biomeDiscs("forest");
-          const swampDiscs = biomeDiscs("swamp");
-          const scene = {
-            commands: [
-              { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
-              { kind: "skill", tool: "terrain.create", input: {
-                // 385 on big maps: a span-scaled river channel (~11m on a 1.4km zone) needs the
-                // cell size under its half-width or the carve aliases away (the 257 grid's ~7m
-                // cells swallowed every drawn river).
-                size, resolution: size > 600 ? 385 : 129, origin: [0, 0, 0], color: 5926970,
-                generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: 12 },
-              } },
-              ...(forestDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
-                // ~8m candidate spacing regardless of tile size — painted woods read as CANOPY
-                // from the orbit, not a dozen specks (the density knob is per-axis over the tile).
-                // slopeMax 1.4: painted forest often climbs the mountain flanks — the default
-                // 0.85 slope gate stripped those candidates and left a thin line at the base.
-                species: ["pine", "spruce", "birch"], density: Math.min(192, Math.max(32, Math.round(size / 6))),
-                // The tree floor is RELATIVE TO THE MAP'S SEA LEVEL (its job is keeping trees out
-                // of the water), never an absolute Y: the sea is an Atlas control (map.seaLevel),
-                // and an absolute floor silently culls every tree on land that sits above the
-                // water but below the number. Both forest outages were this bug: 1.0 vs the
-                // seaLevel+0.8 land floor, then 0.5 vs an authored seaLevel of -11.5.
-                coverage: 0.9, cluster: 0.45, seed: 11, slopeMax: 1.4, sizeRange: [0.95, 1.6],
-                elevationMin: (worldMap.seaLevel ?? 0) + 0.5, inclusions: forestDiscs,
-              } }] : []),
-              // Swamp: SPARSE trees scattered between the standing-water pools the rasterizer
-              // dapples through the biome — sparse stands + mottled water = the marsh read.
-              ...(swampDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
-                species: ["birch", "spruce"], density: Math.min(192, Math.max(32, Math.round(size / 8))),
-                coverage: 0.3, cluster: 0.6, seed: 23, slopeMax: 1.4, sizeRange: [0.7, 1.15],
-                elevationMin: (worldMap.seaLevel ?? 0) + 0.4, inclusions: swampDiscs,
-              } }] : []),
-              // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
-              // reads as a sparkling seam against the void.
-              { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 4), color: 2841970 } },
-              // Terrain-following river ribbons along each waterway (deduped — a doc can carry
-              // exact-duplicate river features). Slightly narrower than the carve so the edges
-              // tuck into the banks.
-              ...[...new Map((worldMap.waterways || []).map((w) => [JSON.stringify(w.points), w])).values()]
-                .filter((w) => w.points.length >= 2)
-                // 1.7x the channel width: the carve's smoothstepped banks slope outward, so the
-                // near-rim water surface must overshoot the floor width to meet them — edges tuck
-                // into the bank slope instead of leaving dry shoulders.
-                .map((w) => ({ kind: "skill", tool: "world.addRiver", input: {
-                  points: w.points, widthM: Math.max(4, (w.widthM || 6) * 1.7), color: 2841970,
-                } })),
-            ],
-            // Rotating setpiece: engine-shots.mjs drives the orbit to EXACT yaw angles (i/N x 360°
-            // via the __setYaw hook) so the frame set always closes the full loop — autoSpin is 0,
-            // timing-based capture under-rotated on heavy scenes and the scrub jumped at the seam.
-            // 0.62/0.38 span frames the WHOLE island; the explicit far plane + FogExp2 density
-            // scaled 1/distance keep it vivid (far shore dissolving — the house look).
-            camera: {
-              center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
-              radius: Math.round(span * 0.62), height: Math.round(span * 0.38),
-              far: Math.round(span * 2.5), autoSpin: 0,
-            },
-            renderBaseline: {
-              exposure: 1.05,
-              sun: { color: 16770744, intensity: 4.6, direction: [-52, 34, 22] },
-              hemisphere: { skyColor: 12374271, groundColor: 4872752, intensity: 1.8 },
-              ambientIntensity: 0.66, ambientColor: 7036501,
-              // `atmosphere.density` is the baseline's REAL haze knob (a `fog:` key is silently
-              // ignored by the deep-partial merge — the default 0.0011 haze then drowns the whole
-              // island at orbit distance). 0.5/span: ~88% clarity at the camera, far shore at
-              // ~65% — aerial depth without the milk. FogExp2: transmittance = exp(-(d*density)²).
-              atmosphere: { density: Math.round(0.5 / span * 1e6) / 1e6 },
-            },
-          };
-          const sceneName = `peek-${project}-${worldMap.id}`;
+          // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
+          // author painted, including stamped asset-anchors, must appear in the peek.
+          const { scene, sceneName } = buildPeekScene(worldMap, { project, mapFile });
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
