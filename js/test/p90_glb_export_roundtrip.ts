@@ -68,20 +68,19 @@ function stripGltfTextures(bytes: Uint8Array): Uint8Array {
 }
 
 // The native runtime reads only through the engine's sandboxed asset path (op_read_asset, rooted at
-// <cwd>/assets — no arbitrary /tmp read), so the export runner mirrors the scratchpad GLB into the
-// asset root under this id. Reading it here is the SAME resolver asset.place uses in production.
-const GLB_ID = "kit-building.glb";
-const BOUNDS_ID = "kit-building.bounds.json";
-const EXPORT_CMD = 'node tools/preview/export-kit-building.mjs "/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/3ed2e681-6346-4bc3-8882-e4d53a225534/scratchpad/kit-building.glb"';
+// <cwd>/assets). GLB_ID is a committed synthetic building fixture (tools/blender/make_fixtures.py) so
+// the round-trip runs on every checkout; reading it is the SAME resolver asset.place uses in production.
+const GLB_ID = "fixtures/building.glb";
+const BOUNDS_ID = "fixtures/building.bounds.json";
+const EXPORT_CMD = 'blender --background --factory-startup --python tools/blender/make_fixtures.py -- --outdir assets/fixtures';
 
-// ── Fixture-dependent gate: the GLB is produced by the browser export harness and is a BINARY (not
-// checked in), so SKIP cleanly when it is absent (a fresh checkout / the full js/test sweep stays
-// green). Run the export command to exercise the FULL round-trip; when the GLB is present, every
-// assertion below runs and a broken export fails loudly. ─────────────────────────────────────────
+// ── The building fixture is committed, so the full round-trip runs on every checkout. The absent-GLB
+// branch remains a defensive SKIP (e.g. if fixtures were pruned): regenerate with the command above.
+// When present, every assertion below runs and a broken re-import fails loudly. ────────────────────
 let bytes: Uint8Array | null = null;
 try { bytes = ops.op_read_asset(GLB_ID); } catch { bytes = null; }
 if (bytes === null) {
-  ops.op_log(`p90_glb_export_roundtrip SKIP: exported GLB '${GLB_ID}' not present (binary, not checked in) — run: ${EXPORT_CMD}`);
+  ops.op_log(`p90_glb_export_roundtrip SKIP: building fixture '${GLB_ID}' not present — regenerate: ${EXPORT_CMD}`);
 } else {
   assert(bytes.length > 1000, `exported GLB is implausibly small (${bytes.length} bytes)`);
 
@@ -113,7 +112,7 @@ if (srcBounds !== null) {
 
 // ── 3. Mesh instantiation via the engine's GLTFLoader path (≥1 real mesh). Texture-stripped copy so
 //       the native (blob-fetch-less) loader instantiates the SAME geometry — see the header note. ──
-const root = await parseGltfScene("kit-building.glb", stripGltfTextures(bytes));
+const root = await parseGltfScene(GLB_ID, stripGltfTextures(bytes));
 let meshes = 0, verts = 0;
 (root as unknown as THREE.Object3D).traverse((o: THREE.Object3D) => {
   const m = o as THREE.Mesh;

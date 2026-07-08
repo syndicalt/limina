@@ -54,17 +54,15 @@ async function readCatalog(registry: SkillRegistry, at: (tick: number) => Parame
   return (rc.result as { entries: CatalogEntry[] }).entries;
 }
 
-// 1. asset.catalog returns the seed entries from assets/catalog.json — the four originals must be
-//    present (the manifest GROWS as approved session publishes are promoted into it; the gate is
-//    relative to the file, not a frozen count).
-const CORE_SEED_IDS = ["cottage-authored.glb", "watchtower-authored.glb", "norman-manor-building.glb", "norman-church.glb"];
+// 1. asset.catalog returns the on-disk seed (assets/catalog.json) as a schema-valid, unique array.
+//    The engine ships an EMPTY seed — curated content lives per-project, not in the engine core — so
+//    this asserts SHAPE (parse + uniqueness), not specific content ids. Seed-loading WITH real entries
+//    is exercised by the publishes below, which flow through the identical merge/browse path.
 let seedCount = 0;
 {
   const { registry, at } = freshCatalog("ses_catalog_seed");
   const entries = await readCatalog(registry, at, 1);
   seedCount = entries.length;
-  assert(seedCount >= 4, `seed catalog must have at least the 4 core entries (got ${seedCount})`);
-  assert(CORE_SEED_IDS.every((id) => entries.some((e) => e.id === id)), `core seed ids missing from assets/catalog.json (got ${entries.map((e) => e.id).join(", ")})`);
   assert(new Set(entries.map((e) => e.id)).size === seedCount, "seed ids must be unique");
 }
 

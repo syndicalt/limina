@@ -68,7 +68,7 @@ const regionId = generated.regionId as string;
 
 const scattered = ok(await registry.invoke("asset.scatter", {
   regionId,
-  config: { seed: 7, density: 8, assets: [{ id: "pine.glb" }], sizeRange: [0.8, 0.8] },
+  config: { seed: 7, density: 8, assets: [{ id: "fixtures/mesh.glb" }], sizeRange: [0.8, 0.8] },
 }, base));
 assert((scattered.mounted as number) > 0, "asset.scatter mounted no InstancedMeshes");
 const meshes = added.filter((o): o is THREE.InstancedMesh => o instanceof THREE.InstancedMesh);

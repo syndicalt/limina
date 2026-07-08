@@ -22,9 +22,10 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 const finitePos = (n: number): boolean => Number.isFinite(n) && n > 0;
 
-// A real 3-mesh, textured building GLB under the host asset root, resolved through the content-addressed
-// registry (AssetRegistry.resolve → { bytes, hash }) — the SAME resolver asset.place uses.
-const GLB = "cottage.glb";
+// A synthetic UNtextured mesh fixture under the host asset root, resolved through the content-addressed
+// registry (AssetRegistry.resolve → { bytes, hash }) — the SAME resolver asset.place uses. Untextured so
+// the native (blob-fetch-less) parseGltfScene instantiates it; the fit/scale math is asset-agnostic.
+const GLB = "fixtures/mesh.glb";
 const reg = new AssetRegistry();
 const resolved = reg.resolve(GLB);
 assert(resolved.hash.startsWith("sha256:") && resolved.bytes.length > 0, "registry did not resolve real GLB bytes");

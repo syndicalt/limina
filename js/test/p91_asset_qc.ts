@@ -100,16 +100,16 @@ assert(badVerdict.failures.some((f: { gate: string }) => f.gate === "fidelity:al
 assert(badVerdict.failures.some((f: { gate: string }) => f.gate === "fidelity:vertices"), "expected the ~12-tri box to fail the vertex floor");
 
 // ── PASS case (fixture-dependent — SKIPS cleanly if the binary GLB isn't checked in). ──────────────
-const GLB_ID = "kit-building.glb";
+const GLB_ID = "fixtures/building.glb";
 let good: Uint8Array | null = null;
 try { good = ops.op_read_asset(GLB_ID); } catch { good = null; }
 if (good === null) {
-  ops.op_log(`p91_asset_qc: PASS-case SKIP — good building '${GLB_ID}' not present (binary, not checked in); the orchestrator bakes it via the kit export harness. FAIL-case (synthetic) ran and passed.`);
+  ops.op_log(`p91_asset_qc: PASS-case SKIP — building fixture '${GLB_ID}' not present (regenerate via tools/blender/make_fixtures.py). FAIL-case (synthetic) ran and passed.`);
 } else {
   const goodVerdict = runAssetQcGate(good, { dd, floor, class: "building" });
   ops.op_log(`PASS-case: pass=${goodVerdict.pass} score=${goodVerdict.score} measured={v:${goodVerdict.measured.vertexCount},t:${goodVerdict.measured.triangleCount},mats:${goodVerdict.measured.materialCount},albedo:${goodVerdict.measured.hasAlbedoMap},normal:${goodVerdict.measured.hasNormalMap},bbox:[${goodVerdict.measured.bboxDims.map((x: number) => x.toFixed(2)).join(",")}]}`);
   for (const f of goodVerdict.failures) ops.op_log(`  (unexpected) FAIL ${f.gate}: ${f.detail}`);
-  assert(goodVerdict.pass === true, `the good kit building FAILED QC: ${goodVerdict.failures.map((f: { detail: string }) => f.detail).join("; ")}`);
+  assert(goodVerdict.pass === true, `the good building fixture FAILED QC: ${goodVerdict.failures.map((f: { detail: string }) => f.detail).join("; ")}`);
 }
 
-ops.op_log(`p91_asset_qc OK: degenerate box HARD-FAILS (${badVerdict.failures.length} reasons incl. fidelity) and the good kit building ${good === null ? "SKIPPED (absent)" : "PASSES"}. The asset QC gate is real + falsifiable.`);
+ops.op_log(`p91_asset_qc OK: degenerate box HARD-FAILS (${badVerdict.failures.length} reasons incl. fidelity) and the good building fixture ${good === null ? "SKIPPED (absent)" : "PASSES"}. The asset QC gate is real + falsifiable.`);

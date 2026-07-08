@@ -70,8 +70,8 @@ function makeWorld(worldOps: EngineOps): WorldContext {
   assert(inp(mat).metalness === undefined && !("material" in inp(mat)), "A: material OMITS the knobs the human did not set");
   assert(mat.kind === "skill" && [...(mat.perms ?? [])].join(",") === "scene.write", "A: material carries least-privilege scene.write");
 
-  const [pa] = translateManipulation({ kind: "placeAsset", assetId: "pine.glb", position: [5, 0, 5], rotation: [0, 1.57, 0] });
-  assert(pa.kind === "skill" && pa.tool === "asset.place" && inp(pa).assetId === "pine.glb", "A: placeAsset -> asset.place by id");
+  const [pa] = translateManipulation({ kind: "placeAsset", assetId: "fixtures/mesh.glb", position: [5, 0, 5], rotation: [0, 1.57, 0] });
+  assert(pa.kind === "skill" && pa.tool === "asset.place" && inp(pa).assetId === "fixtures/mesh.glb", "A: placeAsset -> asset.place by id");
   assert(JSON.stringify(inp(pa).rotation) === "[0,1.57,0]", "A: placeAsset rotation stays EULER (asset.place's encoding)");
 }
 
