@@ -200,6 +200,12 @@ else
   else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
 fi
 
+# Asset-repository X0 gate (Phase 13 / Track 4): a QC-passed asset publishes to a content-addressed
+# store + resolves back byte-identical with its CatalogEntry intact (engine-scheme parity), and a
+# tampered object / malformed entry is rejected. Headless + fast, host-side (marketplace ≠ engine dep).
+if node gates/exchange/x0-roundtrip-check.mjs >/dev/null 2>&1; then echo "   x0-roundtrip (asset repository): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   x0-roundtrip (asset repository): SKIP (sample asset missing)"; else echo "   x0-roundtrip (asset repository): FAIL"; hostfail=1; fi; fi
+
 # On-ramp scaffold gate: create-limina-app produces a complete, BOOTABLE project — real file tree +
 # prebuilt sample world + a classic-script-safe (import.meta-free) player exposing window.LiminaPlayer.
 # Headless + fast (no GPU), catches the DOA-sample regression. Runs in CI.
