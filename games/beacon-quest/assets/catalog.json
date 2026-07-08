@@ -1,0 +1,50 @@
+[
+  {
+    "id": "norman-church.glb",
+    "title": "Norman parish church",
+    "category": "religious",
+    "boundsM": [9.8, 19.35, 21.2],
+    "qcRender": "qc/norman-church.png",
+    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
+    "tags": ["building", "medieval"]
+  },
+  {
+    "id": "tudor-cottage.glb",
+    "title": "Tudor cottage",
+    "category": "dwelling",
+    "boundsM": [7.76, 10.763, 6.789],
+    "qcRender": "qc/tudor-cottage.png",
+    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
+    "authoredBy": "claude-sonnet-5",
+    "tags": ["building", "medieval"]
+  },
+  {
+    "id": "watchtower-authored.glb",
+    "title": "Frontier watchtower",
+    "category": "military",
+    "boundsM": [4.1, 9.4, 4.61],
+    "qcRender": "qc/watchtower-authored.png",
+    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
+    "tags": ["building", "medieval"]
+  },
+  {
+    "id": "whisperlight-lantern.glb",
+    "title": "Whisperlight lantern post",
+    "category": "prop",
+    "boundsM": [1.011, 5.201, 1.083],
+    "qcRender": "qc/whisperlight-lantern.png",
+    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
+    "authoredBy": "claude-fable-5",
+    "tags": ["prop", "fantasy"]
+  },
+  {
+    "id": "a-basic-wooden-bridge.glb",
+    "title": "Wooden footbridge",
+    "category": "prop",
+    "boundsM": [6, 1.881, 2.15],
+    "qcRender": "qc/a-basic-wooden-bridge.png",
+    "qcChecks": { "textured": true, "scale": true, "integrity": true, "theme": true },
+    "authoredBy": "claude-fable-5",
+    "tags": ["prop", "bridge", "wood", "medieval"]
+  }
+]

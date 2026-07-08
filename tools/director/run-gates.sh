@@ -200,6 +200,12 @@ else
   else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
 fi
 
+# Beacon Quest headless determinism gate, PROJECT-LOCAL: the game is a self-contained project whose
+# assets live under games/beacon-quest/assets/. Run FROM the project dir so op_read_asset roots there
+# (the js/test sweep no longer picks this up — it moved out of js/test into the project's gates/).
+if ( cd games/beacon-quest && LIMINA_AUDIO=null "../../$BIN" gates/p14_beacon_quest.ts ) >/dev/null 2>&1; then echo "   beacon-quest gate (project-local): PASS"
+else echo "   beacon-quest gate (project-local): FAIL"; hostfail=1; fi
+
 # Asset-repository X0 gate (Phase 13 / Track 4): a QC-passed asset publishes to a content-addressed
 # store + resolves back byte-identical with its CatalogEntry intact (engine-scheme parity), and a
 # tampered object / malformed entry is rejected. Headless + fast, host-side (marketplace ≠ engine dep).

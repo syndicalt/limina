@@ -17,22 +17,24 @@
 //   5. REPLAY-EQUIVALENCE: record the authored+played skill stream, replay it into a FRESH
 //      map-backed core, assert the game-state managers recompute BIT-IDENTICAL.
 //
-// Run: ./target/release/limina js/test/p14_beacon_quest.ts   (exit 0 = pass)
+// Run FROM the project dir (op_read_asset roots at <cwd>/assets, so the painted world resolves
+// from games/beacon-quest/assets/):
+//   ( cd games/beacon-quest && ./../../target/release/limina gates/p14_beacon_quest.ts )   (exit 0 = pass)
 
-import { EntityTable, ops, type EngineOps } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
-import { createTransformStorage } from "../src/ecs/facade.ts";
-import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
-import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type InvokeBase, type WorldContext } from "../src/skills/registry.ts";
-import { registerCoreSkills, type CoreSkills } from "../src/skills/index.ts";
-import { resolveProfile } from "../src/skills/permissions.ts";
-import { WorldRecorder } from "../src/worldlog/recorder.ts";
-import { replayCommands } from "../src/worldlog/replay.ts";
-import type { WorldMap } from "../src/world/worldmap.ts";
+import { EntityTable, ops, type EngineOps } from "../../../js/src/engine.ts";
+import { createEcsWorld } from "../../../js/src/ecs/world.ts";
+import { createTransformStorage } from "../../../js/src/ecs/facade.ts";
+import { UniformGridSpatialIndex } from "../../../js/src/spatial/index.ts";
+import { LiminaTracer } from "../../../js/src/observability/event.ts";
+import { SkillRegistry, type InvokeBase, type WorldContext } from "../../../js/src/skills/registry.ts";
+import { registerCoreSkills, type CoreSkills } from "../../../js/src/skills/index.ts";
+import { resolveProfile } from "../../../js/src/skills/permissions.ts";
+import { WorldRecorder } from "../../../js/src/worldlog/recorder.ts";
+import { replayCommands } from "../../../js/src/worldlog/replay.ts";
+import type { WorldMap } from "../../../js/src/world/worldmap.ts";
 import {
   buildBeaconQuest, makeBeaconCore, loadBeaconWorldMap, BEACON_LAYOUT, headingToward, type BeaconQuest,
-} from "../src/demos/beacon_quest.ts";
+} from "../../../js/src/demos/beacon_quest.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p14_beacon_quest FAIL: " + msg);
