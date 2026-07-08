@@ -62,7 +62,11 @@ expect(/startAccumulatorLoop\(/.test(entry), "reuses the host.ts accumulator rAF
 expect(/Atomics\.load\(statusView/.test(entry), "reads the worker's tick via Atomics on the status SAB");
 
 // ── renderSyncSystem-style scene drive + real renderer (Mode-A buildRenderTarget). ──
-expect(/renderSyncSystem\(ecs\)/.test(entry), "drives the scene transforms (renderSyncSystem)");
+// runLive drives the scene via `renderSyncSystem(ecs, suppressedEids)` — the second arg is the
+// entity-residency streaming set (detach-but-retain), added after this check was first written.
+// Match `ecs` followed by a comma OR close-paren so the check verifies the transform drive is
+// present without being brittle to that argument (the original `ecs\)` regex predated it).
+expect(/renderSyncSystem\(ecs[,)]/.test(entry), "drives the scene transforms (renderSyncSystem)");
 expect(/buildRenderTarget\(/.test(entry), "builds the real WebGPU renderer/scene/camera (buildRenderTarget reuse)");
 
 // ── Graceful degradation (no crash when SAB/WebGPU absent). ──
