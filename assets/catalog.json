@@ -171,5 +171,29 @@
       "prop",
       "fantasy"
     ]
+  },
+  {
+    "id": "a-basic-wooden-bridge.glb",
+    "title": "Wooden footbridge",
+    "category": "prop",
+    "boundsM": [
+      6.0,
+      1.881,
+      2.15
+    ],
+    "qcRender": "qc/a-basic-wooden-bridge.png",
+    "qcChecks": {
+      "textured": true,
+      "scale": true,
+      "integrity": true,
+      "theme": true
+    },
+    "tags": [
+      "prop",
+      "bridge",
+      "wood",
+      "medieval"
+    ],
+    "authoredBy": "claude-fable-5"
   }
 ]

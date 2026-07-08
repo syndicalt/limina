@@ -21,6 +21,7 @@ dist/
 # --- Zaxy memory store + generated runtime traces ---
 .eventloom/
 traces/
+.limina/
 
 # --- Spike scratch (large model weights / python envs — never commit) ---
 /spikes/**/.venv/
