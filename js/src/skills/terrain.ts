@@ -31,7 +31,7 @@ import type { AssetRegistry } from "../asset-registry.ts";
 import { TERRAIN_TYPE_NAMES, terrainTypeHints, type RegionBounds, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
 import { buildTerrainMesh, disposeTerrainMesh, type TerrainMeshOptions } from "../terrain/render.ts";
-import { scatterBiomeContent } from "../terrain/biome-content.ts";
+import { scatterBiomeContent, EMPTY_BIOME_PACK, type BiomePack } from "../terrain/biome-content.ts";
 import type { InvokeBase, SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -606,6 +606,14 @@ export function registerTerrainSkills(
     waterMargin: z.number().optional(),
     /** Override the scatter seed (default: the region's generation seed). */
     seed: z.number().int().optional(),
+    /** The project's role→asset binding for the scatter (conifer/broadleaf/boulder/…). The engine
+     *  ships NO pack — an absent/partial pack scatters nothing for unmapped roles (graceful). When
+     *  omitted, the effective pack is read from the project's `biome-pack.json` (missing/invalid →
+     *  empty), so a project supplies content either inline here or as that file. */
+    biomePack: z.record(
+      z.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
+      z.object({ id: z.string(), embedRadius: z.number().optional() }),
+    ).optional(),
   });
   const populateBiomeOutput = z.object({
     regionId: z.string(),
@@ -655,8 +663,23 @@ export function registerTerrainSkills(
       const base: InvokeBase = {
         agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions, tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
       };
+      // Effective role→asset pack: the inline input wins; otherwise read the project's
+      // biome-pack.json via the host asset op (the SAME sandboxed read asset-catalog.ts uses for
+      // catalog.json). Missing/invalid → EMPTY_BIOME_PACK, so an engine with no project pack
+      // scatters nothing rather than throwing. Sync host op (no async I/O in the handler), and the
+      // file is static project content, so replay re-reads the same bytes → deterministic.
+      let pack: BiomePack = input.biomePack ?? EMPTY_BIOME_PACK;
+      if (input.biomePack === undefined) {
+        try {
+          const bytes = ctx.world.ops.op_read_asset("biome-pack.json");
+          const parsed = populateBiomeInput.shape.biomePack.safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+          if (parsed.success && parsed.data !== undefined) pack = parsed.data;
+        } catch {
+          pack = EMPTY_BIOME_PACK;
+        }
+      }
       const res = await scatterBiomeContent({
-        registry, source, regions, regionId: input.regionId, type, bounds, seed, base,
+        registry, source, regions, regionId: input.regionId, type, pack, bounds, seed, base,
         waterLevel: input.waterLevel, waterMargin: input.waterMargin,
       });
       ctx.emit("terrain.region.populated", {

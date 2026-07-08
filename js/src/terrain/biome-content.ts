@@ -29,40 +29,41 @@ import type { SkillRegistry, InvokeBase } from "../skills/registry.ts";
 import type { RegionState } from "../skills/terrain.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
 
-// ───────────────────────── ASSET IDS — THE CURATED CC0 PALETTE ─────────────────────────
-// Each is plain glTF 2.0 (no Draco/meshopt/KTX2), public-domain (CC0), verified to load
-// through parseGltfScene + asset.place. Source + license per asset (model unit extents in
-// meters, base at Y≈0 so a scatter seats it ON the surface):
-//   pine.glb      — "Tree" (conifer) by hat_my_guy, CC0 — https://poly.pizza/m/BiWaLAItBx
-//                   (≈2.40 × 6.03 × 2.40 m — a tall narrow spruce)
-//   broadleaf.glb — "Tree from the savanna" by hat_my_guy, CC0 — https://poly.pizza/m/uLxXsCfYb7
-//                   (≈2.32 × 5.13 × 4.89 m — a spreading round canopy)
-//   cactus.glb    — "Cactus" by Quaternius, CC0 — https://poly.pizza/m/HsEJgRLQWX
-//                   (≈0.34 × 1.41 × 1.00 m — a saguaro)
-//   bush.glb      — "Bush" by Quaternius, CC0 — https://poly.pizza/m/ooG6CkLyE8
-//                   (≈2.07 × 1.19 × 2.07 m — a low shrub)
-//   grass.glb     — "Grass" by Quaternius, CC0 — https://poly.pizza/m/UGTOzcO3P2
-//                   (≈1.84 × 0.51 × 0.50 m — a grass tuft)
-//   rock.glb      — "Rock" by Quaternius, CC0 — https://poly.pizza/m/RtLRqYjfMs (the beach set)
-//   palm.glb      — "Palm Tree" by Quaternius, CC0 — https://poly.pizza/m/A6cKJYFsIb (the beach set)
-export const PINE_ASSET = "pine.glb";
-export const BROADLEAF_ASSET = "broadleaf.glb";
-export const CACTUS_ASSET = "cactus.glb";
-export const BUSH_ASSET = "bush.glb";
-export const GRASS_ASSET = "grass.glb";
-export const ROCK_ASSET = "rock.glb"; //   boulder / desert rock / driftwood (reused)
-export const PALM_ASSET = "palm.glb"; //   tropical palm (the beach set)
+// ───────────────────────── SEMANTIC ROLES — THE ENGINE NEVER NAMES A GLB ─────────────────────────
+// A layer references a semantic ROLE (conifer, broadleaf, boulder, …); a PROJECT supplies a
+// BiomePack binding each role to a concrete asset id (+ optional embed radius). The engine ships
+// NO pack — an absent/partial pack is GRACEFUL: an unmapped role is skipped, and a layer with no
+// mapped roles produces no scatter config at all (never a thrown, broken world). The reference
+// CC0 assets a project MIGHT bind (model unit extents in meters, base at Y≈0 so a scatter seats
+// it ON the surface) are documented per role so a pack author knows the intended scale/silhouette:
+//   conifer   — a tall narrow spruce (e.g. "Tree" by hat_my_guy, CC0 — ≈2.40 × 6.03 × 2.40 m)
+//   broadleaf — a spreading round canopy (e.g. "Tree from the savanna" by hat_my_guy, CC0 — ≈2.32 × 5.13 × 4.89 m)
+//   cactus    — a saguaro (e.g. "Cactus" by Quaternius, CC0 — ≈0.34 × 1.41 × 1.00 m)
+//   bush      — a low shrub (e.g. "Bush" by Quaternius, CC0 — ≈2.07 × 1.19 × 2.07 m)
+//   grass     — a grass tuft (e.g. "Grass" by Quaternius, CC0 — ≈1.84 × 0.51 × 0.50 m)
+//   boulder   — a rock / desert boulder / driftwood (e.g. "Rock" by Quaternius, CC0)
+//   palm      — a tropical palm (e.g. "Palm Tree" by Quaternius, CC0)
 
-// ── EMBED RADII — measured base FOOTPRINT half-extents (world units at scale 1) ──────
-// The XZ half-extent of each asset's flat base, fed to asset.scatter's embed-sink so a
-// prop on a slope beds its downhill base lip into the ground instead of floating ~r·slope
-// above it (the "floating trees" artefact on the coastal island-falloff). Only the
-// tree/boulder assets carry a footprint here; palm/cactus/bush/grass stay 0 (no sink).
-// Per-asset, so a layer's mixed palette (broadleaf+pine) embeds each species by its own
-// base. On flat ground slope≈0 → sink≈0, so existing flat placements are unchanged.
-export const PINE_EMBED = 1.2;       // pine.glb base ≈2.40 m wide → ~1.2 half-extent
-export const BROADLEAF_EMBED = 1.3;  // broadleaf.glb trunk/base footprint ≈1.3
-export const ROCK_EMBED = 0.5;       // rock.glb boulder base ≈0.5
+/** The semantic content roles a biome layer can reference. A project's BiomePack binds each to
+ *  a concrete asset id; the engine never hardcodes a GLB name. */
+export type BiomeRole = "conifer" | "broadleaf" | "boulder" | "bush" | "grass" | "cactus" | "palm";
+
+/** A project's binding of ONE role to a concrete content asset. `embedRadius` is the measured base
+ *  FOOTPRINT half-extent (world units at scale 1), fed to asset.scatter's embed-sink so a prop on a
+ *  slope beds its downhill base lip into the ground instead of floating ~r·slope above it (the
+ *  "floating trees" artefact). Omit for props that need no sink (slope≈0 → sink≈0 regardless). */
+export interface BiomePackEntry { id: string; embedRadius?: number; }
+
+/** A project-supplied binding of roles → assets. Partial: any unmapped role is scattered as nothing
+ *  (graceful). The engine ships NO pack — a project drops one in (biome-pack.json). */
+export type BiomePack = Partial<Record<BiomeRole, BiomePackEntry>>;
+
+/** The empty pack — the default when a project supplies none. Every role unmapped → nothing scatters. */
+export const EMPTY_BIOME_PACK: BiomePack = {};
+
+/** One weighted role reference inside a layer's palette. Resolved against a BiomePack to a concrete
+ *  ScatterAsset; an unmapped role is dropped from the resolved palette. */
+export interface BiomeLayerRole { role: BiomeRole; weight?: number; }
 
 // ───────────────────────── the canonical biome enum (terrain/types.ts) ─────────────
 // The integers the tile climate grid actually carries (asset.scatter's `biomes` gate reads
@@ -87,8 +88,9 @@ export const BIOME_BOREAL_WET = Biome.BOREAL_WET;
 export interface BiomeLayer {
   /** Scatter salt — distinct per layer so a type's layers don't share a grid. */
   seed: number;
-  /** The curated palette for this layer (>=1), weighted. */
-  assets: ScatterAsset[];
+  /** The role palette for this layer (>=1), weighted. Resolved against a project's BiomePack to a
+   *  concrete ScatterAsset palette; any role the pack doesn't map is dropped (graceful). */
+  assets: BiomeLayerRole[];
   density?: number;
   coverage?: number;
   cluster?: number;
@@ -122,7 +124,7 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
   beach: [
     {
       seed: 21, density: 14, coverage: 0.05, cluster: 0.85, clusterFreq: 1 / 30,
-      assets: [{ id: PALM_ASSET, weight: 3 }, { id: ROCK_ASSET, weight: 2 }],
+      assets: [{ role: "palm", weight: 3 }, { role: "boulder", weight: 2 }],
       slopeMax: 0.7, sizeRange: [1.1, 2.4], waterGated: true,
     },
   ],
@@ -139,63 +141,63 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       // bury mismatch (the "sunken trees" the user saw at slopeMax 1.15). 0.8 still yields a
       // healthy forest on the amp-4.5 eroded mountain (~540 pines on the 4×4, far above boulders)
       // — it is the gentler tree-line, not the old 0.85/0.45 dual cap that cropped pines to a band.
-      seed: 31, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
+      seed: 31, assets: [{ role: "conifer" }], coverage: 0.30, cluster: 0.45, clusterFreq: 1 / 34,
       slopeMax: 0.8, sizeRange: [0.8, 1.5], elevMaxFrac: 0.58, waterGated: true,
     },
     {
       // Boulders as the rock-zone ACCENT (sparse, so they don't dominate the forested slopes).
-      seed: 32, assets: [{ id: ROCK_ASSET, embedRadius: ROCK_EMBED }], coverage: 0.08, cluster: 0.35,
+      seed: 32, assets: [{ role: "boulder" }], coverage: 0.08, cluster: 0.35,
       slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
   ],
   // Dense temperate woodland: broadleaf + conifer mix over a bush understorey.
   forest: [
     {
-      seed: 41, assets: [{ id: BROADLEAF_ASSET, weight: 3, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
+      seed: 41, assets: [{ role: "broadleaf", weight: 3 }, { role: "conifer", weight: 2 }],
       coverage: 0.30, cluster: 0.5, clusterFreq: 1 / 30, slopeMax: 0.8, sizeRange: [0.9, 1.6],
     },
     {
-      seed: 42, assets: [{ id: BUSH_ASSET }], coverage: 0.18, cluster: 0.3, sizeRange: [0.8, 1.5],
+      seed: 42, assets: [{ role: "bush" }], coverage: 0.18, cluster: 0.3, sizeRange: [0.8, 1.5],
     },
   ],
   // Sparse saguaro cacti (biome-gated to the hot/dry desert) + the odd weathered rock.
   desert: [
     {
-      seed: 51, assets: [{ id: CACTUS_ASSET }], biomes: [BIOME_DESERT],
+      seed: 51, assets: [{ role: "cactus" }], biomes: [BIOME_DESERT],
       coverage: 0.08, cluster: 0.5, clusterFreq: 1 / 32, slopeMax: 0.6, sizeRange: [0.8, 1.8],
     },
     {
-      seed: 52, assets: [{ id: ROCK_ASSET, embedRadius: ROCK_EMBED }], coverage: 0.05, cluster: 0.4, sizeRange: [0.8, 2.0],
+      seed: 52, assets: [{ role: "boulder" }], coverage: 0.05, cluster: 0.4, sizeRange: [0.8, 2.0],
     },
   ],
   // Open grassland: dense grass tufts with the occasional lone broadleaf.
   plains: [
     {
-      seed: 61, assets: [{ id: GRASS_ASSET }], coverage: 0.35, cluster: 0.35, slopeMax: 0.7, sizeRange: [0.7, 1.4],
+      seed: 61, assets: [{ role: "grass" }], coverage: 0.35, cluster: 0.35, slopeMax: 0.7, sizeRange: [0.7, 1.4],
     },
     {
-      seed: 62, assets: [{ id: BROADLEAF_ASSET, embedRadius: BROADLEAF_EMBED }], coverage: 0.02, cluster: 0.6, slopeMax: 0.8, sizeRange: [0.9, 1.5],
+      seed: 62, assets: [{ role: "broadleaf" }], coverage: 0.02, cluster: 0.6, slopeMax: 0.8, sizeRange: [0.9, 1.5],
     },
   ],
   // Cool rolling uplands: a thinner broadleaf+pine cover over grass and bush.
   hills: [
     {
-      seed: 71, assets: [{ id: BROADLEAF_ASSET, weight: 2, embedRadius: BROADLEAF_EMBED }, { id: PINE_ASSET, weight: 2, embedRadius: PINE_EMBED }],
+      seed: 71, assets: [{ role: "broadleaf", weight: 2 }, { role: "conifer", weight: 2 }],
       coverage: 0.12, cluster: 0.5, slopeMax: 0.8, sizeRange: [0.8, 1.5],
     },
     {
-      seed: 72, assets: [{ id: GRASS_ASSET, weight: 2 }, { id: BUSH_ASSET, weight: 1 }],
+      seed: 72, assets: [{ role: "grass", weight: 2 }, { role: "bush", weight: 1 }],
       coverage: 0.16, cluster: 0.3, sizeRange: [0.7, 1.3],
     },
   ],
   // Warm archipelago: palm groves on the shore, a few pines on the higher dry interior.
   islands: [
     {
-      seed: 81, assets: [{ id: PALM_ASSET, weight: 3 }, { id: ROCK_ASSET, weight: 1, embedRadius: ROCK_EMBED }],
+      seed: 81, assets: [{ role: "palm", weight: 3 }, { role: "boulder", weight: 1 }],
       coverage: 0.07, cluster: 0.7, clusterFreq: 1 / 28, slopeMax: 0.7, sizeRange: [1.0, 2.2], waterGated: true,
     },
     {
-      seed: 82, assets: [{ id: PINE_ASSET, embedRadius: PINE_EMBED }], coverage: 0.06, cluster: 0.5, slopeMax: 0.8, sizeRange: [0.8, 1.3],
+      seed: 82, assets: [{ role: "conifer" }], coverage: 0.06, cluster: 0.5, slopeMax: 0.8, sizeRange: [0.8, 1.3],
       waterGated: true, elevMinFrac: 0.45,
     },
   ],
@@ -226,9 +228,22 @@ export function defaultWaterLevel(survey: ReliefSurvey): number {
  * fields the layer actually sets are emitted, so a layer with no gates stays a plain
  * density+coverage scatter (and the beach layer reproduces beachScatterConfig verbatim).
  */
-export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig {
+export function resolveLayer(layer: BiomeLayer, pack: BiomePack, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig {
   const relief = survey.maxY - survey.minY;
-  const config: ScatterConfig = { seed: layer.seed, assets: layer.assets };
+  // Resolve the layer's ROLE palette against the project's BiomePack. An unmapped role is dropped
+  // (graceful decoupling): a layer whose roles are all unmapped resolves to an empty palette, which
+  // biomeScatterConfigs then filters out so no asset.scatter runs for it.
+  const palette: ScatterAsset[] = [];
+  for (const { role, weight } of layer.assets) {
+    const bound = pack[role];
+    if (bound === undefined) continue;
+    palette.push({
+      id: bound.id,
+      ...(weight !== undefined ? { weight } : {}),
+      ...(bound.embedRadius !== undefined ? { embedRadius: bound.embedRadius } : {}),
+    });
+  }
+  const config: ScatterConfig = { seed: layer.seed, assets: palette };
   if (layer.density !== undefined) config.density = layer.density;
   if (layer.coverage !== undefined) config.coverage = layer.coverage;
   if (layer.cluster !== undefined) config.cluster = layer.cluster;
@@ -259,16 +274,21 @@ export function resolveLayer(layer: BiomeLayer, survey: ReliefSurvey, waterLevel
 
 /** The full set of concrete ScatterConfigs a TYPE places over a region (one per layer).
  *  Pure — for inspection, the demo, and the falsifiable tests without invoking the skill. */
-export function biomeScatterConfigs(type: TerrainTypeName, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig[] {
+export function biomeScatterConfigs(type: TerrainTypeName, pack: BiomePack, survey: ReliefSurvey, waterLevel?: number, waterMargin = 0): ScatterConfig[] {
   const wl = waterLevel ?? (isWaterType(type) ? defaultWaterLevel(survey) : undefined);
-  return BIOME_CONTENT[type].map((layer) => resolveLayer(layer, survey, wl, waterMargin));
+  // FILTER OUT layers whose palette resolved to nothing (an unmapped/absent pack) — an empty-asset
+  // config would drive asset.scatter with no assets. Dropping it means an absent pack scatters
+  // nothing rather than throwing, and a partial pack scatters only its mapped layers.
+  return BIOME_CONTENT[type]
+    .map((layer) => resolveLayer(layer, pack, survey, wl, waterMargin))
+    .filter((config) => config.assets.length > 0);
 }
 
 /** The deterministic beach palm/driftwood config, reproduced bit-for-bit from the catalog
  *  (the beach has exactly one layer, water-gated to `seaLevel`). cottage_beach.ts delegates
  *  here so the catalog is the single source of truth and the cottage scene is unchanged. */
-export function resolveBeachConfig(seaLevel: number): ScatterConfig {
-  return resolveLayer(BIOME_CONTENT.beach[0], { minY: 0, maxY: 1 }, seaLevel);
+export function resolveBeachConfig(seaLevel: number, pack: BiomePack): ScatterConfig {
+  return resolveLayer(BIOME_CONTENT.beach[0], pack, { minY: 0, maxY: 1 }, seaLevel);
 }
 
 /** Sample the shaped surface across a region (deterministic, fixed order) to find its
@@ -298,6 +318,9 @@ export interface ScatterBiomeContentDeps {
   regionId: string;
   /** The terrain TYPE (selects its content layers + the hints to survey with). */
   type: TerrainTypeName;
+  /** The project's role→asset binding. The engine ships no pack; an absent/partial pack scatters
+   *  nothing for unmapped roles (graceful). Pass EMPTY_BIOME_PACK to scatter nothing at all. */
+  pack: BiomePack;
   /** The region's tile-grid bounds (to survey the relief). */
   bounds: RegionBounds;
   /** The world seed the region was generated at. */
@@ -357,7 +380,9 @@ export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promis
   const hints = deps.regions?.get(deps.regionId)?.hints ?? terrainTypeHints(deps.type, deps.bounds);
   const survey = surveyRegionRelief(deps.source, deps.seed, deps.bounds, hints);
   const wl = deps.waterLevel ?? (isWaterType(deps.type) ? defaultWaterLevel(survey) : undefined);
-  const configs = biomeScatterConfigs(deps.type, survey, wl, deps.waterMargin ?? 0);
+  // Configs are already filtered to non-empty palettes (unmapped roles dropped). If the pack maps
+  // nothing, configs=[] → the loop drives zero asset.scatter calls → 0 instances, no throw.
+  const configs = biomeScatterConfigs(deps.type, deps.pack, survey, wl, deps.waterMargin ?? 0);
 
   const layers: ScatterBiomeContentResult["layers"] = [];
   let total = 0;

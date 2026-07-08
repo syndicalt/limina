@@ -28,7 +28,7 @@ import { TILE_SIZE } from "../js/src/terrain/procedural.ts";
 import { terrainTypeHints, type TerrainTypeName } from "../js/src/terrain/terrain-types.ts";
 import { MATERIALS } from "../js/src/materials/palette.ts";
 import { scatterAssets } from "../js/src/terrain/asset-scatter.ts";
-import { biomeScatterConfigs } from "../js/src/terrain/biome-content.ts";
+import { biomeScatterConfigs, type BiomePack } from "../js/src/terrain/biome-content.ts";
 import type { TerrainTile } from "../js/src/terrain/types.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -38,6 +38,18 @@ function assert(cond: boolean, msg: string): asserts cond {
 // ── THE WORLD — identical to default_world_window.ts ────────────────────────────
 const SEED = 1234;
 const TYPE: TerrainTypeName = "mountains";
+// The engine ships NO biome pack; this tool supplies its own curated role→asset binding (the same
+// CC0 ids + embed radii the catalog used before decoupling), passed inline to world.populateBiome
+// AND to the parity biomeScatterConfigs so both scatter the identical set.
+const BIOME_PACK: BiomePack = {
+  conifer: { id: "pine.glb", embedRadius: 1.2 },
+  broadleaf: { id: "broadleaf.glb", embedRadius: 1.3 },
+  boulder: { id: "rock.glb", embedRadius: 0.5 },
+  bush: { id: "bush.glb" },
+  grass: { id: "grass.glb" },
+  cactus: { id: "cactus.glb" },
+  palm: { id: "palm.glb" },
+};
 const BOUNDS = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 } as const;
 const HALF_EXTENT = (Math.min(BOUNDS.maxTx - BOUNDS.minTx, BOUNDS.maxTz - BOUNDS.minTz) + 1) * TILE_SIZE / 2;
 const HINTS = {
@@ -97,7 +109,7 @@ assert(water.success, "world.addWater failed: " + JSON.stringify(water.error));
 
 // 3. CONTENT: biome-correct scatter (pines + boulders, gated to the dry slopes).
 const pop = await registry.invoke("world.populateBiome", {
-  regionId, type: TYPE, waterLevel: seaLevel, waterMargin: 2.5,
+  regionId, type: TYPE, waterLevel: seaLevel, waterMargin: 2.5, biomePack: BIOME_PACK,
 }, base);
 assert(pop.success, "world.populateBiome failed: " + JSON.stringify(pop.error));
 const props = (pop.result as { instances: number }).instances;
@@ -144,7 +156,7 @@ assert(loaded.assets.length === assetBundle.length, "asset count lost on round-t
 const PARITY_MAX_FLOAT = 1.5; // m; regression gate (current max ≈ 1.0 m, budget for terrain variance)
 const PARITY_AVG_FLOAT = 0.6; // m; avg gate (current avg ≈ 0.25 m)
 const survey = { minY: relief.minY, maxY: relief.maxY };
-const parityConfigs = biomeScatterConfigs(TYPE, survey, seaLevel, 2.5);
+const parityConfigs = biomeScatterConfigs(TYPE, BIOME_PACK, survey, seaLevel, 2.5);
 // Independent bilinear height query (mirrors scatterAssets.sampleRaw in WORLD space — a
 // falsifiable re-sample, not the same call the placement used).
 const bilinear = (tile: TerrainTile, x: number, z: number): number => {

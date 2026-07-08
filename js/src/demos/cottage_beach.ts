@@ -21,7 +21,7 @@ import { MATERIALS } from "../materials/palette.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { terrainTypeHints } from "../terrain/terrain-types.ts";
-import { resolveBeachConfig } from "../terrain/biome-content.ts";
+import { resolveBeachConfig, type BiomePack } from "../terrain/biome-content.ts";
 import type { AssetInstance, ScatterConfig } from "../terrain/asset-scatter.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
@@ -100,8 +100,16 @@ export function beachScatterConfig(seaLevel: number): ScatterConfig {
   // the old call site + name; the beach layer reproduces the original recipe bit-for-bit
   // (palms weight 3 + driftwood weight 2, clustered groves on the DRY sand above seaLevel),
   // so the cottage scene's placements are byte-identical.
-  return resolveBeachConfig(seaLevel);
+  return resolveBeachConfig(seaLevel, BEACH_PACK);
 }
+
+/** The beach's role→asset binding: this demo supplies its own curated palm+driftwood pack (the
+ *  engine ships none). Roles palm+boulder bind to the scene's PALM_ASSET/DRIFTWOOD_ASSET, no embed
+ *  radius — reproducing the original beach recipe byte-for-bit. */
+const BEACH_PACK: BiomePack = {
+  palm: { id: PALM_ASSET },
+  boulder: { id: DRIFTWOOD_ASSET },
+};
 /** Cottage scale: the Hut model is ≈1.46 × 1.18 m at unit scale, so ×5 gives a ≈7.3 ×
  *  5.9 m footprint and ≈3.8 m ridge — a sensible beach hut sitting ON the sand (the
  *  model's base is at Y≈0, so placing it at the surface height seats it, not buries it). */
