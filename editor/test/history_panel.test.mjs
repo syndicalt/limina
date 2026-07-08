@@ -39,7 +39,9 @@ function find(root, pred) {
 const { createHistoryPanel } = await import("../src/history.js");
 
 let lastScrubPrefixLen = -1;
-const panel = createHistoryPanel({ onScrub: (cmds) => { lastScrubPrefixLen = cmds.length; }, onLog: () => {} });
+// onScrub now receives a { commands, live } payload (not the bare command array) so the host can
+// replay the viewport to the playhead AND know whether it's live-tracking.
+const panel = createHistoryPanel({ onScrub: (payload) => { lastScrubPrefixLen = payload.commands.length; }, onLog: () => {} });
 const ctrl = panel.controller();
 const body = byId["history-body"];
 
@@ -48,12 +50,12 @@ assert(ctrl.tip() === 0, "starts with an empty main branch");
 assert(find(body, (e) => /no edits yet/.test(e._text || "")) !== null, "empty state hint rendered");
 
 // ── 2. Ingesting world-log events grows the timeline on main. ─────────────────────────────────
-panel.recordEvents([
-  { id: "e1", type: "scene.createEntity" }, { id: "e2", type: "player.move" }, { id: "e3", type: "scene.createEntity" },
-  { id: "e4", type: "world.generateRegion" }, { id: "e5", type: "quest.accept" },
+panel.recordCommands([
+  { seq: 1, tool: "scene.createEntity" }, { seq: 2, tool: "player.move" }, { seq: 3, tool: "scene.createEntity" },
+  { seq: 4, tool: "world.generateRegion" }, { seq: 5, tool: "quest.accept" },
 ]);
 assert(ctrl.tip() === 5, `timeline grew to 5 edits (got ${ctrl.tip()})`);
-panel.recordEvents([{ id: "e3", type: "dup" }, { id: "e6", type: "ability.cast" }]); // e3 dup ignored
+panel.recordCommands([{ seq: 3, tool: "dup" }, { seq: 6, tool: "ability.cast" }]); // seq 3 dup ignored
 assert(ctrl.tip() === 6, `dedupes already-seen events; tip 6 (got ${ctrl.tip()})`);
 
 // ── 3. The scrub control time-travels the playhead and emits the prefix. ──────────────────────
@@ -74,7 +76,7 @@ assert(ctrl.branches().some((b) => b.name === "experiment"), "branch-from-here c
 assert(ctrl.currentBranch() === "experiment" && ctrl.tip() === 2, "checked out the new branch at the forked prefix (tip 2)");
 
 // ── 5. Ongoing world-log events still land on MAIN, preserving the user's branch view. ────────
-panel.recordEvents([{ id: "e7", type: "scene.createEntity" }]);
+panel.recordCommands([{ seq: 7, tool: "scene.createEntity" }]);
 assert(ctrl.currentBranch() === "experiment", "the user stays on their branch while events ingest");
 assert(ctrl.diff("main", "experiment").commonPrefix === 2, "main advanced (its tip grew) while 'experiment' held its fork point");
 
