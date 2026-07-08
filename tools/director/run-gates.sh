@@ -200,6 +200,12 @@ else
   else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
 fi
 
+# On-ramp scaffold gate: create-limina-app produces a complete, BOOTABLE project — real file tree +
+# prebuilt sample world + a classic-script-safe (import.meta-free) player exposing window.LiminaPlayer.
+# Headless + fast (no GPU), catches the DOA-sample regression. Runs in CI.
+if node tools/create-limina-app/scaffold-gate.mjs >/dev/null 2>&1; then echo "   scaffold-gate (create-limina-app): PASS"
+else echo "   scaffold-gate (create-limina-app): FAIL"; hostfail=1; fi
+
 # Beacon Quest W5 export gate: the painted-world Mode-A export (the /examples deliverable) is real +
 # replay-complete — peek scene replayed, stamped buildings placed, keyframes + asset bundle written,
 # package files parse. HEADLESS (the export needs no GPU), so it runs in CI where the dogfood SKIPs.
