@@ -604,6 +604,35 @@ console.log("river width:");
   const low = Math.round(400 / 4) * 201 + Math.round((-330 + 400) / 4); // near the coast, low ground
   check(`carve: across low ground the flood floor still wins (got ${rh[low].toFixed(1)}m)`, rh[low] <= -0.5);
   check("(falsifiability) an absolute-floor carve would be DETECTED (high-ground channel above sea)", rh[mid] > 0);
+
+  // SWAMP POOLS: a low-lying swamp biome dapples with sub-sea standing-water pools (the marsh
+  // read) — MOTTLED, not flooded; an ELEVATED swamp (on the mountain) gains no hillside ponds.
+  const docSwamp = JSON.stringify({
+    version: 2, activeMapId: "m",
+    maps: [{
+      id: "m", name: "m", scope: "site", parent: null, seaLevel: 0,
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+      features: [
+        { id: "o1", type: "area", kind: "outline", points: [[-350, -350], [350, -350], [350, 350], [-350, 350]] },
+        { id: "sw", type: "area", kind: "biome", biome: "swamp", points: [[-200, -200], [0, -200], [0, 0], [-200, 0]] },
+        { id: "mt", type: "area", kind: "biome", biome: "mountain", points: [[100, 100], [300, 100], [300, 300], [100, 300]] },
+        { id: "sw2", type: "area", kind: "biome", biome: "swamp", points: [[150, 150], [250, 150], [250, 250], [150, 250]] },
+      ],
+    }],
+  });
+  const { worldMap: swMap } = compileDesignMap({ mapsJsonText: docSwamp, worldBibleText: WB_800 });
+  const { heights: sh } = rasterizeWorldMap(swMap, { size: 800, resolution: 201, seed: 7 });
+  const cellAt = (wx, wz) => sh[Math.round((wz + 400) / 4) * 201 + Math.round((wx + 400) / 4)];
+  let pools = 0, dry = 0, hillPools = 0;
+  for (let wz = -195; wz < -5; wz += 4) for (let wx = -195; wx < -5; wx += 4) { if (cellAt(wx, wz) < 0) pools++; else dry++; }
+  for (let wz = 155; wz < 245; wz += 4) for (let wx = 155; wx < 245; wx += 4) { if (cellAt(wx, wz) < 0) hillPools++; }
+  check(`swamp: low swamp dapples with pools (${pools} wet / ${dry} dry cells — mottled)`, pools > 100 && dry > 100);
+  check("swamp: an ELEVATED swamp gains no hillside ponds", hillPools === 0);
+  const noSwamp = { ...swMap, biomes: swMap.biomes.filter((b) => b.biome !== "swamp") };
+  const { heights: nsh } = rasterizeWorldMap(noSwamp, { size: 800, resolution: 201, seed: 7 });
+  let nsPools = 0;
+  for (let wz = -195; wz < -5; wz += 4) for (let wx = -195; wx < -5; wx += 4) { if (nsh[Math.round((wz + 400) / 4) * 201 + Math.round((wx + 400) / 4)] < 0) nsPools++; }
+  check("(falsifiability) un-painting the swamp removes every pool", nsPools === 0);
 }
 
 // ---- 6b. P3: stamps -> asset anchors (schema + hash, three-place rule) --------------------------

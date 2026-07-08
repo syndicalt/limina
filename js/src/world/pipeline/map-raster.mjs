@@ -486,6 +486,35 @@ export function rasterizeWorldMap(worldMap, opts) {
     }
   }
 
+  // ── 4b. SWAMP POOLS (third pass, same one-way-lower pattern as the carve): a swamp that is
+  //    only a murk ground tint reads as dirt, not wetland. Dapple LOW-LYING swamp-biome ground
+  //    with seeded shallow pools the water plane fills — mottled standing water over the murk
+  //    floor is the marsh read. Only near-waterline ground pools (≤ seaLevel+2.5): an ELEVATED
+  //    painted swamp stays a dank ground tint instead of gaining impossible hillside ponds.
+  //    Pool features ~20 m across (fixed 0.05 cycles/m), covering ~1/3 of the low swamp; the
+  //    dip is one-way (Math.min) and runs after the clamp + carve so it never raises ground and
+  //    never fights the lake/sea rules. Pure + seeded (salt 7919) — replay identical.
+  const swampRings = biomes.filter((b) => b.biome === "swamp").map((b) => b.ring);
+  if (swampRings.length > 0) {
+    const poolFloor = seaLevel - 0.7;
+    for (let row = 0; row < n; row++) {
+      const wz = -half + row * step;
+      for (let col = 0; col < n; col++) {
+        const wx = -half + col * step;
+        const i = row * n + col;
+        if (heights[i] <= seaLevel || heights[i] > seaLevel + 2.5) continue;
+        let inSwamp = false;
+        for (const ring of swampRings) { if (pointInRing(wx, wz, ring)) { inSwamp = true; break; } }
+        if (!inSwamp) continue;
+        const pool = fbm(wx * 0.05, wz * 0.05, seed + 7919, 3, 2.0, 0.5);
+        if (pool > 0.12) {
+          const t = smoothstep01((pool - 0.12) / 0.18);
+          heights[i] = Math.min(heights[i], lerp(heights[i], poolFloor, t));
+        }
+      }
+    }
+  }
+
   return {
     heights,
     paintMat,

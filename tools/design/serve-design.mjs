@@ -354,20 +354,25 @@ createServer((req, res) => {
             }
             return inside;
           };
-          const forestDiscs = [];
           const discStep = Math.max(18, Math.round(span * 0.02));
-          for (const b of worldMap.biomes || []) {
-            if (b.biome !== "forest") continue;
-            let bMinX = Infinity, bMaxX = -Infinity, bMinZ = Infinity, bMaxZ = -Infinity;
-            for (const [x, z] of b.points) {
-              if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
-            }
-            for (let z = bMinZ; z <= bMaxZ; z += discStep) {
-              for (let x = bMinX; x <= bMaxX; x += discStep) {
-                if (inRing(x, z, b.points)) forestDiscs.push({ x: Math.round(x), z: Math.round(z), r: Math.round(discStep * 0.72) });
+          const biomeDiscs = (kind) => {
+            const discs = [];
+            for (const b of worldMap.biomes || []) {
+              if (b.biome !== kind) continue;
+              let bMinX = Infinity, bMaxX = -Infinity, bMinZ = Infinity, bMaxZ = -Infinity;
+              for (const [x, z] of b.points) {
+                if (x < bMinX) bMinX = x; if (x > bMaxX) bMaxX = x; if (z < bMinZ) bMinZ = z; if (z > bMaxZ) bMaxZ = z;
+              }
+              for (let z = bMinZ; z <= bMaxZ; z += discStep) {
+                for (let x = bMinX; x <= bMaxX; x += discStep) {
+                  if (inRing(x, z, b.points)) discs.push({ x: Math.round(x), z: Math.round(z), r: Math.round(discStep * 0.72) });
+                }
               }
             }
-          }
+            return discs;
+          };
+          const forestDiscs = biomeDiscs("forest");
+          const swampDiscs = biomeDiscs("swamp");
           const scene = {
             commands: [
               { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
@@ -391,6 +396,13 @@ createServer((req, res) => {
                 // seaLevel+0.8 land floor, then 0.5 vs an authored seaLevel of -11.5.
                 coverage: 0.9, cluster: 0.45, seed: 11, slopeMax: 1.4, sizeRange: [0.95, 1.6],
                 elevationMin: (worldMap.seaLevel ?? 0) + 0.5, inclusions: forestDiscs,
+              } }] : []),
+              // Swamp: SPARSE trees scattered between the standing-water pools the rasterizer
+              // dapples through the biome — sparse stands + mottled water = the marsh read.
+              ...(swampDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
+                species: ["birch", "spruce"], density: Math.min(192, Math.max(32, Math.round(size / 8))),
+                coverage: 0.3, cluster: 0.6, seed: 23, slopeMax: 1.4, sizeRange: [0.7, 1.15],
+                elevationMin: (worldMap.seaLevel ?? 0) + 0.4, inclusions: swampDiscs,
               } }] : []),
               // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
               // reads as a sparkling seam against the void.
