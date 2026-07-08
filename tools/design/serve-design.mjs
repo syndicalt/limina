@@ -405,15 +405,15 @@ createServer((req, res) => {
                   points: w.points, widthM: Math.max(4, (w.widthM || 6) * 1.7), color: 2841970,
                 } })),
             ],
-            // Rotating setpiece: the orbit camera auto-spins (default 0.004 rad/frame ≈ one full
-            // revolution / ~26s) and engine-shots.mjs captures evenly-spaced yaw frames the Atlas
-            // lightbox cycles. 0.62/0.38 span frames the WHOLE island; the explicit far plane +
-            // FogExp2 density scaled 1/distance keep it vivid (transmittance ~0.93 at the center,
-            // far shore dissolving — the house look).
+            // Rotating setpiece: engine-shots.mjs drives the orbit to EXACT yaw angles (i/N x 360°
+            // via the __setYaw hook) so the frame set always closes the full loop — autoSpin is 0,
+            // timing-based capture under-rotated on heavy scenes and the scrub jumped at the seam.
+            // 0.62/0.38 span frames the WHOLE island; the explicit far plane + FogExp2 density
+            // scaled 1/distance keep it vivid (far shore dissolving — the house look).
             camera: {
               center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
               radius: Math.round(span * 0.62), height: Math.round(span * 0.38),
-              far: Math.round(span * 2.5), autoSpin: 0.004,
+              far: Math.round(span * 2.5), autoSpin: 0,
             },
             renderBaseline: {
               exposure: 1.05,
@@ -432,10 +432,10 @@ createServer((req, res) => {
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
           const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
-          // 12 yaw frames × ~2.2s ≈ one full autoSpin revolution — the lightbox cycles them into
-          // a rotating setpiece. engine-shots.mjs shares engine-authored's harness (real GPU).
-          const FRAMES = 12;
-          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "2200", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
+          // 18 yaw frames at exact 20° steps (engine-shots' __setYaw mode — cheap per frame, and
+          // the loop always closes). The Atlas lightbox scrubs them as a turntable.
+          const FRAMES = 18;
+          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
           let errTail = "";
           child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
           child.stdout.on("data", (c) => { errTail = (errTail + c).slice(-800); });

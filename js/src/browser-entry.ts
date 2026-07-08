@@ -1253,6 +1253,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     entities,
     pickEntityId,
     cameraControls,
+    /** Set the orbit camera's azimuth (radians) directly. Lets a shot harness place yaw
+     *  frames at EXACT angles (i/N x 2pi) instead of timing screenshots against the
+     *  frame-rate-dependent autoSpin — wall-clock spacing under-rotates on heavy scenes
+     *  (a 12-shot "revolution" stopped at ~270 deg). Render-side camera state only. */
+    setOrbitAzimuth: (a: number): void => { angle = a; },
     authoringFailures: authoringFailures.length > 0 ? authoringFailures : undefined,
     applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
       const unsupportedStructuralTools: string[] = [];

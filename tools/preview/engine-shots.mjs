@@ -27,13 +27,21 @@ await page.goto(`http://localhost:${port}/tools/preview/engine-authored.html${sc
 try { await page.waitForFunction("window.__done===true", { timeout: 50000 }); } catch { console.error("TIMEOUT (froze?)"); }
 for (const l of await page.evaluate("window.__log||[]")) console.error("LOG: "+l);
 for (const e of await page.evaluate("window.__err||[]")) console.error("ERR: "+e);
-// The orbit camera auto-spins; screenshot at intervals to capture distinct angles.
 const shots = Number(process.argv[2] || 4);
 const gap = Number(process.argv[3] || 7000);
+// EXACT-YAW mode when the page exposes __setYaw (engine-authored.html): place each frame at
+// precisely i/N of a revolution so N shots ALWAYS close the 360° loop — wall-clock spacing
+// against autoSpin under-rotates on heavy scenes (a 12-shot "revolution" stopped at ~270°).
+// Fallback: the legacy timed loop over the auto-spinning orbit.
+const exactYaw = await page.evaluate("typeof window.__setYaw === 'function' && window.__setYaw(0)");
 for (let i = 1; i <= shots; i++) {
+  if (exactYaw) {
+    await page.evaluate(`window.__setYaw(${((i - 1) / shots) * 2 * Math.PI})`);
+    await page.waitForTimeout(400); // a few frames so the moved camera is what's on the canvas
+  }
   const out = join(outDir, `${outPrefix}-${i}.png`);
   await page.locator("#limina-canvas").screenshot({ path: out });
   console.error("wrote "+out);
-  if (i < shots) await page.waitForTimeout(gap);
+  if (!exactYaw && i < shots) await page.waitForTimeout(gap);
 }
 await b.close(); srv.close();

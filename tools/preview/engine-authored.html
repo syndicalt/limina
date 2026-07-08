@@ -50,6 +50,9 @@ try {
     if (running && running.terrainStream) window.__log.push("terrainStream settled: mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending() + " keys=" + running.terrainStream.mounted().slice(0, 12).join(" "));
     if (running && running.grassStream) window.__log.push("grassStream: tiles=" + running.grassStream.tiles() + " blades=" + running.grassStream.blades());
     if (running && running.entityStream) window.__log.push("entityStream: resident=" + running.entityStream.resident() + " dormant=" + running.entityStream.dormant());
+    // Exact-yaw hook for multi-shot drivers (engine-shots.mjs): place the orbit at a precise
+    // azimuth instead of timing screenshots against the frame-rate-dependent autoSpin.
+    window.__setYaw = (a) => { if (running && typeof running.setOrbitAzimuth === "function") { running.setOrbitAzimuth(a); return true; } return false; };
     window.__done = true;
   }
 } catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
