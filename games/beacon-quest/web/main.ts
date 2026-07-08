@@ -17,18 +17,18 @@ const running = await run({
   width: 1280,
   height: 720,
   orbit: {
-    // HERO framing: stand near the camp at eye level and look DOWN the path toward the
-    // beacon (-Z). azimuth=PI/2 puts the camera on +Z of the center looking -Z; a low
-    // height keeps it at ~human eye level so dense foreground reads and the flat ground
-    // edge is below frame + lost in fog.
-    center: [0, 2.4, -5],
-    radius: 15,
-    height: 1.7,
+    // HERO framing for the painted Eastern Watch (~520 m peninsula): an aerial establishing
+    // orbit centred between the warden's camp (-40) and the beacon headland (150), high and
+    // far enough to read the whole quest at a glance — camp, forest ring, the beacon on its
+    // hill, the coast. (The old eye-level radius-15 framing was for the ~60 m beacon_run hub.)
+    center: [55, 0, 0],
+    radius: 330,
+    height: 195,
     azimuth: Math.PI / 2,
     autoSpin: 0,
-    maxRadius: 120,
-    maxHeight: 90,
-    far: 300,
+    maxRadius: 900,
+    maxHeight: 600,
+    far: 1600,
   },
   onStatus: (s, d) => { if (statusEl) statusEl.textContent = d ? `${s} · ${d}` : s; },
 });
@@ -39,9 +39,10 @@ const scene = (running.player as unknown as {
 }).world?.scene;
 if (scene !== undefined) {
   // Exponential distance haze matched to the baseline sky horizon (0xcdd9e6) so the far
-  // scatter + the flat ground edge melt into the sky instead of ending at a hard line.
-  // Tuned to this ~60-unit scene: near hub stays crisp, distance reads as depth.
-  scene.fog = new THREE.FogExp2(0xcdd9e6, 0.024);
+  // shore + the flat ground edge melt into the sky instead of ending at a hard line.
+  // Tuned to the ~520 m painted peninsula: island crisp at the orbit distance, far coast
+  // dissolving (~the peek's 0.5/span aerial-depth knob), not the old 0.024 that milked it.
+  scene.fog = new THREE.FogExp2(0xcdd9e6, 0.0011);
   let nMesh = 0, nLight = 0;
   const apply = (): void => {
     nMesh = 0; nLight = 0;
