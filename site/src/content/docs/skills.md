@@ -3,7 +3,7 @@ title: "Skills reference"
 description: "Every built-in Limina skill — the agent-facing SDK surface — grouped by domain."
 ---
 
-Limina ships **192 typed skills**: the complete set of actions an agent can take in the world. Each skill is **versioned**, declares the **permissions** it needs, and validates its input against a [Zod](https://zod.dev) schema. Every skill maps **1:1 to an MCP tool** whose name is the skill name — so this page is also the MCP tool list.
+Limina ships **230 typed skills** across 51 systems: the complete set of actions an agent can take in the world. Each skill is **versioned**, declares the **permissions** it needs, and validates its input against a [Zod](https://zod.dev) schema. Every skill maps **1:1 to an MCP tool** whose name is the skill name — so this page is also the MCP tool list.
 
 :::tip[For agents]
 The same catalog is available as machine-readable JSON at [`/agents/skills.json`](/agents/skills.json) (names, permissions, and JSON-Schema inputs). See [the MCP interface](/pillars/mcp-interface) for the wire contract and [the registry](/pillars/skill-registry) for the skill model.

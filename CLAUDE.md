@@ -11,7 +11,7 @@ Read this whole file before your first edit. The rules here override your defaul
 | Where | What |
 |---|---|
 | `crates/` | 7 Rust crates (`limina-runtime/-ecs/-render/-physics/-audio/-ops/-sandbox`). `cargo build --release` → `./target/release/limina`. |
-| `js/src/skills/` | The ~85-skill catalog. Every mutation flows through `skills/registry.ts` (`SkillRegistry.invoke`). |
+| `js/src/skills/` | The ~230-skill catalog (51 systems). Every mutation flows through `skills/registry.ts` (`SkillRegistry.invoke`). |
 | `js/src/kernel/` | `applyAuthorCommand` — the ONE apply seam for human/agent/replay commands. |
 | `js/src/worldlog/` | Determinism machinery: seeded RNG, recorder, JSONL log, snapshots, replay. |
 | `js/src/game/` | Game-director pipeline (GDS → plan → coordinator → gate → publish) + direct-path runtime. |
@@ -155,7 +155,7 @@ Each of these has actually happened here. Check this list before acting; if what
 **#12 Fatal hash-mismatch.** `op_sha256` is not byte-identical across the Rust and JS hosts; a `throw` on mismatch quarantined every building ("no structures"). Bit three separate times.
 *Rule: every asset hash-verify site WARNS and continues (`asset.hash_mismatch` event); `assetId` pins identity. Also: a plain `sha256sum` will never match — the engine hashes the hex-encoding of the bytes.*
 
-**#13 The stale-comment path trap.** Blender script headers reference `tools/build/…` — that directory doesn't exist (and `build/` is globally gitignored, so never put scripts there). Scripts live in `tools/blender/`. The README's "8 permission profiles" is stale (15). `shoot.mjs`'s banner mentions swiftshader; the code uses real GPU.
+**#13 The stale-comment path trap.** Blender script headers reference `tools/build/…` — that directory doesn't exist (and `build/` is globally gitignored, so never put scripts there). Scripts live in `tools/blender/`. The README's "8 permission profiles" is stale (14). `shoot.mjs`'s banner mentions swiftshader; the code uses real GPU.
 *Rule: trust code over comments/docs; when they disagree, fix the comment in passing.*
 
 **#14 GPU renders while the editor is live.** Headless Chromium GPU work OOM-crashed the user's editor WebGPU context (small GPUs).

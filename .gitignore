@@ -61,8 +61,15 @@ assets/trees/manifest.json
 
 # Preview render outputs (binary screenshots)
 tools/preview/out/
-/quarantine/*.glb
+/quarantine/*
+!/quarantine/README.md
 /fable-findings.md
+
+# --- Reference imagery + parked subsystems (never commit — CLAUDE.md §3 Filing) ---
+art-direction/library/
+art-direction/kit-evidence/
+art-direction/pg-progress/
+.parked-*/
 
 # Alpha packaging output (tools/package/make-alpha.mjs)
 dist-alpha/
