@@ -360,7 +360,9 @@ function redrawMap(){
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   const compass='<g transform="translate('+(VBW-44)+',44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
-  const elevCursor = (mapTool==="elev"||mapTool==="land"||mapTool==="terrain") ? '<circle id="elev-cursor" r="'+((mapTool==="land"?lmRadius:mapTool==="terrain"?terRadius:elevRadius)*mapScale)+'" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0" style="pointer-events:none"/>' : '';
+  // Bright white dashed ring with a dark drop-shadow casing — a var(--accent) hairline washed
+  // out against sand/grass and the author lost the brush (a real UAT complaint).
+  const elevCursor = (mapTool==="elev"||mapTool==="land"||mapTool==="terrain") ? '<circle id="elev-cursor" r="'+((mapTool==="land"?lmRadius:mapTool==="terrain"?terRadius:elevRadius)*mapScale)+'" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-dasharray="6 5" opacity="0" style="pointer-events:none;filter:drop-shadow(0 0 1.6px rgba(0,0,0,.95)) drop-shadow(0 0 3px rgba(0,0,0,.5))"/>' : '';
   // No visible paint-region chrome: the raster's world rect is INTERNAL bookkeeping (it maps
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
   // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons

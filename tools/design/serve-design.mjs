@@ -384,11 +384,13 @@ createServer((req, res) => {
                 // slopeMax 1.4: painted forest often climbs the mountain flanks — the default
                 // 0.85 slope gate stripped those candidates and left a thin line at the base.
                 species: ["pine", "spruce", "birch"], density: Math.min(192, Math.max(32, Math.round(size / 6))),
-                // elevationMin 0.5, NOT 1.0: un-sculpted land sits at the rasterizer's +0.8m
-                // floor, so a 1.0 floor silently excluded almost the whole painted forest
-                // (155 of 917 trees survived — the "thin line at the mountain base" UAT bug).
+                // The tree floor is RELATIVE TO THE MAP'S SEA LEVEL (its job is keeping trees out
+                // of the water), never an absolute Y: the sea is an Atlas control (map.seaLevel),
+                // and an absolute floor silently culls every tree on land that sits above the
+                // water but below the number. Both forest outages were this bug: 1.0 vs the
+                // seaLevel+0.8 land floor, then 0.5 vs an authored seaLevel of -11.5.
                 coverage: 0.9, cluster: 0.45, seed: 11, slopeMax: 1.4, sizeRange: [0.95, 1.6],
-                elevationMin: 0.5, inclusions: forestDiscs,
+                elevationMin: (worldMap.seaLevel ?? 0) + 0.5, inclusions: forestDiscs,
               } }] : []),
               // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
               // reads as a sparkling seam against the void.
