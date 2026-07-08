@@ -200,6 +200,12 @@ else
   else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
 fi
 
+# Beacon Quest W5 export gate: the painted-world Mode-A export (the /examples deliverable) is real +
+# replay-complete — peek scene replayed, stamped buildings placed, keyframes + asset bundle written,
+# package files parse. HEADLESS (the export needs no GPU), so it runs in CI where the dogfood SKIPs.
+if node games/beacon-quest/export-gate.mjs >/dev/null 2>&1; then echo "   export-gate (beacon painted world): PASS"
+else rc=$?; if [ $rc -eq 2 ]; then echo "   export-gate (beacon painted world): SKIP (no engine binary)"; else echo "   export-gate (beacon painted world): FAIL"; hostfail=1; fi; fi
+
 # DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
 # functional gate → design gate → export → package → render-verified release. Heavy (renders +
 # replays), so it's last and SKIPs without chromium/GPU. This is the end-to-end "the machine works" gate.
