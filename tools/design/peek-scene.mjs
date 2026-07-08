@@ -36,7 +36,16 @@ export function buildPeekScene(worldMap, { project = "project", mapFile }) {
   }
   if (minX === Infinity) { minX = -100; maxX = 100; minZ = -100; maxZ = 100; }
   const span = Math.max(maxX - minX, maxZ - minZ, 100);
-  const size = Math.ceil(span * 1.25 / 50) * 50;
+  // The peek is a single-tile quick-proof, not the streamed/LOD build path. terrain.create
+  // caps `size` at 8192 (js/src/skills/terrain-edit.ts) — beyond that a painted span would
+  // make terrain.create zod-reject and the whole render exit with a blank error instead of a
+  // picture. Clamp to the cap so a very large map still renders (coarser, one tile) rather
+  // than failing opaquely; `clampedToTileCap` lets the caller warn the author that a
+  // >~6.5km painted world exceeds the single-tile peek and wants the streamed build.
+  const TERRAIN_SIZE_CAP = 8192;
+  const rawSize = Math.ceil(span * 1.25 / 50) * 50;
+  const size = Math.min(rawSize, TERRAIN_SIZE_CAP);
+  const clampedToTileCap = rawSize > TERRAIN_SIZE_CAP;
 
   // Confine the peek's forest to the PAINTED forest polygons: disc-cover each polygon on a
   // grid (the vegetation.scatter inclusion gate takes discs) so trees stand where the
@@ -140,5 +149,5 @@ export function buildPeekScene(worldMap, { project = "project", mapFile }) {
       atmosphere: { density: Math.round(0.5 / span * 1e6) / 1e6 },
     },
   };
-  return { scene, sceneName: `peek-${project}-${worldMap.id}`, span };
+  return { scene, sceneName: `peek-${project}-${worldMap.id}`, span, clampedToTileCap };
 }

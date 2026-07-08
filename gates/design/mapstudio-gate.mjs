@@ -825,6 +825,14 @@ console.log("peek scene (painter P5):");
   check("(falsifiability) no stamps -> no asset.place commands", buildPeekScene(pm0, { project: "gate", mapFile: "x" }).scene.commands.every((c) => c.tool !== "asset.place"));
   const { worldMap: pmNf } = compileDesignMap({ mapsJsonText: doc({ noForest: true }), worldBibleText: WB_800 });
   check("(falsifiability) un-painting the forest removes its scatter (swamp's remains)", buildPeekScene(pmNf, { project: "gate", mapFile: "x" }).scene.commands.filter((c) => c.tool === "vegetation.scatter").length === 1);
+
+  // Tile-cap: a huge painted world must still render (clamped, coarse) — never emit a
+  // terrain.create size past the 8192 cap that would zod-reject and blank the whole peek.
+  const bigLand = { ...pm, land: [{ points: [[-4000, -4000], [4000, -4000], [4000, 4000], [-4000, 4000]] }] };
+  const big = buildPeekScene(bigLand, { project: "gate", mapFile: "x" });
+  const bigTerrain = big.scene.commands.find((c) => c.tool === "terrain.create");
+  check("peek: an oversized world clamps terrain size to the 8192 cap (still renders)", bigTerrain.input.size <= 8192 && big.clampedToTileCap === true);
+  check("peek: a normal-sized world is NOT flagged clamped", buildPeekScene(pm, { project: "gate", mapFile: "x" }).clampedToTileCap === false);
 }
 
 if (failures) { console.error(`\nmapstudio-gate: ${failures} FAILURE(S)`); process.exit(1); }

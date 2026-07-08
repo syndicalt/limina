@@ -338,7 +338,7 @@ createServer((req, res) => {
           writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
           // author painted, including stamped asset-anchors, must appear in the peek.
-          const { scene, sceneName } = buildPeekScene(worldMap, { project, mapFile });
+          const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapFile });
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
@@ -364,7 +364,10 @@ createServer((req, res) => {
             s.setTimeout(400, () => { s.destroy(); resolveUp(false); });
           });
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ job: jobId, editorHostUp }));
+          // clampedToTileCap: the painted world is larger than the single-tile peek can show
+          // at full size (>~6.5km span). It still renders (coarser); the client warns that the
+          // full-fidelity view is the streamed build, not the peek.
+          res.end(JSON.stringify({ job: jobId, editorHostUp, clampedToTileCap }));
           return;
         }
         if (req.url === "/api/compile-map") {
