@@ -37,7 +37,14 @@ const session = {
   profile: "builder.readWrite",
   permissions,
 };
-const conn = { connId: 1, session, subscribed: false, closing: false, queuedIntents: 1 };
+const conn = {
+  connId: 1,
+  session,
+  subscribed: false,
+  closing: false,
+  queuedIntents: 1,
+  worldlogCursor: undefined as number | undefined,
+};
 const internals = server as unknown as {
   conns: Map<number, typeof conn>;
   intentQueue: unknown[];
@@ -46,6 +53,15 @@ const internals = server as unknown as {
   durableLogFailure?: Error;
 };
 internals.conns.set(1, conn);
+
+await internals.handleLine(conn, JSON.stringify({
+  jsonrpc: "2.0",
+  id: 0,
+  method: "worldlog/subscribe",
+  params: { since: 0 },
+}));
+transport.sent.length = 0;
+events.length = 0;
 
 const before = server.world.entities.ids().length;
 internals.intentQueue.push({
@@ -73,6 +89,8 @@ try {
   assert(server.appliedIntents === 0, "non-durable intent was counted as durably applied");
   assert(server.world.entities.ids().length === before + 1,
     "test did not reach the adversarial partial-commit state needed to validate poisoning");
+  assert(!transport.sent.some((line) => (JSON.parse(line) as { method?: string }).method === "worldlog/append"),
+    "non-durable command escaped through worldlog/append before the failed flush");
 
   conn.queuedIntents = 1;
   internals.intentQueue.push({

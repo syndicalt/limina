@@ -178,6 +178,7 @@ export class AuthoritativeServer {
   readonly recorder: WorldRecorder;
   private readonly durableLog?: DurableWorldLog;
   private durableLogClosed = false;
+  private durableWorldlogPushPending = false;
   /** First persistence failure. Once set, no further authoritative mutation is
    * accepted or simulated; continuing would extend memory beyond the recoverable
    * durable prefix. Recovery requires a server restart from that prefix. */
@@ -263,7 +264,10 @@ export class AuthoritativeServer {
     // connection as soon as a command FINALIZES, instead of making the live viewport poll
     // worldlog.tail on a timer. Wired unconditionally (cheap no-op with zero subscribers); a
     // connection only starts costing anything here once it calls worldlog/subscribe.
-    this.recorder.onFinalized(() => this.pushWorldlogAppends());
+    this.recorder.onFinalized(() => {
+      if (this.durableLog !== undefined) this.durableWorldlogPushPending = true;
+      else this.pushWorldlogAppends();
+    });
     this.recorder.seed(opts.seed ?? 0x10ca1ed, { forceInstall: this.rehydrated });
     this.recOps = this.recorder.wrapOps(baseOps);
 
@@ -334,6 +338,13 @@ export class AuthoritativeServer {
   /** Total world-log commands recorded so far (seed + physics + skill). */
   get loggedCommands(): number {
     return this.recorder.commandCount;
+  }
+
+  /** Commands readers may observe. A durable server publishes only the prefix
+   * acknowledged by its sink, never the merely finalized in-memory tail. */
+  get publishedWorldlogCommands(): number {
+    const finalized = this.recorder.flushableCount();
+    return this.durableLog === undefined ? finalized : Math.min(finalized, this.durableLog.persisted);
   }
 
   get connectionCount(): number {
@@ -654,7 +665,7 @@ export class AuthoritativeServer {
         const p = asRecord(params);
         const rawSince = p?.since;
         const since = typeof rawSince === "number" && Number.isFinite(rawSince) ? Math.max(0, Math.floor(rawSince)) : 0;
-        const initial = worldlogTail(this.recorder, this.registry, since);
+        const initial = worldlogTail(this.recorder, this.registry, since, this.publishedWorldlogCommands);
         conn.worldlogCursor = initial.next;
         await this.sendSafe(conn.connId, JSON.stringify({
           jsonrpc: "2.0",
@@ -975,6 +986,10 @@ export class AuthoritativeServer {
     if (this.durableLogFailure !== undefined) throw this.durableLogFailure;
     try {
       this.durableLog?.flush();
+      if (this.durableLog !== undefined && this.durableWorldlogPushPending) {
+        this.durableWorldlogPushPending = false;
+        this.pushWorldlogAppends();
+      }
     } catch (err) {
       throw this.poisonDurableLog(err);
     }
@@ -1030,7 +1045,7 @@ export class AuthoritativeServer {
   private pushWorldlogAppends(): void {
     for (const conn of this.conns.values()) {
       if (conn.worldlogCursor === undefined) continue;
-      const tail = worldlogTail(this.recorder, this.registry, conn.worldlogCursor);
+      const tail = worldlogTail(this.recorder, this.registry, conn.worldlogCursor, this.publishedWorldlogCommands);
       if (tail.commands.length === 0 && !tail.reset) continue;
       conn.worldlogCursor = tail.next;
       void this.sendSafe(conn.connId, JSON.stringify({

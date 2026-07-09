@@ -188,7 +188,10 @@ installCottageScenario(server.registry, { world: server.world });
 
 // Expose the recorded AUTHORING command stream so the live viewport (editor/src/viewport.js) can
 // re-author it and render the world as it is built. Read-only; filters to mutating commands.
-registerWorldlogSkills(server.registry, { recorder: server.recorder });
+registerWorldlogSkills(server.registry, {
+  recorder: server.recorder,
+  visibleCount: () => server.publishedWorldlogCommands,
+});
 
 // The asset catalog: asset.catalog (browse, read-only) + catalog.publish (record a newly
 // authored/QC'd entry). Same recorded-state pattern as the terrain/asset skills above — a session

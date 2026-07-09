@@ -66,10 +66,14 @@ export function worldlogTail(
   recorder: WorldRecorder,
   registry: SkillRegistry,
   since: number,
+  visibleCount?: number,
 ): { commands: WorldCommand[]; next: number; reset: boolean } {
   // commandCount includes in-flight async calls. Exposing it would let a client
   // advance past a provisional command that can still fail and be removed.
-  const total = recorder.flushableCount();
+  const finalized = recorder.flushableCount();
+  const total = visibleCount === undefined
+    ? finalized
+    : Math.min(finalized, Number.isSafeInteger(visibleCount) && visibleCount >= 0 ? visibleCount : 0);
   const compacted = recorder.compactedCommandCount;
   // A cursor ahead of the finalized prefix can come from an older buggy server
   // that exposed a provisional command which was later discarded. It cannot be
@@ -84,7 +88,10 @@ export function worldlogTail(
   return { commands, next: total, reset };
 }
 
-export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder: WorldRecorder }): void {
+export function registerWorldlogSkills(
+  registry: SkillRegistry,
+  opts: { recorder: WorldRecorder; visibleCount?: () => number },
+): void {
   const recorder = opts.recorder;
   const tail: SkillDefinition<{ since: number }, { commands: WorldCommand[]; next: number; reset: boolean }> = {
     name: "worldlog.tail",
@@ -95,7 +102,7 @@ export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder
     effect: "read",
     input: z.object({ since: z.number().int().min(0).default(0) }),
     output: z.object({ commands: z.array(z.any()), next: z.number().int(), reset: z.boolean() }),
-    handler: (input) => worldlogTail(recorder, registry, input.since),
+    handler: (input) => worldlogTail(recorder, registry, input.since, opts.visibleCount?.()),
   };
   registry.register(tail);
 }

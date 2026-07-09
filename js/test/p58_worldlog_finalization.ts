@@ -86,6 +86,12 @@ function setup(session: string, first: Deferred, second: Deferred) {
 
   first.resolve({ value: "first" });
   assert((await pendingFirst).success, "first command did not settle successfully");
+  const durabilityBlocked = worldlogTail(recorder, registry, 0, 0);
+  assert(durabilityBlocked.next === 0 && durabilityBlocked.commands.length === 0,
+    "an explicit durable visibility barrier exposed finalized in-memory commands");
+  const firstDurable = worldlogTail(recorder, registry, 0, 1);
+  assert(firstDurable.next === 1 && firstDurable.commands.length === 1,
+    "durable visibility barrier did not expose exactly its acknowledged prefix");
   assert(notifications.join(",") === "1,2", `expected one boundary per newly contiguous command, got ${notifications}`);
   assert(JSON.stringify(batches) === JSON.stringify([["p58.first"], ["p58.second"]]),
     `subscriber batches had a gap or duplicate: ${JSON.stringify(batches)}`);
