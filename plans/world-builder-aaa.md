@@ -250,3 +250,18 @@ near-vertical cliffs before the SDF layer exists.
   compensation and redo records a new reapply transaction. History scrubbing is view-only, browser and
   simulation replay register the same scene plus project-state allowlist, and the scaffold launcher
   rebuilds missing or stale ignored editor bundles on a clean source checkout.
+- **2026-07-09 — Non-destructive terrain edit layers shipped (`d906e0b`).** Versioned, self-hashed base
+  grids and domain topology now compose ordered sparse metre deltas without rewriting the base. Exact
+  refinement/coarsening rebases preserve shared samples and report structured conflicts rather than
+  silently losing detail; a prepared spatial index keeps chunk composition proportional to local
+  deltas. Gates cover negative chunks, seams, tampering, bounds, cancellation, and distant-chunk work.
+- **2026-07-09 — Production Outliner and shared selection shipped (`0dfc394`).** A single selection store
+  now drives Outliner, viewport, and Inspector. The Outliner pages a version-guarded snapshot up to an
+  explicit 20,000-entity cap, repairs cycles/orphans for display, filters with ancestor preservation,
+  and virtualizes fixed-height rows. External selection expands and reveals ancestors without fighting
+  Outliner-origin scrolling; real Chromium desktop/mobile gates rendered 33 rows for 251 entities.
+- **2026-07-09 — Atlas source bridge shipped (`8cfa64b`).** Atlas saves canonical content-addressed
+  MapDoc sources, commits one exact-head `project-state` ref patch, validates the complete durable
+  receipt/head/commit-record chain, and publishes the mutable `maps.json` mirror only afterward.
+  Cross-process locking, stale-workspace CAS, at-most-once transport defaults, bounded frontend retry,
+  and committed-mirror repair are adversarially gated without duplicate commits or revision churn.
