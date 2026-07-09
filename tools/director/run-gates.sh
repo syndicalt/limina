@@ -136,7 +136,15 @@ else rc=$?; if [ $rc -eq 2 ]; then echo "   engine-browser-gate: SKIP (no chromi
 # Editor gates: the DOM binding is display-independent; live/browser tests run against
 # a real editor host and static editor server. Browser tests self-SKIP with exit 2 when
 # playwright/chromium is unavailable, but the headless history data-path test still runs.
-if node editor/test/history_panel.test.mjs >/dev/null 2>&1; then echo "   editor history panel: PASS"; else echo "   editor history panel: FAIL"; hostfail=1; fi
+editor_bundle_ok=0
+if npm --prefix js run bundle:editor --silent >/dev/null 2>&1; then
+  editor_bundle_ok=1
+  echo "   editor bundle: PASS"
+else
+  echo "   editor bundle: FAIL"
+  hostfail=1
+fi
+if [ "$editor_bundle_ok" = 1 ] && node editor/test/history_panel.test.mjs >/dev/null 2>&1; then echo "   editor history panel: PASS"; else echo "   editor history panel: FAIL"; hostfail=1; fi
 if node editor/test/app_event_retention.test.mjs >/dev/null 2>&1; then echo "   editor event retention: PASS"; else echo "   editor event retention: FAIL"; hostfail=1; fi
 if node editor/test/artifacts.test.cjs >/dev/null 2>&1; then echo "   editor artifacts: PASS"; else echo "   editor artifacts: FAIL"; hostfail=1; fi
 editor_host_log="$(mktemp)"
