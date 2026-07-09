@@ -55,6 +55,7 @@ import { registerCombatSkills, type StatsManager, type CombatManager } from "./c
 import { registerBehaviorDialogueSkills, type BehaviorManager, type DialogueManager } from "./behavior.ts";
 import { registerBehaviorSpecSkills, type EventSpecRegistry } from "./behavior-spec.ts";
 import { registerNavmeshSkills, type NavmeshManager } from "./navmesh.ts";
+import { registerNavigationSkills, type GazetteerManager } from "./navigation.ts";
 import { registerVFXSkills, type VFXManager } from "./vfx.ts";
 import { registerSaveSkills, type SaveManager } from "./save.ts";
 import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
@@ -110,6 +111,8 @@ export interface CoreSkills {
   behaviorSpec: { events: EventSpecRegistry };
   /** Phase 12: navigation and pathfinding. */
   nav: { navmeshManager: NavmeshManager };
+  /** Places Stage 4: the runtime named-place index (gazetteer.load + npc.goToPlace). */
+  navigation: { gazetteerManager: GazetteerManager };
   /** Phase 12: visual effects and particles. */
   vfx: { vfxManager: VFXManager };
   /** Phase 12: save, load, checkpoints. */
@@ -288,6 +291,7 @@ export function registerCoreSkills(
   // seam; this is the portable record format the world log / snapshot carry).
   const behaviorSpec = registerBehaviorSpecSkills(registry);
   const nav = registerNavmeshSkills(registry);
+  const navigation = registerNavigationSkills(registry);
   const vfx = registerVFXSkills(registry);
   const save = registerSaveSkills(registry);
   const progression = registerProgressionSkills(registry);
@@ -299,6 +303,6 @@ export function registerCoreSkills(
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
     behaviorSpec,
-    nav, vfx, save, progression, worldstate,
+    nav, navigation, vfx, save, progression, worldstate,
   };
 }

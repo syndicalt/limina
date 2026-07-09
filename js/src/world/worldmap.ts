@@ -29,7 +29,7 @@ export const RELIEF_KINDS = ["mountain", "hills", "plateau", "peak", "depression
 export const BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"] as const;
 export const WATERWAY_CLASSES = ["river", "stream"] as const;
 export const ROUTE_CLASSES = ["road", "trail"] as const;
-export const ANCHOR_SOURCES = ["world-bible", "map"] as const;
+export const ANCHOR_SOURCES = ["world-bible", "map", "places"] as const;
 export const PROVENANCE_TOOLS = ["design-space", "fmg"] as const;
 
 const PointSchema = z.tuple([z.number(), z.number()]);
@@ -107,6 +107,24 @@ const AnchorSchema = z.object({
 // raw "x,y-px" label, human-readable) + its resolved pixel position in the SOURCE export + the
 // crop radius in meters. Present only when the compiled map is a cropped subset of a larger
 // export; optional so whole-map compiles (the common case) are unaffected.
+// GAZETTEER (Places Stage 4): the runtime named-place index NPCs navigate by. Each placed place
+// (a `places.md` node with a map position) compiles to one entry — the SAME [x, z] world-meter
+// convention as every other IR point (y is resolved at runtime from the terrain height; the IR is
+// 2D). parentId preserves the nested-place hierarchy (Nation > Province > City); it may reference an
+// UNPLACED ancestor (which has no gazetteer entry of its own — nothing to navigate to). radiusM is
+// present only for area-bound places (binding:"area"). Additive + optional so every pre-Places map
+// keeps its original bytes/hash (worldmap-hash emits this only-when-present, like reliefGrid).
+// HASH CONTRACT: hashed via an explicit walk in worldmap-hash.mjs — adding a field here without
+// adding it there ships a silently-unhashed field.
+const GazetteerEntrySchema = z.object({
+  placeId: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.string().min(1),
+  parentId: z.string().min(1).nullable(),
+  position: PointSchema,
+  radiusM: z.number().positive().optional(),
+}).strict();
+
 const CropOfSchema = z.object({
   anchor: z.string().min(1),
   anchorPx: PointSchema,
@@ -135,6 +153,8 @@ export const WorldMapSchema = z.object({
   waterways: z.array(WaterwaySchema),
   routes: z.array(RouteSchema),
   anchors: z.array(AnchorSchema),
+  // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
+  gazetteer: z.array(GazetteerEntrySchema).optional(),
   provenance: ProvenanceSchema,
 }).strict();
 
@@ -146,6 +166,7 @@ export type BiomeRegion = z.infer<typeof BiomeRegionSchema>;
 export type Waterway = z.infer<typeof WaterwaySchema>;
 export type Route = z.infer<typeof RouteSchema>;
 export type Anchor = z.infer<typeof AnchorSchema>;
+export type GazetteerEntry = z.infer<typeof GazetteerEntrySchema>;
 export type WorldMapProvenance = z.infer<typeof ProvenanceSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
 

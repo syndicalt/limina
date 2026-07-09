@@ -46,10 +46,14 @@ if (!existsSync(worldBiblePath)) { console.error(`not found: ${worldBiblePath}`)
 
 const mapsJsonText = readFileSync(mapsJsonPath, "utf8");
 const worldBibleText = readFileSync(worldBiblePath, "utf8");
+// Places (Stage 4): thread places.md when the vault carries one, so the compiled asset embeds the
+// gazetteer + place-marker anchors. Optional — a vault without a places doc compiles unchanged.
+const placesPath = join(vaultDir, "places.md");
+const placesText = existsSync(placesPath) ? readFileSync(placesPath, "utf8") : undefined;
 
 let worldMap, warnings;
 try {
-  ({ worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: args.mapId }));
+  ({ worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: args.mapId, placesText }));
 } catch (err) {
   console.error(String(err.message || err));
   process.exit(1);

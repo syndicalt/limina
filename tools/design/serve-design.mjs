@@ -453,7 +453,10 @@ createServer((req, res) => {
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
           const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
-          const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId });
+          // Places (Stage 4): the compiled peek carries the gazetteer + place-marker anchors, so the
+          // author sees placed places in the render (and NPC nav has its index). Absent doc = undefined.
+          const placesTextPeek = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
+          const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextPeek });
           const mapFile = `${project}-${worldMap.id}.worldmap.json`;
           writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
@@ -502,7 +505,9 @@ createServer((req, res) => {
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
           const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
-          const { worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId });
+          // Places (Stage 4): the built map asset embeds the gazetteer + place-marker anchors.
+          const placesTextCompile = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
+          const { worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextCompile });
           const file = `${project}-${worldMap.id}.worldmap.json`;
           writeFileSync(join(LIMINA_HOME, "assets", "maps", file), JSON.stringify(worldMap, null, 2));
           res.writeHead(200, { "content-type": "application/json" });

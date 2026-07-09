@@ -102,6 +102,45 @@ function readLocations(fm) {
   return locations;
 }
 
+// ---- targeted `places.md` frontmatter reader (Places Stage 4). Same self-contained strategy as
+// readLocations above (a plain .mjs cannot import parsePlaces from the .ts module): split the
+// `places:` list on each `  - id:` item and pluck the small subset the compiler emits — id, name,
+// kind, parentId, position, binding, radiusM, assetId. Missing input (no placesText / no places
+// block) yields [] so pre-Places vaults compile byte-identically. ----
+
+function readPlaces(placesText) {
+  if (typeof placesText !== "string" || placesText.length === 0) return [];
+  const fmMatch = placesText.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return [];
+  const block = fmMatch[1].split(/^places:/m)[1];
+  if (!block) return [];
+  const top = block.search(/\n\S/);
+  const scoped = top === -1 ? block : block.slice(0, top);
+  const places = [];
+  for (const chunk of scoped.split(/^  - id:/m).slice(1)) {
+    const id = chunk.split("\n")[0].trim();
+    if (!id) continue;
+    const name = (chunk.match(/\n\s*name:\s*(.+)/) || [])[1]?.trim() || id;
+    const kind = ((chunk.match(/\n\s*kind:\s*(.+)/) || [])[1] || "place").trim();
+    const parentM = chunk.match(/\n\s*parentId:\s*(\S+)/);
+    const posMatch = chunk.match(/\n\s*position:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]/);
+    const bindingM = chunk.match(/\n\s*binding:\s*(\S+)/);
+    const radM = chunk.match(/\n\s*radiusM:\s*(-?\d+(?:\.\d+)?)/);
+    const assetM = chunk.match(/\n\s*assetId:\s*(\S+)/);
+    places.push({
+      id,
+      name,
+      kind,
+      parentId: parentM ? parentM[1].trim() : null,
+      position: posMatch ? [Number(posMatch[1]), Number(posMatch[2])] : undefined,
+      binding: bindingM ? bindingM[1].trim() : undefined,
+      radiusM: radM ? Number(radM[1]) : undefined,
+      assetId: assetM ? assetM[1].trim() : undefined,
+    });
+  }
+  return places;
+}
+
 /**
  * Compile a design-space map + its world-bible into a plain WorldMap-shaped object (matching
  * worldmap.ts's WorldMapSchema — the caller is expected to zod-parse it; this pure function has
@@ -111,9 +150,11 @@ function readLocations(fm) {
  * @param {string} args.mapsJsonText   raw contents of maps.json
  * @param {string} args.worldBibleText raw contents of world-bible.md
  * @param {string} [args.mapId]        map id to compile (default: maps.json's activeMapId)
+ * @param {string} [args.placesText]   raw contents of places.md (Places Stage 4). Absent -> no
+ *                                      gazetteer / no place anchors (pre-Places vaults unchanged).
  * @returns {{ worldMap: object, warnings: string[] }}
  */
-export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
+export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesText }) {
   const warnings = [];
   const mapsDoc = JSON.parse(mapsJsonText);
   const targetId = mapId || mapsDoc.activeMapId;
@@ -306,7 +347,31 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     });
   }
 
-  const sourceHash = sha256(mapsJsonText + " " + worldBibleText);
+  // PLACES (Stage 4): the gazetteer (the runtime named-place index NPCs navigate by) + place-marker
+  // anchors. A places.md node WITH a map position compiles to one gazetteer entry. A placed place
+  // that also names a marker asset (assetId — the retired world-bible location's asset/anchor role,
+  // folded into a place by the convergence) ALSO compiles to an "asset" anchor, so it spawns its GLB
+  // through the SAME steering path as an Atlas stamp (never a raw asset.place). Unplaced places (no
+  // position — a not-yet-sited landmark, or an ancestor like a Nation) are hierarchy-only: no
+  // gazetteer entry (nothing to navigate to), no anchor. Emitted in source order (deterministic).
+  const gazetteer = [];
+  const anchorIds = new Set(anchors.map((a) => a.id));
+  for (const p of readPlaces(placesText)) {
+    if (!p.position) continue;
+    const entry = { placeId: p.id, name: p.name, kind: p.kind, parentId: p.parentId, position: p.position };
+    if (p.binding === "area" && typeof p.radiusM === "number") entry.radiusM = p.radiusM;
+    gazetteer.push(entry);
+    if (p.assetId) {
+      if (anchorIds.has(p.id)) {
+        warnings.push(`place "${p.id}" shares an id with an existing anchor — its marker-asset anchor was skipped`);
+      } else {
+        anchors.push({ id: p.id, kind: "asset", position: p.position, assetId: p.assetId, source: "places" });
+        anchorIds.add(p.id);
+      }
+    }
+  }
+
+  const sourceHash = sha256(mapsJsonText + " " + worldBibleText + (typeof placesText === "string" ? "\u0000" + placesText : ""));
 
   const worldMap = {
     version: 1,
@@ -331,6 +396,8 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId }) {
     waterways,
     routes,
     anchors,
+    // Emitted only when the vault has placed places, so pre-Places maps keep their bytes/hash.
+    ...(gazetteer.length > 0 ? { gazetteer } : {}),
     provenance: {
       tool: "design-space",
       sourceHash,

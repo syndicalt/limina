@@ -75,6 +75,12 @@ function anchor(a) {
   return out;
 }
 
+function gazetteerEntry(g) {
+  const out = { placeId: g.placeId, name: g.name, kind: g.kind, parentId: g.parentId === undefined ? null : g.parentId, position: point(g.position) };
+  if (g.radiusM !== undefined) out.radiusM = g.radiusM;
+  return out;
+}
+
 function provenance(p, omitContentHash) {
   const out = { tool: p.tool };
   if (p.sourceHash !== undefined) out.sourceHash = p.sourceHash;
@@ -108,6 +114,9 @@ export function stableStringifyWorldMap(map, opts = {}) {
     waterways: map.waterways.map(waterway),
     routes: map.routes.map(route),
     anchors: map.anchors.map(anchor),
+    // Optional additive field: emitted ONLY when present, so every pre-Places map hashes
+    // byte-identically (mirrors reliefGrid above).
+    ...(map.gazetteer !== undefined ? { gazetteer: map.gazetteer.map(gazetteerEntry) } : {}),
     provenance: provenance(map.provenance, omitContentHash),
   };
   return JSON.stringify(canonical);
