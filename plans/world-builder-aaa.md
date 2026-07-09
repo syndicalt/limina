@@ -208,3 +208,15 @@ near-vertical cliffs before the SDF layer exists.
 - **2026-07-09 — M0 code baseline accepted (`69c2931`).** Repair work preserved externally, partitioned
   into coherent commits, contaminated root assets excluded, clean release suite green (266 JS tests,
   all Rust tests, all headless host gates), and tagged `studio-foundation-m0-baseline-20260709`.
+- **2026-07-09 — M1 transaction authority shipped (`719d8d9`..`f71ed9e`).** One WorldLog-backed
+  project transaction kernel now provides exact-base commits, idempotent transaction IDs, compact
+  replay proofs, guarded compensation, version-pinned scene adapters, linearizable reads, strict
+  project identity, crash-before-ack durability, and server-wide fail-stop behavior after persistence
+  or rollback failure. Editor chat tools now cross the same authoritative FIFO and fsync boundary.
+  Adversarial gates cover restart replay, two-writer conflicts, wrong-project isolation, adapter drift,
+  partial-operation visibility, poisoned batches, and durable publication order.
+- **2026-07-09 — Slice 0.2 shipped (`386b3cd`, `b7012c6`).** Atlas authors explicit little-endian u16
+  elevation over -500..9000m. Legacy u8 documents expand exactly and remain byte-identical until an
+  actual edit migrates them. Brush/undo/growth/import/compiler paths retain u16 precision; malformed,
+  oversized, non-canonical, and out-of-range payloads fail closed. Map Studio, u16, WorldMap compile,
+  type, project-identity, and scaffold gates are green.
