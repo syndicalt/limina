@@ -30,6 +30,8 @@
 // dirt/rock deeper) so no tile cell is left with paintW===0 (which would fall back to a bare
 // checker material).
 
+import { bakeMasterErosion, NO_EROSION_RECIPE } from "./erosion.mjs";
+
 // ── deterministic value noise + fBm (verbatim technique from terrain-heightfield.mjs, kept
 // local to this module so map-raster.mjs has zero cross-file coupling with the procedural
 // generator — the two sources are independent, swappable pipelines over the same tile shape). ─
@@ -292,8 +294,10 @@ function biomePaintId(biome) {
  * every host.
  *
  * @param {import("../worldmap.ts").WorldMap} worldMap
- * @param {{ size: number, resolution: number, seed?: number, noiseFrac?: number, baseAmplitude?: number }} opts
+ * @param {{ size: number, resolution: number, seed?: number, noiseFrac?: number, baseAmplitude?: number,
+ *           erosion?: object, shouldCancel?: () => boolean }} opts
  * @returns {{ heights: Float32Array, paintMat: Uint8Array, paintW: Float32Array, seaLevelM: number,
+ *             erosion: object, erosionPasses: number,
  *             cfg: { seaLevelM: number, amplitude: number, noiseFrac: number, size: number, resolution: number, seed: number } }}
  */
 export function rasterizeWorldMap(worldMap, opts) {
@@ -500,7 +504,20 @@ export function rasterizeWorldMap(worldMap, opts) {
     }
   }
 
-  // ── 4. Waterway carve (second pass: pulls the surface DOWN toward a shallow channel floor
+  // ── 4. CANONICAL MASTER EROSION. This runs exactly once over the complete bounded
+  // base field, before waterways/swamp pools (hydrology) and before any future edit
+  // layers. Downstream chunking must slice this baked array, never erode per chunk.
+  // Disabled mode returns the original Float32Array untouched for byte compatibility.
+  const erosionBake = bakeMasterErosion({
+    heights,
+    rows: n,
+    cols: n,
+    seed,
+    recipe: opts.erosion ?? NO_EROSION_RECIPE,
+  }, { shouldCancel: opts.shouldCancel });
+  if (erosionBake.erosionPasses === 1) heights.set(erosionBake.heights);
+
+  // ── 5. Waterway carve (second pass: pulls the surface DOWN toward a shallow channel floor
   //    along each polyline so rivers read as WATER CHANNELS the water plane visibly fills, not
   //    craters — a fixed subtract-with-floor previously dug to seaLevel-3, rendering as a dark
   //    pit wherever the local terrain was already low, e.g. near a river mouth at the coast).
@@ -539,7 +556,7 @@ export function rasterizeWorldMap(worldMap, opts) {
     }
   }
 
-  // ── 4b. SWAMP POOLS (third pass, same one-way-lower pattern as the carve): a swamp that is
+  // ── 5b. SWAMP POOLS (third pass, same one-way-lower pattern as the carve): a swamp that is
   //    only a murk ground tint reads as dirt, not wetland. Dapple LOW-LYING swamp-biome ground
   //    with seeded shallow pools the water plane fills — mottled standing water over the murk
   //    floor is the marsh read. Only near-waterline ground pools (≤ seaLevel+2.5): an ELEVATED
@@ -574,6 +591,8 @@ export function rasterizeWorldMap(worldMap, opts) {
     paintW,
     blight,
     seaLevelM: seaLevel,
+    erosion: erosionBake.recipe,
+    erosionPasses: erosionBake.erosionPasses,
     cfg: { seaLevelM: seaLevel, amplitude: baseAmplitude, noiseFrac, size, resolution: n, seed },
   };
 }

@@ -19,6 +19,7 @@ import { buildBlightMist } from "../mist.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
+import { MapErosionRecipeSchema } from "../world/pipeline/erosion-schema.ts";
 import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
@@ -32,6 +33,16 @@ export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
+
+const ProceduralErosionOverridesSchema = z.object({
+  rain: z.number().min(0).optional(),
+  thermal: z.number().int().min(0).optional(),
+  talus: z.number().min(0).optional(),
+}).strict();
+const ErosionInputSchema = z.union([
+  ProceduralErosionOverridesSchema,
+  MapErosionRecipeSchema,
+]);
 
 const createInput = z.object({
   /** Square terrain extent in world meters. */
@@ -65,12 +76,8 @@ const createInput = z.object({
     gain: z.number().positive().optional(),
     /** Domain-warp strength (meanders the ridgelines). */
     warp: z.number().min(0).optional(),
-    /** Erosion recipe overrides (rain droplets / thermal passes / talus angle). */
-    erosion: z.object({
-      rain: z.number().min(0).optional(),
-      thermal: z.number().int().min(0).optional(),
-      talus: z.number().min(0).optional(),
-    }).optional(),
+    /** Procedural overrides, or the strict versioned recipe used by map master bakes. */
+    erosion: ErosionInputSchema.optional(),
     /**
      * Generation SOURCE. "procedural" (default): the eroded-heightfield generator above.
      * "map": rasterize a COMMITTED WorldMap IR (js/src/world/worldmap.ts) into the tile instead
@@ -287,7 +294,13 @@ export function registerTerrainEditSkills(
           throw new Error(`terrain.create: map asset '${g.mapAssetId}' identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this terrain was authored`);
         }
         mapHash = worldMap.provenance.contentHash;
-        const raster = rasterizeWorldMap(worldMap, { size: input.size, resolution: n, seed: g.seed, baseAmplitude: g.amplitude }) as {
+        const raster = rasterizeWorldMap(worldMap, {
+          size: input.size,
+          resolution: n,
+          seed: g.seed,
+          baseAmplitude: g.amplitude,
+          ...(g.erosion !== undefined ? { erosion: g.erosion } : {}),
+        }) as {
           heights: Float32Array;
           paintMat: Uint8Array;
           paintW: Float32Array;
@@ -302,6 +315,9 @@ export function registerTerrainEditSkills(
         elevationColors = { seaLevel: input.origin[1] + raster.seaLevelM, amplitude: raster.cfg.amplitude, snowFrac: 1.0 };
       } else if (input.generate !== undefined) {
         const g = input.generate;
+        if (g.erosion !== undefined && "schema" in g.erosion) {
+          throw new Error("terrain.create: versioned map erosion recipes require generate.source 'map'");
+        }
         const gh = generateHeightfield({
           seed: g.seed,
           amplitude: g.amplitude,

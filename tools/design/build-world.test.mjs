@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planWorldBuild } from "./build-world.mjs";
+import { EROSION_RECIPE_SCHEMA, NO_EROSION_RECIPE } from "../../js/src/world/pipeline/erosion.mjs";
 
 function assert(condition, message) {
   if (!condition) throw new Error(`build-world.test: ${message}`);
@@ -25,6 +26,33 @@ try {
   assert(plan.commands.some((command) => command.tool === "world.addRiver"), "waterways must produce river commands");
   assert(plan.commands.some((command) => command.tool === "asset.place"), "asset anchors must produce placements");
   assert(!JSON.stringify(plan).includes("Eastern Watch"), "general builder must not contain project-specific content");
+  const terrain = plan.commands.find((command) => command.tool === "terrain.create");
+  assert(terrain.input.generate.erosion.schema === EROSION_RECIPE_SCHEMA && terrain.input.generate.erosion.enabled === true,
+    "world build must record the canonical versioned erosion recipe");
+
+  const compatible = planWorldBuild({
+    projectRoot: root,
+    worldMap,
+    mapAssetId: "maps/primary/hash.worldmap.json",
+    seed: 17,
+    erosionRecipe: NO_EROSION_RECIPE,
+  });
+  const compatibleTerrain = compatible.commands.find((command) => command.tool === "terrain.create");
+  assert(JSON.stringify(compatibleTerrain.input.generate.erosion) === JSON.stringify(NO_EROSION_RECIPE),
+    "disabled build mode must record the exact compatibility recipe");
+
+  let malformedRecipeRejected = false;
+  try {
+    planWorldBuild({
+      projectRoot: root,
+      worldMap,
+      mapAssetId: "maps/primary/hash.worldmap.json",
+      erosionRecipe: { ...NO_EROSION_RECIPE, rain: 1 },
+    });
+  } catch (error) {
+    malformedRecipeRejected = String(error).includes("requires exactly");
+  }
+  assert(malformedRecipeRejected, "world builder accepted a malformed erosion recipe");
 
   const escaped = structuredClone(worldMap);
   escaped.anchors[0].assetId = "../outside.glb";

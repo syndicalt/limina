@@ -26,10 +26,10 @@
 // MAX_MASTER_RES and coarsen the step proportionally; masterTopologyHash makes that exact
 // sampling topology explicit instead of letting two differently-coarsened fields alias.
 //
-// DETERMINISM: rasterizeWorldMap is a pure function of (worldMap, params) and every parameter
-// here is a fixed constant of the IR itself, so the same verified IR always builds the same
-// master field, and the same TileRequest always samples byte-identical tiles — the source is
-// reconstructed FROM the recorded world.setTerrainSource command on replay (never out-of-band).
+// DETERMINISM: rasterizeWorldMap is a pure function of (worldMap, recorded seed/amplitude/erosion
+// recipe). The master field, including erosion, is built ONCE in this constructor; generateTile
+// only slices/samples it, so no HTTP request, authoritative tick, or tile request runs erosion.
+// Replay reconstructs the source FROM the recorded world.setTerrainSource command.
 //
 // CACHE EXEMPTION (`derived: true`): map tiles re-derive deterministically from the IR asset
 // the log pins, so TileCache.resolve keeps them TRANSIENT (LRU) instead of export-retained —
@@ -42,6 +42,8 @@ import {
 } from "./types.ts";
 import { TILE_RES, TILE_SIZE } from "./procedural.ts";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
+import { NO_EROSION_RECIPE, validateErosionRecipe } from "../world/pipeline/erosion.mjs";
+import type { MapErosionRecipe } from "../world/pipeline/erosion-schema.ts";
 import type { WorldMap } from "../world/worldmap.ts";
 import {
   createTerrainGridSpec,
@@ -103,9 +105,12 @@ export interface MapTerrainSourceOptions {
   worldMap: WorldMap;
   /** Provenance name recorded in the log/events. */
   name?: string;
-  /** Rasterizer noise seed. FIXED default (1): world.setTerrainSource records only
-   *  {mapAssetId, hash}, so replay must reconstruct the identical field without it. */
+  /** Recorded rasterizer noise seed. Omitted legacy commands use the historical default 1. */
   seed?: number;
+  /** Absolute-meter relief amplitude used by the WorldMap rasterizer. */
+  baseAmplitude?: number;
+  /** Recorded master-bake recipe. Omission is legacy disabled compatibility. */
+  erosionRecipe?: MapErosionRecipe;
   /** Stable coordinate-frame identity. It must not include a source revision. */
   gridId?: string;
 }
@@ -131,6 +136,7 @@ export class MapTerrainSource implements TerrainSource {
   /** Exact identity of the bounded master sampling topology. A map expansion that
    * triggers global coarsening changes this hash instead of silently aliasing it. */
   readonly masterTopologyHash: string;
+  readonly erosionRecipe: MapErosionRecipe;
 
   private readonly half: number;
   /** Row-major master heights in WORLD METERS (row → z, col → x, both ascending). */
@@ -145,6 +151,11 @@ export class MapTerrainSource implements TerrainSource {
   constructor(opts: MapTerrainSourceOptions) {
     const map = opts.worldMap;
     const seed = validateTerrainSeed(opts.seed ?? 1);
+    const baseAmplitude = opts.baseAmplitude ?? 12;
+    if (!Number.isFinite(baseAmplitude) || baseAmplitude <= 0) {
+      throw new Error("map terrain baseAmplitude must be a positive finite number");
+    }
+    this.erosionRecipe = validateErosionRecipe(opts.erosionRecipe ?? NO_EROSION_RECIPE) as MapErosionRecipe;
     this.name = opts.name ?? "map";
     this.seaLevelM = map.seaLevel;
     this.outsideH = map.seaLevel - DEEP_SEA_DROP;
@@ -177,7 +188,13 @@ export class MapTerrainSource implements TerrainSource {
     });
 
     // ── Rasterize ONCE (pure; fixed params ⇒ replay-identical). ─────────────────────
-    const raster = rasterizeWorldMap(map, { size, resolution: res, seed }) as {
+    const raster = rasterizeWorldMap(map, {
+      size,
+      resolution: res,
+      seed,
+      baseAmplitude,
+      erosion: this.erosionRecipe,
+    }) as {
       heights: Float32Array; paintMat: Uint8Array; paintW: Float32Array; seaLevelM: number;
     };
     this.heightsM = raster.heights;

@@ -25,6 +25,8 @@ import type { Transformable } from "../ecs/world.ts";
 import type { TerrainSource, TerrainTile, TileRequest } from "../terrain/types.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "../terrain/procedural.ts";
 import { MapTerrainSource } from "../terrain/map-source.ts";
+import { MapErosionRecipeSchema } from "../world/pipeline/erosion-schema.ts";
+import { NO_EROSION_RECIPE } from "../world/pipeline/erosion.mjs";
 import { SwappableTerrainSource } from "../terrain/swappable.ts";
 import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
@@ -415,6 +417,13 @@ export function registerTerrainSkills(
      *  output.hash, then committed into the recorded command); present on replay,
      *  where a mismatch against the resolved IR THROWS (identity pin). */
     hash: z.string().optional(),
+    /** Map raster seed. Omitted legacy commands replay with seed 1. */
+    seed: z.number().int().min(-2147483648).max(2147483647).optional(),
+    /** Absolute-meter relief amplitude. Omitted legacy commands replay with 12m. */
+    baseAmplitude: z.number().finite().positive().optional(),
+    /** Versioned authoring-time master erosion. Omission means strict disabled
+     * compatibility, preserving every pre-erosion streamed world. */
+    erosion: MapErosionRecipeSchema.optional(),
   });
   const setTerrainSourceOutput = z.object({
     kind: z.enum(["procedural", "map"]),
@@ -424,7 +433,7 @@ export function registerTerrainSkills(
   const setTerrainSource: SkillDefinition<z.infer<typeof setTerrainSourceInput>, z.infer<typeof setTerrainSourceOutput>> = {
     name: "world.setTerrainSource",
     version: "1.0.0",
-    description: "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset (content-hash pinned, THROWS on tamper/identity mismatch) and rebinds world.generateRegion/world.streamFollow/asset.scatter/water to a MapTerrainSource derived from it; kind 'procedural' restores the default generator. RECORDED — replay reconstructs the source from this command. Must run BEFORE any world.generateRegion (rejects once regions exist). Map tiles re-derive from the IR, so they are never export-retained (the export ships the IR asset, not tiles).",
+    description: "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset and records its raster seed, amplitude, and optional versioned master-erosion recipe; omission preserves legacy no-erosion bytes. Replay reconstructs the same once-baked MapTerrainSource. kind 'procedural' restores the default generator. Must run BEFORE any world.generateRegion. Map tiles sample the baked master and are never export-retained.",
     category: "world",
     permissions: ["scene.write"],
     // Pin the AUTHORED map identity into the replay log (mirrors terrain.create's mapHash).
@@ -439,6 +448,9 @@ export function registerTerrainSkills(
         throw new Error("world.setTerrainSource: terrain regions already exist in this session — reset the world, or set the terrain source BEFORE world.generateRegion (rebinding mid-session would mix sources under the same tile-cache keys)");
       }
       if (input.kind === "procedural") {
+        if (input.seed !== undefined || input.baseAmplitude !== undefined || input.erosion !== undefined) {
+          throw new Error("world.setTerrainSource: seed, baseAmplitude, and erosion are map-only inputs");
+        }
         source.swap(new ProceduralTerrainSource());
         ctx.emit("terrain.source_changed", { kind: "procedural", source: source.name });
         return { kind: "procedural" as const, source: source.name };
@@ -469,8 +481,21 @@ export function registerTerrainSkills(
         throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this world was authored`);
       }
       const hash = worldMap.provenance.contentHash;
-      source.swap(new MapTerrainSource({ worldMap }));
-      ctx.emit("terrain.source_changed", { kind: "map", source: source.name, mapAssetId: input.mapAssetId, hash });
+      source.swap(new MapTerrainSource({
+        worldMap,
+        ...(input.seed !== undefined ? { seed: input.seed } : {}),
+        ...(input.baseAmplitude !== undefined ? { baseAmplitude: input.baseAmplitude } : {}),
+        ...(input.erosion !== undefined ? { erosionRecipe: input.erosion } : {}),
+      }));
+      ctx.emit("terrain.source_changed", {
+        kind: "map",
+        source: source.name,
+        mapAssetId: input.mapAssetId,
+        hash,
+        seed: input.seed ?? 1,
+        baseAmplitude: input.baseAmplitude ?? 12,
+        erosion: input.erosion ?? NO_EROSION_RECIPE,
+      });
       return { kind: "map" as const, source: source.name, hash };
     },
   };

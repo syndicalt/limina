@@ -6,6 +6,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compileDesignMap } from "../../js/src/world/design-map-compile.mjs";
+import {
+  DEFAULT_MAP_EROSION_RECIPE,
+  NO_EROSION_RECIPE,
+  validateErosionRecipe,
+} from "../../js/src/world/pipeline/erosion.mjs";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 
 function projectRootForVault(vaultDir) {
@@ -120,7 +125,17 @@ function vegetationInput(projectRoot, worldMap, terrainRef, span, seed, exclusio
     inclusions: forest, exclusions };
 }
 
-export function planWorldBuild({ projectRoot, worldMap, mapAssetId, seed = 11 }) {
+export function planWorldBuild({
+  projectRoot,
+  worldMap,
+  mapAssetId,
+  seed = 11,
+  erosionRecipe = DEFAULT_MAP_EROSION_RECIPE,
+}) {
+  if (!Number.isSafeInteger(seed) || seed < -2147483648 || seed > 2147483647) {
+    throw new Error(`world build seed must be a signed 32-bit integer, got ${seed}`);
+  }
+  const erosion = validateErosionRecipe(erosionRecipe);
   const bounds = mapBounds(worldMap);
   const span = Math.max(bounds.width, bounds.height, 100);
   const size = Math.ceil((span * 1.25) / 50) * 50;
@@ -131,7 +146,13 @@ export function planWorldBuild({ projectRoot, worldMap, mapAssetId, seed = 11 })
   const terrainRef = "$terrain";
   const commands = [
     { tool: "terrain.create", input: { size, resolution, origin: center, color: 0x5a713a,
-      generate: { source: "map", mapAssetId, seed, amplitude: Math.max(12, Math.round(span * 0.03)) } }, capture: "terrain" },
+      generate: {
+        source: "map",
+        mapAssetId,
+        seed,
+        amplitude: Math.max(12, Math.round(span * 0.03)),
+        erosion,
+      } }, capture: "terrain" },
     { tool: "world.addWater", input: { terrainEntity: terrainRef, level: worldMap.seaLevel ?? 0, size: Math.round(size * 4), color: 0x2b5d72 } },
     { tool: "gazetteer.load", input: { mapAssetId } },
   ];
@@ -223,8 +244,15 @@ async function main() {
   const project = projectConfig.projectId;
   for (const warning of compiled.warnings) console.warn(`warning: ${warning}`);
   const seed = Number(process.env.LIMINA_BUILD_SEED ?? 11);
-  if (!Number.isSafeInteger(seed)) throw new Error(`LIMINA_BUILD_SEED must be a safe integer, got ${process.env.LIMINA_BUILD_SEED}`);
-  const plan = planWorldBuild({ ...compiled, seed });
+  if (!Number.isSafeInteger(seed) || seed < -2147483648 || seed > 2147483647) {
+    throw new Error(`LIMINA_BUILD_SEED must be a signed 32-bit integer, got ${process.env.LIMINA_BUILD_SEED}`);
+  }
+  const erosionMode = process.env.LIMINA_BUILD_EROSION ?? "canonical";
+  if (erosionMode !== "canonical" && erosionMode !== "disabled") {
+    throw new Error(`LIMINA_BUILD_EROSION must be 'canonical' or 'disabled', got '${erosionMode}'`);
+  }
+  const erosionRecipe = erosionMode === "disabled" ? NO_EROSION_RECIPE : DEFAULT_MAP_EROSION_RECIPE;
+  const plan = planWorldBuild({ ...compiled, seed, erosionRecipe });
   console.log(`compiled ${compiled.mapAssetId} (${plan.size}m terrain, ${plan.commands.length} commands)`);
   await authorPlan({ url: process.env.LIMINA_EDITOR_URL || "ws://localhost:8787/", token, project, plan });
   console.log(`built ${project} from ${compiled.mapAssetId}`);
