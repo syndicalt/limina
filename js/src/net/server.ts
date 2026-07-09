@@ -178,6 +178,10 @@ export class AuthoritativeServer {
   readonly recorder: WorldRecorder;
   private readonly durableLog?: DurableWorldLog;
   private durableLogClosed = false;
+  /** First persistence failure. Once set, no further authoritative mutation is
+   * accepted or simulated; continuing would extend memory beyond the recoverable
+   * durable prefix. Recovery requires a server restart from that prefix. */
+  private durableLogFailure?: Error;
   private readonly recOps: EngineOps;
   private readonly transport: NetServerTransport;
   private readonly tickMs: number;
@@ -569,6 +573,14 @@ export class AuthoritativeServer {
         // write, so an omitted annotation can only lose concurrency, not authority.
         const def = this.registry.describe(p.name);
         if (def !== undefined && skillEffect(def) === "read") {
+          if (this.durableLogFailure !== undefined) {
+            await this.reply(conn.connId, this.error(
+              id,
+              JSON_RPC_ERRORS.internalError,
+              "Authoritative state is unavailable after a persistence failure; restart is required",
+            ));
+            return;
+          }
           const result = await this.registry.invoke(p.name, args, {
             agentId: conn.session.agentId,
             sessionId: conn.session.sessionId,
@@ -584,6 +596,14 @@ export class AuthoritativeServer {
           }
           return;
         }
+        if (this.durableLogFailure !== undefined) {
+          await this.reply(conn.connId, this.error(
+            id,
+            JSON_RPC_ERRORS.internalError,
+            "Authoritative persistence is unavailable; mutating intents are disabled until restart",
+          ));
+          return;
+        }
         // INTENT: queue for application at the next tick boundary (one total
         // order). NOTE: the payload's `context`, if any, is IGNORED -- attribution
         // comes from conn.session only.
@@ -597,6 +617,14 @@ export class AuthoritativeServer {
         return;
       }
       case SYNC_METHODS.subscribe: {
+        if (this.durableLogFailure !== undefined) {
+          await this.reply(conn.connId, this.error(
+            id,
+            JSON_RPC_ERRORS.internalError,
+            "Authoritative state is unavailable after a persistence failure; restart is required",
+          ));
+          return;
+        }
         const p = asRecord(params);
         conn.aoi = parseAoi(p?.aoi);
         conn.subscribed = true;
@@ -610,6 +638,14 @@ export class AuthoritativeServer {
         return;
       }
       case WORLDLOG_METHODS.subscribe: {
+        if (this.durableLogFailure !== undefined) {
+          await this.reply(conn.connId, this.error(
+            id,
+            JSON_RPC_ERRORS.internalError,
+            "Authoritative state is unavailable after a persistence failure; restart is required",
+          ));
+          return;
+        }
         // K4: mirrors the state/subscribe pattern above -- push the join batch BEFORE the ack, so
         // a client that only ever reacts to worldlog/append (no separate initial poll) still gets
         // the tail from `since` immediately. worldlogTail is the SAME helper worldlog.tail (the
@@ -629,6 +665,14 @@ export class AuthoritativeServer {
         return;
       }
       case SYNC_METHODS.declareAoi: {
+        if (this.durableLogFailure !== undefined) {
+          await this.reply(conn.connId, this.error(
+            id,
+            JSON_RPC_ERRORS.internalError,
+            "Authoritative state is unavailable after a persistence failure; restart is required",
+          ));
+          return;
+        }
         const aoi = parseAoi(params);
         const prevAoi = conn.aoi;
         conn.aoi = aoi;
@@ -705,6 +749,25 @@ export class AuthoritativeServer {
 
   private async doTick(): Promise<void> {
     await this.ready;
+    if (this.durableLogFailure !== undefined) {
+      // Calls queued before the writer failed must be failed explicitly. Never
+      // invoke them against a world that can no longer be durably advanced.
+      const poisoned = this.intentQueue.splice(0, MAX_INTENTS_PER_TICK);
+      const rejects: Promise<void>[] = [];
+      for (const it of poisoned) {
+        const source = this.conns.get(it.connId);
+        if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
+        if (it.reqId !== undefined) {
+          rejects.push(this.sendSafe(it.connId, this.error(
+            it.reqId ?? null,
+            JSON_RPC_ERRORS.internalError,
+            "Authoritative persistence is unavailable; mutating intents are disabled until restart",
+          )));
+        }
+      }
+      if (rejects.length > 0) await Promise.allSettled(rejects);
+      return;
+    }
     // An authoritative world with no participants and no pending input has
     // nothing to advance -- skip the step (and its world-log entry) so an idle
     // server does not accumulate state unbounded.
@@ -721,7 +784,7 @@ export class AuthoritativeServer {
     // CONCURRENTLY: a slow/backpressured client must not serial-stall the tick (and
     // thereby delay every other client's intents this tick). Each send is
     // independently bounded by NET_SEND_TIMEOUT; we await them all after applying.
-    const replySends: Promise<void>[] = [];
+    const outcomes: Array<{ intent: QueuedIntent; result: MCPResponse }> = [];
     for (const it of queue) {
       const source = this.conns.get(it.connId);
       if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
@@ -733,21 +796,45 @@ export class AuthoritativeServer {
         tick: this.tick,
         world: this.world,
       });
-      if (it.reqId !== undefined) {
-        const line = (!result.success && result.error !== undefined)
-          ? this.error(it.reqId ?? null, mcpErrorToJsonRpc(result.error.code), result.error.message, result)
-          : this.success(it.reqId ?? null, result);
-        replySends.push(this.sendSafe(it.connId, line));
-      }
-      if (result.success) causedBy.push(this.intentSeq++);
+      outcomes.push({ intent: it, result });
     }
-    if (replySends.length > 0) await Promise.allSettled(replySends);
 
     // 2. Advance the authoritative sim one fixed step (recorded), then sync
     //    native body transforms into ECS storage (the per-tick engine rule).
     this.recOps.op_physics_step();
-    this.flushDurableLog();
+    let persistenceFailure: Error | undefined;
+    try {
+      // This is the commit boundary for successful mutating intents. No success
+      // response is constructed until every finalized command through this tick
+      // has reached the durable sink.
+      this.flushDurableLog();
+    } catch (err) {
+      persistenceFailure = this.poisonDurableLog(err);
+      defaultOps.op_log(`AuthoritativeServer: durable world-log append failed; authoring poisoned until restart: ${persistenceFailure.message}`);
+    }
     syncAllBodies(this.world);
+
+    const replySends: Promise<void>[] = [];
+    for (const { intent, result } of outcomes) {
+      if (result.success && persistenceFailure === undefined) causedBy.push(this.intentSeq++);
+      if (intent.reqId === undefined) continue;
+      const line = result.success && persistenceFailure !== undefined
+        ? this.error(
+          intent.reqId ?? null,
+          JSON_RPC_ERRORS.internalError,
+          "Authoritative mutation could not be persisted; authoring is disabled until restart",
+        )
+        : (!result.success && result.error !== undefined)
+        ? this.error(intent.reqId ?? null, mcpErrorToJsonRpc(result.error.code), result.error.message, result)
+        : this.success(intent.reqId ?? null, result);
+      replySends.push(this.sendSafe(intent.connId, line));
+    }
+    if (replySends.length > 0) await Promise.allSettled(replySends);
+
+    // The live world may already contain the failed batch, so it must not publish
+    // deltas that imply those mutations are authoritative. The poisoned process is
+    // intentionally read-only until it is restarted from the last durable prefix.
+    if (persistenceFailure !== undefined) return;
 
     // 3. Skip the O(world) capture+diff entirely when nothing will consume a delta:
     //    broadcasting off, or NO client subscribed. `prev` is refreshed on subscribe,
@@ -885,11 +972,29 @@ export class AuthoritativeServer {
 
   private flushDurableLog(): void {
     if (this.durableLogClosed) return;
-    this.durableLog?.flush();
+    if (this.durableLogFailure !== undefined) throw this.durableLogFailure;
+    try {
+      this.durableLog?.flush();
+    } catch (err) {
+      throw this.poisonDurableLog(err);
+    }
+  }
+
+  private poisonDurableLog(err: unknown): Error {
+    if (this.durableLogFailure === undefined) {
+      this.durableLogFailure = err instanceof Error ? err : new Error(String(err));
+    }
+    return this.durableLogFailure;
   }
 
   private closeDurableLog(): void {
     if (this.durableLog === undefined || this.durableLogClosed) return;
+    if (this.durableLogFailure !== undefined) {
+      // close() flushes. Retrying a poisoned writer could append a later in-memory
+      // suffix after an unknown partial failure, so preserve the last known prefix.
+      this.durableLogClosed = true;
+      return;
+    }
     this.durableLog.close();
     this.durableLogClosed = true;
   }
@@ -915,8 +1020,8 @@ export class AuthoritativeServer {
     }));
   }
 
-  /** K4 (worldlog poll -> subscribe): fired from WorldRecorder.onFinalized after every command
-   *  that commits. For each worldlog/subscribe-d connection, compute its authoring tail from its
+  /** K4 (worldlog poll -> subscribe): fired from WorldRecorder.onFinalized for every command
+   *  newly admitted to the contiguous finalized prefix. For each subscribed connection, compute its authoring tail from its
    *  stored cursor and push a batch -- but ONLY when there is something new to report, so an
    *  otherwise-idle world never wakes a subscriber with an empty push every time an unrelated
    *  command finalizes elsewhere (e.g. two independent agent chains). A dead connection is simply

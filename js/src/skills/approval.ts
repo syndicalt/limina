@@ -113,10 +113,12 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 //    as if it applied at 0 — such a tick is floored back to the propose tick. A
 //    non-gated invoke() supplies no apply tick, so its `skill.executed` keeps the
 //    propose==apply base.tick exactly as before (replay-safe; p4_worldlog_* unaffected).
-// 3. Durable-log REPLAY of an APPROVAL-GATED session is not yet faithful: the
-//    recorder logs the propose-invoke (worldlog/recorder.ts `attach`), so on a
-//    gate-off replay a DENIED action would re-apply. The gate is OFF by default,
-//    so non-gated sessions replay byte-identically (verified by p4_worldlog_*).
+// 3. RESOLVED — approval controls and parked proposals are not replay commands.
+//    The recorder discards a proposal when invoke returns `pending_approval`, skips
+//    approval.grant/deny controls, and records only the original skill when a grant
+//    actually applies it. Denied actions therefore never enter authoritative replay.
+//    p57_approval_recording replays this stream into a fresh world and verifies the
+//    reviewed mutation applies exactly once.
 // 4. The pending map is capacity-bounded by SkillRegistry.setApprovalQueueLimit
 //    and fails closed when full. It still intentionally has no TTL/dedup because
 //    duplicate-looking proposals can differ by tick/provenance and need explicit

@@ -67,9 +67,14 @@ export function worldlogTail(
   registry: SkillRegistry,
   since: number,
 ): { commands: WorldCommand[]; next: number; reset: boolean } {
-  const total = recorder.commandCount;
+  // commandCount includes in-flight async calls. Exposing it would let a client
+  // advance past a provisional command that can still fail and be removed.
+  const total = recorder.flushableCount();
   const compacted = recorder.compactedCommandCount;
-  const reset = since < compacted;
+  // A cursor ahead of the finalized prefix can come from an older buggy server
+  // that exposed a provisional command which was later discarded. It cannot be
+  // continued safely because that absolute position may now name different data.
+  const reset = since < compacted || since > total;
   const start = reset ? compacted : since;
   const commands: WorldCommand[] = [];
   for (let i = start; i < total; i++) {
@@ -84,7 +89,7 @@ export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder
   const tail: SkillDefinition<{ since: number }, { commands: WorldCommand[]; next: number; reset: boolean }> = {
     name: "worldlog.tail",
     version: "1.0.0",
-    description: "Read-only: the AUTHORING command stream (mutating skills + physics; seed + read-only introspection excluded) recorded AFTER a cursor index, so a live editor viewport can re-author the world an agent is building. Returns the authoring tail slice, the next cursor, and `reset` (true when the caller's cursor fell behind a compacted prefix and it must resync from scratch).",
+    description: "Read-only: the AUTHORING command stream (mutating skills + physics; seed + read-only introspection excluded) recorded AFTER a cursor index, so a live editor viewport can re-author the world an agent is building. Returns the finalized authoring tail, the next cursor, and `reset` (true when the cursor is outside the retained finalized range and the caller must resync from scratch).",
     category: "system",
     permissions: [],
     effect: "read",

@@ -30,6 +30,12 @@ import {
 } from "./log.ts";
 import { IdleStepFilter } from "./step-filter.ts";
 
+// Approval controls resolve parked intents; they are not world mutations. A grant
+// re-enters the registry with the original skill, which is the only command replay
+// needs. Recording both makes replay depend on a transient approval queue and puts
+// the control command before the mutation it applies.
+const NON_REPLAYABLE_CONTROL_SKILLS = new Set(["approval.grant", "approval.deny"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -124,7 +130,7 @@ export class WorldRecorder {
   private maxTick = 0;
   private seeded = false;
   /** K4 (worldlog poll -> subscribe) listener seam: see onFinalized(). */
-  private readonly finalizedListeners: Array<() => void> = [];
+  private readonly finalizedListeners: Array<(finalizedCount: number) => void> = [];
 
   constructor(readonly sessionId: string, opts: WorldRecorderOptions = {}) {
     if (opts.filterIdleSteps === true) this.stepFilter = new IdleStepFilter();
@@ -244,7 +250,7 @@ export class WorldRecorder {
         // conservatively a write, so an annotation error cannot evade recording.
         const def = registry.describe(name);
         const readOnly = def !== undefined && skillEffect(def) === "read";
-        if (!readOnly) {
+        if (!readOnly && !NON_REPLAYABLE_CONTROL_SKILLS.has(name)) {
           const tick = base.tick;
           if (tick > rec.maxTick) rec.maxTick = tick;
           const seq = rec.seq++;
@@ -308,26 +314,29 @@ export class WorldRecorder {
 
   private markFinalized(seq: number): void {
     this.finalizedSeqs.add(seq);
+    this.advanceFinalizedPrefix();
+  }
+
+  /** Advance only across the contiguous settled prefix. Notify once for every
+   * newly exposed command so subscribers cannot lose completion boundaries when
+   * several later commands finished while an earlier command was pending. */
+  private advanceFinalizedPrefix(): void {
     while (this.finalizedPrefix < this.commands.length) {
       const cmd = this.commands[this.finalizedPrefix];
       if (cmd === undefined || !this.finalizedSeqs.has(cmd.seq)) break;
       this.finalizedSeqs.delete(cmd.seq);
       this.finalizedPrefix += 1;
+      const finalizedCount = this.compactedPrefix + this.finalizedPrefix;
+      for (const listener of [...this.finalizedListeners]) listener(finalizedCount);
     }
-    // Notify AFTER the command has actually committed. A command that instead FAILS goes through
-    // discardCommand (never markFinalized), so a listener here can never observe a provisional
-    // command that later turns out not to have happened -- the seam a push subscriber needs.
-    for (const listener of this.finalizedListeners) listener();
   }
 
-  /** K4 (worldlog poll -> subscribe): register a listener invoked once per command that
-   *  successfully FINALIZES (seed, a recorded physics op, or a top-level skill invocation that
-   *  settled and was not discarded). Multiple listeners may register; call the returned function
-   *  to unsubscribe. This is the seam AuthoritativeServer uses to PUSH worldlog/append
-   *  notifications to subscribed connections instead of requiring them to poll worldlog.tail --
-   *  since it fires only after markFinalized, a failed or still-pending (held-for-approval)
-   *  command never triggers a push. */
-  onFinalized(listener: () => void): () => void {
+  /** K4 (worldlog poll -> subscribe): register a listener invoked once for each
+   *  command newly admitted to the contiguous finalized prefix. Out-of-order
+   *  completions wait behind the gap; closing a failed gap emits one boundary for
+   *  each already-settled successor. Multiple listeners may register; call the
+   *  returned function to unsubscribe. */
+  onFinalized(listener: (finalizedCount: number) => void): () => void {
     this.finalizedListeners.push(listener);
     return () => {
       const idx = this.finalizedListeners.indexOf(listener);
@@ -338,6 +347,7 @@ export class WorldRecorder {
   private discardCommand(seq: number): void {
     const idx = this.commands.findIndex((cmd) => cmd.seq === seq);
     if (idx >= this.finalizedPrefix && idx !== -1) {
+      this.finalizedSeqs.delete(seq);
       this.commands.splice(idx, 1);
       const renumbered = new Set<number>();
       for (let i = idx; i < this.commands.length; i++) {
@@ -350,6 +360,10 @@ export class WorldRecorder {
       }
       for (const n of renumbered) this.finalizedSeqs.add(n);
       this.seq -= 1;
+      // A failed earlier command may have been the only gap ahead of commands
+      // that already settled. Removing it exposes each of those commands now.
+      this.advanceFinalizedPrefix();
+      return;
     }
     this.finalizedSeqs.delete(seq);
   }

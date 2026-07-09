@@ -10,6 +10,7 @@ import { resolveProfile } from "../src/skills/permissions.ts";
 import { registerWorldlogSkills, worldCommandsToAuthor } from "../src/skills/worldlog.ts";
 import type { WorldCommand } from "../src/worldlog/log.ts";
 import type { AuthorCommand } from "../src/kernel/authoring.ts";
+import { replayCommands } from "../src/worldlog/replay.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error("p57_approval_recording FAIL: " + message);
@@ -25,6 +26,7 @@ async function proposeAndGrant(session: string): Promise<{
   tail: { commands: WorldCommand[]; next: number; reset: boolean };
   authored: AuthorCommand[];
   grantedCommand: WorldCommand;
+  allCommands: WorldCommand[];
 }> {
   const ctx = createHeadlessContext({ session, record: {} });
   const { registry, world, recorder } = ctx;
@@ -80,7 +82,7 @@ async function proposeAndGrant(session: string): Promise<{
   const grantedCommand = tail.commands.find((c) => c.kind === "skill" && (c as { tool: string }).tool === "scene.createEntity");
   assert(grantedCommand !== undefined, "worldlog.tail did not return the granted scene.createEntity command");
 
-  return { before, after, tail, authored, grantedCommand };
+  return { before, after, tail, authored, grantedCommand, allCommands: [...recorder.commands] };
 }
 
 const first = await proposeAndGrant("ses_p57");
@@ -90,6 +92,11 @@ assert(tools.includes("scene.createEntity"), "authoring tail must include grante
 assert(!tools.includes("approval.grant"), "authoring tail must not include approval.grant");
 assert(!tools.includes("approval.deny"), "authoring tail must not include approval.deny");
 assert(!tools.includes("approval.list"), "authoring tail must not include approval.list");
+const recordedTools = skillTools(first.allCommands);
+assert(recordedTools.filter((tool) => tool === "scene.createEntity").length === 1,
+  "the applied original mutation must be recorded exactly once");
+assert(!recordedTools.some((tool) => tool.startsWith("approval.")),
+  `transient approval controls must not enter authoritative replay: ${recordedTools.join(",")}`);
 
 const createAuthor = first.authored.find((c) => c.kind === "skill" && (c as { tool: string }).tool === "scene.createEntity") as
   | ({ kind: "skill"; tool: string; agentId?: string })
@@ -100,6 +107,20 @@ assert(createAuthor.agentId === "agt_builder_review", `granted command actor mus
 assert(!first.tail.commands.some((c) => c.kind === "physics" && /add_(box|sphere|capsule)/.test((c as { op: string }).op)),
   "granted skill's internal physics op leaked as a standalone physics command");
 assert(first.after === first.before + 1, "world does not contain the granted entity");
+
+let replayContext: ReturnType<typeof createHeadlessContext> | undefined;
+const replayed = await replayCommands(first.allCommands, {
+  makeRegistry: () => {
+    replayContext = createHeadlessContext({ session: "ses_p57_replay" });
+    return replayContext.registry;
+  },
+  makeWorld: () => {
+    assert(replayContext !== undefined, "replay requested its world before its registry factory");
+    return replayContext.world;
+  },
+});
+assert(replayed.skillInvokes === 1, `reviewed action replay invoked ${replayed.skillInvokes} skills instead of one`);
+assert(replayed.world.entities.ids().length === 1, "reviewed action replay did not apply the original mutation exactly once");
 
 const second = await proposeAndGrant("ses_p57");
 assert(
