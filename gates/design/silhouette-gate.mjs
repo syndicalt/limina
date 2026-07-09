@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..");
+const toolsRequire = createRequire(join(REPO_ROOT, "tools", "package.json"));
 
 // Thresholds (procgen-review). IoU above CLONE = effectively the same silhouette; a pair is
 // "distinguishable" when its IoU is below DISTINCT. Oatmeal = too few distinguishable pairs.
@@ -32,7 +33,7 @@ export async function renderMasks(entries, opts = {}) {
   const pwc = resolvePwc(), chrome = resolveChrome();
   if (!pwc || !chrome) throw new Error("silhouette-gate: no chromium/playwright-core");
   const { chromium } = require(pwc);
-  const sharp = require("sharp");
+  const sharp = toolsRequire("sharp");
   const W = 512, H = 512;
 
   const server = createServer((req, res) => {

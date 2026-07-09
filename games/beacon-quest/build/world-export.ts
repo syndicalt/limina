@@ -7,7 +7,9 @@
 // terrain.create's map tiles re-derive from the IR on playback, so the shipped package is
 // {IR asset + glbs + command log + keyframes}.
 //
-// Run from repo root: ./target/release/limina games/beacon-quest/build/world-export.ts
+// Run from repo root:
+//   LIMINA_ASSET_ROOT=games/beacon-quest/assets \
+//     ./target/release/limina games/beacon-quest/build/world-export.ts
 //   then games/beacon-quest/build.sh games/beacon-quest/build/world-export.ts relocates + bundles.
 
 import { EntityTable, ops } from "../../../js/src/engine.ts";

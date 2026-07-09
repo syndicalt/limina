@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const LIMINA = join(ROOT, "target/release/limina");
 const EXPORTER = "games/beacon-quest/build/world-export.ts";
+const GAME_ASSETS = join(ROOT, "games", "beacon-quest", "assets");
 
 if (!existsSync(LIMINA)) {
   console.log("export-gate SKIP: no ./target/release/limina (build the engine first: cargo build --release).");
@@ -30,7 +31,12 @@ if (!existsSync(join(ROOT, "assets/maps/beacon-quest-primary.worldmap.json"))) {
 
 let out = "";
 try {
-  out = execFileSync(LIMINA, [EXPORTER], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], timeout: 180000, env: { ...process.env, LIMINA_AUDIO: "null" } }).toString();
+  out = execFileSync(LIMINA, [EXPORTER], {
+    cwd: ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 180000,
+    env: { ...process.env, LIMINA_AUDIO: "null", LIMINA_ASSET_ROOT: GAME_ASSETS },
+  }).toString();
 } catch (e) {
   console.error("export-gate FAILED: the exporter did not run to completion.\n" + ((e.stdout?.toString() ?? "") + (e.stderr?.toString() ?? "")).split("\n").slice(-16).join("\n"));
   process.exit(1);
