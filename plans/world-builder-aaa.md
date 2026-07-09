@@ -234,3 +234,19 @@ near-vertical cliffs before the SDF layer exists.
   computes canonical dependency keys, multigrid-aware halo propagation, local/global/version
   invalidation, cache hits, removals, and strict retained snapshots. Omitted or dishonest client dirty
   hints cannot narrow compiler-owned work and are retained only as diagnostic telemetry.
+- **2026-07-09 — Authoritative project source state shipped (`4ef67e1`).** `WorldProjectState/v1`
+  binds strict content-addressed refs for MapDoc, ordered topology-guarded terrain edit layers, Scene,
+  Assets, and LookProfile to the same WorldLog transaction authority. Replace/patch operations are
+  atomic, compensable, replayable, project-isolated, resource-bounded, and exposed through a
+  permissioned linearizable read skill shared by server and browser replay.
+- **2026-07-09 — Derived revision publication shipped (`bed500b`).** Immutable canonical manifests now
+  bind the exact source head and assets to compiler/grid/chunk dependencies and typed artifacts.
+  Publication stages and fsyncs content-addressed outputs, rejects stale heads, serializes the final
+  pointer swap with a live-owner-aware cross-process lock and CAS, and validates current or previous
+  artifacts for last-known-good recovery. Crash, corruption, traversal, lock-steal, and race gates are
+  green; the lock is intentionally a local-host filesystem contract, not a distributed NFS lease.
+- **2026-07-09 — Authoritative editor scene workflow shipped (`498970d`).** Inspector and gizmo edits
+  submit grouped exact-head scene transactions; stale heads fail explicitly; undo records a guarded
+  compensation and redo records a new reapply transaction. History scrubbing is view-only, browser and
+  simulation replay register the same scene plus project-state allowlist, and the scaffold launcher
+  rebuilds missing or stale ignored editor bundles on a clean source checkout.
