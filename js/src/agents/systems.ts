@@ -4,7 +4,7 @@
 
 import { Position } from "../ecs/world.ts";
 import { ops } from "../engine.ts";
-import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
+import type { InvokeBase, SkillRegistry, WorldContext } from "../skills/registry.ts";
 import type { Tracer } from "../observability/event.ts";
 import { agentGrants } from "./agent.ts";
 import type { AgentRecord, AgentRegistry, PerceivedEntity, Perception } from "./agent.ts";
@@ -14,6 +14,11 @@ import { type AgentScheduler, defaultAgentScheduler } from "./scheduler.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 
 export type ProviderMap = Record<string, LLMProvider>;
+
+/** Replace the local registry crossing for co-located agents that must submit
+ * tools through an external authority boundary (for example the editor server's
+ * serialized, durable intent queue). */
+export type BoundedToolExecutor = (name: string, input: unknown, base: InvokeBase) => Promise<MCPResponse>;
 
 function promptTrace(agent: AgentRecord): Record<string, unknown> {
   const hash = ops.op_sha256(agent.llm.systemPrompt);
@@ -285,6 +290,9 @@ export interface BoundedMultiTurnOptions {
   onText?: (text: string) => void;
   onStep?: (step: { tool: string; label: string; icon?: string }) => void;
   onError?: (err: unknown) => void;
+  /** Omitted for ordinary in-process agents. Authoritative hosts provide an
+   * executor that resolves only after the mutation is durably committed. */
+  invokeTool?: BoundedToolExecutor;
 }
 
 export interface BoundedMultiTurnResult {
@@ -355,6 +363,7 @@ export async function runBoundedMultiTurn(
   let steps = 0;
   let toolCalls = 0;
   let tokensUsed = 0;
+  const invokeTool: BoundedToolExecutor = options.invokeTool ?? ((name, input, base) => registry.invoke(name, input, base));
 
   for (; steps < options.maxSteps; steps++) {
     if (elapsed(start) >= options.timeoutMs) return { steps, toolCalls, tokensUsed, reason: "timeout" };
@@ -440,7 +449,7 @@ export async function runBoundedMultiTurn(
       }
       let response: MCPResponse;
       try {
-        response = await registry.invoke(call.tool, call.input, {
+        response = await invokeTool(call.tool, call.input, {
           agentId: agent.id,
           sessionId: agent.sessionId,
           permissions: agentGrants(agent),

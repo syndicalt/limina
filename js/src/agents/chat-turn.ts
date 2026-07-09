@@ -2,7 +2,7 @@ import type { Tracer } from "../observability/event.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import type { AgentRecord } from "./agent.ts";
-import { runBoundedMultiTurn, type ProviderMap } from "./systems.ts";
+import { runBoundedMultiTurn, type BoundedToolExecutor, type ProviderMap } from "./systems.ts";
 
 export interface ChatTurnMessage {
   turnId: string;
@@ -32,6 +32,8 @@ export interface RunChatTurnOptions {
   msg: ChatTurnMessage;
   push(message: ChatTurnPush): void | Promise<void>;
   persist?(record: ChatTurnPersistRecord): void | Promise<void>;
+  /** Authoritative editor hosts must provide the server queue crossing. */
+  invokeTool?: BoundedToolExecutor;
   limits?: {
     maxSteps?: number;
     maxToolCalls?: number;
@@ -136,6 +138,7 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
       // budget trips `token_budget` and returns BEFORE the first tool call executes.
       // Keep a generous runaway backstop; maxSteps/maxToolCalls/timeout do the real bounding.
       maxTokens: opts.limits?.maxTokens ?? 2_000_000,
+      invokeTool: opts.invokeTool,
       onText: (text) => {
         textParts.push(text);
         enqueuePush({ type: "chat.delta", turnId, text });

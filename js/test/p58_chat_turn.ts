@@ -44,6 +44,7 @@ class BuildOneEntityProvider implements LLMProvider {
 const pushed: ChatTurnPush[] = [];
 const provider = new BuildOneEntityProvider();
 const before = ctx.world.entities.ids().length;
+let executorCalls = 0;
 const reply = await runChatTurn({
   registry: ctx.registry,
   world: ctx.world,
@@ -51,6 +52,10 @@ const reply = await runChatTurn({
   tracer: ctx.registry.tracer,
   msg: { turnId: "turn_p58", text: "Build a red cube at 1,2,3." },
   limits: { timeoutMs: 1000 },
+  invokeTool: async (name, input, base) => {
+    executorCalls++;
+    return ctx.registry.invoke(name, input, base);
+  },
   push: (m) => {
     pushed.push(m);
   },
@@ -66,6 +71,7 @@ assert(done >= 0, "chat.done was not pushed");
 assert(firstDelta < firstStep && firstStep < done, "expected chat.delta before chat.step before chat.done, got " + JSON.stringify(order));
 assert(!order.includes("chat.error"), "chat.error should not be pushed: " + JSON.stringify(pushed));
 assert(ctx.world.entities.ids().length === before + 1, "world should gain exactly one entity");
+assert(executorCalls === 1, `chat must use the injected authority executor exactly once, got ${executorCalls}`);
 assert(reply.includes("Creating a red cube.") && reply.includes("The cube is in the scene."), "assembled reply text missing provider text");
 
 ops.op_log(`p58_chat_turn OK: ${pass} assertions -- scripted chat turn streamed text/step/done and authored one entity`);
