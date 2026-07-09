@@ -106,7 +106,7 @@ export function growRasterToInclude(e, wx, wz, radiusM, fillValue = 0, coBuffers
   const osx = e.rect.w / (w - 1), osz = e.rect.h / (h - 1);
   const nsx = rect.w / (w - 1), nsz = rect.h / (h - 1);
   const resample = (src) => {
-    const next = new Uint8Array(w * h);
+    const next = new src.constructor(w * h);
     if (fillValue) next.fill(fillValue); // e.g. elevation's flat-y=0 value; landmass fills ocean (0)
     for (let r = 0; r < h; r++) {
       const wz2 = rect.z0 + r * nsz;
@@ -467,8 +467,6 @@ export function renderBiomesImage(e, mapId, landEntry) {
 // or previously-compiled maps become hand-editable with the same brushes. Pure compute — returns
 // the serialized doc fields for cmdImportLayers; never mutates the map.
 
-import { u8ToB64 } from "/shared/raster-codec.mjs";
-
 export function importWorldMapIntoLayers(worldMap) {
   const upm = worldMap.unitsPerMeter || 1;
   // Extent: land ∪ biomes ∪ reliefGrid rect, padded — the world the IR describes.
@@ -504,11 +502,15 @@ export function importWorldMapIntoLayers(worldMap) {
   }
   // Elevation: resample the reliefGrid (bilinear) into the import extent, keeping its y range.
   if (g) {
-    const src = decodeRasterCells(g, g.w * g.h);
-    const W = BIOME_SIZE, cells = new Uint8Array(W * W);
+    const decoded = EL.decodeElevationRaster(g);
+    const src = decoded.cells;
+    const W = BIOME_SIZE, cells = new Uint16Array(W * W);
     const gx0 = g.rect.x0, gz0 = g.rect.z0, gw = g.rect.w, gh = g.rect.h;
-    // Outside the source grid, terrain is flat y=0 — encode that value, not raw 0 (= minY pit).
-    const flat = Math.max(0, Math.min(255, Math.round((0 - g.minY) / (g.maxY - g.minY) * 255)));
+    // Outside the source grid is flat y=0. Expand the range when necessary instead of silently
+    // clamping 0 to a source endpoint and inventing an elevated plateau or abyss.
+    const outMinY = Math.min(g.minY, 0), outMaxY = Math.max(g.maxY, 0);
+    const outRange = { minY: outMinY, maxY: outMaxY };
+    const flat = EL.yToVal(0, outRange);
     for (let r = 0; r < W; r++) {
       const wz = rect.z0 + r / (W - 1) * rect.h;
       for (let c = 0; c < W; c++) {
@@ -520,10 +522,11 @@ export function importWorldMapIntoLayers(worldMap) {
         const c1 = Math.min(g.w - 1, c0 + 1), r1 = Math.min(g.h - 1, r0 + 1);
         const fu = u - c0, fv = v - r0;
         const a = src[r0 * g.w + c0], b = src[r0 * g.w + c1], d = src[r1 * g.w + c0], f = src[r1 * g.w + c1];
-        cells[r * W + c] = Math.round((a * (1 - fu) + b * fu) * (1 - fv) + (d * (1 - fu) + f * fu) * fv);
+        const sourceValue = (a * (1 - fu) + b * fu) * (1 - fv) + (d * (1 - fu) + f * fu) * fv;
+        cells[r * W + c] = EL.yToVal(EL.valToY(sourceValue, decoded), outRange);
       }
     }
-    rasters.elevation = { w: W, h: W, rect: { ...rect }, minY: g.minY, maxY: g.maxY, data: u8ToB64(cells) };
+    rasters.elevation = EL.encodeElevationRaster({ w: W, h: W, rect: { ...rect }, minY: outMinY, maxY: outMaxY, cells });
   }
   // Asset anchors -> stamps; waterways/routes -> drawn line features.
   const stamps = (worldMap.anchors || [])

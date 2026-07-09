@@ -200,10 +200,25 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
   // at all (painted is authoritative; the rasterizer would ignore them anyway — this keeps the
   // compiled IR honest about which authority produced the surface).
   const elevation = map.rasters && map.rasters.elevation ? map.rasters.elevation : undefined;
+  let elevationGrid, elevationSampler;
   if (elevation) {
     for (const k of ["w", "h", "minY", "maxY", "data", "rect"]) {
       if (elevation[k] === undefined) throw new Error(`compile-designmap: rasters.elevation is missing '${k}'`);
     }
+    // Construct without numeric/string coercion: accepting "256", Infinity, a reversed range,
+    // or a malformed/oversized base64 payload here would defer corruption until runtime.
+    elevationGrid = {
+      w: elevation.w,
+      h: elevation.h,
+      rect: { x0: elevation.rect?.x0, z0: elevation.rect?.z0, w: elevation.rect?.w, h: elevation.rect?.h },
+      minY: elevation.minY,
+      maxY: elevation.maxY,
+      ...(elevation.encoding !== undefined ? { encoding: elevation.encoding } : {}),
+      data: elevation.data,
+    };
+    // The runtime sampler is the single payload validator and endian decoder. Validate eagerly
+    // even when there is no landmass raster (previously malformed elevation could compile).
+    elevationSampler = reliefGridSampler({ reliefGrid: elevationGrid, origin: [0, 0], unitsPerMeter: 1 });
   }
 
   // A painted landmass mask (Map Painter P1, map.rasters.landmass) compiles to the IR's EXISTING
@@ -251,15 +266,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     // the elevation extent can carve (the sampler clamps to
     // its edge — without the bounds check, an edge dig would smear water outward forever).
     if (elevation) {
-      const sampler = reliefGridSampler({
-        reliefGrid: {
-          w: Number(elevation.w), h: Number(elevation.h),
-          rect: { x0: Number(elevation.rect.x0), z0: Number(elevation.rect.z0), w: Number(elevation.rect.w), h: Number(elevation.rect.h) },
-          minY: Number(elevation.minY), maxY: Number(elevation.maxY),
-          data: String(elevation.data),
-        },
-        origin: [0, 0], unitsPerMeter: 1,
-      });
+      const sampler = elevationSampler;
       const seaY = typeof map.seaLevel === "number" ? map.seaLevel : 0;
       const er = elevation.rect;
       const sx = rect.w / (lw - 1), sz = rect.h / (lh - 1);
@@ -414,14 +421,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     land,
     relief,
     ...(elevation ? {
-      reliefGrid: {
-        w: Number(elevation.w),
-        h: Number(elevation.h),
-        rect: { x0: Number(elevation.rect.x0), z0: Number(elevation.rect.z0), w: Number(elevation.rect.w), h: Number(elevation.rect.h) },
-        minY: Number(elevation.minY),
-        maxY: Number(elevation.maxY),
-        data: String(elevation.data),
-      },
+      reliefGrid: elevationGrid,
     } : {}),
     biomes,
     waterways,

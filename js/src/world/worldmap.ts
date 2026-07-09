@@ -54,8 +54,9 @@ const ReliefHintSchema = z.object({
   amplitude: z.number(),
 }).strict();
 
-// A painted elevation raster (Map Studio S1): ABSOLUTE surface elevation in world meters, u8
-// cells mapped linearly value/255 -> [minY, maxY], row-major with +col = +x (east) and
+// A painted elevation raster (Map Studio S1): ABSOLUTE surface elevation in world meters. New
+// Atlas maps use explicit little-endian u16; absent/'u8' remains the legacy value/255 form.
+// Cells map linearly to [minY, maxY], row-major with +col = +x (east) and
 // +row = +z (i.e. row 0 is the NORTHERNMOST row — north is -z), spanning the world-meter
 // `rect`. PRECEDENCE CONTRACT: when a WorldMap carries a reliefGrid, it REPLACES the vector
 // `relief` hints entirely (painted is authoritative; compilers emit hints only for maps
@@ -74,8 +75,8 @@ const ReliefGridSchema = z.object({
    *  hashes byte-identically (worldmap-hash emits `encoding` only-when-present). */
   encoding: z.enum(["u8", "u16"]).optional(),
   /** base64 of w*h cells (u8 → w*h bytes; u16 → 2*w*h little-endian bytes). */
-  data: z.string().min(1),
-}).strict();
+  data: z.string().min(1).max(2796204), // base64 ceiling for 1024*1024*2 bytes
+}).strict().refine((g) => g.maxY > g.minY, { message: "reliefGrid maxY must be greater than minY" });
 
 const BiomeRegionSchema = z.object({
   biome: z.enum(BIOME_KINDS),

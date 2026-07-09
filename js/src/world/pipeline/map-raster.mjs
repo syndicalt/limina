@@ -168,16 +168,27 @@ export function isLand(worldMap, x, z) {
 // identically in Node, the engine's V8, and the browser sim worker). ─────────────────────────
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_LOOKUP = (() => { const t = new Int16Array(128).fill(-1); for (let i = 0; i < 64; i++) t[B64_ALPHABET.charCodeAt(i)] = i; return t; })();
-function b64ToU8(s) {
-  const clean = s.replace(/=+$/, "");
-  const out = new Uint8Array(Math.floor(clean.length * 3 / 4));
+function b64ToU8Exact(s, expectedBytes) {
+  if (typeof s !== "string") throw new TypeError("reliefGrid: data must be base64 text");
+  const encodedLength = 4 * Math.ceil(expectedBytes / 3);
+  if (s.length !== encodedLength) throw new Error(`reliefGrid: base64 length ${s.length} != expected ${encodedLength}`);
+  const paddingLength = expectedBytes % 3 === 0 ? 0 : expectedBytes % 3 === 1 ? 2 : 1;
+  const clean = paddingLength ? s.slice(0, -paddingLength) : s;
+  if (paddingLength && s.slice(-paddingLength) !== "=".repeat(paddingLength)) throw new Error("reliefGrid: malformed base64 padding");
+  for (let i = 0; i < clean.length; i++) {
+    const code = clean.charCodeAt(i);
+    if (code >= B64_LOOKUP.length || B64_LOOKUP[code] < 0) throw new Error("reliefGrid: invalid base64 character");
+  }
+  if (expectedBytes % 3 === 1 && (B64_LOOKUP[clean.charCodeAt(clean.length - 1)] & 15) !== 0) throw new Error("reliefGrid: non-canonical base64 padding bits");
+  if (expectedBytes % 3 === 2 && (B64_LOOKUP[clean.charCodeAt(clean.length - 1)] & 3) !== 0) throw new Error("reliefGrid: non-canonical base64 padding bits");
+  const out = new Uint8Array(expectedBytes);
   let buf = 0, bits = 0, o = 0;
   for (let i = 0; i < clean.length; i++) {
-    const v = B64_LOOKUP[clean.charCodeAt(i) & 127];
-    if (v < 0) throw new Error("b64ToU8: invalid base64 character");
+    const v = B64_LOOKUP[clean.charCodeAt(i)];
     buf = (buf << 6) | v; bits += 6;
     if (bits >= 8) { bits -= 8; out[o++] = (buf >> bits) & 0xff; }
   }
+  if (o !== expectedBytes) throw new Error(`reliefGrid: decoded ${o} bytes, expected ${expectedBytes}`);
   return out;
 }
 
@@ -190,13 +201,25 @@ function b64ToU8(s) {
 export function reliefGridSampler(worldMap) {
   const g = worldMap.reliefGrid;
   if (!g) return null;
+  if (!Number.isInteger(g.w) || g.w < 2 || g.w > 1024 || !Number.isInteger(g.h) || g.h < 2 || g.h > 1024) {
+    throw new Error("reliefGrid: w/h must be integers in [2, 1024]");
+  }
+  if (!g.rect || !Number.isFinite(g.rect.x0) || !Number.isFinite(g.rect.z0)
+      || !Number.isFinite(g.rect.w) || g.rect.w <= 0 || !Number.isFinite(g.rect.h) || g.rect.h <= 0) {
+    throw new Error("reliefGrid: rect requires finite x0/z0 and positive finite w/h");
+  }
+  if (!Number.isFinite(g.minY) || !Number.isFinite(g.maxY) || !(g.maxY > g.minY)) {
+    throw new Error("reliefGrid: minY/maxY must be finite with maxY > minY");
+  }
+  if (g.encoding !== undefined && g.encoding !== "u8" && g.encoding !== "u16") {
+    throw new Error(`reliefGrid: unsupported encoding "${g.encoding}"`);
+  }
   const { origin, unitsPerMeter } = worldMap;
-  const bytes = b64ToU8(g.data);
   // u16 packs 2 little-endian bytes per cell (65,536 levels); absent/'u8' = 1 byte. Explicit LE
   // decode (not a Uint16Array view) keeps the byte layout host-independent for determinism.
   const u16 = g.encoding === "u16";
   const need = g.w * g.h * (u16 ? 2 : 1);
-  if (bytes.length !== need) throw new Error(`reliefGrid: data length ${bytes.length} != ${need} (${u16 ? "u16" : "u8"}, w*h ${g.w * g.h})`);
+  const bytes = b64ToU8Exact(g.data, need);
   const max = u16 ? 65535 : 255;
   const cellAt = u16 ? (i) => bytes[2 * i] | (bytes[2 * i + 1] << 8) : (i) => bytes[i];
   const x0 = origin[0] + g.rect.x0 * unitsPerMeter;

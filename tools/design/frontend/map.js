@@ -170,11 +170,15 @@ export function renderMap(){
   const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["place","◈","Place a place (marker + gazetteer)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
+  const rawElevMeta=EL.elevationOf(activeMapId)||(activeMap().rasters&&activeMap().rasters.elevation);
+  const elevMeta=rawElevMeta&&Number.isFinite(rawElevMeta.minY)&&Number.isFinite(rawElevMeta.maxY)&&rawElevMeta.maxY>rawElevMeta.minY
+    ? rawElevMeta:{minY:EL.ELEV_MIN_Y,maxY:EL.ELEV_MAX_Y};
+  if(elevLevelY<elevMeta.minY||elevLevelY>elevMeta.maxY) elevLevelY=Math.min(elevMeta.maxY,Math.max(elevMeta.minY,0));
   const elevControls = mapTool!=="elev" ? "" :
     '<select class="sw" id="elev-mode">'+[["raise","Raise"],["lower","Lower"],["smooth","Smooth"],["level","Level"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===elevMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="elev-radius" min="2" max="200" step="1" value="'+elevRadius+'" style="width:80px" title="Brush radius (m)">'
     +'<label class="coord" style="margin-left:0">str</label><input type="range" id="elev-strength" min="0.05" max="1" step="0.05" value="'+elevStrength+'" style="width:64px" title="Brush strength">'
-    +(elevMode==="level"?'<input type="number" id="elev-levely" value="'+elevLevelY+'" step="0.5" style="width:56px" class="sw" title="Level target (m)">':'')
+    +(elevMode==="level"?'<input type="number" id="elev-levely" value="'+elevLevelY+'" min="'+elevMeta.minY+'" max="'+elevMeta.maxY+'" step="0.5" style="width:72px" class="sw" title="Level target (m)">':'')
     +'<label class="coord" style="margin-left:0">sea</label><input type="range" id="elev-sea" min="-12" max="12" step="0.5" value="'+seaY+'" style="width:80px" title="Sea level (m)"><span class="coord" id="elev-sea-val" style="margin-left:0">'+seaY+'m</span>';
   const landControls = mapTool!=="land" ? "" :
     '<select class="sw" id="lm-mode">'+[["land","Raise land"],["ocean","Carve ocean"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===lmMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
@@ -660,7 +664,10 @@ function bindMap(){
   const em1=document.getElementById("elev-mode"); if(em1) em1.onchange=(e)=>{ elevMode=e.target.value; renderMap(); };
   const er1=document.getElementById("elev-radius"); if(er1) er1.oninput=(e)=>{ elevRadius=Number(e.target.value); const c=document.getElementById("elev-cursor"); if(c) c.setAttribute("r",elevRadius*mapScale); };
   const es1=document.getElementById("elev-strength"); if(es1) es1.oninput=(e)=>{ elevStrength=Number(e.target.value); };
-  const el1=document.getElementById("elev-levely"); if(el1) el1.onchange=(e)=>{ elevLevelY=Number(e.target.value)||0; };
+  const el1=document.getElementById("elev-levely"); if(el1) el1.onchange=(e)=>{ const v=Number(e.target.value);
+    const lo=Number(e.target.min), hi=Number(e.target.max);
+    if(Number.isFinite(v)&&v>=lo&&v<=hi) elevLevelY=v;
+    else { e.target.value=elevLevelY; toast("level target must be between "+lo+"m and "+hi+"m"); } };
   const sea1=document.getElementById("elev-sea"); if(sea1){
     const seaBefore=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
     sea1.oninput=(e)=>{ const v=Number(e.target.value); activeMap().seaLevel=v; const lab=document.getElementById("elev-sea-val"); if(lab) lab.textContent=v+"m"; elevRev++; refreshElevImage(); refreshLandImage(); };
@@ -1023,7 +1030,7 @@ function refreshLandImage(){
 function elevDab(er,wx,wz,drag){
   // Same never-a-wall contract as landmass; new cells fill with the flat-y=0 value so growth
   // never digs pits at the old edge.
-  const flat=Math.round((0-er.minY)/(er.maxY-er.minY)*255);
+  const flat=EL.yToVal(0,er);
   if(LM.growRasterToInclude(er,wx,wz,elevRadius,flat,[drag.before])){
     drag.bbox={c0:0,r0:0,c1:er.w-1,r1:er.h-1};
     elevRev++; redrawMap();

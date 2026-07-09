@@ -140,8 +140,8 @@ export function cmdMoveFeature(mapId, fid, before, after) {
   };
 }
 
-/** A raster brush stroke (Map Studio S1): before/after u8 snapshots of the cell BBOX the stroke
- *  touched, applied to a live raster store entry ({w, h, cells: Uint8Array, dirty}) held by
+/** A raster brush stroke (Map Studio S1): before/after typed snapshots of the cell BBOX the stroke
+ *  touched, applied to a live raster store entry ({w, h, cells: Uint8Array|Uint16Array, dirty}) held by
  *  closure — the raster lives OUTSIDE the doc (decoded once per map), so this command targets it
  *  directly rather than re-resolving through the map. Stays pure/DOM-free: the gate constructs a
  *  raster object and property-tests inversion exactly like the feature commands. */
@@ -181,7 +181,7 @@ export function cmdSetRasterRect(mapId, raster, before, after) {
 export function rasterBboxSnapshot(raster, bbox) {
   const { c0, r0, c1, r1 } = bbox;
   const bw = c1 - c0 + 1, bh = r1 - r0 + 1;
-  const out = new Uint8Array(bw * bh);
+  const out = new raster.cells.constructor(bw * bh);
   for (let r = 0; r < bh; r++) out.set(raster.cells.subarray((r0 + r) * raster.w + c0, (r0 + r) * raster.w + c1 + 1), r * bw);
   return out;
 }

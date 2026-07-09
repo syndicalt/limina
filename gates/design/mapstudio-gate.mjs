@@ -24,6 +24,7 @@ const ROOT = resolve(__dirname, "..", "..");
 
 const { migrateMapDoc, serializeMapDoc, MAPDOC_VERSION } = await import(join(ROOT, "tools/design/map-doc.mjs"));
 const H = await import(join(ROOT, "tools/design/frontend/map-commands.js"));
+const EL = await import(join(ROOT, "tools/design/frontend/map-elevation.js"));
 const { compileDesignMap } = await import(join(ROOT, "js/src/world/design-map-compile.mjs"));
 const { worldMapContentHash } = await import(join(ROOT, "js/src/world/worldmap-hash.mjs"));
 const { rasterizeWorldMap, reliefGridSampler } = await import(join(ROOT, "js/src/world/pipeline/map-raster.mjs"));
@@ -169,6 +170,11 @@ inversionTest("cmdSetMapProp (sea)", (m) => H.cmdSetMapProp("m1", "sea", m.sea, 
   const bad = H.cmdPatchRaster("m1", raster, bbox, new Uint8Array(3), postSnap);
   check("cmdPatchRaster: mismatched snapshot sizes are rejected", bad === null);
 
+  // Elevation is u16: a u8-only snapshot silently truncates every height above 255 on undo.
+  const raster16 = { w: 3, h: 2, cells: new Uint16Array([0, 256, 4660, 32768, 65000, 65535]), dirty: false };
+  const snap16 = H.rasterBboxSnapshot(raster16, { c0: 1, r0: 0, c1: 2, r1: 1 });
+  check("cmdPatchRaster: elevation snapshots retain Uint16Array precision", snap16 instanceof Uint16Array && eq([...snap16], [256, 4660, 65000, 65535]));
+
   // cmdSetRasterRect (region move/resize): rect metadata inversion, cells untouched.
   const r2 = { w: 16, h: 16, rect: { x0: 0, z0: 0, w: 100, h: 100 }, cells: new Uint8Array(256).fill(9), dirty: false };
   const h2 = H.createHistory();
@@ -268,10 +274,98 @@ function rasterDoc(elev) {
     }],
   });
 }
+
+// Atlas' live format is explicit LE u16 over a real-world -500..9000m range. These checks cover
+// the frontend persistence path directly, not merely the runtime foundation.
+{
+  check("Atlas defaults cover -500..9000m", EL.ELEV_MIN_Y === -500 && EL.ELEV_MAX_Y === 9000 && EL.ELEV_ENCODING === "u16");
+  const step = (EL.ELEV_MAX_Y - EL.ELEV_MIN_Y) / EL.ELEV_QUANT_MAX;
+  for (const y of [-500, 0, 1234.5, 8848.86, 9000]) {
+    const roundTrip = EL.valToY(EL.yToVal(y));
+    check(`u16 quantize/dequantize ${y}m within half-step`, Math.abs(roundTrip - y) <= step / 2 + 1e-9);
+  }
+  let outOfRange = false;
+  try { EL.yToVal(9000.01); } catch { outOfRange = true; }
+  check("quantization rejects out-of-range height instead of silently clamping", outOfRange);
+
+  const endian = EL.encodeElevationRaster({
+    w: 2, h: 2, rect: { x0: 0, z0: 0, w: 1, h: 1 }, minY: -500, maxY: 9000,
+    cells: new Uint16Array([0x0000, 0x1234, 0xabcd, 0xffff]),
+  });
+  const endianBytes = Uint8Array.from(atob(endian.data), (ch) => ch.charCodeAt(0));
+  check("u16 persistence is explicitly little-endian", eq([...endianBytes], [0x00, 0x00, 0x34, 0x12, 0xcd, 0xab, 0xff, 0xff]));
+  check("u16 persistence round-trips all levels", eq([...EL.decodeElevationRaster(endian).cells], [0x0000, 0x1234, 0xabcd, 0xffff]));
+
+  // No encoding means the committed legacy u8 layout. Loading is exact (v*257) and a no-op save
+  // must not rewrite it, preserving old document bytes and downstream content hashes.
+  const legacyBytes = new Uint8Array([0, 1, 128, 255]);
+  const legacy = { w: 2, h: 2, rect: { x0: 0, z0: 0, w: 10, h: 10 }, minY: -16, maxY: 48, data: b64encode(legacyBytes) };
+  const legacyMap = { id: "gate-legacy-u8", rasters: { elevation: clone(legacy) }, features: [] };
+  const legacyBefore = JSON.stringify(legacyMap.rasters.elevation);
+  const liveLegacy = EL.ensureElevation(legacyMap, []);
+  check("legacy u8 expands exactly to u16 without changing represented heights", eq([...liveLegacy.cells], [0, 257, 128 * 257, 65535]));
+  EL.syncElevationIntoDoc([legacyMap]);
+  check("unmodified legacy u8 document remains byte-identical on save", JSON.stringify(legacyMap.rasters.elevation) === legacyBefore);
+  liveLegacy.dirty = true;
+  EL.syncElevationIntoDoc([legacyMap]);
+  check("first modified legacy grid migrates to explicit u16", legacyMap.rasters.elevation.encoding === "u16");
+  check("legacy migration retains every quantized height exactly", eq([...EL.decodeElevationRaster(legacyMap.rasters.elevation).cells], [0, 257, 128 * 257, 65535]));
+
+  // First actual edit migrates persistence to u16. The center raise remains ~1.2m despite the
+  // 9500m range: quantization precision increased without making the brush unusably coarse.
+  const brush = {
+    w: 3, h: 3, rect: { x0: 0, z0: 0, w: 2, h: 2 }, minY: -500, maxY: 9000,
+    cells: new Uint16Array(9).fill(EL.yToVal(0)), dirty: false,
+  };
+  const beforeY = EL.valToY(brush.cells[4], brush);
+  EL.brushDab(brush, 1, 1, { mode: "raise", radiusM: 1, strength: 1, levelY: 0 });
+  const raisedY = EL.valToY(brush.cells[4], brush);
+  check(`u16 raise brush remains meter-ergonomic (delta ${(raisedY - beforeY).toFixed(3)}m)`, Math.abs((raisedY - beforeY) - 1.2) <= step);
+  const weak = { ...brush, cells: new Uint16Array(9).fill(EL.yToVal(0)), dirty: false };
+  EL.brushDab(weak, 1, 1, { mode: "raise", radiusM: 1, strength: 0.05, levelY: 0 });
+  check("minimum-strength raise dab is not quantized to a no-op", weak.cells[4] > EL.yToVal(0));
+
+  const freshMap = { id: "gate-fresh-u16", features: [], rasters: {} };
+  EL.dropElevationCache(freshMap.id);
+  const fresh = EL.ensureElevation(freshMap, []);
+  check("new Atlas raster edits in Uint16Array", fresh.cells instanceof Uint16Array);
+  EL.syncElevationIntoDoc([freshMap]);
+  check("new Atlas persistence is explicit u16", freshMap.rasters.elevation.encoding === "u16");
+  check("new Atlas range persists the configured extrema", freshMap.rasters.elevation.minY === -500 && freshMap.rasters.elevation.maxY === 9000);
+
+  const malformed = [
+    { ...endian, w: 1025 },
+    { ...endian, minY: 4, maxY: 4 },
+    { ...endian, encoding: "u32" },
+    { ...endian, data: endian.data.slice(0, -4) },
+    { ...endian, data: "!!!!!!!!!!!!" },
+  ];
+  check("frontend rejects every malformed/bounds-violating payload", malformed.every((grid) => { try { EL.decodeElevationRaster(grid); return false; } catch { return true; } }));
+  EL.dropElevationCache(legacyMap.id);
+  EL.dropElevationCache(freshMap.id);
+
+  const u16DocGrid = EL.encodeElevationRaster({
+    w: 2, h: 2, rect: { x0: -50, z0: -50, w: 100, h: 100 }, minY: -500, maxY: 9000,
+    cells: new Uint16Array([0, 32768, 0x1234, 65535]),
+  });
+  const { worldMap: compiledU16 } = compileDesignMap({ mapsJsonText: rasterDoc(u16DocGrid), worldBibleText: WB_TEXT });
+  check("compiler preserves explicit u16 encoding and LE payload", compiledU16.reliefGrid.encoding === "u16" && compiledU16.reliefGrid.data === u16DocGrid.data);
+  check("compiler hashes explicit u16 encoding", worldMapContentHash(compiledU16) === compiledU16.provenance.contentHash);
+  const malformedCompilerInputs = [
+    { ...u16DocGrid, w: 1025 },
+    { ...u16DocGrid, w: "2" },
+    { ...u16DocGrid, data: "!!!!!!!!!!!!" },
+    { ...u16DocGrid, maxY: -500 },
+  ];
+  check("compiler eagerly rejects malformed elevation even without a landmass raster", malformedCompilerInputs.every((grid) => {
+    try { compileDesignMap({ mapsJsonText: rasterDoc(grid), worldBibleText: WB_TEXT }); return false; } catch { return true; }
+  }));
+}
 {
   const elev = hillRaster();
   const { worldMap } = compileDesignMap({ mapsJsonText: rasterDoc(elev), worldBibleText: WB_TEXT });
   check("compile emits reliefGrid from rasters.elevation", !!worldMap.reliefGrid && worldMap.reliefGrid.data === elev.data);
+  check("legacy u8 compile keeps encoding absent for hash compatibility", worldMap.reliefGrid.encoding === undefined);
   check("PRECEDENCE: relief hints NOT emitted when a raster is present", worldMap.relief.length === 0);
   const bare = JSON.parse(rasterDoc(elev));
   delete bare.maps[0].rasters;
@@ -750,16 +844,18 @@ console.log("data safety:");
   const { tmpdir } = await import("node:os");
   const { spawn } = await import("node:child_process");
   const vault = mkTmp(join(tmpdir(), "mapstudio-cas-"));
+  wf(join(vault, "limina.project.json"), JSON.stringify({ schema: "limina-project/1", projectId: "mapstudio-gate" }, null, 2));
   wf(join(vault, "maps.json"), JSON.stringify(serializeMapDoc(clone(V1_FIXTURE.maps), "primary"), null, 2));
   const port = 41870 + (process.pid % 100);
   const srv = spawn("node", [join(ROOT, "tools/design/serve-design.mjs"), vault, String(port)], { stdio: "ignore" });
   try {
-    let rev = null;
+    let rev = null, state = null;
     for (let i = 0; i < 50 && rev === null; i++) {
       await new Promise((r) => setTimeout(r, 200));
-      try { rev = (await (await fetch(`http://localhost:${port}/api/state`)).json()).mapsRev ?? null; } catch { /* booting */ }
+      try { state = await (await fetch(`http://localhost:${port}/api/state`)).json(); rev = state.mapsRev ?? null; } catch { /* booting */ }
     }
     check("server: /api/state carries mapsRev", typeof rev === "string" && rev.length > 0);
+    check("server: /api/state carries the strict fixture projectId", state?.project === "mapstudio-gate");
     const session = await (await fetch(`http://localhost:${port}/api/session`)).json();
     const postHeaders = { "content-type": "application/json", "x-limina-design-token": session.token };
     // Fresh-rev save (drops a feature deliberately — a LEGITIMATE newer-state write) lands.

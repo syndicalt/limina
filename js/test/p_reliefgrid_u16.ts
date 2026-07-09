@@ -12,6 +12,7 @@
 import { reliefGridSampler } from "../src/world/pipeline/map-raster.mjs";
 import { u8ToB64 } from "../src/world/pipeline/raster-codec.mjs";
 import { stableStringifyWorldMap } from "../src/world/worldmap-hash.mjs";
+import { WorldMapSchema } from "../src/world/worldmap.ts";
 import { ops } from "../src/engine.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -49,4 +50,19 @@ const strU16 = stableStringifyWorldMap({ ...baseMap, reliefGrid: gridU16 } as ne
 assert(!strU8.includes('"encoding"'), "a u8 grid must NOT emit an encoding key (byte-identical to pre-u16 maps)");
 assert(strU16.includes('"encoding":"u16"'), "a u16 grid MUST carry encoding into the hashed form (hash discipline)");
 
-ops.op_log("p_reliefgrid_u16 OK: u16 heightfield decodes (Everest-scale peak reachable: " + Math.round(s16(100, 0)) + "m), u8 back-compat intact, mis-tag throws, encoding hashed only-when-present (u8 hashes identically).");
+// ── bounded malformed-input rejection: fail before allocating/decoding an attacker-sized grid ───
+assert(WorldMapSchema.safeParse({ ...baseMap, reliefGrid: gridU16 }).success, "schema must accept a valid u16 grid");
+assert(!WorldMapSchema.safeParse({ ...baseMap, reliefGrid: { ...gridU16, maxY: MINY } }).success, "schema must reject a reversed/empty height range");
+for (const bad of [
+  { ...gridU16, w: 1025 },
+  { ...gridU16, w: "2" },
+  { ...gridU16, encoding: "u32" },
+  { ...gridU16, data: gridU16.data.slice(0, -4) },
+  { ...gridU16, data: "!!!!!!!!!!!!" },
+]) {
+  let malformedRejected = false;
+  try { reliefGridSampler({ reliefGrid: bad, origin: [0, 0], unitsPerMeter: 1 } as never); } catch { malformedRejected = true; }
+  assert(malformedRejected, `malformed relief grid must be rejected: ${JSON.stringify(bad).slice(0, 120)}`);
+}
+
+ops.op_log("p_reliefgrid_u16 OK: u16 heightfield decodes (Everest-scale peak reachable: " + Math.round(s16(100, 0)) + "m), u8 back-compat intact, mis-tag/malformed/bounds violations throw, encoding hashed only-when-present (u8 hashes identically).");
