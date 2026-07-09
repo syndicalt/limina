@@ -148,6 +148,10 @@ export function buildPeekScene(worldMap, { project = "project", mapFile, vantage
         ao: { enabled: true, intensity: 0.85, radius: 1.2, scale: 1.6, samples: 16 },
         bloom: { enabled: true },
         grade: { enabled: true },
+        // A gentle full-scene Sobel edge — ink lines on the coastline, waterways and stamped
+        // assets. The peek is a MAP, so the illustrated-cartography read suits it; kept moderate
+        // (0.7) so it reads as linework, not a heavy cel border.
+        outline: { enabled: true, strength: 0.7 },
       } },
     ],
     // The map's sea level is the ground reference the harness uses to lift a vantage camera to
