@@ -7,9 +7,11 @@
 //!   * structured errors surfaced as catchable JS exceptions,
 //!   * host-owned resources held in `OpState`, fetched per call.
 
-use std::io::Write;
+use std::collections::HashMap;
+use std::io::{BufWriter, Read, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use deno_core::{extension, op2, OpState};
@@ -65,6 +67,18 @@ pub fn op_counter_inc(state: &mut OpState) -> u32 {
 /// Host-configured root for `op_read_asset`. Defaults to `<cwd>/assets`.
 struct AssetRoot(std::path::PathBuf);
 
+const MAX_TRACE_CALL_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TRACE_FILE_BYTES: u64 = 512 * 1024 * 1024;
+static TRACE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct TraceWriter {
+    writer: BufWriter<std::fs::File>,
+    bytes: u64,
+}
+
+#[derive(Default)]
+struct TraceWriters(HashMap<std::path::PathBuf, TraceWriter>);
+
 /// Read a relative asset file as bytes, sandboxed to the asset root. Rejects
 /// absolute paths, `..` traversal, and symlink escapes; caps size. Agents only
 /// ever name a relative asset id, never a host path.
@@ -102,7 +116,6 @@ fn read_asset_bytes(root: &Path, rel: &str) -> Result<Vec<u8>, JsErrorBox> {
     // canonicalize->read TOCTOU window: the metadata cap and the bytes both come
     // from this fd, so a path swap after canonicalize cannot slip a different
     // (larger) file between the size check and the read.
-    use std::io::Read;
     let file = std::fs::File::open(&candidate).map_err(JsErrorBox::from_err)?;
     let meta = file.metadata().map_err(JsErrorBox::from_err)?;
     if meta.len() > MAX_BYTES {
@@ -134,45 +147,115 @@ fn trace_path(name: &str) -> Result<std::path::PathBuf, JsErrorBox> {
 
 /// Write an exported trace JSONL to `<cwd>/traces/<name>`.
 #[op2(fast)]
-pub fn op_write_trace(#[string] name: String, #[string] content: String) -> Result<(), JsErrorBox> {
+pub fn op_write_trace(
+    state: &mut OpState,
+    #[string] name: String,
+    #[string] content: String,
+) -> Result<(), JsErrorBox> {
+    if content.len() > MAX_TRACE_FILE_BYTES as usize {
+        return Err(JsErrorBox::generic("trace write exceeds file size cap"));
+    }
     let path = trace_path(&name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(JsErrorBox::from_err)?;
     }
-    std::fs::write(&path, content).map_err(JsErrorBox::from_err)
+    if let Some(writers) = state.try_borrow_mut::<TraceWriters>() {
+        writers.0.remove(&path);
+    }
+    let seq = TRACE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("limina-tmp-{}-{seq}", std::process::id()));
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        std::fs::rename(&temp, &path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result.map_err(JsErrorBox::from_err)
 }
 
 /// Append one already-complete trace JSONL segment to `<cwd>/traces/<name>`.
 #[op2(fast)]
 pub fn op_append_trace(
+    state: &mut OpState,
     #[string] name: String,
     #[string] content: String,
 ) -> Result<(), JsErrorBox> {
+    if content.len() > MAX_TRACE_CALL_BYTES {
+        return Err(JsErrorBox::generic(
+            "trace append exceeds per-call size cap",
+        ));
+    }
     let path = trace_path(&name)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(JsErrorBox::from_err)?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
+    if state.try_borrow::<TraceWriters>().is_none() {
+        state.put(TraceWriters::default());
+    }
+    let writers = state.borrow_mut::<TraceWriters>();
+    if !writers.0.contains_key(&path) {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(JsErrorBox::from_err)?;
+        let bytes = file.metadata().map_err(JsErrorBox::from_err)?.len();
+        writers.0.insert(
+            path.clone(),
+            TraceWriter {
+                writer: BufWriter::new(file),
+                bytes,
+            },
+        );
+    }
+    let trace = writers.0.get_mut(&path).expect("trace writer inserted");
+    let next_bytes = trace
+        .bytes
+        .checked_add(content.len() as u64)
+        .ok_or_else(|| JsErrorBox::generic("trace file length overflow"))?;
+    if next_bytes > MAX_TRACE_FILE_BYTES {
+        return Err(JsErrorBox::generic("trace file exceeds size cap"));
+    }
+    trace
+        .writer
+        .write_all(content.as_bytes())
         .map_err(JsErrorBox::from_err)?;
-    // NO per-call fsync. op_append_trace runs SYNCHRONOUSLY on the single event-loop thread
-    // and is called once PER EVENT — every skill, every streamed chat token, every read-poll
-    // the editor makes. A blocking sync_data() per event serialized the whole runtime on disk
-    // latency, so as event volume rose the editor host throttled to a crawl and stalled chat
-    // and new connections. The write lands in the OS page cache (durable across a PROCESS
-    // crash; a trace/world-log record does not need synchronous per-record durability), and
-    // the OS flushes it — turning a per-event millisecond fsync into a microsecond memcpy.
-    file.write_all(content.as_bytes())
-        .map_err(JsErrorBox::from_err)
+    // Flush BufWriter into the OS page cache so a following read sees the append;
+    // deliberately no sync_data/fsync on the event loop.
+    trace.writer.flush().map_err(JsErrorBox::from_err)?;
+    trace.bytes = next_bytes;
+    Ok(())
 }
 
 /// Read back a trace JSONL from `<cwd>/traces/<name>`.
 #[op2]
 #[string]
-pub fn op_read_trace(#[string] name: String) -> Result<String, JsErrorBox> {
-    std::fs::read_to_string(trace_path(&name)?).map_err(JsErrorBox::from_err)
+pub fn op_read_trace(state: &mut OpState, #[string] name: String) -> Result<String, JsErrorBox> {
+    let path = trace_path(&name)?;
+    if let Some(writers) = state.try_borrow_mut::<TraceWriters>() {
+        if let Some(trace) = writers.0.get_mut(&path) {
+            trace.writer.flush().map_err(JsErrorBox::from_err)?;
+        }
+    }
+    let file = std::fs::File::open(path).map_err(JsErrorBox::from_err)?;
+    let size = file.metadata().map_err(JsErrorBox::from_err)?.len();
+    if size > MAX_TRACE_FILE_BYTES {
+        return Err(JsErrorBox::generic("trace read exceeds size cap"));
+    }
+    let mut content = String::with_capacity(size as usize);
+    file.take(MAX_TRACE_FILE_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(JsErrorBox::from_err)?;
+    if content.len() as u64 > MAX_TRACE_FILE_BYTES {
+        return Err(JsErrorBox::generic("trace read exceeds size cap"));
+    }
+    Ok(content)
 }
 
 /// Provider-agnostic HTTP POST (JSON). Async: returns a Promise resolved when the
@@ -336,10 +419,20 @@ fn is_http_post_target_ip_allowed(host: &str, ip: &IpAddr) -> bool {
     let host_is_loopback = host_lc == "localhost"
         || host_lc
             .parse::<IpAddr>()
-            .map(|host_ip| host_ip.is_loopback())
+            .map(|host_ip| match host_ip {
+                IpAddr::V4(ip) => ip.is_loopback(),
+                IpAddr::V6(ip) => ip
+                    .to_ipv4_mapped()
+                    .map_or_else(|| ip.is_loopback(), |mapped| mapped.is_loopback()),
+            })
             .unwrap_or(false);
     if host_is_loopback {
-        return ip.is_loopback();
+        return match ip {
+            IpAddr::V4(ip) => ip.is_loopback(),
+            IpAddr::V6(ip) => ip
+                .to_ipv4_mapped()
+                .map_or_else(|| ip.is_loopback(), |mapped| mapped.is_loopback()),
+        };
     }
     is_public_http_target_ip(ip)
 }
@@ -362,6 +455,9 @@ fn is_public_http_target_ip(ip: &IpAddr) -> bool {
                 || a >= 240)
         }
         IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return is_public_http_target_ip(&IpAddr::V4(mapped));
+            }
             let segments = ip.segments();
             !(ip.is_unspecified()
                 || ip.is_loopback()
@@ -584,7 +680,10 @@ mod tests {
         std::env::set_var("SECRET_TEST_KEY", "denied-secret");
         std::env::set_var("ANTHROPIC_test_key", "denied-lowercase");
 
-        assert_eq!(read_allowlisted_env("ANTHROPIC_TEST_KEY"), "allowed-anthropic");
+        assert_eq!(
+            read_allowlisted_env("ANTHROPIC_TEST_KEY"),
+            "allowed-anthropic"
+        );
         assert_eq!(read_allowlisted_env("LIMINA_TEST_KEY"), "allowed-limina");
         assert_eq!(read_allowlisted_env("SECRET_TEST_KEY"), "");
         assert_eq!(read_allowlisted_env("ANTHROPIC_test_key"), "");
@@ -606,13 +705,28 @@ mod tests {
             "# a comment\n\nANTHROPIC_API_KEY=sk-plain\nexport LIMINA_HTTP_POST_ALLOW=api.anthropic.com\nQUOTED=\"quoted value\"\nSINGLE='single'\n",
         )
         .unwrap();
-        assert_eq!(read_dotenv_value_in(&dir, "ANTHROPIC_API_KEY").as_deref(), Some("sk-plain"));
-        assert_eq!(read_dotenv_value_in(&dir, "LIMINA_HTTP_POST_ALLOW").as_deref(), Some("api.anthropic.com"));
-        assert_eq!(read_dotenv_value_in(&dir, "QUOTED").as_deref(), Some("quoted value"));
-        assert_eq!(read_dotenv_value_in(&dir, "SINGLE").as_deref(), Some("single"));
+        assert_eq!(
+            read_dotenv_value_in(&dir, "ANTHROPIC_API_KEY").as_deref(),
+            Some("sk-plain")
+        );
+        assert_eq!(
+            read_dotenv_value_in(&dir, "LIMINA_HTTP_POST_ALLOW").as_deref(),
+            Some("api.anthropic.com")
+        );
+        assert_eq!(
+            read_dotenv_value_in(&dir, "QUOTED").as_deref(),
+            Some("quoted value")
+        );
+        assert_eq!(
+            read_dotenv_value_in(&dir, "SINGLE").as_deref(),
+            Some("single")
+        );
         assert_eq!(read_dotenv_value_in(&dir, "MISSING"), None);
         // absent file → None, not a panic.
-        assert_eq!(read_dotenv_value_in(&temp_root("dotenv-empty"), "ANY"), None);
+        assert_eq!(
+            read_dotenv_value_in(&temp_root("dotenv-empty"), "ANY"),
+            None
+        );
     }
 
     /// A relative file inside the configured root reads back its exact bytes.
@@ -705,13 +819,32 @@ mod tests {
             "api.example.test",
             &"198.18.0.1".parse().unwrap()
         ));
+        for mapped in [
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.5",
+            "::ffff:169.254.169.254",
+            "::ffff:100.64.0.1",
+        ] {
+            assert!(
+                !is_http_post_target_ip_allowed("api.example.test", &mapped.parse().unwrap()),
+                "IPv4-mapped private target must be rejected: {mapped}"
+            );
+        }
         assert!(is_http_post_target_ip_allowed(
             "localhost",
             &"127.0.0.1".parse().unwrap()
         ));
         assert!(is_http_post_target_ip_allowed(
+            "::ffff:127.0.0.1",
+            &"::ffff:127.0.0.1".parse().unwrap()
+        ));
+        assert!(is_http_post_target_ip_allowed(
             "api.example.test",
             &"93.184.216.34".parse().unwrap()
+        ));
+        assert!(is_http_post_target_ip_allowed(
+            "api.example.test",
+            &"::ffff:93.184.216.34".parse().unwrap()
         ));
     }
 
@@ -846,7 +979,10 @@ extension!(
         op_read_trace,
     ],
     state = |state| {
-        let root = std::env::current_dir().unwrap_or_default().join("assets");
+        let root = std::env::var_os("LIMINA_ASSET_ROOT")
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("assets"));
         state.put(AssetRoot(root));
     },
 );

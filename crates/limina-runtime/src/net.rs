@@ -33,9 +33,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{accept_hdr_async, WebSocketStream};
+use tokio_tungstenite::{accept_hdr_async_with_config, connect_async_with_config, WebSocketStream};
 
 /// Returned by `op_net_accept` when its listener has been closed, so the JS
 /// accept loop can break cleanly instead of awaiting a connection forever.
@@ -53,10 +54,19 @@ const NET_SEND_TIMEOUT: Duration = Duration::from_millis(1500);
 /// A real local handshake completes in <1ms; anything past this is abandoned so the
 /// loop keeps accepting. Bounds head-of-line blocking to one timeout, never infinite.
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_NET_LISTENERS: usize = 32;
+const MAX_NET_CONNECTIONS: usize = 512;
+const MAX_WS_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WS_FRAME_BYTES: usize = MAX_WS_MESSAGE_BYTES;
+const WS_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Host-bound listener for `limina --mcp-ws` (installed by the host before the
 /// JS server loop runs). Server-only; the production server never shuts it down.
 pub struct WsListener(pub Rc<TcpListener>);
+
+/// Per-launch secret installed only for `--mcp-ws`. JavaScript reads it once to
+/// configure the initialize handshake; other runtime modes expose an empty value.
+pub struct WsAuthToken(pub String);
 
 type BoxedSink = Pin<Box<dyn Sink<Message, Error = WsError>>>;
 type BoxedStream = Pin<Box<dyn Stream<Item = Result<Message, WsError>>>>;
@@ -93,13 +103,25 @@ struct NetState {
 }
 
 impl NetState {
-    fn register<S>(&mut self, ws: WebSocketStream<S>) -> u32
+    fn allocate_id(&mut self) -> Result<u32, JsErrorBox> {
+        if self.next_id == ACCEPT_CLOSED {
+            return Err(JsErrorBox::generic("network registry id space exhausted"));
+        }
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| JsErrorBox::generic("network registry id overflow"))?;
+        Ok(id)
+    }
+
+    fn register<S>(&mut self, ws: WebSocketStream<S>) -> Result<u32, JsErrorBox>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static,
     {
+        ensure_connection_capacity(self.conns.len())?;
         let (sink, stream) = ws.split();
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        let id = self.allocate_id()?;
         self.conns.insert(
             id,
             Rc::new(NetConn {
@@ -109,8 +131,37 @@ impl NetState {
                 closed: AtomicBool::new(false),
             }),
         );
-        id
+        Ok(id)
     }
+}
+
+fn ensure_connection_capacity(current: usize) -> Result<(), JsErrorBox> {
+    if current >= MAX_NET_CONNECTIONS {
+        Err(JsErrorBox::generic(format!(
+            "network connection cap exceeded ({MAX_NET_CONNECTIONS})"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_listener_capacity(current: usize) -> Result<(), JsErrorBox> {
+    if current >= MAX_NET_LISTENERS {
+        Err(JsErrorBox::generic(format!(
+            "network listener cap exceeded ({MAX_NET_LISTENERS})"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .read_buffer_size(WS_BUFFER_BYTES)
+        .write_buffer_size(WS_BUFFER_BYTES)
+        .max_write_buffer_size(MAX_WS_MESSAGE_BYTES + WS_BUFFER_BYTES)
+        .max_message_size(Some(MAX_WS_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_WS_FRAME_BYTES))
 }
 
 fn with_net<R>(state: &Rc<RefCell<OpState>>, f: impl FnOnce(&mut NetState) -> R) -> R {
@@ -154,13 +205,13 @@ pub async fn op_net_listen(state: Rc<RefCell<OpState>>, port: u16) -> Result<u32
 }
 
 async fn net_listen_impl(state: Rc<RefCell<OpState>>, port: u16) -> Result<u32, JsErrorBox> {
+    with_net(&state, |net| ensure_listener_capacity(net.listeners.len()))?;
     let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(JsErrorBox::from_err)?;
     let resolved = listener.local_addr().map_err(JsErrorBox::from_err)?.port();
-    Ok(with_net(&state, |net| {
-        let id = net.next_id;
-        net.next_id = net.next_id.wrapping_add(1);
+    with_net(&state, |net| {
+        let id = net.allocate_id()?;
         net.listeners.insert(
             id,
             Rc::new(ListenerEntry {
@@ -171,8 +222,8 @@ async fn net_listen_impl(state: Rc<RefCell<OpState>>, port: u16) -> Result<u32, 
                 accept_lock: Mutex::new(()),
             }),
         );
-        id
-    }))
+        Ok(id)
+    })
 }
 
 /// The resolved local port of a listener (so the test can connect clients).
@@ -233,6 +284,7 @@ fn origin_is_allowed(req: &Request, allowed_origins: Option<&HashSet<String>>) -
     }
 }
 
+#[allow(clippy::result_large_err)] // tungstenite's callback requires its concrete ErrorResponse.
 async fn accept_ws_with_origins(
     tcp: tokio::net::TcpStream,
     allowed_origins: Option<HashSet<String>>,
@@ -244,7 +296,7 @@ async fn accept_ws_with_origins(
             Err(origin_rejection())
         }
     };
-    accept_hdr_async(tcp, callback).await
+    accept_hdr_async_with_config(tcp, callback, Some(websocket_config())).await
 }
 
 async fn net_accept_impl_with_origins(
@@ -293,8 +345,13 @@ async fn net_accept_impl_with_origins(
         // Bound the handshake so a stalled/half-open peer is dropped rather than holding
         // its pool slot forever; combined with the released accept_lock, other clients
         // keep connecting throughout.
-        match timeout(WS_HANDSHAKE_TIMEOUT, accept_ws_with_origins(tcp, allowed_origins.clone())).await {
-            Ok(Ok(ws)) => return Ok(with_net(&state, |net| net.register(ws))),
+        match timeout(
+            WS_HANDSHAKE_TIMEOUT,
+            accept_ws_with_origins(tcp, allowed_origins.clone()),
+        )
+        .await
+        {
+            Ok(Ok(ws)) => return with_net(&state, |net| net.register(ws)),
             Ok(Err(_)) => continue,
             Err(_) => continue,
         }
@@ -330,6 +387,28 @@ pub fn op_net_host_port(state: &mut OpState) -> u16 {
         .unwrap_or(0)
 }
 
+#[op2]
+#[string]
+pub fn op_net_host_auth_token(state: &mut OpState) -> String {
+    net_host_auth_token_impl(state)
+}
+
+fn net_host_auth_token_impl(state: &mut OpState) -> String {
+    state
+        .try_borrow::<WsAuthToken>()
+        .map(|token| token.0.clone())
+        .unwrap_or_default()
+}
+
+#[allow(clippy::result_large_err)] // tungstenite's callback requires its concrete ErrorResponse.
+fn reject_browser_origin(req: &Request, response: Response) -> Result<Response, ErrorResponse> {
+    if req.headers().contains_key("origin") {
+        Err(origin_rejection())
+    } else {
+        Ok(response)
+    }
+}
+
 async fn net_accept_host_impl(state: Rc<RefCell<OpState>>) -> Result<u32, JsErrorBox> {
     let listener = {
         let s = state.borrow();
@@ -340,8 +419,13 @@ async fn net_accept_host_impl(state: Rc<RefCell<OpState>>) -> Result<u32, JsErro
         tcp.set_nodelay(true).ok();
         // Same head-of-line guard as the gated listener: a stalled handshake must not
         // block the host accept loop from taking the next client.
-        match timeout(WS_HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async(tcp)).await {
-            Ok(Ok(ws)) => return Ok(with_net(&state, |net| net.register(ws))),
+        match timeout(
+            WS_HANDSHAKE_TIMEOUT,
+            accept_hdr_async_with_config(tcp, reject_browser_origin, Some(websocket_config())),
+        )
+        .await
+        {
+            Ok(Ok(ws)) => return with_net(&state, |net| net.register(ws)),
             Ok(Err(_)) => continue,
             Err(_) => continue,
         }
@@ -360,10 +444,10 @@ pub async fn op_net_connect(
 }
 
 async fn net_connect_impl(state: Rc<RefCell<OpState>>, url: String) -> Result<u32, JsErrorBox> {
-    let (ws, _resp) = tokio_tungstenite::connect_async(&url)
+    let (ws, _resp) = connect_async_with_config(&url, Some(websocket_config()), false)
         .await
         .map_err(|e| JsErrorBox::generic(format!("net connect: {e}")))?;
-    Ok(with_net(&state, |net| net.register(ws)))
+    with_net(&state, |net| net.register(ws))
 }
 
 // ---- per-connection read / write / close ----------------------------------
@@ -436,12 +520,26 @@ async fn net_send_impl(
     conn_id: u32,
     line: String,
 ) -> Result<(), JsErrorBox> {
+    net_send_impl_with_timeout(state, conn_id, line, NET_SEND_TIMEOUT).await
+}
+
+async fn net_send_impl_with_timeout(
+    state: Rc<RefCell<OpState>>,
+    conn_id: u32,
+    line: String,
+    send_timeout: Duration,
+) -> Result<(), JsErrorBox> {
+    if line.len() > MAX_WS_MESSAGE_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "net send message exceeds {MAX_WS_MESSAGE_BYTES} bytes"
+        )));
+    }
     let conn = conn_by_id(&state, conn_id)
         .ok_or_else(|| JsErrorBox::generic("net: send on unknown connection"))?;
     if conn.closed.load(Ordering::Acquire) {
         return Err(JsErrorBox::generic("net: send on closed connection"));
     }
-    match timeout(NET_SEND_TIMEOUT, async {
+    match timeout(send_timeout, async {
         let mut tx = conn.tx.lock().await;
         tx.send(Message::text(line)).await
     })
@@ -462,7 +560,7 @@ async fn net_send_impl(
             // decides what to do, and the connection survives.
             Err(JsErrorBox::generic(format!(
                 "net send timeout after {}ms",
-                NET_SEND_TIMEOUT.as_millis()
+                send_timeout.as_millis()
             )))
         }
     }
@@ -558,8 +656,7 @@ mod tests {
         let state = Rc::new(RefCell::new(OpState::new(None)));
         let conn = Rc::new(conn);
         let conn_id = with_net(&state, |net| {
-            let id = net.next_id;
-            net.next_id = net.next_id.wrapping_add(1);
+            let id = net.allocate_id().expect("allocate test connection id");
             net.conns.insert(id, conn.clone());
             id
         });
@@ -611,27 +708,50 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn send_timeout_returns_error_and_deregisters_connection() {
+    async fn send_timeout_returns_error_and_preserves_connection() {
         let rx = futures_util::stream::pending::<Result<Message, WsError>>();
         let (state, conn_id, conn) = state_with_conn(conn_with_parts(PendingSink, rx));
 
-        let result = timeout(
-            Duration::from_millis(200),
-            net_send_impl(state.clone(), conn_id, "tick".to_string()),
+        let result = net_send_impl_with_timeout(
+            state.clone(),
+            conn_id,
+            "tick".to_string(),
+            Duration::from_millis(10),
         )
         .await
-        .expect("op_net_send must use its own bounded send timeout")
         .expect_err("timed-out send must not report fake success");
 
         assert!(
             result.to_string().contains("timeout"),
             "unexpected send error: {result}"
         );
-        assert!(conn.closed.load(Ordering::Acquire));
+        assert!(!conn.closed.load(Ordering::Acquire));
         assert!(
-            conn_by_id(&state, conn_id).is_none(),
-            "timed-out send must remove the connection from NetState"
+            conn_by_id(&state, conn_id).is_some(),
+            "transient send timeout must preserve the connection for recv/retry"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn send_rejects_oversized_message_before_touching_connection() {
+        let state = Rc::new(RefCell::new(OpState::new(None)));
+        let err = net_send_impl(state, 999, "x".repeat(MAX_WS_MESSAGE_BYTES + 1))
+            .await
+            .expect_err("oversized send must be rejected");
+        assert!(err.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn registry_ids_fail_closed_and_capacity_is_bounded() {
+        let mut net = NetState {
+            next_id: ACCEPT_CLOSED,
+            ..NetState::default()
+        };
+        assert!(net.allocate_id().is_err());
+        assert!(ensure_connection_capacity(MAX_NET_CONNECTIONS - 1).is_ok());
+        assert!(ensure_connection_capacity(MAX_NET_CONNECTIONS).is_err());
+        assert!(ensure_listener_capacity(MAX_NET_LISTENERS - 1).is_ok());
+        assert!(ensure_listener_capacity(MAX_NET_LISTENERS).is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -732,6 +852,53 @@ mod tests {
             "accepted allowed-origin websocket must be registered"
         );
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn host_accept_rejects_browser_origin_and_allows_non_browser_client() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind host listener");
+        let port = listener.local_addr().unwrap().port();
+        let state = Rc::new(RefCell::new(OpState::new(None)));
+        state.borrow_mut().put(WsListener(Rc::new(listener)));
+
+        let url = format!("ws://127.0.0.1:{port}/");
+        let mut browser_req = url
+            .clone()
+            .into_client_request()
+            .expect("build browser request");
+        browser_req.headers_mut().insert(
+            "Origin",
+            "https://evil.example".parse().expect("valid origin"),
+        );
+        let browser =
+            tokio::spawn(async move { tokio_tungstenite::connect_async(browser_req).await });
+        let native = tokio::spawn(async move { tokio_tungstenite::connect_async(url).await });
+
+        let accepted = timeout(Duration::from_secs(2), net_accept_host_impl(state.clone()))
+            .await
+            .expect("host accept timed out")
+            .expect("host should accept native client after rejecting browser");
+        timeout(Duration::from_secs(2), browser)
+            .await
+            .expect("browser request timed out")
+            .expect("browser task panicked")
+            .expect_err("browser Origin must be rejected on production host listener");
+        timeout(Duration::from_secs(2), native)
+            .await
+            .expect("native request timed out")
+            .expect("native task panicked")
+            .expect("native client should connect");
+        assert!(conn_by_id(&state, accepted).is_some());
+    }
+
+    #[test]
+    fn host_auth_token_is_available_only_when_installed() {
+        let mut state = OpState::new(None);
+        assert_eq!(net_host_auth_token_impl(&mut state), "");
+        state.put(WsAuthToken("secret".to_string()));
+        assert_eq!(net_host_auth_token_impl(&mut state), "secret");
+    }
 }
 
 extension!(
@@ -744,6 +911,7 @@ extension!(
         op_net_close_listener,
         op_net_accept_host,
         op_net_host_port,
+        op_net_host_auth_token,
         op_net_connect,
         op_net_recv,
         op_net_send,

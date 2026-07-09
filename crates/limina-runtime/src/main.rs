@@ -144,6 +144,107 @@ fn run_headless(main_path: &str) -> anyhow::Result<()> {
         .map_err(Into::into)
 }
 
+/// MCP stdio: load a JS module that owns the SkillRegistry and transport,
+/// then expose stdin/stdout ops so external agents exercise JSON-RPC framing.
+fn run_mcp_stdio(main_path: &str) -> anyhow::Result<()> {
+    let mut extensions = limina_render::deno_extensions();
+    extensions.push(limina_ops::limina_ops::init());
+    extensions.push(limina_physics::limina_physics::init());
+    extensions.push(limina_sandbox::limina_sandbox::init());
+    extensions.push(limina_ecs::limina_ecs::init());
+    extensions.push(limina_audio::limina_audio::init());
+    extensions.push(mcp_stdio::limina_mcp_stdio::init());
+
+    let mut js_runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
+        extensions,
+        ..Default::default()
+    });
+
+    let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
+
+    let fut = async move {
+        let mod_id = js_runtime.load_main_es_module(&main_module).await?;
+        let result = js_runtime.mod_evaluate(mod_id);
+        js_runtime.run_event_loop(Default::default()).await?;
+        result.await
+    };
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(fut)
+        .map_err(Into::into)
+}
+
+/// MCP WebSocket: bind a localhost TCP listener up front (so clients can connect
+/// the instant the process is ready), hand it to the JS module via `OpState`,
+/// then run the same JSON-RPC transport loop the stdio path uses. The listener is
+/// localhost-only and every launch receives a fresh initialize-handshake token.
+fn run_mcp_ws(main_path: &str, port: u16) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    let mut extensions = limina_render::deno_extensions();
+    extensions.push(limina_ops::limina_ops::init());
+    extensions.push(limina_physics::limina_physics::init());
+    extensions.push(limina_sandbox::limina_sandbox::init());
+    extensions.push(limina_ecs::limina_ecs::init());
+    extensions.push(limina_audio::limina_audio::init());
+    extensions.push(net::limina_net::init());
+
+    let mut js_runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
+        extensions,
+        ..Default::default()
+    });
+
+    let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
+    let auth_token = generate_ws_auth_token()?;
+
+    let fut = async move {
+        // Bind before the JS loop runs: the kernel queues incoming connections
+        // in the accept backlog until the JS side calls op_net_accept_host.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+        let addr = listener.local_addr()?;
+        js_runtime
+            .op_state()
+            .borrow_mut()
+            .put(net::WsListener(Rc::new(listener)));
+        js_runtime
+            .op_state()
+            .borrow_mut()
+            .put(net::WsAuthToken(auth_token.clone()));
+
+        // Emit a machine-readable ready line so callers can synchronize before
+        // connecting (the port is the resolved one, which matters for `--port 0`).
+        println!("limina mcp-ws listening on {addr} auth_token={auth_token}");
+        std::io::stdout().flush().ok();
+
+        let mod_id = js_runtime.load_main_es_module(&main_module).await?;
+        let result = js_runtime.mod_evaluate(mod_id);
+        js_runtime.run_event_loop(Default::default()).await?;
+        result.await
+    };
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(fut)
+        .map_err(Into::into)
+}
+
+fn generate_ws_auth_token() -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+
+    let mut random = [0_u8; 32];
+    getrandom::fill(&mut random)?;
+    let mut token = String::with_capacity(random.len() * 2);
+    for byte in random {
+        write!(&mut token, "{byte:02x}").expect("writing to String is infallible");
+    }
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,88 +289,13 @@ mod tests {
         assert_eq!(opts.max_frames, Some(12));
         assert_eq!(opts.module, "demo.ts");
     }
-}
 
-/// MCP stdio: load a JS module that owns the SkillRegistry and transport,
-/// then expose stdin/stdout ops so external agents exercise JSON-RPC framing.
-fn run_mcp_stdio(main_path: &str) -> anyhow::Result<()> {
-    let mut extensions = limina_render::deno_extensions();
-    extensions.push(limina_ops::limina_ops::init());
-    extensions.push(limina_physics::limina_physics::init());
-    extensions.push(limina_sandbox::limina_sandbox::init());
-    extensions.push(limina_ecs::limina_ecs::init());
-    extensions.push(limina_audio::limina_audio::init());
-    extensions.push(mcp_stdio::limina_mcp_stdio::init());
-
-    let mut js_runtime = JsRuntime::new(RuntimeOptions {
-        module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
-        extensions,
-        ..Default::default()
-    });
-
-    let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
-
-    let fut = async move {
-        let mod_id = js_runtime.load_main_es_module(&main_module).await?;
-        let result = js_runtime.mod_evaluate(mod_id);
-        js_runtime.run_event_loop(Default::default()).await?;
-        result.await
-    };
-
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(fut)
-        .map_err(Into::into)
-}
-
-/// MCP WebSocket: bind a localhost TCP listener up front (so clients can connect
-/// the instant the process is ready), hand it to the JS module via `OpState`,
-/// then run the same JSON-RPC transport loop the stdio path uses. Localhost-only
-/// and unauthenticated for Phase 2; transport auth is Phase 4.
-fn run_mcp_ws(main_path: &str, port: u16) -> anyhow::Result<()> {
-    use std::io::Write as _;
-
-    let mut extensions = limina_render::deno_extensions();
-    extensions.push(limina_ops::limina_ops::init());
-    extensions.push(limina_physics::limina_physics::init());
-    extensions.push(limina_sandbox::limina_sandbox::init());
-    extensions.push(limina_ecs::limina_ecs::init());
-    extensions.push(limina_audio::limina_audio::init());
-    extensions.push(net::limina_net::init());
-
-    let mut js_runtime = JsRuntime::new(RuntimeOptions {
-        module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
-        extensions,
-        ..Default::default()
-    });
-
-    let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
-
-    let fut = async move {
-        // Bind before the JS loop runs: the kernel queues incoming connections
-        // in the accept backlog until the JS side calls op_net_accept_host.
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-        let addr = listener.local_addr()?;
-        js_runtime
-            .op_state()
-            .borrow_mut()
-            .put(net::WsListener(Rc::new(listener)));
-
-        // Emit a machine-readable ready line so callers can synchronize before
-        // connecting (the port is the resolved one, which matters for `--port 0`).
-        println!("limina mcp-ws listening on {addr}");
-        std::io::stdout().flush().ok();
-
-        let mod_id = js_runtime.load_main_es_module(&main_module).await?;
-        let result = js_runtime.mod_evaluate(mod_id);
-        js_runtime.run_event_loop(Default::default()).await?;
-        result.await
-    };
-
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(fut)
-        .map_err(Into::into)
+    #[test]
+    fn websocket_auth_tokens_are_256_bit_hex_and_fresh() {
+        let first = generate_ws_auth_token().expect("OS random source");
+        let second = generate_ws_auth_token().expect("OS random source");
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
 }

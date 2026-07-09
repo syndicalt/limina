@@ -93,10 +93,15 @@ async fn mcp_ws_real_socket_e2e() {
     // full pipe buffer can never block the child.
     let stdout = child.stdout.take().expect("child stdout");
     let mut lines = BufReader::new(stdout).lines();
-    timeout(Duration::from_secs(60), async {
+    let auth_token = timeout(Duration::from_secs(60), async {
         while let Some(line) = lines.next_line().await.expect("read child stdout") {
             if line.contains("mcp-ws listening") {
-                return;
+                return line
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix("auth_token="))
+                    .filter(|token| token.len() == 64)
+                    .map(str::to_string)
+                    .expect("ready line must include a 256-bit auth token");
             }
         }
         panic!("child exited before reporting it was listening");
@@ -114,7 +119,12 @@ async fn mcp_ws_real_socket_e2e() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": { "agentId": "agt_ws", "sessionId": "ses_ws", "profile": "builder.readWrite" },
+            "params": {
+                "agentId": "agt_ws",
+                "sessionId": "ses_ws",
+                "profile": "builder.readWrite",
+                "authToken": auth_token,
+            },
         }),
     )
     .await;
@@ -172,7 +182,12 @@ async fn mcp_ws_real_socket_e2e() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": { "agentId": "agt_player", "sessionId": "ses_player", "profile": "player.limited" },
+            "params": {
+                "agentId": "agt_player",
+                "sessionId": "ses_player",
+                "profile": "player.limited",
+                "authToken": auth_token,
+            },
         }),
     )
     .await;

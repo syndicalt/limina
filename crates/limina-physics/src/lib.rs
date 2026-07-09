@@ -7,15 +7,77 @@
 //! (`None`) rather than shifting later ids. Scene queries (raycast) build a
 //! transient `QueryPipeline` from the broad-phase BVH on demand.
 
+use bincode::Options;
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::geometry::Array2;
 use rapier3d::prelude::*;
-use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 const MAX_HEIGHTFIELD_SAMPLES: usize = 1_048_576;
+const MAX_PENDING_COLLISION_EVENTS: usize = 4_096;
+const MAX_PHYSICS_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const PHYSICS_SNAPSHOT_MAGIC: &[u8; 6] = b"LMPHYS";
+const PHYSICS_SNAPSHOT_VERSION: u16 = 1;
+
+#[derive(Default)]
+struct BoundedCollisionEvents {
+    pending: Mutex<VecDeque<CollisionEvent>>,
+    dropped: AtomicU64,
+}
+
+impl BoundedCollisionEvents {
+    fn push(&self, event: CollisionEvent) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pending.len() == MAX_PENDING_COLLISION_EVENTS {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        } else {
+            pending.push_back(event);
+        }
+    }
+
+    fn drain(&self) -> Vec<CollisionEvent> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.drain(..).collect()
+    }
+
+    fn take_dropped(&self) -> u64 {
+        self.dropped.swap(0, Ordering::AcqRel)
+    }
+}
+
+struct BoundedCollisionCollector(Arc<BoundedCollisionEvents>);
+
+impl EventHandler for BoundedCollisionCollector {
+    fn handle_collision_event(
+        &self,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        event: CollisionEvent,
+        _contact_pair: Option<&ContactPair>,
+    ) {
+        self.0.push(event);
+    }
+
+    fn handle_contact_force_event(
+        &self,
+        _dt: Real,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        _contact_pair: &ContactPair,
+        _total_force_magnitude: Real,
+    ) {
+    }
+}
 
 struct PhysicsWorld {
     gravity: Vector,
@@ -29,8 +91,7 @@ struct PhysicsWorld {
     impulse_joints: ImpulseJointSet,
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
-    collision_send: Sender<CollisionEvent>,
-    collision_recv: Receiver<CollisionEvent>,
+    collision_events: Arc<BoundedCollisionEvents>,
     /// `bodyId` -> handle; `None` is a tombstone for a removed body (ids never shift).
     handles: Vec<Option<RigidBodyHandle>>,
     /// Rapier handle -> stable `bodyId`, maintained alongside `handles` so collision
@@ -49,7 +110,6 @@ struct StartedContact {
 
 impl PhysicsWorld {
     fn new(gravity_y: f32) -> Self {
-        let (collision_send, collision_recv) = channel();
         Self {
             gravity: Vector::new(0.0, gravity_y, 0.0),
             integration_parameters: IntegrationParameters::default(),
@@ -62,16 +122,14 @@ impl PhysicsWorld {
             impulse_joints: ImpulseJointSet::new(),
             multibody_joints: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
-            collision_send,
-            collision_recv,
+            collision_events: Arc::new(BoundedCollisionEvents::default()),
             handles: Vec::new(),
             body_ids_by_handle: HashMap::new(),
         }
     }
 
     fn step(&mut self) {
-        let (contact_force_send, _contact_force_recv) = channel();
-        let events = ChannelEventCollector::new(self.collision_send.clone(), contact_force_send);
+        let events = BoundedCollisionCollector(self.collision_events.clone());
         self.pipeline.step(
             self.gravity,
             &self.integration_parameters,
@@ -173,7 +231,6 @@ impl PhysicsWorld {
     }
 
     fn from_snapshot(snapshot: PhysicsSnapshot) -> Self {
-        let (collision_send, collision_recv) = channel();
         let mut world = Self {
             gravity: Vector::new(
                 snapshot.gravity[0],
@@ -190,8 +247,7 @@ impl PhysicsWorld {
             impulse_joints: snapshot.impulse_joints,
             multibody_joints: snapshot.multibody_joints,
             ccd_solver: CCDSolver::new(),
-            collision_send,
-            collision_recv,
+            collision_events: Arc::new(BoundedCollisionEvents::default()),
             handles: snapshot.handles,
             body_ids_by_handle: HashMap::new(),
         };
@@ -297,8 +353,10 @@ fn validate_heightfield(
 /// broad-phase BVH, and island membership) PLUS the id->handle slotmap so body
 /// ids stay stable across a restore. The pipeline, CCD solver, and event channel
 /// are transient scratch -- they are reconstructed on restore, never serialized.
-/// f32 round-trips bit-exact through bincode, so a restored world steps
-/// identically to one that never stopped (the M2 mid-stream resume guarantee).
+/// Stored f32 values round-trip bit-exact through bincode. Rapier intentionally
+/// treats `PhysicsPipeline` as unserializable workspace, so a long active world
+/// may accumulate small floating-point drift after restore even though the
+/// authoritative dynamics state resumes from the exact captured values.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PhysicsSnapshot {
     gravity: [f32; 3],
@@ -311,6 +369,90 @@ struct PhysicsSnapshot {
     impulse_joints: ImpulseJointSet,
     multibody_joints: MultibodyJointSet,
     handles: Vec<Option<RigidBodyHandle>>,
+}
+
+fn snapshot_options() -> impl Options {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_PHYSICS_SNAPSHOT_BYTES as u64)
+        .reject_trailing_bytes()
+}
+
+fn validate_snapshot(snapshot: &PhysicsSnapshot) -> Result<(), JsErrorBox> {
+    validate_finite("physics snapshot gravity", &snapshot.gravity)?;
+    if !snapshot.integration_parameters.dt.is_finite() || snapshot.integration_parameters.dt <= 0.0
+    {
+        return Err(JsErrorBox::generic(
+            "physics snapshot integration dt must be finite and positive",
+        ));
+    }
+
+    let mut seen = HashSet::with_capacity(snapshot.handles.len());
+    for handle in snapshot.handles.iter().flatten() {
+        if snapshot.bodies.get(*handle).is_none() {
+            return Err(JsErrorBox::generic(
+                "physics snapshot contains a dangling body handle",
+            ));
+        }
+        if !seen.insert(*handle) {
+            return Err(JsErrorBox::generic(
+                "physics snapshot maps multiple ids to one body handle",
+            ));
+        }
+    }
+    if seen.len() != snapshot.bodies.len() {
+        return Err(JsErrorBox::generic(
+            "physics snapshot body index does not cover every rigid body",
+        ));
+    }
+    for (_, collider) in snapshot.colliders.iter() {
+        if collider
+            .parent()
+            .is_some_and(|parent| snapshot.bodies.get(parent).is_none())
+        {
+            return Err(JsErrorBox::generic(
+                "physics snapshot contains a collider with a dangling parent",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn decode_snapshot(bytes: &[u8]) -> Result<PhysicsSnapshot, JsErrorBox> {
+    let max_envelope_bytes = MAX_PHYSICS_SNAPSHOT_BYTES + PHYSICS_SNAPSHOT_MAGIC.len() + 2;
+    if bytes.len() > max_envelope_bytes {
+        return Err(JsErrorBox::generic(format!(
+            "physics restore exceeds {MAX_PHYSICS_SNAPSHOT_BYTES} byte payload cap"
+        )));
+    }
+
+    let payload = if bytes.starts_with(PHYSICS_SNAPSHOT_MAGIC) {
+        let version_offset = PHYSICS_SNAPSHOT_MAGIC.len();
+        let version_bytes = bytes
+            .get(version_offset..version_offset + 2)
+            .ok_or_else(|| JsErrorBox::generic("physics restore snapshot header is truncated"))?;
+        let version = u16::from_le_bytes([version_bytes[0], version_bytes[1]]);
+        if version != PHYSICS_SNAPSHOT_VERSION {
+            return Err(JsErrorBox::generic(format!(
+                "physics restore snapshot version {version} is unsupported"
+            )));
+        }
+        &bytes[version_offset + 2..]
+    } else {
+        // Legacy snapshots had no envelope. Keep them readable while applying the
+        // same strict allocation and trailing-byte limits as the versioned format.
+        bytes
+    };
+    if payload.len() > MAX_PHYSICS_SNAPSHOT_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "physics restore exceeds {MAX_PHYSICS_SNAPSHOT_BYTES} byte payload cap"
+        )));
+    }
+    let snapshot = snapshot_options()
+        .deserialize(payload)
+        .map_err(|e| JsErrorBox::generic(format!("physics restore: {e}")))?;
+    validate_snapshot(&snapshot)?;
+    Ok(snapshot)
 }
 
 /// (Re)create the physics world with the given gravity (replaces any existing).
@@ -719,6 +861,10 @@ pub fn op_physics_step(state: &mut OpState) {
 #[op2]
 #[buffer]
 pub fn op_physics_snapshot(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
+    physics_snapshot_impl(state)
+}
+
+fn physics_snapshot_impl(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
     let world = state.borrow::<PhysicsWorld>();
     let snapshot = PhysicsSnapshot {
         gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
@@ -732,19 +878,30 @@ pub fn op_physics_snapshot(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
         multibody_joints: world.multibody_joints.clone(),
         handles: world.handles.clone(),
     };
-    bincode::serialize(&snapshot).map_err(|e| JsErrorBox::generic(format!("physics snapshot: {e}")))
+    let payload = snapshot_options()
+        .serialize(&snapshot)
+        .map_err(|e| JsErrorBox::generic(format!("physics snapshot: {e}")))?;
+    let mut encoded = Vec::with_capacity(PHYSICS_SNAPSHOT_MAGIC.len() + 2 + payload.len());
+    encoded.extend_from_slice(PHYSICS_SNAPSHOT_MAGIC);
+    encoded.extend_from_slice(&PHYSICS_SNAPSHOT_VERSION.to_le_bytes());
+    encoded.extend_from_slice(&payload);
+    Ok(encoded)
 }
 
 /// Replace the live physics world with one deserialized from an
 /// `op_physics_snapshot` blob. Body ids resolve exactly as before the snapshot
 /// (the slotmap, including tombstones, is restored). The pipeline, CCD solver,
-/// and collision-event channel are reconstructed fresh -- they hold no state
-/// that survives a step boundary. Stepping the restored world is bit-identical
-/// to having never stopped.
+/// and collision-event channel are reconstructed fresh because they are not
+/// part of the serialized world state. The serialized state itself restores
+/// exactly; long-horizon continuation can diverge in collision-heavy scenes
+/// because Rapier's transient `PhysicsPipeline` workspace is rebuilt.
 #[op2(fast)]
 pub fn op_physics_restore(state: &mut OpState, #[buffer] bytes: &[u8]) -> Result<(), JsErrorBox> {
-    let snapshot: PhysicsSnapshot = bincode::deserialize(bytes)
-        .map_err(|e| JsErrorBox::generic(format!("physics restore: {e}")))?;
+    physics_restore_impl(state, bytes)
+}
+
+fn physics_restore_impl(state: &mut OpState, bytes: &[u8]) -> Result<(), JsErrorBox> {
+    let snapshot = decode_snapshot(bytes)?;
     state.put(PhysicsWorld::from_snapshot(snapshot));
     Ok(())
 }
@@ -808,17 +965,36 @@ pub fn op_physics_set_body_transform(
     qy: f32,
     qz: f32,
     qw: f32,
-) {
-    if !(x.is_finite() && y.is_finite() && z.is_finite() && qx.is_finite() && qy.is_finite() && qz.is_finite() && qw.is_finite()) {
-        return;
-    }
+) -> Result<(), JsErrorBox> {
+    physics_set_body_transform_impl(state, id, x, y, z, qx, qy, qz, qw)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn physics_set_body_transform_impl(
+    state: &mut OpState,
+    id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+) -> Result<(), JsErrorBox> {
+    validate_finite("physics body transform", &[x, y, z, qx, qy, qz, qw])?;
+    let rotation = rapier3d::na::UnitQuaternion::try_new(
+        rapier3d::na::Quaternion::new(qw, qx, qy, qz),
+        f32::EPSILON,
+    )
+    .ok_or_else(|| JsErrorBox::generic("physics body rotation quaternion must be non-zero"))?;
     let world = state.borrow_mut::<PhysicsWorld>();
     if let Some(handle) = world.handle(id) {
         if let Some(body) = world.bodies.get_mut(handle) {
             body.set_translation(Vector::new(x, y, z), true);
-            body.set_rotation(rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(qw, qx, qy, qz)).into(), true);
+            body.set_rotation(rotation.into(), true);
         }
     }
+    Ok(())
 }
 
 /// A drained collision event. `kind` is 1 for `Started`, 0 for `Stopped`. `point`
@@ -841,12 +1017,7 @@ pub struct CollisionRecord {
 #[serde]
 pub fn op_physics_drain_collisions(state: &mut OpState) -> Vec<CollisionRecord> {
     let world = state.borrow_mut::<PhysicsWorld>();
-    // Drain the channel first so the immutable manifold queries below don't race
-    // the receiver borrow.
-    let mut raw = Vec::new();
-    while let Ok(event) = world.collision_recv.try_recv() {
-        raw.push(event);
-    }
+    let raw = world.collision_events.drain();
     let mut events = Vec::with_capacity(raw.len());
     for event in raw {
         match event {
@@ -885,6 +1056,22 @@ pub fn op_physics_drain_collisions(state: &mut OpState) -> Vec<CollisionRecord> 
         }
     }
     events
+}
+
+/// Return and reset the number of collision events dropped since the previous
+/// query. Consumers must treat a nonzero value as a signal to resynchronize any
+/// derived contact state rather than assuming the event stream was complete.
+#[op2(fast)]
+pub fn op_physics_take_collision_overflow_count(state: &mut OpState) -> u32 {
+    physics_take_collision_overflow_count_impl(state)
+}
+
+fn physics_take_collision_overflow_count_impl(state: &mut OpState) -> u32 {
+    state
+        .borrow::<PhysicsWorld>()
+        .collision_events
+        .take_dropped()
+        .min(u32::MAX as u64) as u32
 }
 
 /// Cast a ray from (ox,oy,oz) along (dx,dy,dz). Writes
@@ -1094,6 +1281,7 @@ extension!(
         op_physics_body_transform,
         op_physics_set_body_transform,
         op_physics_drain_collisions,
+        op_physics_take_collision_overflow_count,
         op_physics_raycast,
         op_physics_new_world,
         op_physics_activate_world,
@@ -1108,10 +1296,14 @@ extension!(
 #[cfg(test)]
 mod tests {
     use super::{
-        init_physics_state, registry_activate, registry_drop, registry_new_world,
-        registry_new_world_validated, validate_heightfield, PhysicsRegistry, PhysicsSnapshot,
-        PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES,
+        decode_snapshot, init_physics_state, physics_restore_impl, physics_set_body_transform_impl,
+        physics_snapshot_impl, physics_take_collision_overflow_count_impl, registry_activate,
+        registry_drop, registry_new_world, registry_new_world_validated, snapshot_options,
+        validate_heightfield, BoundedCollisionEvents, PhysicsRegistry, PhysicsSnapshot,
+        PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES, MAX_PENDING_COLLISION_EVENTS,
+        PHYSICS_SNAPSHOT_MAGIC,
     };
+    use bincode::Options;
     use deno_core::OpState;
     use rapier3d::prelude::*;
 
@@ -1291,6 +1483,122 @@ mod tests {
             assert_eq!(restored.body_id_for_handle(handle), Some(id));
         }
         assert_eq!(restored.handle(removed), None);
+    }
+
+    #[test]
+    fn snapshot_is_versioned_bounded_and_legacy_compatible() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        {
+            let world = state.borrow_mut::<PhysicsWorld>();
+            world.insert_body(
+                RigidBodyBuilder::dynamic()
+                    .translation(Vector::new(1.0, 2.0, 3.0))
+                    .build(),
+                ColliderBuilder::ball(0.5).build(),
+            );
+        }
+
+        let encoded = physics_snapshot_impl(&mut state).expect("encode versioned snapshot");
+        assert!(encoded.starts_with(PHYSICS_SNAPSHOT_MAGIC));
+        physics_restore_impl(&mut state, &encoded).expect("restore versioned snapshot");
+
+        let legacy = {
+            let world = state.borrow::<PhysicsWorld>();
+            snapshot_options()
+                .serialize(&PhysicsSnapshot {
+                    gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+                    integration_parameters: world.integration_parameters,
+                    islands: world.islands.clone(),
+                    broad_phase: world.broad_phase.clone(),
+                    narrow_phase: world.narrow_phase.clone(),
+                    bodies: world.bodies.clone(),
+                    colliders: world.colliders.clone(),
+                    impulse_joints: world.impulse_joints.clone(),
+                    multibody_joints: world.multibody_joints.clone(),
+                    handles: world.handles.clone(),
+                })
+                .expect("encode legacy payload")
+        };
+        physics_restore_impl(&mut state, &legacy).expect("restore bounded legacy snapshot");
+
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(decode_snapshot(&trailing).is_err());
+        let mut unknown_version = PHYSICS_SNAPSHOT_MAGIC.to_vec();
+        unknown_version.extend_from_slice(&999_u16.to_le_bytes());
+        assert!(decode_snapshot(&unknown_version).is_err());
+    }
+
+    #[test]
+    fn restore_rejects_inconsistent_body_index() {
+        let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
+        let body = RigidBodyBuilder::dynamic().build();
+        let collider = ColliderBuilder::ball(0.5).build();
+        let id = world.insert_body(body, collider);
+        let live_handle = world.handle(id).unwrap();
+        let invalid = PhysicsSnapshot {
+            gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+            integration_parameters: world.integration_parameters,
+            islands: world.islands.clone(),
+            broad_phase: world.broad_phase.clone(),
+            narrow_phase: world.narrow_phase.clone(),
+            bodies: world.bodies.clone(),
+            colliders: world.colliders.clone(),
+            impulse_joints: world.impulse_joints.clone(),
+            multibody_joints: world.multibody_joints.clone(),
+            handles: vec![Some(live_handle), Some(live_handle)],
+        };
+        let encoded = snapshot_options().serialize(&invalid).unwrap();
+        assert!(decode_snapshot(&encoded).is_err());
+    }
+
+    #[test]
+    fn set_body_transform_rejects_zero_quaternion_without_mutation() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        let id = state.borrow_mut::<PhysicsWorld>().insert_body(
+            RigidBodyBuilder::dynamic()
+                .translation(Vector::new(1.0, 2.0, 3.0))
+                .build(),
+            ColliderBuilder::ball(0.5).build(),
+        );
+
+        let err =
+            physics_set_body_transform_impl(&mut state, id, 9.0, 9.0, 9.0, 0.0, 0.0, 0.0, 0.0)
+                .expect_err("zero quaternion must be rejected");
+        assert!(err.to_string().contains("non-zero"));
+        let world = state.borrow::<PhysicsWorld>();
+        assert_eq!(world.bodies[world.handle(id).unwrap()].translation().x, 1.0);
+    }
+
+    #[test]
+    fn collision_buffer_is_bounded_and_overflow_is_observable() {
+        let events = BoundedCollisionEvents::default();
+        for _ in 0..MAX_PENDING_COLLISION_EVENTS + 7 {
+            events.push(CollisionEvent::Started(
+                ColliderHandle::from_raw_parts(0, 0),
+                ColliderHandle::from_raw_parts(1, 0),
+                CollisionEventFlags::empty(),
+            ));
+        }
+        assert_eq!(events.drain().len(), MAX_PENDING_COLLISION_EVENTS);
+        assert_eq!(events.take_dropped(), 7);
+        assert_eq!(events.take_dropped(), 0, "overflow query resets the count");
+
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        for _ in 0..MAX_PENDING_COLLISION_EVENTS + 1 {
+            state
+                .borrow::<PhysicsWorld>()
+                .collision_events
+                .push(CollisionEvent::Stopped(
+                    ColliderHandle::from_raw_parts(0, 0),
+                    ColliderHandle::from_raw_parts(1, 0),
+                    CollisionEventFlags::empty(),
+                ));
+        }
+        assert_eq!(physics_take_collision_overflow_count_impl(&mut state), 1);
     }
 
     #[test]

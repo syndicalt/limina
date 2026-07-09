@@ -23,12 +23,12 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::io::{Cursor, Write};
 use std::num::{NonZeroU16, NonZeroU32};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Weak};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use deno_core::{extension, op2, OpState};
@@ -52,6 +52,8 @@ const MAX_TTS_TEXT_BYTES: usize = 1_000;
 const MAX_TTS_WORKERS: usize = 4;
 const MAX_TTS_DECODED_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 30;
 const MAX_GAIN: f32 = 4.0;
+const AUDIO_SHUTDOWN_POLL: Duration = Duration::from_millis(25);
+const TTS_PROCESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Commands sent from the JS-thread ops (and TTS workers) to the audio thread.
 enum AudioCmd {
@@ -139,6 +141,7 @@ enum AudioCmd {
 struct AudioHandle {
     tx: Option<Arc<SyncSender<AudioCmd>>>,
     join: Option<thread::JoinHandle<()>>,
+    shutdown: Option<Arc<AtomicBool>>,
     /// Count of commands dropped due to a full channel (backpressure); used only to
     /// throttle the warning log. Not world state (never affects determinism).
     dropped: AtomicU64,
@@ -178,6 +181,9 @@ impl Drop for AudioHandle {
     /// sender so the receive loop can still end if that signal was dropped (channel
     /// full), then join. Null backend has no thread, so this is a no-op there.
     fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            shutdown.store(true, Ordering::Release);
+        }
         if let Some(tx) = self.tx.take() {
             let _ = tx.try_send(AudioCmd::Shutdown);
             drop(tx);
@@ -359,7 +365,30 @@ fn synth_pad() -> Vec<f32> {
 /// local TTS binary (espeak-ng / Piper), so synthesis stays out-of-process and
 /// off the JS frame loop. `Send + Sync` so a worker thread can own a clone.
 trait VoiceProvider: Send + Sync {
-    fn synth(&self, text: &str, pitch: u8) -> Result<Vec<u8>, String>;
+    fn synth(&self, text: &str, pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String>;
+}
+
+fn wait_child(
+    child: &mut Child,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> Result<ExitStatus, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+        if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(if cancelled.load(Ordering::Acquire) {
+                "TTS cancelled".to_string()
+            } else {
+                format!("TTS process timed out after {}s", timeout.as_secs())
+            });
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Unique temp WAV path (pid + nanos) so concurrent syntheses never collide.
@@ -386,7 +415,7 @@ impl Drop for TmpWav {
 /// zero-install fallback voice.
 struct EspeakProvider;
 impl VoiceProvider for EspeakProvider {
-    fn synth(&self, text: &str, pitch: u8) -> Result<Vec<u8>, String> {
+    fn synth(&self, text: &str, pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
         let tmp = TmpWav {
             path: tts_tmp_path(),
         };
@@ -397,10 +426,13 @@ impl VoiceProvider for EspeakProvider {
             cmd.arg("-p").arg(pitch.min(99).to_string());
             cmd.arg("-s").arg("150");
         }
-        let status = cmd
+        let mut child = cmd
             .arg(text)
-            .status()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
             .map_err(|e| format!("espeak-ng spawn: {e}"))?;
+        let status = wait_child(&mut child, TTS_PROCESS_TIMEOUT, cancelled)?;
         if !status.success() {
             return Err("espeak-ng exited non-zero".into());
         }
@@ -415,7 +447,7 @@ struct PiperProvider {
     model: String,
 }
 impl VoiceProvider for PiperProvider {
-    fn synth(&self, text: &str, _pitch: u8) -> Result<Vec<u8>, String> {
+    fn synth(&self, text: &str, _pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
         let tmp = TmpWav {
             path: tts_tmp_path(),
         };
@@ -432,7 +464,7 @@ impl VoiceProvider for PiperProvider {
             .ok_or("piper stdin unavailable")?
             .write_all(text.as_bytes())
             .map_err(|e| e.to_string())?;
-        if !child.wait().map_err(|e| e.to_string())?.success() {
+        if !wait_child(&mut child, TTS_PROCESS_TIMEOUT, cancelled)?.success() {
             return Err("piper exited non-zero".into());
         }
         // `tmp` drops on return (any path), removing the file.
@@ -454,12 +486,18 @@ fn select_voice() -> Option<Arc<dyn VoiceProvider>> {
             model: "en_US-amy-medium.onnx".to_string(),
         })),
         _ => {
-            let have_espeak = Command::new("espeak-ng")
+            let mut probe = match Command::new("espeak-ng")
                 .arg("--version")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => return None,
+            };
+            let cancelled = AtomicBool::new(false);
+            let have_espeak = wait_child(&mut probe, Duration::from_secs(2), &cancelled)
+                .map(|status| status.success())
                 .unwrap_or(false);
             if have_espeak {
                 eprintln!("[audio] voice: espeak-ng (auto)");
@@ -554,6 +592,7 @@ fn run_audio(
     rx: Receiver<AudioCmd>,
     back: Weak<SyncSender<AudioCmd>>,
     voice: Option<Arc<dyn VoiceProvider>>,
+    shutdown: Arc<AtomicBool>,
 ) {
     let mixer = dev.mixer();
     let mut sounds: HashMap<u32, Sound> = HashMap::new();
@@ -561,7 +600,12 @@ fn run_audio(
     let mut left_ear = [-0.1f32, 0.0, 0.0];
     let mut right_ear = [0.1f32, 0.0, 0.0];
     let tts_inflight = Arc::new(AtomicUsize::new(0));
-    for cmd in rx {
+    while !shutdown.load(Ordering::Acquire) {
+        let cmd = match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+            Ok(cmd) => cmd,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
         match cmd {
             AudioCmd::PlaySfx {
                 id,
@@ -681,11 +725,15 @@ fn run_audio(
                     }
                     tts_inflight.fetch_add(1, Ordering::AcqRel);
                     let tts_inflight_done = Arc::clone(&tts_inflight);
+                    let worker_shutdown = Arc::clone(&shutdown);
                     if thread::Builder::new()
                         .name("limina-tts".into())
                         .spawn(move || {
                             let _slot = TtsWorkerSlot(tts_inflight_done);
-                            match provider.synth(&text, pitch).and_then(decode_wav) {
+                            match provider
+                                .synth(&text, pitch, &worker_shutdown)
+                                .and_then(decode_wav)
+                            {
                                 Ok((data, channels, rate)) => {
                                     // Backpressure applies here too: a full channel
                                     // drops the decoded line rather than queueing it.
@@ -798,12 +846,19 @@ fn run_audio(
 /// join handle. The channel is BOUNDED (`AUDIO_CMD_CAPACITY`) so a stalled thread
 /// applies backpressure instead of growing memory. On no device the thread keeps
 /// draining commands (no-op), so the returned sender is always valid.
-fn spawn_audio() -> (Arc<SyncSender<AudioCmd>>, bool, thread::JoinHandle<()>) {
+fn spawn_audio() -> (
+    Arc<SyncSender<AudioCmd>>,
+    Arc<AtomicBool>,
+    bool,
+    thread::JoinHandle<()>,
+) {
     let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
     // The audio thread holds only a `Weak` (for the TTS-back path), so dropping
     // this strong sender is what lets the receive loop terminate.
     let tx = Arc::new(raw_tx);
     let back = Arc::downgrade(&tx);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let thread_shutdown = Arc::clone(&shutdown);
     let (ready_tx, ready_rx) = mpsc::channel::<bool>();
     let handle = thread::Builder::new()
         .name("limina-audio".into())
@@ -812,17 +867,22 @@ fn spawn_audio() -> (Arc<SyncSender<AudioCmd>>, bool, thread::JoinHandle<()>) {
                 dev.log_on_drop(false);
                 let _ = ready_tx.send(true);
                 let voice = select_voice();
-                run_audio(dev, rx, back, voice);
+                run_audio(dev, rx, back, voice, thread_shutdown);
             }
             Err(e) => {
                 eprintln!("[audio] no output device ({e}); running null");
                 let _ = ready_tx.send(false);
-                for _ in rx {} // drain so sends stay no-op and never error
+                while !thread_shutdown.load(Ordering::Acquire) {
+                    match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+                        Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
             }
         })
         .expect("spawn limina-audio thread");
     let live = ready_rx.recv().unwrap_or(false);
-    (tx, live, handle)
+    (tx, shutdown, live, handle)
 }
 
 // ---- ops -------------------------------------------------------------------
@@ -838,16 +898,18 @@ pub fn op_audio_init(state: &mut OpState) -> u32 {
         state.put(AudioHandle {
             tx: None,
             join: None,
+            shutdown: None,
             dropped: AtomicU64::new(0),
             next_id: 0,
         });
         println!("[audio] backend: null (LIMINA_AUDIO=null)");
         return 0;
     }
-    let (tx, live, join) = spawn_audio();
+    let (tx, shutdown, live, join) = spawn_audio();
     state.put(AudioHandle {
         tx: Some(tx),
         join: Some(join),
+        shutdown: Some(shutdown),
         dropped: AtomicU64::new(0),
         next_id: 0,
     });
@@ -1107,6 +1169,7 @@ mod tests {
         let h = AudioHandle {
             tx: Some(Arc::new(tx)),
             join: None,
+            shutdown: None,
             dropped: AtomicU64::new(0),
             next_id: 0,
         };
@@ -1153,6 +1216,46 @@ mod tests {
         drop(worker_tx);
         assert!(back.upgrade().is_none());
         assert_eq!(consumer.join().expect("consumer joined"), 1);
+    }
+
+    #[test]
+    fn independent_shutdown_does_not_wait_for_retained_sender() {
+        let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(1);
+        let tx = Arc::new(raw_tx);
+        tx.try_send(AudioCmd::StopAll).expect("fill channel");
+        let retained_worker_sender = Arc::clone(&tx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let join = thread::spawn(move || {
+            while !thread_shutdown.load(Ordering::Acquire) {
+                match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+                    Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        let started = Instant::now();
+        drop(AudioHandle {
+            tx: Some(tx),
+            join: Some(join),
+            shutdown: Some(shutdown),
+            dropped: AtomicU64::new(0),
+            next_id: 0,
+        });
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(retained_worker_sender);
+    }
+
+    #[test]
+    fn cancelled_child_is_killed_promptly() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn cancellation fixture");
+        let cancelled = AtomicBool::new(true);
+        let started = Instant::now();
+        assert!(wait_child(&mut child, Duration::from_secs(5), &cancelled).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

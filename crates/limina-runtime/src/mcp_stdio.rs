@@ -4,18 +4,35 @@ use std::io::{BufRead, Write};
 
 const MAX_MCP_STDIO_LINE_BYTES: usize = 1024 * 1024;
 
-fn read_stdin_line_bounded<R: BufRead>(reader: R) -> Result<String, JsErrorBox> {
-    let mut line = String::new();
-    let read = reader
-        .take((MAX_MCP_STDIO_LINE_BYTES + 1) as u64)
-        .read_line(&mut line)
-        .map_err(JsErrorBox::from_err)?;
-    if read > MAX_MCP_STDIO_LINE_BYTES {
+fn read_stdin_line_bounded<R: BufRead>(reader: &mut R) -> Result<String, JsErrorBox> {
+    let mut bytes = Vec::with_capacity(4096);
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf().map_err(JsErrorBox::from_err)?;
+        if available.is_empty() {
+            break;
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |i| i + 1);
+        if !oversized && bytes.len().saturating_add(take) <= MAX_MCP_STDIO_LINE_BYTES {
+            bytes.extend_from_slice(&available[..take]);
+        } else {
+            oversized = true;
+        }
+        let ended = available[take - 1] == b'\n';
+        reader.consume(take);
+        if ended {
+            break;
+        }
+    }
+    if oversized {
         return Err(JsErrorBox::generic(format!(
             "mcp stdio line exceeds {MAX_MCP_STDIO_LINE_BYTES} byte cap"
         )));
     }
-    Ok(line)
+    String::from_utf8(bytes).map_err(|_| JsErrorBox::generic("mcp stdio line is not valid UTF-8"))
 }
 
 #[op2]
@@ -27,7 +44,7 @@ async fn op_mcp_read_stdin_line() -> Result<String, JsErrorBox> {
     // blocking read onto tokio's blocking pool so the event loop stays live;
     // the line semantics (one call == one newline-terminated line, "" on EOF)
     // are unchanged.
-    tokio::task::spawn_blocking(|| read_stdin_line_bounded(std::io::stdin().lock()))
+    tokio::task::spawn_blocking(|| read_stdin_line_bounded(&mut std::io::stdin().lock()))
         .await
         .map_err(|e| JsErrorBox::generic(format!("stdin read task: {e}")))?
 }
@@ -59,7 +76,8 @@ mod tests {
     #[test]
     fn stdio_read_line_rejects_oversized_frames() {
         let oversized = format!("{}\n", "x".repeat(MAX_MCP_STDIO_LINE_BYTES + 1));
-        let err = read_stdin_line_bounded(Cursor::new(oversized.into_bytes())).unwrap_err();
+        let mut input = Cursor::new(oversized.into_bytes());
+        let err = read_stdin_line_bounded(&mut input).unwrap_err();
         assert!(
             err.to_string().contains("line exceeds"),
             "unexpected error: {err}"
@@ -69,7 +87,16 @@ mod tests {
     #[test]
     fn stdio_read_line_accepts_bounded_frames() {
         let line = "{\"jsonrpc\":\"2.0\",\"id\":1}\n";
-        let got = read_stdin_line_bounded(Cursor::new(line.as_bytes())).unwrap();
+        let mut input = Cursor::new(line.as_bytes());
+        let got = read_stdin_line_bounded(&mut input).unwrap();
         assert_eq!(got, line);
+    }
+
+    #[test]
+    fn oversized_line_is_fully_drained_before_next_frame() {
+        let bytes = format!("{}\nnext\n", "x".repeat(MAX_MCP_STDIO_LINE_BYTES + 1)).into_bytes();
+        let mut input = Cursor::new(bytes);
+        assert!(read_stdin_line_bounded(&mut input).is_err());
+        assert_eq!(read_stdin_line_bounded(&mut input).unwrap(), "next\n");
     }
 }

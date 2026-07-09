@@ -24,6 +24,14 @@ use deno_error::JsErrorBox;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+const MAX_ENTITIES: usize = 1_000_000;
+const MAX_QUERIES: usize = 65_536;
+const MAX_HITS_PER_QUERY: usize = 1_000_000;
+const MIN_CELL_SIZE: f64 = 0.001;
+const MAX_CELL_SIZE: f64 = 1_000_000.0;
+const MAX_QUERY_RADIUS: f64 = 1_000_000.0;
+const MAX_CELLS_PER_QUERY: u128 = 1_000_000;
+
 /// Batched native uniform-grid radius query.
 ///
 /// Inputs (all borrowed zero-copy from JS for the call):
@@ -68,7 +76,38 @@ fn spatial_query_batch(
 ) -> Result<(), JsErrorBox> {
     let n = ordered_eids.len();
     let max_hits = max_hits as usize;
-    let stride = 1 + max_hits;
+    if n > MAX_ENTITIES {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: entity count {n} exceeds {MAX_ENTITIES}"
+        )));
+    }
+    if !cell_size.is_finite() || !(MIN_CELL_SIZE..=MAX_CELL_SIZE).contains(&cell_size) {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: cell_size must be finite and in [{MIN_CELL_SIZE}, {MAX_CELL_SIZE}]"
+        )));
+    }
+    if !queries.len().is_multiple_of(5) {
+        return Err(JsErrorBox::type_error(
+            "spatial_query_batch: queries length must be a multiple of 5",
+        ));
+    }
+    let k = queries.len() / 5;
+    if k > MAX_QUERIES {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: query count {k} exceeds {MAX_QUERIES}"
+        )));
+    }
+    if max_hits > MAX_HITS_PER_QUERY {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: max_hits {max_hits} exceeds {MAX_HITS_PER_QUERY}"
+        )));
+    }
+    let stride = 1usize
+        .checked_add(max_hits)
+        .ok_or_else(|| JsErrorBox::generic("spatial_query_batch: output stride overflow"))?;
+    let required_out = k
+        .checked_mul(stride)
+        .ok_or_else(|| JsErrorBox::generic("spatial_query_batch: output length overflow"))?;
 
     // Validate the array-length invariants ONCE, here at the op boundary, before
     // the sequential build and the parallel query region. A desync between
@@ -86,9 +125,56 @@ fn spatial_query_batch(
     }
     let pos_len = px.len();
     for &eid in ordered_eids {
-        if eid as usize >= pos_len {
+        let index = eid as usize;
+        if index >= pos_len {
             return Err(JsErrorBox::type_error(format!(
                 "spatial_query_batch: eid {eid} out of bounds for position SoA of length {pos_len}"
+            )));
+        }
+        let (x, y, z) = (px[index], py[index], pz[index]);
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: non-finite position at active eid {eid}"
+            )));
+        }
+    }
+
+    for (q, query) in queries.chunks_exact(5).enumerate() {
+        let [nx, ny, nz, radius, exclude] = [query[0], query[1], query[2], query[3], query[4]];
+        if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} center must be finite"
+            )));
+        }
+        if !radius.is_finite() || !(0.0..=MAX_QUERY_RADIUS).contains(&radius) {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} radius must be finite and in [0, {MAX_QUERY_RADIUS}]"
+            )));
+        }
+        if !exclude.is_finite()
+            || (exclude >= 0.0 && (exclude.fract() != 0.0 || exclude > u32::MAX as f64))
+        {
+            return Err(JsErrorBox::range_error(format!(
+                "spatial_query_batch: query {q} excludeEid must be negative or an exact u32"
+            )));
+        }
+        let mins = [nx - radius, ny - radius, nz - radius];
+        let maxs = [nx + radius, ny + radius, nz + radius];
+        let mut cells = 1u128;
+        for axis in 0..3 {
+            let lo = (mins[axis] / cell_size).floor();
+            let hi = (maxs[axis] / cell_size).floor();
+            if lo < i64::MIN as f64 || hi > i64::MAX as f64 {
+                return Err(JsErrorBox::generic(format!(
+                    "spatial_query_batch: query {q} cell coordinate exceeds i64 range"
+                )));
+            }
+            let span = (hi as i128 - lo as i128 + 1) as u128;
+            cells = cells.saturating_mul(span);
+        }
+        if cells > MAX_CELLS_PER_QUERY {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} spans {cells} cells, cap is {MAX_CELLS_PER_QUERY}"
             )));
         }
     }
@@ -138,13 +224,12 @@ fn spatial_query_batch(
         cursor[c] += 1;
     }
 
-    let k = queries.len() / 5;
     // `out` must hold one `stride`-wide chunk per query; a mis-sized buffer would
     // otherwise silently truncate (`take(k)`) or write past the end. Check up front.
-    if out.len() < k * stride {
+    if out.len() < required_out {
         return Err(JsErrorBox::type_error(format!(
             "spatial_query_batch: out buffer too small (need {} u32 for {k} queries, got {})",
-            k * stride,
+            required_out,
             out.len(),
         )));
     }
@@ -182,8 +267,6 @@ fn spatial_query_batch(
                     }
                 }
             }
-            candidates.sort_unstable();
-
             let mut hits: Vec<(f64, u32, u32)> = Vec::new(); // (distance, order, eid)
             for &order in &candidates {
                 let oi = order as usize;
@@ -202,14 +285,7 @@ fn spatial_query_batch(
             }
             // (distance asc, then order asc) == V8 stable sort by distance over an
             // order-ascending input. `f64::total_cmp` is a TOTAL order, so this is
-            // well-defined even for pathological non-finite distances: a NaN distance
-            // (e.g. from a NaN coordinate — the `distance > radius` cutoff lets it
-            // through, exactly as the JS oracle's `distance > maxDistance` does) sorts
-            // deterministically AFTER every finite distance, then ties break by
-            // `order` ascending. For finite distances this is bit-identical to the
-            // previous `partial_cmp` ordering; only the ordering of non-finite
-            // distances (where V8's `a.distance - b.distance` comparator is itself
-            // unspecified) is pinned to this documented, thread-count-independent rule.
+            // well-defined. Boundary validation guarantees finite distances.
             hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
 
             let count = hits.len();
@@ -229,21 +305,6 @@ extension!(limina_ecs, ops = [op_ecs_spatial_query_batch],);
 mod tests {
     use super::*;
 
-    // Tests drive the module-level pure fn directly (the op itself is a thin
-    // wrapper around it; the `#[op2]` op type is not reachable outside its macro).
-    fn run(
-        px: &[f32],
-        py: &[f32],
-        pz: &[f32],
-        ordered_eids: &[u32],
-        cell_size: f64,
-        queries: &[f64],
-        max_hits: u32,
-        out: &mut [u32],
-    ) -> Result<(), JsErrorBox> {
-        spatial_query_batch(px, py, pz, ordered_eids, cell_size, queries, max_hits, out)
-    }
-
     #[test]
     fn oob_or_mismatched_input_errors_without_panicking() {
         // An eid past the end of the Position SoA must error, not OOB-panic.
@@ -252,8 +313,10 @@ mod tests {
         let pz = [0.0f32];
         let ordered_eids = [0u32, 5u32]; // 5 is out of bounds for len-1 arrays
         let queries = [0.0f64, 0.0, 0.0, 10.0, -1.0];
-        let mut out = vec![0u32; 1 * (1 + 4)];
-        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+        let mut out = vec![0u32; 1 + 4];
+        assert!(
+            spatial_query_batch(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
+        );
 
         // A short/stale (mismatched-length) SoA must error too.
         let px = [0.0f32, 1.0];
@@ -261,7 +324,9 @@ mod tests {
         let pz = [0.0f32, 1.0];
         let ordered_eids = [0u32];
         let mut out = vec![0u32; 5];
-        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+        assert!(
+            spatial_query_batch(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
+        );
 
         // An undersized `out` buffer must error rather than truncate/overrun.
         let px = [0.0f32];
@@ -269,7 +334,9 @@ mod tests {
         let pz = [0.0f32];
         let ordered_eids = [0u32];
         let mut out = vec![0u32; 3]; // need 1 * (1 + 4) = 5
-        assert!(run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err());
+        assert!(
+            spatial_query_batch(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
+        );
     }
 
     #[test]
@@ -281,33 +348,51 @@ mod tests {
         let pz = [0.0f32, 0.0, 0.0];
         let ordered_eids = [0u32, 1, 2];
         let queries = [0.0f64, 0.0, 0.0, 5.0, -1.0];
-        let mut out = vec![0u32; 1 * (1 + 4)];
-        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).unwrap();
+        let mut out = vec![0u32; 1 + 4];
+        spatial_query_batch(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).unwrap();
         assert_eq!(out[0], 2); // true hit count
         assert_eq!(&out[1..3], &[0u32, 1u32]); // nearest-first eids
     }
 
     #[test]
-    fn nan_coordinate_produces_deterministic_ordering() {
-        // A NaN coordinate yields a NaN distance, which (like the JS oracle) is
-        // NOT excluded by the `distance > radius` cutoff. It must land in a
-        // deterministic, documented position: after every finite distance.
+    fn malformed_geometry_is_rejected_before_query_loops() {
         let px = [0.0f32, f32::NAN, 1.0];
         let py = [0.0f32, 0.0, 0.0];
         let pz = [0.0f32, 0.0, 0.0];
         let ordered_eids = [0u32, 1, 2];
         let queries = [0.0f64, 0.0, 0.0, 100.0, -1.0];
+        let mut out = vec![0u32; 5];
+        assert!(
+            spatial_query_batch(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
+        );
 
-        let mut out_a = vec![0u32; 1 * (1 + 4)];
-        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out_a).unwrap();
-        // Determinism: an identical call yields an identical result.
-        let mut out_b = vec![0u32; 1 * (1 + 4)];
-        run(&px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out_b).unwrap();
-        assert_eq!(out_a, out_b);
-
-        assert_eq!(out_a[0], 3); // all three included (NaN not excluded)
-                                 // Finite distances first, ascending (eid 0 at d=0, then eid 2 at d=1),
-                                 // and the NaN-distance eid 1 pinned last.
-        assert_eq!(&out_a[1..4], &[0u32, 2u32, 1u32]);
+        let finite = [0.0f32, 1.0, 2.0];
+        assert!(
+            spatial_query_batch(&finite, &py, &pz, &ordered_eids, 0.0, &queries, 4, &mut out)
+                .is_err()
+        );
+        assert!(spatial_query_batch(
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &[0.0, 0.0],
+            4,
+            &mut out
+        )
+        .is_err());
+        let huge = [0.0, 0.0, 0.0, MAX_QUERY_RADIUS, -1.0];
+        assert!(spatial_query_batch(
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            MIN_CELL_SIZE,
+            &huge,
+            4,
+            &mut out
+        )
+        .is_err());
     }
 }

@@ -34,7 +34,18 @@ use rquickjs::{CatchResultExt, Context, Ctx, Function, Object, Runtime, Value};
 const MAX_SANDBOX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SANDBOX_STACK_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SANDBOX_DEADLINE_MS: f64 = 5_000.0;
+const DEFAULT_SANDBOX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_SANDBOX_STACK_BYTES: usize = 256 * 1024;
+const DEFAULT_SANDBOX_DEADLINE_MS: f64 = 50.0;
 const MAX_LIVE_SANDBOXES: usize = 256;
+const MAX_READ_CAPS_JSON_BYTES: usize = 64 * 1024;
+const MAX_READ_CAPS: usize = 256;
+const MAX_CAPABILITY_BYTES: usize = 512;
+const MAX_CODE_BYTES: usize = 1024 * 1024;
+const MAX_PERCEPTION_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CALL_ARGS_BYTES: usize = 256 * 1024;
+const MAX_BOUNDARY_CROSSINGS: u64 = 1_024;
+const MAX_CAPTURED_BYTES: usize = 1024 * 1024;
 
 /// Mutable state shared between the injected `host.invoke` closure and the op
 /// driving an eval. The closure can ONLY (a) read the injected perception
@@ -50,6 +61,8 @@ struct SandboxShared {
     /// Recorded MUTATING capability intents `(cap, argsJson)` in call order. The
     /// JS host drains these and drives each through `SkillRegistry.invoke`.
     captured: Vec<(String, String)>,
+    /// Bytes currently retained by `captured`, excluding Vec/String bookkeeping.
+    captured_bytes: usize,
     /// Total boundary crossings this eval (reads + mutate-intents) -- audit count.
     crossings: u64,
     /// Crossings served as synchronous reads.
@@ -79,18 +92,35 @@ fn ensure_registry(state: &mut OpState) -> &mut SandboxRegistry {
     state.borrow_mut::<SandboxRegistry>()
 }
 
-fn finite_non_negative(name: &str, value: f64) -> Result<f64, JsErrorBox> {
-    if value.is_finite() && value >= 0.0 {
+fn finite_positive(name: &str, value: f64) -> Result<f64, JsErrorBox> {
+    if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
         Err(JsErrorBox::generic(format!(
-            "{name} must be finite and >= 0"
+            "{name} must be finite and > 0"
         )))
     }
 }
 
-fn finite_bounded_non_negative(name: &str, value: f64, max: f64) -> Result<f64, JsErrorBox> {
-    let value = finite_non_negative(name, value)?;
+fn finite_bounded_or_default(
+    name: &str,
+    value: f64,
+    default: f64,
+    max: f64,
+) -> Result<f64, JsErrorBox> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(JsErrorBox::generic(format!(
+            "{name} must be finite and >= 0"
+        )));
+    }
+    if value == 0.0 {
+        return Ok(default);
+    }
+    finite_bounded_positive(name, value, max)
+}
+
+fn finite_bounded_positive(name: &str, value: f64, max: f64) -> Result<f64, JsErrorBox> {
+    let value = finite_positive(name, value)?;
     if value <= max {
         Ok(value)
     } else {
@@ -102,17 +132,50 @@ fn validate_create_budgets(
     mem_limit_bytes: f64,
     max_stack_bytes: f64,
 ) -> Result<(usize, usize), JsErrorBox> {
-    let mem_limit_bytes = finite_bounded_non_negative(
+    let mem_limit_bytes = finite_bounded_or_default(
         "mem_limit_bytes",
         mem_limit_bytes,
+        DEFAULT_SANDBOX_MEMORY_BYTES as f64,
         MAX_SANDBOX_MEMORY_BYTES as f64,
     )?;
-    let max_stack_bytes = finite_bounded_non_negative(
+    let max_stack_bytes = finite_bounded_or_default(
         "max_stack_bytes",
         max_stack_bytes,
+        DEFAULT_SANDBOX_STACK_BYTES as f64,
         MAX_SANDBOX_STACK_BYTES as f64,
     )?;
     Ok((mem_limit_bytes as usize, max_stack_bytes as usize))
+}
+
+fn ensure_registry_capacity(current: usize) -> Result<(), JsErrorBox> {
+    if current >= MAX_LIVE_SANDBOXES {
+        Err(JsErrorBox::generic(format!(
+            "sandbox registry live context cap exceeded ({MAX_LIVE_SANDBOXES})"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_read_caps(read_caps_json: &str) -> Result<HashSet<String>, JsErrorBox> {
+    if read_caps_json.len() > MAX_READ_CAPS_JSON_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "read_caps_json exceeds {MAX_READ_CAPS_JSON_BYTES} bytes"
+        )));
+    }
+    let caps: Vec<String> = serde_json::from_str(read_caps_json)
+        .map_err(|e| JsErrorBox::generic(format!("invalid read_caps_json: {e}")))?;
+    if caps.len() > MAX_READ_CAPS {
+        return Err(JsErrorBox::generic(format!(
+            "read capability count exceeds {MAX_READ_CAPS}"
+        )));
+    }
+    if caps.iter().any(|cap| cap.len() > MAX_CAPABILITY_BYTES) {
+        return Err(JsErrorBox::generic(format!(
+            "read capability exceeds {MAX_CAPABILITY_BYTES} bytes"
+        )));
+    }
+    Ok(caps.into_iter().collect())
 }
 
 /// Create a fresh QuickJS sandbox for one untrusted agent and return its handle.
@@ -138,23 +201,14 @@ fn sandbox_create_impl(
 ) -> Result<u32, JsErrorBox> {
     let (mem_limit_bytes, max_stack_bytes) =
         validate_create_budgets(mem_limit_bytes, max_stack_bytes)?;
-    let read_caps: HashSet<String> = serde_json::from_str(read_caps_json)
-        .map_err(|e| JsErrorBox::generic(format!("invalid read_caps_json: {e}")))?;
+    let read_caps = parse_read_caps(read_caps_json)?;
     {
         let reg = ensure_registry(state);
-        if reg.sandboxes.len() >= MAX_LIVE_SANDBOXES {
-            return Err(JsErrorBox::generic(format!(
-                "sandbox registry live context cap exceeded ({MAX_LIVE_SANDBOXES})"
-            )));
-        }
+        ensure_registry_capacity(reg.sandboxes.len())?;
     }
     let rt = Runtime::new().map_err(|e| JsErrorBox::generic(format!("quickjs runtime: {e}")))?;
-    if mem_limit_bytes > 0 {
-        rt.set_memory_limit(mem_limit_bytes as usize);
-    }
-    if max_stack_bytes > 0 {
-        rt.set_max_stack_size(max_stack_bytes as usize);
-    }
+    rt.set_memory_limit(mem_limit_bytes);
+    rt.set_max_stack_size(max_stack_bytes);
     let ctx =
         Context::full(&rt).map_err(|e| JsErrorBox::generic(format!("quickjs context: {e}")))?;
     let shared = Rc::new(RefCell::new(SandboxShared {
@@ -166,22 +220,62 @@ fn sandbox_create_impl(
     let s = shared.clone();
     ctx.with(|ctx| -> rquickjs::Result<()> {
         let host = Object::new(ctx.clone())?;
-        let invoke = Function::new(ctx.clone(), move |cap: String, args: String| -> String {
-            let mut sh = s.borrow_mut();
-            sh.crossings += 1;
-            if sh.read_caps.contains(&cap) {
-                sh.reads += 1;
-                // A read returns the agent's OWN perception snapshot verbatim.
-                if sh.perception_json.is_empty() {
-                    return "null".to_string();
+        let invoke = Function::new(
+            ctx.clone(),
+            move |cap: String, args: String| -> rquickjs::Result<String> {
+                let mut sh = s.borrow_mut();
+                if sh.crossings >= MAX_BOUNDARY_CROSSINGS {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "host.invoke",
+                        "result",
+                        format!("boundary crossing limit exceeded ({MAX_BOUNDARY_CROSSINGS})"),
+                    ));
                 }
-                return sh.perception_json.clone();
-            }
-            // A mutating capability is RECORDED as an intent -- never executed
-            // here. The privileged JS host drives it through SkillRegistry.invoke.
-            sh.captured.push((cap, args));
-            "{\"queued\":true}".to_string()
-        })?;
+                sh.crossings += 1;
+                if cap.len() > MAX_CAPABILITY_BYTES {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "host.invoke",
+                        "result",
+                        format!("capability exceeds {MAX_CAPABILITY_BYTES} bytes"),
+                    ));
+                }
+                if sh.read_caps.contains(&cap) {
+                    sh.reads += 1;
+                    // A read returns the agent's OWN perception snapshot verbatim.
+                    if sh.perception_json.is_empty() {
+                        return Ok("null".to_string());
+                    }
+                    return Ok(sh.perception_json.clone());
+                }
+                if args.len() > MAX_CALL_ARGS_BYTES {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "host.invoke",
+                        "result",
+                        format!("call arguments exceed {MAX_CALL_ARGS_BYTES} bytes"),
+                    ));
+                }
+                let call_bytes = cap.len() + args.len();
+                let new_total = sh.captured_bytes.checked_add(call_bytes).ok_or_else(|| {
+                    rquickjs::Error::new_from_js_message(
+                        "host.invoke",
+                        "result",
+                        "captured call byte count overflow",
+                    )
+                })?;
+                if new_total > MAX_CAPTURED_BYTES {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "host.invoke",
+                        "result",
+                        format!("captured calls exceed {MAX_CAPTURED_BYTES} bytes"),
+                    ));
+                }
+                // A mutating capability is RECORDED as an intent -- never executed
+                // here. The privileged JS host drives it through SkillRegistry.invoke.
+                sh.captured_bytes = new_total;
+                sh.captured.push((cap, args));
+                Ok("{\"queued\":true}".to_string())
+            },
+        )?;
         host.set("invoke", invoke)?;
         ctx.globals().set("host", host)?;
         Ok(())
@@ -198,8 +292,9 @@ fn sandbox_create_impl(
     Ok(handle)
 }
 
-/// Run untrusted JS in sandbox `handle` under a CPU deadline (`deadline_ms`; 0 =
-/// none) with `perception_json` injected for read capabilities. Returns a JSON
+/// Run untrusted JS in sandbox `handle` under an effective nonzero CPU deadline
+/// (`0` selects the safe host default) with `perception_json` injected for read
+/// capabilities. Returns a JSON
 /// envelope `{ ok, value?, error?, calls:[{cap,args}], crossings, reads }`.
 /// `calls` are the recorded MUTATING intents for the JS host to drive through the
 /// registry; the untrusted code NEVER reaches the registry itself. A runaway
@@ -214,8 +309,32 @@ pub fn op_sandbox_eval(
     #[string] perception_json: String,
     deadline_ms: f64,
 ) -> Result<String, JsErrorBox> {
-    let deadline_ms =
-        finite_bounded_non_negative("deadline_ms", deadline_ms, MAX_SANDBOX_DEADLINE_MS)?;
+    sandbox_eval_impl(state, handle, code, perception_json, deadline_ms)
+}
+
+fn sandbox_eval_impl(
+    state: &mut OpState,
+    handle: u32,
+    code: String,
+    perception_json: String,
+    deadline_ms: f64,
+) -> Result<String, JsErrorBox> {
+    let deadline_ms = finite_bounded_or_default(
+        "deadline_ms",
+        deadline_ms,
+        DEFAULT_SANDBOX_DEADLINE_MS,
+        MAX_SANDBOX_DEADLINE_MS,
+    )?;
+    if code.len() > MAX_CODE_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "sandbox code exceeds {MAX_CODE_BYTES} bytes"
+        )));
+    }
+    if perception_json.len() > MAX_PERCEPTION_BYTES {
+        return Err(JsErrorBox::generic(format!(
+            "sandbox perception exceeds {MAX_PERCEPTION_BYTES} bytes"
+        )));
+    }
     let reg = ensure_registry(state);
     let sb = reg
         .sandboxes
@@ -226,15 +345,14 @@ pub fn op_sandbox_eval(
         let mut sh = sb.shared.borrow_mut();
         sh.perception_json = perception_json;
         sh.captured.clear();
+        sh.captured_bytes = 0;
         sh.crossings = 0;
         sh.reads = 0;
     }
 
-    if deadline_ms > 0.0 {
-        let dl = Instant::now() + Duration::from_millis(deadline_ms as u64);
-        sb.rt
-            .set_interrupt_handler(Some(Box::new(move || Instant::now() >= dl)));
-    }
+    let dl = Instant::now() + Duration::from_millis(deadline_ms as u64);
+    sb.rt
+        .set_interrupt_handler(Some(Box::new(move || Instant::now() >= dl)));
 
     let outcome: Result<String, String> =
         sb.ctx.with(
@@ -344,34 +462,129 @@ mod tests {
 
     #[test]
     fn sandbox_eval_rejects_absurd_deadlines() {
-        assert!(finite_bounded_non_negative(
+        assert!(finite_bounded_positive(
             "deadline_ms",
             MAX_SANDBOX_DEADLINE_MS + 1.0,
             MAX_SANDBOX_DEADLINE_MS
         )
         .is_err());
-        assert!(
-            finite_bounded_non_negative("deadline_ms", 1_000.0, MAX_SANDBOX_DEADLINE_MS).is_ok()
+        assert!(finite_bounded_positive("deadline_ms", 1_000.0, MAX_SANDBOX_DEADLINE_MS).is_ok());
+        assert_eq!(
+            finite_bounded_or_default(
+                "deadline_ms",
+                0.0,
+                DEFAULT_SANDBOX_DEADLINE_MS,
+                MAX_SANDBOX_DEADLINE_MS,
+            )
+            .unwrap(),
+            DEFAULT_SANDBOX_DEADLINE_MS
         );
     }
 
     #[test]
     fn sandbox_registry_rejects_unbounded_live_context_growth() {
-        let mut state = OpState::new(None);
-        let mut handles = Vec::new();
-        for _ in 0..256 {
-            handles.push(
-                sandbox_create_impl(&mut state, 0.0, 0.0, "[]")
-                    .expect("sandbox within cap should create"),
-            );
-        }
-        let over = sandbox_create_impl(&mut state, 0.0, 0.0, "[]");
-        assert!(
-            over.is_err(),
-            "sandbox registry must reject unbounded live context growth"
+        assert!(ensure_registry_capacity(MAX_LIVE_SANDBOXES - 1).is_ok());
+        assert!(ensure_registry_capacity(MAX_LIVE_SANDBOXES).is_err());
+    }
+
+    #[test]
+    fn sandbox_create_supplies_effective_nonzero_budgets() {
+        assert_eq!(
+            validate_create_budgets(0.0, 0.0).unwrap(),
+            (DEFAULT_SANDBOX_MEMORY_BYTES, DEFAULT_SANDBOX_STACK_BYTES)
         );
-        for handle in handles {
-            assert!(sandbox_destroy_impl(&mut state, handle));
-        }
+    }
+
+    #[test]
+    fn sandbox_read_cap_metadata_is_bounded() {
+        let too_many = serde_json::to_string(&vec!["read"; MAX_READ_CAPS + 1]).unwrap();
+        assert!(parse_read_caps(&too_many).is_err());
+        let too_long = serde_json::to_string(&vec!["x".repeat(MAX_CAPABILITY_BYTES + 1)]).unwrap();
+        assert!(parse_read_caps(&too_long).is_err());
+    }
+
+    #[test]
+    fn sandbox_eval_bounds_host_side_capture_allocations() {
+        let mut state = OpState::new(None);
+        let handle = sandbox_create_impl(&mut state, 16.0 * 1024.0 * 1024.0, 256.0 * 1024.0, "[]")
+            .expect("create bounded sandbox");
+
+        assert!(sandbox_eval_impl(
+            &mut state,
+            handle,
+            " ".repeat(MAX_CODE_BYTES + 1),
+            "null".to_string(),
+            1_000.0,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("code exceeds"));
+        assert!(sandbox_eval_impl(
+            &mut state,
+            handle,
+            "null".to_string(),
+            " ".repeat(MAX_PERCEPTION_BYTES + 1),
+            1_000.0,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("perception exceeds"));
+
+        let oversized_args = "x".repeat(MAX_CALL_ARGS_BYTES + 1);
+        let code = format!("host.invoke('mutate', '{}')", oversized_args);
+        let envelope = sandbox_eval_impl(&mut state, handle, code, "null".to_string(), 1_000.0)
+            .expect("resource rejection is contained in the envelope");
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["calls"].as_array().unwrap().len(), 0);
+
+        let oversized_cap = "x".repeat(MAX_CAPABILITY_BYTES + 1);
+        let envelope = sandbox_eval_impl(
+            &mut state,
+            handle,
+            format!("host.invoke('{oversized_cap}', '{{}}')"),
+            "null".to_string(),
+            1_000.0,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["calls"].as_array().unwrap().len(), 0);
+
+        let aggregate_code =
+            "const args = 'x'.repeat(200000); for (let i = 0; i < 6; i++) host.invoke('mutate', args)";
+        let envelope = sandbox_eval_impl(
+            &mut state,
+            handle,
+            aggregate_code.to_string(),
+            "null".to_string(),
+            1_000.0,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["calls"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn sandbox_eval_bounds_total_boundary_crossings() {
+        let mut state = OpState::new(None);
+        let handle = sandbox_create_impl(
+            &mut state,
+            16.0 * 1024.0 * 1024.0,
+            256.0 * 1024.0,
+            r#"["read"]"#,
+        )
+        .expect("create bounded sandbox");
+        let code = format!(
+            "for (let i = 0; i < {}; i++) host.invoke('read', '{{}}')",
+            MAX_BOUNDARY_CROSSINGS + 1
+        );
+        let envelope =
+            sandbox_eval_impl(&mut state, handle, code, "null".to_string(), 1_000.0).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert_eq!(parsed["crossings"], MAX_BOUNDARY_CROSSINGS);
+        assert_eq!(parsed["reads"], MAX_BOUNDARY_CROSSINGS);
     }
 }

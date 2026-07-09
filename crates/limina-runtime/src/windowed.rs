@@ -131,11 +131,9 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => {
+            } if !self.grabbed => {
                 // Click to capture the mouse for free-fly look (no-op if already grabbed).
-                if !self.grabbed {
-                    self.set_grab(true);
-                }
+                self.set_grab(true);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
@@ -238,7 +236,7 @@ pub fn run_windowed(
             }
 
             if let Some((w, h)) = app.resized.take() {
-                invoke_callback(&mut js_runtime, Callback::Resize(w, h));
+                invoke_callback(&mut js_runtime, Callback::Resize(w, h))?;
             }
 
             // Refresh input axes for JS to read this frame.
@@ -258,7 +256,7 @@ pub fn run_windowed(
             accumulator += dt;
             let budget = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
             for _ in 0..budget.steps {
-                invoke_callback(&mut js_runtime, Callback::Step(FIXED_DT));
+                invoke_callback(&mut js_runtime, Callback::Step(FIXED_DT))?;
                 steps += 1;
             }
             if budget.dropped > 0.0 {
@@ -270,13 +268,12 @@ pub fn run_windowed(
 
             // Render once with the leftover interpolation factor.
             let alpha = (accumulator / FIXED_DT) as f32;
-            invoke_callback(&mut js_runtime, Callback::Frame(alpha));
+            invoke_callback(&mut js_runtime, Callback::Frame(alpha))?;
 
             std::future::poll_fn(|cx| {
                 js_runtime.poll_event_loop(cx, PollEventLoopOptions::default())
             })
-            .await
-            .ok();
+            .await?;
 
             frames += 1;
             if max_frames.is_some_and(|max| frames >= max) {
@@ -287,8 +284,7 @@ pub fn run_windowed(
         // Clean exit: hide window, drain any in-flight async work, then drop.
         window.set_visible(false);
         std::future::poll_fn(|cx| js_runtime.poll_event_loop(cx, PollEventLoopOptions::default()))
-            .await
-            .ok();
+            .await?;
 
         let elapsed = start.elapsed().as_secs_f64();
         println!(
@@ -306,6 +302,56 @@ enum Callback {
     Frame(f32),
     Step(f64),
     Resize(u32, u32),
+}
+
+/// Invoke a registered JS callback inside a `TryCatch` so a thrown error is
+/// surfaced (logged) rather than silently swallowed.
+fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) -> anyhow::Result<()> {
+    use limina_render::{FrameCallback, ResizeCallback, StepCallback};
+
+    let cb = {
+        let op_state = js_runtime.op_state();
+        let op_state = op_state.borrow();
+        match which {
+            Callback::Frame(_) => op_state.try_borrow::<FrameCallback>().map(|c| c.0.clone()),
+            Callback::Step(_) => op_state.try_borrow::<StepCallback>().map(|c| c.0.clone()),
+            Callback::Resize(..) => op_state.try_borrow::<ResizeCallback>().map(|c| c.0.clone()),
+        }
+    };
+    let Some(cb) = cb else { return Ok(()) };
+
+    deno_core::scope!(scope, js_runtime);
+    v8::tc_scope!(let tc, scope);
+    let func = cb.open(tc);
+    let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
+
+    let called = match which {
+        Callback::Frame(alpha) => {
+            let args = [v8::Number::new(tc, alpha as f64).into()];
+            func.call(tc, recv, &args)
+        }
+        Callback::Step(dt) => {
+            let args = [v8::Number::new(tc, dt).into()];
+            func.call(tc, recv, &args)
+        }
+        Callback::Resize(w, h) => {
+            let args = [
+                v8::Number::new(tc, w as f64).into(),
+                v8::Number::new(tc, h as f64).into(),
+            ];
+            func.call(tc, recv, &args)
+        }
+    };
+    if called.is_none() {
+        let message = tc
+            .exception()
+            .map(|exception| exception.to_rust_string_lossy(tc))
+            .unwrap_or_else(|| {
+                "callback returned no value after an unknown V8 failure".to_string()
+            });
+        anyhow::bail!("windowed JavaScript callback failed: {message}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -335,43 +381,5 @@ mod tests {
         assert_eq!(applied.steps, 2);
         assert_eq!(applied.dropped, 0.0);
         assert!((accumulator - FIXED_DT * 0.25).abs() < 1e-12);
-    }
-}
-
-/// Invoke a registered JS callback inside a `TryCatch` so a thrown error is
-/// surfaced (logged) rather than silently swallowed.
-fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) {
-    use limina_render::{FrameCallback, ResizeCallback, StepCallback};
-
-    let cb = {
-        let op_state = js_runtime.op_state();
-        let op_state = op_state.borrow();
-        match which {
-            Callback::Frame(_) => op_state.try_borrow::<FrameCallback>().map(|c| c.0.clone()),
-            Callback::Step(_) => op_state.try_borrow::<StepCallback>().map(|c| c.0.clone()),
-            Callback::Resize(..) => op_state.try_borrow::<ResizeCallback>().map(|c| c.0.clone()),
-        }
-    };
-    let Some(cb) = cb else { return };
-
-    deno_core::scope!(scope, js_runtime);
-    v8::tc_scope!(let tc, scope);
-    let func = cb.open(tc);
-    let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
-
-    let args: Vec<v8::Local<v8::Value>> = match which {
-        Callback::Frame(alpha) => vec![v8::Number::new(tc, alpha as f64).into()],
-        Callback::Step(dt) => vec![v8::Number::new(tc, dt).into()],
-        Callback::Resize(w, h) => vec![
-            v8::Number::new(tc, w as f64).into(),
-            v8::Number::new(tc, h as f64).into(),
-        ],
-    };
-
-    func.call(tc, recv, &args);
-
-    if let Some(ex) = tc.exception() {
-        let msg = ex.to_rust_string_lossy(tc);
-        eprintln!("[limina] callback error: {msg}");
     }
 }
