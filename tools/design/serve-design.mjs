@@ -316,6 +316,39 @@ function moveLocation(id, x, z) {
 // then save -> cascade — the exact shape editLocation uses for world-bible locations. The place
 // tree stays connected: reparent refuses a cycle, delete re-parents the victim's children.
 const ELP_B = "===ELP_BEGIN===", ELP_E = "===ELP_END===";
+// One-time convergence: MOVE world-bible locations: into places.md — Places is now the single
+// named-point model. Idempotent (a location whose id is already a place is skipped); migrated
+// locations are REMOVED from the world-bible (a true move, no data loss). Each becomes a place
+// carrying its name/kind/position/tags/note + mapLink (nested-map zoom) + assetId (marker asset).
+function migrateLocationsToPlaces() {
+  // Frontmatter parsing lives in the spawned harness, not this Node process — read the already-parsed
+  // locations + places from computeState() instead.
+  const st = computeState();
+  const locations = (st.world && st.world.locations) || [];
+  const existing = new Set((st.places || []).map((p) => p.id));
+  let migrated = 0;
+  for (const loc of Array.isArray(locations) ? locations : []) {
+    if (!loc || !loc.id || existing.has(loc.id)) continue;
+    const pos = (typeof loc.x === "number" && typeof loc.z === "number") ? [Number(loc.x), Number(loc.z)]
+      : (Array.isArray(loc.position) && loc.position.length >= 2 ? [Number(loc.position[0]), Number(loc.position[1])] : null);
+    const place = {
+      id: loc.id, name: loc.name || loc.id, kind: loc.kind || "landmark", binding: "point",
+      ...(pos ? { position: pos } : {}),
+      ...(loc.region || loc.regionId ? { regionId: loc.region || loc.regionId } : {}),
+      ...(loc.map && loc.map !== "__off__" ? { map: loc.map } : {}), // "__off__" = unlinked; default to primary
+      ...(Array.isArray(loc.tags) && loc.tags.length ? { tags: loc.tags } : {}),
+      ...(loc.note || loc.description ? { note: loc.note || loc.description } : {}),
+      ...(loc.mapLink ? { mapLink: loc.mapLink } : {}),
+      ...(loc.assetId ? { assetId: loc.assetId } : {}),
+    };
+    editPlace("add", place);                // preserves the id; carries assetId/mapLink
+    existing.add(loc.id);
+    editLocation("delete", { id: loc.id }); // remove from world-bible — a true MOVE
+    migrated++;
+  }
+  const places = (computeState().places) || [];
+  return { ok: true, migrated, places };
+}
 function editPlace(op, place) {
   let doc = readDocs().find((d) => /kind:\s*places/.test(d.content));
   if (!doc) {
@@ -345,6 +378,8 @@ if (op === "add") {
   if (place.map) node.map = place.map;
   if (Array.isArray(place.tags) && place.tags.length) node.tags = place.tags;
   if (place.note) node.note = place.note;
+  if (place.assetId) node.assetId = place.assetId;
+  if (place.mapLink) node.mapLink = place.mapLink;
   places.push(node);
 } else if (!has(place.id)) {
   error = "no such place: " + place.id;
@@ -387,7 +422,7 @@ else { fm.places = places; const nextContent = replaceFrontmatter(content, fm); 
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/migrate-locations-to-places", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -396,6 +431,11 @@ createServer((req, res) => {
         if (req.url === "/api/save") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(saveDoc(p.name, p.content)));
+          return;
+        }
+        if (req.url === "/api/migrate-locations-to-places") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(migrateLocationsToPlaces()));
           return;
         }
         if (req.url === "/api/move-location") {

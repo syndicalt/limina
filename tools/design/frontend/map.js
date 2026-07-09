@@ -167,7 +167,7 @@ export function renderMap(){
   // the terrain palette their decorative one. Existing glyph features render read-only.
   // Road is an inline SVG — the 🛤 emoji has spotty font coverage and renders as junk glyphs.
   const ICON_ROAD='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7.5 21 L10 3"/><path d="M16.5 21 L14 3"/><path d="M12 4.5v2.5M12 11v3M12 18v3"/></svg>';
-  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["place","◈","Place a location (Places)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["place","◈","Place a place (marker + gazetteer)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -413,7 +413,8 @@ function redrawMap(){
   svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + compass + elevCursor + stampGhost;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
-  svg.querySelectorAll(".ppin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPlacePinDrag(e,p.dataset.placeId)); });
+  svg.querySelectorAll(".ppin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPlacePinDrag(e,p.dataset.placeId));
+    p.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const pl=mapPlaces().find(x=>x.id===p.dataset.placeId); if(pl&&pl.mapLink) switchMap(pl.mapLink); }); });
   svg.querySelectorAll(".stampf").forEach(el=>{
     el.style.cursor = mapTool==="select" ? "move" : "";
     el.addEventListener("mousedown",(e)=>{ if(mapTool!=="select") return; e.stopPropagation();
@@ -1097,6 +1098,10 @@ export function openPlaceInspector(place, cx, cy){
       +'<input id="pi-radius" type="number" min="1" step="1" placeholder="radius m" value="'+(p.radiusM!=null?esc(p.radiusM):"")+'"'+(isArea?"":' style="display:none"')+'></div>'
     +'<label>Tags (comma-separated)</label><input id="pi-tags" value="'+esc((p.tags||[]).join(", "))+'">'
     +'<label>Note</label><input id="pi-note" value="'+esc(p.note||"")+'">'
+    +'<label>Marker asset</label><select id="pi-asset"><option value="">— none —</option>'
+      +(catalog||[]).map(c=>'<option value="'+esc(c.id)+'"'+(c.id===p.assetId?" selected":"")+'>'+esc(c.title||c.id)+'</option>').join("")+'</select>'
+    +'<label>Links to map (zoom in)</label><select id="pi-maplink"><option value="">— none —</option>'
+      +(S.state.maps||[]).filter(mm=>mm.id!==(p.map||activeMapId)).map(mm=>'<option value="'+esc(mm.id)+'"'+(mm.id===p.mapLink?" selected":"")+'>'+esc(mm.name||mm.id)+'</option>').join("")+'</select>'
     +(Array.isArray(p.position)?'<div class="co">x '+p.position[0]+'  z '+p.position[1]+(p.map?"  · "+esc(p.map):"")+'</div>':'<div class="co">unplaced</div>')
     +'<div class="actions"><button class="save" id="pi-save">Save</button><button class="del" id="pi-del">Delete</button></div>';
   document.body.appendChild(el);
@@ -1116,7 +1121,9 @@ async function savePlace(id){
   const binding=document.getElementById("pi-binding").value;
   const tags=document.getElementById("pi-tags").value.split(",").map(s=>s.trim()).filter(Boolean);
   const note=document.getElementById("pi-note").value.trim();
-  const place={id,name,kind,parentId,binding,tags,note};
+  const place={id,name,kind,parentId,binding,tags,note,
+    assetId:document.getElementById("pi-asset").value,
+    mapLink:document.getElementById("pi-maplink").value};
   if(binding==="area"){ const r=Number(document.getElementById("pi-radius").value); if(r>0) place.radiusM=r; }
   const btn=document.getElementById("pi-save"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
   try{ const j=await postJSON("/api/edit-place",{op:"update",place});

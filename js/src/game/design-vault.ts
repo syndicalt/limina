@@ -270,6 +270,12 @@ export interface PlaceNode {
   map?: string;
   tags?: string[];
   note?: string;
+  /** The catalog asset this place is MARKED by — its map glyph and the worldmap anchor it spawns at
+   *  compile. Folds the retired world-bible location's asset/anchor role into a place. */
+  assetId?: string;
+  /** A nested child-map id this place links to (double-click on the map to zoom in) — same meaning
+   *  as the old location `mapLink`. */
+  mapLink?: string;
 }
 
 /** Parse the flat `places:` array of a `kind: places` doc into normalized place nodes.
@@ -296,6 +302,10 @@ export function parsePlaces(fm: Frontmatter): PlaceNode[] {
       if (Array.isArray(p.tags)) node.tags = (p.tags as unknown[]).map((t) => str(t));
       const note = str(p.note ?? p.description);
       if (note.length > 0) node.note = note;
+      const asset = str(p.assetId);
+      if (asset.length > 0) node.assetId = asset;
+      const link = str(p.mapLink);
+      if (link.length > 0) node.mapLink = link;
       return node;
     })
     .filter((n) => n.id.length > 0);
