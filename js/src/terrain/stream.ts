@@ -7,6 +7,13 @@
 // which tiles a follower generates/keeps/drops. The render mesh (mesh.ts) and the
 // Rapier heightfield are applied/removed off the back of this diff.
 
+import {
+  createTerrainGridSpec,
+  terrainChunkBounds,
+  terrainWorldToChunk,
+  validateTerrainChunkCoordinate,
+} from "./grid.mjs";
+
 export interface TileCoord {
   tx: number;
   tz: number;
@@ -16,12 +23,18 @@ export interface TileCoord {
 export type TileKey = string;
 
 export function tileKey(tx: number, tz: number): TileKey {
-  return `${tx},${tz}`;
+  return `${validateTerrainChunkCoordinate("tx", tx)},${validateTerrainChunkCoordinate("tz", tz)}`;
 }
 
 export function parseTileKey(key: TileKey): TileCoord {
-  const comma = key.indexOf(",");
-  return { tx: Number(key.slice(0, comma)), tz: Number(key.slice(comma + 1)) };
+  const match = /^(-?\d+),(-?\d+)$/.exec(key);
+  if (match === null) throw new Error(`invalid tile key '${key}'`);
+  const parsed = {
+    tx: validateTerrainChunkCoordinate("tx", Number(match[1])),
+    tz: validateTerrainChunkCoordinate("tz", Number(match[2])),
+  };
+  if (tileKey(parsed.tx, parsed.tz) !== key) throw new Error(`non-canonical tile key '${key}'`);
+  return parsed;
 }
 
 /** Residency window shape around the anchor tile. */
@@ -53,14 +66,28 @@ export interface StreamDiff {
   changed: boolean;
 }
 
+let lastLegacyGrid: ReturnType<typeof createTerrainGridSpec> | undefined;
+function legacyGrid(tileSize: number): ReturnType<typeof createTerrainGridSpec> {
+  if (lastLegacyGrid?.chunkSizeM !== tileSize) {
+    lastLegacyGrid = createTerrainGridSpec({ gridId: "legacy", origin: [0, 0], chunkSizeM: tileSize, defaultSamples: 33 });
+  }
+  return lastLegacyGrid;
+}
+
 /** World (x,z) -> the tile coord that contains it (rows->z, cols->x, like the mesh). */
 export function worldToTile(x: number, z: number, tileSize: number): TileCoord {
-  return { tx: Math.floor(x / tileSize), tz: Math.floor(z / tileSize) };
+  const coord = terrainWorldToChunk(legacyGrid(tileSize), x, z);
+  return { tx: coord.tx, tz: coord.tz };
 }
 
 /** World-space center of tile (tx,tz). */
 export function tileCenter(tx: number, tz: number, tileSize: number): [number, number] {
-  return [(tx + 0.5) * tileSize, (tz + 0.5) * tileSize];
+  const bounds = terrainChunkBounds(
+    legacyGrid(tileSize),
+    tx,
+    tz,
+  );
+  return [(bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2];
 }
 
 /** Is tile (tx,tz) inside the window of `radius` around (ax,az) for the given shape? */

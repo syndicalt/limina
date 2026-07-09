@@ -22,8 +22,9 @@
 // tx·48 + c·1.5 lands exactly on a master sample when the half-size is a multiple of 1.5,
 // which the constructor guarantees) — the bilinear tile fill degenerates to exact lookups.
 // Memory: ~10 bytes/sample (f32 heights + f32 paintW + u8 paintMat + u8 biome); the 200 m
-// primary island masters at ~191² samples ≈ 0.36 MB. Maps wider than ~3 km would exceed
-// MAX_MASTER_RES and coarsen the step proportionally (documented cap, never a throw).
+// primary island masters at ~191² samples ≈ 0.36 MB. Maps wider than ~1.5 km would exceed
+// MAX_MASTER_RES and coarsen the step proportionally; masterTopologyHash makes that exact
+// sampling topology explicit instead of letting two differently-coarsened fields alias.
 //
 // DETERMINISM: rasterizeWorldMap is a pure function of (worldMap, params) and every parameter
 // here is a fixed constant of the IR itself, so the same verified IR always builds the same
@@ -42,6 +43,14 @@ import {
 import { TILE_RES, TILE_SIZE } from "./procedural.ts";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
 import type { WorldMap } from "../world/worldmap.ts";
+import {
+  createTerrainGridSpec,
+  terrainChunkBounds,
+  terrainChunkTopology,
+  terrainFieldTopologyHash,
+  terrainGridIdForLogicalMap,
+  validateTerrainSeed,
+} from "./grid.mjs";
 
 /** Master-field sample spacing (meters). Equal to the streamed tile lattice spacing
  *  (TILE_SIZE/(TILE_RES−1) = 1.5 m) so tile samples land exactly on master samples. */
@@ -97,6 +106,8 @@ export interface MapTerrainSourceOptions {
   /** Rasterizer noise seed. FIXED default (1): world.setTerrainSource records only
    *  {mapAssetId, hash}, so replay must reconstruct the identical field without it. */
   seed?: number;
+  /** Stable coordinate-frame identity. It must not include a source revision. */
+  gridId?: string;
 }
 
 /** The map-backed streamed terrain source. Deterministic: same verified IR + same
@@ -115,6 +126,11 @@ export class MapTerrainSource implements TerrainSource {
    *  FIELD-WIDE (every tile shares it → seam-consistent normalization). */
   readonly floorY: number;
   readonly spanY: number;
+  /** Stable fixed-size coordinate frame used by every emitted chunk. */
+  readonly grid: ReturnType<typeof createTerrainGridSpec>;
+  /** Exact identity of the bounded master sampling topology. A map expansion that
+   * triggers global coarsening changes this hash instead of silently aliasing it. */
+  readonly masterTopologyHash: string;
 
   private readonly half: number;
   /** Row-major master heights in WORLD METERS (row → z, col → x, both ascending). */
@@ -128,9 +144,16 @@ export class MapTerrainSource implements TerrainSource {
 
   constructor(opts: MapTerrainSourceOptions) {
     const map = opts.worldMap;
+    const seed = validateTerrainSeed(opts.seed ?? 1);
     this.name = opts.name ?? "map";
     this.seaLevelM = map.seaLevel;
     this.outsideH = map.seaLevel - DEEP_SEA_DROP;
+    this.grid = createTerrainGridSpec({
+      gridId: opts.gridId ?? terrainGridIdForLogicalMap(map.id),
+      origin: [0, 0],
+      chunkSizeM: TILE_SIZE,
+      defaultSamples: TILE_RES,
+    });
 
     // ── Master frame: centered on world (0,0) (the rasterizer's frame), covering the
     // IR's projected feature bbox + a one-tile ocean margin. half is a multiple of
@@ -146,9 +169,15 @@ export class MapTerrainSource implements TerrainSource {
     this.half = half;
     this.masterRes = res;
     this.masterStep = step;
+    this.masterTopologyHash = terrainFieldTopologyHash({
+      gridId: this.grid.gridId,
+      bounds: { minX: -half, minZ: -half, maxX: half, maxZ: half },
+      rows: res,
+      cols: res,
+    });
 
     // ── Rasterize ONCE (pure; fixed params ⇒ replay-identical). ─────────────────────
-    const raster = rasterizeWorldMap(map, { size, resolution: res, seed: (opts.seed ?? 1) | 0 }) as {
+    const raster = rasterizeWorldMap(map, { size, resolution: res, seed }) as {
       heights: Float32Array; paintMat: Uint8Array; paintW: Float32Array; seaLevelM: number;
     };
     this.heightsM = raster.heights;
@@ -234,7 +263,10 @@ export class MapTerrainSource implements TerrainSource {
    *  hints stay the global-scalar bag they are, never a spatial channel). */
   generateTile(req: TileRequest): TerrainTile {
     const nrows = TILE_RES, ncols = TILE_RES;
-    const x0 = req.tx * TILE_SIZE, z0 = req.tz * TILE_SIZE;
+    // The hot tile path needs validated bounds, not a topology hash. The latter is
+    // exposed by chunkTopology() for compiler/manifests and computed on demand.
+    const bounds = terrainChunkBounds(this.grid, req.tx, req.tz);
+    const x0 = bounds.minX, z0 = bounds.minZ;
     const origin: [number, number, number] = [x0 + TILE_SIZE / 2, this.floorY, z0 + TILE_SIZE / 2];
     const scale: [number, number, number] = [TILE_SIZE, this.spanY, TILE_SIZE];
     const heights = new Float32Array(nrows * ncols);
@@ -269,6 +301,11 @@ export class MapTerrainSource implements TerrainSource {
       }
     }
     return { nrows, ncols, origin, scale, heights, paintMat, paintW, climate, climateChannels: CLIMATE_CHANNELS, blight };
+  }
+
+  /** Stable spatial identity + versioned topology for one emitted chunk. */
+  chunkTopology(req: Pick<TileRequest, "tx" | "tz" | "lod">): ReturnType<typeof terrainChunkTopology> {
+    return terrainChunkTopology(this.grid, { ...req, samples: TILE_RES });
   }
 
   /** O(1) point elevation (world meters) — a bilinear query of the SAME master field

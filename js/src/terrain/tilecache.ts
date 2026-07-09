@@ -18,19 +18,36 @@ import {
   type TerrainTile,
   type TileRequest,
 } from "./types.ts";
+import { sha256 } from "../world/sha256.mjs";
+import {
+  validateTerrainChunkCoordinate,
+  validateTerrainLod,
+  validateTerrainSeed,
+} from "./grid.mjs";
 
 /** Canonical, stable string key for a tile request — the cache/content address.
  *  Hints are emitted in sorted-key order so logically-equal requests collide. */
 export function requestKey(req: TileRequest): string {
+  const seed = validateTerrainSeed(req.seed);
+  const tx = validateTerrainChunkCoordinate("tx", req.tx);
+  const tz = validateTerrainChunkCoordinate("tz", req.tz);
+  const lod = validateTerrainLod(req.lod);
   const hints = req.hints;
   let hintStr = "";
   if (hints !== undefined) {
     // JSON-encode sorted [k,v] pairs so delimiter chars in keys can't collide two
     // different hint maps onto the same content address.
     const keys = Object.keys(hints).sort();
+    for (const key of keys) {
+      if (typeof hints[key] !== "number" || !Number.isFinite(hints[key])) {
+        throw new Error(`terrain tile hint '${key}' must be finite`);
+      }
+    }
     hintStr = JSON.stringify(keys.map((k) => [k, hints[k]]));
   }
-  return `s${req.seed | 0}|x${req.tx | 0}|z${req.tz | 0}|l${req.lod | 0}|h${hintStr}`;
+  // Preserve legacy bytes throughout the supported domain without bitwise
+  // coercion, which used to alias distinct out-of-range requests.
+  return `s${seed}|x${tx}|z${tz}|l${lod}|h${hintStr}`;
 }
 
 // Bit-exact Float32 (de)serialization: a height/climate sample serializes as its
@@ -76,6 +93,75 @@ export function tileContentHash(tile: TerrainTile): string {
     tile.climate !== undefined ? `${tile.climateChannels ?? 0}:${bitsOf(tile.climate).join(",")}` : "",
   ];
   return "sha256:" + ops.op_sha256(parts.join("|"));
+}
+
+/** Versioned complete artifact identity. The legacy tileContentHash intentionally
+ * remains unchanged because its hashes are persisted in existing export bundles.
+ *
+ * Allocation note: this first complete contract canonicalizes channels as JSON
+ * arrays. That is acceptable for today's 33x33 runtime tiles, but a future compiler
+ * emitting 257x257 derived chunks must replace it with a streaming/binary v3 codec
+ * rather than using this implementation in a high-throughput build path. */
+export const TERRAIN_TILE_ARTIFACT_SCHEMA_V2 = "limina.terrain-tile-artifact/v2";
+
+function optionalU8Bits(value: Uint8Array | undefined): number[] | null {
+  return value === undefined ? null : Array.from(value);
+}
+
+function optionalF32Bits(value: Float32Array | undefined): number[] | null {
+  return value === undefined ? null : bitsOf(value);
+}
+
+function assertFiniteChannel(name: string, values: Float32Array): void {
+  for (let index = 0; index < values.length; index++) {
+    if (!Number.isFinite(values[index])) throw new Error(`terrain tile artifact ${name}[${index}] must be finite`);
+  }
+}
+
+function validateTileArtifactShape(tile: TerrainTile): void {
+  if (!Number.isSafeInteger(tile.nrows) || !Number.isSafeInteger(tile.ncols) || tile.nrows < 2 || tile.ncols < 2) {
+    throw new Error("terrain tile artifact requires integer dimensions >= 2");
+  }
+  const cells = tile.nrows * tile.ncols;
+  if (!Number.isSafeInteger(cells) || tile.heights.length !== cells) {
+    throw new Error(`terrain tile artifact heights length ${tile.heights.length} != ${cells}`);
+  }
+  if (tile.paintMat !== undefined && tile.paintMat.length !== cells) throw new Error("terrain tile artifact paintMat length mismatch");
+  if (tile.paintW !== undefined && tile.paintW.length !== cells) throw new Error("terrain tile artifact paintW length mismatch");
+  if (tile.blight !== undefined && tile.blight.length !== cells) throw new Error("terrain tile artifact blight length mismatch");
+  if (tile.climate !== undefined) {
+    if (!Number.isSafeInteger(tile.climateChannels) || (tile.climateChannels ?? 0) < 1) {
+      throw new Error("terrain tile artifact climate requires a positive integer climateChannels");
+    }
+    if (tile.climate.length !== cells * tile.climateChannels!) throw new Error("terrain tile artifact climate length mismatch");
+  } else if (tile.climateChannels !== undefined) {
+    throw new Error("terrain tile artifact climateChannels requires climate data");
+  }
+  for (const value of [...tile.origin, ...tile.scale]) {
+    if (!Number.isFinite(value)) throw new Error("terrain tile artifact placement must be finite");
+  }
+  assertFiniteChannel("heights", tile.heights);
+  if (tile.paintW !== undefined) assertFiniteChannel("paintW", tile.paintW);
+  if (tile.climate !== undefined) assertFiniteChannel("climate", tile.climate);
+  if (tile.blight !== undefined) assertFiniteChannel("blight", tile.blight);
+}
+
+export function terrainTileArtifactHashV2(tile: TerrainTile): string {
+  validateTileArtifactShape(tile);
+  const canonical = {
+    schema: TERRAIN_TILE_ARTIFACT_SCHEMA_V2,
+    nrows: tile.nrows,
+    ncols: tile.ncols,
+    origin: tile.origin.map(floatToBits),
+    scale: tile.scale.map(floatToBits),
+    heights: bitsOf(tile.heights),
+    paintMat: optionalU8Bits(tile.paintMat),
+    paintW: optionalF32Bits(tile.paintW),
+    climateChannels: tile.climateChannels ?? null,
+    climate: optionalF32Bits(tile.climate),
+    blight: optionalF32Bits(tile.blight),
+  };
+  return `sha256:${sha256(JSON.stringify(canonical))}`;
 }
 
 /** A content-addressed tile store: request -> generated tile. The same key resolves
