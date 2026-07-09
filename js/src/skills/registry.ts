@@ -128,6 +128,11 @@ export interface SkillDefinition<I = unknown, O = unknown> {
    *  content hash). Each named field must also be an OPTIONAL input field so the
    *  committed value validates on replay. Absent -> nothing committed (default). */
   commitFields?: string[];
+  /** Optional post-success recording filter. Returning false marks a successful
+   * idempotent/no-op call as non-authoring so the recorder removes its provisional
+   * command. It must be pure and deterministic; a thrown predicate fails closed by
+   * retaining the command. */
+  shouldRecordResult?(result: O): boolean;
   /** Progressive-disclosure tier for the MCP surface. "core" tools are returned in
    *  the BOOTSTRAP list an agent starts with (kept small so a large catalog never
    *  floods the model's tool-reasoning window); "standard"/"advanced" are discovered

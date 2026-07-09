@@ -291,6 +291,19 @@ export class WorldRecorder {
                 if (into[f] === undefined && f in res.result) into[f] = (res.result as Record<string, unknown>)[f];
               }
             }
+            if (def?.shouldRecordResult !== undefined) {
+              let shouldRecord = true;
+              try {
+                shouldRecord = def.shouldRecordResult(res.result);
+              } catch {
+                // A broken filter must not hide a successful mutation. Retaining
+                // the command is the conservative replay-safe outcome.
+              }
+              if (!shouldRecord) {
+                rec.discardCommand(cmd.seq);
+                cmd = undefined;
+              }
+            }
           }
           return res;
         }, (err) => {
