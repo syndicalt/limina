@@ -13,6 +13,7 @@ const fs = require("fs");
 const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
 const { artifactPath } = require("./artifacts.cjs");
 const CHROME = chromeExecutable();
+const EDITOR_BASE_URL = process.env.EDITOR_BASE_URL || "http://localhost:5173";
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
@@ -34,7 +35,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
   const page = await (await browser.newContext()).newPage();
   try {
-    const resp = await page.goto("http://localhost:5173/render-harness.html", { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+    const resp = await page.goto(`${EDITOR_BASE_URL}/render-harness.html`, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
     if (!resp) { console.log("SKIP: harness not served on :5173"); await browser.close(); process.exit(2); }
     await page.waitForFunction(() => window.__ready === true, { timeout: 10000 });
 

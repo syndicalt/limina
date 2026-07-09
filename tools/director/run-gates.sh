@@ -5,7 +5,7 @@
 #
 #   --quick : run only the game-director gates (p20..p27) + host gates, skipping the full js/test sweep.
 #
-# Tests that need external services we can't drive here (ollama, an MCP server, a WS peer) are SKIPPED
+# Tests that need external services we can't drive here (ollama, a model worker, a WS peer) are SKIPPED
 # and reported as such — never silently counted as passing.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,38 +38,48 @@ record_skip() { # <name> <reason>
   echo "   SKIP: $1 — $2" >&2
 }
 
+record_failure() { # <name> <captured output>
+  fail=$((fail+1)); failed+=("$1")
+  echo "   FAIL: $1" >&2
+  printf '%s\n' "$2" | sed 's/^/      /' >&2
+}
+
 run_test() {
-  local t="$1" name out rc reason mline; name="$(basename "$t" .ts)"
+  local t="$1" name out rc reason; name="$(basename "$t" .ts)"
   case "$name" in
-    *ollama*|mcp_*|*_ws|*_ws_*|p4_multi_client*) record_skip "$name" "needs external service (ollama/mcp/ws)"; return;;
+    *ollama*|*_ws|*_ws_*|p4_multi_client*) record_skip "$name" "needs external service (ollama/ws)"; return;;
+    p9_model_real_tile|p9_model_source_http) record_skip "$name" "needs external terrain-model worker"; return;;
   esac
   if [ "$HEADLESS" = 1 ] && [[ "$HEADLESS_TESTS" == *" $name "* ]]; then
     record_skip "$name" "needs GPU/window (headless runner)"; return
   fi
   out="$(LIMINA_AUDIO=null timeout 240 "$BIN" "$t" 2>&1)"; rc=$?
+  if [ "$name" = "throw" ]; then
+    if [ "$rc" -ne 0 ] \
+      && grep -Fq 'Error: intentional failure for source-map check' <<<"$out" \
+      && grep -Eq 'throw\.ts:5:[0-9]+' <<<"$out" \
+      && grep -Eq 'throw\.ts:9:[0-9]+' <<<"$out" \
+      && grep -Eq 'throw\.ts:12:[0-9]+' <<<"$out"; then
+      pass=$((pass+1))
+    else
+      record_failure "$name" "$out"
+    fi
+    return
+  fi
   if [ $rc -eq 0 ]; then pass=$((pass+1)); return; fi
-  # (c) EXPLICIT opt-in skip: a test that prints a line starting with __LIMINA_SKIP__ self-declares an
+  # Explicit opt-in skip: a test that prints a line starting with __LIMINA_SKIP__ self-declares an
   # environmental skip. PREFER this over error-text matching — it's auditable and can't be forged by a
   # regression that merely happens to print a known startup phrase.
   if reason="$(echo "$out" | grep -m1 '^__LIMINA_SKIP__')"; then
     record_skip "$name" "self-declared${reason#__LIMINA_SKIP__}"
     return
   fi
-  # (d) exit code 2 is the reserved "can't run here" signal → SKIP; any other non-zero is a real FAIL,
-  # unless it matches one of the specific, ANCHORED startup lines below.
+  # Exit code 2 is the reserved "can't run here" signal. Any other non-zero is a real failure.
   if [ "$rc" -eq 2 ]; then
     record_skip "$name" "exit code 2 (environmental)"
     return
   fi
-  # (a) Legacy environmental/negative startup failures classified as SKIP. The patterns are ANCHORED to
-  # the specific startup lines (createEngine GPU/window, the model worker not coming up, the source-map
-  # probe) — line start or a "prefix: " boundary — so a regression whose message merely CONTAINS one of
-  # these phrases mid-sentence still counts as a FAIL, not a silent SKIP.
-  if mline="$(echo "$out" | grep -m1 -iE '(^|: )no (WindowTarget|WebGPU adapter)|worker at .+ not ready after [0-9]+ tries|(^|: )intentional failure for source-map')"; then
-    record_skip "$name" "matched startup line: ${mline}"
-  else
-    fail=$((fail+1)); failed+=("$name")
-  fi
+  record_failure "$name" "$out"
 }
 
 echo "== js/test suite =="
@@ -104,6 +114,18 @@ if npm --prefix js run check:portability --silent >/dev/null 2>&1; then echo "  
 if npm --prefix js run check:live --silent >/dev/null 2>&1; then echo "   check-live-composition: PASS"; else echo "   check-live-composition: FAIL"; hostfail=1; fi
 if npm --prefix js run check:coordinator-demo --silent >/dev/null 2>&1; then echo "   check-coordinator-demo: PASS"; else echo "   check-coordinator-demo: FAIL"; hostfail=1; fi
 
+# Node-native TypeScript module gate. This file is .mjs and therefore is not part
+# of the limina-driven js/test/*.ts sweep above.
+if node js/test/p69_tree_source.mjs >/dev/null 2>&1; then echo "   p69-tree-source: PASS"; else echo "   p69-tree-source: FAIL"; hostfail=1; fi
+
+# Genuine Zaxy/EventLoom integration. It is external by definition, so its absence
+# is announced; when available, incompatibility or round-trip failure is fatal.
+zaxy_bin="${ZAXY_BIN:-zaxy}"
+if command -v "$zaxy_bin" >/dev/null 2>&1; then
+  if ZAXY_BIN="$zaxy_bin" LIMINA_BIN="$BIN" node js/test/eventloom_bridge_roundtrip.mjs >/dev/null 2>&1; then echo "   eventloom-roundtrip: PASS"
+  else echo "   eventloom-roundtrip: FAIL"; hostfail=1; fi
+else echo "   eventloom-roundtrip: SKIP (no zaxy; set ZAXY_BIN)"; fi
+
 if command -v bun >/dev/null 2>&1; then
   if bun run tools/director/check-gds.ts >/dev/null 2>&1; then echo "   check-gds: PASS"; else echo "   check-gds: FAIL"; hostfail=1; fi
 else echo "   check-gds: SKIP (no bun)"; fi
@@ -121,14 +143,24 @@ editor_host_log="$(mktemp)"
 editor_static_log="$(mktemp)"
 editor_host_pid=""
 editor_static_pid=""
+free_port() {
+  node -e 'const s=require("node:net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'
+}
+editor_static_port="$(free_port)"
+editor_host_port="$(free_port)"
 cleanup_editor_gates() {
   [ -n "$editor_host_pid" ] && kill "$editor_host_pid" >/dev/null 2>&1 || true
   [ -n "$editor_static_pid" ] && kill "$editor_static_pid" >/dev/null 2>&1 || true
   rm -f "$editor_host_log" "$editor_static_log"
 }
-node tools/scaffold/scripts/serve.mjs editor 5173 >"$editor_static_log" 2>&1 &
+trap cleanup_editor_gates EXIT
+node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
 editor_static_pid=$!
-"$BIN" editor/server/editor_host.ts >"$editor_host_log" 2>&1 &
+LIMINA_EDITOR_PORT="$editor_host_port" LIMINA_EDITOR_STATIC_PORT="$editor_static_port" \
+  LIMINA_EDITOR_WORLDLOG="editor_gate_${editor_host_port}_worldlog.jsonl" \
+  LIMINA_EDITOR_TRACE="editor_gate_${editor_host_port}_trace.jsonl" \
+  LIMINA_EDITOR_KERNEL_LOCK="editor_gate_${editor_host_port}_kernel.lock.json" \
+  "$BIN" editor/server/editor_host.ts >"$editor_host_log" 2>&1 &
 editor_host_pid=$!
 editor_token=""
 for _ in $(seq 1 50); do
@@ -139,9 +171,11 @@ for _ in $(seq 1 50); do
 done
 if [ -z "$editor_token" ]; then
   echo "   editor live/browser gates: FAIL (editor host did not publish an auth token)"
+  sed 's/^/      /' "$editor_host_log" | tail -n 12
   hostfail=1
 else
-  if EDITOR_AUTH_TOKEN="$editor_token" node editor/test/history_live.test.mjs >/dev/null 2>&1; then echo "   editor history live: PASS"
+  if EDITOR_AUTH_TOKEN="$editor_token" EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
+    node editor/test/history_live.test.mjs >/dev/null 2>&1; then echo "   editor history live: PASS"
   else rc=$?; if [ $rc -eq 2 ]; then echo "   editor history live: SKIP"; else echo "   editor history live: FAIL"; hostfail=1; fi; fi
   for et in \
     editor/test/fidelity_frame.test.cjs \
@@ -151,11 +185,13 @@ else
     editor/test/history_browser.test.cjs
   do
     ename="$(basename "$et" .test.cjs)"
-    if EDITOR_AUTH_TOKEN="$editor_token" node "$et" >/dev/null 2>&1; then echo "   editor $ename: PASS"
+    if EDITOR_AUTH_TOKEN="$editor_token" EDITOR_BASE_URL="http://localhost:$editor_static_port" \
+      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" node "$et" >/dev/null 2>&1; then echo "   editor $ename: PASS"
     else rc=$?; if [ $rc -eq 2 ]; then echo "   editor $ename: SKIP"; else echo "   editor $ename: FAIL"; hostfail=1; fi; fi
   done
 fi
 cleanup_editor_gates
+trap - EXIT
 
 if [ -n "${LLMFF_BIN:-}" ] || command -v llmff >/dev/null 2>&1; then
   if node tools/director/check-slice-builder.mjs >/dev/null 2>&1; then echo "   check-slice-builder: PASS"

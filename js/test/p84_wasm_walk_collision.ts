@@ -42,7 +42,7 @@ assert(RAPIER !== null, "rapier-compat could not be imported in this binary — 
 
 // A real GLB the assets route serves (used by the fidelity renders / village.build). The WORKER must
 // author a collider for it even though it never parses the mesh.
-const BUILDING_ASSET = "library/cottage.glb";
+const BUILDING_ASSET = "cottage.glb";
 
 // Flat terrain so the resting height is exact (baseHeight 0 ⇒ surface y=0). Player radius 0.3 +
 // halfHeight 0.6 ⇒ ground offset 0.9 (see Task-2 human capsule).

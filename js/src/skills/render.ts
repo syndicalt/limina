@@ -3,7 +3,8 @@
 // `render.enablePost` wraps buildPostPipeline (render/post.ts) as a first-class skill: it
 // builds the GTAO + bloom + grade pipeline on the LIVE renderer/scene/camera and stores
 // it on the world (`world.post`) so a render loop can drive `post.render()` in place of
-// `renderer.render(...)`. Returns a handle (the resolved preset + which stages are wired).
+// `renderer.render(...)`. Renderer-free authoring accepts the declarative command for
+// recording/replay and reports it as deferred. Returns the resolved preset and status.
 //
 // RENDER-ONLY: the post stack composites the colour the scene pass already produced. It
 // reads NOTHING from and writes NOTHING to the sim / physics / world-log / replay — a
@@ -16,7 +17,7 @@
 // that native fix lands; for live free-fly navigation drive the bare renderer.render path.
 
 import { z } from "../../build/zod.bundle.mjs";
-import { buildPostPipeline, type PostPipeline } from "../render/post.ts";
+import { buildPostPipeline, resolvePostPreset, type PostPipeline } from "../render/post.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const aoOverride = z.object({
@@ -72,8 +73,10 @@ const enablePostInput = z.object({
 });
 
 const enablePostOutput = z.object({
-  /** Whether the pipeline was built (false would be an error path — kept for symmetry). */
+  /** Whether the live pipeline was built. False in a renderer-free authoring/export world. */
   enabled: z.boolean(),
+  /** True when the declarative command was accepted for replay but no renderer exists yet. */
+  deferred: z.boolean(),
   /** Which stages are wired (a disabled stage drops its node). */
   ao: z.boolean(),
   bloom: z.boolean(),
@@ -96,7 +99,7 @@ export function registerRenderSkills(registry: SkillRegistry): void {
   const enablePost: SkillDefinition<z.infer<typeof enablePostInput>, z.infer<typeof enablePostOutput>> = {
     name: "render.enablePost",
     version: "1.0.0",
-    description: "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). Returns the resolved preset + which stages are wired. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation). Render-only: never touches the sim/log/replay.",
+    description: "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset + materialization status. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation).",
     category: "world",
     permissions: ["scene.write"],
     input: enablePostInput,
@@ -104,7 +107,27 @@ export function registerRenderSkills(registry: SkillRegistry): void {
     handler: (input, ctx) => {
       const renderer = ctx.world.renderer;
       if (renderer === undefined || renderer === null) {
-        throw new Error("render.enablePost: no renderer on the world (windowed/live-renderer only)");
+        if (ctx.world.mode !== "headless") {
+          throw new Error("render.enablePost: no renderer on a non-headless world");
+        }
+        const preset = resolvePostPreset({
+          ao: input.ao, bloom: input.bloom, grade: input.grade,
+          godrays: input.godrays, dof: input.dof, outline: input.outline,
+        });
+        ctx.emit("render.post.deferred", {});
+        return {
+          enabled: false,
+          deferred: true,
+          ao: false,
+          bloom: false,
+          grade: false,
+          depth: false,
+          normal: false,
+          godrays: false,
+          dof: false,
+          outline: false,
+          preset,
+        };
       }
       const pipeline: PostPipeline = buildPostPipeline(renderer, ctx.world.scene, ctx.world.camera, {
         ao: input.ao, bloom: input.bloom, grade: input.grade,
@@ -117,6 +140,7 @@ export function registerRenderSkills(registry: SkillRegistry): void {
       });
       return {
         enabled: true,
+        deferred: false,
         ao: pipeline.aoNode !== null,
         bloom: pipeline.bloomNode !== null,
         grade: pipeline.preset.grade.enabled,

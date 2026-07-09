@@ -29,6 +29,8 @@ import { resolveProfile } from "../src/skills/permissions.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
 import { captureWorldState, compareWorldState, syncAllBodies } from "../src/worldlog/log.ts";
 import { buildWaterSurface, DEFAULT_WATER_COLOR, DEFAULT_WATER_SIZE } from "../src/water.ts";
+import { AssetRegistry } from "../src/asset-registry.ts";
+import { worldMapContentHash, type WorldMap } from "../src/world/worldmap.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p11_water FAIL: " + msg);
@@ -235,3 +237,33 @@ ops.op_log(
   `p11_water addRiver OK: registered + scene.write-gated (player denied); one RENDER-ONLY ribbon ` +
   `(no physics body, no ECS entity); world.river.added traced; 1-point polyline rejected (falsifiable).`,
 );
+
+// ── world.addMapRivers: validated map asset, identity pin, and all waterways ───────────────────
+const mapAssetId = "test/map-rivers.worldmap.json";
+const map = {
+  version: 1, id: "river-test", unitsPerMeter: 2, origin: [10, -20], extent: { w: 100, h: 100 },
+  seaLevel: 0, land: [], relief: [], biomes: [], routes: [], anchors: [],
+  waterways: [
+    { points: [[0, 0], [5, 2]], widthM: 4, class: "river" },
+    { points: [[2, 3], [4, 5], [8, 9]], widthM: 6, class: "river" },
+  ],
+  provenance: { tool: "design-space", contentHash: "pending" },
+} as WorldMap;
+map.provenance.contentHash = worldMapContentHash(map);
+const mapAssets = new AssetRegistry(ops);
+mapAssets.seed(mapAssetId, new TextEncoder().encode(JSON.stringify(map)));
+const mapRegistry = new SkillRegistry(new LiminaTracer("ses_p11_map_rivers"));
+registerCoreSkills(mapRegistry, { assets: mapAssets });
+const mapWorld = makeHeadlessWorld(ops);
+const mapAuthor = { ...author, sessionId: "ses_p11_map_rivers", world: mapWorld };
+const mapRivers = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, widthScale: 1.5 }, mapAuthor);
+assert(mapRivers.success, `world.addMapRivers failed: ${JSON.stringify(mapRivers.error)}`);
+const mapRiverOut = mapRivers.result as { rivers: number; points: number; mapHash: string };
+assert(mapRiverOut.rivers === 2 && mapRiverOut.points === 5, `map river counts wrong: ${JSON.stringify(mapRiverOut)}`);
+assert(mapRiverOut.mapHash === map.provenance.contentHash, "world.addMapRivers did not return the verified map identity");
+assert(riverMeshes(mapWorld.scene).length === 2, "world.addMapRivers must mount every mapped waterway");
+const wrongIdentity = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, mapHash: "wrong" }, mapAuthor);
+assert(!wrongIdentity.success, "world.addMapRivers must reject a mismatched committed map hash");
+assert(riverMeshes(mapWorld.scene).length === 2, "identity rejection must occur before mounting any river");
+
+ops.op_log("p11_water addMapRivers OK: validated and pinned one map asset, transformed and mounted all 2 waterways, and rejected an identity mismatch before side effects.");

@@ -14,6 +14,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Rotation, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import type { EntityOrigin, SceneObject } from "../engine.ts";
 import { applyProceduralPbr } from "../materials/procedural-pbr.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 
@@ -41,7 +42,7 @@ export function pbrMat(grain: string, color: number, roughness: number): THREE.M
  *  `origin` (the create command, e.g. {tool, input}) is stored on the entity so a self-sufficient
  *  snapshot can rebuild the mesh after the create command is compacted out of the live log — pass it
  *  for agent-authored geometry (scene.createMesh); omit for internal composites. */
-export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0, origin?: unknown): string {
+export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0, origin?: EntityOrigin): string {
   const [x, y, z] = pos;
   world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh, x, y, z);
@@ -54,7 +55,7 @@ export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, 
   // mesh.rotation directly is overwritten). Box collider stays axis-aligned (an AABB approximation).
   if (yaw !== 0) { Rotation.y[eid] = Math.sin(yaw / 2); Rotation.w[eid] = Math.cos(yaw / 2); }
   const bodyId = world.ops.op_physics_add_static_box(x, y, z, half[0], half[1], half[2], 0.85, 0);
-  return world.entities.create({ eid, mesh, bodyId, origin });
+  return world.entities.create({ eid, mesh: mesh as unknown as SceneObject, bodyId, origin });
 }
 
 /** A static box mesh + collider, with a given material. */

@@ -2,14 +2,14 @@
 //
 // Drives the real co-authoring loop against a running editor host (ws://localhost:8787/):
 // a builder.review agent PROPOSES a held edit, the reviewer GRANTS it (so it applies and traces),
-// the reviewer reads trace.tail, and those REAL server events are fed into the History panel — proving
-// the full path server → trace.tail → recordEvents → controller timeline works end to end, not just
+// the reviewer reads worldlog.tail, and those REAL commands are fed into the History panel — proving
+// the full path server → worldlog.tail → recordCommands → controller timeline works end to end, not just
 // with synthetic events. Pixel rendering remains the in-browser step.
 //
 // Prereq: the editor host must be running:  ./target/release/limina editor/server/editor_host.ts
 // Run:    node editor/test/history_live.test.mjs   (exit 0 = pass; exit 2 = host not running → skip)
 
-const HOST = "ws://localhost:8787/";
+const HOST = process.env.EDITOR_HOST_URL ?? "ws://localhost:8787/";
 const AUTH_TOKEN = process.env.EDITOR_AUTH_TOKEN || undefined;
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -71,17 +71,17 @@ try {
   const grant = await reviewer.callTool("approval.grant", { approvalId: pending.approvalId }).catch((e) => ({ error: String(e) }));
   if (grant && grant.error) fail("approval.grant failed: " + grant.error);
 
-  // 3. The applied edit now traces; pull it via trace.tail and FEED it to the History panel.
-  let afterSeq = -1;
-  const events = await pollUntil(async () => {
-    const tail = await reviewer.callTool("trace.tail", { afterSeq, limit: 500 }).catch(() => null);
-    if (!tail || !Array.isArray(tail.events)) return null;
-    if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) afterSeq = tail.nextAfterSeq;
-    return tail.events.length > 0 ? tail.events : null;
+  // 3. The applied edit is now in the authoring log; pull it and FEED it to the History panel.
+  let cursor = 0;
+  const commands = await pollUntil(async () => {
+    const tail = await reviewer.callTool("worldlog.tail", { since: cursor }).catch(() => null);
+    if (!tail || !Array.isArray(tail.commands)) return null;
+    if (typeof tail.next === "number") cursor = tail.next;
+    return tail.commands.length > 0 ? tail.commands : null;
   });
-  if (!events) fail("no trace events appeared after granting the edit");
+  if (!commands) fail("no authoring commands appeared after granting the edit");
 
-  panel.recordEvents(events);
+  panel.recordCommands(commands);
   if (ctrl.tip() <= before) fail(`the History timeline did not grow from real server events (tip ${before} → ${ctrl.tip()})`);
 
   // The scrub control reflects the real timeline length, and time-travel emits a real prefix.
@@ -92,8 +92,8 @@ try {
   if (scrub.max !== String(ctrl.tip())) fail(`scrub max ${scrub.max} != live tip ${ctrl.tip()}`);
 
   console.log(`history_live.test OK: real co-authoring loop — agent proposed a held edit, reviewer granted it, ` +
-    `the applied edit traced, and ${events.length} real trace event(s) flowed into the History timeline (tip ${before} → ${ctrl.tip()}) ` +
-    `with the scrub control tracking it. Full path server → trace.tail → recordEvents → controller, verified live.`);
+      `the applied edit recorded, and ${commands.length} real command(s) flowed into the History timeline (tip ${before} → ${ctrl.tip()}) ` +
+      `with the scrub control tracking it. Full path server → worldlog.tail → recordCommands → controller, verified live.`);
   clearTimeout(overall);
   reviewer.close(); agent.close();
   process.exit(0);

@@ -205,6 +205,7 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
 
   const res = ok(await registry.invoke("render.enablePost", {}, base));
   assert(res.enabled === true, "render.enablePost did not report enabled");
+  assert(res.deferred === false, "live render.enablePost incorrectly reported deferred");
   assert(res.ao === true && res.bloom === true && res.grade === true, "default post stages not all wired");
   assert(res.depth === true && res.normal === true, "post pipeline missing the real depth+normal pre-pass nodes");
   assert(res.godrays === false && res.dof === false && res.outline === false, "opt-in stages (godrays/dof/outline) must be OFF by default");
@@ -224,6 +225,20 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   // shadow-casting sun so it is GPU-verified separately, not asserted here).
   const fx = ok(await registry.invoke("render.enablePost", { dof: { enabled: true }, outline: { enabled: true } }, base));
   assert(fx.dof === true && fx.outline === true, "enabling dof/outline did not wire the stages");
+}
+
+// Renderer-free authoring must preserve the command for recorder/export replay instead of
+// failing the whole export. It reports that materialization is deferred and allocates no pipeline.
+{
+  const registry = new SkillRegistry(new LiminaTracer("ses_p11_default_c_headless"));
+  registerCoreSkills(registry);
+  const { world } = makeCapturingWorld();
+  const base = { agentId: "agt_c_headless", sessionId: "ses_p11_default_c_headless", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+  const res = ok(await registry.invoke("render.enablePost", { outline: { enabled: true } }, base));
+  assert(res.enabled === false && res.deferred === true, "headless render.enablePost did not defer materialization");
+  assert(world.post === undefined, "headless render.enablePost allocated a live pipeline");
+  const preset = res.preset as { outline?: { enabled?: boolean } };
+  assert(preset.outline?.enabled === true, "headless render.enablePost lost the resolved preset");
 }
 
 ops.op_log(

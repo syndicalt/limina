@@ -11,6 +11,7 @@
 // engine consumer, so they were removed rather than left as tested-but-unwired
 // dead code. The surviving surface is exactly what the engine uses today.
 
+import type { World } from "bitecs";
 import { Position, Rotation, Scale } from "./world.ts";
 
 /** Versioned write surface over the SoA transform components. The monotonic
@@ -55,6 +56,6 @@ class SoaTransformStorage implements TransformStorage {
 
 /** `world` is accepted for call-site stability (the storage binds to the same
  *  bitECS world the caller owns); the SoA arrays are global, so it is not stored. */
-export function createTransformStorage(_world: unknown): TransformStorage {
+export function createTransformStorage(_world: World): TransformStorage {
   return new SoaTransformStorage();
 }

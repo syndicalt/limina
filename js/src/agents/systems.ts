@@ -15,6 +15,16 @@ import { querySpatialEntities } from "../spatial/index.ts";
 
 export type ProviderMap = Record<string, LLMProvider>;
 
+function promptTrace(agent: AgentRecord): Record<string, unknown> {
+  const hash = ops.op_sha256(agent.llm.systemPrompt);
+  return {
+    model: agent.llm.model,
+    promptId: agent.llm.promptId ?? "unversioned",
+    promptVersion: agent.llm.promptVersion ?? "unversioned",
+    promptHash: hash.length > 0 ? `sha256:${hash}` : undefined,
+  };
+}
+
 function dueForDecision(agent: AgentRecord, tick: number): boolean {
   return tick - agent.lastDecisionTick >= agent.decisionIntervalTicks;
 }
@@ -179,13 +189,26 @@ export function decisionSystem(
       threadId: agent.sessionId,
       parentEventId: null,
       causedBy: agent.lastPerceptionEventId !== undefined ? [agent.lastPerceptionEventId] : [],
-      payload: { tick, provider: agent.llm.provider },
+      payload: { tick, provider: agent.llm.provider, ...promptTrace(agent) },
     });
     const tools = registry.list(agentGrants(agent));
+    const perception = agent.perception;
+    if (perception === undefined) {
+      scheduler.failDecision(agent, generation);
+      continue;
+    }
 
     provider
-      .decide({ systemPrompt: agent.llm.systemPrompt, perception: agent.perception, tools, previousResults: [] })
-      .then(({ toolCalls }) => {
+      .decide({ systemPrompt: agent.llm.systemPrompt, perception, tools, previousResults: [] })
+      .then(({ toolCalls, usage, latencyMs }) => {
+        tracer.emit({
+          type: "agent.llm.response",
+          actorId: agent.id,
+          threadId: agent.sessionId,
+          parentEventId: null,
+          causedBy: [decisionId],
+          payload: { ...(latencyMs !== undefined ? { latencyMs } : {}), usage, ...promptTrace(agent) },
+        });
         const calls = toolCalls.map((call) => {
           const skill = registry.describe(call.tool);
           if (skill === undefined) {
@@ -360,7 +383,7 @@ export async function runBoundedMultiTurn(
       threadId: agent.sessionId,
       parentEventId: null,
       causedBy: decisionCauses,
-      payload: { tick, provider: agent.llm.provider, turnStep: steps },
+      payload: { tick, provider: agent.llm.provider, turnStep: steps, ...promptTrace(agent) },
     });
 
     const decision = await decideWithTimeout(provider, {
@@ -373,6 +396,14 @@ export async function runBoundedMultiTurn(
     if (decision === "timeout") {
       return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };
     }
+    tracer.emit({
+      type: "agent.llm.response",
+      actorId: agent.id,
+      threadId: agent.sessionId,
+      parentEventId: null,
+      causedBy: [decisionId],
+      payload: { ...(decision.latencyMs !== undefined ? { latencyMs: decision.latencyMs } : {}), usage: decision.usage, turnStep: steps, ...promptTrace(agent) },
+    });
     try {
       if (decision.text !== undefined && decision.text.length > 0) options.onText?.(decision.text);
     } catch (err) {

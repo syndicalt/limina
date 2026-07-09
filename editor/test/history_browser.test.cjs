@@ -11,6 +11,8 @@
 const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
 const { artifactPath } = require("./artifacts.cjs");
 const CHROME = chromeExecutable();
+const EDITOR_BASE_URL = process.env.EDITOR_BASE_URL || "http://localhost:5173";
+const EDITOR_HOST_URL = process.env.EDITOR_HOST_URL || "ws://localhost:8787/";
 
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
@@ -31,8 +33,8 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
 
   try {
-    const resp = await page.goto("http://localhost:5173/", { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
-    if (!resp) { console.log("SKIP: editor not served on http://localhost:5173/"); await browser.close(); process.exit(2); }
+    const resp = await page.goto(`${EDITOR_BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+    if (!resp) { console.log(`SKIP: editor not served on ${EDITOR_BASE_URL}/`); await browser.close(); process.exit(2); }
 
     // The History panel exists from the static markup (empty state) before connect.
     await page.waitForSelector("#history-body", { timeout: 5000 });
@@ -40,6 +42,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     if (!/no edits yet|connect to begin/.test(emptyText || "")) fail("History panel did not render its initial state (got: " + emptyText + ")");
 
     // Connect, then drive the co-authoring loop: propose a held edit, then grant it.
+    await page.fill("#url", EDITOR_HOST_URL);
     if (process.env.EDITOR_AUTH_TOKEN) await page.fill("#auth-token", process.env.EDITOR_AUTH_TOKEN);
     await page.click("#connect");
     await page.waitForTimeout(1800);

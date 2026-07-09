@@ -6,27 +6,7 @@
 
 function assert(cond, msg) { if (!cond) { console.error("FAIL: " + msg); process.exit(1); } }
 
-function makeEl(tag) {
-  return {
-    tagName: tag, className: "", _text: "", children: [], style: {},
-    value: tag === "input" ? "1000" : "", type: "", title: "", selected: false,
-    appendChild(c) { this.children.push(c); return c; },
-    addEventListener() {},
-    get firstChild() { return this.children[0] || null; },
-    get textContent() { return this._text; }, set textContent(v) { this._text = v; },
-    get innerHTML() { return ""; }, set innerHTML(_v) { this.children = []; },
-  };
-}
-
-const ids = [
-  "connect", "disconnect", "propose", "interval", "log",
-  "status-dot", "status-text", "history-body",
-];
-const byId = Object.fromEntries(ids.map((id) => [id, makeEl(id === "interval" ? "input" : "div")]));
-globalThis.document = { getElementById: (id) => byId[id] || makeEl("div"), createElement: (tag) => makeEl(tag) };
-globalThis.window = { prompt: () => "" };
-
-const { ingestTraceEvents } = await import("../src/app.js");
+const { ingestTraceEvents } = await import("../src/trace-retention.js");
 
 const retained = new Map();
 ingestTraceEvents(retained, Array.from({ length: 7 }, (_, i) => ({ id: `e${i}`, type: "event" })), 5);

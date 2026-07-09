@@ -20,6 +20,15 @@ export interface Perception {
   tick: number;
 }
 
+export interface AgentLlmConfig {
+  provider: string;
+  model: string;
+  systemPrompt: string;
+  /** Stable template identity/version for replay and evaluation attribution. */
+  promptId?: string;
+  promptVersion?: string;
+}
+
 export interface AgentRecord {
   id: string; // agt_
   type: "builder" | "player" | "npc";
@@ -32,7 +41,7 @@ export interface AgentRecord {
    *  invocation (via agentGrants); absent -> the profile's grants. */
   bundle?: ReadonlySet<string>;
   sessionId: string;
-  llm: { provider: string; model: string; systemPrompt: string };
+  llm: AgentLlmConfig;
   // runtime state
   perception?: Perception;
   lastPerceptionEventId?: string;
@@ -57,7 +66,7 @@ export interface NewAgent {
   profile: string;
   bundle?: ReadonlySet<string>;
   sessionId: string;
-  llm: { provider: string; model: string; systemPrompt: string };
+  llm: AgentLlmConfig;
 }
 
 /** Cache of profile-name -> resolved grants. `resolveProfile` allocates a fresh

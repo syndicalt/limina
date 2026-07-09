@@ -154,6 +154,7 @@ export function registerVegetationSkills(
       if (terrainId === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; terrainId = last; }
       const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
       if (layer === undefined) throw new Error("vegetation.scatter: no terrain layer — create one with terrain.create first");
+      const terrainKey = terrainId as string;
 
       // Per-instance BLIGHT lookup over the layer's caesura mask (nearest cell). A tree whose base sits
       // inside painted blight renders DEAD (bare + colour-drained) — the canopy dies with the ground.
@@ -202,7 +203,7 @@ export function registerVegetationSkills(
       // village.build has registered its footprints — the causal "veg first, then civilization
       // clears" order. Deterministic + replay-safe: footprints + scatter are pure over the log.
       const computePlacements = (): AssetInstance[] => {
-        const registered = footprints.get(terrainId!) ?? [];
+        const registered = footprints.get(terrainKey) ?? [];
         const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
         const config: ScatterConfig = {
           seed: input.seed,
@@ -278,7 +279,7 @@ export function registerVegetationSkills(
               for (const mesh of buildAssetInstancedMeshes(root, variant.set, { chunkSize: 96, ...(variant.dead ? { dead: true } : {}) })) {
                 (mesh as unknown as InstMesh).castShadow = true;
                 (mesh as unknown as InstMesh).receiveShadow = true;
-                scene!.add(mesh);
+                scene?.add?.(mesh);
                 meshes.push(mesh);
               }
             }
@@ -302,11 +303,11 @@ export function registerVegetationSkills(
       mounted.set(entity, disposeMeshes);
       // Register the subtractive-clear closure: village.build calls it after registering footprints,
       // so a forest scattered before the village is re-grown with the settlement footprints carved out.
-      const clears = vegetationClears.get(terrainId) ?? [];
+      const clears = vegetationClears.get(terrainKey) ?? [];
       clears.push(async () => { await remount(); });
-      vegetationClears.set(terrainId, clears);
+      vegetationClears.set(terrainKey, clears);
 
-      ctx.emit("vegetation.scattered", { entity, terrain: terrainId, instances: placements.length, mounted: meshes.length });
+      ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: meshes.length });
       return { entity, instances: placements.length, assetHashes, placements };
     },
   };

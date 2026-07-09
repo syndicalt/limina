@@ -111,7 +111,7 @@ export class Panel {
     this.key = Panel.makeKey(this.style, this.text, this.title);
     this._texture = makeTexture(this._composited);
     this._material = new THREE.MeshBasicNodeMaterial({
-      map: this._texture,
+      map: this._texture as never,
       transparent: true,
       side: THREE.DoubleSide,
       depthWrite: false,
@@ -119,7 +119,7 @@ export class Panel {
     // UI is unlit and must keep its authored colors: skip scene tone mapping.
     this._material.toneMapped = false;
     this._geometry = this.makeGeometry();
-    this._mesh = new THREE.Mesh(this._geometry, this._material) as unknown as PanelMesh;
+    this._mesh = new THREE.Mesh(this._geometry as never, this._material as never) as unknown as PanelMesh;
   }
 
   /** The scene-addable quad (Object3D); position/orient it however you anchor. */

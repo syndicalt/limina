@@ -6,7 +6,7 @@ export { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 export { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 export { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 // Post-processing TSL display nodes (Phase 3 terrain overhaul render stack):
-// real GTAO ambient occlusion + bloom, composited via THREE.PostProcessing.
+// real GTAO ambient occlusion + bloom, composited via THREE.RenderPipeline.
 // These are addon nodes (not part of the three/webgpu or three/tsl surface),
 // so they are pulled in explicitly here and exposed as THREE.ao / THREE.bloom.
 export { ao } from "three/examples/jsm/tsl/display/GTAONode.js";

@@ -18,6 +18,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "List agent actions currently held for human approval (id, skill, proposed input, agent).",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       pending: z.array(z.object({
@@ -47,6 +48,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "Approve a held agent action by id; it is applied now and its outcome returned.",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "admin",
     input: z.object({ approvalId: z.string() }),
     output: z.object({ resolved: z.boolean(), applied: z.boolean(), error: z.string().nullable() }),
     handler: async (input, ctx) => {
@@ -64,6 +66,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "Reject a held agent action by id; it is dropped and never applied.",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "admin",
     input: z.object({ approvalId: z.string(), reason: z.string().optional() }),
     output: z.object({ resolved: z.boolean(), error: z.string().nullable() }),
     handler: async (input, ctx) => {
@@ -93,8 +96,9 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 
 // ---- Known limitations (Phase 7 first cut; hardening is a follow-up) ------
 // 1. Re-authorization at grant (registry.resolveApproval) re-checks REVOCATION
-//    only — not quotas/budgets, since re-running the full policy would double-count
-//    the propose-time commit. Quota consumed at propose is not refunded on deny.
+//    without re-running the quota/budget-committing policy evaluation. Quota and
+//    call-budget usage are consumed exactly once, at proposal, and are not refunded
+//    on deny.
 // 2. RESOLVED — a granted action's apply-time events now carry the APPLY tick. The
 //    `approval.grant` handler passes its `ctx.tick` to `resolveApproval`, which stamps
 //    BOTH `skill.approval.granted` and `skill.executed` via registry.stampTick. The

@@ -46,7 +46,7 @@ export interface ScreenContext {
 
 /** Artifacts that depend on `kind` (its downstream), derived from studio upstreamKinds. */
 function downstreamOf(kind: DesignArtifactKind): DesignArtifactKind[] {
-  return DESIGN_STUDIOS.filter((s) => s.upstreamKinds.includes(kind)).map((s) => s.artifactKind);
+  return DESIGN_STUDIOS.filter((s) => s.upstreamKinds.some((upstream) => upstream === kind)).map((s) => s.artifactKind);
 }
 
 const ARCHITECT: DesignAgent = {

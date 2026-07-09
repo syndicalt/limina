@@ -107,7 +107,7 @@ function spawnVelocity(
 }
 
 /** Map an agent blend-mode name to a THREE blending constant. */
-function blendOf(mode: ParticleConfig["blendMode"]): number {
+function blendOf(mode: ParticleConfig["blendMode"]): THREE.Blending {
   if (mode === "alpha") return THREE.NormalBlending;
   if (mode === "multiply") return THREE.MultiplyBlending;
   return THREE.AdditiveBlending;

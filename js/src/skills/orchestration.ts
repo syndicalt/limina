@@ -144,7 +144,13 @@ export function registerOrchestrationSkills(registry: SkillRegistry, deps: Orche
         profile: DELEGATE_REVIEW_PROFILE,
         bundle: new Set(input.bundle),
         sessionId: workerId,
-        llm: { provider: providerName, model: "", systemPrompt: input.task },
+        llm: {
+          provider: providerName,
+          model: "",
+          systemPrompt: input.task,
+          promptId: "limina.delegate-task",
+          promptVersion: "1.0.0",
+        },
       });
 
       const bounds: BoundedMultiTurnOptions = {

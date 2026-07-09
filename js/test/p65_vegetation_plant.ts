@@ -46,8 +46,17 @@ const BIRCH_PALETTE = [{ id: "trees/birch-1.glb" }, { id: "trees/birch-2.glb" }]
 const SPRUCE = new Set(SPRUCE_PALETTE.map((e) => e.id));
 const PINE = new Set(PINE_PALETTE.map((e) => e.id));
 
-async function session(name: string): Promise<{ registry: SkillRegistry; world: WorldContext; layers: Map<string, EditableTerrain>; tracer: LiminaTracer }> {
+async function session(name: string, opts: { noProjectPack?: boolean } = {}): Promise<{ registry: SkillRegistry; world: WorldContext; layers: Map<string, EditableTerrain>; tracer: LiminaTracer }> {
   const world = makeHeadlessWorld();
+  if (opts.noProjectPack) {
+    world.ops = new Proxy(ops, {
+      get(target, property, receiver) {
+        if (property === "op_read_asset") return () => { throw new Error("asset not found"); };
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
   const layers = new Map<string, EditableTerrain>();
   const tracer = new LiminaTracer(name);
   const registry = new SkillRegistry(tracer);
@@ -116,7 +125,7 @@ const at = (world: WorldContext, name: string, t: number) => ({ agentId: "agt_p6
 // 5. Decoupling: with NO inline palette AND no project tree-pack.json (the engine ships none), the
 // skill fails cleanly — it names no baked GLB and never silently succeeds.
 {
-  const { registry, world } = await session("ses_p65_e");
+  const { registry, world } = await session("ses_p65_e", { noProjectPack: true });
   const r = await registry.invoke("vegetation.plant", { species: "spruce", position: [0, 0, 0], seed: 1 }, at(world, "ses_p65_e", 1));
   assert(!r.success, "plant with no palette and no pack must fail (engine bakes no tree ids)");
 }

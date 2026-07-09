@@ -14,7 +14,7 @@
 // world rendered with or without this stack logs and replays bit-identically —
 // the pipeline is rebuilt per-run from the scene, never carried as world state.
 //
-// EMPIRICAL: built on three's `PostProcessing` (a wrapper over RenderPipeline).
+// EMPIRICAL: built on three's `RenderPipeline`.
 // The depth+normal pre-pass is real — `pass(scene, camera).setMRT(mrt({ output,
 // normal: normalView }))` makes the scene pass emit a sampleable depth texture
 // (`getTextureNode('depth')`) and a view-space normal target, which GTAO reads.
@@ -196,7 +196,7 @@ type DeepPartial<T> = { [K in keyof T]?: Partial<T[K]> };
 /** The built pipeline, with the live nodes exposed for inspection (tests) + the
  *  driver methods the render loop calls in place of `renderer.render(...)`. */
 export interface PostPipeline {
-  /** The three PostProcessing object — `.outputNode` is the composited graph. */
+  /** The three RenderPipeline object — `.outputNode` is the composited graph. */
   postProcessing: unknown;
   /** The scene `pass` node (the depth+normal pre-pass source). */
   scenePass: unknown;
@@ -233,7 +233,7 @@ export function buildPostPipeline(
   const preset = resolvePostPreset(override);
 
   // deno-lint-ignore no-explicit-any
-  const post = new (THREE as any).PostProcessing(renderer);
+  const post = new (THREE as any).RenderPipeline(renderer);
 
   // ── Depth + normal PRE-PASS ──────────────────────────────────────────────────
   // The scene pass renders colour AND, via MRT, a view-space normal target; its

@@ -17,9 +17,23 @@ export interface DecideRequest {
   userMessage?: string;
 }
 
+export interface LLMUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface LLMDecision {
+  toolCalls: MCPRequest[];
+  text?: string;
+  usage?: LLMUsage;
+  /** Provider-measured wall latency. Deterministic/scripted providers omit it. */
+  latencyMs?: number;
+}
+
 export interface LLMProvider {
   readonly name: string;
-  decide(req: DecideRequest): Promise<{ toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } }>;
+  decide(req: DecideRequest): Promise<LLMDecision>;
 }
 
 /** Deterministic policy function — the CI test path and the demo baseline. */
@@ -39,7 +53,7 @@ export class OllamaProvider implements LLMProvider {
     private readonly url = "http://localhost:11434/api/chat",
   ) {}
 
-  async decide(req: DecideRequest): Promise<{ toolCalls: MCPRequest[] }> {
+  async decide(req: DecideRequest): Promise<LLMDecision> {
     // Function names must match ^[A-Za-z0-9_-]+$ — encode the skill's dot as "__".
     const tools = req.tools.map((t) => ({
       type: "function",
@@ -55,8 +69,9 @@ export class OllamaProvider implements LLMProvider {
       ],
       tools,
     });
+    const startedAt = Date.now();
     const text = await ops.op_http_post(this.url, body);
-    return { toolCalls: parseOllamaToolCalls(text) };
+    return { toolCalls: parseOllamaToolCalls(text), latencyMs: Date.now() - startedAt };
   }
 }
 
@@ -260,7 +275,7 @@ function buildAnthropicUserMessage(req: DecideRequest): string {
 
 function parseAnthropicMessagesResponse(
   text: string,
-): { toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } } {
+): LLMDecision {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -291,7 +306,7 @@ function parseAnthropicMessagesResponse(
   const usageRecord = asRecord(root.usage);
   const inputTokens = typeof usageRecord?.input_tokens === "number" ? usageRecord.input_tokens : 0;
   const outputTokens = typeof usageRecord?.output_tokens === "number" ? usageRecord.output_tokens : 0;
-  const usage = usageRecord === undefined ? undefined : { totalTokens: inputTokens + outputTokens };
+  const usage = usageRecord === undefined ? undefined : { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
   const outText = textBlocks.join("");
   return { toolCalls, ...(outText.length > 0 ? { text: outText } : {}), ...(usage !== undefined ? { usage } : {}) };
 }
@@ -312,7 +327,8 @@ export class AnthropicProvider implements LLMProvider {
 
   async decide(
     req: DecideRequest,
-  ): Promise<{ toolCalls: MCPRequest[]; text?: string; usage?: { totalTokens?: number } }> {
+  ): Promise<LLMDecision> {
+    const startedAt = Date.now();
     // PROMPT CACHING: the tools (~50k tokens) + system prompt are byte-identical on
     // every call in a turn (and across turns within the 5-min TTL). Mark a cache
     // breakpoint at the end of that static prefix so repeated calls read it at ~10%
@@ -347,7 +363,7 @@ export class AnthropicProvider implements LLMProvider {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const raw = await ops.op_http_post_headers(`${this.baseUrl}/v1/messages`, body, headers);
-        return parseAnthropicMessagesResponse(raw);
+        return { ...parseAnthropicMessagesResponse(raw), latencyMs: Date.now() - startedAt };
       } catch (e) {
         lastErr = e;
         const msg = e instanceof Error ? e.message : String(e);

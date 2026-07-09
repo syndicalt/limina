@@ -48,8 +48,15 @@ const initializeLine = JSON.stringify({
   params: { agentId: "agent", sessionId: "session", profile: "builder.readWrite" },
 });
 const toolsListLine = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+const preInitializeSubscribe = JSON.stringify({ jsonrpc: "2.0", id: 0, method: "state/subscribe", params: {} });
+const repeatedInitialize = JSON.stringify({
+  jsonrpc: "2.0",
+  id: 3,
+  method: "initialize",
+  params: { agentId: "replacement", sessionId: "replacement", profile: "system.readonly" },
+});
 
-const transport = new ScriptedTransport([initializeLine, toolsListLine]);
+const transport = new ScriptedTransport([preInitializeSubscribe, initializeLine, repeatedInitialize, toolsListLine]);
 const server = new AuthoritativeServer(transport, { sessionId: "p38_net_error_handling", tickMs: 1000 });
 const registry = server.registry as unknown as { list: (permissions: ReadonlySet<string>) => unknown };
 registry.list = () => {
@@ -58,10 +65,16 @@ registry.list = () => {
 server.start();
 await ops.op_sleep_ms(80);
 
-assert(transport.sent.length >= 2, `server dropped the connection without replying to handler failure: ${transport.sent.length} sends`);
-const initResponse = parseMsg(transport.sent[0]);
+assert(transport.sent.length >= 4, `server dropped the connection without replying to handler failure: ${transport.sent.length} sends`);
+const preInitResponse = parseMsg(transport.sent[0]);
+assert(preInitResponse.id === 0 && preInitResponse.error?.code === -32000,
+  "state subscription before initialize must be rejected");
+const initResponse = parseMsg(transport.sent[1]);
 assert(initResponse.id === 1 && initResponse.error === undefined, "initialize did not succeed before the injected handler failure");
-const failureResponse = parseMsg(transport.sent[1]);
+const repeatResponse = parseMsg(transport.sent[2]);
+assert(repeatResponse.id === 3 && repeatResponse.error?.code === JSON_RPC_ERRORS.invalidRequest,
+  "repeated initialize must not replace the bound identity");
+const failureResponse = parseMsg(transport.sent[3]);
 assert(failureResponse.id === 2, "handler failure response did not preserve the request id");
 assert(failureResponse.error?.code === JSON_RPC_ERRORS.internalError,
   `handler failure returned ${failureResponse.error?.code}, expected ${JSON_RPC_ERRORS.internalError}`);

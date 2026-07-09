@@ -120,6 +120,7 @@ export function registerInteractionSkills(
     description: "Query interactable entities within range of a position (or the actor entity), sorted by distance. Uses the world spatial index over real entity transforms. Pure read — emits nothing.",
     category: "interaction",
     permissions: ["interaction.read"],
+    effect: "read",
     input: queryInput,
     output: z.object({ interactables: z.array(z.object({ entity: z.string(), prompt: z.string(), type: z.string(), distance: z.number() })) }),
     handler: (input, ctx) => {
@@ -158,7 +159,7 @@ export function registerInteractionSkills(
     category: "interaction",
     permissions: ["interaction.write"],
     input: interactInput,
-    output: z.object({ ok: z.boolean(), result: z.unknown().optional() }),
+    output: z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional() }),
     handler: (input, ctx) => {
       const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx.tick);
       ctx.emit("interaction.performed", { entity: input.entity, actor: input.actorEntity ?? ctx.agentId, data: input.data, ...input.meta });
@@ -247,7 +248,7 @@ export function registerInteractionSkills(
     category: "interaction",
     permissions: ["interaction.write"],
     input: useInput,
-    output: z.object({ ok: z.boolean(), result: z.unknown().optional(), reason: z.string().optional() }),
+    output: z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
       if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
       const consumed = inv.removeItem(input.actorEntity, input.itemId, undefined, input.quantity);

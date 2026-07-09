@@ -216,6 +216,7 @@ export function registerCutsceneSkills(registry: SkillRegistry): { cutsceneManag
     description: "Read the current cutscene playback state (playing, id, progress). Pure read.",
     category: "game",
     permissions: ["scene.read"],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       playing: z.boolean(),

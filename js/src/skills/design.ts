@@ -94,6 +94,7 @@ export function registerDesignSkills(registry: SkillRegistry): void {
     description: "Read a first-class design artifact from the world without recording a mutation.",
     category: "design",
     permissions: ["design.read"],
+    effect: "read",
     input: getInput,
     output: artifactOutput,
     handler: (input, ctx) => {

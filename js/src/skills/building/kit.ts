@@ -95,6 +95,7 @@ const ROLE_GRAIN: Record<PaletteRole, string> = {
   trim: "rock",
   skin: "stone",
   sky: "stone",
+  slate: "stone",
 };
 
 /** Roles that resolve to a PURPOSE-BUILT tiled texture (building-textures.ts) instead of the generic

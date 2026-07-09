@@ -496,6 +496,7 @@ export function registerBehaviorDialogueSkills(registry: SkillRegistry, opts?: {
     description: "Query an NPC's memories (for dialogue or behavior decisions).",
     category: "behavior",
     permissions: ["behavior.read"],
+    effect: "read",
     input: recallInput,
     output: z.object({ memories: z.array(z.object({ key: z.string(), value: z.unknown(), tick: z.number(), source: z.string().optional() })) }),
     // Pure read: no emit.
@@ -589,6 +590,7 @@ export function registerBehaviorDialogueSkills(registry: SkillRegistry, opts?: {
     description: "Get the current state of an active dialogue (current node, available choices, history).",
     category: "dialogue",
     permissions: ["dialogue.read"],
+    effect: "read",
     input: getDialogueInput,
     output: z.object({ currentNode: nodeView.optional(), history: z.array(z.object({ nodeId: z.string(), choiceIndex: z.number().optional() })) }),
     // Pure read: no emit.

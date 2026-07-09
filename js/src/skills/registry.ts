@@ -4,6 +4,7 @@
 // wrapper over it).
 
 import { z } from "../../build/zod.bundle.mjs";
+import type { World } from "bitecs";
 import type { CameraLike, EngineOps, EntityTable, SceneLike } from "../engine.ts";
 import type { TransformStorage } from "../ecs/facade.ts";
 import type { Tracer } from "../observability/event.ts";
@@ -13,6 +14,9 @@ import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEvent
 import type { DesignArtifactStore } from "../world/design-artifacts.ts";
 
 export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "system" | "ui" | "social" | "audio" | "terrain" | "world" | "design" | "player" | "camera" | "animation" | "interaction" | "inventory" | "game" | "trigger" | "event" | "quest" | "stats" | "damage" | "status" | "combat" | "behavior" | "dialogue" | "nav" | "vfx" | "save" | "progression";
+export type SkillEffect = "read" | "write" | "admin";
+
+const policyAlreadyCommitted: unique symbol = Symbol("limina.policyAlreadyCommitted");
 
 /** Pick the tick to stamp on an APPLY-TIME event. The apply tick (the reviewer's
  *  current tick for an approval-gated action) is used ONLY when it is a finite number
@@ -35,7 +39,7 @@ export interface AgentLookup {
 
 /** Read/write surface a skill handler operates on (built from the Engine). */
 export interface WorldContext {
-  ecs: unknown; // bitECS world
+  ecs: World;
   transforms?: TransformStorage;
   spatial?: UniformGridSpatialIndex;
   entities: EntityTable;
@@ -103,6 +107,9 @@ export interface InvokeBase {
    *  re-enters invoke() to apply an already-approved parked action; callers must
    *  not use it as a general policy or validation bypass. */
   approvalGateBypassed?: true;
+  /** Module-private proof that resolveApproval already committed policy usage at
+   *  proposal time. The symbol key prevents callers from forging this bypass. */
+  [policyAlreadyCommitted]?: true;
 }
 
 export interface SkillDefinition<I = unknown, O = unknown> {
@@ -113,6 +120,9 @@ export interface SkillDefinition<I = unknown, O = unknown> {
   input: z.ZodType<I>;
   output: z.ZodType<O>;
   permissions: string[];
+  /** Observable effect classification used by scheduling and recording boundaries.
+   *  Omitted definitions are treated as writes, never as reads. */
+  effect?: SkillEffect;
   /** OUTPUT field names the RECORDER commits back into the recorded command's
    *  input, so the replay log PINS authored-resolved identity (e.g. asset.place's
    *  content hash). Each named field must also be an OPTIONAL input field so the
@@ -129,6 +139,12 @@ export interface SkillDefinition<I = unknown, O = unknown> {
     before?(input: I, ctx: ExecutionContext): Promise<void> | void;
     after?(result: O, ctx: ExecutionContext): Promise<void> | void;
   };
+}
+
+/** Classify a skill conservatively. Read fast paths are opt-in because an
+ *  incorrectly inferred read can bypass authoritative ordering and recording. */
+export function skillEffect(skill: SkillDefinition): SkillEffect {
+  return skill.effect ?? "write";
 }
 
 /** Decides whether a validated, policy-approved call is HELD for human approval
@@ -250,11 +266,10 @@ export class SkillRegistry {
    *  ones, a player the play ones). A skill overrides its tier via the `priority`
    *  field; this set is the default for skills that don't. */
   private static readonly DEFAULT_CORE: ReadonlySet<string> = new Set([
-    "skills.list", "skills.search", "skills.browse", "skills.describe",
-    "scene.createEntity", "scene.moveEntity", "scene.queryEntities", "ecs.updateComponent",
-    "world.generateRegion", "world.populateBiome", "asset.place",
-    "terrain.create", "terrain.deform", "village.build", "vegetation.scatter", "vegetation.plant", "vegetation.grass",
-    "player.move", "player.jump", "interaction.interact", "interaction.query", "inventory.add",
+    "skills.search", "skills.browse",
+    "scene.createEntity", "scene.moveEntity", "ecs.updateComponent", "world.generateRegion", "asset.place",
+    "terrain.create", "vegetation.scatter",
+    "player.move", "player.jump", "interaction.interact", "inventory.add",
     "social.say", "dialogue.start",
   ]);
 
@@ -482,6 +497,20 @@ export class SkillRegistry {
     try {
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
       const result = await skill.handler(input, ctx);
+      const parsedResult = skill.output.safeParse(result);
+      if (!parsedResult.success) {
+        ctx.emit("skill.contract.violation", {
+          skill: skill.name,
+          version: skill.version,
+          boundary: "output",
+          error: parsedResult.error.message,
+        }, execCausedBy);
+        return {
+          success: false,
+          error: { code: "contract_error", message: `skill '${skill.name}' returned output that violates its schema: ${parsedResult.error.message}` },
+          metadata: meta(),
+        };
+      }
       if (skill.hooks?.after) await skill.hooks.after(result, ctx);
       ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
       return { success: true, result, metadata: meta() };
@@ -510,7 +539,7 @@ export class SkillRegistry {
     //    is linked into skill.executed (causedBy) so M8 can walk action -> decision.
     //    Without an engine, the legacy static permission check governs (unchanged).
     let policyEventId: string | undefined;
-    if (this.policy !== undefined) {
+    if (this.policy !== undefined && base[policyAlreadyCommitted] !== true) {
       const decision = this.policy.evaluate({
         boundary: "registry",
         agentId: base.agentId,
@@ -613,6 +642,7 @@ export class SkillRegistry {
       causedBy: [approvalId, grantedId],
       chainId: undefined,
       approvalGateBypassed: true,
+      [policyAlreadyCommitted]: true,
     };
     return this.invoke(parked.skill, parked.input, invokeBase);
   }

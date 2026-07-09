@@ -87,6 +87,7 @@ export function registerWorldlogSkills(registry: SkillRegistry, opts: { recorder
     description: "Read-only: the AUTHORING command stream (mutating skills + physics; seed + read-only introspection excluded) recorded AFTER a cursor index, so a live editor viewport can re-author the world an agent is building. Returns the authoring tail slice, the next cursor, and `reset` (true when the caller's cursor fell behind a compacted prefix and it must resync from scratch).",
     category: "system",
     permissions: [],
+    effect: "read",
     input: z.object({ since: z.number().int().min(0).default(0) }),
     output: z.object({ commands: z.array(z.any()), next: z.number().int(), reset: z.boolean() }),
     handler: (input) => worldlogTail(recorder, registry, input.since),

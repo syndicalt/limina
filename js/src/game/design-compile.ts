@@ -211,7 +211,7 @@ function projectStoryboard(gds: GameDesignSpec, storyboard: Storyboard, bible: W
         kind: "state-transition",
         drives: {
           description: `${quest.name}: ${step.objective}`,
-          steps: [{ forward: 1 }],
+          steps: [{ repeat: 1, forward: 1 }],
           assert: [assertion],
         },
       };

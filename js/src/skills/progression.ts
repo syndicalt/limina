@@ -66,11 +66,20 @@ export class ProgressionManager {
     this.xpCurve = opts?.xpCurve ?? ((level: number) => 100 * Math.pow(1.5, level - 1));
   }
 
+  private initialData(): ProgressionData {
+    return { xp: 0, level: 1, xpToNext: this.xpCurve(1), unlocked: new Set(), skillPoints: 0, allocated: new Map() };
+  }
+
   getOrCreate(entity: string): ProgressionData {
     if (!this.progression.has(entity)) {
-      this.progression.set(entity, { xp: 0, level: 1, xpToNext: this.xpCurve(1), unlocked: new Set(), skillPoints: 0, allocated: new Map() });
+      this.progression.set(entity, this.initialData());
     }
     return this.progression.get(entity)!;
+  }
+
+  /** Read progression without materializing state for an unknown entity. */
+  read(entity: string): Readonly<ProgressionData> {
+    return this.progression.get(entity) ?? this.initialData();
   }
 
   /** Attach a data-driven action to fire when `entity` levels up. */
@@ -102,7 +111,7 @@ export class ProgressionManager {
   }
 
   getLevel(entity: string): number {
-    return this.getOrCreate(entity).level;
+    return this.read(entity).level;
   }
 
   unlock(entity: string, id: string): boolean {
@@ -113,7 +122,7 @@ export class ProgressionManager {
   }
 
   isUnlocked(entity: string, id: string): boolean {
-    return this.getOrCreate(entity).unlocked.has(id);
+    return this.read(entity).unlocked.has(id);
   }
 
   defineSkillTree(tree: SkillTree): void {
@@ -247,10 +256,11 @@ export function registerProgressionSkills(registry: SkillRegistry, opts?: { prog
     description: "Get an entity's current level and XP progress (computed from the XP curve). Pure read — does not emit.",
     category: "progression",
     permissions: ["progression.read"],
+    effect: "read",
     input: getLevelInput,
     output: z.object({ level: z.number(), xp: z.number(), xpToNext: z.number() }),
     handler: (input) => {
-      const data = mgr.getOrCreate(input.entity);
+      const data = mgr.read(input.entity);
       return { level: data.level, xp: data.xp, xpToNext: data.xpToNext };
     },
   };
@@ -291,6 +301,7 @@ export function registerProgressionSkills(registry: SkillRegistry, opts?: { prog
     description: "Check if an ability, area, item, or skill is unlocked for an entity. Pure read — does not emit.",
     category: "progression",
     permissions: ["progression.read"],
+    effect: "read",
     input: isUnlockedInput,
     output: z.object({ unlocked: z.boolean() }),
     handler: (input) => ({ unlocked: mgr.isUnlocked(input.entity, input.id) }),

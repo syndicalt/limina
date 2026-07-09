@@ -23,7 +23,7 @@ import { createEcsWorld } from "../src/ecs/world.ts";
 import { createTransformStorage } from "../src/ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
-import { SkillRegistry, type WorldContext } from "../src/skills/registry.ts";
+import { SkillRegistry, skillEffect, type WorldContext } from "../src/skills/registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../src/skills/index.ts";
 import { resolveProfile } from "../src/skills/permissions.ts";
 import { WorldRecorder } from "../src/worldlog/recorder.ts";
@@ -74,7 +74,10 @@ function captureOutputs(registry: SkillRegistry): string[] {
   const log: string[] = [];
   const inner = registry.invoke.bind(registry);
   registry.invoke = (n, i, b) => inner(n, i, b).then((rr) => {
-    log.push(JSON.stringify({ tool: n, success: rr.success, result: rr.result }));
+    const definition = registry.describe(n);
+    if (definition === undefined || skillEffect(definition) !== "read") {
+      log.push(JSON.stringify({ tool: n, success: rr.success, result: rr.result }));
+    }
     return rr;
   });
   return log;

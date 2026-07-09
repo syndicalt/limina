@@ -88,6 +88,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "List the skills the caller is authorized to invoke (names + descriptions). `mode:\"bootstrap\"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:\"full\"` (default) lists everything authorized.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: z.object({ mode: z.enum(["bootstrap", "full"]).optional().describe("bootstrap = core tools only; full = all authorized (default).") }),
     output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string().optional(), priority: z.string().optional() })) }),
     handler: (input, ctx) => ({
@@ -105,6 +106,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Describe a skill: version, category, and JSON-Schema input.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: describeInput,
     output: z.object({
       name: z.string(),
@@ -139,6 +141,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Search the AUTHORIZED skills by name/description (+ optional category) — browse a large catalog instead of listing everything.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: searchInput,
     output: z.object({ matches: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
     handler: (input, ctx) => {
@@ -179,6 +182,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Browse the AUTHORIZED skills in a specific category — progressive discovery of a large catalog.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: browseInput,
     output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
     handler: (input, ctx) => {
@@ -217,6 +221,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // behind `trace.read` so only observer profiles (reviewer / reviewer.coordinator
     // / system.readonly) can read it — a scoped delegate worker must NOT.
     permissions: ["trace.read"],
+    effect: "read",
     input: z.object({
       afterSeq: z.number().int().min(-1).optional(),
       limit: z.number().int().min(0).max(1000).optional(),
@@ -238,6 +243,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // Resolves a cross-agent event + its causal neighbours — same read surface as
     // trace.tail, so it is gated behind the same `trace.read` capability.
     permissions: ["trace.read"],
+    effect: "read",
     input: z.object({ eventId: z.string() }),
     output: z.object({
       event: eventSchema,
@@ -260,6 +266,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // than trace.tail, so it stays behind the same `trace.read` observer capability
     // (one cap, kept simple). A scoped worker has neither read nor export.
     permissions: ["trace.read"],
+    effect: "admin",
     input: z.object({ name: z.string().min(1) }),
     output: z.object({ name: z.string(), events: z.number().int(), bytes: z.number().int() }),
     handler: (input) => tracer.flush(input.name),
@@ -296,6 +303,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Return a bounded, paginated snapshot of world, entities, agents, skills, permissions, resources, and trace metadata.",
     category: "system",
     permissions: ["scene.read", "ecs.read", "physics.read", "agent.read"],
+    effect: "read",
     input: snapshotInput,
     output: z.object({
       page: z.object({
@@ -440,7 +448,8 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     version: "2.0.0",
     description: "Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.",
     category: "system",
-    permissions: ["scene.read"],
+    permissions: ["system.admin"],
+    effect: "admin",
     input: reloadInput,
     output: z.object({
       ok: z.boolean(),

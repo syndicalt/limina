@@ -124,6 +124,7 @@ export function registerClipAuthorSkills(registry: SkillRegistry): { clipAuthor:
     description: "Sample an authored clip at time t — returns each track's interpolated value (looped/clamped per the clip). Pure read; the host applies the values to entities.",
     category: "animation",
     permissions: ["animation.read"],
+    effect: "read",
     input: sampleInput,
     output: z.object({ found: z.boolean(), values: z.record(z.string(), valueSchema).optional() }),
     handler: (input) => {

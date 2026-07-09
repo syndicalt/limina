@@ -125,7 +125,7 @@ const SitingSchema = z.object({
   /** Extra world-XZ margin (m) the "commons" clearing adds beyond the outermost building, i.e.
    *  how deep the open ring between the hamlet edge and the treeline is. Ignored for "none". */
   clearingMargin: z.number().min(0).max(60).default(10),
-}).default({});
+}).prefault({});
 
 // AUTHORED PLACEMENT ANCHORS — WorldMap-derived pins (js/src/world/worldmap.ts Anchor: {id, kind,
 // position, count?, name?, source}) reduced to what village.build needs to bind one to a buildingSpec:

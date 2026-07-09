@@ -106,7 +106,13 @@ function appends(connId: number): WorldlogAppendMsg[] {
 // ===========================================================================
 // A. worldlog/subscribe pushes the EXISTING tail immediately, before the ack.
 // ===========================================================================
-const conn1 = { connId: 1, subscribed: false, closing: false };
+const testSession = {
+  agentId: "agt_build",
+  sessionId: "p_worldlog_subscribe_session",
+  profile: "builder.readWrite",
+  permissions: BUILDER,
+};
+const conn1 = { connId: 1, session: testSession, subscribed: false, closing: false, queuedIntents: 0 };
 internals.conns.set(1, conn1);
 await internals.handleLine(conn1, JSON.stringify({ jsonrpc: "2.0", id: 1, method: WORLDLOG_METHODS.subscribe, params: { since: 0 } }));
 
@@ -181,7 +187,7 @@ assert(sentAfterDisconnect === sentBeforeDisconnect, "D: a disconnected connecti
 // connections even while one just dropped (no exception, no cross-connection interference). Read
 // the CURRENT cursor via the polled worldlog.tail skill (it includes the destroy recorded above).
 const currentCursor = (await author("worldlog.tail", { since: 0 }, 3) as { next: number }).next;
-const conn2 = { connId: 2, subscribed: false, closing: false };
+const conn2 = { connId: 2, session: testSession, subscribed: false, closing: false, queuedIntents: 0 };
 internals.conns.set(2, conn2);
 await internals.handleLine(conn2, JSON.stringify({ jsonrpc: "2.0", id: 1, method: WORLDLOG_METHODS.subscribe, params: { since: currentCursor } }));
 const conn2Initial = appends(2);

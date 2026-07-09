@@ -409,6 +409,7 @@ export function registerInventorySkills(registry: SkillRegistry, opts?: { invent
     description: "List all items in an inventory with slot positions and quantities, plus the equipped items by equipment slot. Pure read.",
     category: "inventory",
     permissions: ["inventory.read"],
+    effect: "read",
     input: listInvInput,
     output: z.object({
       items: z.array(z.object({ itemId: z.string(), quantity: z.number(), slot: z.number(), equipped: z.boolean() })),
@@ -426,6 +427,7 @@ export function registerInventorySkills(registry: SkillRegistry, opts?: { invent
     description: "Count how many of a specific item are in an inventory (sums across all slots). Pure read.",
     category: "inventory",
     permissions: ["inventory.read"],
+    effect: "read",
     input: countItemInput,
     output: z.object({ count: z.number() }),
     handler: (input) => ({ count: mgr.countItem(input.entity, input.itemId) }),
@@ -437,6 +439,7 @@ export function registerInventorySkills(registry: SkillRegistry, opts?: { invent
     description: "Check if an inventory contains a specific item (returns boolean). Pure read.",
     category: "inventory",
     permissions: ["inventory.read"],
+    effect: "read",
     input: hasItemInput,
     output: z.object({ has: z.boolean() }),
     handler: (input) => ({ has: mgr.hasItem(input.entity, input.itemId) }),

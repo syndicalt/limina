@@ -82,8 +82,8 @@ export class DurableWorldLog {
    *  (contiguous-seq) command stream that no longer matches the segment, and APPENDING to the
    *  old segment would corrupt seq contiguity -- so the segment is replaced wholesale. The whole
    *  compacted history is written in ONE op_write_trace host call (no truncate-then-append
-   *  window); a crash mid-write leaves a clean-lined prefix that the boot parser's
-   *  recoverCorruptLines path can still load. Requires the full history in memory (no prior
+   *  window); a crash mid-write leaves a clean-lined prefix plus, at worst, one
+   *  unterminated final fragment that the boot parser can discard. Requires the full history in memory (no prior
    *  hot-memory compaction) and a fully-settled recorder. Returns the command count written. */
   rewriteFromRecorder(): number {
     if (!this.opened) throw new Error("DurableWorldLog: open()/resume() before rewriteFromRecorder()");

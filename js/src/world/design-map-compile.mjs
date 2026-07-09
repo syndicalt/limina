@@ -102,6 +102,17 @@ function readLocations(fm) {
   return locations;
 }
 
+function yamlScalar(raw) {
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  if (value === "" || value === "null" || value === "~") return undefined;
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try { return JSON.parse(value); } catch { throw new Error(`invalid quoted YAML scalar: ${value}`); }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replace(/''/g, "'");
+  return value;
+}
+
 // ---- targeted `places.md` frontmatter reader (Places Stage 4). Same self-contained strategy as
 // readLocations above (a plain .mjs cannot import parsePlaces from the .ts module): split the
 // `places:` list on each `  - id:` item and pluck the small subset the compiler emits — id, name,
@@ -120,23 +131,43 @@ function readPlaces(placesText) {
   for (const chunk of scoped.split(/^  - id:/m).slice(1)) {
     const id = chunk.split("\n")[0].trim();
     if (!id) continue;
-    const name = (chunk.match(/\n\s*name:\s*(.+)/) || [])[1]?.trim() || id;
-    const kind = ((chunk.match(/\n\s*kind:\s*(.+)/) || [])[1] || "place").trim();
-    const parentM = chunk.match(/\n\s*parentId:\s*(\S+)/);
+    const name = yamlScalar((chunk.match(/\n\s*name:\s*(.*)/) || [])[1]) || id;
+    const kind = yamlScalar((chunk.match(/\n\s*kind:\s*(.*)/) || [])[1]) || "place";
+    const parentM = chunk.match(/\n\s*parentId:\s*(.*)/);
     const posMatch = chunk.match(/\n\s*position:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]/);
-    const bindingM = chunk.match(/\n\s*binding:\s*(\S+)/);
+    const bindingM = chunk.match(/\n\s*binding:\s*(.*)/);
     const radM = chunk.match(/\n\s*radiusM:\s*(-?\d+(?:\.\d+)?)/);
-    const assetM = chunk.match(/\n\s*assetId:\s*(\S+)/);
+    const assetM = chunk.match(/\n\s*assetId:\s*(.*)/);
     places.push({
       id,
       name,
       kind,
-      parentId: parentM ? parentM[1].trim() : null,
+      parentId: yamlScalar(parentM?.[1]) ?? null,
       position: posMatch ? [Number(posMatch[1]), Number(posMatch[2])] : undefined,
-      binding: bindingM ? bindingM[1].trim() : undefined,
+      binding: yamlScalar(bindingM?.[1]),
       radiusM: radM ? Number(radM[1]) : undefined,
-      assetId: assetM ? assetM[1].trim() : undefined,
+      assetId: yamlScalar(assetM?.[1]),
     });
+  }
+  const ids = new Set();
+  for (const place of places) {
+    if (ids.has(place.id)) throw new Error(`places: duplicate id "${place.id}"`);
+    ids.add(place.id);
+    if (place.binding === "area" && !(typeof place.radiusM === "number" && place.radiusM > 0)) {
+      throw new Error(`places: area-bound place "${place.id}" requires a positive radiusM`);
+    }
+  }
+  for (const place of places) {
+    if (place.parentId !== null && !ids.has(place.parentId)) {
+      throw new Error(`places: "${place.id}" references missing parent "${place.parentId}"`);
+    }
+    const seen = new Set([place.id]);
+    let parent = place.parentId;
+    while (parent !== null) {
+      if (seen.has(parent)) throw new Error(`places: hierarchy cycle involving "${place.id}"`);
+      seen.add(parent);
+      parent = places.find((candidate) => candidate.id === parent)?.parentId ?? null;
+    }
   }
   return places;
 }
@@ -371,7 +402,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     }
   }
 
-  const sourceHash = sha256(mapsJsonText + " " + worldBibleText + (typeof placesText === "string" ? "\u0000" + placesText : ""));
+  const sourceHash = sha256(mapsJsonText + "\u0000" + worldBibleText + (typeof placesText === "string" ? "\u0000" + placesText : ""));
 
   const worldMap = {
     version: 1,

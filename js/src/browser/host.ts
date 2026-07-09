@@ -110,7 +110,9 @@ export function createBrowserRenderOps(canvas: CanvasLike, input?: BrowserInput)
     op_set_frame_callback: (): void => { /* the rAF driver owns the frame fn */ },
     op_set_fixed_step_callback: (): void => { /* the rAF driver owns the step fn */ },
     op_set_resize_callback: (): void => { /* the browser entry wires resize */ },
-    op_input_axes: (out: Float32Array): void => { input?.readAxes(out); },
+    op_input_axes: (out: Float32Array): void => { out.fill(0); input?.readAxes(out); },
+    op_input_look: (out: Float32Array): void => { out.fill(0); },
+    op_input_buttons: (out: Float32Array): void => { out.fill(0); },
   };
 }
 

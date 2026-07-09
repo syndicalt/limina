@@ -109,6 +109,9 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   ],
   // Observer profiles (existing)
   "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
+  /** Runtime maintenance identity. Deliberately separate from builder and readonly
+   *  profiles because dev.reload replaces code and rebuilds scene state. */
+  "system.admin": ["system.admin", "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
   // Phase 7 human-in-the-loop (existing)
   "builder.review": [
     "scene.read", "scene.write", "ecs.read", "ecs.modify",

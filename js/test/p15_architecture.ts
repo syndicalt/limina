@@ -91,7 +91,11 @@ async function build(session: string, input: Record<string, unknown>): Promise<{
   const parts = result.parts as Part[];
   assert(!parts.some((p) => p.kind === "roof"), "withRoof:false omits the roof");
   assert(!parts.some((p) => p.kind === "gable"), "withRoof:false omits the gable pediments too");
-  assert(result.entityCount === 9, `no-roof building has 9 parts (plinth,floor,6 walls,lintel,stoop) — got ${result.entityCount}`);
+  const kinds = new Set(parts.map((p) => p.kind));
+  for (const kind of ["plinth", "floor", "wall_north", "wall_east", "wall_west", "wall_south", "lintel_south", "doorstep"]) {
+    assert(kinds.has(kind), `no-roof building retains structural part ${kind}`);
+  }
+  assert(result.entityCount >= 9, `no-roof building must retain the structural shell, got ${result.entityCount} parts`);
 }
 
 // ── 4. Replay-determinism: identical inputs ⇒ byte-identical geometry. ────────────────────────

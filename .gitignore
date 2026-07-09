@@ -6,6 +6,11 @@ target/
 node_modules/
 dist/
 .astro/
+# Type contracts for the generated dependency bundles are source inputs to the
+# strict checker, not build artifacts. Keep them visible even when a developer's
+# global ignore file contains a broad `build/` rule.
+!js/build/
+!js/build/*.d.mts
 
 # --- Secrets & machine-specific local config (never publish) ---
 .env

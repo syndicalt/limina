@@ -40,6 +40,8 @@ export interface RunChatTurnOptions {
   };
 }
 
+export const CHAT_SYSTEM_PROMPT_ID = "limina.live-world-builder";
+export const CHAT_SYSTEM_PROMPT_VERSION = "1.0.0";
 const SYSTEM_PROMPT = [
   "You are Limina's live world-build agent, co-authoring a live 3D scene with a human.",
   "You receive the human's request as a plain \"User request:\" message. Treat it as a direct instruction to act on right now.",
@@ -105,7 +107,13 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
     decisionIntervalTicks: 1,
     profile: "builder.readWrite",
     sessionId,
-    llm: { provider: "anthropic", model: "anthropic", systemPrompt: SYSTEM_PROMPT },
+    llm: {
+      provider: "anthropic",
+      model: "anthropic",
+      systemPrompt: SYSTEM_PROMPT,
+      promptId: CHAT_SYSTEM_PROMPT_ID,
+      promptVersion: CHAT_SYSTEM_PROMPT_VERSION,
+    },
     inFlight: false,
     lastDecisionTick: -1,
     queue: [],

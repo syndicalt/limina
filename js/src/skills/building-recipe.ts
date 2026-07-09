@@ -238,9 +238,9 @@ export function assembleBuilding(recipe: BuildingRecipe, position: V3, world: Wo
   // The roof COVER resolves its material from the recipe's cover role (slate shingles by default) — the
   // texture-orientation principle keeps it on the SLOPES only (gable ends are OPEN, closed by the plaster
   // infill below), so no vertical face shows a triplanar-wrapped shingle.
-  const coverRole: PaletteRole = (roof as RoofSpec).cover ?? "slate";
   let roofTop = 0;
   if (roof) {
+    const coverRole: PaletteRole = roof.cover ?? "slate";
     if (roof.type === "gable") {
       const pitch = roof.pitch ?? 2.4;
       const { geo, half } = gableRoofGeometry(W, D, pitch, roof.overhang ?? 0.5, false);

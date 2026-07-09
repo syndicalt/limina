@@ -11,7 +11,10 @@
   },
   "devDependencies": {
     "@dgreenheck/ez-tree": "^1.1.0",
-    "esbuild": "^0.24.2"
+    "@types/three": "0.184.0",
+    "@webgpu/types": "0.1.71",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
   },
   "scripts": {
     "bundle:three": "esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs",
@@ -26,6 +29,7 @@
     "check:live": "node scripts/check-live-composition.mjs",
     "check:assets": "node ../tools/qc/asset-sanity.mjs ../assets",
     "bundle:coordinator-demo": "esbuild ../coordinator-demo/src/app.js --bundle --format=esm --platform=browser --outfile=../coordinator-demo/dist/coordinator-demo.js --loader:.ts=ts",
-    "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs"
+    "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs",
+    "check:types": "tsc -p tsconfig.check.json"
   }
 }

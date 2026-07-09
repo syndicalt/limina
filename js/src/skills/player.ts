@@ -298,6 +298,7 @@ export function registerPlayerSkills(
     description: "Query whether a bound action is currently active (pressed/held). Reflects the latest native poll or input.set injection.",
     category: "player",
     permissions: ["player.read"],
+    effect: "read",
     input: queryActionInput,
     output: z.object({ active: z.boolean() }),
     handler: (i) => {
@@ -312,6 +313,7 @@ export function registerPlayerSkills(
     description: "Query a continuous axis value (e.g. moveX, moveY, lookX, lookY). Range is typically -1 to 1.",
     category: "player",
     permissions: ["player.read"],
+    effect: "read",
     input: queryAxisInput,
     output: z.object({ value: z.number() }),
     handler: (i) => {

@@ -10,6 +10,7 @@
 const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
 const { artifactPath } = require("./artifacts.cjs");
 const CHROME = chromeExecutable();
+const EDITOR_BASE_URL = process.env.EDITOR_BASE_URL || "http://localhost:5173";
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
@@ -32,7 +33,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
   page.on("console", (m) => { const t = m.text(); if (/viewport|runLive|WebGL|render/i.test(t)) status.push(m.type() + ": " + t.slice(0, 120)); });
 
   try {
-    const resp = await page.goto("http://localhost:5173/", { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+    const resp = await page.goto(`${EDITOR_BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
     if (!resp) { console.log("SKIP: editor not served on :5173"); await browser.close(); process.exit(2); }
 
     // runLive boots on load (viewport.js calls boot()); give the worker + SAB + first frames time.

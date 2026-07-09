@@ -216,6 +216,7 @@ export function registerWorldAudioExtensionSkills(
     description: "Get the default spawn position for players.",
     category: "world",
     permissions: ["world.read"],
+    effect: "read",
     input: getSpawnInput,
     output: z.object({ position: Vec3 }),
     // Pure read — no emit (mirrors the other read-only skills).

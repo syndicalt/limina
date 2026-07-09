@@ -180,10 +180,10 @@ export interface ParsedWorldLog {
 }
 
 export interface ParseWorldLogOptions {
-  /** Skip malformed lines and report them to the caller. Intended for boot
-   *  recovery from a possibly torn append log; strict verification/replay should
-   *  leave this disabled so bad persisted input fails closed. */
-  recoverCorruptLines?: boolean;
+  /** Ignore one malformed, unterminated final line. This is the only corruption
+   *  pattern an interrupted append can safely explain; malformed complete or
+   *  interior lines always fail closed. */
+  recoverPartialFinalLine?: boolean;
   onRecoverableError?: (message: string) => void;
 }
 
@@ -221,12 +221,14 @@ const lineSchema = z.discriminatedUnion("kind", [
 ]);
 
 /** Parse a persisted world log. Tolerates a trailing newline; by default rejects
- *  malformed lines loudly. Boot recovery may pass recoverCorruptLines to skip a
- *  torn/corrupt line while logging the exact recovery decision. */
+ *  malformed lines loudly. Boot recovery may ignore only an unterminated final
+ *  fragment left by an interrupted append. */
 export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): ParsedWorldLog {
   const out: WorldCommand[] = [];
   let meta: WorldLogMeta | undefined;
   const rawLines = jsonl.split("\n");
+  const canRecover = (lineIndex: number): boolean =>
+    opts.recoverPartialFinalLine === true && !jsonl.endsWith("\n") && lineIndex === rawLines.length - 1;
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (line.length === 0) continue; // trailing newline / blank separators
@@ -235,7 +237,7 @@ export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): P
       json = JSON.parse(line);
     } catch (err) {
       const message = `world log: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`;
-      if (opts.recoverCorruptLines === true) {
+      if (canRecover(i)) {
         opts.onRecoverableError?.(message);
         continue;
       }
@@ -244,7 +246,7 @@ export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): P
     const result = lineSchema.safeParse(json);
     if (!result.success) {
       const message = `world log: malformed command on line ${i + 1}: ${result.error.message}`;
-      if (opts.recoverCorruptLines === true) {
+      if (canRecover(i)) {
         opts.onRecoverableError?.(message);
         continue;
       }

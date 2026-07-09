@@ -42,6 +42,8 @@ export function propagateTransform(world: WorldContext, parentId: string): void 
 }
 
 function propagateFrom(world: WorldContext, parentId: string, parentWorld: THREE.Matrix4): void {
+  const transforms = world.transforms;
+  if (transforms === undefined) throw new Error("propagateTransform: world has no transform storage");
   for (const childId of world.entities.childrenOf(parentId)) {
     const child = world.entities.resolve(childId);
     if (child === undefined || child.localOffset === undefined) continue;
@@ -49,9 +51,9 @@ function propagateFrom(world: WorldContext, parentId: string, parentWorld: THREE
     // parentWorld for the recursion into this child's grandchildren.
     const childWorld = offsetMatrix(child.localOffset, new THREE.Matrix4()).premultiply(parentWorld);
     childWorld.decompose(_p, _q, _s);
-    world.transforms.writePosition(child.eid, _p.x, _p.y, _p.z);
-    world.transforms.writeRotation(child.eid, _q.x, _q.y, _q.z, _q.w);
-    world.transforms.writeScale(child.eid, _s.x, _s.y, _s.z);
+    transforms.writePosition(child.eid, _p.x, _p.y, _p.z);
+    transforms.writeRotation(child.eid, _q.x, _q.y, _q.z, _q.w);
+    transforms.writeScale(child.eid, _s.x, _s.y, _s.z);
     propagateFrom(world, childId, childWorld);
   }
 }

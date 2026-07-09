@@ -34,6 +34,8 @@ import type { TerrainSource } from "../terrain/types.ts";
 import type { RegionState } from "./terrain.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import type { AssetRegistry } from "../asset-registry.ts";
+import { migrateWorldMap, verifyWorldMap, WorldMapSchema } from "../world/worldmap.ts";
 
 /** One water surface currently in the scene (for inspection / idempotent rebuild on
  *  replay). Held in the registry closure, so a fresh replay registry starts empty and
@@ -215,6 +217,7 @@ export function registerWaterSkills(
    *  its LEVEL from the layer's `elevationColors.seaLevel` and bakes its depth-fade from the layer's
    *  heightfield. Read-only — never mutated. */
   terrainLayers?: Map<string, EditableTerrain>,
+  assets?: AssetRegistry,
 ): { surfaces: WaterSurfaceState[]; rivers: unknown[] } {
   const surfaces: WaterSurfaceState[] = [];
   /** River ribbon meshes currently in the scene (render-only, like `surfaces`). */
@@ -297,6 +300,27 @@ export function registerWaterSkills(
     terrainEntity: z.string().optional(),
   });
   const addRiverOutput = z.object({ points: z.number().int(), widthM: z.number(), level: z.number() });
+  const mountRiver = (input: z.infer<typeof addRiverInput>, ctx: Parameters<typeof addRiver.handler>[1]) => {
+    const layer = pickLayer(terrainLayers, input.terrainEntity);
+    const level = input.level ?? layer?.elevationColors?.seaLevel ?? 0;
+    const sampleHeight = layer === undefined ? () => level - 1.2 : (x: number, z: number): number => {
+      const t = layer.tile;
+      const fc = ((x - (t.origin[0] - t.scale[0] / 2)) / t.scale[0]) * (t.ncols - 1);
+      const fr = ((z - (t.origin[2] - t.scale[2] / 2)) / t.scale[2]) * (t.nrows - 1);
+      const c0 = Math.max(0, Math.min(t.ncols - 2, Math.floor(fc)));
+      const r0 = Math.max(0, Math.min(t.nrows - 2, Math.floor(fr)));
+      const tc = Math.max(0, Math.min(1, fc - c0));
+      const tr = Math.max(0, Math.min(1, fr - r0));
+      const h00 = t.heights[r0 * t.ncols + c0], h01 = t.heights[r0 * t.ncols + c0 + 1];
+      const h10 = t.heights[(r0 + 1) * t.ncols + c0], h11 = t.heights[(r0 + 1) * t.ncols + c0 + 1];
+      return t.origin[1] + (h00 * (1 - tc) + h01 * tc) * (1 - tr) + (h10 * (1 - tc) + h11 * tc) * tr;
+    };
+    const mesh = buildRiverRibbon({ points: input.points as [number, number][], widthM: input.widthM, color: input.color, sampleHeight, seaLevel: level });
+    ctx.world.scene.add(mesh);
+    rivers.push(mesh);
+    ctx.emit("world.river.added", { points: input.points.length, widthM: input.widthM, level });
+    return { points: input.points.length, widthM: input.widthM, level };
+  };
   const addRiver: SkillDefinition<z.infer<typeof addRiverInput>, z.infer<typeof addRiverOutput>> = {
     name: "world.addRiver",
     version: "1.0.0",
@@ -306,33 +330,53 @@ export function registerWaterSkills(
     permissions: ["scene.write"],
     input: addRiverInput,
     output: addRiverOutput,
+    handler: mountRiver,
+  };
+
+  const addMapRiversInput = z.object({
+    mapAssetId: z.string().min(1),
+    mapHash: z.string().optional(),
+    widthScale: z.number().positive().max(10).default(1),
+    color: z.number().int().min(0).max(0xffffff).optional(),
+    level: z.number().optional(),
+    terrainEntity: z.string().optional(),
+  });
+  const addMapRivers: SkillDefinition<z.infer<typeof addMapRiversInput>, { rivers: number; points: number; mapHash: string }> = {
+    name: "world.addMapRivers",
+    version: "1.0.0",
+    description: "Render every waterway in a validated WorldMap asset as terrain-following river ribbons without duplicating its centerline data in authoring source.",
+    category: "world",
+    permissions: ["scene.write"],
+    commitFields: ["mapHash"],
+    input: addMapRiversInput,
+    output: z.object({ rivers: z.number().int(), points: z.number().int(), mapHash: z.string() }),
     handler: (input, ctx) => {
-      const layer = pickLayer(terrainLayers, input.terrainEntity);
-      const level = input.level ?? layer?.elevationColors?.seaLevel ?? 0;
-      // Bilinear surface sample over the layer's heightfield (the CARVED channel floor along
-      // the centerline). With no terrain layer the ribbon lies flat just above `level`.
-      const sampleHeight = layer === undefined ? () => level - 1.2 : (x: number, z: number): number => {
-        const t = layer.tile;
-        const fc = ((x - (t.origin[0] - t.scale[0] / 2)) / t.scale[0]) * (t.ncols - 1);
-        const fr = ((z - (t.origin[2] - t.scale[2] / 2)) / t.scale[2]) * (t.nrows - 1);
-        const c0 = Math.max(0, Math.min(t.ncols - 2, Math.floor(fc)));
-        const r0 = Math.max(0, Math.min(t.nrows - 2, Math.floor(fr)));
-        const tc = Math.max(0, Math.min(1, fc - c0));
-        const tr = Math.max(0, Math.min(1, fr - r0));
-        const h00 = t.heights[r0 * t.ncols + c0], h01 = t.heights[r0 * t.ncols + c0 + 1];
-        const h10 = t.heights[(r0 + 1) * t.ncols + c0], h11 = t.heights[(r0 + 1) * t.ncols + c0 + 1];
-        return t.origin[1] + (h00 * (1 - tc) + h01 * tc) * (1 - tr) + (h10 * (1 - tc) + h11 * tc) * tr;
-      };
-      const mesh = buildRiverRibbon({ points: input.points as [number, number][], widthM: input.widthM, color: input.color, sampleHeight, seaLevel: level });
-      // Render-only: scene graph ONLY (no ECS entity, no physics body) — same as addWater.
-      ctx.world.scene.add(mesh);
-      rivers.push(mesh);
-      ctx.emit("world.river.added", { points: input.points.length, widthM: input.widthM, level });
-      return { points: input.points.length, widthM: input.widthM, level };
+      if (assets === undefined) throw new Error("world.addMapRivers requires an AssetRegistry");
+      const resolved = assets.resolve(input.mapAssetId);
+      let parsed: unknown;
+      try { parsed = JSON.parse(new TextDecoder().decode(resolved.bytes)); }
+      catch (error) { throw new Error(`world.addMapRivers: '${input.mapAssetId}' is not valid JSON: ${error instanceof Error ? error.message : String(error)}`); }
+      const worldMap = WorldMapSchema.parse(migrateWorldMap(parsed));
+      const verified = verifyWorldMap(worldMap);
+      if (!verified.ok) throw new Error(`world.addMapRivers: '${input.mapAssetId}' content hash mismatch`);
+      if (input.mapHash !== undefined && input.mapHash !== worldMap.provenance.contentHash) {
+        throw new Error(`world.addMapRivers: map identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash})`);
+      }
+      let pointCount = 0;
+      for (const waterway of worldMap.waterways) {
+        const points = waterway.points.map(([x, z]) => [
+          worldMap.origin[0] + x * worldMap.unitsPerMeter,
+          worldMap.origin[1] + z * worldMap.unitsPerMeter,
+        ] as [number, number]);
+        mountRiver({ points, widthM: (waterway.widthM ?? 6) * input.widthScale, color: input.color, level: input.level, terrainEntity: input.terrainEntity }, ctx);
+        pointCount += points.length;
+      }
+      return { rivers: worldMap.waterways.length, points: pointCount, mapHash: worldMap.provenance.contentHash };
     },
   };
 
   registry.register(addWater);
   registry.register(addRiver);
+  registry.register(addMapRivers);
   return { surfaces, rivers };
 }

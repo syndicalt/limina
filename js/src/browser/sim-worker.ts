@@ -34,6 +34,7 @@ import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { applyAuthorCommandsIsolated, type AuthorCommandFailure } from "../kernel/apply-isolated.ts";
+import { partitionViewportCommands } from "./author-command-policy.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
@@ -99,6 +100,8 @@ export interface SimWorkerCreateOptions {
   sab?: SharedArrayBuffer | ArrayBuffer;
   /** JOIN an existing input SAB instead of allocating. */
   inputBuffer?: SharedArrayBuffer | ArrayBuffer;
+  /** Asset bytes prefetched by the main thread before the worker handshake. */
+  assets?: Iterable<{ id: string; bytes: Uint8Array }>;
   /** Permissions `loadWorld` invokes authoring skills with (default DEFAULT_GRANTS). */
   grants?: Iterable<string>;
   width?: number;
@@ -133,29 +136,7 @@ function stubCamera(): CameraLike {
  *  M1 adapter, and inert stubs for every surface a headless worker lacks (render,
  *  input device, host services, trace, sandbox, audio). Skills read `ctx.world.ops`,
  *  so this is the single op seam the whole sim composes over — no `Deno.core.ops`. */
-/** Read `/assets/<id>` bytes with a SYNCHRONOUS same-origin XHR (the AssetRegistry resolve is sync).
- *  Sync XHR can't use responseType:"arraybuffer", so binary is read via the x-user-defined charset
- *  trick (mirrors live-runtime.ts composeAuthoringOps). Returns empty off a browser (no XHR → native
- *  host / tests) or on any miss/error, so authoring degrades to "no collider" rather than throwing. */
-function readAssetBytesSync(id: string): Uint8Array {
-  const XHR = (globalThis as unknown as { XMLHttpRequest?: new () => XMLHttpRequest }).XMLHttpRequest;
-  if (typeof XHR !== "function") return new Uint8Array(0);
-  try {
-    const xhr = new XHR();
-    xhr.open("GET", "/assets/" + id, false);
-    xhr.overrideMimeType("text/plain; charset=x-user-defined");
-    xhr.send();
-    if (xhr.status < 200 || xhr.status >= 300) return new Uint8Array(0);
-    const text = xhr.responseText;
-    const bytes = new Uint8Array(text.length);
-    for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
-    return bytes;
-  } catch {
-    return new Uint8Array(0);
-  }
-}
-
-function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
+function composeWorkerOps(P: WasmRapierPhysics, assets: ReadonlyMap<string, Uint8Array>): EngineOps {
   const noop = (): void => {};
   return {
     // ── physics: the REAL wasm-Rapier solver (bound so `this` is the adapter) ──
@@ -197,13 +178,9 @@ function composeWorkerOps(P: WasmRapierPhysics): EngineOps {
     op_http_post: () => Promise.resolve(""),
     op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
-    // Asset bytes: the worker AUTHORS the building collider (asset.place → gltfLocalAabb → static box),
-    // which needs the GLB bytes. Read them same-origin via a SYNCHRONOUS XHR (a Worker permits sync
-    // XHR; it blocks only this background thread, once per asset at authoring — NOT the render thread).
-    // Bytes-only: no GLTFLoader / no texture decode, so it does NOT hit the "parse hangs a Worker"
-    // trap that `skipMesh` guards. Inert (empty) off a browser (native host / no XHR) — headless tests
-    // inject their own reader onto `world.ops.op_read_asset`.
-    op_read_asset: (id: string): Uint8Array => readAssetBytesSync(id),
+    // Asset bytes are cloned into the init message after an async main-thread
+    // prefetch. This keeps worker authoring deterministic without synchronous XHR.
+    op_read_asset: (id: string): Uint8Array => assets.get(id) ?? new Uint8Array(0),
     op_sha256: () => "",
     op_read_env: () => "",
     // ── durable trace ──
@@ -298,7 +275,9 @@ export class SimWorkerController {
 
     const ecs = createEcsWorld();
     const entities = new EntityTable();
-    const ops = composeWorkerOps(physics);
+    const assetBytes = new Map<string, Uint8Array>();
+    for (const asset of opts.assets ?? []) assetBytes.set(asset.id, asset.bytes);
+    const ops = composeWorkerOps(physics, assetBytes);
 
     const world: WorldContext = {
       ecs,
@@ -322,7 +301,9 @@ export class SimWorkerController {
     // AssetRegistry bound to the WORKER's ops (op_read_asset is a no-op → empty bytes): a GLB skill's
     // assets.resolve() returns instantly here instead of a blocking sync XHR that would hang the
     // worker's init. The worker never parses the mesh, so it never needs real bytes.
-    const core = registerCoreSkills(registry, { assets: new AssetRegistry(ops) });
+    const assets = new AssetRegistry(ops);
+    for (const [id, bytes] of assetBytes) assets.seed(id, bytes);
+    const core = registerCoreSkills(registry, { assets });
 
     return new SimWorkerController({
       physics, transforms, inputRing, statusBuffer, statusShared,
@@ -340,26 +321,32 @@ export class SimWorkerController {
    *  try/catches every handler). After authoring, the initial body transforms are synced into the
    *  transform SAB so the render thread frames the world before the first tick. */
   async loadWorldIsolated(commands: AuthorCommand[]): Promise<{ results: unknown[]; failures: AuthorCommandFailure[] }> {
-    const outcome = await applyAuthorCommandsIsolated(this.registry, this.world, commands, {
+    const viewportBatch = partitionViewportCommands(commands);
+    const outcome = await applyAuthorCommandsIsolated(this.registry, this.world, viewportBatch.commands, {
       sessionId: this.sessionId,
       defaultAgentId: "author",
       defaultPerms: this.grants,
       tick: this.tickCount,
     });
-    const results: unknown[] = [];
-    for (let i = 0; i < commands.length; i++) {
+    const results: unknown[] = Array(commands.length).fill(undefined);
+    for (let i = 0; i < viewportBatch.commands.length; i++) {
+      const originalIndex = viewportBatch.originalIndices[i];
       const res = outcome.results[i];
       if (res !== undefined && res.success) {
         // Only a SUCCESSFUL live transform mutation re-drives the physics body; a failed command left
         // no effect to mirror.
-        this.syncLiveTransformMutationToPhysics(commands[i]);
-        results.push(res.result);
-      } else {
-        results.push(undefined);
+        this.syncLiveTransformMutationToPhysics(viewportBatch.commands[i]);
+        results[originalIndex] = res.result;
       }
     }
     this.syncTransforms();
-    return { results, failures: outcome.failures };
+    return {
+      results,
+      failures: outcome.failures.map((failure) => ({
+        ...failure,
+        index: viewportBatch.originalIndices[failure.index],
+      })),
+    };
   }
 
   /** Back-compat wrapper: returns just the per-command results (skill result / physics-op return, or
@@ -543,6 +530,7 @@ type InitMessage = {
   sab?: SharedArrayBuffer | ArrayBuffer;
   inputBuffer?: SharedArrayBuffer | ArrayBuffer;
   commands?: AuthorCommand[];
+  assets?: { id: string; bytes: Uint8Array }[];
   hz?: number;
 };
 type StepMessage = { type: "step" };
@@ -594,7 +582,7 @@ export function installSimWorker(scope: WorkerScopeLike): void {
     void (async (): Promise<void> => {
       if (msg.type === "init") {
         const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
-        controller = await SimWorkerController.create({ rapier, sab: msg.sab, inputBuffer: msg.inputBuffer });
+        controller = await SimWorkerController.create({ rapier, sab: msg.sab, inputBuffer: msg.inputBuffer, assets: msg.assets });
         if (msg.commands !== undefined) {
           // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
           // aborting the handshake — the worker still replies `ready` and self-drives.

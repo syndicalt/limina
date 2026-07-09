@@ -79,6 +79,9 @@ export interface EngineOps {
    *  its collider follows instead of the per-tick body→SoA sync snapping the entity back. */
   op_physics_set_body_transform(id: number, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): void;
   op_physics_drain_collisions(): CollisionEventRecord[];
+  /** Number of collision events dropped since the last read because the bounded
+   *  native queue was full. Browser adapters without overflow return zero. */
+  op_physics_take_collision_overflow_count?(): number;
   op_physics_raycast(
     ox: number, oy: number, oz: number,
     dx: number, dy: number, dz: number,
@@ -120,8 +123,6 @@ export interface EngineOps {
   op_audio_speak(text: string, ex: number, ey: number, ez: number, volume: number, pitch: number): number;
   op_audio_play_buffer(data: Float32Array, sampleRate: number, channels: number, bus: number, volume: number, loop: boolean): number;
 }
-interface Adapter { requestDevice(): Promise<unknown>; }
-declare const navigator: { gpu: { requestAdapter(): Promise<Adapter | null> } };
 declare const Deno: { core: { ops: EngineOps } } | undefined;
 
 // ---- Host-capabilities boundary ------------------------------------------
@@ -184,13 +185,19 @@ export interface SceneLike extends Object3DLike {
   environmentIntensity?: number;
 }
 export interface CameraLike {
-  position: { set(x: number, y: number, z: number): void };
-  aspect: number;
-  lookAt(x: number, y: number, z: number): void;
+  position: { set(x: number, y: number, z: number): void; x?: number; y?: number; z?: number; copy?(value: unknown): unknown };
+  aspect?: number;
+  near?: number;
+  far?: number;
+  fov?: number;
+  matrixWorld?: unknown;
+  lookAt(x: number | unknown, y?: number, z?: number): void;
   updateProjectionMatrix(): void;
+  updateMatrixWorld?(): void;
+  getWorldQuaternion?(target: unknown): unknown;
 }
 export interface RendererLike {
-  init(): Promise<void>;
+  init(): Promise<unknown>;
   setSize(w: number, h: number, updateStyle?: boolean): void;
   render(scene: unknown, camera: unknown): void;
   /** Real-time shadow-map config (WebGPU path). `type` is one of THREE's
@@ -199,6 +206,7 @@ export interface RendererLike {
   /** Tone-mapping operator constant (e.g. ACESFilmicToneMapping) + exposure. */
   toneMapping: number;
   toneMappingExposure: number;
+  domElement?: unknown;
 }
 export interface MaterialLike {
   color: { set(value: number): void };
@@ -470,7 +478,7 @@ export interface Engine {
   renderer: RendererLike;
   scene: SceneLike;
   camera: CameraLike;
-  world: unknown; // bitECS world
+  world: ReturnType<typeof createEcsWorld>;
   transforms: TransformStorage;
   spatial: UniformGridSpatialIndex;
   entities: EntityTable;
@@ -499,13 +507,18 @@ export async function createEngine(opts: {
    *  (a bare scene — the pre-Phase-11 void). */
   renderBaseline?: RenderBaselineOverride | false;
 }): Promise<Engine> {
-  const adapter = await navigator.gpu.requestAdapter();
+  const adapter = await (navigator as unknown as { gpu: { requestAdapter(): Promise<{ requestDevice(): Promise<unknown> } | null> } }).gpu.requestAdapter();
   if (!adapter) throw new Error("engine: no WebGPU adapter");
   const device = await adapter.requestDevice();
   const context = ops.op_create_window_context();
 
   const canvas = { width: opts.width, height: opts.height, style: {} };
-  const renderer: RendererLike = new THREE.WebGPURenderer({ device, context, canvas, antialias: true });
+  const renderer = new THREE.WebGPURenderer({
+    device,
+    context,
+    canvas: canvas as unknown as HTMLCanvasElement,
+    antialias: true,
+  } as never) as unknown as RendererLike;
   await renderer.init();
   renderer.setSize(opts.width, opts.height, false);
   // Real-time fidelity: PCF-soft shadow maps, ACES Filmic tone mapping, and MSAA

@@ -27,7 +27,7 @@ class SilentTransport implements NetServerTransport {
 }
 
 // A worldLog name that is guaranteed NOT to exist on disk (unique-ish, never written).
-const MISSING_LOG = "p_fresh_boot_definitely_absent_9271.jsonl";
+const MISSING_LOG = `p_fresh_boot_${Date.now()}_${Math.floor(Math.random() * 0x1_0000_0000).toString(16)}.jsonl`;
 
 let built = false;
 let server: AuthoritativeServer | undefined;

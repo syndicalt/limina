@@ -13,30 +13,21 @@ import { buildForest, groupByActor, eventKind, isIntrospectionEvent } from "./re
 import { createHistoryPanel } from "./history.js";
 import { cueColorFor } from "./viewport.js";
 import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
+import { ingestTraceEvents } from "./trace-retention.js";
+export { MAX_TRACE_EVENTS, ingestTraceEvents } from "./trace-retention.js";
 
 const $ = (id) => document.getElementById(id);
+
+const configuredServer = new URLSearchParams(location.search).get("server");
+if (configuredServer !== null && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServer)) {
+  $("url").value = configuredServer;
+}
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
 };
-
-export const MAX_TRACE_EVENTS = 5000;
-
-export function ingestTraceEvents(eventsById, events, maxEvents = MAX_TRACE_EVENTS) {
-  if (!Array.isArray(events) || events.length === 0) return;
-  for (const ev of events) {
-    if (!ev || ev.id === undefined) continue;
-    if (eventsById.has(ev.id)) eventsById.delete(ev.id);
-    eventsById.set(ev.id, ev);
-  }
-  while (eventsById.size > maxEvents) {
-    const oldest = eventsById.keys().next().value;
-    if (oldest === undefined) break;
-    eventsById.delete(oldest);
-  }
-}
 
 const state = {
   /** @type {McpClient | undefined} */ client: undefined,

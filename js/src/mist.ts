@@ -8,9 +8,6 @@
 import * as THREE from "../build/three.bundle.mjs";
 import type { TerrainTile } from "./terrain/types.ts";
 
-// deno-lint-ignore no-explicit-any
-const T = (THREE as any).TSL;
-
 /** Build the blight-mist mesh for a tile, or `undefined` when the tile carries no blight. The caller
  *  adds it to the scene and disposes it when the terrain layer is removed. */
 export function buildBlightMist(tile: TerrainTile): THREE.Mesh | undefined {
@@ -45,26 +42,19 @@ export function buildBlightMist(tile: TerrainTile): THREE.Mesh | undefined {
   const [ox, oy, oz] = origin;
   const [sx, , sz] = scale;
   const geometry = new THREE.PlaneGeometry(sx, sz, 1, 1);
-  // SELF-LIT miasma: a black albedo (no lit response — the intense scene sun would otherwise blow a
-  // lit surface out to white) carrying the putrid colour on the EMISSIVE channel, with tone mapping
-  // off so it keeps that authored colour (same reason UI panels opt out). colorNode + emissiveNode are
-  // the proven node properties (water.ts / grass.ts); MeshBasicNodeMaterial.colorNode reads as white.
-  const material = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false, roughness: 1, metalness: 0 });
+  // The baked R8 texture already contains the gravity-aware density. A conventional basic material
+  // keeps the effect portable across WebGPU and WebGL2; the former node-material implementation
+  // stalled WebGL2 shader compilation on the first rendered frame for real map-sized masks.
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x526335,
+    alphaMap: tex,
+    alphaTest: 0.015,
+    opacity: 0.68,
+    transparent: true,
+    depthWrite: false,
+  });
   material.side = THREE.DoubleSide;
   material.toneMapped = false;
-  material.colorNode = T.vec3(0, 0, 0);
-
-  // World (x,z) → tile uv (0..1); DataTexture flipY defaults false, so (u,v) → (col,row).
-  const x0 = ox - sx / 2, z0 = oz - sz / 2;
-  const u = T.positionWorld.x.sub(x0).div(sx);
-  const v = T.positionWorld.z.sub(z0).div(sz);
-  const density = T.texture(tex, T.vec2(u, v)).r;
-  // Slow creeping drift so the miasma breathes rather than sitting as a flat decal.
-  const drift = T.positionWorld.x.mul(0.03).add(T.positionWorld.z.mul(0.027)).add(T.time.mul(0.25)).sin().mul(0.5).add(0.5);
-  material.opacityNode = T.clamp(density.mul(0.7).mul(T.float(0.6).add(drift.mul(0.4))), 0, 0.82);
-  // Putrid: a murky, sickly yellow-green on the EMISSIVE channel (self-lit, tone-mapping off, so this IS
-  // the on-screen colour). Denser hollows read a touch darker/greener (concentrated miasma).
-  material.emissiveNode = T.mix(T.vec3(0.34, 0.40, 0.24), T.vec3(0.20, 0.28, 0.12), T.clamp(density, 0, 1));
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = -Math.PI / 2;

@@ -585,6 +585,7 @@ export function registerNavmeshSkills(registry: SkillRegistry, opts?: { navmeshM
     description: "Find a path between two world positions with deterministic A* over the grid navmesh. Returns the waypoint list (endpoints exact, interior = walkable cell centres) and whether the goal is reachable. Empty path when there is no grid or no route — NO straight-line cheat.",
     category: "nav",
     permissions: ["nav.read"],
+    effect: "read",
     input: findPathInput,
     output: z.object({ path: z.array(Vec3), reachable: z.boolean() }),
     handler: (input, ctx) => {
@@ -665,6 +666,7 @@ export function registerNavmeshSkills(registry: SkillRegistry, opts?: { navmeshM
     description: "Check (via real A* existence) whether a target is reachable from an entity's current position (body/tracked) or an explicit `from`. Returns false when there is no grid, an endpoint is blocked, or the cells are disconnected.",
     category: "nav",
     permissions: ["nav.read"],
+    effect: "read",
     input: isReachableInput,
     output: z.object({ reachable: z.boolean() }),
     handler: (input, ctx) => {

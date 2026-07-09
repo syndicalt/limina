@@ -568,6 +568,7 @@ export function registerAnimationSkills(registry: SkillRegistry, opts?: { animat
     description: "Get the current clip id, time, duration, weight, and layer for an entity's running actions (read from the live AnimationActions).",
     category: "animation",
     permissions: ["animation.read"],
+    effect: "read",
     input: getClipInfoInput,
     output: z.object({ clips: z.array(clipInfoSchema) }),
     handler: (input) => {

@@ -452,7 +452,9 @@ export interface RecoveryResult {
 
 /** Apply a snapshot to a fresh world: restore RNG, native physics, the bitECS
  *  allocator, the entity table, and every live entity's SoA transform. Leaves the
- *  world primed to replay the delta from tick T. */
+ *  world primed to replay the delta from tick T. Rapier's serialized dynamics
+ *  state is exact, but its intentionally transient pipeline workspace is rebuilt,
+ *  so long active continuations are compared with an explicit numeric tolerance. */
 export function restoreSnapshot(
   world: WorldContext,
   snapshot: WorldSnapshot,
@@ -512,8 +514,8 @@ export function restoreSnapshot(
 /** Recover a world from a snapshot + the delta command stream. Builds a FRESH
  *  world via `deps.makeWorld`, restores the snapshot, then replays ONLY the delta
  *  commands (the same command-application semantics as M1 replay, started
- *  mid-stream). The result's final state must be bit-identical to the original
- *  run's final state -- proven by the caller via compareWorldState.
+ *  mid-stream). The caller chooses exact or explicitly tolerant transform
+ *  comparison based on whether the captured physics world was active.
  *
  *  `deltaCommands` MUST be exactly the commands with seq >= snapshot.snapshotSeq
  *  (in seq order). They carry recorded tool calls + physics ops; NO decision

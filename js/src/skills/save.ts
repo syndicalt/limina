@@ -266,6 +266,7 @@ export function registerSaveSkills(
     description: "List available checkpoints for the current session (name, tick, captured entity count).",
     category: "save",
     permissions: ["checkpoint.read"],
+    effect: "read",
     input: listCheckpointsInput,
     output: z.object({ checkpoints: z.array(z.object({ name: z.string(), tick: z.number(), entityCount: z.number() })) }),
     handler: () => ({ checkpoints: mgr.listCheckpoints() }),

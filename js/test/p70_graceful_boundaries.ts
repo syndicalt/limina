@@ -29,6 +29,7 @@ import {
   createWorkerHandshake,
   partitionQuarantined,
 } from "../src/kernel/apply-isolated.ts";
+import { partitionViewportCommands } from "../src/browser/author-command-policy.ts";
 import type { AuthorCommand } from "../src/kernel/authoring.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -63,6 +64,17 @@ function makeWorld(worldOps: EngineOps): WorldContext {
 }
 
 const BUILDER = resolveProfile("builder.readWrite");
+
+{
+  const commands: AuthorCommand[] = [
+    { kind: "skill", tool: "asset.request", input: { prompt: "house" } },
+    { kind: "skill", tool: "scene.createEntity", input: { name: "kept" } },
+    { kind: "skill", tool: "catalog.publish", input: { assetId: "house.glb" } },
+  ];
+  const viewport = partitionViewportCommands(commands);
+  assert(viewport.commands.length === 1, "viewport must skip server-only catalog commands");
+  assert(viewport.originalIndices[0] === 1, "viewport partition must preserve authoritative log indices");
+}
 
 // ============================================================================
 // 1. ISOLATION — the per-command apply used by loadWorld + runLive continues past a bad command.

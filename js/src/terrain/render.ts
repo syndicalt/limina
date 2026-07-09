@@ -13,7 +13,6 @@ import { scatterProps } from "./scatter.ts";
 import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
 import { applyPbrMaterial, type TerrainPbrOptions } from "./material-pbr.ts";
-import { sharedDetailTexture, triplanarLayer } from "../materials/triplanar-noise.ts";
 export type { TerrainPbrOptions } from "./material-pbr.ts";
 
 export interface TerrainMeshOptions {
@@ -500,42 +499,6 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
   geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 }
 
-/** Add TSL surface MICRO-RELIEF to the vertex-colored elevation terrain (the `elevationColors`
- *  path). The bands are per-vertex colours (a flat clay read: light lands the same everywhere in
- *  a band). This layers a real detail NORMAL on top without touching the albedo, so the ground
- *  catches light with micro-relief and STEEP faces read as craggy ROCK instead of flat grey:
- *    • a FINE grain normal everywhere (fields/grass/sand pick up a subtle grained surface), and
- *    • a COARSER, stronger ROCK crag normal blended in by SLOPE (cliffs/terrace cuts read rocky).
- *  Albedo stays the exact per-vertex elevation bands — the snow-scree slope gate in
- *  applyElevationColors is untouched, so no snow/scree regression. Render-only, deterministic
- *  (shared baked noise singleton — same grain family as the PBR terrain path), no time node. */
-function applyElevationSurfaceDetail(material: THREE.MeshStandardNodeMaterial, baseRough: number): void {
-  const tex = sharedDetailTexture();
-  const sharp = 4;
-  const grainL = triplanarLayer(tex, 0.32, 0.45, sharp); // fine ground micro-relief (cycles/m)
-  const rockL = triplanarLayer(tex, 0.13, 1.15, sharp);  // coarse cliff crags (stronger relief)
-  const microL = triplanarLayer(tex, 1.3, 0.4, sharp);   // shared FINE eye-level micro-grain
-  // Geometric steepness (0 flat → 1 vertical). Rock crags now ramp in from a MODERATE ~37° grade
-  // (steep≈0.20) to full by a cliff-y ~72° (steep≈0.72) — the fix so moderate mountainsides read
-  // craggy ROCK, not flat grey. (Was 0.35→0.72, which left moderate slopes flat-shaded.)
-  const steep = T.clamp(T.oneMinus(T.normalWorld.y), 0, 1);
-  const cliffMask = T.smoothstep(0.20, 0.72, steep);
-  let nrm = T.mix(grainL.normal, rockL.normal, cliffMask);
-  // Layer the shared FINE micro-grain (its deviation from the geometric normal) over EVERY face so
-  // the surface catches light at eye level (breaks up the flat-plastic read on big slopes) — the
-  // coarse crags read at distance, this reads underfoot. Mirrors the PBR path's micro layer.
-  const micro = microL.normal.sub(T.normalWorld);
-  nrm = nrm.add(micro).normalize();
-  // Terrain geometry is identity-transformed (positions already world-space), so the perturbed
-  // world normal → view space via transformNormalToView — the same idiom water.ts / the PBR path use.
-  material.normalNode = T.transformNormalToView(nrm.normalize());
-  // Faint roughness break-up from the fine grain so grazing golden-hour light glints on the relief
-  // instead of a uniform matte. Cliffs read a touch rougher (dry rock). Kept subtle.
-  let rough = T.float(baseRough).sub(grainL.value.sub(0.5).mul(0.12));
-  rough = T.mix(rough, T.float(Math.min(1, baseRough + 0.03)), cliffMask.mul(0.5));
-  material.roughnessNode = T.clamp(rough, 0.5, 1);
-}
-
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
   const { positions, indices, normals } = terrainTileGeometry(tile);
@@ -554,17 +517,13 @@ export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeomet
 // One entry per combo ⇒ ONE shader-program compile per combo instead of one per tile (the map-terrain
 // compile storm: ~4,600 tiles → thousands of identical compiles). Marked SHARED so disposeTerrainMesh
 // never frees it out from under sibling tiles still on screen.
-const sharedElevationMaterials = new Map<string, THREE.MeshStandardNodeMaterial>();
-function sharedElevationMaterial(baseRough: number, metalness: number, doubleSide: boolean): THREE.MeshStandardNodeMaterial {
+const sharedElevationMaterials = new Map<string, THREE.MeshStandardMaterial>();
+function sharedElevationMaterial(baseRough: number, metalness: number, doubleSide: boolean): THREE.MeshStandardMaterial {
   const key = `${baseRough}|${metalness}|${doubleSide}`;
   let m = sharedElevationMaterials.get(key);
   if (m === undefined) {
-    m = new THREE.MeshStandardNodeMaterial({ color: 0xffffff, roughness: baseRough, metalness });
+    m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: baseRough, metalness, vertexColors: true });
     if (doubleSide) m.side = THREE.DoubleSide;
-    m.vertexColors = true;
-    // Same TSL micro-relief every tile reads: detail normal + slope-aware crags, all world-space
-    // (no per-tile data), so one instance renders every tile identically to the old per-tile one.
-    applyElevationSurfaceDetail(m, baseRough);
     (m.userData as Record<string, unknown>)[SHARED_MATERIAL_KEY] = true;
     sharedElevationMaterials.set(key, m);
   }
@@ -587,7 +546,7 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
   // keep their own instance. ALL branches are no-ops when absent → byte-identical to the flat default.
   const useShared = opts.pbr === undefined && opts.palette === undefined
     && opts.shoreline === undefined && opts.elevationColors !== undefined;
-  let material: THREE.MeshStandardNodeMaterial;
+  let material: THREE.MeshStandardMaterial | THREE.MeshStandardNodeMaterial;
   if (useShared) {
     // Sand/grass/rock/snow bands (+ blight ash) written to the `color` attribute; the shared
     // material has vertexColors on and a white base so they show true.
@@ -629,7 +588,7 @@ export function disposeTerrainMesh(mesh: THREE.Mesh): void {
   for (const material of materials) {
     const userData = (material as THREE.Material | undefined)?.userData as Record<string, unknown> | undefined;
     // Shared across every tile of its kind — freeing it here would blank all the siblings. It lives
-    // for the process; its only texture (sharedDetailTexture) is a global cache, not tile-owned.
+    // for the process.
     if (userData?.[SHARED_MATERIAL_KEY]) continue;
     const textures = userData?.[OWNED_TEXTURES_KEY];
     if (Array.isArray(textures)) {

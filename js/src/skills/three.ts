@@ -1,9 +1,10 @@
 // three.* skills — transform/material/lighting + glTF load over the live scene.
 
 import * as THREE from "../../build/three.bundle.mjs";
+import type { World } from "bitecs";
 import { z } from "../../build/zod.bundle.mjs";
 import { Position, Rotation, Scale, spawnRenderable } from "../ecs/world.ts";
-import type { LoadedResourceMetadata, SceneObject, SceneLike } from "../engine.ts";
+import type { EntityOrigin, LoadedResourceMetadata, MaterialLike, SceneObject, SceneLike } from "../engine.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import { createMaterial, getMaterialParams, isMaterialName } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
@@ -274,7 +275,7 @@ const addLight: SkillDefinition<z.infer<typeof addLightInput>, { ok: boolean; id
   output: z.object({ ok: z.boolean(), id: z.string() }),
   handler: (input, ctx) => {
     const scene = ctx.world.scene;
-    let light: { castShadow: boolean; shadow: { mapSize: { width: number; height: number }; bias: number; camera: { near: number; far: number; left: number; right: number; top: number; bottom: number; updateProjectionMatrix(): void } }; position: { set(x: number, y: number, z: number): void }; target?: { position: { set(x: number, y: number, z: number): void } } };
+    let light: THREE.DirectionalLight | THREE.PointLight | THREE.SpotLight;
     switch (input.kind) {
       case "directional": {
         const l = new THREE.DirectionalLight(input.color, input.intensity);
@@ -311,11 +312,12 @@ const addLight: SkillDefinition<z.infer<typeof addLightInput>, { ok: boolean; id
       const cam = light.shadow.camera;
       cam.near = input.shadowCameraNear;
       cam.far = input.shadowCameraFar;
-      if (input.kind === "directional") {
-        cam.left = -input.shadowCameraExtent;
-        cam.right = input.shadowCameraExtent;
-        cam.top = input.shadowCameraExtent;
-        cam.bottom = -input.shadowCameraExtent;
+      if (light instanceof THREE.DirectionalLight) {
+        const orthographicCamera = light.shadow.camera;
+        orthographicCamera.left = -input.shadowCameraExtent;
+        orthographicCamera.right = input.shadowCameraExtent;
+        orthographicCamera.top = input.shadowCameraExtent;
+        orthographicCamera.bottom = -input.shadowCameraExtent;
       }
       cam.updateProjectionMatrix();
     }
@@ -550,9 +552,9 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
     return `limina-asset://${base}${url}`;
   });
   const loader = new THREE.GLTFLoader(manager);
-  const payload = assetId.endsWith(".gltf")
+  const payload: string | ArrayBuffer = assetId.endsWith(".gltf")
     ? new TextDecoder().decode(bytes)
-    : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    : bytes.slice().buffer as ArrayBuffer;
   const gltf = await new Promise<{ scene: SceneObject; animations?: unknown[] }>((resolve, reject) => {
     loader.parse(
       payload,
@@ -577,7 +579,7 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
  *  records the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
  *  asset.place call this — no duplicated loader/rehome code. */
 export async function loadGltfIntoScene(
-  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: unknown }): string } } },
+  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
   assetId: string,
   bytes: Uint8Array,
   hash: string,
@@ -638,7 +640,7 @@ const INERT_GLTF_TRANSFORM = { position: { set() {} }, quaternion: { set() {} },
  *  the collider, authored from level-0 bytes by asset.placeLod, is what the worker's physics needs).
  *  Returns the LOD object so the caller can register it for the per-frame `lod.update(camera)` pass. */
 export async function loadLodIntoScene(
-  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: unknown }): string } } },
+  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
   levels: ReadonlyArray<{ assetId: string; bytes: Uint8Array; hash: string; distance: number }>,
   placement: GltfPlacement,
 ): Promise<{ entity: string; resource: LoadedResourceMetadata; lod?: SceneObject }> {

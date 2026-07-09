@@ -3,7 +3,7 @@
 // The controller logic is the engine's js/src/editor/history_controller.ts, bundled to
 // ../vendor/history-controller.js (so there is ONE source of truth, proven by
 // js/test/p16_editor_controller.ts). This module is the thin browser binding: it ingests the
-// editor's observed world-log (trace.tail events) onto the "main" branch, and renders the branch
+// editor's observed authoring log (worldlog.tail commands) onto the "main" branch, and renders the branch
 // list, a time-travel scrub slider, and branch/merge controls. Scrubbing emits the command prefix
 // at the playhead (onScrub) so a host can replay the viewport to that past state.
 

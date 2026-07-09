@@ -49,7 +49,7 @@ registerSystemSkills(registry); // provides dev.reload + discovery skills
 const caller = {
   agentId: "agt_reloader",
   sessionId: "ses_hot_reload",
-  permissions: resolveProfile("system.readonly"), // has scene.read => dev.reload allowed
+  permissions: resolveProfile("system.admin"),
   tick: 0,
   world,
 };

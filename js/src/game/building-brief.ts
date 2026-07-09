@@ -136,7 +136,7 @@ export const BuildingBriefSchema = z.object({
   storeyHeightM: z.number().positive().max(20).default(2.6),
   /** Rough footprint hint the planner may honour or override for site fit (metres). */
   footprintM: z.object({ width: z.number().positive().max(120), depth: z.number().positive().max(120) }).strict().optional(),
-  roof: RoofBriefSchema.default({}),
+  roof: RoofBriefSchema.prefault({}),
   material: MaterialByElementSchema,
   ornament: z.enum(ORNAMENT_NAMES).default("modest"),
   openingStyle: z.enum(OPENING_STYLE_NAMES).default("plain"),

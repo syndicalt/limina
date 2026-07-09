@@ -542,6 +542,7 @@ export function registerGrassSkill(
       if (terrainId === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; terrainId = last; }
       const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
       if (layer === undefined) throw new Error("vegetation.grass: no terrain layer — create one with terrain.create first");
+      const terrainKey = terrainId as string;
 
       const pal = GRASS_CLIMATES[input.climate];
       const bounds = grassElevationBounds(layer);
@@ -556,7 +557,7 @@ export function registerGrassSkill(
       // (the causal "grass grows first, then civilization clears it" order). Replay-safe: footprints
       // + the grass plan are pure over the recorded ops.
       const computePlacements = (): AssetInstance[] => {
-        const registered = footprints.get(terrainId!) ?? [];
+        const registered = footprints.get(terrainKey) ?? [];
         const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
         const plan: GrassPlan = {
           seed: input.seed,
@@ -606,11 +607,11 @@ export function registerGrassSkill(
             aoStrength: input.aoStrength,
             maxBlades: input.maxBlades,
           });
-          if (built !== null) { scene!.add(built); mesh = built; }
+          if (built !== null) { scene?.add?.(built); mesh = built; }
           // GROUND TINT: paint the terrain toward the grass base green over EXACTLY the same
           // footprint (elevation band ∩ slope ∩ outside settlement discs) so the gaps between blades
           // read as turf, not bare ground — sand/rock/plaza/cobble/snow (outside the mask) untouched.
-          const registered = footprints.get(terrainId!) ?? [];
+          const registered = footprints.get(terrainKey) ?? [];
           const allExclusions: ScatterExclusion[] = [...registered, ...(input.exclusions ?? [])];
           const tint = buildGrassGroundTint(layer.tile, {
             baseColor: pal.base,
@@ -621,7 +622,7 @@ export function registerGrassSkill(
             ...(input.include !== undefined && input.include.length > 0 ? { inclusions: input.include } : {}),
             opacity: input.groundTint,
           });
-          if (tint !== null) { scene!.add(tint); tintMesh = tint; }
+          if (tint !== null) { scene?.add?.(tint); tintMesh = tint; }
         } catch (err) {
           ctx.emit("vegetation.grass_mount_failed", { message: err instanceof Error ? err.message : String(err) });
         }
@@ -639,12 +640,12 @@ export function registerGrassSkill(
       mounted.set(entity, disposeMesh);
       // Register the subtractive-clear closure: village.build calls it after registering footprints,
       // so a carpet grown before the village is re-grown with the settlement footprints carved out.
-      const clears = vegetationClears.get(terrainId) ?? [];
+      const clears = vegetationClears.get(terrainKey) ?? [];
       clears.push(() => { remount(); });
-      vegetationClears.set(terrainId, clears);
+      vegetationClears.set(terrainKey, clears);
 
-      ctx.emit("vegetation.grass_scattered", { entity, terrain: terrainId, blades: placements.length, mounted: mesh !== null ? placements.length : 0, climate: input.climate });
-      return { entity, blades: placements.length, exclusions: (footprints.get(terrainId) ?? []).length + (input.exclusions?.length ?? 0) };
+      ctx.emit("vegetation.grass_scattered", { entity, terrain: terrainKey, blades: placements.length, mounted: mesh !== null ? placements.length : 0, climate: input.climate });
+      return { entity, blades: placements.length, exclusions: (footprints.get(terrainKey) ?? []).length + (input.exclusions?.length ?? 0) };
     },
   };
 

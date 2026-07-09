@@ -382,6 +382,7 @@ export function registerQuestSkills(registry: SkillRegistry, opts?: { questManag
     description: "List quests for an entity (active, completed, failed, available), optionally filtered by status.",
     category: "quest",
     permissions: ["quest.read"],
+    effect: "read",
     input: listQuestsInput,
     output: z.object({
       quests: z.array(z.object({

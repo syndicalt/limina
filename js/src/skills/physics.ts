@@ -14,6 +14,7 @@ const collisionEventOutput = z.object({
     point: Vec3.nullable(),
     normal: Vec3.nullable(),
   })),
+  dropped: z.number().int().nonnegative(),
 });
 
 const applyImpulseInput = z.object({ entity: z.string(), impulse: Vec3 });
@@ -48,6 +49,7 @@ const raycast: SkillDefinition<
   description: "Cast a ray from origin along direction; returns the first hit (distance, point, entity).",
   category: "physics",
   permissions: ["physics.read"],
+  effect: "read",
   input: raycastInput,
   output: z.object({
     hit: z.boolean(),
@@ -78,6 +80,8 @@ const collisionEvents: SkillDefinition<unknown, z.infer<typeof collisionEventOut
   input: z.object({}).default({}),
   output: collisionEventOutput,
   handler: (_input, ctx) => {
+    const dropped = ctx.world.ops.op_physics_take_collision_overflow_count?.() ?? 0;
+    if (dropped > 0) ctx.emit("physics.collision.overflow", { dropped });
     const events = ctx.world.ops.op_physics_drain_collisions().map((rec) => {
       const entityA = ctx.world.entities.entityByBody(rec.a);
       const entityB = ctx.world.entities.entityByBody(rec.b);
@@ -101,7 +105,7 @@ const collisionEvents: SkillDefinition<unknown, z.infer<typeof collisionEventOut
         normal: rec.normal,
       };
     });
-    return { events };
+    return { events, dropped };
   },
 };
 

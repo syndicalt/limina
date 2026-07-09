@@ -385,6 +385,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
     description: "Get the current value, max, and min of a stat on an entity.",
     category: "stats",
     permissions: ["stats.read"],
+    effect: "read",
     input: getStatInput,
     output: z.object({ value: z.number(), maxValue: z.number(), minValue: z.number() }),
     handler: (input) => {
@@ -506,6 +507,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
     description: "List active status effects on an entity.",
     category: "status",
     permissions: ["status.read"],
+    effect: "read",
     input: listStatusInput,
     output: z.object({ effects: z.array(z.object({ id: z.string(), type: z.string(), duration: z.number(), elapsed: z.number(), magnitude: z.number() })) }),
     handler: (input) => {
@@ -533,7 +535,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, damage: input.damage, knockback: input.knockback, crit, ...input.meta, ...result });
+      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, knockback: input.knockback, crit, ...input.meta, ...result });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
       return { hit: true, damage: result.damage, killed: result.killed, crit };
     },
@@ -558,7 +560,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, damage: input.damage, speed: input.speed, crit, ...input.meta, ...result });
+      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, speed: input.speed, crit, ...input.meta, ...result });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
       return { fired: true, hit: true, damage: result.damage, killed: result.killed, crit };
     },

@@ -1,6 +1,7 @@
 {
   "name": "limina-tools",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "type": "module",
   "description": "limina HOST-SIDE tooling (asset pipeline converters). Deps here are NEVER imported by the sandboxed limina engine.",
   "dependencies": {

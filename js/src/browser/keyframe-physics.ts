@@ -83,10 +83,17 @@ export class KeyframePhysics {
   // A heightfield consumes a body id like any insert_body (keeps id parity with
   // native); playback motion comes from keyframes, the terrain mesh from render.
   op_physics_add_heightfield(): number { return this.nextBodyId++; }
+  op_physics_add_character(): number { return this.nextBodyId++; }
+  op_physics_move_character(id: number, _dx: number, _dy: number, _dz: number, out: Float32Array): void {
+    const s = this.scratch7;
+    this.lookup(id, s);
+    out[0] = s[0]; out[1] = s[1]; out[2] = s[2]; out[3] = 1;
+  }
   op_physics_remove_body(_id: number): void { /* tombstone: ids never reused (matches native) */ }
   op_physics_apply_impulse(): void { /* motion comes from keyframes, not impulses */ }
   op_physics_step(): void { this.tick++; }
   op_physics_body_transform(id: number, out: Float32Array): void { this.lookup(id, out); }
+  op_physics_set_body_transform(): void { /* playback poses come from keyframes */ }
   op_physics_body_pos(id: number, out: Float32Array): void {
     const s = this.scratch7; this.lookup(id, s); out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
   }
@@ -116,6 +123,8 @@ export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineO
     op_physics_add_static_sphere: () => physics.op_physics_add_static_sphere(),
     op_physics_add_static_capsule: () => physics.op_physics_add_static_capsule(),
     op_physics_add_heightfield: () => physics.op_physics_add_heightfield(),
+    op_physics_add_character: () => physics.op_physics_add_character(),
+    op_physics_move_character: (id, dx, dy, dz, out) => physics.op_physics_move_character(id, dx, dy, dz, out),
     op_physics_remove_body: (id) => physics.op_physics_remove_body(id),
     op_physics_apply_impulse: () => physics.op_physics_apply_impulse(),
     op_physics_step: () => physics.op_physics_step(),
@@ -123,6 +132,7 @@ export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineO
     op_physics_restore: (b) => physics.op_physics_restore(b),
     op_physics_body_pos: (id, out) => physics.op_physics_body_pos(id, out),
     op_physics_body_transform: (id, out) => physics.op_physics_body_transform(id, out),
+    op_physics_set_body_transform: () => physics.op_physics_set_body_transform(),
     op_physics_drain_collisions: () => physics.op_physics_drain_collisions(),
     op_physics_raycast: (ox, oy, oz, dx, dy, dz, maxToi, out) => physics.op_physics_raycast(ox, oy, oz, dx, dy, dz, maxToi, out),
     // render / loop / input — stubs (browser host overrides)
@@ -133,6 +143,8 @@ export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineO
     op_set_fixed_step_callback: noop,
     op_set_resize_callback: noop,
     op_input_axes: noop,
+    op_input_look: noop,
+    op_input_buttons: noop,
     // host services
     op_log: noop,
     op_http_post: () => Promise.resolve(""),

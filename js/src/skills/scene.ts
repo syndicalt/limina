@@ -12,7 +12,7 @@ import { tagEntity, writeTransformComponent } from "./ecs.ts";
 import { spawnStaticMesh } from "./architecture.ts";
 import { buildGeometry, GeometrySpecSchema } from "../geometry/geometry-spec.ts";
 import type { MaterialState, TransformOffset } from "../engine.ts";
-import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
+import type { ExecutionContext, SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 import {
   ENTITY_RECIPE_VERSION,
   type EntityRecipe,
@@ -292,7 +292,7 @@ function makeCreateMesh(materials?: MaterialRegistry): SkillDefinition<z.infer<t
     // Orientation: a full quaternion overrides yaw. writeTransformComponent re-poses the physics body
     // so the collider rotates with the mesh.
     const quat = input.rotation
-      ?? (input.yaw !== undefined ? [0, Math.sin(input.yaw / 2), 0, Math.cos(input.yaw / 2)] as [number, number, number] : undefined);
+      ?? (input.yaw !== undefined ? [0, Math.sin(input.yaw / 2), 0, Math.cos(input.yaw / 2)] as [number, number, number, number] : undefined);
     if (quat !== undefined) writeTransformComponent(ctx, entity, "rotation", quat);
     // Scale is visual (the collider was pre-scaled above); the physics body is not re-scaled.
     if (input.scale !== undefined) writeTransformComponent(ctx, entity, "scale", s);
@@ -386,6 +386,7 @@ const queryEntities: SkillDefinition<
   description: "List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances.",
   category: "scene",
   permissions: ["scene.read"],
+  effect: "read",
   input: queryEntitiesInput,
   output: z.object({
     entities: z.array(z.object({ entity: z.string(), position: Vec3, distance: z.number() })),
@@ -432,6 +433,7 @@ const inspectScene: SkillDefinition<
   description: "Summarize the whole scene for an agent to reason about: entity count, world AABB (min/max/center/size), a global tag census, and a small position sample. Pure read — the perception substrate for self-checking an authored world.",
   category: "scene",
   permissions: ["scene.read"],
+  effect: "read",
   input: inspectInput,
   output: z.object({
     entityCount: z.number(),

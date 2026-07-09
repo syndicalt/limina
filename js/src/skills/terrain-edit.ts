@@ -252,7 +252,7 @@ export function registerTerrainEditSkills(
       // `generate` is set. Both generators produce an n×n grid over `size` meters deterministically
       // from the recorded params, so replay reconstructs identical heights.
       let heights: Float32Array;
-      let elevationColors: { seaLevel: number; amplitude: number } | undefined;
+      let elevationColors: ElevationColorRamp | undefined;
       let paintMat: Uint8Array | undefined;
       let paintW: Float32Array | undefined;
       let blightMask: Float32Array | undefined;
@@ -287,7 +287,14 @@ export function registerTerrainEditSkills(
           throw new Error(`terrain.create: map asset '${g.mapAssetId}' identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this terrain was authored`);
         }
         mapHash = worldMap.provenance.contentHash;
-        const raster = rasterizeWorldMap(worldMap, { size: input.size, resolution: n, seed: g.seed, baseAmplitude: g.amplitude });
+        const raster = rasterizeWorldMap(worldMap, { size: input.size, resolution: n, seed: g.seed, baseAmplitude: g.amplitude }) as {
+          heights: Float32Array;
+          paintMat: Uint8Array;
+          paintW: Float32Array;
+          blight?: Float32Array;
+          seaLevelM: number;
+          cfg: { amplitude: number };
+        };
         heights = raster.heights;
         paintMat = raster.paintMat;
         paintW = raster.paintW;
@@ -382,7 +389,9 @@ export function registerTerrainEditSkills(
       // An overview peek (ctx.world.peek) skips grass: from a whole-map turntable the blades are
       // sub-pixel, but a km-scale painted slab grows THOUSANDS of instanced chunks (the dominant
       // peek cost). The slab's own painted vertex-colors already tint the grassy ground.
-      if (ctx.world.mode !== "headless" && ctx.world.peek !== true && scene !== undefined && typeof scene.add === "function") {
+      const supportsBladeDetail = Math.max(tile.scale[0], tile.scale[2]) <= 1024;
+      if (ctx.world.mode !== "headless" && ctx.world.peek !== true && supportsBladeDetail
+        && scene !== undefined && typeof scene.add === "function") {
         const grassSeed = input.generate?.seed ?? 1337;
         const seaLevel = elevationColors?.seaLevel;
         layer.grass = new TileGrass(

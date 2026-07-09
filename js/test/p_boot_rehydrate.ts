@@ -121,8 +121,28 @@ assert(corruptCmp.identical,
   `rehydrate with corrupt trailing line diverged after ${corruptCmp.comparisons} comparisons: ${corruptCmp.detail ?? "unknown"}`);
 await recoveredFromPartial.shutdown();
 
+const firstBreak = firstDisk.indexOf("\n");
+assert(firstBreak >= 0, "fixture must contain more than one world-log line");
+const INTERIOR_CORRUPT_LOG_NAME = "p_boot_rehydrate_corrupt_interior.jsonl";
+ops.op_write_trace(
+  INTERIOR_CORRUPT_LOG_NAME,
+  firstDisk.slice(0, firstBreak + 1) + "{corrupt-but-terminated}\n" + firstDisk.slice(firstBreak + 1),
+);
+let rejectedInteriorCorruption = false;
+try {
+  new AuthoritativeServer(new IdleTransport(), {
+    sessionId: "p_boot_rehydrate",
+    seed: 0x42,
+    tickMs: 1000,
+    worldLog: { name: INTERIOR_CORRUPT_LOG_NAME },
+  });
+} catch (error) {
+  rejectedInteriorCorruption = error instanceof Error && error.message.includes("invalid JSON");
+}
+assert(rejectedInteriorCorruption, "a malformed complete line inside the log must fail boot closed");
+
 ops.op_log(
   "p_boot_rehydrate OK: AuthoritativeServer rebuilt the prior world from its durable world log, " +
   "repopulated recorder.commands, did not change the persisted log on a no-edit reboot, and appended " +
-  "exactly one new command after reboot; corrupt trailing log input was skipped without crashing boot.",
+  "exactly one new command after reboot; a torn final fragment was recovered and interior corruption failed closed.",
 );

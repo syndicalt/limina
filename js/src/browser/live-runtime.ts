@@ -52,7 +52,7 @@ export function crossOriginIsolatedAvailable(): boolean {
  *  This is intentionally a parallel of `composeWorkerOps` (sim-worker.ts) rather
  *  than an import of it: the worker module's shell auto-installs on a WorkerGlobalScope
  *  and that composition is its private detail; the render side owns its own. */
-export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
+export function composeAuthoringOps(P: WasmRapierPhysics, readAsset: (id: string) => Uint8Array = () => new Uint8Array(0)): EngineOps {
   const noop = (): void => {};
   return {
     // ── physics: the REAL wasm-Rapier solver (bound so `this` is the adapter) ──
@@ -75,6 +75,7 @@ export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
     op_physics_restore: P.op_physics_restore.bind(P),
     op_physics_body_pos: P.op_physics_body_pos.bind(P),
     op_physics_body_transform: P.op_physics_body_transform.bind(P),
+    op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
     op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
     op_physics_raycast: P.op_physics_raycast.bind(P),
     // ── render / loop / device input — the render-main renderer is built directly
@@ -94,24 +95,10 @@ export function composeAuthoringOps(P: WasmRapierPhysics): EngineOps {
     op_http_post: () => Promise.resolve(""),
     op_http_post_headers: () => Promise.resolve(""),
     op_sleep_ms: () => Promise.resolve(),
-    // Live asset bytes: fetch same-origin /assets/<id> synchronously (AssetRegistry.resolve is
-    // sync). Sync main-thread XHR can't use responseType:arraybuffer, so read binary via the
-    // x-user-defined charset trick. Cached by AssetRegistry after the first resolve. Empty on miss.
-    op_read_asset: (id: string): Uint8Array => {
-      try {
-        const xhr = new XMLHttpRequest();
-        xhr.open("GET", "/assets/" + id, false);
-        xhr.overrideMimeType("text/plain; charset=x-user-defined");
-        xhr.send();
-        if (xhr.status < 200 || xhr.status >= 300) return new Uint8Array(0);
-        const text = xhr.responseText;
-        const bytes = new Uint8Array(text.length);
-        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
-        return bytes;
-      } catch {
-        return new Uint8Array(0);
-      }
-    },
+    // AssetRegistry is synchronous, so the caller prefetches known command assets
+    // before authoring and provides an in-memory reader. A miss returns empty bytes;
+    // browser I/O never blocks the render thread.
+    op_read_asset: readAsset,
     op_sha256: () => "",
     op_read_env: () => "",
     // ── durable trace ──

@@ -194,6 +194,8 @@ export function spawnNpc(
       provider: spec.model.provider,
       model: spec.model.model,
       systemPrompt: buildNpcSystemPrompt(spec),
+      promptId: "limina.npc",
+      promptVersion: "1.0.0",
     },
   });
 

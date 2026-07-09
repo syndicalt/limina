@@ -110,7 +110,7 @@ export interface GameContext {
 }
 
 interface AssembleParams {
-  ecs: unknown;
+  ecs: WorldContext["ecs"];
   transforms: WorldContext["transforms"];
   spatial: WorldContext["spatial"];
   entities: EntityTable;

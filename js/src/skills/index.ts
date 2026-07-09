@@ -77,7 +77,7 @@ export interface CoreSkills {
   terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
   assets: AssetRegistry;
   materials: MaterialRegistry;
-  water: { surfaces: WaterSurfaceState[] };
+  water: { surfaces: WaterSurfaceState[]; rivers: unknown[] };
   /** Phase 12: player input and movement surface. */
   player: { input: InputRegistry; controllers: CharacterControllerRegistry };
   /** Phase 12: camera rigs and control. */
@@ -258,7 +258,7 @@ export function registerCoreSkills(
   // from the field the terrain was generated with, and absent one the depth is auto-derived
   // from the regions already generated in this world (the camera-distance proxy is used only
   // when there is no terrain at all). Read-only — never sim/ECS/log state.
-  const water = registerWaterSkills(registry, terrainSource, terrainRegions, terrainLayers);
+  const water = registerWaterSkills(registry, terrainSource, terrainRegions, terrainLayers, assets);
   // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
   // map is supplied (the worker loop needs real providers); without it the engine
   // behaves exactly as before — no `delegate` skill registered.

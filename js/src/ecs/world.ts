@@ -6,6 +6,7 @@
 // the scene graph. Storage is plain Float32Arrays (cache-friendly, JIT-able,
 // and a zero-copy path to native systems later).
 
+import type { World } from "bitecs";
 import { addComponent, addEntity, createWorld, query, removeEntity } from "../../build/bitecs.bundle.mjs";
 
 export const MAX_ENTITIES = 16384;
@@ -149,13 +150,13 @@ export function renderableOwnerEid(object: unknown): number | undefined {
   return undefined;
 }
 
-export function createEcsWorld(): unknown {
+export function createEcsWorld(): World {
   return createWorld();
 }
 
 /** Spawn an entity with identity transform bound to a scene object. */
 export function spawnRenderable(
-  world: unknown,
+  world: World,
   object: Transformable,
   x: number,
   y: number,
@@ -185,14 +186,14 @@ export function spawnRenderable(
 
 /** Tear down an entity: free the eid (bitECS may recycle it) and drop its scene
  *  object binding so a recycled eid never renders the old mesh. */
-export function despawnRenderable(world: unknown, eid: number): void {
+export function despawnRenderable(world: World, eid: number): void {
   renderables[eid] = undefined;
   removeEntity(world, eid);
 }
 
 /** Copy ECS transforms onto their bound scene objects. The ONLY path that
  *  drives object transforms - removing it freezes the scene. */
-export function renderSyncSystem(world: unknown, skip?: Set<number>): void {
+export function renderSyncSystem(world: World, skip?: Set<number>): void {
   for (const eid of query(world, [Position, Rotation, Scale])) {
     if (skip?.has(eid)) continue;
     const object = renderables[eid];

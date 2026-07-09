@@ -3,14 +3,14 @@
 // REAL round-trip test for the limina -> Zaxy/EventLoom logging bridge.
 // =============================================================================
 //
-// This is a genuine end-to-end test against the LIVE `zaxy` 2.6.2 CLI — no
+// This is a genuine end-to-end test against a compatible LIVE `zaxy` CLI — no
 // mocks, no stubs. It will FAIL if ingest is a no-op, if ids / parent / causedBy
 // links are lost, if the producer is misattributed, or if a second ingest
 // duplicates events instead of deduping.
 //
 // Reproducible wrapper — run from the repo root:
 //   node js/test/eventloom_bridge_roundtrip.mjs
-// Optional env overrides: ZAXY_BIN (default /home/cheapseatsecon/miniconda3/bin/zaxy),
+// Optional env overrides: ZAXY_BIN (default zaxy from PATH),
 // LIMINA_BIN (default ./target/debug/limina).
 //
 // Flow:
@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..");
-const ZAXY_BIN = process.env.ZAXY_BIN ?? "/home/cheapseatsecon/miniconda3/bin/zaxy";
+const ZAXY_BIN = process.env.ZAXY_BIN ?? "zaxy";
 const LIMINA_BIN = process.env.LIMINA_BIN ?? join(REPO, "target", "debug", "limina");
 const PRODUCER = join(REPO, "js", "test", "eventloom_bridge_producer.ts");
 const BRIDGE = join(REPO, "js", "tools", "eventloom_bridge.mjs");
@@ -53,6 +53,17 @@ function check(cond, msg) {
 }
 function eq(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function compatibleZaxyVersion(output) {
+  const match = /^zaxy\s+(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/i.exec(output.trim());
+  if (!match) return false;
+  const version = match.slice(1).map(Number);
+  const minimum = [2, 6, 2];
+  for (let i = 0; i < minimum.length; i++) {
+    if (version[i] !== minimum[i]) return version[i] > minimum[i];
+  }
+  return true;
 }
 
 function run(cmd, args, opts = {}) {
@@ -96,9 +107,12 @@ async function bridgeOnce(eventloomPath) {
 }
 
 async function main() {
-  // Pre-flight: confirm the live CLI is exactly 2.6.2 and supports `memory ingest`.
+  // Pre-flight: confirm the live CLI is new enough and still supports the API this test exercises.
   const ver = await run(ZAXY_BIN, ["--version"]);
-  check(ver.out.trim() === "zaxy 2.6.2", `zaxy version is 2.6.2 (got "${ver.out.trim()}")`);
+  if (ver.code !== 0 || !compatibleZaxyVersion(ver.out)) {
+    throw new Error(`zaxy >=2.6.2 required (got "${ver.out.trim() || ver.err.trim()}")`);
+  }
+  check(true, `zaxy version is compatible (${ver.out.trim()})`);
   const ing = await run(ZAXY_BIN, ["memory", "ingest", "--help"]);
   if (ing.code !== 0 || !/--eventloom-path/.test(ing.out)) {
     throw new Error("zaxy CLI lacks `memory ingest`; STOP — cannot run round-trip");

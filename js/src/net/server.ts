@@ -20,7 +20,7 @@ import { createTransformStorage } from "../ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { registerCoreSkills } from "../skills/index.ts";
-import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { SkillRegistry, skillEffect, type WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
@@ -39,6 +39,7 @@ import {
 import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type MCPResponse } from "../mcp/protocol.ts";
 import { inAoi, parseAoi, SYNC_METHODS, WORLDLOG_METHODS, type AreaOfInterest, type NetOps } from "./protocol.ts";
 import { worldlogTail } from "../skills/worldlog.ts";
+import { assertReplayable } from "../worldlog/verify.ts";
 
 /** op_net_accept returns this when its listener is closed (Rust u32::MAX). */
 export const ACCEPT_CLOSED = 0xffffffff;
@@ -47,6 +48,10 @@ export const ACCEPT_CLOSED = 0xffffffff;
  *  awaits a full per-connection handshake, so this is the number of stalled/half-open
  *  peers the accept path tolerates before a legitimate new client has to wait. */
 const ACCEPT_CONCURRENCY = 16;
+const MAX_WIRE_MESSAGE_CHARS = 1_048_576;
+const MAX_QUEUED_INTENTS = 4096;
+const MAX_QUEUED_INTENTS_PER_CONNECTION = 256;
+const MAX_INTENTS_PER_TICK = 256;
 
 /** The socket primitives the server drives. ws_runtime supplies `accept` over the
  *  host listener; a headless test supplies it over a self-bound listener. */
@@ -137,6 +142,7 @@ interface ClientConn {
   subscribed: boolean;
   aoi?: AreaOfInterest;
   closing: boolean;
+  queuedIntents: number;
   /** K4: set once this connection calls worldlog/subscribe; the cursor advances on every
    *  worldlog/append push. undefined => not subscribed to the authoring-stream push (no listener
    *  work is done for it in pushWorldlogAppends). */
@@ -238,9 +244,10 @@ export class AuthoritativeServer {
       }
       if (existing.length > 0) {
         persisted = parseWorldLog(existing, {
-          recoverCorruptLines: true,
-          onRecoverableError: (message) => defaultOps.op_log(`AuthoritativeServer: skipping corrupt world-log line in ${opts.worldLog!.name}: ${message}`),
+          recoverPartialFinalLine: true,
+          onRecoverableError: (message) => baseOps.op_log(`AuthoritativeServer: ignoring torn final world-log fragment in ${opts.worldLog!.name}: ${message}`),
         }).commands;
+        assertReplayable(persisted);
       }
       if (persisted !== undefined && persisted.length > 0) this.durableLog.resume(persisted.length);
       else this.durableLog.open();
@@ -408,7 +415,7 @@ export class AuthoritativeServer {
       return false; // transient accept/handshake error on this slot -- keep the pool going
     }
     if (connId === ACCEPT_CLOSED || !this.running) return true;
-    const conn: ClientConn = { connId, subscribed: false, closing: false };
+    const conn: ClientConn = { connId, subscribed: false, closing: false, queuedIntents: 0 };
     this.conns.set(connId, conn);
     this.bgLoops.push(this.connLoop(conn));
     return false;
@@ -425,6 +432,10 @@ export class AuthoritativeServer {
       }
       try {
         if (line.length === 0) break;
+        if (line.length > MAX_WIRE_MESSAGE_CHARS) {
+          await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.invalidRequest, "Request exceeds the 1 MiB message limit"));
+          break;
+        }
         const trimmed = line.trim();
         if (trimmed.length === 0) continue;
         await this.handleLine(conn, trimmed);
@@ -453,12 +464,25 @@ export class AuthoritativeServer {
       await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.invalidRequest, "Invalid Request"));
       return;
     }
+    if (rec.id !== undefined && rec.id !== null && typeof rec.id !== "string" && typeof rec.id !== "number") {
+      await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.invalidRequest, "Invalid Request"));
+      return;
+    }
     const id = (rec.id ?? null) as string | number | null;
     const params = rec.params;
+
+    if (rec.method !== "initialize" && conn.session === undefined) {
+      await this.reply(conn.connId, this.error(id, -32000, "MCP session is not initialized"));
+      return;
+    }
 
     try {
       switch (rec.method) {
       case "initialize": {
+        if (conn.session !== undefined) {
+          await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidRequest, "MCP session is already initialized"));
+          return;
+        }
         const p = asRecord(params);
         if (p === undefined || typeof p.agentId !== "string" || typeof p.sessionId !== "string" || typeof p.profile !== "string") {
           await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidParams, "initialize requires agentId, sessionId, and profile"));
@@ -514,18 +538,12 @@ export class AuthoritativeServer {
       }
       case "tools/list":
       case "listTools":
-        if (conn.session === undefined) {
-          await this.reply(conn.connId, this.error(id, -32000, "MCP session is not initialized"));
-          return;
-        }
+        if (conn.session === undefined) return;
         await this.reply(conn.connId, this.success(id, { tools: this.registry.list(conn.session.permissions) }));
         return;
       case "tools/call":
       case "callTool": {
-        if (conn.session === undefined) {
-          await this.reply(conn.connId, this.error(id, -32000, "MCP session is not initialized"));
-          return;
-        }
+        if (conn.session === undefined) return;
         const p = asRecord(params);
         if (p === undefined || typeof p.name !== "string") {
           await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidParams, "tools/call requires name and object arguments"));
@@ -547,10 +565,10 @@ export class AuthoritativeServer {
         // reads on their own connection loop decouples them. They still run through
         // registry.invoke (recorded + permission-checked) exactly as before; only
         // the SERVING PATH changes, not what is recorded. Read-only == every declared
-        // permission ends in ".read" (empty-perm introspection like worldlog.tail
-        // counts as read), the inverse of the worldlog `isAuthoringCommand` test.
+        // effect is explicitly declared. Unknown and legacy definitions default to
+        // write, so an omitted annotation can only lose concurrency, not authority.
         const def = this.registry.describe(p.name);
-        if (def !== undefined && def.permissions.every((perm) => perm.endsWith(".read"))) {
+        if (def !== undefined && skillEffect(def) === "read") {
           const result = await this.registry.invoke(p.name, args, {
             agentId: conn.session.agentId,
             sessionId: conn.session.sessionId,
@@ -569,7 +587,13 @@ export class AuthoritativeServer {
         // INTENT: queue for application at the next tick boundary (one total
         // order). NOTE: the payload's `context`, if any, is IGNORED -- attribution
         // comes from conn.session only.
+        const queuedByConnection = conn.queuedIntents ?? 0;
+        if (this.intentQueue.length >= MAX_QUEUED_INTENTS || queuedByConnection >= MAX_QUEUED_INTENTS_PER_CONNECTION) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Authoritative intent queue is full"));
+          return;
+        }
         this.intentQueue.push({ connId: conn.connId, reqId: rec.id, name: p.name, input: args, session: conn.session });
+        conn.queuedIntents = queuedByConnection + 1;
         return;
       }
       case SYNC_METHODS.subscribe: {
@@ -692,14 +716,15 @@ export class AuthoritativeServer {
     //    through SkillRegistry.invoke (permission check + recorder hook), so the
     //    authoritative timeline stays an M1 log and authority holds.
     const causedBy: number[] = [];
-    const queue = this.intentQueue;
-    this.intentQueue = [];
+    const queue = this.intentQueue.splice(0, MAX_INTENTS_PER_TICK);
     // Apply intents SERIALLY (one total order, deterministic), but fire each reply
     // CONCURRENTLY: a slow/backpressured client must not serial-stall the tick (and
     // thereby delay every other client's intents this tick). Each send is
     // independently bounded by NET_SEND_TIMEOUT; we await them all after applying.
     const replySends: Promise<void>[] = [];
     for (const it of queue) {
+      const source = this.conns.get(it.connId);
+      if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
       const result: MCPResponse = await this.registry.invoke(it.name, it.input, {
         agentId: it.session.agentId,
         sessionId: it.session.sessionId,

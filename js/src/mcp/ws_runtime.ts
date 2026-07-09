@@ -14,16 +14,23 @@
 
 import { AuthoritativeServer, hostTransport } from "../net/server.ts";
 import type { NetOps } from "../net/protocol.ts";
+import { PolicyEngine } from "../policy/engine.ts";
+import { PERMISSION_PROFILES } from "../skills/permissions.ts";
 
 declare const Deno: { core: { ops: NetOps } };
 const net = Deno.core.ops;
 const hostPort = net.op_net_host_port();
+const authToken = net.op_net_host_auth_token();
+if (authToken.length === 0) throw new Error("WebSocket host did not provide an authentication token");
 const tracePrefix = hostPort === 8787 ? "mcp_ws" : `mcp_ws_${hostPort}`;
 
 const server = new AuthoritativeServer(hostTransport(net), {
   sessionId: "mcp_ws",
   seed: 0x10ca1ed,
   tickMs: 8,
+  policy: new PolicyEngine({ maxSessions: 64 }),
+  initializeAuthToken: authToken,
+  allowedProfiles: new Set(Object.keys(PERMISSION_PROFILES)),
   trace: { name: `${tracePrefix}_trace.jsonl`, maxInMemory: 8192 },
   worldLog: { name: `${tracePrefix}_worldlog.jsonl`, compactFlushed: true },
 });

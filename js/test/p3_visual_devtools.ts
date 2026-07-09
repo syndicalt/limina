@@ -46,7 +46,8 @@ registry.registerSceneBuilder("main", (ctx) => {
 });
 
 const builder = { agentId: "agt_builder", sessionId: "ses_p3_visual", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
-const debuggerCtx = { agentId: "agt_debugger", sessionId: "ses_p3_visual", permissions: resolveProfile("system.readonly"), tick: 0, world };
+const readonlyDebuggerCtx = { agentId: "agt_observer", sessionId: "ses_p3_visual", permissions: resolveProfile("system.readonly"), tick: 0, world };
+const debuggerCtx = { agentId: "agt_debugger", sessionId: "ses_p3_visual", permissions: new Set([...resolveProfile("system.readonly"), "system.admin"]), tick: 0, world };
 
 const firstEntity = field(ok(await registry.invoke("scene.createEntity", {
   position: [0, 1, 0],
@@ -118,6 +119,11 @@ assert(asRecord(snapshotResult.world).mode === "headless", "snapshot world mode 
 
 const nextSnapshot = asRecord(ok(await registry.invoke("inspector.snapshot", { afterEntity: page.nextAfterEntity, limit: 10 }, debuggerCtx)));
 assert((nextSnapshot.entities as unknown[]).length === 1, "snapshot second page wrong");
+
+const deniedReload = await registry.invoke("dev.reload", { target: "scene", reason: "read-only escape attempt" }, readonlyDebuggerCtx);
+assert(!deniedReload.success && deniedReload.error?.code === "forbidden", "read-only observer invoked admin dev.reload");
+assert(sceneBuilds === 0, "denied read-only dev.reload rebuilt the scene");
+assert(registry.describe("dev.reload")?.effect === "admin", "dev.reload is not explicitly classified as an admin effect");
 
 const sceneReload = asRecord(ok(await registry.invoke("dev.reload", { target: "scene", reason: "test scene asset refresh" }, debuggerCtx)));
 assert(sceneReload.ok === true, "scene reload should succeed when a builder is registered");

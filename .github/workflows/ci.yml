@@ -2,8 +2,8 @@
 # push/PR, so the determinism lint, replay/parity tests, and convergence gates can't
 # silently rot. (deploy.yml only publishes the Astro site; it does not test the engine.)
 #
-# Headless-safe by design: run-gates.sh classifies GPU/window tests ("no WebGPU adapter"
-# / "no WindowTarget") as environmental SKIPs, and the browser/GPU host gates
+# Headless-safe by design: run-gates.sh uses a named allowlist for GPU/window tests,
+# and the browser/GPU host gates
 # (engine-browser-gate, design-gate, packager, dogfood) self-SKIP via exit-code 2 when
 # chromium/GPU are absent. The determinism lint, the js/test logic+replay sweep, cargo
 # tests, and the display-independent playable smoke are the load-bearing checks here.
@@ -48,7 +48,7 @@ jobs:
       # Dependency CVE gate (reqwest/tokio/tungstenite/rapier3d are in the tree).
       # A vulnerability advisory fails the build before any artifact ships.
       - name: Cargo audit (RustSec advisories)
-        run: cargo install --locked cargo-audit && cargo audit --deny warnings
+        run: cargo install --locked cargo-audit && ./tools/audit-rust.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -56,9 +56,25 @@ jobs:
           cache: npm
           cache-dependency-path: js/package-lock.json
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install host-tool dependencies
+        working-directory: tools
+        run: bun install --frozen-lockfile
+
       - name: Install JS deps (rapier-compat wasm, three, zod, bitecs)
         working-directory: js
         run: npm ci
+
+      - name: Type-check JS runtime
+        working-directory: js
+        run: npm run check:types
+
+      - name: Audit JS dependencies
+        working-directory: js
+        run: npm audit --audit-level=moderate
 
       # Build the release binary the gate runner drives (./target/release/limina).
       - name: Build engine (release)

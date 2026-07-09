@@ -29,6 +29,7 @@ const getPerception: SkillDefinition<z.infer<typeof getPerceptionInput>, { perce
   description: "Get the calling agent's current perception (nearby entities + recent events).",
   category: "agent",
   permissions: ["agent.read"],
+  effect: "read",
   input: getPerceptionInput,
   output: z.object({ perception: z.unknown() }),
   handler: (_input, ctx) => ({ perception: ctx.world.agents?.getPerception(ctx.agentId) ?? null }),

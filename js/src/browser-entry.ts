@@ -37,6 +37,7 @@ import {
   createWorkerHandshake,
   type AuthorCommandFailure,
 } from "./kernel/apply-isolated.ts";
+import { isViewportDataOnlyCommand, partitionViewportCommands } from "./browser/author-command-policy.ts";
 // Re-exported so the editor viewport (plain JS importing the bundle) shares the SAME quarantine
 // helper the headless gate unit-tests — no forked copy of the skip logic.
 export { partitionQuarantined } from "./kernel/apply-isolated.ts";
@@ -90,13 +91,12 @@ import {
   type AccumulatorLoopHandle,
 } from "./browser/host.ts";
 
-declare const navigator: { gpu?: { requestAdapter(): Promise<unknown> } };
 declare const document: unknown;
-declare const fetch: (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+declare const fetch: (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }>;
 
 export interface RunOptions {
   /** A real <canvas> element to render into. */
-  canvas: unknown;
+  canvas: HTMLCanvasElement;
   /** Base URL of the exported world (dir holding manifest.json/log.jsonl/keyframes.jsonl). */
   worldUrl: string;
   width: number;
@@ -165,17 +165,15 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
     if (!res.ok) throw new Error(`fetch ${name}: HTTP ${res.status}`);
     return await res.text();
   };
-  // tiles.jsonl is OPTIONAL (only terrain worlds carry it) -> "" when absent.
-  const getOptional = async (name: string): Promise<string> => {
-    const res = await fetch(base + name);
-    return res.ok ? await res.text() : "";
-  };
-  const [manifest, log, keyframes, tiles, assets] = await Promise.all([
-    get("manifest.json"),
+  const manifest = await get("manifest.json");
+  let manifestSummary: { tiles?: unknown; assets?: unknown };
+  try { manifestSummary = JSON.parse(manifest) as { tiles?: unknown; assets?: unknown }; }
+  catch { throw new Error("fetch manifest.json: invalid JSON"); }
+  const [log, keyframes, tiles, assets] = await Promise.all([
     get("log.jsonl"),
     get("keyframes.jsonl"),
-    getOptional("tiles.jsonl"),
-    getOptional("assets.jsonl"),
+    Number(manifestSummary.tiles ?? 0) > 0 ? get("tiles.jsonl") : Promise.resolve(""),
+    Array.isArray(manifestSummary.assets) && manifestSummary.assets.length > 0 ? get("assets.jsonl") : Promise.resolve(""),
   ]);
   return loadExport({ "manifest.json": manifest, "log.jsonl": log, "keyframes.jsonl": keyframes, "tiles.jsonl": tiles, "assets.jsonl": assets });
 }
@@ -186,16 +184,16 @@ export async function fetchExport(worldUrl: string): Promise<LoadedExport> {
  *  cosmetic lights/ground — it just applies the baseline. `baseline` lets the
  *  caller tweak it (terrain mode disables the flat ground, for example). */
 async function buildRenderTarget(
-  canvas: unknown,
+  canvas: HTMLCanvasElement,
   width: number,
   height: number,
   forceWebGL: boolean,
   baseline: RenderBaselineOverride | false,
   renderScale = 1,
 ): Promise<{
-  renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void };
-  scene: SceneLike;
-  camera: CameraLike;
+  renderer: THREE.WebGPURenderer;
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
 }> {
   // THREE's WebGPURenderer targets either a WebGPU or a WebGL2 backend; forceWebGL
   // selects WebGL2 so the world still renders where WebGPU is unavailable.
@@ -216,8 +214,8 @@ async function buildRenderTarget(
     renderer.setSize(width, height, false);
   }
 
-  const scene: SceneLike = new THREE.Scene();
-  const camera: CameraLike = new THREE.PerspectiveCamera(60, width / height, 0.1, 200);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 200);
 
   // One source of truth: lights, procedural-sky IBL, tonemapping, ground, camera.
   if (baseline !== false) {
@@ -437,7 +435,7 @@ declare const URL: { new (url: string, base?: string): unknown };
 
 export interface RunLiveOptions {
   /** A real <canvas> element to render into. */
-  canvas: unknown;
+  canvas: HTMLCanvasElement;
   width: number;
   height: number;
   /** The authoring command log (the agent's edits): each command is re-invoked
@@ -531,6 +529,7 @@ export interface RunningLive {
    *  lists server-side inspector.snapshot state, still sees it and can select it via this hook). */
   entityStream?: { resident(): number; dormant(): number; isDormant(id: string): boolean; setProtected(id: string, on: boolean): void };
   setCameraControlsEnabled(on: boolean): void;
+  setOrbitAzimuth?(angle: number): void;
   setSyncSuppressed(eid: number, on: boolean): void;
   stop(): void;
 }
@@ -665,6 +664,41 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     return null;
   }
 
+  // Resolve every asset the boot command stream can reference before either
+  // thread authors the world. AssetRegistry.resolve is synchronous by contract;
+  // prefetching here keeps that contract without synchronous XHR on main or worker.
+  const prefetchedAssets = new Map<string, Uint8Array>();
+  const fetchAsset = async (id: string): Promise<Uint8Array | undefined> => {
+    if (prefetchedAssets.has(id)) return prefetchedAssets.get(id);
+    try {
+      const response = await fetch("/assets/" + id);
+      if (!response.ok) return undefined;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      prefetchedAssets.set(id, bytes);
+      return bytes;
+    } catch {
+      return undefined;
+    }
+  };
+  if (typeof fetch === "function") await fetchAsset("tree-pack.json");
+  const vegPack = loadVegetationPack({ op_read_asset: (id) => prefetchedAssets.get(id) ?? new Uint8Array(0) });
+  const gltfIds = new Set<string>(Object.values(vegPack).flat().map((entry) => entry.id));
+  const mapIds = new Set<string>();
+  for (const cmd of opts.commands) {
+    for (const id of gltfAssetIdsForCommand(cmd, vegPack)) gltfIds.add(id);
+    for (const id of mapAssetIdsForCommand(cmd)) mapIds.add(id);
+  }
+  const assetIds = [...new Set([...gltfIds, ...mapIds])];
+  if (assetIds.length > 0) {
+    status("loading", `loading ${assetIds.length} asset${assetIds.length === 1 ? "" : "s"}`);
+    await Promise.all(assetIds.map(async (id) => {
+      const bytes = await fetchAsset(id);
+      if (bytes !== undefined && gltfIds.has(id)) {
+        try { await prewarmGltfScene(id, bytes); } catch { /* mount reports malformed GLB */ }
+      }
+    }));
+  }
+
   status("loading", "spawning sim worker");
 
   // ── Spawn the sim-worker + handshake. The worker authors the command log, then
@@ -684,7 +718,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const handshake = createWorkerHandshake<ReadyMessage>();
   worker.onmessage = (ev: { data: unknown }): void => { handshake.offer(ev.data); };
   worker.onerror = (ev: { message?: string }): void => handshake.fail("sim worker error: " + (ev.message ?? "unknown"));
-  worker.postMessage({ type: "init", commands: opts.commands });
+  worker.postMessage({
+    type: "init",
+    commands: opts.commands,
+    assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
+  });
   const handshakeResult = await handshake.promise;
   if (!handshakeResult.ok) {
     // A hard startup failure (no worker, rapier import/create failed) — the environment cannot host
@@ -754,50 +792,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   //    renderer/baseline code reaches module-level `ops`. ──
   const rapier = opts.rapier ?? (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
   const physics = await WasmRapierPhysics.create(rapier);
-  const ops = composeAuthoringOps(physics);
+  const ops = composeAuthoringOps(physics, (id) => prefetchedAssets.get(id) ?? new Uint8Array(0));
   installOps(ops); // complete global op surface for any engine code reaching module-level `ops`
 
   const liveAssets = new AssetRegistry(ops);
-  // The project VEGETATION PACK (species → archetype ids). Loaded once for the whole live session so
-  // both the boot pre-warm and the mid-session reboot check resolve vegetation archetypes identically.
-  const vegPack = loadVegetationPack(ops);
-  if (typeof fetch === "function") {
-    // Warm the tree palette (so a LATER incremental plant/scatter mounts from a clone) + this scene's
-    // own GLB assets. Skip anything already cached — the module cache persists across reboots, so only
-    // the first connect pays the fetch. All of this runs BEFORE renderer.init(), the only safe window.
-    // The project VEGETATION PACK (tree-pack.json) supplies the tree archetype ids; the engine bakes
-    // none. Read it once (sync host op, safe pre-init window) so species-based plant/scatter commands
-    // pre-warm their archetypes from a clone instead of a blocking main-thread read at mount.
-    const gltfIds = new Set<string>(Object.values(vegPack).flat().map((e) => e.id));
-    for (const cmd of opts.commands) for (const id of gltfAssetIdsForCommand(cmd, vegPack)) gltfIds.add(id);
-    const cold = [...gltfIds].filter((id) => !hasGltfScene(id));
-    // Map Phase 3.3: the WorldMap IR assets the log resolves (setTerrainSource / terrain.create map
-    // path) are seeded the same way — bytes only (JSON, not GLB: no parse cache). Resolved ONCE here;
-    // without the seed the skill handler would fall back to a blocking main-thread sync XHR.
-    const mapIds = new Set<string>();
-    for (const cmd of opts.commands) for (const id of mapAssetIdsForCommand(cmd)) mapIds.add(id);
-    if (cold.length > 0 || mapIds.size > 0) {
-      status("loading", `loading ${cold.length + mapIds.size} asset${cold.length + mapIds.size === 1 ? "" : "s"}`);
-      await Promise.all([
-        ...cold.map(async (id) => {
-          try {
-            const res = await fetch("/assets/" + id);
-            if (!res.ok) return;
-            const bytes = new Uint8Array(await res.arrayBuffer());
-            liveAssets.seed(id, bytes);        // sync resolve() during apply (no host XHR)
-            await prewarmGltfScene(id, bytes); // parse into the clone cache (no macrotask at mount)
-          } catch { /* a missing/failed asset surfaces when the mount runs */ }
-        }),
-        ...[...mapIds].map(async (id) => {
-          try {
-            const res = await fetch("/assets/" + id);
-            if (!res.ok) return;
-            liveAssets.seed(id, new Uint8Array(await res.arrayBuffer())); // sync resolve() during apply
-          } catch { /* falls back to the sync-XHR op_read_asset inside the skill */ }
-        }),
-      ]);
-    }
-  }
+  for (const [id, bytes] of prefetchedAssets) liveAssets.seed(id, bytes);
 
   // ── Build the real renderer/scene/camera (reuse Mode-A buildRenderTarget + baseline). ──
   // Map Phase 3.3: a map-STREAMED world renders its own ground wherever the camera goes, and its
@@ -884,13 +883,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // abort policy differs. This adds NO fetch/import/createImageBitmap between renderer.init() and the
   // first render — the assets were pre-warmed above — so the forceWebGL init-collapse window is
   // untouched: this loop's awaits are identical in kind to the original per-command loop.)
-  const authoringOutcome = await applyAuthorCommandsIsolated(registry, world, opts.commands, {
+  const viewportBatch = partitionViewportCommands(opts.commands);
+  const authoringOutcome = await applyAuthorCommandsIsolated(registry, world, viewportBatch.commands, {
     sessionId: "ses_browser_live",
     defaultAgentId: "author",
     defaultPerms: permissions,
     tick: 0,
   });
-  const authoringFailures = authoringOutcome.failures;
+  const authoringFailures = authoringOutcome.failures.map((failure) => ({
+    ...failure,
+    index: viewportBatch.originalIndices[failure.index],
+  }));
   if (authoringFailures.length > 0) {
     // The viewport still comes up; surface the offenders for observability. The caller (editor) reads
     // `running.authoringFailures` off the returned handle to quarantine + report which/why.
@@ -1012,7 +1015,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           worker.postMessage({ type: "streamTileColliders", add: [add], remove: [] });
         },
         unmount: (key) => {
-          grassStreamRef.dropTile(key);
+          grassStreamRef?.dropTile(key);
           const mesh = tileMeshes.get(key);
           if (mesh !== undefined) {
             scene.remove(mesh);
@@ -1369,7 +1372,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // no scene/ecs/physics state, and the live viewport's registry doesn't carry the
         // asset-catalog skills (they live server-side; the catalog is not render/sim state). Apply
         // as a true no-op: mark applied without invoking the registry or the sim worker.
-        if (cmd.kind === "skill" && (cmd.tool === "catalog.publish" || cmd.tool === "asset.request")) { applied++; continue; }
+        if (isViewportDataOnlyCommand(cmd)) { applied++; continue; }
         const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
           ? new Set(entities.ids())
           : undefined;
@@ -1381,7 +1384,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // Task #78: untrack a to-be-destroyed entity BEFORE the skill runs. unregister
         // re-materializes a dormant mesh first, so teardownEntity's scene.remove path is
         // byte-identical to the never-streamed world.
-        if (removedEid !== undefined && entityStream !== undefined) {
+        if (removedEid !== undefined && entityStream !== undefined && cmd.kind === "skill") {
           const removedId = String((cmd.input as { entity?: unknown })?.entity ?? "");
           entityStream.unregister(removedId);
           entityStreamProtected.delete(removedId);
@@ -1534,7 +1537,7 @@ async function bootstrap(): Promise<void> {
 
   try {
     await run({
-      canvas,
+      canvas: canvas as unknown as HTMLCanvasElement,
       worldUrl,
       width,
       height,

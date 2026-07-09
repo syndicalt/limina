@@ -206,6 +206,7 @@ export function registerDirectorSkills(registry: SkillRegistry): { directorManag
     description: "Read the director's current phase, tension, and ticks left in the phase. Pure read.",
     category: "agent",
     permissions: ["agent.read"],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       running: z.boolean(),

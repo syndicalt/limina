@@ -216,6 +216,13 @@ export interface AppliedRenderBaseline {
 
 // ---- Helpers -------------------------------------------------------------
 
+function mergeVec3(
+  base: [number, number, number],
+  over?: [number?, number?, number?],
+): [number, number, number] {
+  return [over?.[0] ?? base[0], over?.[1] ?? base[1], over?.[2] ?? base[2]];
+}
+
 function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride): RenderBaselinePreset {
   if (over === undefined) return { ...base };
   return {
@@ -223,7 +230,7 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
     toneMapping: over.toneMapping ?? base.toneMapping,
     exposure: over.exposure ?? base.exposure,
     shadows: over.shadows ?? base.shadows,
-    sun: { ...base.sun, ...over.sun },
+    sun: { ...base.sun, ...over.sun, direction: mergeVec3(base.sun.direction, over.sun?.direction) },
     hemisphere: { ...base.hemisphere, ...over.hemisphere },
     ambientIntensity: over.ambientIntensity ?? base.ambientIntensity,
     ambientColor: over.ambientColor ?? base.ambientColor,
@@ -237,7 +244,12 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
       height: { ...base.atmosphere.height, ...over.atmosphere?.height },
     },
     ground: { ...base.ground, ...over.ground },
-    camera: { ...base.camera, ...over.camera },
+    camera: {
+      ...base.camera,
+      ...over.camera,
+      position: mergeVec3(base.camera.position, over.camera?.position),
+      target: mergeVec3(base.camera.target, over.camera?.target),
+    },
   };
 }
 
@@ -356,7 +368,7 @@ export function applyRenderBaseline(
       // PMREM needs a live renderer/GPU. Try it; on ANY failure fall back to
       // the cheap gradient (never ship a broken environment, never throw).
       try {
-        const pmrem = new THREE.PMREMGenerator(renderer);
+        const pmrem = new THREE.PMREMGenerator(renderer as never);
         const rt = pmrem.fromEquirectangular(skyTex as never);
         envTexture = (rt as { texture: unknown }).texture;
         pmrem.dispose();
