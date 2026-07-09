@@ -287,6 +287,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
 
   const snapshotInput = z.object({
     afterEntity: z.string().optional(),
+    entityVersion: z.number().int().nonnegative().optional(),
     limit: z.number().int().min(0).max(500).default(100),
     // Per-poll cost controls for high-frequency observers (the live editor). Both default
     // TRUE so the observability contract is unchanged for every existing caller/test. A
@@ -310,12 +311,14 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         limit: z.number().int(),
         totalEntities: z.number().int(),
         nextAfterEntity: z.string().nullable(),
+        entityVersion: z.number().int().nonnegative(),
       }),
       world: z.unknown(),
       entities: z.array(z.object({
         entity: z.string(),
         eid: z.number().int(),
         generation: z.number().int(),
+        parent: z.string().nullable(),
         transform: z.object({ position: Vec3, rotation: Quat, scale: Vec3 }),
         tags: z.array(z.string()),
         physics: z.object({ bodyId: z.number().int().optional() }),
@@ -358,8 +361,13 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     }),
     handler: (input, ctx) => {
       const ids = ctx.world.entities.ids();
-      const start = input.afterEntity === undefined ? 0 : ids.indexOf(input.afterEntity) + 1;
-      const offset = Math.max(0, start);
+      const entityVersion = ctx.world.entities.version;
+      if (input.entityVersion !== undefined && input.entityVersion !== entityVersion) {
+        throw new Error(`entity snapshot changed during pagination (expected ${input.entityVersion}, current ${entityVersion})`);
+      }
+      const cursorIndex = input.afterEntity === undefined ? -1 : ids.indexOf(input.afterEntity);
+      if (input.afterEntity !== undefined && cursorIndex < 0) throw new Error(`unknown inspector.snapshot cursor '${input.afterEntity}'`);
+      const offset = cursorIndex + 1;
       const selected = ids.slice(offset, offset + input.limit);
       const nextAfterEntity = offset + input.limit < ids.length && selected.length > 0 ? selected[selected.length - 1] : null;
       const entities = selected.flatMap((entity) => {
@@ -370,6 +378,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           entity,
           eid: entry.eid,
           generation: entry.generation,
+          parent: entry.parent ?? null,
           transform: {
             position: [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]] as [number, number, number],
             rotation: [Rotation.x[entry.eid], Rotation.y[entry.eid], Rotation.z[entry.eid], Rotation.w[entry.eid]] as [number, number, number, number],
@@ -402,7 +411,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         ? traceView
         : { threadId: traceView.threadId, eventCount: traceView.eventCount, actors: [], recent: [] };
       return {
-        page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity },
+        page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity, entityVersion },
         world: sceneMetadata(ctx),
         entities,
         agents: ctx.world.agents?.all?.().map(agentSnapshot) ?? [],

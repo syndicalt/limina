@@ -11,6 +11,8 @@
 import { McpClient, McpError } from "./mcp-client.js";
 import { buildForest, groupByActor, eventKind, isIntrospectionEvent } from "./reasoning.js";
 import { createHistoryPanel } from "./history.js";
+import { createOutlinerView, SnapshotPageLoader } from "./outliner.js";
+import { editorSelection } from "./selection-store.js";
 import { cueColorFor } from "./viewport.js";
 import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
 import { ingestTraceEvents } from "./trace-retention.js";
@@ -37,14 +39,17 @@ const state = {
   afterSeq: -1,
   worldlogCursor: 0, // worldlog.tail cursor for the History + Activity (authoring-command) streams
   snapshot: undefined,
+  entityIndex: new Map(),
   approvals: [],
   polling: undefined,
   log: [],
 };
 
-// git-for-worlds History panel (branch / time-travel / merge), backed by the tested
-// EditorHistoryController. Ingests the AUTHORING command stream (worldlog.tail — the actual world
-// edits) onto the "main" branch; scrubbing time-travels the viewport to that past state.
+const snapshotLoader = new SnapshotPageLoader();
+const outliner = createOutlinerView($("outliner-root"), editorSelection);
+
+// Read-only History timeline backed by the tested EditorHistoryController. It ingests the
+// authoring stream; scrubbing changes only the viewport replay prefix.
 const history = createHistoryPanel({
   onLog: (m) => logLine(m, "ok"),
   // Playhead moved: tell the viewport to replay to that prefix (live=true → follow the newest).
@@ -56,8 +61,8 @@ const history = createHistoryPanel({
 // Structured entity lookup for the property inspector — the full record (transform, tags,
 // physics.bodyId, resource, and origin = the create command with shape/size/material/color/
 // static/dynamic) from the latest inspector.snapshot. take-control uses this to edit more than
-// the transform. Returns undefined if the entity isn't in the current snapshot page.
-window.liminaEntity = (id) => (state.snapshot?.entities ?? []).find((e) => e.entity === id);
+// the transform. The paged snapshot loader keeps this index complete up to the hard cap.
+window.liminaEntity = (id) => state.entityIndex.get(id);
 
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
@@ -127,12 +132,17 @@ async function connect() {
 }
 
 function disconnect() {
+  snapshotLoader.cancel();
   stopPolling();
   if (state.client) { state.client.close(); state.client = undefined; }
   if (state.agentClient) { state.agentClient.close(); state.agentClient = undefined; }
   state.events.clear();
+  snapshotTick = 0;
   state.afterSeq = -1;
   state.worldlogCursor = 0;
+  state.snapshot = undefined;
+  state.entityIndex = new Map();
+  outliner.setEntities([]);
   history.reset();
   setStatus(false);
 }
@@ -249,7 +259,14 @@ async function refreshAll() {
       // Routine polls drop the two blocks that don't scale: the O(world) resource scan and
       // the static skill catalog (its size is cached once at connect as state.skillCount).
       // Live positions come from the delta stream (client.entityState), overlaid below.
-      try { state.snapshot = await c.callTool("inspector.snapshot", { limit: 200, includeResources: false, includeSkills: false }); }
+      try {
+        const snapshot = await snapshotLoader.load(c);
+        if (snapshot !== undefined && state.client === c) {
+          state.snapshot = snapshot;
+          state.entityIndex = new Map(snapshot.entities.map((record) => [record.entity, record]));
+          editorSelection.reconcile(new Set(state.entityIndex.keys()), "snapshot-delete");
+        }
+      }
       finally { setSpin("world", false); }
     }
     snapshotTick++;
@@ -274,35 +291,18 @@ window.addEventListener("limina:window-open", () => { if (state.client) void ref
 // (a) WORLD panel.
 // ---------------------------------------------------------------------------
 function renderWorld() {
-  const root = $("world-body");
+  const root = $("world-meta");
   root.innerHTML = "";
   const snap = state.snapshot;
-  if (!snap) { root.appendChild(el("div", "muted", "no snapshot yet")); return; }
+  if (!snap) { outliner.setEntities([]); root.appendChild(el("div", "muted", "no snapshot yet")); return; }
+  outliner.setEntities(snap.entities ?? []);
 
   const meta = el("div", "kv");
   meta.appendChild(kv("mode", snap.world?.mode ?? "?"));
-  meta.appendChild(kv("entities", String(snap.entities?.length ?? 0)));
+  meta.appendChild(kv("entities", String(snap.page?.totalEntities ?? snap.entities?.length ?? 0)));
   meta.appendChild(kv("skills", String(snap.skills?.length || state.skillCount || 0)));
   meta.appendChild(kv("caller caps", (snap.permissions?.caller ?? []).join(", ") || "—"));
   root.appendChild(meta);
-
-  root.appendChild(el("h4", null, "Entities"));
-  const live = state.client?.entityState;
-  const etable = el("div", "list");
-  for (const e of snap.entities ?? []) {
-    const liveState = live?.get(e.entity);
-    const pos = liveState ? liveState.pos : e.transform.position;
-    const row = el("div", "row");
-    row.appendChild(el("span", "mono", e.entity));
-    row.appendChild(el("span", "dim", `(${fmt(pos[0])}, ${fmt(pos[1])}, ${fmt(pos[2])})`));
-    if (e.tags && e.tags.length) {
-      const tags = el("span", "tags");
-      for (const t of e.tags) tags.appendChild(el("span", "tag", t));
-      row.appendChild(tags);
-    }
-    etable.appendChild(row);
-  }
-  root.appendChild(etable);
 
   const agents = snap.agents ?? [];
   root.appendChild(el("h4", null, `Agents (${agents.length})`));
@@ -710,7 +710,7 @@ function firstMovableEntity() {
     return { id: entity.entity, position: liveState?.pos ?? entity.transform?.position };
   }
 
-  const rowId = $("world-body")?.querySelector(".row .mono")?.textContent?.trim();
+  const rowId = $("outliner-root")?.querySelector(".outliner-row .mono")?.textContent?.trim();
   if (rowId && rowId.startsWith("ent_")) return { id: rowId, position: undefined };
   return undefined;
 }

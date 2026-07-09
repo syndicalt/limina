@@ -25,6 +25,7 @@
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { sceneTransformOperation } from "./authoring-gateway.js";
 import { isAttachedToScene } from "./scene-graph.js";
+import { editorSelection } from "./selection-store.js";
 import { McpClient } from "./mcp-client.js";
 import {
   commitSceneOperations,
@@ -58,8 +59,6 @@ function cuesEnabled() {
 
 const canvas = document.getElementById("editor-viewport");
 const statusEl = document.getElementById("viewport-status");
-const SELECT_ENTITY_EVENT = "limina:select-entity";
-const VIEWPORT_ENTITY_SELECTED_EVENT = "limina:viewport-entity-selected";
 const viewportUi = {
   snapToggle: document.getElementById("viewport-snap-toggle"),
   snapTranslate: document.getElementById("viewport-snap-translate"),
@@ -649,7 +648,9 @@ function startSelectionGuardLoop() {
     if (!isAttachedToScene(mesh, scene)) {
       // The selected entity was destroyed out from under the gizmo — detach before TransformControls
       // spams the scene-graph error every frame. deselectEntity() also stops this loop.
+      const removedId = state.selected?.id;
       deselectEntity();
+      if (removedId !== undefined && editorSelection.get() === removedId) editorSelection.clear("viewport-deleted");
       return;
     }
     state.selectionGuardFrame = requestAnimationFrame(tick);
@@ -659,7 +660,10 @@ function startSelectionGuardLoop() {
 
 function selectEntity(id, running) {
   const entry = running?.entities?.resolve?.(id);
-  if (!entry?.mesh || typeof entry.eid !== "number") return false;
+  if (!entry?.mesh || typeof entry.eid !== "number") {
+    if (state.selected?.id !== id) deselectEntity();
+    return false;
+  }
   // Task #78: pin the selection RESIDENT in the placed-entity residency stream BEFORE the gizmo
   // attaches — setProtected(true) re-materializes a dormant mesh immediately, so the selection
   // guard's scene-graph check never fires on a detached target (e.g. a far entity chosen from
@@ -698,13 +702,11 @@ function pickEntity(event) {
   for (const hit of hits) {
     const id = running.pickEntityId?.(hit.object);
     if (id) {
-      if (selectEntity(id, running)) {
-        window.dispatchEvent(new CustomEvent(VIEWPORT_ENTITY_SELECTED_EVENT, { detail: { entity: id, source: "viewport" } }));
-      }
+      editorSelection.select(id, "viewport");
       return;
     }
   }
-  if (!controls.axis) deselectEntity();
+  if (!controls.axis) editorSelection.clear("viewport");
 }
 
 // --- In-game terrain brush (Slice 1) ---------------------------------------------------------------
@@ -1327,6 +1329,8 @@ async function reboot() {
       logConsolePanel(`viewport quarantined a bad command (${f.command}): ${f.message}`, "err");
     }
     installGizmo(state.running);
+    const selectedId = editorSelection.get();
+    if (selectedId !== undefined) selectEntity(selectedId, state.running);
     installGridHelper(state.running);
     applyWireframeMode(state.running);
     const authored = kept.length - failures.length;
@@ -1404,11 +1408,10 @@ canvas.addEventListener("pointercancel", (event) => {
   }
   if (pointerClick.id === event.pointerId) pointerClick.id = undefined;
 });
-window.addEventListener(SELECT_ENTITY_EVENT, (event) => {
-  const entity = event instanceof CustomEvent ? event.detail?.entity : undefined;
-  if (typeof entity !== "string" || !entity.startsWith("ent_")) return;
-  selectEntity(entity, state.running);
-});
+editorSelection.subscribe(({ selectedId }) => {
+  if (selectedId === undefined) deselectEntity();
+  else selectEntity(selectedId, state.running);
+}, { emitCurrent: true });
 // History time-travel: the History panel scrubs over the authoring-command timeline and emits
 // the target here — replay the world to that prefix (limit=null → back to live/following).
 window.addEventListener("limina:scrub-to", (event) => {
@@ -1518,10 +1521,13 @@ window.addEventListener("keydown", (event) => {
   event.preventDefault();
   const id = selected.id;
   deselectEntity();
-  destroyEntity(id).catch((e) => {
-    resetWriter();
-    surfaceViewportWarning("destroy failed", e);
-  });
+  destroyEntity(id)
+    .then(() => { if (editorSelection.get() === id) editorSelection.clear("delete"); })
+    .catch((e) => {
+      resetWriter();
+      surfaceViewportWarning("destroy failed", e);
+      if (editorSelection.get() === id) selectEntity(id, state.running);
+    });
 });
 window.addEventListener("keyup", (event) => {
   if ((event.key === " " || event.code === "Space") && state.spaceNav) {

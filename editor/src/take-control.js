@@ -9,12 +9,11 @@ import {
   resetWriter,
 } from "./write-client.js";
 import { sceneMaterialOperation, sceneTagsOperation, sceneTransformOperation } from "./authoring-gateway.js";
+import { parseTransformDraft } from "./inspector-draft.js";
+import { editorSelection } from "./selection-store.js";
 import { surfaceViewportWarning, viewportIsReadOnly } from "./viewport.js";
 
-const worldBody = document.getElementById("world-body");
 const inspectorBody = document.getElementById("inspector-body");
-const SELECT_ENTITY_EVENT = "limina:select-entity";
-const VIEWPORT_ENTITY_SELECTED_EVENT = "limina:viewport-entity-selected";
 
 const DEFAULT_TRANSFORM = {
   position: [0, 0, 0],
@@ -137,14 +136,6 @@ function refreshSelectionFromSnapshot() {
   }
 }
 
-function parseVecFromRow(row) {
-  const text = row?.querySelector(".dim")?.textContent ?? "";
-  const match = text.match(/\(([^)]*)\)/);
-  if (!match) return undefined;
-  const nums = match[1].split(",").map((v) => Number(v.trim()));
-  return nums.length === 3 && nums.every(Number.isFinite) ? nums : undefined;
-}
-
 function readVec(prefix) {
   return ["x", "y", "z"].map((axis) => {
     const input = document.querySelector(`[data-take-input="${prefix}-${axis}"]`);
@@ -159,10 +150,6 @@ function readOptionalNumber(inputName) {
   return Number.isFinite(value) ? value : NaN;
 }
 
-function validVec(v) {
-  return v.length === 3 && v.every(Number.isFinite);
-}
-
 // A 0..1 slider value, or undefined if the user never moved it (so Apply only writes touched fields).
 function readSlider(name) {
   const el = document.querySelector(`[data-take-input="${name}"]`);
@@ -173,18 +160,6 @@ function readSlider(name) {
 
 function changed(a, b) {
   return a.length !== b.length || a.some((v, i) => v !== b[i]);
-}
-
-function rowEntity(row) {
-  const id = row?.querySelector(".mono")?.textContent?.trim();
-  return id && id.startsWith("ent_") ? id : undefined;
-}
-
-function highlightSelectedRow() {
-  if (!worldBody) return;
-  for (const row of worldBody.querySelectorAll(".row")) {
-    row.classList.toggle("selected", rowEntity(row) === state.entity);
-  }
 }
 
 function fieldset(label, prefix, values) {
@@ -472,8 +447,9 @@ function captureDraftFromForm() {
   const position = readVec("position");
   const rotationDeg = readVec("rotation");
   const scale = readVec("scale");
-  if (validVec(position) && validVec(rotationDeg) && validVec(scale)) {
-    state.base = { position, rotationDeg, scale };
+  const parsedTransform = parseTransformDraft(position, rotationDeg, scale);
+  if (parsedTransform.valid) {
+    state.base = parsedTransform.transform;
     state.transformEdited = changed(position, state.original.position) ||
       changed(rotationDeg, state.original.rotationDeg) || changed(scale, state.original.scale);
   }
@@ -488,6 +464,7 @@ function captureDraftFromForm() {
   state.materialEdited = ["color", "roughness", "metalness"].some(
     (key) => state.materialBase[key] !== state.originalMaterial[key],
   );
+  return { transformValid: parsedTransform.valid };
 }
 
 function materialChanges() {
@@ -503,8 +480,8 @@ function materialChanges() {
 async function applyEdits() {
   if (!state.entity) { setStatus("select an entity first", "warn"); return; }
   if (viewportIsReadOnly()) { setStatus("history view is read-only", "err"); return; }
-  captureDraftFromForm();
-  if (!validVec(state.base.position) || !validVec(state.base.rotationDeg) || !validVec(state.base.scale)) {
+  const draft = captureDraftFromForm();
+  if (!draft.transformValid) {
     setStatus("all transform fields must be finite numbers", "err");
     return;
   }
@@ -562,7 +539,10 @@ function addTagEdit() {
     setStatus("tag contains unsupported characters", "err");
     return;
   }
-  captureDraftFromForm();
+  if (!captureDraftFromForm().transformValid) {
+    setStatus("all transform fields must be finite numbers", "err");
+    return;
+  }
   state.tags = [...state.tags, tag].sort();
   state.tagsEdited = changed(state.tags, state.originalTags);
   renderInspector();
@@ -574,7 +554,10 @@ function removeTagEdit(tag) {
     setStatus("select an entity first", "warn");
     return;
   }
-  captureDraftFromForm();
+  if (!captureDraftFromForm().transformValid) {
+    setStatus("all transform fields must be finite numbers", "err");
+    return;
+  }
   state.tags = state.tags.filter((candidate) => candidate !== tag);
   state.tagsEdited = changed(state.tags, state.originalTags);
   renderInspector();
@@ -592,19 +575,7 @@ async function deleteEntity() {
     await ensureWriter();
     await destroyEntity(entity);
     console.info("take-control destroyed", { entity });
-    state.entity = undefined;
-    state.base = cloneTransform(DEFAULT_TRANSFORM);
-    state.original = cloneTransform(DEFAULT_TRANSFORM);
-    state.tags = [];
-    state.originalTags = [];
-    state.materialBase = {};
-    state.originalMaterial = {};
-    state.originInput = undefined;
-    state.transformEdited = false;
-    state.tagsEdited = false;
-    state.materialEdited = false;
-    highlightSelectedRow();
-    renderInspector();
+    editorSelection.clear("delete");
   } catch (e) {
     resetWriter();
     const message = e && e.message ? e.message : String(e);
@@ -613,11 +584,9 @@ async function deleteEntity() {
   }
 }
 
-function selectEntity(entity, row, options = {}) {
+function selectEntity(entity) {
   if (!entity) return;
   const transform = cloneTransform(DEFAULT_TRANSFORM);
-  const pos = parseVecFromRow(row);
-  if (pos) transform.position = pos;
   const record = entityRecord(entity);
   state.entity = entity;
   state.base = transformFromRecord(record, transform);
@@ -630,33 +599,31 @@ function selectEntity(entity, row, options = {}) {
   state.transformEdited = false;
   state.tagsEdited = false;
   state.materialEdited = false;
-  highlightSelectedRow();
   renderInspector();
-  // The Inspector is not a menu window you open by hand — selecting an entity in the
-  // World panel pops it up (and focuses it if already open).
+  // Selecting an entity pops the Inspector up and focuses it if already open.
   window.liminaWindows?.open?.("inspector");
-  if (options.emitViewportSelection !== false) {
-    window.dispatchEvent(new CustomEvent(SELECT_ENTITY_EVENT, { detail: { entity, source: "world-panel" } }));
-  }
 }
 
-function selectRow(row, options = {}) {
-  selectEntity(rowEntity(row), row, options);
-}
-
-if (worldBody && inspectorBody) {
-  worldBody.addEventListener("click", (event) => {
-    const row = event.target instanceof Element ? event.target.closest(".row") : null;
-    if (row && worldBody.contains(row)) selectRow(row);
-  });
-  window.addEventListener(VIEWPORT_ENTITY_SELECTED_EVENT, (event) => {
-    const entity = event instanceof CustomEvent ? event.detail?.entity : undefined;
-    if (typeof entity !== "string" || !entity.startsWith("ent_")) return;
-    const row = [...worldBody.querySelectorAll(".row")].find((candidate) => rowEntity(candidate) === entity);
-    selectEntity(entity, row, { emitViewportSelection: false });
-  });
-  new MutationObserver(highlightSelectedRow).observe(worldBody, { childList: true, subtree: true });
+function clearInspectorSelection() {
+  state.entity = undefined;
+  state.base = cloneTransform(DEFAULT_TRANSFORM);
+  state.original = cloneTransform(DEFAULT_TRANSFORM);
+  state.tags = [];
+  state.originalTags = [];
+  state.materialBase = {};
+  state.originalMaterial = {};
+  state.originInput = undefined;
+  state.transformEdited = false;
+  state.tagsEdited = false;
+  state.materialEdited = false;
   renderInspector();
+}
+
+if (inspectorBody) {
+  editorSelection.subscribe(({ selectedId }) => {
+    if (selectedId === undefined) clearInspectorSelection();
+    else selectEntity(selectedId);
+  }, { emitCurrent: true });
 }
 
 window.addEventListener("beforeunload", () => {

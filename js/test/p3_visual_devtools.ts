@@ -61,6 +61,7 @@ const secondEntity = field(ok(await registry.invoke("scene.createEntity", {
   size: 2,
 }, builder)), "entity");
 assert(typeof firstEntity === "string" && typeof secondEntity === "string", "entity setup failed");
+ok(await registry.invoke("scene.reparent", { entity: secondEntity, parent: firstEntity }, builder));
 ok(await registry.invoke("ecs.addComponent", { entity: firstEntity, component: "player" }, builder));
 
 const gltf = asRecord(ok(await registry.invoke("three.loadGLTF", { assetId: "triangle.glb", position: [0, 0, 2] }, builder)));
@@ -100,6 +101,7 @@ const snapshotResult = asRecord(ok(await registry.invoke("inspector.snapshot", {
 const page = asRecord(snapshotResult.page);
 assert(page.totalEntities === 3, "snapshot should count all entities");
 assert(typeof page.nextAfterEntity === "string", "snapshot should paginate entities");
+assert(typeof page.entityVersion === "number", "snapshot entity version missing");
 const entities = snapshotResult.entities as unknown[];
 assert(entities.length === 2, "snapshot page should respect limit");
 const firstSnap = asRecord(entities[0]);
@@ -107,6 +109,8 @@ const transform = asRecord(firstSnap.transform);
 assert(Array.isArray(transform.position) && transform.position[1] === 1, "snapshot transform missing");
 assert(Array.isArray(firstSnap.tags) && firstSnap.tags.includes("player"), "snapshot tags missing");
 assert(typeof asRecord(firstSnap.physics).bodyId === "number", "snapshot physics body id missing");
+assert(firstSnap.parent === null, "root snapshot parent must be explicit null");
+assert(asRecord(entities[1]).parent === firstEntity, "snapshot canonical parent relation missing");
 const resources = asRecord(snapshotResult.resources);
 const counts = asRecord(resources.counts);
 assert(counts.total === 1 && counts.gltf === 1, "snapshot resource counts wrong");
@@ -117,8 +121,25 @@ const snapAgents = snapshotResult.agents as unknown[];
 assert(snapAgents.some((a) => asRecord(a).id === "agt_denied" && asRecord(a).profile === "player.limited"), "snapshot agents missing");
 assert(asRecord(snapshotResult.world).mode === "headless", "snapshot world mode should be honest in tests");
 
-const nextSnapshot = asRecord(ok(await registry.invoke("inspector.snapshot", { afterEntity: page.nextAfterEntity, limit: 10 }, debuggerCtx)));
+const nextSnapshot = asRecord(ok(await registry.invoke("inspector.snapshot", {
+  afterEntity: page.nextAfterEntity,
+  entityVersion: page.entityVersion,
+  limit: 10,
+}, debuggerCtx)));
 assert((nextSnapshot.entities as unknown[]).length === 1, "snapshot second page wrong");
+const invalidCursor = await registry.invoke("inspector.snapshot", {
+  afterEntity: "ent_missing",
+  entityVersion: page.entityVersion,
+  limit: 10,
+}, debuggerCtx);
+assert(!invalidCursor.success, "snapshot accepted an unknown pagination cursor");
+ok(await registry.invoke("scene.reparent", { entity: secondEntity, parent: null }, builder));
+const stalePage = await registry.invoke("inspector.snapshot", {
+  afterEntity: page.nextAfterEntity,
+  entityVersion: page.entityVersion,
+  limit: 10,
+}, debuggerCtx);
+assert(!stalePage.success, "snapshot accepted a stale entity version after hierarchy mutation");
 
 const deniedReload = await registry.invoke("dev.reload", { target: "scene", reason: "read-only escape attempt" }, readonlyDebuggerCtx);
 assert(!deniedReload.success && deniedReload.error?.code === "forbidden", "read-only observer invoked admin dev.reload");
