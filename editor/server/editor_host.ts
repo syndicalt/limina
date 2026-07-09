@@ -1,7 +1,8 @@
 // Editor host — a gate-enabled authoritative MCP-ws server for the co-authoring
-// editor. Run it with the limina binary, then open editor/index.html:
+// editor. Launch it through a project's `npm run editor`; that launcher validates
+// limina.project.json and supplies the canonical LIMINA_PROJECT_ID:
 //
-//     ./target/release/limina editor/server/editor_host.ts
+//     cd <limina-project> && npm run editor
 //
 // It stands up the SAME AuthoritativeServer the stock `--mcp-ws` runtime runs
 // (real WebSocket, fixed-step sim, M1 world log, AoI state sync), but with the
@@ -41,6 +42,10 @@ import type { ProviderMap } from "../../js/src/agents/systems.ts";
 const net = ops as unknown as NetOps;
 const PORT = Number(ops.op_read_env("LIMINA_EDITOR_PORT")) || 8787;
 const STATIC_PORT = Number(ops.op_read_env("LIMINA_EDITOR_STATIC_PORT")) || 5173;
+const PROJECT_ID = ops.op_read_env("LIMINA_PROJECT_ID");
+if (PROJECT_ID.length > 64 || !/^[a-z0-9][a-z0-9._-]*$/.test(PROJECT_ID)) {
+  throw new Error("editor_host: LIMINA_PROJECT_ID must be the canonical 1-64 character project id from limina.project.json");
+}
 const WORLDLOG_NAME = ops.op_read_env("LIMINA_EDITOR_WORLDLOG") || "editor_host_worldlog.jsonl";
 const TRACE_NAME = ops.op_read_env("LIMINA_EDITOR_TRACE") || "editor_host_trace.jsonl";
 const CHAT_NAME = ops.op_read_env("LIMINA_EDITOR_CHAT") || "editor_host_chat.jsonl";
@@ -132,6 +137,7 @@ const server = new AuthoritativeServer(editorTransport, {
   // memory and the viewport would render an empty/partial world. A dev-editor session keeps the whole
   // stream resident (bounded by session length, not a concern here).
   worldLog: { name: WORLDLOG_NAME, compactFlushed: false },
+  authoring: { projectId: PROJECT_ID },
   initializeAuthToken: EDITOR_AUTH_TOKEN,
   allowedProfiles: EDITOR_ALLOWED_PROFILES,
   onClientMessage: async (method, params, ctx) => {
@@ -164,6 +170,19 @@ const server = new AuthoritativeServer(editorTransport, {
       providers: buildProviders(model, key),
       tracer: server.registry.tracer,
       msg: { turnId: p.turnId, text: p.text, attachments: p.attachments },
+      invokeTool: (name, input, base) => {
+        const argumentsRecord = asRecord(input);
+        if (argumentsRecord === undefined) {
+          return Promise.resolve({ success: false, error: { code: "invalid_input", message: "tool input must be an object" } });
+        }
+        return server.invokeAuthoritatively(name, argumentsRecord, {
+          agentId: base.agentId,
+          sessionId: base.sessionId,
+          permissions: base.permissions,
+          profile: base.profile,
+          causedBy: base.causedBy,
+        });
+      },
       push: (m) => ctx.push(`chat/${m.type.split(".")[1]}`, m),
       persist: persistChat,
     }).catch((err) => {
