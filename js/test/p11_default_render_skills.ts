@@ -201,6 +201,7 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   assert(res.enabled === true, "render.enablePost did not report enabled");
   assert(res.ao === true && res.bloom === true && res.grade === true, "default post stages not all wired");
   assert(res.depth === true && res.normal === true, "post pipeline missing the real depth+normal pre-pass nodes");
+  assert(res.godrays === false && res.dof === false && res.outline === false, "opt-in stages (godrays/dof/outline) must be OFF by default");
 
   // The live pipeline is stowed on world.post for the render loop to drive.
   const pipe = world.post as { aoNode?: unknown; bloomNode?: unknown; depthNode?: unknown; normalNode?: unknown; render?: unknown } | undefined;
@@ -212,6 +213,11 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   // Falsifiable: disabling stages drops their nodes.
   const off = ok(await registry.invoke("render.enablePost", { ao: { enabled: false }, bloom: { enabled: false } }, base));
   assert(off.ao === false && off.bloom === false, "disabling AO/bloom did not drop the stages");
+
+  // Opt-in stages wire when enabled (dof/outline are camera/scene-agnostic; godrays needs a
+  // shadow-casting sun so it is GPU-verified separately, not asserted here).
+  const fx = ok(await registry.invoke("render.enablePost", { dof: { enabled: true }, outline: { enabled: true } }, base));
+  assert(fx.dof === true && fx.outline === true, "enabling dof/outline did not wire the stages");
 }
 
 ops.op_log(

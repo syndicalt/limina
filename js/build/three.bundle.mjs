@@ -83365,6 +83365,734 @@ var BloomNode = class extends TempNode {
   }
 };
 var bloom = (node, strength, radius, threshold) => new BloomNode(nodeObject2(node), strength, radius, threshold);
+
+// node_modules/three/examples/jsm/tsl/display/GodraysNode.js
+var _quadMesh4 = /* @__PURE__ */ new QuadMesh();
+var _size4 = /* @__PURE__ */ new Vector2();
+var _DIRECTIONS = [
+  new Vector3(1, 0, 0),
+  new Vector3(-1, 0, 0),
+  new Vector3(0, 1, 0),
+  new Vector3(0, -1, 0),
+  new Vector3(0, 0, 1),
+  new Vector3(0, 0, -1)
+];
+var _PLANES = _DIRECTIONS.map(() => new Plane());
+var _SCRATCH_VECTOR = new Vector3();
+var _SCRATCH_MAT4 = new Matrix4();
+var _SCRATCH_FRUSTUM = new Frustum();
+var _rendererState4;
+var GodraysNode = class extends TempNode {
+  static get type() {
+    return "GodraysNode";
+  }
+  /**
+   * Constructs a new Godrays node.
+   *
+   * @param {TextureNode} depthNode - A texture node that represents the scene's depth.
+   * @param {Camera} camera - The camera the scene is rendered with.
+   * @param {(DirectionalLight|PointLight)} light - The light the godrays are rendered for.
+   */
+  constructor(depthNode, camera, light) {
+    super("vec4");
+    this.depthNode = depthNode;
+    this.raymarchSteps = uniform2(uint2(60));
+    this.density = uniform2(float2(0.7));
+    this.maxDensity = uniform2(float2(0.5));
+    this.distanceAttenuation = uniform2(float2(2));
+    this.resolutionScale = 0.5;
+    this.updateBeforeType = NodeUpdateType.FRAME;
+    this._cameraMatrixWorld = uniform2(camera.matrixWorld);
+    this._cameraProjectionMatrixInverse = uniform2(camera.projectionMatrixInverse);
+    this._premultipliedLightCameraMatrix = uniform2(new Matrix4());
+    this._cameraPosition = uniform2(new Vector3());
+    this._cameraNear = reference2("near", "float", camera);
+    this._cameraFar = reference2("far", "float", camera);
+    this._shadowCameraNear = reference2("near", "float", light.shadow.camera);
+    this._shadowCameraFar = reference2("far", "float", light.shadow.camera);
+    this._fNormals = uniformArray2(_DIRECTIONS.map(() => new Vector3()));
+    this._fConstants = uniformArray2(_DIRECTIONS.map(() => 0));
+    this._light = light;
+    this._camera = camera;
+    this._godraysRenderTarget = new RenderTarget(1, 1, { depthBuffer: false });
+    this._godraysRenderTarget.texture.name = "Godrays";
+    this._material = new NodeMaterial();
+    this._material.name = "Godrays";
+    this._textureNode = passTexture2(this, this._godraysRenderTarget.texture);
+  }
+  /**
+   * Returns the result of the effect as a texture node.
+   *
+   * @return {PassTextureNode} A texture node that represents the result of the effect.
+   */
+  getTextureNode() {
+    return this._textureNode;
+  }
+  /**
+   * Sets the size of the effect.
+   *
+   * @param {number} width - The width of the effect.
+   * @param {number} height - The height of the effect.
+   */
+  setSize(width, height) {
+    width = Math.round(this.resolutionScale * width);
+    height = Math.round(this.resolutionScale * height);
+    this._godraysRenderTarget.setSize(width, height);
+  }
+  /**
+   * This method is used to render the effect once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore(frame) {
+    const { renderer } = frame;
+    _rendererState4 = RendererUtils.resetRendererState(renderer, _rendererState4);
+    const size = renderer.getDrawingBufferSize(_size4);
+    this.setSize(size.width, size.height);
+    _quadMesh4.material = this._material;
+    _quadMesh4.name = "Godrays";
+    this._updateLightParams();
+    this._cameraPosition.value.setFromMatrixPosition(this._camera.matrixWorld);
+    renderer.setClearColor(16777215, 1);
+    renderer.setRenderTarget(this._godraysRenderTarget);
+    _quadMesh4.render(renderer);
+    RendererUtils.restoreRendererState(renderer, _rendererState4);
+  }
+  _updateLightParams() {
+    const light = this._light;
+    const shadowCamera = light.shadow.camera;
+    this._premultipliedLightCameraMatrix.value.multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+    if (light.isPointLight) {
+      for (let i = 0; i < _DIRECTIONS.length; i++) {
+        const direction = _DIRECTIONS[i];
+        const plane = _PLANES[i];
+        _SCRATCH_VECTOR.copy(light.position);
+        _SCRATCH_VECTOR.addScaledVector(direction, shadowCamera.far);
+        plane.setFromNormalAndCoplanarPoint(direction, _SCRATCH_VECTOR);
+        this._fNormals.array[i].copy(plane.normal);
+        this._fConstants.array[i] = plane.constant;
+      }
+    } else if (light.isDirectionalLight) {
+      _SCRATCH_MAT4.multiplyMatrices(shadowCamera.projectionMatrix, shadowCamera.matrixWorldInverse);
+      _SCRATCH_FRUSTUM.setFromProjectionMatrix(_SCRATCH_MAT4);
+      for (let i = 0; i < 6; i++) {
+        const plane = _SCRATCH_FRUSTUM.planes[i];
+        this._fNormals.array[i].copy(plane.normal).multiplyScalar(-1);
+        this._fConstants.array[i] = plane.constant * -1;
+      }
+    }
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {PassTextureNode}
+   */
+  setup(builder) {
+    const uvNode = uv2();
+    const lightPos = lightPosition2(this._light);
+    const sampleDepth = (uv3) => {
+      const depth3 = this.depthNode.sample(uv3).r;
+      if (builder.renderer.logarithmicDepthBuffer === true) {
+        const viewZ = logarithmicDepthToViewZ2(depth3, this._cameraNear, this._cameraFar);
+        return viewZToPerspectiveDepth2(viewZ, this._cameraNear, this._cameraFar);
+      }
+      return depth3;
+    };
+    const sdPlane = (p, n, h) => {
+      return dot2(p, n).add(h);
+    };
+    const intersectRayPlane = (rayOrigin, rayDirection, planeNormal, planeDistance) => {
+      const denom = dot2(planeNormal, rayDirection);
+      return sdPlane(rayOrigin, planeNormal, planeDistance).div(denom).negate();
+    };
+    const computeShadowCoord = (worldPos) => {
+      const shadowPosition = lightShadowMatrix2(this._light).mul(worldPos);
+      const shadowCoord = shadowPosition.xyz.div(shadowPosition.w);
+      return vec32(shadowCoord.x, shadowCoord.y.oneMinus(), shadowCoord.z);
+    };
+    const inShadow = (worldPos) => {
+      if (this._light.isPointLight) {
+        const lightToPos = worldPos.sub(lightPos).toConst();
+        const shadowPositionAbs = lightToPos.abs().toConst();
+        const viewZ = shadowPositionAbs.x.max(shadowPositionAbs.y).max(shadowPositionAbs.z).negate();
+        const depth3 = viewZToPerspectiveDepth2(viewZ, this._shadowCameraNear, this._shadowCameraFar);
+        const result = cubeTexture2(this._light.shadow.map.depthTexture, lightToPos).compare(depth3).r;
+        return vec22(result.oneMinus().add(5e-3), viewZ.negate());
+      } else if (this._light.isDirectionalLight) {
+        const shadowCoord = computeShadowCoord(worldPos).toConst();
+        const frustumTest = shadowCoord.x.greaterThanEqual(0).and(shadowCoord.x.lessThanEqual(1)).and(shadowCoord.y.greaterThanEqual(0)).and(shadowCoord.y.lessThanEqual(1)).and(shadowCoord.z.greaterThanEqual(0)).and(shadowCoord.z.lessThanEqual(1));
+        const output3 = vec22(1, 0);
+        If2(frustumTest.equal(true), () => {
+          const result = texture2(this._light.shadow.map.depthTexture, shadowCoord.xy).compare(shadowCoord.z).r;
+          const viewZ = perspectiveDepthToViewZ2(shadowCoord.z, this._shadowCameraNear, this._shadowCameraFar);
+          output3.assign(vec22(result.oneMinus(), viewZ.negate()));
+        });
+        return output3;
+      } else {
+        throw new Error("GodraysNode: Unsupported light type.");
+      }
+    };
+    const godrays2 = Fn2(() => {
+      const output3 = vec42(0, 0, 0, 1).toVar();
+      const isEarlyOut = bool2(false);
+      const depth3 = sampleDepth(uvNode).toConst();
+      const viewPosition = getViewPosition2(uvNode, depth3, this._cameraProjectionMatrixInverse).toConst();
+      const worldPosition = this._cameraMatrixWorld.mul(viewPosition);
+      const inBoxDist = float2(-1e4).toVar();
+      Loop2(6, ({ i }) => {
+        inBoxDist.assign(max2(inBoxDist, sdPlane(this._cameraPosition, this._fNormals.element(i), this._fConstants.element(i))));
+      });
+      const startPosition = this._cameraPosition.toVar();
+      If2(inBoxDist.lessThan(0), () => {
+        Loop2(6, ({ i }) => {
+          If2(sdPlane(worldPosition, this._fNormals.element(i), this._fConstants.element(i)).greaterThan(0), () => {
+            const direction = worldPosition.sub(this._cameraPosition).toConst();
+            const t = intersectRayPlane(this._cameraPosition, direction, this._fNormals.element(i), this._fConstants.element(i));
+            worldPosition.assign(this._cameraPosition.add(t.mul(direction)));
+          });
+        });
+      }).Else(() => {
+        const direction = worldPosition.sub(this._cameraPosition).toConst();
+        const minT = float2(1e4).toVar();
+        Loop2(6, ({ i }) => {
+          const t = intersectRayPlane(this._cameraPosition, direction, this._fNormals.element(i), this._fConstants.element(i));
+          If2(t.lessThan(minT).and(t.greaterThan(0)), () => {
+            minT.assign(t);
+          });
+        });
+        If2(minT.equal(1e4), () => {
+          isEarlyOut.assign(true);
+        }).Else(() => {
+          startPosition.assign(this._cameraPosition.add(minT.add(1e-3).mul(direction)));
+          const endInBoxDist = float2(-1e4).toVar();
+          Loop2(6, ({ i }) => {
+            endInBoxDist.assign(max2(endInBoxDist, sdPlane(worldPosition, this._fNormals.element(i), this._fConstants.element(i))));
+          });
+          If2(endInBoxDist.greaterThanEqual(0), () => {
+            const minT2 = float2(1e4).toVar();
+            Loop2(6, ({ i }) => {
+              If2(sdPlane(worldPosition, this._fNormals.element(i), this._fConstants.element(i)).greaterThan(0), () => {
+                const t = intersectRayPlane(startPosition, direction, this._fNormals.element(i), this._fConstants.element(i));
+                If2(t.lessThan(minT2).and(t.greaterThan(0)), () => {
+                  minT2.assign(t);
+                });
+              });
+            });
+            If2(minT2.lessThan(worldPosition.distance(startPosition)), () => {
+              worldPosition.assign(startPosition.add(minT2.mul(direction)));
+            });
+          });
+        });
+      });
+      If2(isEarlyOut.equal(false), () => {
+        const illum = float2(0).toVar();
+        const noise = interleavedGradientNoise2(screenCoordinate2).toConst();
+        const samplesFloat = round2(add2(this.raymarchSteps, mul2(this.raymarchSteps.div(8).add(2), noise))).toConst();
+        const samples = uint2(samplesFloat).toConst();
+        Loop2(samples, ({ i }) => {
+          const samplePos = mix2(startPosition, worldPosition, float2(i).div(samplesFloat)).toConst();
+          const shadowInfo = inShadow(samplePos);
+          const shadowAmount = shadowInfo.x.oneMinus().toConst();
+          illum.addAssign(shadowAmount.mul(distance2(startPosition, worldPosition).mul(this.density.div(100))).mul(pow5(shadowInfo.y.div(this._shadowCameraFar).oneMinus(), this.distanceAttenuation)));
+        });
+        illum.divAssign(samplesFloat);
+        output3.assign(vec42(vec32(clamp3(exp3(illum.negate()).oneMinus(), 0, this.maxDensity)), depth3));
+      });
+      return output3;
+    });
+    this._material.fragmentNode = godrays2().context(builder.getSharedContext());
+    this._material.needsUpdate = true;
+    return this._textureNode;
+  }
+  /**
+   * Frees internal resources. This method should be called
+   * when the effect is no longer required.
+   */
+  dispose() {
+    this._godraysRenderTarget.dispose();
+    this._material.dispose();
+  }
+};
+var godrays = (depthNode, camera, light) => new GodraysNode(depthNode, camera, light);
+
+// node_modules/three/examples/jsm/tsl/display/GaussianBlurNode.js
+var _quadMesh5 = /* @__PURE__ */ new QuadMesh();
+var _rendererState5;
+var GaussianBlurNode = class extends TempNode {
+  static get type() {
+    return "GaussianBlurNode";
+  }
+  /**
+   * Constructs a new gaussian blur node.
+   *
+   * @param {TextureNode} textureNode - The texture node that represents the input of the effect.
+   * @param {Node<vec2|float>} directionNode - Defines the direction and radius of the blur.
+   * @param {number} sigma - Controls the kernel of the blur filter. Higher values mean a wider blur radius.
+   * @param {Object} [options={}] - Additional options for the gaussian blur effect.
+   * @param {boolean} [options.premultipliedAlpha=false] - Whether to use premultiplied alpha for the blur effect.
+   * @param {number} [options.resolutionScale=1] - The resolution of the effect. 0.5 means half the resolution of the texture node.
+   */
+  constructor(textureNode, directionNode = null, sigma = 4, options = {}) {
+    super("vec4");
+    this.textureNode = textureNode;
+    this.directionNode = directionNode;
+    this.sigma = sigma;
+    this._invSize = uniform2(new Vector2());
+    this._passDirection = uniform2(new Vector2());
+    this._horizontalRT = new RenderTarget(1, 1, { depthBuffer: false });
+    this._horizontalRT.texture.name = "GaussianBlurNode.horizontal";
+    this._verticalRT = new RenderTarget(1, 1, { depthBuffer: false });
+    this._verticalRT.texture.name = "GaussianBlurNode.vertical";
+    this._textureNode = passTexture2(this, this._verticalRT.texture);
+    this._textureNode.uvNode = textureNode.uvNode;
+    this._material = null;
+    this.updateBeforeType = NodeUpdateType.FRAME;
+    this.resolutionScale = options.resolutionScale || 1;
+    this.premultipliedAlpha = options.premultipliedAlpha || false;
+    this.isGaussianBlurNode = true;
+  }
+  /**
+   * Sets the size of the effect.
+   *
+   * @param {number} width - The width of the effect.
+   * @param {number} height - The height of the effect.
+   */
+  setSize(width, height) {
+    width = Math.max(Math.round(width * this.resolutionScale), 1);
+    height = Math.max(Math.round(height * this.resolutionScale), 1);
+    this._invSize.value.set(1 / width, 1 / height);
+    this._horizontalRT.setSize(width, height);
+    this._verticalRT.setSize(width, height);
+  }
+  /**
+   * This method is used to render the effect once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore(frame) {
+    const { renderer } = frame;
+    _rendererState5 = RendererUtils.resetRendererState(renderer, _rendererState5);
+    const textureNode = this.textureNode;
+    const map = textureNode.value;
+    const currentTexture = textureNode.value;
+    _quadMesh5.material = this._material;
+    this.setSize(map.image.width, map.image.height);
+    const textureType = map.type;
+    this._horizontalRT.texture.type = textureType;
+    this._verticalRT.texture.type = textureType;
+    renderer.setRenderTarget(this._horizontalRT);
+    this._passDirection.value.set(1, 0);
+    _quadMesh5.name = "Gaussian Blur [ Horizontal Pass ]";
+    _quadMesh5.render(renderer);
+    textureNode.value = this._horizontalRT.texture;
+    renderer.setRenderTarget(this._verticalRT);
+    this._passDirection.value.set(0, 1);
+    _quadMesh5.name = "Gaussian Blur [ Vertical Pass ]";
+    _quadMesh5.render(renderer);
+    textureNode.value = currentTexture;
+    RendererUtils.restoreRendererState(renderer, _rendererState5);
+  }
+  /**
+   * Returns the result of the effect as a texture node.
+   *
+   * @return {PassTextureNode} A texture node that represents the result of the effect.
+   */
+  getTextureNode() {
+    return this._textureNode;
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {PassTextureNode}
+   */
+  setup(builder) {
+    const textureNode = this.textureNode;
+    const uvNode = uv2();
+    const directionNode = vec22(this.directionNode || 1);
+    let sampleTexture, output3;
+    if (this.premultipliedAlpha) {
+      sampleTexture = (uv3) => premultiplyAlpha2(textureNode.sample(uv3));
+      output3 = (color3) => unpremultiplyAlpha2(color3);
+    } else {
+      sampleTexture = (uv3) => textureNode.sample(uv3);
+      output3 = (color3) => color3;
+    }
+    const blur3 = Fn2(() => {
+      const kernelSize = 3 + 2 * this.sigma;
+      const gaussianCoefficients = this._getCoefficients(kernelSize);
+      const invSize = this._invSize;
+      const direction = directionNode.mul(this._passDirection);
+      const diffuseSum = vec42(sampleTexture(uvNode).mul(gaussianCoefficients[0])).toVar();
+      for (let i = 1; i < kernelSize; i++) {
+        const x = float2(i);
+        const w = float2(gaussianCoefficients[i]);
+        const uvOffset = vec22(direction.mul(invSize.mul(x))).toVar();
+        const sample1 = sampleTexture(uvNode.add(uvOffset));
+        const sample22 = sampleTexture(uvNode.sub(uvOffset));
+        diffuseSum.addAssign(sample1.add(sample22).mul(w));
+      }
+      return output3(diffuseSum);
+    });
+    const material = this._material || (this._material = new NodeMaterial());
+    material.fragmentNode = blur3().context(builder.getSharedContext());
+    material.name = "Gaussian_blur";
+    material.needsUpdate = true;
+    const properties = builder.getNodeProperties(this);
+    properties.textureNode = textureNode;
+    return this._textureNode;
+  }
+  /**
+   * Frees internal resources. This method should be called
+   * when the effect is no longer required.
+   */
+  dispose() {
+    this._horizontalRT.dispose();
+    this._verticalRT.dispose();
+    if (this._material !== null) this._material.dispose();
+  }
+  /**
+   * Computes gaussian coefficients depending on the given kernel radius.
+   *
+   * @private
+   * @param {number} kernelRadius - The kernel radius.
+   * @return {Array<number>}
+   */
+  _getCoefficients(kernelRadius) {
+    const coefficients = [];
+    const sigma = kernelRadius / 3;
+    for (let i = 0; i < kernelRadius; i++) {
+      coefficients.push(0.39894 * Math.exp(-0.5 * i * i / (sigma * sigma)) / sigma);
+    }
+    return coefficients;
+  }
+  /**
+   * The resolution scale.
+   *
+   * @deprecated
+   * @type {Vector2}
+   * @default {(1,1)}
+   */
+  get resolution() {
+    console.warn('THREE.GaussianBlurNode: The "resolution" property has been renamed to "resolutionScale" and is now of type `number`.');
+    return new Vector2(this.resolutionScale, this.resolutionScale);
+  }
+  set resolution(value) {
+    console.warn('THREE.GaussianBlurNode: The "resolution" property has been renamed to "resolutionScale" and is now of type `number`.');
+    this.resolutionScale = value.x;
+  }
+};
+var gaussianBlur = (node, directionNode, sigma, options = {}) => new GaussianBlurNode(convertToTexture2(node), directionNode, sigma, options);
+
+// node_modules/three/examples/jsm/tsl/display/DepthOfFieldNode.js
+var _quadMesh6 = /* @__PURE__ */ new QuadMesh();
+var _rendererState6;
+var DepthOfFieldNode = class extends TempNode {
+  static get type() {
+    return "DepthOfFieldNode";
+  }
+  /**
+   * Constructs a new DOF node.
+   *
+   * @param {TextureNode} textureNode - The texture node that represents the input of the effect.
+   * @param {Node<float>} viewZNode - Represents the viewZ depth values of the scene.
+   * @param {Node<float>} focusDistanceNode - Defines the effect's focus which is the distance along the camera's look direction in world units.
+   * @param {Node<float>} focalLengthNode - How far an object can be from the focal plane before it goes completely out-of-focus in world units.
+   * @param {Node<float>} bokehScaleNode - A unitless value for artistic purposes to adjust the size of the bokeh.
+   */
+  constructor(textureNode, viewZNode, focusDistanceNode, focalLengthNode, bokehScaleNode) {
+    super("vec4");
+    this.textureNode = textureNode;
+    this.viewZNode = viewZNode;
+    this.focusDistanceNode = focusDistanceNode;
+    this.focalLengthNode = focalLengthNode;
+    this.bokehScaleNode = bokehScaleNode;
+    this._invSize = uniform2(new Vector2());
+    this._CoCRT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType, format: RedFormat, count: 2 });
+    this._CoCRT.textures[0].name = "DepthOfField.NearField";
+    this._CoCRT.textures[1].name = "DepthOfField.FarField";
+    this._CoCBlurredRT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType, format: RedFormat });
+    this._CoCBlurredRT.texture.name = "DepthOfField.NearFieldBlurred";
+    this._blur64RT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._blur64RT.texture.name = "DepthOfField.Blur64";
+    this._blur16NearRT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._blur16NearRT.texture.name = "DepthOfField.Blur16Near";
+    this._blur16FarRT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._blur16FarRT.texture.name = "DepthOfField.Blur16Far";
+    this._compositeRT = new RenderTarget(1, 1, { depthBuffer: false, type: HalfFloatType });
+    this._compositeRT.texture.name = "DepthOfField.Composite";
+    this._CoCMaterial = new NodeMaterial();
+    this._CoCBlurredMaterial = new NodeMaterial();
+    this._blur64Material = new NodeMaterial();
+    this._blur16Material = new NodeMaterial();
+    this._compositeMaterial = new NodeMaterial();
+    this._textureNode = texture2(this._compositeRT.texture);
+    this._CoCTextureNode = texture2(this._CoCRT.texture);
+    this._blur64TextureNode = texture2(this._blur64RT.texture);
+    this._blur16NearTextureNode = texture2(this._blur16NearRT.texture);
+    this._blur16FarTextureNode = texture2(this._blur16FarRT.texture);
+    this.updateBeforeType = NodeUpdateType.FRAME;
+  }
+  /**
+   * Sets the size of the effect.
+   *
+   * @param {number} width - The width of the effect.
+   * @param {number} height - The height of the effect.
+   */
+  setSize(width, height) {
+    this._invSize.value.set(1 / width, 1 / height);
+    this._CoCRT.setSize(width, height);
+    this._compositeRT.setSize(width, height);
+    const halfResX = Math.round(width / 2);
+    const halfResY = Math.round(height / 2);
+    this._CoCBlurredRT.setSize(halfResX, halfResY);
+    this._blur64RT.setSize(halfResX, halfResY);
+    this._blur16NearRT.setSize(halfResX, halfResY);
+    this._blur16FarRT.setSize(halfResX, halfResY);
+  }
+  /**
+   * Returns the result of the effect as a texture node.
+   *
+   * @return {PassTextureNode} A texture node that represents the result of the effect.
+   */
+  getTextureNode() {
+    return this._textureNode;
+  }
+  /**
+   * This method is used to update the effect's uniforms once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore(frame) {
+    const { renderer } = frame;
+    const map = this.textureNode.value;
+    this.setSize(map.image.width, map.image.height);
+    _rendererState6 = RendererUtils.resetRendererState(renderer, _rendererState6);
+    renderer.setClearColor(0, 0);
+    _quadMesh6.material = this._CoCMaterial;
+    renderer.setRenderTarget(this._CoCRT);
+    _quadMesh6.name = "DoF [ CoC ]";
+    _quadMesh6.render(renderer);
+    this._CoCTextureNode.value = this._CoCRT.textures[0];
+    _quadMesh6.material = this._CoCBlurredMaterial;
+    renderer.setRenderTarget(this._CoCBlurredRT);
+    _quadMesh6.name = "DoF [ CoC Blur ]";
+    _quadMesh6.render(renderer);
+    this._CoCTextureNode.value = this._CoCBlurredRT.texture;
+    _quadMesh6.material = this._blur64Material;
+    renderer.setRenderTarget(this._blur64RT);
+    _quadMesh6.name = "DoF [ Blur64 Near ]";
+    _quadMesh6.render(renderer);
+    _quadMesh6.material = this._blur16Material;
+    renderer.setRenderTarget(this._blur16NearRT);
+    _quadMesh6.name = "DoF [ Blur16 Near ]";
+    _quadMesh6.render(renderer);
+    this._CoCTextureNode.value = this._CoCRT.textures[1];
+    _quadMesh6.material = this._blur64Material;
+    renderer.setRenderTarget(this._blur64RT);
+    _quadMesh6.name = "DoF [ Blur64 Far ]";
+    _quadMesh6.render(renderer);
+    _quadMesh6.material = this._blur16Material;
+    renderer.setRenderTarget(this._blur16FarRT);
+    _quadMesh6.name = "DoF [ Blur16 Far ]";
+    _quadMesh6.render(renderer);
+    _quadMesh6.material = this._compositeMaterial;
+    renderer.setRenderTarget(this._compositeRT);
+    _quadMesh6.name = "DoF [ Composite ]";
+    _quadMesh6.render(renderer);
+    RendererUtils.restoreRendererState(renderer, _rendererState6);
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {ShaderCallNodeInternal}
+   */
+  setup(builder) {
+    const kernels = this._generateKernels();
+    const nearField = property2("float");
+    const farField = property2("float");
+    const outputNode = outputStruct2(nearField, farField);
+    const CoC = Fn2(() => {
+      const signedDist = this.viewZNode.negate().sub(this.focusDistanceNode);
+      const CoC2 = smoothstep3(0, this.focalLengthNode, signedDist.abs());
+      nearField.assign(step2(signedDist, 0).mul(CoC2));
+      farField.assign(step2(0, signedDist).mul(CoC2));
+      return vec42(0);
+    });
+    this._CoCMaterial.colorNode = CoC().context(builder.getSharedContext());
+    this._CoCMaterial.outputNode = outputNode;
+    this._CoCMaterial.needsUpdate = true;
+    this._CoCBlurredMaterial.colorNode = gaussianBlur(this._CoCTextureNode, 1, 2);
+    this._CoCBlurredMaterial.needsUpdate = true;
+    const bokeh64 = uniformArray2(kernels.points64);
+    const blur64 = Fn2(() => {
+      const acc = vec32();
+      const uvNode = uv2();
+      const CoC2 = this._CoCTextureNode.sample(uvNode).r;
+      const sampleStep = this._invSize.mul(this.bokehScaleNode).mul(CoC2);
+      Loop2(64, ({ i }) => {
+        const sUV = uvNode.add(sampleStep.mul(bokeh64.element(i)));
+        const tap = this.textureNode.sample(sUV);
+        acc.addAssign(tap.rgb);
+      });
+      acc.divAssign(64);
+      return vec42(acc, CoC2);
+    });
+    this._blur64Material.fragmentNode = blur64().context(builder.getSharedContext());
+    this._blur64Material.needsUpdate = true;
+    const bokeh16 = uniformArray2(kernels.points16);
+    const blur16 = Fn2(() => {
+      const uvNode = uv2();
+      const col = this._blur64TextureNode.sample(uvNode).toVar();
+      const maxVal = col.rgb;
+      const CoC2 = col.a;
+      const sampleStep = this._invSize.mul(this.bokehScaleNode).mul(CoC2);
+      Loop2(16, ({ i }) => {
+        const sUV = uvNode.add(sampleStep.mul(bokeh16.element(i)));
+        const tap = this._blur64TextureNode.sample(sUV);
+        maxVal.assign(max2(tap.rgb, maxVal));
+      });
+      return vec42(maxVal, CoC2);
+    });
+    this._blur16Material.fragmentNode = blur16().context(builder.getSharedContext());
+    this._blur16Material.needsUpdate = true;
+    const composite = Fn2(() => {
+      const uvNode = uv2();
+      const near = this._blur16NearTextureNode.sample(uvNode);
+      const far = this._blur16FarTextureNode.sample(uvNode);
+      const beauty = this.textureNode.sample(uvNode);
+      const blendNear = min2(near.a, 0.5).mul(2);
+      const blendFar = min2(far.a, 0.5).mul(2);
+      const result = vec42(0, 0, 0, 1).toVar();
+      result.rgb = mix2(beauty.rgb, far.rgb, blendFar);
+      result.rgb = mix2(result.rgb, near.rgb, blendNear);
+      return result;
+    });
+    this._compositeMaterial.fragmentNode = composite().context(builder.getSharedContext());
+    this._compositeMaterial.needsUpdate = true;
+    return this._textureNode;
+  }
+  _generateKernels() {
+    const GOLDEN_ANGLE = 2.39996323;
+    const SAMPLES = 80;
+    const points64 = [];
+    const points16 = [];
+    let idx64 = 0;
+    let idx16 = 0;
+    for (let i = 0; i < SAMPLES; i++) {
+      const theta = i * GOLDEN_ANGLE;
+      const r = Math.sqrt(i) / Math.sqrt(SAMPLES);
+      const p = new Vector2(r * Math.cos(theta), r * Math.sin(theta));
+      if (i % 5 === 0) {
+        points16[idx16] = p;
+        idx16++;
+      } else {
+        points64[idx64] = p;
+        idx64++;
+      }
+    }
+    return { points16, points64 };
+  }
+  /**
+   * Frees internal resources. This method should be called
+   * when the effect is no longer required.
+   */
+  dispose() {
+    this._CoCRT.dispose();
+    this._CoCBlurredRT.dispose();
+    this._blur64RT.dispose();
+    this._blur16NearRT.dispose();
+    this._blur16FarRT.dispose();
+    this._compositeRT.dispose();
+    this._CoCMaterial.dispose();
+    this._CoCBlurredMaterial.dispose();
+    this._blur64Material.dispose();
+    this._blur16Material.dispose();
+    this._compositeMaterial.dispose();
+  }
+};
+var dof = (node, viewZNode, focusDistance = 1, focalLength = 1, bokehScale = 1) => new DepthOfFieldNode(convertToTexture2(node), nodeObject2(viewZNode), nodeObject2(focusDistance), nodeObject2(focalLength), nodeObject2(bokehScale));
+
+// node_modules/three/examples/jsm/tsl/display/SobelOperatorNode.js
+var SobelOperatorNode = class extends TempNode {
+  static get type() {
+    return "SobelOperatorNode";
+  }
+  /**
+   * Constructs a new sobel operator node.
+   *
+   * @param {TextureNode} textureNode - The texture node that represents the input of the effect.
+   */
+  constructor(textureNode) {
+    super("vec4");
+    this.textureNode = textureNode;
+    this.updateBeforeType = NodeUpdateType.FRAME;
+    this._invSize = uniform2(new Vector2());
+  }
+  /**
+   * This method is used to update the effect's uniforms once per frame.
+   *
+   * @param {NodeFrame} frame - The current node frame.
+   */
+  updateBefore() {
+    const map = this.textureNode.value;
+    this._invSize.value.set(1 / map.image.width, 1 / map.image.height);
+  }
+  /**
+   * This method is used to setup the effect's TSL code.
+   *
+   * @param {NodeBuilder} builder - The current node builder.
+   * @return {ShaderCallNodeInternal}
+   */
+  setup() {
+    const { textureNode } = this;
+    const uvNode = textureNode.uvNode || uv2();
+    const sampleTexture = (uv3) => textureNode.sample(uv3);
+    const sobel2 = Fn2(() => {
+      const texel = this._invSize;
+      const Gx = mat32(-1, -2, -1, 0, 0, 0, 1, 2, 1);
+      const Gy = mat32(-1, 0, 1, -2, 0, 2, -1, 0, 1);
+      const tx0y0 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(-1, -1)))).xyz);
+      const tx0y1 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(-1, 0)))).xyz);
+      const tx0y2 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(-1, 1)))).xyz);
+      const tx1y0 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(0, -1)))).xyz);
+      const tx1y1 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(0, 0)))).xyz);
+      const tx1y2 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(0, 1)))).xyz);
+      const tx2y0 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(1, -1)))).xyz);
+      const tx2y1 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(1, 0)))).xyz);
+      const tx2y2 = luminance2(sampleTexture(uvNode.add(texel.mul(vec22(1, 1)))).xyz);
+      const valueGx = add2(
+        Gx[0][0].mul(tx0y0),
+        Gx[1][0].mul(tx1y0),
+        Gx[2][0].mul(tx2y0),
+        Gx[0][1].mul(tx0y1),
+        Gx[1][1].mul(tx1y1),
+        Gx[2][1].mul(tx2y1),
+        Gx[0][2].mul(tx0y2),
+        Gx[1][2].mul(tx1y2),
+        Gx[2][2].mul(tx2y2)
+      );
+      const valueGy = add2(
+        Gy[0][0].mul(tx0y0),
+        Gy[1][0].mul(tx1y0),
+        Gy[2][0].mul(tx2y0),
+        Gy[0][1].mul(tx0y1),
+        Gy[1][1].mul(tx1y1),
+        Gy[2][1].mul(tx2y1),
+        Gy[0][2].mul(tx0y2),
+        Gy[1][2].mul(tx1y2),
+        Gy[2][2].mul(tx2y2)
+      );
+      const G = valueGx.mul(valueGx).add(valueGy.mul(valueGy)).sqrt();
+      return vec42(vec32(G), 1);
+    });
+    const outputNode = sobel2();
+    return outputNode;
+  }
+};
+var sobel = (node) => new SobelOperatorNode(convertToTexture2(node));
 export {
   ACESFilmicToneMapping,
   AONode,
@@ -83991,11 +84719,14 @@ export {
   createCanvasElement,
   defaultBuildStages,
   defaultShaderStages,
+  dof,
   error,
   getConsoleFunction,
+  godrays,
   log,
   setConsoleFunction,
   shaderStages,
+  sobel,
   vectorComponents,
   warn,
   warnOnce

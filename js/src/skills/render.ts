@@ -41,13 +41,34 @@ const gradeOverride = z.object({
   contrast: z.number().optional(),
   saturation: z.number().optional(),
 }).optional();
+const godraysOverride = z.object({
+  enabled: z.boolean().optional(),
+  density: z.number().optional(),
+  maxDensity: z.number().optional(),
+  distanceAttenuation: z.number().optional(),
+  raymarchSteps: z.number().int().optional(),
+  intensity: z.number().optional(),
+}).optional();
+const dofOverride = z.object({
+  enabled: z.boolean().optional(),
+  focusDistance: z.number().optional(),
+  focalLength: z.number().optional(),
+  bokehScale: z.number().optional(),
+}).optional();
+const outlineOverride = z.object({
+  enabled: z.boolean().optional(),
+  strength: z.number().optional(),
+}).optional();
 
 const enablePostInput = z.object({
   /** Per-stage preset overrides (deep-merged onto the "Grounded Stylized Realism" default).
-   *  Omit for the tuned default. */
+   *  Omit for the tuned default. ao/bloom/grade are on by default; godrays/dof/outline off. */
   ao: aoOverride,
   bloom: bloomOverride,
   grade: gradeOverride,
+  godrays: godraysOverride,
+  dof: dofOverride,
+  outline: outlineOverride,
 });
 
 const enablePostOutput = z.object({
@@ -60,6 +81,11 @@ const enablePostOutput = z.object({
   /** Proof the real depth + normal pre-pass is wired (GTAO's true source). */
   depth: z.boolean(),
   normal: z.boolean(),
+  /** Opt-in stages: godrays wires only if a shadow-casting sun was found; dof/outline
+   *  wire whenever enabled. All false unless explicitly turned on. */
+  godrays: z.boolean(),
+  dof: z.boolean(),
+  outline: z.boolean(),
   /** The resolved preset the pipeline was built from. */
   preset: z.unknown(),
 });
@@ -82,6 +108,7 @@ export function registerRenderSkills(registry: SkillRegistry): void {
       }
       const pipeline: PostPipeline = buildPostPipeline(renderer, ctx.world.scene, ctx.world.camera, {
         ao: input.ao, bloom: input.bloom, grade: input.grade,
+        godrays: input.godrays, dof: input.dof, outline: input.outline,
       });
       // Stash the live pipeline on the world so the render loop can drive it.
       ctx.world.post = pipeline;
@@ -95,6 +122,9 @@ export function registerRenderSkills(registry: SkillRegistry): void {
         grade: pipeline.preset.grade.enabled,
         depth: pipeline.depthNode !== undefined && pipeline.depthNode !== null,
         normal: pipeline.normalNode !== undefined && pipeline.normalNode !== null,
+        godrays: pipeline.godraysNode !== null && pipeline.godraysNode !== undefined,
+        dof: pipeline.preset.dof.enabled,
+        outline: pipeline.preset.outline.enabled,
         preset: pipeline.preset,
       };
     },

@@ -36,6 +36,15 @@ const T = (THREE as any).TSL;
 const AO = (THREE as any).ao as (depth: unknown, normal: unknown, camera: unknown) => any;
 // deno-lint-ignore no-explicit-any
 const BLOOM = (THREE as any).bloom as (node: unknown, strength?: number, radius?: number, threshold?: number) => any;
+// Phase-4 additions (opt-in stages). godrays raymarches the SUN's shadow map for
+// volumetric crepuscular scatter; dof is a depth-driven bokeh blur; sobel is a
+// full-scene edge operator we use for a cel ink outline.
+// deno-lint-ignore no-explicit-any
+const GODRAYS = (THREE as any).godrays as (depth: unknown, camera: unknown, light: unknown) => any;
+// deno-lint-ignore no-explicit-any
+const DOF = (THREE as any).dof as (node: unknown, viewZ: unknown, focus?: unknown, focal?: unknown, bokeh?: unknown) => any;
+// deno-lint-ignore no-explicit-any
+const SOBEL = (THREE as any).sobel as (node: unknown) => any;
 
 /** GTAO (ambient-occlusion) parameters. Defaults are tuned SUBTLE — short radius,
  *  gentle intensity — so the AO reads as contact shadow where geometry meets the
@@ -79,11 +88,47 @@ export interface GradePreset {
   saturation: number;
 }
 
+/** Volumetric god-rays (crepuscular scatter) parameters. Raymarches the sun's
+ *  shadow map, so the SUN must cast shadows (the render baseline's does). */
+export interface GodraysPreset {
+  /** Scatter strength accumulated per raymarch step. */
+  density: number;
+  /** Clamp on accumulated density (keeps rays from blowing out). */
+  maxDensity: number;
+  /** Falloff of the scatter over distance. */
+  distanceAttenuation: number;
+  /** Raymarch step count (quality vs. cost). */
+  raymarchSteps: number;
+  /** Overall additive strength when composited over the scene (our dial). */
+  intensity: number;
+}
+
+/** Depth-of-field bokeh. Distances are WORLD units along the camera look axis.
+ *  Low value for a top-down map overview; meant for hero / eye-level shots. */
+export interface DofPreset {
+  /** Distance along the look direction that is perfectly in focus. */
+  focusDistance: number;
+  /** How far past the focus plane before fully out of focus. */
+  focalLength: number;
+  /** Artistic bokeh size multiplier. */
+  bokehScale: number;
+}
+
+/** Full-scene Sobel edge → cel ink outline. A style choice (can read noisy on
+ *  organic terrain), so opt-in. */
+export interface OutlinePreset {
+  /** Darkening applied where the edge operator fires (0 = none, 1 = black lines). */
+  strength: number;
+}
+
 /** The full post preset. Each stage can be toggled off independently. */
 export interface PostPreset {
   ao: AoPreset & { enabled: boolean };
   bloom: BloomPreset & { enabled: boolean };
   grade: GradePreset & { enabled: boolean };
+  godrays: GodraysPreset & { enabled: boolean };
+  dof: DofPreset & { enabled: boolean };
+  outline: OutlinePreset & { enabled: boolean };
 }
 
 /** "Grounded Stylized Realism" — the subtle default. */
@@ -110,6 +155,26 @@ export const DEFAULT_POST_PRESET: PostPreset = {
     contrast: 1.05,
     saturation: 1.08,
   },
+  // Opt-in stages: OFF by default so the shipped "Grounded Stylized Realism" look
+  // (and every demo built on it) is unchanged. Callers enable per scene.
+  godrays: {
+    enabled: false,
+    density: 0.7,
+    maxDensity: 0.5,
+    distanceAttenuation: 2.0,
+    raymarchSteps: 60,
+    intensity: 0.9,
+  },
+  dof: {
+    enabled: false,
+    focusDistance: 40,
+    focalLength: 60,
+    bokehScale: 2.0,
+  },
+  outline: {
+    enabled: false,
+    strength: 0.6,
+  },
 };
 
 /** Deep-merge a partial preset onto the default (per-stage), so callers can tweak
@@ -120,6 +185,9 @@ export function resolvePostPreset(override?: DeepPartial<PostPreset>): PostPrese
     ao: { ...d.ao, ...(override?.ao ?? {}) },
     bloom: { ...d.bloom, ...(override?.bloom ?? {}) },
     grade: { ...d.grade, ...(override?.grade ?? {}) },
+    godrays: { ...d.godrays, ...(override?.godrays ?? {}) },
+    dof: { ...d.dof, ...(override?.dof ?? {}) },
+    outline: { ...d.outline, ...(override?.outline ?? {}) },
   };
 }
 
@@ -140,6 +208,8 @@ export interface PostPipeline {
   aoNode: unknown;
   /** The bloom node (null if bloom disabled). */
   bloomNode: unknown;
+  /** The godrays node (null if disabled or no shadow-casting sun was found). */
+  godraysNode: unknown;
   /** The resolved preset this pipeline was built from. */
   preset: PostPreset;
   /** Render one frame through the post stack (replaces renderer.render). */
@@ -206,6 +276,41 @@ export function buildPostPipeline(
     composited = litColor.add(bloomNode);
   }
 
+  // ── 2b. GODRAYS — volumetric crepuscular scatter from the sun ────────────────
+  // The sun = the first shadow-casting directional light; godrays raymarches its
+  // shadow map (allocated on the first render — shadow.camera, which the node needs
+  // at construction, already exists). Composited additively like bloom.
+  // deno-lint-ignore no-explicit-any
+  let godraysNode: any = null;
+  if (preset.godrays.enabled) {
+    // deno-lint-ignore no-explicit-any
+    let sun: any = null;
+    // deno-lint-ignore no-explicit-any
+    (scene as any).traverse?.((o: any) => { if (!sun && o?.isDirectionalLight && o.castShadow && o.shadow?.camera) sun = o; });
+    if (sun) {
+      godraysNode = GODRAYS(depthNode, camera, sun);
+      godraysNode.density.value = preset.godrays.density;
+      godraysNode.maxDensity.value = preset.godrays.maxDensity;
+      godraysNode.distanceAttenuation.value = preset.godrays.distanceAttenuation;
+      godraysNode.raymarchSteps.value = preset.godrays.raymarchSteps;
+      composited = composited.add(godraysNode.mul(T.float(preset.godrays.intensity)));
+    }
+  }
+
+  // ── 2c. DEPTH OF FIELD — depth-driven bokeh (blurs the composited colour) ────
+  if (preset.dof.enabled) {
+    const viewZ = scenePass.getViewZNode();
+    composited = DOF(composited, viewZ, T.float(preset.dof.focusDistance), T.float(preset.dof.focalLength), T.float(preset.dof.bokehScale));
+  }
+
+  // ── 2d. OUTLINE — full-scene Sobel cel edge (darkens where the edge fires) ───
+  if (preset.outline.enabled) {
+    const edge = SOBEL(composited);
+    // Sobel output is a grayscale edge magnitude; use .r and darken the colour there.
+    const ink = T.float(1.0).sub(edge.r.mul(T.float(preset.outline.strength))).max(0.0);
+    composited = composited.mul(T.vec4(T.vec3(ink), 1.0));
+  }
+
   // ── 3. GRADE — gentle HDR exposure / contrast / saturation ───────────────────
   // Applied BEFORE the pipeline's tone transform (post.outputColorTransform keeps
   // the renderer's ACES tonemap + sRGB convert at the very end), so this is cohesion
@@ -232,6 +337,7 @@ export function buildPostPipeline(
     normalNode,
     aoNode,
     bloomNode,
+    godraysNode,
     preset,
     render(): void {
       // Refresh the camera's world matrix from the LIVE transform BEFORE the scene
