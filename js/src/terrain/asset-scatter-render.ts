@@ -43,6 +43,10 @@ export function buildAssetInstancedMeshes(
      *  sphere is correct. Omit (the default) for scatters that are already spatially bounded (per-region
      *  props, per-building dressing) — one bucket, byte-identical mesh count/order to no chunking. */
     chunkSize?: number;
+    /** DEAD (blighted) variant: render a bare, colour-drained tree — drop the leaf-card nodes
+     *  (alphaTest MASK foliage) entirely and grey the surviving bark. Used by vegetation.scatter for
+     *  instances that fall inside a painted caesura, so the canopy dies with the ground. */
+    dead?: boolean;
   },
 ): THREE.InstancedMesh[] {
   if (instances.length === 0) return [];
@@ -130,9 +134,29 @@ export function buildAssetInstancedMeshes(
     // erodes to bare trunks — a forest reads DEAD from any aerial/orbit view. Lower the test on
     // a CLONE (render-side only; never mutates the shared/loaded asset material) so distant
     // foliage survives mipping. 0.08 keeps edges acceptable at eye level.
-    const instMaterial = ((material as unknown as { alphaTest?: number }).alphaTest ?? 0) > 0.1
-      ? (() => { const c = (material as unknown as { clone(): THREE.Material }).clone(); (c as unknown as { alphaTest: number }).alphaTest = 0.08; return c; })()
-      : material;
+    const isFoliage = ((material as unknown as { alphaTest?: number }).alphaTest ?? 0) > 0.1;
+    // DEAD variant: the caesura kills the canopy. Drop the leaf-card nodes entirely (a bare tree) and
+    // drain the surviving bark to a desaturated ash-grey — matching the ground's blight drain.
+    if (opts?.dead === true && isFoliage) continue;
+    let instMaterial: THREE.Material;
+    if (opts?.dead === true) {
+      const c = (material as unknown as { clone(): THREE.Material }).clone() as unknown as { color?: THREE.Color; emissive?: THREE.Color; roughness?: number };
+      c.color?.setRGB(0.33, 0.30, 0.26);
+      c.emissive?.setRGB(0, 0, 0);
+      if (c.roughness !== undefined) c.roughness = 1;
+      instMaterial = c as unknown as THREE.Material;
+    } else if (isFoliage) {
+      // ALPHA-CUTOUT FOLIAGE AT DISTANCE: leaf-card materials bake alphaMode MASK (cutoff ~0.3).
+      // Mip-averaged alpha falls below that cutoff a few hundred metres out, so a whole canopy
+      // erodes to bare trunks — a forest reads DEAD from any aerial/orbit view. Lower the test on
+      // a CLONE (render-side only; never mutates the shared/loaded asset material) so distant
+      // foliage survives mipping. 0.08 keeps edges acceptable at eye level.
+      const c = (material as unknown as { clone(): THREE.Material }).clone();
+      (c as unknown as { alphaTest: number }).alphaTest = 0.08;
+      instMaterial = c;
+    } else {
+      instMaterial = material;
+    }
     for (const bucket of buckets) {
       const inst = new THREE.InstancedMesh(geometry, instMaterial, bucket.length);
       for (let i = 0; i < bucket.length; i++) {

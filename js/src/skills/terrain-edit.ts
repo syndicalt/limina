@@ -15,6 +15,7 @@ import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 import { applyElevationColors, applyPaintOverlay, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
 import { TileGrass } from "../terrain/grass-render.ts";
+import { buildBlightMist } from "../mist.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
@@ -27,7 +28,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: TileGrass; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: TileGrass; blightMist?: MeshLike; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -394,6 +395,13 @@ export function registerTerrainEditSkills(
         const clears = vegetationClears.get(entity) ?? [];
         clears.push(() => { layer.grass?.refreshAll(); });
         vegetationClears.set(entity, clears);
+      }
+      // BLIGHT MIST (render-only, like grass/water): a low-lying, gravity-aware putrid miasma pooling in
+      // the caesura's hollows. NOT peek-gated — from the overview it reads as a sickly haze marking the
+      // blight (and it's a single mesh). Recomputed on replay from the recorded map's blight mask.
+      if (ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function" && tile.blight !== undefined) {
+        const mist = buildBlightMist(tile);
+        if (mist !== undefined) { scene.add(mist); layer.blightMist = mist as unknown as MeshLike; }
       }
       ctx.emit("terrain.created", { entity, size: input.size, resolution: n, ...(mapHash !== undefined ? { mapHash } : {}) });
       return { entity, ...(mapHash !== undefined ? { mapHash } : {}) };

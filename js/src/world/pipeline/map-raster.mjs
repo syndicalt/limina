@@ -284,6 +284,17 @@ export function rasterizeWorldMap(worldMap, opts) {
   const landPolys = projectLandPolys(worldMap);
   const reliefs = projectRelief(worldMap);
   const biomes = projectBiomes(worldMap);
+  // Blight is a DEPTH gradient, not a flat mask — the caesura is mild at its frontier and grows
+  // oppressive toward its core (Corruption Index / periphery→heart). Precompute each blight region's
+  // core depth (≈ its inscribed radius, measured at the centroid) so the per-cell mask can normalise
+  // inward distance → ~0 at the edge, →1 at the core.
+  for (const b of biomes) {
+    if (b.biome !== "blight") continue;
+    let cx = 0, cz = 0;
+    for (const [x, z] of b.ring) { cx += x; cz += z; }
+    cx /= b.ring.length; cz /= b.ring.length;
+    b.coreDepth = Math.max(1, distToRing(cx, cz, b.ring));
+  }
   const waterways = projectWaterways(worldMap);
   // PRECEDENCE: a painted elevation raster (reliefGrid) REPLACES the base shore-lerp + vector
   // relief hints entirely — the painted surface is authoritative. Everything downstream of the
@@ -406,10 +417,16 @@ export function rasterizeWorldMap(worldMap, opts) {
       const edgeBand = Math.max(3, size * 0.03);
       for (const b of biomes) {
         if (!pointInRing(wx, wz, b.ring)) continue;
-        // Blight is an overlay, not a paint material: flag the mask (the render drains this cell's
-        // color) and let the underlying biome still win paintMat below, so the ground keeps its
-        // texture — just corrupted. Mirrors map-source.ts's streamed-tile blight channel.
-        if (b.biome === "blight") { blight[i] = 1; continue; }
+        // Blight is an OVERLAY (not a paint material) and a DEPTH gradient: intensity climbs from ~0 at
+        // the caesura's frontier to ~1 toward its core (inward distance / coreDepth), so the render's
+        // colour-drain + mist + dead-vegetation all intensify with depth — a mild edge, an oppressive
+        // heart. The underlying biome still wins paintMat, so the ground keeps its texture, just
+        // corrupted. (An authored per-region Corruption Index ceiling is a future painter hook.)
+        if (b.biome === "blight") {
+          const inten = Math.min(1, distToRing(wx, wz, b.ring) / b.coreDepth);
+          if (inten > blight[i]) blight[i] = inten;
+          continue;
+        }
         const id = biomePaintId(b.biome);
         if (id === undefined) continue;
         const bd = distToRing(wx, wz, b.ring);

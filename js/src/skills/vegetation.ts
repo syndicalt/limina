@@ -155,6 +155,20 @@ export function registerVegetationSkills(
       const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
       if (layer === undefined) throw new Error("vegetation.scatter: no terrain layer — create one with terrain.create first");
 
+      // Per-instance BLIGHT lookup over the layer's caesura mask (nearest cell). A tree whose base sits
+      // inside painted blight renders DEAD (bare + colour-drained) — the canopy dies with the ground.
+      // 0 everywhere when the layer carries no blight, so a clean map scatters an all-living forest.
+      // Deterministic: the mask is a pure function of the recorded map, so replay re-splits identically.
+      const bt = layer.tile;
+      const blightGrid = bt.blight;
+      const blightAtWorld = (x: number, z: number): number => {
+        if (blightGrid === undefined) return 0;
+        const bx0 = bt.origin[0] - bt.scale[0] / 2, bz0 = bt.origin[2] - bt.scale[2] / 2;
+        const col = Math.max(0, Math.min(bt.ncols - 1, Math.round((x - bx0) / (bt.scale[0] / (bt.ncols - 1)))));
+        const row = Math.max(0, Math.min(bt.nrows - 1, Math.round((z - bz0) / (bt.scale[2] / (bt.nrows - 1)))));
+        return blightGrid[row * bt.ncols + col];
+      };
+
       // Resolve the archetype palette: an inline `assets` palette wins; otherwise the requested
       // species are looked up in the project VEGETATION PACK (tree-pack.json). The engine bakes NO
       // tree ids — with neither an inline palette nor a pack binding, the skill errors (no silent
@@ -253,11 +267,20 @@ export function registerVegetationSkills(
             // intersect the frustum, defeating culling even once the sphere itself is correct (see
             // asset-scatter-render.ts's chunkSize doc). Other buildAssetInstancedMeshes callers
             // (asset.scatter props, village dressing) are already spatially bounded and don't opt in.
-            for (const mesh of buildAssetInstancedMeshes(root, list, { chunkSize: 96 })) {
-              (mesh as unknown as InstMesh).castShadow = true;
-              (mesh as unknown as InstMesh).receiveShadow = true;
-              scene!.add(mesh);
-              meshes.push(mesh);
+            // Split this archetype's instances by the caesura mask: living trees mount whole, blighted
+            // ones mount DEAD (bare + drained). A clean map has no blight → the `dead` list is empty and
+            // the mount is byte-identical to before.
+            const living: AssetInstance[] = [];
+            const dead: AssetInstance[] = [];
+            for (const inst of list) (blightAtWorld(inst.x, inst.z) > 0.5 ? dead : living).push(inst);
+            for (const variant of [{ set: living, dead: false }, { set: dead, dead: true }]) {
+              if (variant.set.length === 0) continue;
+              for (const mesh of buildAssetInstancedMeshes(root, variant.set, { chunkSize: 96, ...(variant.dead ? { dead: true } : {}) })) {
+                (mesh as unknown as InstMesh).castShadow = true;
+                (mesh as unknown as InstMesh).receiveShadow = true;
+                scene!.add(mesh);
+                meshes.push(mesh);
+              }
             }
           } catch (err) {
             ctx.emit("vegetation.mount_failed", { archetype: id, message: err instanceof Error ? err.message : String(err) });
