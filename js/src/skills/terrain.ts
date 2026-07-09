@@ -26,7 +26,7 @@ import type { TerrainSource, TerrainTile, TileRequest } from "../terrain/types.t
 import { ProceduralTerrainSource, TILE_SIZE } from "../terrain/procedural.ts";
 import { MapTerrainSource } from "../terrain/map-source.ts";
 import { SwappableTerrainSource } from "../terrain/swappable.ts";
-import { WorldMapSchema, verifyWorldMap } from "../world/worldmap.ts";
+import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import { TERRAIN_TYPE_NAMES, terrainTypeHints, type RegionBounds, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
@@ -456,10 +456,11 @@ export function registerTerrainSkills(
       } catch (e) {
         throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
       }
-      // Zod-parse as WorldMap v1 (THROWS on malformed shape), then verify the embedded
-      // content hash with the pure-JS sha256 path — a mismatch THROWS: maps are load-
+      // Zod-parse as WorldMap (THROWS on malformed shape), forward-migrated to the current
+      // version first (migrateWorldMap — a no-op for an already-current map), then verify the
+      // embedded content hash with the pure-JS sha256 path — a mismatch THROWS: maps are load-
       // bearing (deliberately stricter than asset.place's warn-not-throw).
-      const worldMap = WorldMapSchema.parse(parsedJson);
+      const worldMap = WorldMapSchema.parse(migrateWorldMap(parsedJson));
       const verify = verifyWorldMap(worldMap);
       if (!verify.ok) {
         throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) — refusing a tampered/corrupted map`);

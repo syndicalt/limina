@@ -191,13 +191,51 @@ export interface WorldMapVerifyResult {
 }
 
 /**
+ * Forward-migrate a raw parsed WorldMap object (JSON.parse output, not yet schema-validated) up
+ * to WORLD_MAP_VERSION, returning something ready for WorldMapSchema.parse. Structured as a
+ * version-step LADDER — one `if (version === N)` rung per historical version — so a future v2
+ * lands as one more rung, not a rewrite:
+ *
+ *   if (version === 1) { map = { ...map, version: 2, ...newV2Defaults }; }
+ *   if (version === 2) { map = { ...map, version: 3, ... }; }
+ *   // falls through to WORLD_MAP_VERSION
+ *
+ * TODAY WORLD_MAP_VERSION is 1 and there is no rung below it (v1 is the IR's origin version — no
+ * v0 WorldMap ever shipped), so this function is a HASH-IDENTICAL NO-OP for every input it
+ * recognizes as current or ladder-eligible: `raw` is returned BY REFERENCE, unmodified — no key
+ * reordering, no field defaulting, nothing that could perturb worldMapContentHash. A
+ * missing/non-numeric/unrecognized-lower `version` (garbage, or a hypothetical v0) is likewise
+ * passed through untouched rather than guessed at — WorldMapSchema.parse is left to reject it,
+ * so a non-map file can never be silently coerced into looking like one.
+ *
+ * Mirrors tools/design/map-doc.mjs's migrateMapDoc (the map DOC's migration-on-read) in shape,
+ * but not in spirit: a map DOC is hand-authored and gets defaulting/repair on read. A WorldMap is
+ * machine-compiled — an out-of-shape one is a real bug to surface via the schema, never to paper
+ * over here.
+ */
+export function migrateWorldMap(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const map = raw as Record<string, unknown>;
+  if (typeof map.version !== "number") return raw;
+
+  // Ladder rungs land here as WORLD_MAP_VERSION grows, e.g.:
+  //   if (map.version === 1) map = { ...map, version: 2, newField: defaultFor(map) };
+  // None exist yet: v1 is the origin version, so every currently-possible input already at
+  // WORLD_MAP_VERSION (or below it with no rung defined) falls through unchanged.
+
+  return map;
+}
+
+/**
  * zod-parse `parsed` as a WorldMap, recompute its content hash, and compare against the embedded
  * provenance.contentHash. Reports {ok, expected, actual} — this function never throws on a hash
  * mismatch (a malformed/non-WorldMap `parsed` still throws via WorldMapSchema.parse, since there
  * is no hash to compare in that case); whether a mismatch is fatal is the CALLER's choice.
+ * Migrates forward (see migrateWorldMap) before validating, so an older-version map on disk keeps
+ * loading as the IR evolves.
  */
 export function verifyWorldMap(parsed: unknown): WorldMapVerifyResult {
-  const map = WorldMapSchema.parse(parsed);
+  const map = WorldMapSchema.parse(migrateWorldMap(parsed));
   const expected = map.provenance.contentHash;
   const actual = worldMapContentHash(map);
   return { ok: expected === actual, expected, actual };

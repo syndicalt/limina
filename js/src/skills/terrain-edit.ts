@@ -19,7 +19,7 @@ import { buildBlightMist } from "../mist.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
-import { WorldMapSchema, verifyWorldMap } from "../world/worldmap.ts";
+import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -272,9 +272,11 @@ export function registerTerrainEditSkills(
         } catch (e) {
           throw new Error(`terrain.create: map asset '${g.mapAssetId}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
         }
-        // Zod-parse as WorldMap v1 — THROWS on a malformed/non-WorldMap shape. Maps are
+        // Zod-parse as WorldMap — THROWS on a malformed/non-WorldMap shape. Maps are
         // load-bearing (unlike a cosmetic GLB), so a parse failure must fail loudly, not warn.
-        const worldMap = WorldMapSchema.parse(parsedJson);
+        // Forward-migrated to the current version first (migrateWorldMap — a no-op for an
+        // already-current map) so an older-version map on disk keeps loading as the IR evolves.
+        const worldMap = WorldMapSchema.parse(migrateWorldMap(parsedJson));
         const verify = verifyWorldMap(worldMap);
         if (!verify.ok) {
           throw new Error(`terrain.create: map asset '${g.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) — refusing a tampered/corrupted map`);
