@@ -36,7 +36,20 @@ try {
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
     window.__log.push("PROF runLive() build " + (performance.now() - __t0).toFixed(0) + "ms");
     if (running && running.terrainStream) window.__log.push("terrainStream mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending());
-    if (running && running.authoringFailures && running.authoringFailures.length) window.__log.push("authoringFailures=" + JSON.stringify(running.authoringFailures).slice(0, 500));
+    // Structured authoring failures (untruncated) for the render driver, so a broken scene fails
+    // LOUD instead of silently rendering a groundless ocean. A failed STRUCTURAL command (terrain.create
+    // is the ground everything else sits on) invalidates the whole peek — flag it so engine-shots exits
+    // non-zero rather than passing off a blank frame as success.
+    window.__authoringFailures = (running && running.authoringFailures) || [];
+    window.__ranNull = running === null;
+    if (window.__authoringFailures.length) {
+      window.__log.push("authoringFailures=" + JSON.stringify(window.__authoringFailures).slice(0, 500));
+      const cmds = scene.commands || [];
+      const STRUCTURAL = new Set(["terrain.create"]);
+      window.__structuralFailures = window.__authoringFailures
+        .map((f) => ({ tool: (cmds[f.index] || {}).tool, message: f.message }))
+        .filter((f) => STRUCTURAL.has(f.tool));
+    } else { window.__structuralFailures = []; }
     await new Promise((r) => setTimeout(r, 3000));
     // A map-streamed world fills its window at ≤2 mounts/frame — wait (bounded) for the pending
     // queue to drain so the screenshot shows the CONVERGED window, not a half-filled fill.

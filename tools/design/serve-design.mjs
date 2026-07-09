@@ -6,7 +6,7 @@
 //
 //   node tools/design/serve-design.mjs <vault-dir> [port]
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
@@ -49,6 +49,36 @@ const MIME = {
 
 const vaultDir = resolve(process.argv[2] || process.cwd());
 const port = Number(process.argv[3]) || 4321;
+
+// The 3D peek renders through the PREBUILT browser bundle editor/vendor/limina-runtime.js. When a
+// js/src schema (e.g. the WorldMap IR) changes but the bundle isn't rebuilt, the stale bundle rejects
+// the newer compiled map and terrain.create fails — the peek renders only ocean (a real bug that cost
+// hours). Self-heal: before every peek, rebuild the bundle if any js/src file is newer than it. Cheap
+// (esbuild ~100ms) and idempotent; if the rebuild fails we log and render anyway (fail-loud downstream
+// in engine-shots then surfaces the real error instead of a silent blank).
+const EDITOR_BUNDLE = join(LIMINA_HOME, "editor", "vendor", "limina-runtime.js");
+function newestMtimeUnder(dir) {
+  let newest = 0;
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|mjs|js)$/.test(e.name)) { const m = statSync(p).mtimeMs; if (m > newest) newest = m; }
+    }
+  };
+  try { walk(dir); } catch { /* best-effort */ }
+  return newest;
+}
+function ensureFreshEditorBundle() {
+  const bundleMtime = existsSync(EDITOR_BUNDLE) ? statSync(EDITOR_BUNDLE).mtimeMs : 0;
+  const srcMtime = newestMtimeUnder(join(LIMINA_HOME, "js", "src"));
+  if (srcMtime <= bundleMtime) return;
+  console.error("[peek] editor bundle is stale (js/src is newer) — rebuilding via bundle:editor…");
+  const r = spawnSync("npm", ["--prefix", join(LIMINA_HOME, "js"), "run", "bundle:editor"], { encoding: "utf8" });
+  if (r.status !== 0) console.error("[peek] bundle:editor FAILED: " + String(r.stderr || r.stdout || "").slice(-400));
+  else console.error("[peek] editor bundle rebuilt.");
+}
 
 // The expert agents talk through the model. Key from the environment or the project .env.
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
@@ -454,6 +484,8 @@ createServer((req, res) => {
           // — runLive + terrain.create source:"map", ANGLE GL, never swiftshader) as an async job.
           // GPU CAUTION (failure mode #14): the UI warns the user to close the 3D editor first;
           // we also report whether the editor host port is up so the client can warn harder.
+          // Self-heal a stale render bundle before we compile+render (see ensureFreshEditorBundle).
+          ensureFreshEditorBundle();
           const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");

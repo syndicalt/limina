@@ -27,6 +27,11 @@ await page.goto(`http://localhost:${port}/tools/preview/engine-authored.html${sc
 try { await page.waitForFunction("window.__done===true", { timeout: 180000 }); } catch { console.error("TIMEOUT (froze?)"); }
 for (const l of await page.evaluate("window.__log||[]")) console.error("LOG: "+l);
 for (const e of await page.evaluate("window.__err||[]")) console.error("ERR: "+e);
+// FAIL LOUD: a peek whose STRUCTURAL command (terrain.create — the ground) failed, or whose engine
+// returned null, is INVALID. Frames are still written for debugging, but we exit non-zero so callers
+// (serve-design /api/peek) report an error instead of passing off a blank-ocean render as success.
+const structuralFailures = await page.evaluate("window.__structuralFailures||[]");
+const ranNull = await page.evaluate("window.__ranNull===true");
 const shots = Number(process.argv[2] || 4);
 const gap = Number(process.argv[3] || 7000);
 // EXACT-YAW mode when the page exposes __setYaw (engine-authored.html): place each frame at
@@ -45,3 +50,12 @@ for (let i = 1; i <= shots; i++) {
   if (!exactYaw && i < shots) await page.waitForTimeout(gap);
 }
 await b.close(); srv.close();
+if (structuralFailures.length > 0) {
+  console.error("FATAL: peek invalid — structural command(s) failed: " +
+    structuralFailures.map((f) => `${f.tool}: ${String(f.message).replace(/\s+/g, " ").slice(0, 160)}`).join(" | "));
+  console.error("  frames were written for debugging, but the scene has no ground — refusing to report success.");
+  process.exitCode = 1;
+} else if (ranNull) {
+  console.error("FATAL: peek invalid — runLive returned null (the engine failed to build the scene).");
+  process.exitCode = 1;
+}
