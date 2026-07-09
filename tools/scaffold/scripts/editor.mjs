@@ -7,9 +7,9 @@
 //  coding agent uses to coordinate builders into the running world.
 // ---------------------------------------------------------------------------
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -179,18 +179,66 @@ export function editorHostEnvironment({ projectId, editorPort, uiPort, token, pr
   };
 }
 
+function newestSourceMtime(root, fsApi) {
+  let newest = 0;
+  const visit = (dir) => {
+    for (const entry of fsApi.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (/\.(?:ts|mjs|js)$/.test(entry.name)) newest = Math.max(newest, fsApi.statSync(path).mtimeMs);
+    }
+  };
+  visit(root);
+  return newest;
+}
+
+/** Ensure ignored editor bundles exist and are newer than browser-reachable source. */
+export function ensureFreshEditorBundles(home, dependencies = {}) {
+  const fsApi = {
+    existsSync: dependencies.existsSync ?? existsSync,
+    readdirSync: dependencies.readdirSync ?? readdirSync,
+    statSync: dependencies.statSync ?? statSync,
+  };
+  const run = dependencies.spawnSync ?? spawnSync;
+  const sourceRoot = join(home, "js", "src");
+  const packageJson = join(home, "js", "package.json");
+  const bundles = [
+    join(home, "editor", "vendor", "limina-runtime.js"),
+    join(home, "editor", "vendor", "sim-worker-entry.js"),
+  ];
+  if (!fsApi.existsSync(sourceRoot) || !fsApi.existsSync(packageJson)) {
+    throw new Error(
+      `cannot build editor runtime: Limina source/build metadata is missing under ${join(home, "js")}. ` +
+      "Install a complete Limina release or set LIMINA_HOME to a source checkout.",
+    );
+  }
+  const sourceMtime = newestSourceMtime(sourceRoot, fsApi);
+  const stale = bundles.some((bundle) => !fsApi.existsSync(bundle) || fsApi.statSync(bundle).mtimeMs < sourceMtime);
+  if (!stale) return { rebuilt: false, bundles };
+
+  const result = run("npm", ["--prefix", join(home, "js"), "run", "bundle:editor"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    const detail = String(result.error?.message ?? result.stderr ?? result.stdout ?? "unknown build failure").trim();
+    throw new Error(
+      `failed to build editor runtime with 'npm --prefix ${join(home, "js")} run bundle:editor': ${detail}. ` +
+      "Install the Limina JavaScript dependencies and retry.",
+    );
+  }
+  const missing = bundles.filter((bundle) => !fsApi.existsSync(bundle));
+  if (missing.length > 0) {
+    throw new Error(`editor bundle build reported success but did not create: ${missing.join(", ")}`);
+  }
+  return { rebuilt: true, bundles };
+}
+
 async function main() {
   const { bin, home } = resolveLimina();
   const { projectId: id } = await loadEditorProjectConfig(home);
   const stateDir = join(PROJECT_DIR, ".limina");
   mkdirSync(stateDir, { recursive: true });
-  const bundle = join(home, "editor", "vendor", "limina-runtime.js");
-  if (!existsSync(bundle)) {
-    fail(
-      `missing editor runtime bundle: ${bundle}\n` +
-      "  Build it first:\n" +
-      `      cd ${join(home, "js")} && npm run bundle:editor`,
-    );
+  try { ensureFreshEditorBundles(home); } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
 
   const editorPort = parsePort(process.env.LIMINA_EDITOR_PORT, DEFAULT_EDITOR_PORT, "LIMINA_EDITOR_PORT");

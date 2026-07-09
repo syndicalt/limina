@@ -35,6 +35,8 @@ import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { applyAuthorCommandsIsolated, type AuthorCommandFailure } from "../kernel/apply-isolated.ts";
 import { partitionViewportCommands } from "./author-command-policy.ts";
+import { AuthoringProjectBinding } from "./authoring-project.ts";
+import { registerBrowserAuthoringRuntime } from "./authoring-runtime.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
@@ -52,6 +54,7 @@ const DEFAULT_GRANTS: ReadonlySet<string> = new Set([
   "world.write", "world.read", "terrain.write", "terrain.read", "asset.write", "material.write",
   "design.write", "design.read",
   "audio.write", "camera.write", "animation.write",
+  "authoring.read", "authoring.write",
 ]);
 
 /** One `loadWorld` authoring command. A `skill` command RE-INVOKES a recorded tool
@@ -102,6 +105,8 @@ export interface SimWorkerCreateOptions {
   inputBuffer?: SharedArrayBuffer | ArrayBuffer;
   /** Asset bytes prefetched by the main thread before the worker handshake. */
   assets?: Iterable<{ id: string; bytes: Uint8Array }>;
+  /** Project authority for replaying authoring.commit commands through the scene adapter. */
+  authoringProjectId?: string;
   /** Permissions `loadWorld` invokes authoring skills with (default DEFAULT_GRANTS). */
   grants?: Iterable<string>;
   width?: number;
@@ -227,6 +232,7 @@ export class SimWorkerController {
   private readonly entityTable: EntityTable;
   private readonly grants: ReadonlySet<string>;
   private readonly sessionId = "ses_sim_worker";
+  private readonly authoringBinding: AuthoringProjectBinding;
 
   private tickCount = 0;
   private disposed = false;
@@ -245,6 +251,7 @@ export class SimWorkerController {
     registry: SkillRegistry;
     entities: EntityTable;
     grants: ReadonlySet<string>;
+    authoringBinding: AuthoringProjectBinding;
   }) {
     this.physics = args.physics;
     this.transformStorage = args.transforms;
@@ -257,6 +264,7 @@ export class SimWorkerController {
     this.registry = args.registry;
     this.entityTable = args.entities;
     this.grants = args.grants;
+    this.authoringBinding = args.authoringBinding;
   }
 
   /** Build the controller: bring up wasm Rapier (M1), allocate/join the transform
@@ -304,11 +312,15 @@ export class SimWorkerController {
     const assets = new AssetRegistry(ops);
     for (const [id, bytes] of assetBytes) assets.seed(id, bytes);
     const core = registerCoreSkills(registry, { assets });
+    const authoringBinding = new AuthoringProjectBinding((projectId) => {
+      registerBrowserAuthoringRuntime(registry, world, projectId);
+    }, opts.authoringProjectId);
 
     return new SimWorkerController({
       physics, transforms, inputRing, statusBuffer, statusShared,
       world, core, registry, entities,
       grants: opts.grants !== undefined ? new Set(opts.grants) : DEFAULT_GRANTS,
+      authoringBinding,
     });
   }
 
@@ -321,6 +333,7 @@ export class SimWorkerController {
    *  try/catches every handler). After authoring, the initial body transforms are synced into the
    *  transform SAB so the render thread frames the world before the first tick. */
   async loadWorldIsolated(commands: AuthorCommand[]): Promise<{ results: unknown[]; failures: AuthorCommandFailure[] }> {
+    this.authoringBinding.ensure(commands);
     const viewportBatch = partitionViewportCommands(commands);
     const outcome = await applyAuthorCommandsIsolated(this.registry, this.world, viewportBatch.commands, {
       sessionId: this.sessionId,
@@ -531,6 +544,7 @@ type InitMessage = {
   inputBuffer?: SharedArrayBuffer | ArrayBuffer;
   commands?: AuthorCommand[];
   assets?: { id: string; bytes: Uint8Array }[];
+  authoringProjectId?: string;
   hz?: number;
 };
 type StepMessage = { type: "step" };
@@ -582,7 +596,13 @@ export function installSimWorker(scope: WorkerScopeLike): void {
     void (async (): Promise<void> => {
       if (msg.type === "init") {
         const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
-        controller = await SimWorkerController.create({ rapier, sab: msg.sab, inputBuffer: msg.inputBuffer, assets: msg.assets });
+        controller = await SimWorkerController.create({
+          rapier,
+          sab: msg.sab,
+          inputBuffer: msg.inputBuffer,
+          assets: msg.assets,
+          authoringProjectId: msg.authoringProjectId,
+        });
         if (msg.commands !== undefined) {
           // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
           // aborting the handshake — the worker still replies `ready` and self-drives.

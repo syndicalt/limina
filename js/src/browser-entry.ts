@@ -48,6 +48,9 @@ import { SharedTransformStorage } from "./browser/sab-transforms.ts";
 import { InputRingBuffer } from "./browser/sab-ringbuffer.ts";
 import { FrameInterpolator, type TransformStore } from "./browser/frame-interpolator.ts";
 import type { AuthorCommand } from "./browser/sim-worker.ts";
+import { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browser/authoring-project.ts";
+import { registerBrowserAuthoringRuntime } from "./browser/authoring-runtime.ts";
+export { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browser/authoring-project.ts";
 import {
   composeAuthoringOps,
   crossOriginIsolatedAvailable,
@@ -548,7 +551,7 @@ export interface RunningLive {
 //     CLIENT's own view window stays independent: the view stream never records anything, and it
 //     treats recorded-region tiles as externally owned (reconciled right after the apply), so an
 //     authoritative window and the camera window coexist without double-mounting.
-const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint", "catalog.publish", "asset.request", "world.streamFollow"]);
+const LIVE_IN_PLACE_SKILLS = new Set(["authoring.commit", "ecs.updateComponent", "scene.moveEntity", "three.setMaterial", "terrain.deform", "terrain.paint", "catalog.publish", "asset.request", "world.streamFollow"]);
 // Structural adds applied INCREMENTALLY on the live scene (no reboot) — including the GLB-mounting
 // skills. Their mid-session mount is safe because runLive PRE-WARMS the glTF parse cache (the tree
 // palette + the scene's assets) BEFORE renderer.init(), so parseGltfScene returns a synchronous clone
@@ -650,6 +653,7 @@ interface ReadyMessage { type: "ready"; buffer: SharedArrayBuffer | ArrayBuffer;
  *  never throws for an unsupported environment). */
 export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null> {
   const status = opts.onStatus ?? ((): void => {});
+  const initialAuthoringProjectId = authoringProjectIdForCommands(opts.commands);
 
   // ── Gate 1: cross-origin isolation (no COOP/COEP ⇒ no SharedArrayBuffer ⇒ no
   //    zero-copy worker bridge). Degrade gracefully — the caller shows a poster.
@@ -721,6 +725,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   worker.postMessage({
     type: "init",
     commands: opts.commands,
+    authoringProjectId: initialAuthoringProjectId,
     assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
   });
   const handshakeResult = await handshake.promise;
@@ -867,6 +872,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   };
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   const core = registerCoreSkills(registry, { assets: liveAssets });
+  const authoringBinding = new AuthoringProjectBinding((projectId) => {
+    registerBrowserAuthoringRuntime(registry, world, projectId);
+  }, initialAuthoringProjectId);
   const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
   const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
     return applyAuthorCommand(registry, world, cmd, {
@@ -1331,6 +1339,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     setOrbitAzimuth: (a: number): void => { angle = a; },
     authoringFailures: authoringFailures.length > 0 ? authoringFailures : undefined,
     applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
+      authoringBinding.ensure(cmds);
       const unsupportedStructuralTools: string[] = [];
       let structuralAdds = 0;
       for (const cmd of cmds) {

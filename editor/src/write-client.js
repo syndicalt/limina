@@ -1,9 +1,13 @@
 import { McpClient } from "./mcp-client.js";
+import { ProjectAuthoringGateway } from "./authoring-gateway.js";
 
 const state = {
   client: undefined,
   connecting: undefined,
+  generation: 0,
 };
+
+const authoring = new ProjectAuthoringGateway({ getClient: ensureWriter });
 
 const val = (id) => {
   const el = document.getElementById(id);
@@ -19,7 +23,8 @@ export async function ensureWriter() {
   if (writerIsOpen(state.client)) return state.client;
   state.client = undefined;
   if (state.connecting) return state.connecting;
-  state.connecting = (async () => {
+  const generation = state.generation;
+  const connecting = (async () => {
     const url = val("url");
     const authToken = val("auth-token") || undefined;
     if (!url) throw new Error("server URL is required");
@@ -32,16 +37,46 @@ export async function ensureWriter() {
         "builder.readWrite",
         authToken,
       );
+      if (generation !== state.generation) {
+        client.close();
+        throw new Error("writer connection was superseded");
+      }
+      client.onConnectionChange = (connected) => {
+        if (connected || state.client !== client) return;
+        state.client = undefined;
+        authoring.invalidateHead();
+      };
       state.client = client;
       return client;
     } catch (e) {
       try { client.close(); } catch { /* ignore */ }
       throw e;
     } finally {
-      state.connecting = undefined;
+      if (state.connecting === connecting) state.connecting = undefined;
     }
   })();
-  return state.connecting;
+  state.connecting = connecting;
+  return connecting;
+}
+
+export function commitSceneOperations(operations) {
+  return authoring.commit(operations);
+}
+
+export function undoSceneAuthoring() {
+  return authoring.undo();
+}
+
+export function redoSceneAuthoring() {
+  return authoring.redo();
+}
+
+export function refreshAuthoringHead() {
+  return authoring.refreshHead();
+}
+
+export function sceneAuthoringHistory() {
+  return authoring.historySnapshot();
 }
 
 export async function writeUpdate(entity, component, value) {
@@ -117,11 +152,14 @@ export async function destroyEntity(entity) {
 }
 
 export function resetWriter() {
+  const client = state.client;
+  state.generation++;
   state.client = undefined;
   state.connecting = undefined;
+  authoring.invalidateHead();
+  try { client?.close(); } catch { /* ignore */ }
 }
 
 export function closeWriter() {
-  try { state.client?.close(); } catch { /* ignore */ }
   resetWriter();
 }

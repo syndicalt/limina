@@ -23,9 +23,21 @@
 // - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { sceneTransformOperation } from "./authoring-gateway.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { McpClient } from "./mcp-client.js";
-import { destroyEntity, resetWriter, writeUpdate, deformTerrain, paintTerrain, fetchCatalog, placeAsset, requestAsset } from "./write-client.js";
+import {
+  commitSceneOperations,
+  destroyEntity,
+  deformTerrain,
+  fetchCatalog,
+  paintTerrain,
+  placeAsset,
+  redoSceneAuthoring,
+  requestAsset,
+  resetWriter,
+  undoSceneAuthoring,
+} from "./write-client.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -93,7 +105,7 @@ const PHYSICS_OP_FN = {
 
 // WorldCommand[] (recorder) -> AuthorCommand[] (loadWorld): drop the seed marker, remap physics op
 // names, pass skills through (actorId -> agentId). Mirror of worldlog.ts worldCommandsToAuthor.
-function toAuthorCommands(commands) {
+export function toAuthorCommands(commands) {
   const out = [];
   for (const cmd of commands) {
     if (cmd.kind === "physics") {
@@ -153,13 +165,7 @@ const state = {
   // TIME instead of interleaving into state.commands / the reboot flags.
   applyingBatch: false,
   queuedBatches: [],
-  // Undo trail (per-stroke). undoMarks = worldlog command counts at edit boundaries: undoMarks[0] is
-  // "before the first stroke", each later entry is "after a completed stroke". undoAt indexes the point
-  // currently in view (undoMarks.length-1 = live). Ctrl+Z walks back through strokes via the scrub view.
-  undoMarks: [],
-  undoAt: 0,
   strokeDid: false,
-  strokeStartLen: 0,
   flattenTarget: 0, // world height the flatten tool drives toward (captured at stroke start)
   spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
   paintMaterial: "grass", // active material for the paint tool (sand|grass|rock|dirt)
@@ -826,20 +832,17 @@ function updatePlaceGhost(event) {
 }
 function hidePlaceGhost() { if (placeGhost) placeGhost.visible = false; }
 
-// One click = one recorded asset.place = one step in the existing per-stroke undo trail.
+// Asset placement remains a legacy command and is deliberately excluded from transactional undo.
 async function placeCatalogAsset(event) {
   if (state.placing) return;
   const entry = state.placeAsset;
   const p = raycastGround(event);
   if (!entry || !p) return;
   state.placing = true;
-  const before = state.commands.length;
   try {
     setStatus("placing", entry.title);
     await placeAsset(entry.id, [p.x, 0, p.z], { rotation: [0, state.placeYaw, 0] });
     await poll(); // pull the recorded placement straight back so it renders (or reboots to warm the GLB)
-    state.strokeStartLen = before;
-    recordStrokeBoundary();
     setStatus("placed", entry.title);
   } catch (e) {
     resetWriter();
@@ -1153,8 +1156,14 @@ function buildTerrainHud() {
   fWrap.appendChild(fLab); fWrap.appendChild(fSel); hud.appendChild(fWrap);
   const ur = document.createElement("div");
   ur.style.cssText = "display:flex;gap:6px;margin-top:10px";
-  const undoB = document.createElement("button"); undoB.textContent = "↶ Undo"; undoB.onclick = () => undoStroke();
-  const redoB = document.createElement("button"); redoB.textContent = "↷ Redo"; redoB.onclick = () => redoStroke();
+  const undoB = document.createElement("button");
+  undoB.textContent = "↶ Undo";
+  undoB.title = "Undo the latest committed scene edit";
+  undoB.onclick = () => { void undoAuthoringEdit(); };
+  const redoB = document.createElement("button");
+  redoB.textContent = "↷ Redo";
+  redoB.title = "Reapply the latest undone scene edit";
+  redoB.onclick = () => { void redoAuthoringEdit(); };
   for (const b of [undoB, redoB]) {
     b.style.cssText = "flex:1;padding:6px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#eee;font:12px system-ui;cursor:pointer";
     ur.appendChild(b);
@@ -1210,52 +1219,30 @@ function updateEditModeIndicator() {
   }
 }
 
-// --- Per-stroke undo trail (Ctrl+Z / Ctrl+Shift+Z) -------------------------------------------------
-// Undo is non-destructive time-travel: we scrub the world to the command prefix BEFORE a stroke (the
-// same mechanism the History panel uses). A stroke is one press-drag-release, so one Ctrl+Z undoes a
-// whole stroke's worth of dabs, not one dab.
-function scrubTo(limit) {
-  window.dispatchEvent(new CustomEvent("limina:scrub-to", { detail: { limit: limit == null ? null : limit } }));
-}
-function recordStrokeBoundary() {
-  // Called after a stroke's dabs have flushed. If we had undone strokes, a fresh edit branches: drop
-  // the redo tail. Then mark the new live boundary.
-  if (state.undoMarks.length === 0) state.undoMarks.push(state.strokeStartLen ?? state.commands.length);
-  if (state.undoAt < state.undoMarks.length - 1) state.undoMarks.length = state.undoAt + 1;
-  state.undoMarks.push(state.commands.length);
-  state.undoAt = state.undoMarks.length - 1;
-}
-function undoStroke() {
-  if (state.undoAt <= 0) { setStatus("nothing to undo", ""); return; }
-  state.undoAt -= 1;
-  scrubTo(state.undoMarks[state.undoAt]);
-  setStatus("undo", `${state.undoAt}/${state.undoMarks.length - 1} strokes`);
-}
-function redoStroke() {
-  if (state.undoAt >= state.undoMarks.length - 1) { setStatus("nothing to redo", ""); return; }
-  state.undoAt += 1;
-  scrubTo(state.undoAt >= state.undoMarks.length - 1 ? null : state.undoMarks[state.undoAt]);
-  setStatus("redo", `${state.undoAt}/${state.undoMarks.length - 1} strokes`);
+export function viewportIsReadOnly() {
+  return state.scrubLimit !== undefined;
 }
 
-export async function applyOptimisticUpdate(entity, component, value) {
-  const running = state.running;
-  if (!running || typeof running.applyAuthorCommands !== "function") {
-    // Surface, don't swallow: if applyAuthorCommands is missing the served limina-runtime.js bundle
-    // is stale (rebuild: `cd js && npm run bundle:editor`, then hard-refresh) or the live sim isn't up.
-    logConsolePanel("optimistic edit skipped — live viewport not ready or runtime bundle out of date (rebuild bundle:editor + hard-refresh)", "err");
-    return { applied: 0, needsReboot: false };
+async function undoAuthoringEdit() {
+  if (viewportIsReadOnly()) { setStatus("read-only history", "return to live before undo"); return; }
+  try {
+    const receipt = await undoSceneAuthoring();
+    setStatus(receipt ? "undone" : "nothing to undo", receipt?.compensates ?? "");
+  } catch (error) {
+    surfaceViewportWarning("authoritative undo failed", error);
+    setStatus("undo failed", error?.message ?? String(error));
   }
-  // Carry the skill's OWN required permission: ecs.updateComponent needs `ecs.modify`, which the
-  // runLive re-author DEFAULT_GRANTS does not include — without it the optimistic invoke is
-  // permission-denied and throws before the edit reaches the canvas.
-  return running.applyAuthorCommands([
-    { kind: "skill", tool: "ecs.updateComponent", input: { entity, component, value }, agentId: "human", perms: ["ecs.modify"] },
-  ]);
 }
 
-export async function reconcileViewport() {
-  await reboot();
+async function redoAuthoringEdit() {
+  if (viewportIsReadOnly()) { setStatus("read-only history", "return to live before redo"); return; }
+  try {
+    const receipt = await redoSceneAuthoring();
+    setStatus(receipt ? "reapplied" : "nothing to redo", receipt?.transactionId ?? "");
+  } catch (error) {
+    surfaceViewportWarning("authoritative redo failed", error);
+    setStatus("redo failed", error?.message ?? String(error));
+  }
 }
 
 export function surfaceViewportWarning(message, error) {
@@ -1268,19 +1255,20 @@ async function commitSelectedTransform(selected, running) {
   const current = state.selected;
   if (!current || current.id !== selected.id || current.eid !== selected.eid || current.mesh !== selected.mesh) return;
   const mesh = selected.mesh;
-  const updates = [
-    ["position", mesh.position.toArray()],
-    ["scale", mesh.scale.toArray()],
-    ["rotation", mesh.quaternion.toArray()],
-  ];
   try {
+    if (viewportIsReadOnly()) throw new Error("history scrub is read-only; return to live before editing");
+    const record = typeof window.liminaEntity === "function" ? window.liminaEntity(selected.id) : undefined;
+    if (record?.physics?.bodyId !== undefined) {
+      throw new Error("transactional transforms are unavailable for physics-bearing entities");
+    }
     setStatus("applying", selected.id);
-    for (const [component, value] of updates) await applyOptimisticUpdate(selected.id, component, value);
-    if (typeof running?.setSyncSuppressed === "function") running.setSyncSuppressed(selected.eid, false);
-    for (const [component, value] of updates) await writeUpdate(selected.id, component, value);
+    await commitSceneOperations([sceneTransformOperation(selected.id, {
+      position: mesh.position.toArray(),
+      rotation: mesh.quaternion.toArray(),
+      scale: mesh.scale.toArray(),
+    })]);
     setStatus("applied", selected.id);
   } catch (e) {
-    resetWriter();
     surfaceViewportWarning("viewport gizmo write failed", e);
     setStatus("write failed", e && e.message ? e.message : String(e));
     await reboot();
@@ -1365,7 +1353,6 @@ canvas.addEventListener("pointerdown", (event) => {
   // camera so you can reframe and keep editing without leaving edit mode.
   if (state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)) {
     state.brushStroking = true;
-    state.strokeStartLen = state.commands.length; // command count before this stroke (for undo)
     state.strokeDid = false;
     if (state.brushTool === "flatten") { const g = raycastGround(event); state.flattenTarget = g ? g.y : 0; }
     try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
@@ -1397,8 +1384,7 @@ canvas.addEventListener("pointerup", (event) => {
     state.brushStroking = false;
     try { canvas.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
     state.running?.setCameraControlsEnabled?.(true);
-    // Close the undo boundary once the stroke's dabs have flushed back through the poll.
-    if (state.strokeDid) void (async () => { await poll(); recordStrokeBoundary(); })();
+    if (state.strokeDid) void poll();
     return; // a sculpt stroke never falls through to entity selection
   }
   if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) {
@@ -1435,16 +1421,15 @@ window.addEventListener("limina:scrub-to", (event) => {
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
   if (isTextInputTarget(event.target)) return;
-  // Undo trail: Ctrl+Z undoes the last terrain stroke, Ctrl+Shift+Z redoes. Intercept before the
-  // Ctrl-rotate handler below (which returns early on any ctrlKey press).
+  // Scene undo is an authoritative compensation transaction; redo is a new reapply transaction.
   if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
     event.preventDefault();
-    if (event.shiftKey) redoStroke(); else undoStroke();
+    if (event.shiftKey) void redoAuthoringEdit(); else void undoAuthoringEdit();
     return;
   }
   if ((event.ctrlKey || event.metaKey) && (event.key === "y" || event.key === "Y")) {
     event.preventDefault();
-    redoStroke();
+    void redoAuthoringEdit();
     return;
   }
   // Hold Space in edit mode: a drag navigates the camera (reframe) instead of sculpting.

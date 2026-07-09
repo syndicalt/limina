@@ -1,18 +1,15 @@
-// Human take-control inspector. Select an entity from the World panel, edit its
-// core properties, apply transform changes optimistically to the live viewport,
-// then write through the shared builder.readWrite MCP write path.
+// Human take-control inspector. Supported scene fields are staged and committed
+// together through the authoritative project transaction gateway.
 
 import {
-  addTag,
   closeWriter,
+  commitSceneOperations,
   destroyEntity,
   ensureWriter,
-  removeTag,
   resetWriter,
-  writeMaterial,
-  writeUpdate,
 } from "./write-client.js";
-import { applyOptimisticUpdate, reconcileViewport, surfaceViewportWarning } from "./viewport.js";
+import { sceneMaterialOperation, sceneTagsOperation, sceneTransformOperation } from "./authoring-gateway.js";
+import { surfaceViewportWarning, viewportIsReadOnly } from "./viewport.js";
 
 const worldBody = document.getElementById("world-body");
 const inspectorBody = document.getElementById("inspector-body");
@@ -28,8 +25,11 @@ const DEFAULT_TRANSFORM = {
 const state = {
   entity: undefined,
   base: cloneTransform(DEFAULT_TRANSFORM),
+  original: cloneTransform(DEFAULT_TRANSFORM),
   tags: [],
+  originalTags: [],
   materialBase: {},
+  originalMaterial: {},
   originInput: undefined,
   transformEdited: false,
   tagsEdited: false,
@@ -122,10 +122,19 @@ function refreshSelectionFromSnapshot() {
   if (!state.entity) return;
   const record = entityRecord(state.entity);
   if (!record) return;
-  if (!state.transformEdited) state.base = transformFromRecord(record, state.base);
-  if (!state.tagsEdited) state.tags = tagsFromRecord(record) ?? state.tags;
+  if (!state.transformEdited) {
+    state.base = transformFromRecord(record, state.base);
+    state.original = cloneTransform(state.base);
+  }
+  if (!state.tagsEdited) {
+    state.tags = (tagsFromRecord(record) ?? state.tags).sort();
+    state.originalTags = [...state.tags];
+  }
   state.originInput = originInputFromRecord(record) ?? state.originInput;
-  if (!state.materialEdited) state.materialBase = materialBaseFromRecord(record);
+  if (!state.materialEdited) {
+    state.materialBase = materialBaseFromRecord(record);
+    state.originalMaterial = { ...state.materialBase };
+  }
 }
 
 function parseVecFromRow(row) {
@@ -139,7 +148,7 @@ function parseVecFromRow(row) {
 function readVec(prefix) {
   return ["x", "y", "z"].map((axis) => {
     const input = document.querySelector(`[data-take-input="${prefix}-${axis}"]`);
-    return Number(input?.value);
+    return !input || input.value.trim() === "" ? NaN : Number(input.value);
   });
 }
 
@@ -192,6 +201,15 @@ function fieldset(label, prefix, values) {
     input.step = prefix === "rotation" ? "1" : "0.1";
     input.value = fmt(values[i]);
     input.dataset.takeInput = `${prefix}-${axis}`;
+    input.addEventListener("input", () => {
+      if (input.value.trim() === "") { state.transformEdited = true; return; }
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) return;
+      const key = prefix === "rotation" ? "rotationDeg" : prefix;
+      state.base[key][i] = value;
+      state.transformEdited = changed(state.base.position, state.original.position) ||
+        changed(state.base.rotationDeg, state.original.rotationDeg) || changed(state.base.scale, state.original.scale);
+    });
     labelEl.appendChild(input);
     wrap.appendChild(labelEl);
   }
@@ -224,16 +242,6 @@ function renderTransformSection(form) {
   form.appendChild(fieldset("Position", "position", state.base.position));
   form.appendChild(fieldset("Rotation deg", "rotation", state.base.rotationDeg));
   form.appendChild(fieldset("Scale", "scale", state.base.scale));
-
-  const actions = document.createElement("div");
-  actions.className = "take-actions";
-  const apply = document.createElement("button");
-  apply.className = "btn btn-small";
-  apply.type = "button";
-  apply.textContent = "Apply transform";
-  apply.addEventListener("click", () => { void applyEdits(); });
-  actions.appendChild(apply);
-  form.appendChild(actions);
 }
 
 // A labeled 0..1 slider with a live numeric readout. `value` undefined → the control shows a
@@ -257,6 +265,12 @@ function inspSlider(parent, label, name, value) {
   slider.addEventListener("input", () => {
     readout.textContent = Number(slider.value).toFixed(2);
     slider.dataset.set = "true";
+    const value = Number(slider.value);
+    if (name === "material-smoothness") state.materialBase.roughness = 1 - value;
+    else if (name === "material-metallic") state.materialBase.metalness = value;
+    state.materialEdited = ["color", "roughness", "metalness"].some(
+      (key) => state.materialBase[key] !== state.originalMaterial[key],
+    );
   });
   row.append(lab, slider, readout);
   parent.appendChild(row);
@@ -277,7 +291,14 @@ function renderMaterialSection(form) {
   color.value = toHexColor(Number.isInteger(base.color) ? base.color : 0xcccccc);
   color.dataset.takeInput = "material-color";
   color.dataset.dirty = "false";
-  color.addEventListener("input", () => { color.dataset.dirty = "true"; });
+  color.addEventListener("input", () => {
+    color.dataset.dirty = "true";
+    const value = fromHexColor(color.value);
+    if (value !== undefined) state.materialBase.color = value;
+    state.materialEdited = ["color", "roughness", "metalness"].some(
+      (key) => state.materialBase[key] !== state.originalMaterial[key],
+    );
+  });
   colorRow.append(colorLab, color);
   material.appendChild(colorRow);
 
@@ -287,15 +308,6 @@ function renderMaterialSection(form) {
 
   form.appendChild(material);
 
-  const actions = document.createElement("div");
-  actions.className = "take-actions";
-  const apply = document.createElement("button");
-  apply.className = "btn btn-small";
-  apply.type = "button";
-  apply.textContent = "Apply material";
-  apply.addEventListener("click", () => { void applyMaterialEdits(); });
-  actions.appendChild(apply);
-  form.appendChild(actions);
 }
 
 function renderTagsSection(form) {
@@ -313,7 +325,7 @@ function renderTagsSection(form) {
       remove.className = "insp-chip-x";
       remove.textContent = "×";
       remove.title = `Remove ${tag}`;
-      remove.addEventListener("click", () => { void removeTagEdit(tag); });
+      remove.addEventListener("click", () => { removeTagEdit(tag); });
       chip.appendChild(remove);
       chips.appendChild(chip);
     }
@@ -327,13 +339,13 @@ function renderTagsSection(form) {
   input.placeholder = "add a tag…";
   input.dataset.takeInput = "tag-add";
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { event.preventDefault(); void addTagEdit(); }
+    if (event.key === "Enter") { event.preventDefault(); addTagEdit(); }
   });
   const add = document.createElement("button");
   add.className = "btn btn-small";
   add.type = "button";
   add.textContent = "Add";
-  add.addEventListener("click", () => { void addTagEdit(); });
+  add.addEventListener("click", () => { addTagEdit(); });
   addRow.append(input, add);
   tags.appendChild(addRow);
   form.appendChild(tags);
@@ -394,10 +406,18 @@ function renderInspector() {
 
   const actions = document.createElement("div");
   actions.className = "take-actions";
+  const apply = document.createElement("button");
+  apply.className = "btn btn-small";
+  apply.type = "button";
+  apply.textContent = "Apply changes";
+  apply.title = "Commit transform, tags, and material together";
+  apply.addEventListener("click", () => { void applyEdits(); });
+  actions.appendChild(apply);
   const del = document.createElement("button");
   del.className = "btn btn-small btn-danger";
   del.type = "button";
   del.textContent = "Delete";
+  del.title = "Legacy delete; not included in scene undo";
   del.addEventListener("click", () => { void deleteEntity(); });
   actions.appendChild(del);
   form.appendChild(actions);
@@ -448,90 +468,82 @@ function radToDeg(v) {
   return v * 180 / Math.PI;
 }
 
-async function applyEdits() {
-  if (!state.entity) {
-    setStatus("select an entity first", "warn");
-    return;
-  }
+function captureDraftFromForm() {
   const position = readVec("position");
   const rotationDeg = readVec("rotation");
   const scale = readVec("scale");
-  if (!validVec(position) || !validVec(rotationDeg) || !validVec(scale)) {
-    setStatus("all fields must be finite numbers", "err");
-    return;
-  }
-
-  const updates = [];
-  if (changed(position, state.base.position)) updates.push(["position", position]);
-  if (changed(scale, state.base.scale)) updates.push(["scale", scale]);
-  if (changed(rotationDeg, state.base.rotationDeg)) {
-    updates.push(["rotation", eulerToQuaternion(...rotationDeg.map(degToRad))]);
-  }
-  if (updates.length === 0) {
-    setStatus("no changes to apply", "warn");
-    return;
-  }
-
-  try {
-    setStatus("applying...", "info");
-    for (const [component, value] of updates) await applyOptimisticUpdate(state.entity, component, value);
-    setStatus("connecting writer...", "info");
-    await ensureWriter();
-    setStatus("applying...", "info");
-    for (const [component, value] of updates) await writeUpdate(state.entity, component, value);
+  if (validVec(position) && validVec(rotationDeg) && validVec(scale)) {
     state.base = { position, rotationDeg, scale };
-    state.transformEdited = true;
-    console.info("take-control applied", { entity: state.entity, components: updates.map(([c]) => c) });
-    setStatus(`applied ${updates.map(([component]) => component).join(", ")}`, "ok");
-  } catch (e) {
-    resetWriter();
-    const message = e && e.message ? e.message : String(e);
-    surfaceViewportWarning("take-control apply failed", e);
-    setStatus("failed: " + message, "err");
-    await reconcileViewport();
+    state.transformEdited = changed(position, state.original.position) ||
+      changed(rotationDeg, state.original.rotationDeg) || changed(scale, state.original.scale);
   }
+
+  const colorInput = document.querySelector('[data-take-input="material-color"]');
+  const smoothness = readSlider("material-smoothness");
+  const metalness = readSlider("material-metallic");
+  const color = colorInput ? fromHexColor(colorInput.value) : undefined;
+  if (color !== undefined && colorInput?.dataset.dirty === "true") state.materialBase.color = color;
+  if (smoothness !== undefined) state.materialBase.roughness = 1 - smoothness;
+  if (metalness !== undefined) state.materialBase.metalness = metalness;
+  state.materialEdited = ["color", "roughness", "metalness"].some(
+    (key) => state.materialBase[key] !== state.originalMaterial[key],
+  );
 }
 
-async function applyMaterialEdits() {
-  if (!state.entity) {
-    setStatus("select an entity first", "warn");
-    return;
+function materialChanges() {
+  const patch = {};
+  for (const key of ["color", "roughness", "metalness"]) {
+    if (state.materialBase[key] !== state.originalMaterial[key] && state.materialBase[key] !== undefined) {
+      patch[key] = state.materialBase[key];
+    }
   }
-  const colorInput = document.querySelector('[data-take-input="material-color"]');
-  const smoothness = readSlider("material-smoothness"); // 0..1, undefined if untouched
-  const metalness = readSlider("material-metallic");
-  const roughness = smoothness === undefined ? undefined : 1 - smoothness;
+  return patch;
+}
 
-  const material = {};
-  const color = colorInput ? fromHexColor(colorInput.value) : undefined;
-  if (color !== undefined && colorInput?.dataset.dirty === "true") material.color = color;
-  if (roughness !== undefined && roughness !== state.materialBase.roughness) material.roughness = roughness;
-  if (metalness !== undefined && metalness !== state.materialBase.metalness) material.metalness = metalness;
-
-  if (Object.keys(material).length === 0) {
-    setStatus("no material changes to apply", "warn");
+async function applyEdits() {
+  if (!state.entity) { setStatus("select an entity first", "warn"); return; }
+  if (viewportIsReadOnly()) { setStatus("history view is read-only", "err"); return; }
+  captureDraftFromForm();
+  if (!validVec(state.base.position) || !validVec(state.base.rotationDeg) || !validVec(state.base.scale)) {
+    setStatus("all transform fields must be finite numbers", "err");
     return;
   }
 
   try {
-    setStatus("connecting writer...", "info");
-    await ensureWriter();
-    setStatus("applying material...", "info");
-    await writeMaterial(state.entity, material);
-    state.materialBase = { ...state.materialBase, ...material };
-    state.materialEdited = true;
-    console.info("take-control material applied", { entity: state.entity, fields: Object.keys(material) });
+    const operations = [];
+    if (state.transformEdited) {
+      if (entityRecord(state.entity)?.physics?.bodyId !== undefined) {
+        setStatus("transactional transforms are unavailable for physics-bearing entities", "err");
+        return;
+      }
+      operations.push(sceneTransformOperation(state.entity, {
+        position: state.base.position,
+        rotation: eulerToQuaternion(...state.base.rotationDeg.map(degToRad)),
+        scale: state.base.scale,
+      }));
+    }
+    if (changed(state.tags, state.originalTags)) operations.push(sceneTagsOperation(state.entity, state.tags));
+    const material = materialChanges();
+    if (Object.keys(material).length > 0) operations.push(sceneMaterialOperation(state.entity, material));
+    if (operations.length === 0) { setStatus("no changes to apply", "warn"); return; }
+    setStatus("committing...", "info");
+    await commitSceneOperations(operations);
+    state.original = cloneTransform(state.base);
+    state.originalTags = [...state.tags];
+    state.originalMaterial = { ...state.materialBase };
+    state.transformEdited = false;
+    state.tagsEdited = false;
+    state.materialEdited = false;
     renderInspector();
-    setStatus(`applied material ${Object.keys(material).join(", ")}`, "ok");
+    setStatus(`committed ${operations.length} change${operations.length === 1 ? "" : "s"}`, "ok");
   } catch (e) {
-    resetWriter();
     const message = e && e.message ? e.message : String(e);
-    surfaceViewportWarning("take-control material failed", e);
+    surfaceViewportWarning("take-control transaction failed", e);
     setStatus("failed: " + message, "err");
   }
 }
 
-async function addTagEdit() {
+function addTagEdit() {
   if (!state.entity) {
     setStatus("select an entity first", "warn");
     return;
@@ -546,45 +558,27 @@ async function addTagEdit() {
     setStatus("tag already present", "warn");
     return;
   }
-  try {
-    setStatus("connecting writer...", "info");
-    await ensureWriter();
-    setStatus("adding tag...", "info");
-    await addTag(state.entity, tag);
-    state.tags = [...state.tags, tag].sort();
-    state.tagsEdited = true;
-    console.info("take-control tag added", { entity: state.entity, tag });
-    renderInspector();
-    setStatus(`added tag ${tag}`, "ok");
-  } catch (e) {
-    resetWriter();
-    const message = e && e.message ? e.message : String(e);
-    surfaceViewportWarning("take-control add tag failed", e);
-    setStatus("failed: " + message, "err");
+  if (tag.length > 64 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(tag)) {
+    setStatus("tag contains unsupported characters", "err");
+    return;
   }
+  captureDraftFromForm();
+  state.tags = [...state.tags, tag].sort();
+  state.tagsEdited = changed(state.tags, state.originalTags);
+  renderInspector();
+  setStatus(`staged tag ${tag}`, "info");
 }
 
-async function removeTagEdit(tag) {
+function removeTagEdit(tag) {
   if (!state.entity) {
     setStatus("select an entity first", "warn");
     return;
   }
-  try {
-    setStatus("connecting writer...", "info");
-    await ensureWriter();
-    setStatus("removing tag...", "info");
-    await removeTag(state.entity, tag);
-    state.tags = state.tags.filter((candidate) => candidate !== tag);
-    state.tagsEdited = true;
-    console.info("take-control tag removed", { entity: state.entity, tag });
-    renderInspector();
-    setStatus(`removed tag ${tag}`, "ok");
-  } catch (e) {
-    resetWriter();
-    const message = e && e.message ? e.message : String(e);
-    surfaceViewportWarning("take-control remove tag failed", e);
-    setStatus("failed: " + message, "err");
-  }
+  captureDraftFromForm();
+  state.tags = state.tags.filter((candidate) => candidate !== tag);
+  state.tagsEdited = changed(state.tags, state.originalTags);
+  renderInspector();
+  setStatus(`staged removal ${tag}`, "info");
 }
 
 async function deleteEntity() {
@@ -599,8 +593,12 @@ async function deleteEntity() {
     await destroyEntity(entity);
     console.info("take-control destroyed", { entity });
     state.entity = undefined;
+    state.base = cloneTransform(DEFAULT_TRANSFORM);
+    state.original = cloneTransform(DEFAULT_TRANSFORM);
     state.tags = [];
+    state.originalTags = [];
     state.materialBase = {};
+    state.originalMaterial = {};
     state.originInput = undefined;
     state.transformEdited = false;
     state.tagsEdited = false;
@@ -623,9 +621,12 @@ function selectEntity(entity, row, options = {}) {
   const record = entityRecord(entity);
   state.entity = entity;
   state.base = transformFromRecord(record, transform);
-  state.tags = tagsFromRecord(record) ?? [];
+  state.original = cloneTransform(state.base);
+  state.tags = (tagsFromRecord(record) ?? []).sort();
+  state.originalTags = [...state.tags];
   state.originInput = originInputFromRecord(record);
   state.materialBase = materialBaseFromRecord(record);
+  state.originalMaterial = { ...state.materialBase };
   state.transformEdited = false;
   state.tagsEdited = false;
   state.materialEdited = false;
