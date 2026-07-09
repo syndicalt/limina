@@ -5,16 +5,19 @@ import { AuthoringError, type AuthoringErrorCode } from "./errors.ts";
 import { AuthoringTransactionKernel, createWorldProjectHead } from "./kernel.ts";
 import { AuthoringTransactionSchema, CommittedAuthoringReceiptSchema, WorldProjectHeadSchema } from "./schema.ts";
 import type { AuthoringAdapterAllowlist } from "./adapter.ts";
+import { WorldProjectStateSchema, type WorldProjectStateReader } from "./project-state.ts";
 import { SkillInvocationError, type SkillDefinition, type SkillRegistry } from "../skills/registry.ts";
 
 export interface AuthoringSkillOptions {
   readonly projectId: string;
   readonly sha256: Sha256Function;
   readonly adapters: AuthoringAdapterAllowlist;
+  readonly projectState?: WorldProjectStateReader;
 }
 
 export interface AuthoringSkillRuntime {
   readonly kernel: AuthoringTransactionKernel;
+  readonly projectState?: WorldProjectStateReader;
 }
 
 const commitInputSchema = z.object({
@@ -65,6 +68,9 @@ function mapAuthoringError(error: unknown): never {
 }
 
 export function registerAuthoringSkills(registry: SkillRegistry, options: AuthoringSkillOptions): AuthoringSkillRuntime {
+  if (options.projectState !== undefined && options.projectState.projectId !== options.projectId) {
+    throw new Error(`authoring project-state store '${options.projectState.projectId}' does not match '${options.projectId}'`);
+  }
   const kernel = new AuthoringTransactionKernel({
     head: createWorldProjectHead(options.projectId, options.sha256),
     sha256: options.sha256,
@@ -115,5 +121,20 @@ export function registerAuthoringSkills(registry: SkillRegistry, options: Author
 
   registry.register(commit);
   registry.register(head);
-  return { kernel };
+  if (options.projectState !== undefined) {
+    const projectState: SkillDefinition<Record<string, never>, z.infer<typeof WorldProjectStateSchema>> = {
+      name: "authoring.projectState",
+      version: "1.0.0",
+      description: "Read the strict content-addressed source references at the current authoritative WorldProject head.",
+      category: "world",
+      permissions: ["authoring.read"],
+      effect: "read",
+      priority: "core",
+      input: z.object({}).strict(),
+      output: WorldProjectStateSchema,
+      handler: () => options.projectState!.state,
+    };
+    registry.register(projectState);
+  }
+  return { kernel, projectState: options.projectState };
 }

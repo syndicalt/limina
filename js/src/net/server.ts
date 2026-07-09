@@ -41,6 +41,7 @@ import { inAoi, parseAoi, SYNC_METHODS, WORLDLOG_METHODS, type AreaOfInterest, t
 import { worldlogTail } from "../skills/worldlog.ts";
 import { assertReplayable } from "../worldlog/verify.ts";
 import { StaticAuthoringAdapterAllowlist } from "../authoring/adapter.ts";
+import { createWorldProjectStateAuthoring } from "../authoring/adapters/project-state.ts";
 import { SceneAuthoringAdapter } from "../authoring/adapters/scene.ts";
 import { registerAuthoringSkills, type AuthoringSkillRuntime } from "../authoring/skills.ts";
 
@@ -323,11 +324,14 @@ export class AuthoritativeServer {
     };
 
     if (opts.authoring !== undefined) {
+      const authoringSha256 = (canonical: string): string => baseOps.op_sha256(canonical);
+      const projectStateAuthoring = createWorldProjectStateAuthoring(opts.authoring.projectId, authoringSha256);
       const sceneAdapter = new SceneAuthoringAdapter({ world: this.world });
       this.authoring = registerAuthoringSkills(this.registry, {
         projectId: opts.authoring.projectId,
-        sha256: (canonical) => baseOps.op_sha256(canonical),
-        adapters: new StaticAuthoringAdapterAllowlist([sceneAdapter]),
+        sha256: authoringSha256,
+        adapters: new StaticAuthoringAdapterAllowlist([sceneAdapter, projectStateAuthoring.adapter]),
+        projectState: projectStateAuthoring.projectState,
       });
     }
 

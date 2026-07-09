@@ -3,5 +3,6 @@ export * from "./canonical.ts";
 export * from "./durability.ts";
 export * from "./errors.ts";
 export * from "./kernel.ts";
+export * from "./project-state.ts";
 export * from "./schema.ts";
 export * from "./skills.ts";
