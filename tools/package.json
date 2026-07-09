@@ -4,6 +4,10 @@
   "packageManager": "bun@1.3.14",
   "type": "module",
   "description": "limina HOST-SIDE tooling (asset pipeline converters). Deps here are NEVER imported by the sandboxed limina engine.",
+  "scripts": {
+    "benchmark:visual": "node benchmark/run-visual-benchmark.mjs",
+    "test:benchmark": "node --test benchmark/*.test.mjs"
+  },
   "dependencies": {
     "@gltf-transform/core": "^4.4.0",
     "@gltf-transform/extensions": "^4.4.0",
