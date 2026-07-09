@@ -137,6 +137,18 @@ export function buildPeekScene(worldMap, { project = "project", mapFile, vantage
           ...(a.scale ? { scale: [a.scale, a.scale, a.scale] } : {}),
           ground: true,
         } })),
+      // RENDER-ONLY post stack (last, after the scene is fully built): a real depth+normal
+      // pre-pass → GTAO contact AO (nestles trees/rocks into the ground, deepens ridge + dune
+      // relief) → highlight bloom → gentle HDR grade. The peek is a fixed-pose turntable of
+      // screenshots — exactly the static/cinematic case render.enablePost supports (live editor
+      // nav stays on the bare renderer). runLive drives world.post.render() in place of the bare
+      // present. Radius/intensity nudged above the eye-level default so contact AO still reads at
+      // orbit distance on a km-scale slab.
+      { kind: "skill", tool: "render.enablePost", input: {
+        ao: { enabled: true, intensity: 0.85, radius: 1.2, scale: 1.6, samples: 16 },
+        bloom: { enabled: true },
+        grade: { enabled: true },
+      } },
     ],
     // The map's sea level is the ground reference the harness uses to lift a vantage camera to
     // eye height (no terrain-height lookup in the offline harness — see engine-authored.html).

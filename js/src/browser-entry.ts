@@ -1292,7 +1292,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
         entityStream?.update(camPos.x, camPos.z);
       }
-      renderer.render(scene, camera);
+      // Opt-in RENDER-ONLY post stack: render.enablePost stashes a PostPipeline on world.post;
+      // when present, drive its GTAO/bloom/grade composite in place of the bare present. Absent
+      // (live navigation — the static/cinematic caveat) → the known-good bare renderer path.
+      const wp = (world as unknown as { post?: { render: () => void } }).post;
+      if (wp) wp.render(); else renderer.render(scene, camera);
     },
   });
   liveLoop = loop; // let the error handler above stop the loop on a worker throw

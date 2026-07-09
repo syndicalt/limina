@@ -817,6 +817,9 @@ console.log("peek scene (painter P5):");
     && places[0].input.assetId === "tudor-cottage.glb" && eq(places[0].input.position, [10, 0, -20])
     && places[0].input.ground === true && places[0].input.rotation[1] === 1.5 && eq(places[0].input.scale, [1.2, 1.2, 1.2]));
   check("peek: placement happens AFTER the terrain exists (ground lift needs it)", tools.indexOf("asset.place") > terrainIx);
+  const postIx = tools.indexOf("render.enablePost");
+  check("peek: the render-only post stack (GTAO/bloom/grade) is the LAST command (built on the finished scene)",
+    postIx === scene.commands.length - 1 && scene.commands[postIx].input.ao.enabled === true && scene.commands[postIx].input.bloom.enabled === true);
   check("peek: sceneName is stable per project+map", sceneName === "peek-gate-m");
   // Determinism: the builder is pure — same IR in, byte-identical scene out.
   check("peek: scene assembly is deterministic", eq(buildPeekScene(pm, { project: "gate", mapFile: "gate-m.worldmap.json" }).scene, scene));
