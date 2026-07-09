@@ -8,7 +8,7 @@ import type { World } from "bitecs";
 import type { CameraLike, EngineOps, EntityTable, SceneLike } from "../engine.ts";
 import type { TransformStorage } from "../ecs/facade.ts";
 import type { Tracer } from "../observability/event.ts";
-import type { MCPResponse, MCPTool } from "../mcp/protocol.ts";
+import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import type { DesignArtifactStore } from "../world/design-artifacts.ts";
@@ -139,6 +139,15 @@ export interface SkillDefinition<I = unknown, O = unknown> {
     before?(input: I, ctx: ExecutionContext): Promise<void> | void;
     after?(result: O, ctx: ExecutionContext): Promise<void> | void;
   };
+}
+
+/** A deliberate, client-actionable skill failure. Handlers throw this only for
+ * expected domain outcomes; unexpected exceptions remain `handler_error`. */
+export class SkillInvocationError extends Error {
+  constructor(readonly code: MCPErrorCode, message: string, options: ErrorOptions = {}) {
+    super(message, options);
+    this.name = "SkillInvocationError";
+  }
 }
 
 /** Classify a skill conservatively. Read fast paths are opt-in because an
@@ -516,7 +525,8 @@ export class SkillRegistry {
       return { success: true, result, metadata: meta() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { success: false, error: { code: "handler_error", message }, metadata: meta() };
+      const code = err instanceof SkillInvocationError ? err.code : "handler_error";
+      return { success: false, error: { code, message }, metadata: meta() };
     }
   }
 
