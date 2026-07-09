@@ -220,3 +220,17 @@ near-vertical cliffs before the SDF layer exists.
   actual edit migrates them. Brush/undo/growth/import/compiler paths retain u16 precision; malformed,
   oversized, non-canonical, and out-of-range payloads fail closed. Map Studio, u16, WorldMap compile,
   type, project-identity, and scaffold gates are green.
+- **2026-07-09 — Terrain topology shipped (`efa7028`).** A shared fixed-grid contract provides
+  revision-independent chunk IDs, versioned topology hashes, power-of-two-plus-one sampling,
+  cross-LOD shared edges, exact negative coordinates, and bounded 8km-domain coverage. Legacy cache
+  keys/hashes remain compatible; a complete v2 artifact hash now covers height, paint, climate, and
+  blight channels without pretending its current JSON codec is the future high-throughput compiler codec.
+- **2026-07-09 — Slice 0.4 erosion shipped (`d15b417`).** The existing erosion implementation now runs
+  once over the complete bounded master field before hydrology and chunk slicing. Recipes are strict,
+  versioned, recorded, cancellable, replay-identical across one-shot and streamed terrain, and have an
+  exact disabled compatibility mode. Measured canonical bakes: 257x257 p50 95.1ms / 55.6MiB peak RSS;
+  513x513 p50 399.1ms / 64.4MiB. Actual worker orchestration and controlled visual tuning remain open.
+- **2026-07-09 — Compiler invalidation foundation shipped (`27bbbb3`).** A bounded immutable stage DAG
+  computes canonical dependency keys, multigrid-aware halo propagation, local/global/version
+  invalidation, cache hits, removals, and strict retained snapshots. Omitted or dishonest client dirty
+  hints cannot narrow compiler-owned work and are retained only as diagnostic telemetry.
