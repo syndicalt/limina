@@ -248,6 +248,59 @@ function buildWorldBible(fm: Frontmatter): unknown {
   return bible;
 }
 
+// ---- places (Design Space "Places") ---------------------------------------
+// A dedicated `kind: places` vault doc carries a flat `places:` array — the world's
+// containment hierarchy (nation > province > settlement > landmark), each node linked to
+// its parent by `parentId` (root nodes have none). A node is PLACED when it carries a
+// `position` [x,z] and UNPLACED otherwise (authored but not yet sited). This is a READ-ONLY
+// translation for the UI (Stage 1): places do not (yet) compile into the GDS, so — like the
+// readable world-bible `locations:` the map reads — they are parsed straight from the doc's
+// frontmatter rather than entering the design.* artifact store. The UI builds the nested tree
+// from this flat list by `parentId`.
+
+export interface PlaceNode {
+  id: string;
+  name: string;
+  kind: string;
+  parentId: string | null;
+  position?: [number, number];
+  binding?: string;
+  radiusM?: number;
+  regionId?: string;
+  map?: string;
+  tags?: string[];
+  note?: string;
+}
+
+/** Parse the flat `places:` array of a `kind: places` doc into normalized place nodes.
+ *  Mirrors buildWorldBible's location parse: readable field names, position -> placed. */
+export function parsePlaces(fm: Frontmatter): PlaceNode[] {
+  return arr(fm.places)
+    .map((p) => {
+      const pos = Array.isArray(p.position) ? (p.position as number[]) : undefined;
+      const parent = str(p.parentId);
+      const node: PlaceNode = {
+        id: str(p.id),
+        name: str(p.name, str(p.id)),
+        kind: str(p.kind, "place"),
+        parentId: parent.length > 0 ? parent : null,
+      };
+      if (pos && pos.length >= 2) node.position = [Number(pos[0]), Number(pos[1])];
+      const binding = str(p.binding);
+      if (binding.length > 0) node.binding = binding;
+      if (typeof p.radiusM === "number") node.radiusM = p.radiusM;
+      const region = str(p.regionId ?? p.region);
+      if (region.length > 0) node.regionId = region;
+      const map = str(p.map);
+      if (map.length > 0) node.map = map;
+      if (Array.isArray(p.tags)) node.tags = (p.tags as unknown[]).map((t) => str(t));
+      const note = str(p.note ?? p.description);
+      if (note.length > 0) node.note = note;
+      return node;
+    })
+    .filter((n) => n.id.length > 0);
+}
+
 function castRole(m: Record<string, unknown>): string {
   return str(m.role ?? m.note ?? m.behavior, "resident");
 }

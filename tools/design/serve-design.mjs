@@ -69,7 +69,7 @@ const BEGIN = "===STATE_BEGIN===", END = "===STATE_END===";
 function computeState() {
   const docs = readDocs();
   const harness = `
-import { vaultToStore, vaultGraph, parseFrontmatter } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { vaultToStore, vaultGraph, parseFrontmatter, parsePlaces } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
 import { compileDesignToGds } from "${LIMINA_HOME}/js/src/game/design-compile.ts";
 import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
 const docs = ${JSON.stringify(docs)};
@@ -96,7 +96,12 @@ try {
     world.locations = (fm.locations || []).map((l) => ({ id: l.id, name: l.name, kind: l.kind, region: l.region, x: (l.position||[0,0])[0], z: (l.position||[0,0])[1], tags: l.tags || [], map: l.map || "", mapLink: l.mapLink || "" }));
   }
 } catch (e) { world = { regions: [], locations: [] }; }
-ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
+var places = [];
+try {
+  const plDoc = docs.find((d) => /kind:\\s*places/.test(d.content));
+  if (plDoc) places = parsePlaces(parseFrontmatter(plDoc.content));
+} catch (e) { places = []; }
+ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world, places }) + "${END}");
 `;
   const tmp = mkdtempSync(join(tmpdir(), "limina-design-"));
   const hp = join(tmp, "h.ts");
@@ -105,7 +110,7 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world }) + "${END}");
   rmSync(tmp, { recursive: true, force: true });
   const out = (res.stdout || "") + (res.stderr || "");
   const m = out.match(new RegExp(BEGIN + "([\\s\\S]*?)" + END));
-  const extra = m ? JSON.parse(m[1]) : { graph: { nodes: [], edges: [] }, build: { ok: false, error: out.slice(-400) } };
+  const extra = m ? JSON.parse(m[1]) : { graph: { nodes: [], edges: [] }, build: { ok: false, error: out.slice(-400) }, places: [] };
   const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
   return { project, docs, ...loadMaps(project), ...extra };
 }

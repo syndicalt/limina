@@ -123,6 +123,26 @@
   .bid { font-family:ui-monospace,monospace; font-size:12px; color:var(--accent); }
   .bid.unbuilt { color:var(--amber); }
 
+  /* places view (read-only nested tree, Stage 1) */
+  .places-wrap { max-width:760px; margin:0 auto; padding:30px 34px 90px; }
+  .places-head { display:flex; align-items:baseline; gap:12px; margin-bottom:4px; }
+  .places-head h2 { font-family:var(--serif); font-weight:600; margin:0; }
+  .places-head .cnt { font-size:12px; color:var(--muted); }
+  .places-search { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 11px;
+    font:inherit; font-size:13px; background:var(--bg); color:var(--ink); margin:14px 0 18px; }
+  .ptree { display:flex; flex-direction:column; gap:2px; }
+  .pnode { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; }
+  .pnode:hover { background:var(--panel-2); }
+  .pnode .pname { font-weight:500; }
+  .pnode .pkind { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+    background:var(--panel-2); border:1px solid var(--line); border-radius:20px; padding:2px 8px; }
+  .pnode .placed { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--ok); margin-left:auto; }
+  .pnode .placed .pdot { width:8px; height:8px; border-radius:50%; background:var(--ok); display:inline-block; }
+  .pnode .unplaced { margin-left:auto; font-size:10.5px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--amber); border:1px dashed var(--amber); border-radius:20px; padding:2px 9px; }
+  .pnode .rtail { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); }
+  .places-empty { padding:40px; text-align:center; color:var(--muted); }
+
   /* team rail */
   .rail h3 { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted); margin:2px 0 12px; }
   .agent { display:flex; gap:10px; padding:10px; border:1px solid var(--line); border-radius:10px; margin-bottom:8px;
@@ -280,6 +300,7 @@
     <div class="tabs">
       <div class="tab active" data-view="docs">Documents</div>
       <div class="tab" data-view="map">Atlas</div>
+      <div class="tab" data-view="places">Places</div>
       <div class="tab" data-view="graph">Mind-map</div>
       <div class="tab" data-view="build">Build</div>
     </div>

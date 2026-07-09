@@ -8,8 +8,8 @@ import { S } from "./store.js";
 import { postJSON, setMapsRev } from "./net.js";
 import { renderMap } from "./map.js";
 
-const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", cast:"☗", storyboard:"❧", "build-map":"⚑" };
-const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
+const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", places:"⚲", cast:"☗", storyboard:"❧", "build-map":"⚑" };
+const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", places:"Places", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
 const NODE_COLOR = { region:"#dfeadf", location:"#e2eef0", player:"#e7e0f0", npc:"#f6ecdd", creature:"#f0dede", beat:"#e6ecf2" };
 const NODE_STROKE = { region:"#3f7d57", location:"#2f6f7a", player:"#6d5f7a", npc:"#b9772b", creature:"#a25151", beat:"#5c6773" };
 const TEAM = [
@@ -81,7 +81,7 @@ function renderMd(src){
 // ---- views ----
 function renderNav(){
   const nav = document.getElementById("nav");
-  const order = ["home","concept","art-direction","world-bible","cast","storyboard","build-map"];
+  const order = ["home","concept","art-direction","world-bible","places","cast","storyboard","build-map"];
   const docs = [...S.state.docs].sort((a,b)=> order.indexOf(kindOf(a.content)) - order.indexOf(kindOf(b.content)));
   nav.innerHTML = docs.map(d=>{
     const k = kindOf(d.content);
@@ -148,6 +148,62 @@ function renderBuild(){
     +'<div class="kpi"><div class="n">'+(b.ok?"✓":"—")+'</div><div class="l">compiles</div></div></div>'
     +'<table class="build"><thead><tr><th>Design entity</th><th>From</th><th>Where in the build</th></tr></thead><tbody>'+rows+'</tbody></table>'
     +'<p style="color:var(--muted);font-size:12.5px;margin-top:16px">These are the compiled placements — where each thing goes. The buildings are still <b>unbuilt</b> GLBs until the 3D build step renders them.</p></div>';
+}
+
+// ---- places (read-only nested tree, Stage 1) ----
+// The vault ships a FLAT places[] list (each node carries an optional parentId); the tree is
+// reconstructed here by linking children to parents. Placed = has a position; unplaced nodes are
+// authored but not yet sited. No editing in this stage — just the hierarchy + placed/unplaced read.
+function placesTree(list){
+  const byId = new Map(list.map(p=>[p.id,{...p,children:[]}]));
+  const roots=[];
+  for(const p of byId.values()){
+    const parent = p.parentId!=null && byId.get(p.parentId);
+    if(parent) parent.children.push(p); else roots.push(p);
+  }
+  return roots;
+}
+function renderPlaces(center){
+  const all = S.state.places || [];
+  const placed = all.filter(p=>Array.isArray(p.position)).length;
+  const draw = (filter)=>{
+    const match = filter
+      ? new Set(all.filter(p=>p.name.toLowerCase().includes(filter)).map(p=>p.id))
+      : null;
+    // Keep a node if it matches OR any descendant matches, so the tree stays connected.
+    const keep = new Set();
+    if(match){
+      const byId = new Map(all.map(p=>[p.id,p]));
+      for(const id of match){ let cur=byId.get(id); while(cur){ keep.add(cur.id); cur=cur.parentId!=null?byId.get(cur.parentId):null; } }
+    }
+    const rows=[];
+    const walk=(nodes,depth)=>{
+      nodes.sort((a,b)=>a.name.localeCompare(b.name));
+      for(const n of nodes){
+        if(!match || keep.has(n.id)){
+          const isPlaced = Array.isArray(n.position);
+          const tail = isPlaced
+            ? '<span class="placed"><span class="pdot"></span>placed<span class="rtail">'
+              +(n.binding==="area"&&n.radiusM?" · r"+n.radiusM+"m":" · "+n.position[0]+", "+n.position[1])+'</span></span>'
+            : '<span class="unplaced">unplaced</span>';
+          rows.push('<div class="pnode" style="padding-left:'+(10+depth*22)+'px">'
+            +'<span class="pkind">'+esc(n.kind||"place")+'</span>'
+            +'<span class="pname">'+esc(n.name)+'</span>'+tail+'</div>');
+        }
+        if(n.children.length) walk(n.children, depth+1);
+      }
+    };
+    walk(placesTree(all), 0);
+    return rows.length ? '<div class="ptree">'+rows.join("")+'</div>'
+      : '<div class="places-empty">'+(all.length?"No place matches “"+esc(filter)+"”.":"No places yet. Add a <b>places.md</b> doc (kind: places) to this vault.")+'</div>';
+  };
+  center.innerHTML =
+    '<div class="places-wrap">'
+    +'<div class="places-head"><h2>Places</h2><span class="cnt">'+placed+' of '+all.length+' placed</span></div>'
+    +'<input class="places-search" id="places-search" type="search" placeholder="Filter places by name…" autocomplete="off">'
+    +'<div id="places-body">'+draw("")+'</div></div>';
+  const box=document.getElementById("places-search");
+  if(box) box.oninput=()=>{ document.getElementById("places-body").innerHTML = draw(box.value.trim().toLowerCase()); };
 }
 
 function renderTeam(){
@@ -274,6 +330,7 @@ function showView(){
   document.querySelector(".body").classList.toggle("atlas", S.activeView==="map");
   if(S.activeView==="docs") openDoc(S.activeDoc || (S.state.docs[0]&&S.state.docs[0].name));
   else if(S.activeView==="map") renderMap();
+  else if(S.activeView==="places") renderPlaces(document.getElementById("center"));
   else if(S.activeView==="graph") renderGraph();
   else renderBuild();
   if(chatAgent) updateChatCtx();
