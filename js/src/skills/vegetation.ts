@@ -86,7 +86,7 @@ const scatterInput = z.object({
   terrain: z.string().optional(),
   /** Species to include (weighted equally). Resolved to concrete archetype ids via the project
    *  VEGETATION PACK (tree-pack.json). Defaults to all. Ignored when `assets` is supplied. */
-  species: z.array(z.enum(["spruce", "pine", "birch"])).optional(),
+  species: z.array(z.enum(["spruce", "pine", "birch", "oak", "ash", "dead-oak"])).optional(),
   /** Explicit archetype palette — a caller/project binding that WINS over the pack. When set, the
    *  forest is scattered from these ids directly (the engine bakes no tree ids of its own). */
   assets: z.array(paletteAssetSchema).optional(),
@@ -321,7 +321,7 @@ export function registerVegetationSkills(
   const plantInput = z.object({
     /** Which tree to plant. Resolved to a concrete archetype via the project VEGETATION PACK
      *  (tree-pack.json) unless an explicit `assets` palette is supplied. */
-    species: z.enum(["spruce", "pine", "birch"]).default("spruce"),
+    species: z.enum(["spruce", "pine", "birch", "oak", "ash", "dead-oak"]).default("spruce"),
     /** Explicit archetype palette — a caller/project binding that WINS over the pack. When set, the
      *  archetype is chosen from these ids (the engine bakes no tree ids of its own). */
     assets: z.array(paletteAssetSchema).optional(),

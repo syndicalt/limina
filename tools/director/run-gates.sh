@@ -95,6 +95,11 @@ if node js/scripts/check-determinism.mjs >/dev/null 2>&1; then echo "   check-de
 # call (replay would apply it twice). Pure lexical scan — always runnable, no display needed.
 if node js/scripts/check-nested-invoke.mjs >/dev/null 2>&1; then echo "   check-nested-invoke: PASS"; else echo "   check-nested-invoke: FAIL"; hostfail=1; fi
 
+# Pack-import gate: path safety (rejects traversal/absolute), manifest validation, the three manifest
+# merges, recipe expansion, and an end-to-end aethon-conifers recipe bake. Exit 2 = baker deps absent.
+pic_rc=0; node tools/design/pack-import-check.mjs >/dev/null 2>&1 || pic_rc=$?
+if [ $pic_rc -eq 0 ]; then echo "   pack-import-check: PASS"; elif [ $pic_rc -eq 2 ]; then echo "   pack-import-check: SKIP (baker deps absent)"; else echo "   pack-import-check: FAIL"; hostfail=1; fi
+
 if npm --prefix js run check:portability --silent >/dev/null 2>&1; then echo "   check-portability: PASS"; else echo "   check-portability: FAIL"; hostfail=1; fi
 if npm --prefix js run check:live --silent >/dev/null 2>&1; then echo "   check-live-composition: PASS"; else echo "   check-live-composition: FAIL"; hostfail=1; fi
 if npm --prefix js run check:coordinator-demo --silent >/dev/null 2>&1; then echo "   check-coordinator-demo: PASS"; else echo "   check-coordinator-demo: FAIL"; hostfail=1; fi

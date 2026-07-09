@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
+import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 
 // 3D-peek render jobs (Painter P5): jobId -> {status, png?, error?}. In-memory, best-effort.
@@ -24,6 +25,10 @@ import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIMINA_HOME = resolve(__dirname, "..", "..");
 const LIMINA_BIN = process.env.LIMINA_BIN || join(LIMINA_HOME, "target", "release", "limina");
+// Content-pack library (source) + the asset root imports land in. assetsDir is LIMINA_HOME/assets
+// today (every authoring reader resolves there); it becomes project-local when the asset root does.
+const PACKS_DIR = process.env.LIMINA_PACKS_DIR || join(LIMINA_HOME, "packs");
+const ASSETS_DIR = join(LIMINA_HOME, "assets");
 // The frontend is served from disk PER REQUEST (no boot cache — caching index.html at startup
 // meant every frontend edit needed a server restart, a repeated debugging trap).
 const FRONTEND_DIR = join(__dirname, "frontend");
@@ -422,7 +427,7 @@ else { fm.places = places; const nextContent = replaceFrontmatter(content, fm); 
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/migrate-locations-to-places", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/migrate-locations-to-places", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete", "/api/pack-import"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -557,6 +562,20 @@ createServer((req, res) => {
           res.end(JSON.stringify(editPlace(p.op, place)));
           return;
         }
+        if (req.url === "/api/pack-import") {
+          // Import a content pack into the engine asset root: a generator recipe bakes its trees on
+          // the fly (headless ez-tree) + binds them; a static pack copies its GLBs. Merges
+          // tree-pack.json / biome-pack.json / catalog.json — read fresh by the engine + /api/catalog.
+          try {
+            const r = importPack({ packsDir: PACKS_DIR, packName: String(p.pack || ""), assetsDir: ASSETS_DIR });
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify(r));
+          } catch (e) {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }));
+          }
+          return;
+        }
         const ctx = assembleContext(p.agentId, p.screen || {});
         const out = await callModel(ctx.systemPrompt, p.history || [], String(p.message || ""));
         res.writeHead(200, { "content-type": "application/json" });
@@ -566,6 +585,17 @@ createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, error: String(e), reply: "⚠ " + String(e) }));
       }
     });
+    return;
+  }
+  if (req.method === "GET" && req.url.split("?")[0] === "/api/packs") {
+    // The content-pack library (LIMINA_PACKS_DIR or LIMINA_HOME/packs), each with an `imported`
+    // flag computed against the current asset root — so the Packs panel can show what's installed.
+    try {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
+      res.end(JSON.stringify({ packs: listPacks({ packsDir: PACKS_DIR, assetsDir: ASSETS_DIR }) }));
+    } catch (e) {
+      res.writeHead(500); res.end(JSON.stringify({ packs: [], error: String(e) }));
+    }
     return;
   }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/catalog") {

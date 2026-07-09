@@ -54,6 +54,7 @@ editor/test/archetype_quest.png
 .asset-cache/
 tools/node_modules/
 tools/.ez-core.mjs
+js/.ez-core.mjs
 # large throwaway generation-test artifacts (demos commit the assets they actually use)
 assets/prop-a-wooden-barrel-2.glb
 assets/trees/*.glb

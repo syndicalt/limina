@@ -237,6 +237,63 @@ async function newPlace(){
   }catch(e){ toast("add place failed: "+e); }
 }
 
+// ---- packs (importable content packs) ----
+// A pack bundles content the world can import — baked trees, a biome, and catalog entries.
+// "recipe" packs bake their trees on import (~10-20s); "static" packs just copy. `imported` means
+// already materialized into the asset root. Fetched fresh from /api/packs on each view (import
+// mutates the on-disk set), then re-fetched after an import so the row flips to "Imported".
+async function renderPacks(center){
+  center.innerHTML =
+    '<div class="packs-wrap"><div class="packs-head"><h2>Packs</h2>'
+    +'<span class="cnt" id="packs-cnt"></span></div>'
+    +'<div id="packs-body"><div class="loading">Loading packs…</div></div></div>';
+  let packs;
+  try{ const r=await fetch("/api/packs"); const j=await r.json(); packs=(j&&Array.isArray(j.packs))?j.packs:[]; }
+  catch(e){ const b=document.getElementById("packs-body"); if(b) b.innerHTML='<div class="packs-empty">Couldn’t load packs: '+esc(String(e))+'</div>'; return; }
+  S.state.packs=packs;
+  drawPacks(packs);
+}
+function drawPacks(packs){
+  const cnt=document.getElementById("packs-cnt");
+  if(cnt) cnt.textContent = packs.length ? (packs.filter(p=>p.imported).length+' of '+packs.length+' imported') : '';
+  const body=document.getElementById("packs-body"); if(!body) return;
+  if(!packs.length){ body.innerHTML='<div class="packs-empty">No packs available.</div>'; return; }
+  body.innerHTML='<div class="packlist">'+packs.map(packRow).join("")+'</div>';
+  bindPackRows();
+}
+function packRow(p){
+  const pr=p.provides||{};
+  const badges=[];
+  if(pr.trees) badges.push('<span class="pkbadge">'+pr.trees+' trees</span>');
+  if(pr.biome) badges.push('<span class="pkbadge">'+pr.biome+' biome</span>');
+  if(pr.catalog) badges.push('<span class="pkbadge">'+pr.catalog+' catalog</span>');
+  if(p.kind) badges.push('<span class="pkbadge kind">'+esc(p.kind)+'</span>');
+  const right = p.valid===false ? ''
+    : p.imported ? '<span class="pk-imported"><span class="pdot"></span>Imported</span>'
+    : '<button class="btn pkrow-btn" data-pack="'+esc(p.dir)+'">Import</button>';
+  const errs = (p.valid===false && Array.isArray(p.errors) && p.errors.length)
+    ? '<div class="pkerr">'+p.errors.map(e=>esc(String(e))).join(" · ")+'</div>' : '';
+  return '<div class="packrow">'
+    +'<div class="pkhead"><span class="pkname">'+esc(p.name||p.dir)+'</span>'
+    +(p.version?'<span class="pkver">v'+esc(p.version)+'</span>':'')+right+'</div>'
+    +(p.description?'<div class="pkdesc">'+esc(p.description)+'</div>':'')
+    +(badges.length?'<div class="pkbadges">'+badges.join("")+'</div>':'')
+    +errs+'</div>';
+}
+function bindPackRows(){
+  const body=document.getElementById("packs-body"); if(!body) return;
+  body.querySelectorAll("button[data-pack]").forEach(btn=>{ btn.onclick=()=>importPack(btn.dataset.pack, btn); });
+}
+async function importPack(dir, btn){
+  if(btn){ btn.disabled=true; btn.textContent="Importing…"; }
+  try{
+    const j=await postJSON("/api/pack-import",{pack:dir});
+    if(j&&j.ok===false){ toast("import failed"+(j.error?": "+j.error:"")); if(btn){ btn.disabled=false; btn.textContent="Import"; } return; }
+    toast("Imported "+dir+(j&&j.baked?" — baked "+j.baked+" trees":""));
+    await renderPacks(document.getElementById("center"));
+  }catch(e){ toast("import failed: "+e); if(btn){ btn.disabled=false; btn.textContent="Import"; } }
+}
+
 function renderTeam(){
   document.getElementById("team").innerHTML = TEAM.map(a=>
     '<div class="agent" data-agent="'+a.id+'"><div class="av" style="background:'+a.c+'">'+a.nm[0]+'</div>'
@@ -362,6 +419,7 @@ function showView(){
   if(S.activeView==="docs") openDoc(S.activeDoc || (S.state.docs[0]&&S.state.docs[0].name));
   else if(S.activeView==="map") renderMap();
   else if(S.activeView==="places") renderPlaces(document.getElementById("center"));
+  else if(S.activeView==="packs") renderPacks(document.getElementById("center"));
   else if(S.activeView==="graph") renderGraph();
   else renderBuild();
   if(chatAgent) updateChatCtx();
@@ -400,5 +458,6 @@ S.fn.updateChatCtx = updateChatCtx;
 S.fn.chatOpen = () => !!chatAgent;
 // map.js calls this after a place mutation so the tree re-renders when it's the visible surface.
 S.fn.refreshPlaces = () => { if(S.activeView==="places") renderPlaces(document.getElementById("center")); };
+S.fn.refreshPacks = () => { if(S.activeView==="packs") renderPacks(document.getElementById("center")); };
 
 load();
