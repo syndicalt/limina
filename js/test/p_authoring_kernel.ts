@@ -42,6 +42,7 @@ function inputOf(operation: AuthoringOperation): { key: string; value?: JsonValu
 
 class MemoryAdapter implements AuthoringAdapter<ModelCapture> {
   readonly id: string;
+  readonly version = "1.0.0";
   readonly values = new Map<string, JsonValue>();
   readonly order: string[] = [];
   readonly rollbackFailures = new Set<string>();
@@ -149,7 +150,12 @@ function transaction(
   };
 }
 
-const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "scene", action: "set", input: { key, value } });
+const set = (key: string, value: JsonValue): AuthoringOperation => ({
+  adapter: "scene",
+  adapterVersion: "1.0.0",
+  action: "set",
+  input: { key, value },
+});
 
 // Atomic success and a deterministic head advance.
 {
@@ -164,7 +170,7 @@ const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "
 // Invalid operation N is rejected during whole-batch preflight, before operation 0 mutates.
 {
   const { adapter, kernel, genesis } = setup();
-  const invalid = { adapter: "scene", action: "unsupported", input: { key: "b" } } as AuthoringOperation;
+  const invalid = { adapter: "scene", adapterVersion: "1.0.0", action: "unsupported", input: { key: "b" } } as AuthoringOperation;
   await expectCode(kernel.commit(transaction("tx.preflight", genesis, [set("a", 1), invalid])), "preflight_failed");
   assert(adapter.applyCount === 0 && adapter.values.size === 0, "preflight failure must leave all state untouched");
   assert(
@@ -194,7 +200,7 @@ const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "
 // Unknown and known-but-not-allowlisted adapters are rejected before preflight.
 {
   const { adapter, kernel, genesis } = setup();
-  const unknown = { adapter: "terrain", action: "set", input: { key: "a", value: 1 } } as AuthoringOperation;
+  const unknown = { adapter: "terrain", adapterVersion: "1.0.0", action: "set", input: { key: "a", value: 1 } } as AuthoringOperation;
   await expectCode(kernel.commit(transaction("tx.unknown", genesis, [unknown])), "unknown_adapter");
   assert(adapter.applyCount === 0, "unknown adapter must not invoke another adapter");
 }
@@ -207,7 +213,7 @@ const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "
 // A partially mutating failure rolls the failed operation and all prior operations back in reverse.
 {
   const { adapter, kernel, genesis } = setup();
-  const partial = { adapter: "scene", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
+  const partial = { adapter: "scene", adapterVersion: "1.0.0", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
   await expectCode(kernel.commit(transaction("tx.rollback", genesis, [set("a", 1), partial])), "apply_failed");
   assert(adapter.values.size === 0 && kernel.head.revision === 0, "successful rollback must restore state and preserve head");
   assert(adapter.order.slice(-2).join(",") === "rollback:b,rollback:a", "rollback order must be exact reverse application order");
@@ -217,7 +223,7 @@ const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "
 {
   const { adapter, kernel, genesis } = setup();
   adapter.rollbackFailures.add("a");
-  const partial = { adapter: "scene", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
+  const partial = { adapter: "scene", adapterVersion: "1.0.0", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
   await expectCode(kernel.commit(transaction("tx.poison", genesis, [set("a", 1), partial])), "rollback_failed");
   assert(kernel.poisoned, "rollback failure must poison the writer");
   const count = adapter.applyCount;
@@ -229,7 +235,7 @@ const set = (key: string, value: JsonValue): AuthoringOperation => ({ adapter: "
 {
   const { adapter, kernel, genesis } = setup();
   adapter.corruptRollbacks.add("a");
-  const partial = { adapter: "scene", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
+  const partial = { adapter: "scene", adapterVersion: "1.0.0", action: "partial-fail", input: { key: "b", value: 2 } } as AuthoringOperation;
   await expectCode(kernel.commit(transaction("tx-corrupt-rollback", genesis, [set("a", 1), partial])), "rollback_failed");
   assert(kernel.poisoned && adapter.values.get("a") === 1, "state-hash mismatch after rollback must poison the writer");
 }

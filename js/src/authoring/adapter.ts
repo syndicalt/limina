@@ -24,6 +24,8 @@ export interface AuthoringCapture<Capture = unknown> {
  */
 export interface AuthoringAdapter<Capture = unknown> {
   readonly id: string;
+  /** Stable recorded semantics version. Retain old implementations or replay fails explicitly. */
+  readonly version: string;
   /** Stable identity of the state guarded by this operation (entity id, terrain chunk id, etc.). */
   stateKey(operation: AuthoringOperation): string;
   preflight(operation: AuthoringOperation, context: AuthoringAdapterContext): void | Promise<void>;
@@ -49,6 +51,9 @@ export class StaticAuthoringAdapterAllowlist implements AuthoringAdapterAllowlis
     const byId = new Map<string, AuthoringAdapter>();
     for (const adapter of adapters) {
       if (byId.has(adapter.id)) throw new Error(`duplicate authoring adapter '${adapter.id}'`);
+      if (!/^[0-9][A-Za-z0-9._+-]{0,63}$/.test(adapter.version)) {
+        throw new Error(`authoring adapter '${adapter.id}' has invalid version '${adapter.version}'`);
+      }
       byId.set(adapter.id, adapter);
     }
     this.#adapters = byId;

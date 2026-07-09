@@ -64,7 +64,7 @@ const headB = createWorldProjectHead("project.canonical", prefixedUpperHash);
 assert(JSON.stringify(headA) === JSON.stringify(headB), "raw and prefixed host SHA-256 providers must produce the same head");
 assert(Object.isFrozen(headA), "WorldProject heads must be immutable");
 
-const operation = { adapter: "scene", action: "set", input: { key: "x", value: 1 } };
+const operation = { adapter: "scene", adapterVersion: "1.0.0", action: "set", input: { key: "x", value: 1 } };
 const base = {
   schema: "limina.authoring-transaction/v1",
   transactionId: "tx.bounds",

@@ -10,6 +10,7 @@ export const MAX_AUTHORING_TRANSACTION_BYTES = 1_048_576;
 
 const IdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const AdapterIdSchema = z.string().min(1).max(96).regex(/^[a-z][a-z0-9.-]*$/);
+const AdapterVersionSchema = z.string().min(1).max(64).regex(/^[0-9][A-Za-z0-9._+-]*$/);
 const ActionSchema = z.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._:-]*$/);
 const ContentHashSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/) as z.ZodType<ContentHash>;
 
@@ -33,6 +34,7 @@ export type WorldProjectHead = z.infer<typeof WorldProjectHeadSchema>;
 
 export const AuthoringOperationSchema = z.object({
   adapter: AdapterIdSchema,
+  adapterVersion: AdapterVersionSchema,
   action: ActionSchema,
   input: JsonValueSchema,
   guard: z.object({
