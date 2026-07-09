@@ -40,6 +40,9 @@ import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type MCPResponse } from "../mcp/pro
 import { inAoi, parseAoi, SYNC_METHODS, WORLDLOG_METHODS, type AreaOfInterest, type NetOps } from "./protocol.ts";
 import { worldlogTail } from "../skills/worldlog.ts";
 import { assertReplayable } from "../worldlog/verify.ts";
+import { StaticAuthoringAdapterAllowlist } from "../authoring/adapter.ts";
+import { SceneAuthoringAdapter } from "../authoring/adapters/scene.ts";
+import { registerAuthoringSkills, type AuthoringSkillRuntime } from "../authoring/skills.ts";
 
 /** op_net_accept returns this when its listener is closed (Rust u32::MAX). */
 export const ACCEPT_CLOSED = 0xffffffff;
@@ -106,6 +109,11 @@ export interface AuthoritativeServerOptions {
     name: string;
     compactFlushed?: boolean;
   };
+  /** Enable the atomic WorldProject transaction surface. Authoring requires a
+   * durable WorldLog because its replay envelope has no second persistence path. */
+  authoring?: {
+    projectId: string;
+  };
   /** Record every per-tick `step` command even when the tick provably changed nothing.
    *  Default FALSE (kernel K-compaction): idle steps are still APPLIED every tick, but only
    *  steps that moved a dynamic body (plus a short post-activity grace window) are RECORDED.
@@ -136,6 +144,16 @@ interface ClientSession {
   permissions: ReadonlySet<string>;
 }
 
+/** Identity and provenance for a trusted in-process caller such as the editor's
+ * chat coordinator. This API does not weaken permission or policy checks. */
+export interface AuthoritativeInvocationContext {
+  agentId: string;
+  sessionId: string;
+  permissions: ReadonlySet<string>;
+  profile?: string;
+  causedBy?: readonly string[];
+}
+
 interface ClientConn {
   connId: number;
   session?: ClientSession;
@@ -150,11 +168,17 @@ interface ClientConn {
 }
 
 interface QueuedIntent {
-  connId: number;
-  reqId: string | number | null | undefined;
+  connId?: number;
+  reqId?: string | number | null;
   name: string;
   input: Record<string, unknown>;
-  session: ClientSession;
+  session: AuthoritativeInvocationContext;
+  resolve?: (response: MCPResponse) => void;
+}
+
+interface TickDispatch {
+  sends: Promise<void>[];
+  completions: Array<{ resolve: (response: MCPResponse) => void; response: MCPResponse }>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -183,6 +207,9 @@ export class AuthoritativeServer {
    * accepted or simulated; continuing would extend memory beyond the recoverable
    * durable prefix. Recovery requires a server restart from that prefix. */
   private durableLogFailure?: Error;
+  /** A poisoned transaction kernel means rollback could not restore the live
+   * world. The process must expose neither that world nor its dirty log suffix. */
+  private authorityIntegrityFailure?: Error;
   private readonly recOps: EngineOps;
   private readonly transport: NetServerTransport;
   private readonly tickMs: number;
@@ -194,6 +221,7 @@ export class AuthoritativeServer {
   private readonly initializeAuthToken?: string;
   private readonly allowedProfiles?: ReadonlySet<string>;
   private readonly onClientMessage?: AuthoritativeServerOptions["onClientMessage"];
+  readonly authoring?: AuthoringSkillRuntime;
 
   private readonly conns = new Map<number, ClientConn>();
   private intentQueue: QueuedIntent[] = [];
@@ -203,6 +231,10 @@ export class AuthoritativeServer {
   private running = false;
   private bgLoops: Promise<void>[] = [];
   private acceptLoopP?: Promise<void>;
+  /** FIFO promise mutex for world reads and authoritative mutation batches.
+   * Network sends are started inside the ordering boundary but awaited outside. */
+  private authorityTail: Promise<void> = Promise.resolve();
+  private standaloneDrainScheduled = false;
 
   /** Tick at which the last broadcast happened (for tests). */
   lastBroadcastTick = 0;
@@ -219,6 +251,9 @@ export class AuthoritativeServer {
     this.sessionId = opts.sessionId;
     this.broadcastEnabled = opts.broadcastEnabled ?? true;
     const baseOps = opts.ops ?? defaultOps;
+    if (opts.authoring !== undefined && opts.worldLog === undefined) {
+      throw new Error("AuthoritativeServer: authoring requires a durable worldLog");
+    }
 
     const tracer = opts.trace === undefined
       ? new LiminaTracer(opts.sessionId)
@@ -287,6 +322,15 @@ export class AuthoritativeServer {
       mode: "headless",
     };
 
+    if (opts.authoring !== undefined) {
+      const sceneAdapter = new SceneAuthoringAdapter({ world: this.world });
+      this.authoring = registerAuthoringSkills(this.registry, {
+        projectId: opts.authoring.projectId,
+        sha256: (canonical) => baseOps.op_sha256(canonical),
+        adapters: new StaticAuthoringAdapterAllowlist([sceneAdapter]),
+      });
+    }
+
     // The authoritative physics world the sim steps each tick.
     this.recOps.op_physics_create_world(0);
     if (opts.bootstrap !== undefined) {
@@ -321,6 +365,9 @@ export class AuthoritativeServer {
           );
         }
         this.prev = this.snapshotMap();
+      }).catch((error) => {
+        this.poisonAuthority(error);
+        throw error;
       });
     } else {
       this.ready = Promise.resolve();
@@ -355,6 +402,68 @@ export class AuthoritativeServer {
     this.broadcastEnabled = enabled;
   }
 
+  /** Submit a trusted co-located tool call through the exact same FIFO and
+   * durable acknowledgement boundary used by socket clients. */
+  invokeAuthoritatively(
+    name: string,
+    input: Record<string, unknown>,
+    context: AuthoritativeInvocationContext,
+  ): Promise<MCPResponse> {
+    const failure = this.currentAuthorityFailure();
+    if (failure !== undefined) return Promise.resolve(this.authorityUnavailableResponse());
+    if (this.intentQueue.length >= MAX_QUEUED_INTENTS) {
+      return Promise.resolve({
+        success: false,
+        error: { code: "capacity_exceeded", message: "Authoritative intent queue is full" },
+      });
+    }
+    const response = new Promise<MCPResponse>((resolve) => {
+      this.intentQueue.push({
+        name,
+        input,
+        session: {
+          ...context,
+          causedBy: context.causedBy === undefined ? undefined : [...context.causedBy],
+        },
+        resolve,
+      });
+    });
+    // A co-located host may use the executor without starting transport loops.
+    // Schedule one shared drain; calls arriving before it runs join the batch.
+    if (!this.running) this.scheduleStandaloneDrain();
+    return response;
+  }
+
+  private scheduleStandaloneDrain(): void {
+    if (this.standaloneDrainScheduled) return;
+    this.standaloneDrainScheduled = true;
+    void Promise.resolve().then(async () => {
+      try {
+        await this.doTick();
+      } catch (error) {
+        this.poisonAuthority(error);
+        this.completeDispatch(this.rejectQueuedAfterFailure());
+      } finally {
+        this.standaloneDrainScheduled = false;
+        if (!this.running && this.intentQueue.length > 0 && this.currentAuthorityFailure() === undefined) {
+          this.scheduleStandaloneDrain();
+        }
+      }
+    });
+  }
+
+  private async withAuthorityLock<T>(operation: () => Promise<T> | T): Promise<T> {
+    const previous = this.authorityTail;
+    let release!: () => void;
+    this.authorityTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
   /** Start the accept + tick loops (returns immediately; loops run in background). */
   start(): void {
     if (this.running) return;
@@ -364,6 +473,9 @@ export class AuthoritativeServer {
       this.startLoops();
     }, (err) => {
       this.running = false;
+      const dispatch = this.rejectQueuedAfterFailure();
+      this.completeDispatch(dispatch);
+      if (dispatch.sends.length > 0) void Promise.allSettled(dispatch.sends);
       defaultOps.op_log(`AuthoritativeServer rehydrate failed; not starting loops: ${err instanceof Error ? err.message : String(err)}`);
     }));
   }
@@ -569,36 +681,24 @@ export class AuthoritativeServer {
           await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.invalidParams, "tools/call requires object arguments"));
           return;
         }
-        // READ-ONLY skills are OBSERVATIONS, not authoring: serve them IMMEDIATELY,
-        // off the authoritative tick loop. Only MUTATING intents go through the
-        // per-tick total order (intentQueue) below. Reads never change the world
-        // timeline, so ordering them against mutations buys nothing -- but forcing
-        // them through the single serial tick drain does real harm: a client's
-        // read-polling (the editor viewport tails worldlog/inspector every second)
-        // then shares one lane with every other client's intents, and a slow reader
-        // serial-stalls the tick and starves the coordinator bridge's acks. Serving
-        // reads on their own connection loop decouples them. They still run through
-        // registry.invoke (recorded + permission-checked) exactly as before; only
-        // the SERVING PATH changes, not what is recorded. Read-only == every declared
-        // effect is explicitly declared. Unknown and legacy definitions default to
-        // write, so an omitted annotation can only lose concurrency, not authority.
-        const def = this.registry.describe(p.name);
+        // Reads do not wait for a simulation tick, but they do enter the same FIFO
+        // world lock as mutation batches. Otherwise an async transaction can yield
+        // between operations and a reader can observe a state that never committed.
+        // The reply send remains outside that lock.
+        const skillName = p.name;
+        const def = this.registry.describe(skillName);
         if (def !== undefined && skillEffect(def) === "read") {
-          if (this.durableLogFailure !== undefined) {
-            await this.reply(conn.connId, this.error(
-              id,
-              JSON_RPC_ERRORS.internalError,
-              "Authoritative state is unavailable after a persistence failure; restart is required",
-            ));
-            return;
-          }
-          const result = await this.registry.invoke(p.name, args, {
-            agentId: conn.session.agentId,
-            sessionId: conn.session.sessionId,
-            permissions: conn.session.permissions,
-            profile: conn.session.profile,
-            tick: this.tick,
-            world: this.world,
+          const result = await this.withAuthorityLock(async () => {
+            await this.ready;
+            if (this.currentAuthorityFailure() !== undefined) return this.authorityUnavailableResponse();
+            return this.registry.invoke(skillName, args, {
+              agentId: conn.session!.agentId,
+              sessionId: conn.session!.sessionId,
+              permissions: conn.session!.permissions,
+              profile: conn.session!.profile,
+              tick: this.tick,
+              world: this.world,
+            });
           });
           if (!result.success && result.error !== undefined) {
             await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc(result.error.code), result.error.message, result));
@@ -607,7 +707,7 @@ export class AuthoritativeServer {
           }
           return;
         }
-        if (this.durableLogFailure !== undefined) {
+        if (this.currentAuthorityFailure() !== undefined) {
           await this.reply(conn.connId, this.error(
             id,
             JSON_RPC_ERRORS.internalError,
@@ -623,12 +723,12 @@ export class AuthoritativeServer {
           await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Authoritative intent queue is full"));
           return;
         }
-        this.intentQueue.push({ connId: conn.connId, reqId: rec.id, name: p.name, input: args, session: conn.session });
+        this.intentQueue.push({ connId: conn.connId, reqId: rec.id, name: skillName, input: args, session: conn.session });
         conn.queuedIntents = queuedByConnection + 1;
         return;
       }
       case SYNC_METHODS.subscribe: {
-        if (this.durableLogFailure !== undefined) {
+        if (this.currentAuthorityFailure() !== undefined) {
           await this.reply(conn.connId, this.error(
             id,
             JSON_RPC_ERRORS.internalError,
@@ -636,20 +736,25 @@ export class AuthoritativeServer {
           ));
           return;
         }
-        const p = asRecord(params);
-        conn.aoi = parseAoi(p?.aoi);
-        conn.subscribed = true;
-        // Refresh the authoritative baseline: while no client was subscribed the per-tick
-        // capture is skipped, so `this.prev` may be stale. Re-capture now so this client's
-        // first delta (and any declareAoi that reads `this.prev`) diffs against fresh state.
-        this.prev = this.snapshotMap();
-        // Push the AoI-filtered join view (reuses the M2 WorldSnapshot capture).
-        await this.sendSnapshot(conn);
-        await this.reply(conn.connId, this.success(id, { ok: true, tick: this.tick }));
+        const joined = await this.withAuthorityLock(async () => {
+          await this.ready;
+          if (this.currentAuthorityFailure() !== undefined) return undefined;
+          const p = asRecord(params);
+          conn.aoi = parseAoi(p?.aoi);
+          conn.subscribed = true;
+          this.prev = this.snapshotMap();
+          return { snapshot: this.snapshotLine(conn), tick: this.tick };
+        });
+        if (joined === undefined) {
+          await this.reply(conn.connId, this.authorityUnavailableWire(id));
+          return;
+        }
+        await this.sendSafe(conn.connId, joined.snapshot);
+        await this.reply(conn.connId, this.success(id, { ok: true, tick: joined.tick }));
         return;
       }
       case WORLDLOG_METHODS.subscribe: {
-        if (this.durableLogFailure !== undefined) {
+        if (this.currentAuthorityFailure() !== undefined) {
           await this.reply(conn.connId, this.error(
             id,
             JSON_RPC_ERRORS.internalError,
@@ -662,11 +767,20 @@ export class AuthoritativeServer {
         // the tail from `since` immediately. worldlogTail is the SAME helper worldlog.tail (the
         // skill) calls, so a client that mixes an occasional poll with this push can never see the
         // two disagree on what "authoring since X" means.
-        const p = asRecord(params);
-        const rawSince = p?.since;
-        const since = typeof rawSince === "number" && Number.isFinite(rawSince) ? Math.max(0, Math.floor(rawSince)) : 0;
-        const initial = worldlogTail(this.recorder, this.registry, since, this.publishedWorldlogCommands);
-        conn.worldlogCursor = initial.next;
+        const initial = await this.withAuthorityLock(async () => {
+          await this.ready;
+          if (this.currentAuthorityFailure() !== undefined) return undefined;
+          const p = asRecord(params);
+          const rawSince = p?.since;
+          const since = typeof rawSince === "number" && Number.isFinite(rawSince) ? Math.max(0, Math.floor(rawSince)) : 0;
+          const tail = worldlogTail(this.recorder, this.registry, since, this.publishedWorldlogCommands);
+          conn.worldlogCursor = tail.next;
+          return tail;
+        });
+        if (initial === undefined) {
+          await this.reply(conn.connId, this.authorityUnavailableWire(id));
+          return;
+        }
         await this.sendSafe(conn.connId, JSON.stringify({
           jsonrpc: "2.0",
           method: WORLDLOG_METHODS.append,
@@ -676,7 +790,7 @@ export class AuthoritativeServer {
         return;
       }
       case SYNC_METHODS.declareAoi: {
-        if (this.durableLogFailure !== undefined) {
+        if (this.currentAuthorityFailure() !== undefined) {
           await this.reply(conn.connId, this.error(
             id,
             JSON_RPC_ERRORS.internalError,
@@ -684,28 +798,29 @@ export class AuthoritativeServer {
           ));
           return;
         }
-        const aoi = parseAoi(params);
-        const prevAoi = conn.aoi;
-        conn.aoi = aoi;
-        // A client-driven AoI change (shrink/move) drops entities out of view even
-        // though they never moved. The per-tick delta only derives exits from THIS
-        // tick's `changes` set, so a STATIONARY AoI-exit would linger forever. Push a
-        // `removed` delta now for entities inside the OLD AoI but outside the NEW one,
-        // using the last authoritative capture (`this.prev`) as their positions --
-        // mirroring the snapshot/delta relevance filter so the client view converges.
-        if (conn.subscribed) {
+        const aoiResult = await this.withAuthorityLock(async () => {
+          await this.ready;
+          if (this.currentAuthorityFailure() !== undefined) return undefined;
+          const aoi = parseAoi(params);
+          const prevAoi = conn.aoi;
+          conn.aoi = aoi;
           const removed: string[] = [];
-          for (const [entId, state] of this.prev) {
-            if (inAoi(prevAoi, state.pos) && !inAoi(aoi, state.pos)) removed.push(entId);
+          if (conn.subscribed) {
+            for (const [entId, state] of this.prev) {
+              if (inAoi(prevAoi, state.pos) && !inAoi(aoi, state.pos)) removed.push(entId);
+            }
           }
-          if (removed.length > 0) {
-            await this.sendSafe(conn.connId, JSON.stringify({
+          return removed.length === 0 ? null : JSON.stringify({
               jsonrpc: "2.0",
               method: SYNC_METHODS.delta,
               params: { tick: this.tick, causedBy: [], changes: [], removed },
-            }));
-          }
+            });
+        });
+        if (aoiResult === undefined) {
+          await this.reply(conn.connId, this.authorityUnavailableWire(id));
+          return;
         }
+        if (aoiResult !== null) await this.sendSafe(conn.connId, aoiResult);
         await this.reply(conn.connId, this.success(id, { ok: true }));
         return;
       }
@@ -716,6 +831,10 @@ export class AuthoritativeServer {
         return;
       }
       default:
+        if (this.currentAuthorityFailure() !== undefined) {
+          await this.reply(conn.connId, this.authorityUnavailableWire(id));
+          return;
+        }
         if (this.onClientMessage !== undefined) {
           const handled = await this.onClientMessage(rec.method, params, {
             session: conn.session,
@@ -760,29 +879,17 @@ export class AuthoritativeServer {
 
   private async doTick(): Promise<void> {
     await this.ready;
-    if (this.durableLogFailure !== undefined) {
-      // Calls queued before the writer failed must be failed explicitly. Never
-      // invoke them against a world that can no longer be durably advanced.
-      const poisoned = this.intentQueue.splice(0, MAX_INTENTS_PER_TICK);
-      const rejects: Promise<void>[] = [];
-      for (const it of poisoned) {
-        const source = this.conns.get(it.connId);
-        if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
-        if (it.reqId !== undefined) {
-          rejects.push(this.sendSafe(it.connId, this.error(
-            it.reqId ?? null,
-            JSON_RPC_ERRORS.internalError,
-            "Authoritative persistence is unavailable; mutating intents are disabled until restart",
-          )));
-        }
-      }
-      if (rejects.length > 0) await Promise.allSettled(rejects);
-      return;
-    }
+    const dispatch = await this.withAuthorityLock(() => this.doTickExclusive());
+    this.completeDispatch(dispatch);
+    if (dispatch.sends.length > 0) await Promise.allSettled(dispatch.sends);
+  }
+
+  private async doTickExclusive(): Promise<TickDispatch> {
+    if (this.currentAuthorityFailure() !== undefined) return this.rejectQueuedAfterFailure();
     // An authoritative world with no participants and no pending input has
     // nothing to advance -- skip the step (and its world-log entry) so an idle
     // server does not accumulate state unbounded.
-    if (this.conns.size === 0 && this.intentQueue.length === 0) return;
+    if (this.conns.size === 0 && this.intentQueue.length === 0) return { sends: [], completions: [] };
     this.tick += 1;
     this.recorder.tick = this.tick;
 
@@ -791,23 +898,32 @@ export class AuthoritativeServer {
     //    authoritative timeline stays an M1 log and authority holds.
     const causedBy: number[] = [];
     const queue = this.intentQueue.splice(0, MAX_INTENTS_PER_TICK);
-    // Apply intents SERIALLY (one total order, deterministic), but fire each reply
-    // CONCURRENTLY: a slow/backpressured client must not serial-stall the tick (and
-    // thereby delay every other client's intents this tick). Each send is
-    // independently bounded by NET_SEND_TIMEOUT; we await them all after applying.
+    for (const intent of queue) this.decrementQueuedConnection(intent);
     const outcomes: Array<{ intent: QueuedIntent; result: MCPResponse }> = [];
     for (const it of queue) {
-      const source = this.conns.get(it.connId);
-      if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
       const result: MCPResponse = await this.registry.invoke(it.name, it.input, {
         agentId: it.session.agentId,
         sessionId: it.session.sessionId,
         permissions: it.session.permissions,
         profile: it.session.profile,
+        causedBy: it.session.causedBy === undefined ? undefined : [...it.session.causedBy],
         tick: this.tick,
         world: this.world,
       });
       outcomes.push({ intent: it, result });
+      if (this.authoring?.kernel.poisoned) {
+        this.poisonAuthority(this.authoring.kernel.poisonReason ?? new Error("authoring transaction kernel is poisoned"));
+        // Nothing after a failed rollback may execute against the indeterminate
+        // world. Reject this whole batch plus every intent accepted behind it.
+        const remainingBatch = queue.slice(outcomes.length);
+        const queuedBehind = this.intentQueue.splice(0);
+        for (const pending of queuedBehind) this.decrementQueuedConnection(pending);
+        return this.rejectIntentsAfterFailure([
+          ...outcomes.map((outcome) => outcome.intent),
+          ...remainingBatch,
+          ...queuedBehind,
+        ]);
+      }
     }
 
     // 2. Advance the authoritative sim one fixed step (recorded), then sync
@@ -823,29 +939,24 @@ export class AuthoritativeServer {
       persistenceFailure = this.poisonDurableLog(err);
       defaultOps.op_log(`AuthoritativeServer: durable world-log append failed; authoring poisoned until restart: ${persistenceFailure.message}`);
     }
+    if (persistenceFailure !== undefined) {
+      // The in-memory world and recorder may now be ahead of the recoverable
+      // prefix. Every outcome in the batch fails and no state is synchronized or
+      // published. Later queued work is drained by the fail-stop path.
+      return this.rejectIntentsAfterFailure(outcomes.map((outcome) => outcome.intent));
+    }
     syncAllBodies(this.world);
 
-    const replySends: Promise<void>[] = [];
+    const dispatch: TickDispatch = { sends: [], completions: [] };
     for (const { intent, result } of outcomes) {
-      if (result.success && persistenceFailure === undefined) causedBy.push(this.intentSeq++);
-      if (intent.reqId === undefined) continue;
-      const line = result.success && persistenceFailure !== undefined
-        ? this.error(
-          intent.reqId ?? null,
-          JSON_RPC_ERRORS.internalError,
-          "Authoritative mutation could not be persisted; authoring is disabled until restart",
-        )
-        : (!result.success && result.error !== undefined)
+      if (result.success) causedBy.push(this.intentSeq++);
+      if (intent.resolve !== undefined) dispatch.completions.push({ resolve: intent.resolve, response: result });
+      if (intent.connId === undefined || intent.reqId === undefined) continue;
+      const line = !result.success && result.error !== undefined
         ? this.error(intent.reqId ?? null, mcpErrorToJsonRpc(result.error.code), result.error.message, result)
         : this.success(intent.reqId ?? null, result);
-      replySends.push(this.sendSafe(intent.connId, line));
+      dispatch.sends.push(this.sendSafe(intent.connId, line));
     }
-    if (replySends.length > 0) await Promise.allSettled(replySends);
-
-    // The live world may already contain the failed batch, so it must not publish
-    // deltas that imply those mutations are authoritative. The poisoned process is
-    // intentionally read-only until it is restarted from the last durable prefix.
-    if (persistenceFailure !== undefined) return;
 
     // 3. Skip the O(world) capture+diff entirely when nothing will consume a delta:
     //    broadcasting off, or NO client subscribed. `prev` is refreshed on subscribe,
@@ -855,10 +966,10 @@ export class AuthoritativeServer {
     //    entities-touched-this-tick set out of the sim/skill-apply path so the diff
     //    scans only mutated entities. The AoI filter below already bounds each client's
     //    OUTPUT to O(relevant).)
-    if (!this.broadcastEnabled) return;
+    if (!this.broadcastEnabled) return dispatch;
     let anySubscribed = false;
     for (const c of this.conns.values()) { if (c.subscribed) { anySubscribed = true; break; } }
-    if (!anySubscribed) return;
+    if (!anySubscribed) return dispatch;
 
     const prev = this.prev;
     const cur = this.snapshotMap();
@@ -874,7 +985,7 @@ export class AuthoritativeServer {
     }
     this.prev = cur;
 
-    if (changes.length === 0 && removedIds.length === 0) return;
+    if (changes.length === 0 && removedIds.length === 0) return dispatch;
 
     // 4. Broadcast per subscribed client, filtered by that client's AoI. A client
     //    only ever sees entities relevant to it -> O(relevant), not O(K). Removals
@@ -888,12 +999,11 @@ export class AuthoritativeServer {
       params: { tick: this.tick, causedBy, changes, removed: removedIds },
     });
     let broadcast = false;
-    const sends: Promise<void>[] = [];
     for (const conn of this.conns.values()) {
       if (!conn.subscribed) continue;
       if (conn.aoi === undefined) {
         broadcast = true;
-        sends.push(this.sendSafe(conn.connId, fullInterestDeltaLine));
+        dispatch.sends.push(this.sendSafe(conn.connId, fullInterestDeltaLine));
         continue;
       }
       const filtered: EntityState[] = [];
@@ -913,14 +1023,14 @@ export class AuthoritativeServer {
       }
       if (filtered.length === 0 && removed.length === 0) continue;
       broadcast = true;
-      sends.push(this.sendSafe(conn.connId, JSON.stringify({
+      dispatch.sends.push(this.sendSafe(conn.connId, JSON.stringify({
         jsonrpc: "2.0",
         method: SYNC_METHODS.delta,
         params: { tick: this.tick, causedBy, changes: filtered, removed },
       })));
     }
-    await Promise.allSettled(sends);
     if (broadcast) this.lastBroadcastTick = this.tick;
+    return dispatch;
   }
 
   /** Replay the persisted tail through the RECORDING ops so the recorder repopulates its
@@ -972,6 +1082,82 @@ export class AuthoritativeServer {
     return droppedSteps;
   }
 
+  private currentAuthorityFailure(): Error | undefined {
+    if (this.authoring?.kernel.poisoned && this.authorityIntegrityFailure === undefined) {
+      this.poisonAuthority(this.authoring.kernel.poisonReason ?? new Error("authoring transaction kernel is poisoned"));
+    }
+    return this.durableLogFailure ?? this.authorityIntegrityFailure;
+  }
+
+  private poisonAuthority(error: unknown): Error {
+    if (this.authorityIntegrityFailure === undefined) {
+      this.authorityIntegrityFailure = error instanceof Error ? error : new Error(String(error));
+    }
+    return this.authorityIntegrityFailure;
+  }
+
+  private authorityUnavailableResponse(): MCPResponse {
+    return {
+      success: false,
+      error: {
+        code: "handler_error",
+        message: "Authoritative state is unavailable after an integrity or persistence failure; restart is required",
+      },
+    };
+  }
+
+  private authorityUnavailableWire(id: string | number | null): string {
+    return this.error(
+      id,
+      JSON_RPC_ERRORS.internalError,
+      "Authoritative state is unavailable after an integrity or persistence failure; restart is required",
+    );
+  }
+
+  private mutationUnavailableResponse(): MCPResponse {
+    return {
+      success: false,
+      error: {
+        code: "handler_error",
+        message: this.durableLogFailure !== undefined
+          ? "Authoritative mutation could not be persisted; authoring is disabled until restart"
+          : "Authoritative mutation failed integrity checks; authoring is disabled until restart",
+      },
+    };
+  }
+
+  private mutationUnavailableWire(id: string | number | null): string {
+    return this.error(id, JSON_RPC_ERRORS.internalError, this.mutationUnavailableResponse().error!.message);
+  }
+
+  private decrementQueuedConnection(intent: QueuedIntent): void {
+    if (intent.connId === undefined) return;
+    const source = this.conns.get(intent.connId);
+    if (source !== undefined) source.queuedIntents = Math.max(0, source.queuedIntents - 1);
+  }
+
+  private rejectQueuedAfterFailure(): TickDispatch {
+    const queued = this.intentQueue.splice(0);
+    for (const intent of queued) this.decrementQueuedConnection(intent);
+    return this.rejectIntentsAfterFailure(queued);
+  }
+
+  private rejectIntentsAfterFailure(intents: readonly QueuedIntent[]): TickDispatch {
+    const response = this.mutationUnavailableResponse();
+    const dispatch: TickDispatch = { sends: [], completions: [] };
+    for (const intent of intents) {
+      if (intent.resolve !== undefined) dispatch.completions.push({ resolve: intent.resolve, response });
+      if (intent.connId !== undefined && intent.reqId !== undefined) {
+        dispatch.sends.push(this.sendSafe(intent.connId, this.mutationUnavailableWire(intent.reqId ?? null)));
+      }
+    }
+    return dispatch;
+  }
+
+  private completeDispatch(dispatch: TickDispatch): void {
+    for (const completion of dispatch.completions) completion.resolve(completion.response);
+  }
+
   // ---- snapshot / state helpers -------------------------------------------
 
   private snapshotMap(): Map<string, EntityState> {
@@ -983,7 +1169,8 @@ export class AuthoritativeServer {
 
   private flushDurableLog(): void {
     if (this.durableLogClosed) return;
-    if (this.durableLogFailure !== undefined) throw this.durableLogFailure;
+    const authorityFailure = this.currentAuthorityFailure();
+    if (authorityFailure !== undefined) throw authorityFailure;
     try {
       this.durableLog?.flush();
       if (this.durableLog !== undefined && this.durableWorldlogPushPending) {
@@ -1004,7 +1191,7 @@ export class AuthoritativeServer {
 
   private closeDurableLog(): void {
     if (this.durableLog === undefined || this.durableLogClosed) return;
-    if (this.durableLogFailure !== undefined) {
+    if (this.currentAuthorityFailure() !== undefined) {
       // close() flushes. Retrying a poisoned writer could append a later in-memory
       // suffix after an unknown partial failure, so preserve the last known prefix.
       this.durableLogClosed = true;
@@ -1014,7 +1201,7 @@ export class AuthoritativeServer {
     this.durableLogClosed = true;
   }
 
-  private async sendSnapshot(conn: ClientConn): Promise<void> {
+  private snapshotLine(conn: ClientConn): string {
     // Reuse the M2 capture for the authoritative join view, then project it to
     // the wire + filter to the client's AoI (the snapshot is part of the stream,
     // so it must be O(relevant) too).
@@ -1028,11 +1215,11 @@ export class AuthoritativeServer {
       if (!inAoi(conn.aoi, e.pos)) continue;
       entities.push({ id: e.id, eid: e.eid, pos: e.pos, rot: e.rot, scale: e.scale });
     }
-    await this.sendSafe(conn.connId, JSON.stringify({
+    return JSON.stringify({
       jsonrpc: "2.0",
       method: SYNC_METHODS.snapshot,
       params: { tick: this.tick, entities },
-    }));
+    });
   }
 
   /** K4 (worldlog poll -> subscribe): fired from WorldRecorder.onFinalized for every command
@@ -1043,6 +1230,7 @@ export class AuthoritativeServer {
    *  absent from `this.conns` (connLoop's teardown / sendSafe's send-failure prune both delete it
    *  synchronously), so this loop can never push to, or throw for, a disconnected client. */
   private pushWorldlogAppends(): void {
+    if (this.currentAuthorityFailure() !== undefined) return;
     for (const conn of this.conns.values()) {
       if (conn.worldlogCursor === undefined) continue;
       const tail = worldlogTail(this.recorder, this.registry, conn.worldlogCursor, this.publishedWorldlogCommands);
