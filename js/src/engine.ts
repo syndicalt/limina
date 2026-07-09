@@ -480,6 +480,9 @@ export interface Engine {
   /** The render-only post-processing pipeline built by `render.enablePost` (opt-in,
    *  static/cinematic). A PostPipeline from render/post.ts; never sim/log state. */
   post?: unknown;
+  /** Screen-distance THREE.LOD objects placed by `asset.placeLod`, driven by the render loop's
+   *  per-frame `lod.update(camera)` pass. Render-only (rebuilt from the log on replay); never sim state. */
+  lods?: unknown[];
   width: number;
   height: number;
   mode?: "windowed" | "headless";

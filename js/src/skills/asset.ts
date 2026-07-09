@@ -16,7 +16,7 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { AssetRegistry } from "../asset-registry.ts";
 import { Position, Scale, renderSyncSystem } from "../ecs/world.ts";
-import { gltfResourceSchema, loadGltfIntoScene, parseGltfScene } from "./three.ts";
+import { gltfResourceSchema, loadGltfIntoScene, loadLodIntoScene, parseGltfScene } from "./three.ts";
 import { gltfLocalAabb, type LocalAabb } from "../assets/gltf-bounds.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
@@ -116,6 +116,26 @@ const placeInput = z.object({
    *  (textured/scale/integrity — theme stays the human's call). The editor's approval card renders them. */
   qcRender: z.string().optional(),
   qcChecks: z.record(z.string(), z.union([z.boolean(), z.null()])).optional(),
+});
+
+/** asset.placeLod — the same placement as asset.place, but the visible mesh is a screen-distance
+ *  THREE.LOD composed from ordered levels (level 0 = nearest / highest detail). Draw-call control:
+ *  the renderer swaps to a cheaper mesh as the entity shrinks on screen. Collider + authored identity
+ *  come from LEVEL 0 (pure from its bytes, so worker/render/gate agree). */
+const lodLevel = z.object({
+  assetId: z.string(),
+  /** Camera distance (world units) at/after which this level takes over. Level 0 is usually 0. */
+  distance: z.number().nonnegative(),
+});
+const placeLodInput = z.object({
+  lods: z.array(lodLevel).min(1),
+  position: Vec3.default([0, 0, 0]),
+  rotation: Vec3.optional(),
+  scale: Vec3.optional(),
+  ground: z.boolean().default(true),
+  normalizeHeight: z.number().positive().max(500).optional(),
+  /** COMMITTED content address of LEVEL 0 (pins the base identity across replay). */
+  hash: z.string().optional(),
 });
 
 /** Permission scope for asset.place — also the scope handed to its nested
@@ -322,6 +342,66 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
   };
 
   registry.register(place);
+
+  // ---- asset.placeLod ------------------------------------------------------
+  const placeLod: SkillDefinition<z.infer<typeof placeLodInput>, { entity: string; hash: string; levels: number; resource: z.infer<typeof gltfResourceSchema>; bounds: z.infer<typeof Vec3> }> = {
+    name: "asset.placeLod",
+    version: "1.0.0",
+    description: "Place a curated glTF asset as a screen-distance LOD: multiple resolution levels that the renderer swaps by camera distance for draw-call control. Level 0 is the nearest/highest-detail mesh and defines the collider + committed identity. Same transform/ground/normalize semantics as asset.place; records the REQUEST (ordered level ids + distances + level-0 hash).",
+    category: "three",
+    permissions: [...PLACE_PERMS],
+    commitFields: ["hash"],
+    input: placeLodInput,
+    output: z.object({ entity: z.string(), hash: z.string(), levels: z.number().int(), resource: gltfResourceSchema, bounds: Vec3 }),
+    handler: async (input, ctx) => {
+      // Order by distance ascending: level 0 = nearest/highest-detail = the collider + identity base.
+      const ordered = [...input.lods].sort((a, b) => a.distance - b.distance);
+      const resolved = ordered.map((l) => { const r = assets.resolve(l.assetId); return { assetId: l.assetId, distance: l.distance, bytes: r.bytes, hash: r.hash }; });
+      const base = resolved[0];
+      // Content-hash pin on LEVEL 0: WARN (never THROW) on a cross-host mismatch — same rule as asset.place.
+      if (input.hash !== undefined && input.hash !== base.hash) {
+        ctx.emit("asset.hash_mismatch", { assetId: base.assetId, committed: input.hash, resolved: base.hash });
+      }
+      const terrainY = (input.ground && layers !== undefined) ? terrainSurfaceHeight(layers, input.position[0], input.position[2]) : undefined;
+      const groundPos: z.infer<typeof Vec3> = terrainY !== undefined ? [input.position[0], terrainY, input.position[2]] : input.position;
+      const { entity, resource, lod } = await loadLodIntoScene(ctx, resolved, {
+        position: groundPos, rotationEuler: input.rotation, scale: input.scale,
+      });
+      // Register the LOD for the per-frame lod.update(camera) pass (render-only; rebuilt from the log
+      // on replay by re-invoking this skill — never sim/log state, like world.post).
+      if (lod !== undefined) {
+        const w = ctx.world as unknown as { lods?: unknown[] };
+        (w.lods ??= []).push(lod);
+      }
+      // Collider + placed AABB from LEVEL 0 bytes — identical in worker/render/gate (pure), as asset.place.
+      const localAabb = gltfLocalAabb(base.bytes);
+      const placed = localAabb === null ? null : placedWorldAabb(localAabb, groundPos, input.rotation, input.scale, input.normalizeHeight, input.ground);
+      // Mesh-side normalize + ground on the LOD root (render/gate only; the worker has no mesh).
+      const rec = ctx.world.entities.resolve(entity) as { eid: number; mesh?: THREE.Object3D } | undefined;
+      if (rec?.mesh !== undefined && rec.eid !== undefined) {
+        const measure = (): THREE.Box3 => { renderSyncSystem(ctx.world.ecs); rec.mesh!.updateMatrixWorld(true); return new THREE.Box3().setFromObject(rec.mesh!); };
+        let box = measure();
+        if (input.normalizeHeight !== undefined) {
+          const h = box.max.y - box.min.y;
+          if (h > 1e-6) { const f = input.normalizeHeight / h; Scale.x[rec.eid] *= f; Scale.y[rec.eid] *= f; Scale.z[rec.eid] *= f; box = measure(); }
+        }
+        if (input.ground) { Position.y[rec.eid] += groundPos[1] - box.min.y; measure(); }
+      }
+      let bounds: [number, number, number] = placed === null ? [0, 0, 0] : [placed.max[0] - placed.min[0], placed.max[1] - placed.min[1], placed.max[2] - placed.min[2]];
+      if (placed !== null) {
+        const hx = (placed.max[0] - placed.min[0]) / 2, hy = (placed.max[1] - placed.min[1]) / 2, hz = (placed.max[2] - placed.min[2]) / 2;
+        if (hx > 1e-4 && hy > 1e-4 && hz > 1e-4) {
+          const cx = (placed.min[0] + placed.max[0]) / 2, cy = (placed.min[1] + placed.max[1]) / 2, cz = (placed.min[2] + placed.max[2]) / 2;
+          ctx.world.ops.op_physics_add_static_box(cx, cy, cz, hx, hy, hz, 0.85, 0);
+        }
+        bounds = [placed.max[0] - placed.min[0], placed.max[1] - placed.min[1], placed.max[2] - placed.min[2]];
+      }
+      const levelCount = lod !== undefined ? (lod as unknown as { levels: unknown[] }).levels.length : 0;
+      ctx.emit("asset.lodPlaced", { levels: resolved.map((r) => ({ assetId: r.assetId, distance: r.distance, hash: r.hash })), position: input.position, grounded: input.ground, entity, mounted: levelCount });
+      return { entity, hash: base.hash, levels: levelCount, resource, bounds };
+    },
+  };
+  registry.register(placeLod);
 
   // ---- asset.scatter -------------------------------------------------------
   // Scatter curated assets BY ID across a tile-grid region under an agent-set

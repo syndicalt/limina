@@ -383,6 +383,8 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
         );
         camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
       }
+      const wl = (player.world as unknown as { lods?: Array<{ update: (c: unknown) => void }> }).lods;
+      if (wl !== undefined) for (const l of wl) l.update(camera);
       renderSyncSystem(player.world.ecs);
       renderer.render(scene, camera);
     },
@@ -555,7 +557,7 @@ const LIVE_IN_PLACE_SKILLS = new Set(["ecs.updateComponent", "scene.moveEntity",
 // backend (invisible mesh). A handler must NOT do its own async fetch: handlers ALSO run in the sim
 // worker, where a hanging fetch blocks the "ready" handshake and freezes the viewport (learned the
 // hard way — that is why prewarmAssets was removed).
-const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "asset.placeLod", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
 
 /** An inline `assets` palette off a command's input (vegetation.plant/scatter), sanitised to ids. */
 function inlinePaletteEntries(input: Record<string, unknown>): { id: string }[] {
@@ -572,6 +574,11 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack = {}): 
   const input = (cmd.input ?? {}) as Record<string, unknown>;
   if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF") {
     return typeof input.assetId === "string" ? [input.assetId] : [];
+  }
+  // asset.placeLod mounts a GLB PER LEVEL — pre-warm every level's parse cache before init().
+  if (cmd.tool === "asset.placeLod") {
+    const lods = Array.isArray(input.lods) ? input.lods : [];
+    return lods.map((l) => (l && typeof (l as { assetId?: unknown }).assetId === "string" ? (l as { assetId: string }).assetId : "")).filter((s) => s.length > 0);
   }
   // village.build mounts a GLB per building (via nested asset.place); its ids live in
   // steering.buildings[].assetId, so pre-warm each one's parse cache before init().
@@ -1292,6 +1299,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
         entityStream?.update(camPos.x, camPos.z);
       }
+      // Screen-distance LOD (asset.placeLod): pick each LOD's level for THIS frame's camera before
+      // the scene is drawn. Cheap (a distance compare per LOD); render-only.
+      const wl = (world as unknown as { lods?: Array<{ update: (c: unknown) => void }> }).lods;
+      if (wl !== undefined) for (const l of wl) l.update(camera);
       // Opt-in RENDER-ONLY post stack: render.enablePost stashes a PostPipeline on world.post;
       // when present, drive its GTAO/bloom/grade composite in place of the bare present. Absent
       // (live navigation — the static/cinematic caveat) → the known-good bare renderer path.

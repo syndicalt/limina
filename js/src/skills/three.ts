@@ -632,6 +632,58 @@ export async function loadGltfIntoScene(
 /** Inert Transformable for the sim-worker entity spawn (position comes from spawnRenderable's args). */
 const INERT_GLTF_TRANSFORM = { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
 
+/** Compose a screen-distance THREE.LOD from ordered levels (level 0 = highest detail) and mount it as
+ *  ONE entity — the mesh-side sibling of loadGltfIntoScene, sharing the same sim-worker skipMesh rule
+ *  (the worker never parses a mesh — texture decode hangs it — so it spawns the entity WITHOUT the LOD;
+ *  the collider, authored from level-0 bytes by asset.placeLod, is what the worker's physics needs).
+ *  Returns the LOD object so the caller can register it for the per-frame `lod.update(camera)` pass. */
+export async function loadLodIntoScene(
+  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: unknown; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: unknown }): string } } },
+  levels: ReadonlyArray<{ assetId: string; bytes: Uint8Array; hash: string; distance: number }>,
+  placement: GltfPlacement,
+): Promise<{ entity: string; resource: LoadedResourceMetadata; lod?: SceneObject }> {
+  const [x, y, z] = placement.position;
+  const base = levels[0];
+  const skipMesh = ctx.world.simWorker === true;
+  let lod: SceneObject | undefined;
+  if (!skipMesh) {
+    // deno-lint-ignore no-explicit-any
+    const L = new (THREE as any).LOD();
+    for (const lvl of levels) {
+      try {
+        const mesh = await parseGltfScene(lvl.assetId, lvl.bytes);
+        (mesh as unknown as { traverse: (fn: (o: unknown) => void) => void }).traverse((o) => {
+          const m = o as { isMesh?: boolean; castShadow?: boolean; receiveShadow?: boolean };
+          if (m.isMesh === true) { m.castShadow = true; m.receiveShadow = true; }
+        });
+        L.addLevel(mesh, lvl.distance);
+      } catch {
+        // A missing/corrupt level is dropped — the LOD still works from its remaining levels (and if
+        // ALL levels fail, the entity spawns mesh-less, like loadGltfIntoScene's catch).
+      }
+    }
+    if (L.levels.length > 0) { lod = L as SceneObject; ctx.world.scene.add(lod); }
+  }
+  const transform = (lod ?? INERT_GLTF_TRANSFORM) as unknown as Parameters<typeof spawnRenderable>[1];
+  const eid = spawnRenderable(ctx.world.ecs, transform, x, y, z);
+  if (placement.rotationEuler !== undefined) {
+    const q = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(placement.rotationEuler[0], placement.rotationEuler[1], placement.rotationEuler[2]),
+    );
+    Rotation.x[eid] = q.x; Rotation.y[eid] = q.y; Rotation.z[eid] = q.z; Rotation.w[eid] = q.w;
+  }
+  if (placement.scale !== undefined) {
+    Scale.x[eid] = placement.scale[0]; Scale.y[eid] = placement.scale[1]; Scale.z[eid] = placement.scale[2];
+  }
+  const resource: LoadedResourceMetadata = lod !== undefined
+    ? collectGltfMetadata(base.assetId, base.hash, base.bytes, lod)
+    : { kind: "gltf", assetId: base.assetId, source: `assets/${base.assetId}`, hash: base.hash, bytes: base.bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
+  const entity = lod !== undefined
+    ? ctx.world.entities.create({ eid, mesh: lod, resource })
+    : ctx.world.entities.create({ eid, origin: { tool: "asset.loadLod", input: { assetId: base.assetId, position: placement.position } } });
+  return { entity, resource, lod };
+}
+
 /** three.loadGLTF over a content-addressed AssetRegistry: the id resolves to bytes
  *  + a CACHED content hash (no re-hash per load), then loads via the shared
  *  pipeline. */
