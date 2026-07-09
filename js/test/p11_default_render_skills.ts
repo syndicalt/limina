@@ -162,13 +162,19 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   const { world } = makeCapturingWorld();
   const base = { agentId: "agt_b", sessionId: "ses_p11_default_b", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
+  // The engine ships NO biome content (engine↔content decoupling): populateBiome scatters nothing
+  // for unmapped roles, so this MECHANISM test supplies its own pack inline — binding the roles the
+  // mountains/desert types reference to bundled test GLBs — rather than depending on an ambient
+  // project biome-pack.json. Self-contained + deterministic (the gate owns its content).
+  const TEST_BIOME_PACK = { conifer: { id: "triangle.glb" }, boulder: { id: "textured-triangle.gltf" }, cactus: { id: "triangle.glb" } };
+
   const gen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: "mountains", hints: SHAPE }, base));
   const regionId = gen.regionId as string;
   const relief = gen.relief as { minY: number; maxY: number };
   const seaLevel = relief.minY + 0.18 * (relief.maxY - relief.minY);
 
   // Populate via the SKILL (type resolved from the region). Props place, gated to dry land.
-  const pop = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: seaLevel, waterMargin: 2.5 }, base));
+  const pop = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: seaLevel, waterMargin: 2.5, biomePack: TEST_BIOME_PACK }, base));
   assert(pop.type === "mountains", `populateBiome resolved type '${pop.type}', expected the region's 'mountains'`);
   assert((pop.instances as number) > 0, `world.populateBiome placed NO props (instances=${pop.instances}) — the populate path is broken`);
   const layers = pop.layers as { instances: number; mounted: number }[];
@@ -176,13 +182,13 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
 
   // GATED — 0 in water: flood the region OVER its peak so EVERY candidate is in water; the
   // waterGated mountains layers must then place ZERO. Falsifiable against the run above.
-  const flooded = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: relief.maxY + 50, waterMargin: 2.5 }, base));
+  const flooded = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: relief.maxY + 50, waterMargin: 2.5, biomePack: TEST_BIOME_PACK }, base));
   assert((flooded.instances as number) === 0, `flooding the region to its peak still placed ${flooded.instances} props (props in water — the water gate is not load-bearing)`);
   assert((flooded.instances as number) < (pop.instances as number), "flooded run did not place strictly fewer than the dry run (gate vacuous)");
 
   // Biome-correctness: a DESERT region scatters its (biome-gated) cacti content too.
   const dgen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: { minTx: 8, minTz: 0, maxTx: 9, maxTz: 1 }, lod: 0, type: "desert" }, base));
-  const dpop = ok(await registry.invoke("world.populateBiome", { regionId: dgen.regionId as string }, base));
+  const dpop = ok(await registry.invoke("world.populateBiome", { regionId: dgen.regionId as string, biomePack: TEST_BIOME_PACK }, base));
   assert(dpop.type === "desert" && (dpop.instances as number) > 0, `desert populate placed nothing (instances=${dpop.instances})`);
 }
 

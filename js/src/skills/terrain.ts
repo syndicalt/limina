@@ -611,7 +611,11 @@ export function registerTerrainSkills(
      *  ships NO pack — an absent/partial pack scatters nothing for unmapped roles (graceful). When
      *  omitted, the effective pack is read from the project's `biome-pack.json` (missing/invalid →
      *  empty), so a project supplies content either inline here or as that file. */
-    biomePack: z.record(
+    // partialRecord (NOT record): a project supplies SOME roles, not all seven. zod v4's
+    // z.record over an enum is EXHAUSTIVE — it silently rejected every partial pack (a real
+    // project's biome-pack.json failed safeParse → EMPTY_BIOME_PACK → nothing scattered), which
+    // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
+    biomePack: z.partialRecord(
       z.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
       z.object({ id: z.string(), embedRadius: z.number().optional() }),
     ).optional(),
