@@ -252,6 +252,7 @@ export function renderHillshade(e, seaLevel = SEA_DEFAULT) {
   const img = ctx.createImageData(e.w, e.h);
   const d = img.data;
   const valueScale = (e.maxY - e.minY) / ELEV_QUANT_MAX;
+  const landSpan = Math.max(1e-9, e.maxY - seaLevel);
   const yAt = (c, r) => e.minY + e.cells[Math.max(0, Math.min(e.h - 1, r)) * e.w + Math.max(0, Math.min(e.w - 1, c))] * valueScale;
   const cellM = e.rect.w / (e.w - 1);
   // light from the NW (screen up-left = north-west since row 0 is north)
@@ -264,7 +265,7 @@ export function renderHillshade(e, seaLevel = SEA_DEFAULT) {
         const depth = Math.min(1, (seaLevel - y) / 12);
         rgb = [127 - 60 * depth, 176 - 78 * depth, 212 - 74 * depth];
       } else {
-        rgb = landColor(Math.min(1, Math.max(0, y - seaLevel) / (e.maxY - seaLevel)));
+        rgb = landColor(Math.min(1, Math.max(0, y - seaLevel) / landSpan));
       }
       // central-difference normal -> lambert shade
       const gx = (yAt(c + 1, r) - yAt(c - 1, r)) / (2 * cellM);
