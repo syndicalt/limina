@@ -34,16 +34,20 @@ export async function postJSON(url, body) {
 }
 
 const SAVE_DEBOUNCE_MS = 750;
+const SAVE_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000];
 let saveTimer = null;
+let retryAttempt = 0;
 let getPayload = null; // bound once by map.js: () => ({ maps, activeMapId })
 let mapsRev = null; // the on-disk revision this client's state derives from (compare-and-set)
 let onConflict = null; // bound by map.js: another session saved first → reload, don't clobber
+let onSaveError = null;
 
 export function bindMapSaver(payloadFn) {
   getPayload = payloadFn;
   void sessionToken().catch(() => {});
 }
 export function bindSaveConflict(fn) { onConflict = fn; }
+export function bindSaveError(fn) { onSaveError = fn; }
 export function setMapsRev(rev) { mapsRev = typeof rev === "string" ? rev : null; }
 
 async function doSave() {
@@ -56,14 +60,34 @@ async function doSave() {
       body: JSON.stringify({ ...getPayload(), baseRev: mapsRev }),
     });
     const j = await r.json();
-    if (r.status === 409) { if (onConflict) onConflict(j); return; }
-    if (j && typeof j.mapsRev === "string") mapsRev = j.mapsRev;
-  } catch { /* next schedule retries */ }
+    if (r.status === 409) {
+      retryAttempt = 0;
+      if (onConflict) onConflict(j);
+      return { conflict: true };
+    }
+    if (!r.ok || !j || j.ok !== true || typeof j.mapsRev !== "string") {
+      const error = new Error(j?.error || `map save failed with HTTP ${r.status}`);
+      error.status = r.status;
+      throw error;
+    }
+    mapsRev = j.mapsRev;
+    retryAttempt = 0;
+    return j;
+  } catch (error) {
+    const transient = error?.status === 423 || error?.status === 502 || error?.status === 503 || error?.status === 504 || error instanceof TypeError;
+    if (transient && retryAttempt < SAVE_RETRY_DELAYS_MS.length) {
+      const delay = SAVE_RETRY_DELAYS_MS[retryAttempt++];
+      if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = null; void doSave().catch(() => {}); }, delay);
+      if (retryAttempt === 1 && onSaveError) onSaveError(new Error(`${error.message}; retrying`));
+    } else if (onSaveError) onSaveError(error);
+    throw error;
+  }
 }
 
 export function scheduleMapSave() {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { saveTimer = null; doSave(); }, SAVE_DEBOUNCE_MS);
+  retryAttempt = 0;
+  saveTimer = setTimeout(() => { saveTimer = null; void doSave().catch(() => {}); }, SAVE_DEBOUNCE_MS);
 }
 
 export async function flushMapSave() {
@@ -77,7 +101,7 @@ export async function flushMapSave() {
 // small payloads on an instant close (it carries baseRev, so a late/unordered delivery can't
 // clobber a newer session — compare-and-set refuses it).
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden" && saveTimer) flushMapSave();
+  if (document.visibilityState === "hidden" && saveTimer) void flushMapSave().catch(() => {});
 });
 window.addEventListener("beforeunload", () => {
   if (!saveTimer || !getPayload || !cachedSessionToken) return;

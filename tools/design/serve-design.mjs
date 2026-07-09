@@ -6,10 +6,22 @@
 //
 //   node tools/design/serve-design.mjs <vault-dir> [port]
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve, basename } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, basename, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync, renameSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -17,11 +29,17 @@ import { buildPeekScene } from "./peek-scene.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
+import { AtlasMapDocBridge, AtlasSourceBridgeError } from "./atlas-source-bridge.mjs";
+import {
+  EditorBridgeClient,
+  assertLoopbackEditorUrl,
+  editorClientConfigFromEnvironment,
+} from "../bridge/editor-client.mjs";
 
 // 3D-peek render jobs (Painter P5): bounded in-memory status retained for recent jobs.
 const peekJobs = new Map();
 import { createServer } from "node:http";
-import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
+import { migrateMapDoc } from "./map-doc.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIMINA_HOME = resolve(__dirname, "..", "..");
@@ -52,7 +70,36 @@ const PROJECT_CONFIG = loadProjectConfig(REQUESTED_PROJECT_ROOT);
 const PROJECT_ROOT = PROJECT_CONFIG.projectRoot;
 const PROJECT_ID = PROJECT_CONFIG.projectId;
 const vaultDir = resolveProjectPath(PROJECT_ROOT, REQUESTED_VAULT_DIR, "design vault");
-const ASSETS_DIR = resolve(process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, "assets"));
+const CONFIGURED_ASSET_ROOT = PROJECT_CONFIG.assetRoot ?? "assets";
+function ensureProjectDirectory(path, label) {
+  const candidate = resolve(path);
+  const relativePath = relative(PROJECT_ROOT, candidate);
+  if (relativePath === "" || relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new Error(`${label} must be a child of the canonical project root`);
+  }
+  let current = PROJECT_ROOT;
+  for (const segment of relativePath.split(sep)) {
+    current = join(current, segment);
+    try { mkdirSync(current, { mode: 0o755 }); }
+    catch (error) { if (error?.code !== "EEXIST") throw error; }
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} contains a non-directory or symlink: ${current}`);
+    const real = realpathSync(current);
+    const realRelative = relative(PROJECT_ROOT, real);
+    if (realRelative === ".." || realRelative.startsWith(`..${sep}`) || isAbsolute(realRelative)) {
+      throw new Error(`${label} escapes the canonical project root through ${current}`);
+    }
+    current = real;
+  }
+  return current;
+}
+const ASSET_ROOT_REQUEST = process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, CONFIGURED_ASSET_ROOT);
+ensureProjectDirectory(ASSET_ROOT_REQUEST, "asset root");
+const ASSETS_DIR = resolveProjectPath(
+  PROJECT_ROOT,
+  ASSET_ROOT_REQUEST,
+  "asset root",
+);
 const port = Number(process.argv[3]) || 4321;
 const HOST = "127.0.0.1";
 const DESIGN_SESSION_TOKEN = randomBytes(32).toString("hex");
@@ -61,6 +108,30 @@ const MAX_PEEK_JOBS = 256;
 const MAX_CONCURRENT_PEEKS = 2;
 const PEEK_JOB_TTL_MS = 30 * 60 * 1000;
 const PEEK_TIMEOUT_MS = 2 * 60 * 1000;
+
+let atlasAuthoringClient;
+try {
+  const config = editorClientConfigFromEnvironment(process.env, {
+    agentId: "atlas-design-space",
+    sessionId: `atlas-${randomBytes(16).toString("hex")}`,
+    profile: "builder.readWrite",
+  });
+  assertLoopbackEditorUrl(config.url);
+  atlasAuthoringClient = new EditorBridgeClient(config);
+} catch (error) {
+  const configurationError = error;
+  atlasAuthoringClient = {
+    callTool() { return Promise.reject(configurationError); },
+    close() {},
+  };
+  console.warn(`[atlas] authoritative saves disabled until editor connection is configured: ${error.message}`);
+}
+const atlasMapDocBridge = new AtlasMapDocBridge({
+  projectConfig: PROJECT_CONFIG,
+  vaultDir,
+  assetRoot: ASSETS_DIR,
+  authoringClient: atlasAuthoringClient,
+});
 
 function writeWorldMap(worldMap) {
   const relativePath = join("maps", worldMap.id, `${worldMap.provenance.contentHash}.worldmap.json`);
@@ -215,38 +286,7 @@ function mapsRev() {
   catch { return "0"; }
 }
 function saveMaps(maps, activeMapId, baseRev) {
-  // COMPARE-AND-SET: saves are wholesale (the client posts its entire in-memory doc), so a
-  // client holding stale state would silently clobber every feature saved since it loaded —
-  // the proven root cause of the phantom feature loss. A save whose baseRev doesn't match the
-  // on-disk revision is refused with a conflict; the client reloads and the stale tab's
-  // unsaved edits are dropped VISIBLY instead of newer disk state dying silently.
-  const cur = mapsRev();
-  if (typeof baseRev !== "string" || baseRev !== cur) return { conflict: true, mapsRev: cur };
-  // The client only round-trips maps + activeMapId; re-read the on-disk doc so top-level markers
-  // it doesn't know about (e.g. axes:"north-negz") survive every save.
-  let prev = {};
-  try { prev = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")) || {}; } catch { /* first save */ }
-  const doc = serializeMapDoc(maps, activeMapId, prev);
-  // TRIPWIRE (phantom feature loss under investigation): whenever a save DROPS features that the
-  // on-disk doc has, snapshot both sides so the culprit interaction can be reconstructed. Legit
-  // deletes trip this too — it's evidence, not a refusal.
-  try {
-    for (const pm of prev.maps || []) {
-      const nm = doc.maps.find((m) => m.id === pm.id);
-      const prevIds = new Set((pm.features || []).map((f) => f.id));
-      const nextIds = new Set(((nm && nm.features) || []).map((f) => f.id));
-      const dropped = [...prevIds].filter((id) => !nextIds.has(id));
-      if (dropped.length > 0) {
-        const evDir = join(vaultDir, ".map-save-drops");
-        mkdirSync(evDir, { recursive: true });
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        writeFileSync(join(evDir, `${stamp}-${pm.id}.json`), JSON.stringify({ droppedIds: dropped, prevMap: pm, nextMap: nm ?? null }, null, 2));
-        console.warn(`map-save DROPPED ${dropped.length} feature(s) from "${pm.id}" (${dropped.join(", ")}) — evidence in ${evDir}`);
-      }
-    }
-  } catch { /* evidence only — never block a save */ }
-  writeFileSync(join(vaultDir, "maps.json"), JSON.stringify(doc, null, 2));
-  return { saved: true, maps: doc.maps.length, mapsRev: mapsRev() };
+  return atlasMapDocBridge.save({ maps, activeMapId, baseRev });
 }
 
 // Create a new vault document (a readable, linkable markdown note).
@@ -635,9 +675,15 @@ createServer((req, res) => {
           return;
         }
         if (req.url === "/api/map-save") {
-          const r = saveMaps(p.maps, p.activeMapId, p.baseRev);
-          res.writeHead(r.conflict ? 409 : 200, { "content-type": "application/json" });
-          res.end(JSON.stringify(r));
+          try {
+            const r = await saveMaps(p.maps, p.activeMapId, p.baseRev);
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify(r));
+          } catch (error) {
+            if (!(error instanceof AtlasSourceBridgeError)) throw error;
+            res.writeHead(error.status, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(JSON.stringify(error.response()));
+          }
           return;
         }
         if (req.url === "/api/doc-create") {

@@ -10,7 +10,7 @@
 
 import { esc, toast } from "./util.js";
 import { S } from "./store.js";
-import { postJSON, bindMapSaver, bindSaveConflict, scheduleMapSave, flushMapSave } from "./net.js";
+import { postJSON, bindMapSaver, bindSaveConflict, bindSaveError, scheduleMapSave, flushMapSave } from "./net.js";
 import * as H from "./map-commands.js";
 import * as EL from "./map-elevation.js";
 import * as LM from "./map-paint.js";
@@ -100,6 +100,7 @@ bindSaveConflict(() => {
   toast("Map changed in another session — reloading its version", 4000);
   S.fn.reload();
 });
+bindSaveError((error) => toast("Map save failed: " + String(error?.message || error), 6000));
 
 function biomeDefs(){
   const p=(id,base,ex)=>'<pattern id="biome-'+id+'" width="16" height="16" patternUnits="userSpaceOnUse"><rect width="16" height="16" fill="'+base+'"/>'+ex+'</pattern>';

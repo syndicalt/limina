@@ -837,9 +837,10 @@ console.log("data safety:");
   check("delete-undo skips re-insert when the id already exists", map.features.filter((f) => f.id === "f2").length === 1);
 }
 {
-  // (c) compare-and-set on /api/map-save — the PRIMARY loss cause (stale wholesale save
-  // clobbering newer disk state). Run the REAL server on a temp vault: a save echoing the
-  // current rev lands; a save with a stale rev is refused 409 and the disk stays untouched.
+  // (c) compare-and-set and authority fail-closed behavior on /api/map-save. The successful
+  // source->transaction->mirror path is exhaustively gated in atlas-source-bridge.test.mjs with
+  // an injected authority. This real server intentionally has NO editor token/host: a fresh-rev
+  // request may persist its immutable source, but must refuse to mirror/ack without durability.
   const { mkdtempSync: mkTmp, writeFileSync: wf, readFileSync: rf, rmSync: rm } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { spawn } = await import("node:child_process");
@@ -858,23 +859,25 @@ console.log("data safety:");
     check("server: /api/state carries the strict fixture projectId", state?.project === "mapstudio-gate");
     const session = await (await fetch(`http://localhost:${port}/api/session`)).json();
     const postHeaders = { "content-type": "application/json", "x-limina-design-token": session.token };
-    // Fresh-rev save (drops a feature deliberately — a LEGITIMATE newer-state write) lands.
+    // Fresh-rev save (drops a feature deliberately) reaches source persistence, then fails closed
+    // because this server was deliberately launched without LIMINA_EDITOR_TOKEN/editor_host.
     const newer = clone(V1_FIXTURE.maps); newer[0].features = newer[0].features.slice(0, 2);
     const ok = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: newer, activeMapId: "primary", baseRev: rev }) });
     const okJ = await ok.json();
-    check("server: matching baseRev save lands (200 + new rev)", ok.status === 200 && okJ.saved === true && typeof okJ.mapsRev === "string" && okJ.mapsRev !== rev);
-    // THE BUG, replayed: a client still holding the OLD rev posts its stale full doc (which
-    // lacks nothing here — worse, it would RESURRECT/clobber). Must bounce 409, disk unchanged.
-    const stale = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary", baseRev: rev }) });
+    check("server: authority outage refuses acknowledgement/mirror (503 + stored source)",
+      ok.status === 503 && okJ.code === "authoring_unavailable" && typeof okJ.details?.source?.hash === "string");
+    // THE BUG, replayed: a client holding the wrong revision posts a wholesale doc. CAS must
+    // bounce it before another source write or authority call.
+    const stale = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary", baseRev: "stale-revision" }) });
     const staleJ = await stale.json();
     const onDisk = JSON.parse(rf(join(vault, "maps.json"), "utf8"));
-    check("server: STALE baseRev save is refused with 409 + conflict + current rev", stale.status === 409 && staleJ.conflict === true && staleJ.mapsRev === okJ.mapsRev);
-    check("server: refused save left the disk untouched (2 features, not 4)", onDisk.maps[0].features.length === 2);
+    check("server: STALE baseRev save is refused with 409 + conflict + current rev", stale.status === 409 && staleJ.conflict === true && staleJ.mapsRev === rev);
+    check("server: uncommitted save left the mutable mirror untouched", onDisk.maps[0].features.length === V1_FIXTURE.maps[0].features.length);
     // A save with NO baseRev (old client / late beacon from a dead session) is also refused.
     const bare = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary" }) });
     check("server: rev-less save (late beacon shape) is refused", bare.status === 409);
     // Falsifiability: the pre-CAS behavior — stale save landing — would flip the disk check.
-    check("(falsifiability) had the stale save landed, the disk check would FAIL", clone(V1_FIXTURE.maps)[0].features.length !== 2);
+    check("(falsifiability) had the uncommitted save mirrored, the disk check would FAIL", newer[0].features.length !== onDisk.maps[0].features.length);
   } finally {
     srv.kill();
     rm(vault, { recursive: true, force: true });
