@@ -9,8 +9,9 @@
 // browser bundle. A pure, standalone implementation with no host op and no runtime globals
 // (no node:crypto, no WebCrypto, no TextEncoder) is the only way to guarantee that.
 //
-// Standard FIPS 180-4 SHA-256, single-pass (whole message buffered — worldmaps are small JSON
-// documents, not multi-GB streams, so streaming support is not needed).
+// Standard FIPS 180-4 SHA-256. Uint8Array inputs are processed directly in 64-byte blocks with
+// only the final padded block(s) allocated, which keeps large derived-artifact verification bounded.
+// String inputs use the portable hand-written UTF-8 encoder below.
 //
 // Known test vectors (verified by js/test/p_worldmap_compile.ts):
 //   sha256("")    = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -18,24 +19,36 @@
 //   sha256("abc" + "def" ... wait, use the standard NIST 2-block vector instead — see the test file.
 
 // -- UTF-8 encode a JS string into bytes, by hand (no TextEncoder dependency). ------------------
-function utf8Bytes(str) {
-  const out = [];
+function utf8ByteLength(str) {
+  let length = 0;
   for (let i = 0; i < str.length; i++) {
-    let cp = str.codePointAt(i);
+    const cp = str.codePointAt(i);
+    if (cp > 0xffff) i++; // consumed a surrogate pair
+    length += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+  }
+  return length;
+}
+
+function utf8Bytes(str) {
+  const out = new Uint8Array(utf8ByteLength(str));
+  let offset = 0;
+  for (let i = 0; i < str.length; i++) {
+    const cp = str.codePointAt(i);
     if (cp > 0xffff) i++; // consumed a surrogate pair
     if (cp < 0x80) {
-      out.push(cp);
+      out[offset++] = cp;
     } else if (cp < 0x800) {
-      out.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+      out[offset++] = 0xc0 | (cp >> 6);
+      out[offset++] = 0x80 | (cp & 0x3f);
     } else if (cp < 0x10000) {
-      out.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+      out[offset++] = 0xe0 | (cp >> 12);
+      out[offset++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[offset++] = 0x80 | (cp & 0x3f);
     } else {
-      out.push(
-        0xf0 | (cp >> 18),
-        0x80 | ((cp >> 12) & 0x3f),
-        0x80 | ((cp >> 6) & 0x3f),
-        0x80 | (cp & 0x3f),
-      );
+      out[offset++] = 0xf0 | (cp >> 18);
+      out[offset++] = 0x80 | ((cp >> 12) & 0x3f);
+      out[offset++] = 0x80 | ((cp >> 6) & 0x3f);
+      out[offset++] = 0x80 | (cp & 0x3f);
     }
   }
   return out;
@@ -67,29 +80,23 @@ function toHex32(word) {
  * Returns lowercase hex (64 chars). Pure — no host op, no crypto global, no randomness.
  */
 export function sha256(input) {
-  const msg = typeof input === "string" ? utf8Bytes(input) : Array.from(input);
+  if (typeof input !== "string" && !(input instanceof Uint8Array)) {
+    throw new TypeError("sha256 input must be a string or Uint8Array");
+  }
+  const msg = typeof input === "string" ? utf8Bytes(input) : input;
   const bitLenLo = (msg.length * 8) >>> 0;
   const bitLenHi = Math.floor((msg.length * 8) / 0x100000000) >>> 0;
-
-  // Padding: 0x80, zero bytes until length % 64 === 56, then the 64-bit big-endian bit length.
-  const padded = msg.slice();
-  padded.push(0x80);
-  while (padded.length % 64 !== 56) padded.push(0);
-  padded.push(
-    (bitLenHi >>> 24) & 0xff, (bitLenHi >>> 16) & 0xff, (bitLenHi >>> 8) & 0xff, bitLenHi & 0xff,
-    (bitLenLo >>> 24) & 0xff, (bitLenLo >>> 16) & 0xff, (bitLenLo >>> 8) & 0xff, bitLenLo & 0xff,
-  );
 
   // Initial hash values: the first 32 bits of the fractional parts of the square roots of the
   // first 8 primes.
   let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
   let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
 
-  const w = new Array(64);
-  for (let block = 0; block < padded.length; block += 64) {
+  const w = new Uint32Array(64);
+  const processBlock = (bytes, block) => {
     for (let t = 0; t < 16; t++) {
       const o = block + t * 4;
-      w[t] = ((padded[o] << 24) | (padded[o + 1] << 16) | (padded[o + 2] << 8) | padded[o + 3]) >>> 0;
+      w[t] = ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
     }
     for (let t = 16; t < 64; t++) {
       const s0 = rotr(w[t - 15], 7) ^ rotr(w[t - 15], 18) ^ (w[t - 15] >>> 3);
@@ -110,7 +117,27 @@ export function sha256(input) {
     }
     h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
     h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
-  }
+  };
+
+  // Process the caller's bytes directly. Only the final one or two padded blocks are copied,
+  // so hashing a maximum-sized derived artifact does not create hundreds of millions of boxed numbers.
+  const completeBytes = msg.length - (msg.length % 64);
+  for (let block = 0; block < completeBytes; block += 64) processBlock(msg, block);
+
+  const remainingBytes = msg.length - completeBytes;
+  const tail = new Uint8Array(remainingBytes < 56 ? 64 : 128);
+  tail.set(msg.subarray(completeBytes));
+  tail[remainingBytes] = 0x80;
+  const lengthOffset = tail.length - 8;
+  tail[lengthOffset] = (bitLenHi >>> 24) & 0xff;
+  tail[lengthOffset + 1] = (bitLenHi >>> 16) & 0xff;
+  tail[lengthOffset + 2] = (bitLenHi >>> 8) & 0xff;
+  tail[lengthOffset + 3] = bitLenHi & 0xff;
+  tail[lengthOffset + 4] = (bitLenLo >>> 24) & 0xff;
+  tail[lengthOffset + 5] = (bitLenLo >>> 16) & 0xff;
+  tail[lengthOffset + 6] = (bitLenLo >>> 8) & 0xff;
+  tail[lengthOffset + 7] = bitLenLo & 0xff;
+  for (let block = 0; block < tail.length; block += 64) processBlock(tail, block);
 
   return toHex32(h0) + toHex32(h1) + toHex32(h2) + toHex32(h3)
        + toHex32(h4) + toHex32(h5) + toHex32(h6) + toHex32(h7);
