@@ -760,20 +760,22 @@ console.log("data safety:");
       try { rev = (await (await fetch(`http://localhost:${port}/api/state`)).json()).mapsRev ?? null; } catch { /* booting */ }
     }
     check("server: /api/state carries mapsRev", typeof rev === "string" && rev.length > 0);
+    const session = await (await fetch(`http://localhost:${port}/api/session`)).json();
+    const postHeaders = { "content-type": "application/json", "x-limina-design-token": session.token };
     // Fresh-rev save (drops a feature deliberately — a LEGITIMATE newer-state write) lands.
     const newer = clone(V1_FIXTURE.maps); newer[0].features = newer[0].features.slice(0, 2);
-    const ok = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: newer, activeMapId: "primary", baseRev: rev }) });
+    const ok = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: newer, activeMapId: "primary", baseRev: rev }) });
     const okJ = await ok.json();
     check("server: matching baseRev save lands (200 + new rev)", ok.status === 200 && okJ.saved === true && typeof okJ.mapsRev === "string" && okJ.mapsRev !== rev);
     // THE BUG, replayed: a client still holding the OLD rev posts its stale full doc (which
     // lacks nothing here — worse, it would RESURRECT/clobber). Must bounce 409, disk unchanged.
-    const stale = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary", baseRev: rev }) });
+    const stale = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary", baseRev: rev }) });
     const staleJ = await stale.json();
     const onDisk = JSON.parse(rf(join(vault, "maps.json"), "utf8"));
     check("server: STALE baseRev save is refused with 409 + conflict + current rev", stale.status === 409 && staleJ.conflict === true && staleJ.mapsRev === okJ.mapsRev);
     check("server: refused save left the disk untouched (2 features, not 4)", onDisk.maps[0].features.length === 2);
     // A save with NO baseRev (old client / late beacon from a dead session) is also refused.
-    const bare = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary" }) });
+    const bare = await fetch(`http://localhost:${port}/api/map-save`, { method: "POST", headers: postHeaders, body: JSON.stringify({ maps: clone(V1_FIXTURE.maps), activeMapId: "primary" }) });
     check("server: rev-less save (late beacon shape) is refused", bare.status === 409);
     // Falsifiability: the pre-CAS behavior — stale save landing — would flip the disk check.
     check("(falsifiability) had the stale save landed, the disk check would FAIL", clone(V1_FIXTURE.maps)[0].features.length !== 2);

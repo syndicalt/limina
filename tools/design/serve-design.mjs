@@ -9,15 +9,15 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync, renameSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 
-// 3D-peek render jobs (Painter P5): jobId -> {status, png?, error?}. In-memory, best-effort.
+// 3D-peek render jobs (Painter P5): bounded in-memory status retained for recent jobs.
 const peekJobs = new Map();
 import { createServer } from "node:http";
 import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
@@ -25,10 +25,8 @@ import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LIMINA_HOME = resolve(__dirname, "..", "..");
 const LIMINA_BIN = process.env.LIMINA_BIN || join(LIMINA_HOME, "target", "release", "limina");
-// Content-pack library (source) + the asset root imports land in. assetsDir is LIMINA_HOME/assets
-// today (every authoring reader resolves there); it becomes project-local when the asset root does.
+// Content-pack library source. Imported packs and compiled maps are project-local.
 const PACKS_DIR = process.env.LIMINA_PACKS_DIR || join(LIMINA_HOME, "packs");
-const ASSETS_DIR = join(LIMINA_HOME, "assets");
 // The frontend is served from disk PER REQUEST (no boot cache — caching index.html at startup
 // meant every frontend edit needed a server restart, a repeated debugging trap).
 const FRONTEND_DIR = join(__dirname, "frontend");
@@ -48,7 +46,65 @@ const MIME = {
 };
 
 const vaultDir = resolve(process.argv[2] || process.cwd());
+const PROJECT_ROOT = basename(vaultDir) === "design" ? dirname(vaultDir) : vaultDir;
+const ASSETS_DIR = resolve(process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, "assets"));
 const port = Number(process.argv[3]) || 4321;
+const HOST = "127.0.0.1";
+const DESIGN_SESSION_TOKEN = randomBytes(32).toString("hex");
+const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_PEEK_JOBS = 256;
+const MAX_CONCURRENT_PEEKS = 2;
+const PEEK_JOB_TTL_MS = 30 * 60 * 1000;
+const PEEK_TIMEOUT_MS = 2 * 60 * 1000;
+
+function projectId() {
+  try {
+    const config = JSON.parse(readFileSync(join(PROJECT_ROOT, "limina.project.json"), "utf8"));
+    if (config.schema === "limina-project/1" && /^[a-z0-9][a-z0-9._-]*$/.test(config.projectId)) return config.projectId;
+  } catch { /* package fallback below */ }
+  try {
+    const name = JSON.parse(readFileSync(join(PROJECT_ROOT, "package.json"), "utf8")).name;
+    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
+  } catch { /* directory fallback below */ }
+  const fallback = basename(PROJECT_ROOT);
+  if (/^[a-z0-9][a-z0-9._-]*$/.test(fallback)) return fallback;
+  throw new Error("project requires a lowercase npm-style projectId");
+}
+
+function writeWorldMap(worldMap) {
+  const relativePath = join("maps", worldMap.id, `${worldMap.provenance.contentHash}.worldmap.json`);
+  const output = join(ASSETS_DIR, relativePath);
+  mkdirSync(dirname(output), { recursive: true });
+  const temporary = `${output}.tmp-${process.pid}`;
+  try {
+    writeFileSync(temporary, JSON.stringify(worldMap, null, 2) + "\n", "utf8");
+    renameSync(temporary, output);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return relativePath.replaceAll("\\", "/");
+}
+
+function listWorldMaps(dir = join(ASSETS_DIR, "maps"), root = dir, found = []) {
+  if (!existsSync(dir)) return found;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) listWorldMaps(path, root, found);
+    else if (entry.name.endsWith(".worldmap.json")) found.push(path.slice(root.length + 1).replaceAll("\\", "/"));
+  }
+  return found.sort();
+}
+
+function prunePeekJobs(now = Date.now()) {
+  for (const [id, job] of peekJobs) {
+    if (job.status !== "running" && now - job.createdAt > PEEK_JOB_TTL_MS) peekJobs.delete(id);
+  }
+  while (peekJobs.size >= MAX_PEEK_JOBS) {
+    const oldestFinished = [...peekJobs].find(([, job]) => job.status !== "running");
+    if (oldestFinished === undefined) break;
+    peekJobs.delete(oldestFinished[0]);
+  }
+}
 
 // The 3D peek renders through the PREBUILT browser bundle editor/vendor/limina-runtime.js. When a
 // js/src schema (e.g. the WorldMap IR) changes but the bundle isn't rebuilt, the stale bundle rejects
@@ -458,11 +514,33 @@ else { fm.places = places; const nextContent = replaceFrontmatter(content, fm); 
 
 createServer((req, res) => {
   if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/migrate-locations-to-places", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete", "/api/pack-import"].includes(req.url)) {
-    let body = "";
-    req.on("data", (c) => (body += c));
+    if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+      res.writeHead(415, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "application/json is required" }));
+      return;
+    }
+    const chunks = [];
+    let bodyBytes = 0;
+    let bodyTooLarge = false;
+    req.on("data", (chunk) => {
+      bodyBytes += chunk.length;
+      if (bodyBytes > MAX_REQUEST_BODY_BYTES) bodyTooLarge = true;
+      else chunks.push(chunk);
+    });
     req.on("end", async () => {
+      if (bodyTooLarge) {
+        res.writeHead(413, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: "request body exceeds 16 MiB" }));
+        return;
+      }
       try {
+        const body = Buffer.concat(chunks).toString("utf8");
         const p = JSON.parse(body || "{}");
+        if (req.headers["x-limina-design-token"] !== DESIGN_SESSION_TOKEN && p?._token !== DESIGN_SESSION_TOKEN) {
+          res.writeHead(403, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "invalid design session token" }));
+          return;
+        }
         if (req.url === "/api/save") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(saveDoc(p.name, p.content)));
@@ -485,17 +563,23 @@ createServer((req, res) => {
           // GPU CAUTION (failure mode #14): the UI warns the user to close the 3D editor first;
           // we also report whether the editor host port is up so the client can warn harder.
           // Self-heal a stale render bundle before we compile+render (see ensureFreshEditorBundle).
+          prunePeekJobs();
+          const runningJobs = [...peekJobs.values()].filter((job) => job.status === "running").length;
+          if (runningJobs >= MAX_CONCURRENT_PEEKS || peekJobs.size >= MAX_PEEK_JOBS) {
+            res.writeHead(429, { "content-type": "application/json", "retry-after": "5" });
+            res.end(JSON.stringify({ ok: false, error: "peek render capacity is full" }));
+            return;
+          }
           ensureFreshEditorBundle();
           const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
-          const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
+          const project = projectId();
           // Places (Stage 4): the compiled peek carries the gazetteer + place-marker anchors, so the
           // author sees placed places in the render (and NPC nav has its index). Absent doc = undefined.
           const placesTextPeek = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
           const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextPeek });
-          const mapFile = `${project}-${worldMap.id}.worldmap.json`;
-          writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
+          const mapFile = writeWorldMap(worldMap);
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
           // author painted, including stamped asset-anchors, must appear in the peek.
           // An optional `camera` of shape { mode:'vantage', pos:[x,z], yaw, eyeHeight } swaps the
@@ -506,23 +590,34 @@ createServer((req, res) => {
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
-          const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+          const jobId = "pk" + randomBytes(12).toString("hex");
           // 18 yaw frames at exact 20° steps (engine-shots' __setYaw mode — cheap per frame, and
           // the loop always closes). The Atlas lightbox scrubs them as a turntable. A vantage is a
           // single fixed-pose shot — one frame, no turntable.
           const FRAMES = vantage ? 1 : 8;
-          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
+          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], {
+            stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, LIMINA_PREVIEW_ASSETS_DIR: ASSETS_DIR },
+          });
           let errTail = "";
+          let timedOut = false;
+          const killTimer = setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, PEEK_TIMEOUT_MS);
+          killTimer.unref();
           child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
           child.stdout.on("data", (c) => { errTail = (errTail + c).slice(-800); });
           child.on("exit", (code) => {
+            clearTimeout(killTimer);
             const frames = [];
             for (let i = 1; i <= FRAMES; i++) if (existsSync(join(outDir, `${sceneName}-${i}.png`))) frames.push(`${sceneName}-${i}.png`);
-            peekJobs.set(jobId, code === 0 && frames.length > 0
-              ? { status: "done", png: frames[0], frames }
-              : { status: "error", error: "render exited " + code + ": " + errTail.slice(-300) });
+            const createdAt = Date.now();
+            peekJobs.set(jobId, !timedOut && code === 0 && frames.length > 0
+              ? { status: "done", png: frames[0], frames, createdAt }
+              : { status: "error", error: timedOut ? "render timed out" : "render exited " + code + ": " + errTail.slice(-300), createdAt });
           });
-          peekJobs.set(jobId, { status: "running" });
+          peekJobs.set(jobId, { status: "running", createdAt: Date.now() });
           const editorHostUp = await new Promise((resolveUp) => {
             const s = netConnect({ port: 8787, host: "127.0.0.1" }, () => { s.destroy(); resolveUp(true); });
             s.on("error", () => resolveUp(false));
@@ -541,12 +636,10 @@ createServer((req, res) => {
           const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
-          const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
           // Places (Stage 4): the built map asset embeds the gazetteer + place-marker anchors.
           const placesTextCompile = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
           const { worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextCompile });
-          const file = `${project}-${worldMap.id}.worldmap.json`;
-          writeFileSync(join(LIMINA_HOME, "assets", "maps", file), JSON.stringify(worldMap, null, 2));
+          const file = writeWorldMap(worldMap);
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ file, contentHash: worldMap.provenance.contentHash, warnings }));
           return;
@@ -619,6 +712,15 @@ createServer((req, res) => {
     });
     return;
   }
+  if (req.method === "GET" && req.url.split("?")[0] === "/api/session") {
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    });
+    res.end(JSON.stringify({ token: DESIGN_SESSION_TOKEN }));
+    return;
+  }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/packs") {
     // The content-pack library (LIMINA_PACKS_DIR or LIMINA_HOME/packs), each with an `imported`
     // flag computed against the current asset root — so the Packs panel can show what's installed.
@@ -634,7 +736,8 @@ createServer((req, res) => {
     // The REAL asset catalog (read fresh — the architect daemon appends approved assets).
     try {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
-      res.end(readFileSync(join(LIMINA_HOME, "assets", "catalog.json"), "utf8"));
+      const catalog = join(ASSETS_DIR, "catalog.json");
+      res.end(existsSync(catalog) ? readFileSync(catalog, "utf8") : "[]");
     } catch (e) {
       res.writeHead(500); res.end(String(e));
     }
@@ -662,8 +765,7 @@ createServer((req, res) => {
   if (req.method === "GET" && req.url.split("?")[0] === "/api/worldmaps") {
     // Compiled WorldMap IR files available for import into the Atlas as paint layers.
     try {
-      const dir = join(LIMINA_HOME, "assets", "maps");
-      const files = readdirSync(dir).filter((f) => f.endsWith(".worldmap.json"));
+      const files = listWorldMaps();
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
       res.end(JSON.stringify(files));
     } catch { res.writeHead(200, { "content-type": "application/json" }); res.end("[]"); }
@@ -671,9 +773,14 @@ createServer((req, res) => {
   }
   if (req.method === "GET" && req.url.startsWith("/api/worldmaps/")) {
     try {
-      const name = basename(req.url.split("?")[0]);
-      if (!/^[\w.-]+\.worldmap\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
-      const body = readFileSync(join(LIMINA_HOME, "assets", "maps", name), "utf8");
+      const relativePath = decodeURIComponent(req.url.split("?")[0].slice("/api/worldmaps/".length));
+      if (!relativePath.endsWith(".worldmap.json") || relativePath.split(/[\\/]/).some((part) => part === ".." || part === "")) {
+        res.writeHead(404); res.end(); return;
+      }
+      const root = resolve(ASSETS_DIR, "maps");
+      const file = resolve(root, relativePath);
+      if (file !== root && !file.startsWith(root + "/")) { res.writeHead(404); res.end(); return; }
+      const body = readFileSync(file, "utf8");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(body);
     } catch { if (!res.headersSent) res.writeHead(404); res.end(); }
@@ -684,7 +791,7 @@ createServer((req, res) => {
     try {
       const name = basename(req.url.split("?")[0]);
       if (!/^[\w.-]+\.(png|jpg|jpeg)$/i.test(name)) { res.writeHead(404); res.end(); return; }
-      const bytes = readFileSync(join(LIMINA_HOME, "assets", "qc", name));
+      const bytes = readFileSync(join(ASSETS_DIR, "qc", name));
       res.writeHead(200, { "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg", "cache-control": "max-age=300" });
       res.end(bytes);
     } catch {
@@ -731,7 +838,7 @@ createServer((req, res) => {
   } else {
     res.writeHead(404); res.end("not found");
   }
-}).listen(port, () => {
+}).listen(port, HOST, () => {
   console.log(`\n  Design Space — ${vaultDir}`);
   console.log(`  open  http://localhost:${port}/\n`);
 });

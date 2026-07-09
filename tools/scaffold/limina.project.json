@@ -1,0 +1,6 @@
+{
+  "schema": "limina-project/1",
+  "projectId": "__APP_NAME__",
+  "assetRoot": "assets",
+  "stateDir": ".limina"
+}

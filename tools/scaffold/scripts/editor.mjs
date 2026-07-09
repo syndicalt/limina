@@ -9,7 +9,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,21 @@ const PROJECT_DIR = resolve(__dirname, "..");
 const DEFAULT_EDITOR_PORT = 8787;
 const DEFAULT_UI_PORT = 5173;
 let cleanupChildren = () => {};
+
+function projectId() {
+  const fallback = PROJECT_DIR.split(/[\\/]/).filter(Boolean).at(-1) ?? "limina-project";
+  try {
+    const configured = JSON.parse(readFileSync(join(PROJECT_DIR, "limina.project.json"), "utf8"));
+    if (configured.schema === "limina-project/1" && typeof configured.projectId === "string"
+      && /^[a-z0-9][a-z0-9._-]*$/.test(configured.projectId)) return configured.projectId;
+  } catch { /* actionable fallback below */ }
+  try {
+    const name = JSON.parse(readFileSync(join(PROJECT_DIR, "package.json"), "utf8")).name;
+    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
+  } catch { /* actionable fallback below */ }
+  if (/^[a-z0-9][a-z0-9._-]*$/.test(fallback)) return fallback;
+  fail("package.json must contain a lowercase npm-style project name");
+}
 
 /** Print an actionable error and exit non-zero. */
 function fail(msg) {
@@ -143,7 +158,7 @@ function printBanner({ home, uiPort, editorPort, token }) {
   console.log("");
   console.log("limina editor is running");
   console.log("");
-  console.log(`  Browser:     http://localhost:${uiPort}/`);
+  console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
   console.log(`  Token:       ${token}`);
   console.log("");
@@ -157,6 +172,9 @@ function printBanner({ home, uiPort, editorPort, token }) {
 
 async function main() {
   const { bin, home } = resolveLimina();
+  const id = projectId();
+  const stateDir = join(PROJECT_DIR, ".limina");
+  mkdirSync(stateDir, { recursive: true });
   const bundle = join(home, "editor", "vendor", "limina-runtime.js");
   if (!existsSync(bundle)) {
     fail(
@@ -171,13 +189,23 @@ async function main() {
   if (await canConnect(editorPort)) fail(`LIMINA_EDITOR_PORT is already in use: ${editorPort}`);
   if (await canConnect(uiPort)) fail(`editor UI port is already in use: ${uiPort}`);
 
-  const token = randomBytes(24).toString("base64url");
-  const editorHost = spawn(bin, ["editor/server/editor_host.ts"], {
-    cwd: home,
+  const requestedToken = process.env.LIMINA_EDITOR_TOKEN;
+  if (requestedToken !== undefined && !/^[A-Za-z0-9_-]{32,128}$/.test(requestedToken)) {
+    fail("LIMINA_EDITOR_TOKEN must be 32-128 URL-safe characters");
+  }
+  const token = requestedToken ?? randomBytes(24).toString("base64url");
+  const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
+    cwd: stateDir,
     env: {
       ...process.env,
       LIMINA_EDITOR_PORT: String(editorPort),
+      LIMINA_EDITOR_STATIC_PORT: String(uiPort),
       LIMINA_EDITOR_TOKEN: token,
+      LIMINA_ASSET_ROOT: join(PROJECT_DIR, "assets"),
+      LIMINA_EDITOR_WORLDLOG: `${id}.editor.worldlog.jsonl`,
+      LIMINA_EDITOR_TRACE: `${id}.editor.trace.jsonl`,
+      LIMINA_EDITOR_CHAT: `${id}.editor.chat.jsonl`,
+      LIMINA_EDITOR_KERNEL_LOCK: `${id}.editor.kernel.lock.json`,
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -216,6 +244,7 @@ async function main() {
 
   staticServer = spawn(process.execPath, [join(PROJECT_DIR, "scripts", "serve.mjs"), join(home, "editor"), String(uiPort)], {
     cwd: PROJECT_DIR,
+    env: { ...process.env, LIMINA_ASSETS_ROOT: join(PROJECT_DIR, "assets") },
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(staticServer.stderr, "[editor_ui]");

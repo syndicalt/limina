@@ -40,11 +40,22 @@ import type { ProviderMap } from "../../js/src/agents/systems.ts";
 
 const net = ops as unknown as NetOps;
 const PORT = Number(ops.op_read_env("LIMINA_EDITOR_PORT")) || 8787;
+const STATIC_PORT = Number(ops.op_read_env("LIMINA_EDITOR_STATIC_PORT")) || 5173;
+const WORLDLOG_NAME = ops.op_read_env("LIMINA_EDITOR_WORLDLOG") || "editor_host_worldlog.jsonl";
+const TRACE_NAME = ops.op_read_env("LIMINA_EDITOR_TRACE") || "editor_host_trace.jsonl";
+const CHAT_NAME = ops.op_read_env("LIMINA_EDITOR_CHAT") || "editor_host_chat.jsonl";
 const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN") || ops.op_sha256(`editor:${Date.now()}:${Math.random()}`).slice(0, 32);
-const EDITOR_ALLOWED_PROFILES = new Set(["reviewer", "system.readonly", "reviewer.coordinator", "builder.review", "builder.readWrite"]);
+const EDITOR_ALLOWED_PROFILES = new Set([
+  "reviewer",
+  "system.readonly",
+  "system.admin",
+  "reviewer.coordinator",
+  "builder.review",
+  "builder.readWrite",
+]);
 const EDITOR_ALLOWED_ORIGINS = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+  `http://localhost:${STATIC_PORT}`,
+  `http://127.0.0.1:${STATIC_PORT}`,
 ];
 const DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 const ALLOWED_ANTHROPIC_MODELS = new Set([
@@ -70,7 +81,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function persistChat(record: ChatTurnPersistRecord): void {
-  ops.op_append_trace("editor_host_chat.jsonl", JSON.stringify(record) + "\n");
+  ops.op_append_trace(CHAT_NAME, JSON.stringify(record) + "\n");
 }
 
 // KERNEL K3 -- daemon reuse. The project's kernel port IS the liveness lock: the
@@ -79,7 +90,7 @@ function persistChat(record: ChatTurnPersistRecord): void {
 // the CLI, a board) cannot bind, so it ATTACHES to the running kernel instead of
 // spawning a second authoritative server on a second workspace (the "new workspace
 // every time" pain). K2 already made a serial RESTART resume the same durable log.
-const KERNEL_LOCK_FILE = "editor_host_kernel.lock.json";
+const KERNEL_LOCK_FILE = ops.op_read_env("LIMINA_EDITOR_KERNEL_LOCK") || "editor_host_kernel.lock.json";
 const kernelLock: LockIO = {
   read: () => { try { const t = net.op_read_trace(KERNEL_LOCK_FILE); return t.length > 0 ? t : null; } catch { return null; } },
   write: (text) => net.op_write_trace(KERNEL_LOCK_FILE, text),
@@ -87,7 +98,7 @@ const kernelLock: LockIO = {
 const acq = await acquireKernel({
   port: PORT,
   token: EDITOR_AUTH_TOKEN,
-  worldlog: "editor_host_worldlog.jsonl",
+  worldlog: WORLDLOG_NAME,
   lock: kernelLock,
   listen: (p) => net.op_net_listen(p),
 });
@@ -115,12 +126,12 @@ const server = new AuthoritativeServer(editorTransport, {
   sessionId: "editor_host",
   seed: 0xed170,
   tickMs: 16,
-  trace: { name: "editor_host_trace.jsonl", maxInMemory: 8192 },
+  trace: { name: TRACE_NAME, maxInMemory: 8192 },
   // compactFlushed:false — the live viewport re-authors the FULL recorded stream via worldlog.tail,
   // which reads in-memory recorder.commands; compaction would drop flushed authoring commands out of
   // memory and the viewport would render an empty/partial world. A dev-editor session keeps the whole
   // stream resident (bounded by session length, not a concern here).
-  worldLog: { name: "editor_host_worldlog.jsonl", compactFlushed: false },
+  worldLog: { name: WORLDLOG_NAME, compactFlushed: false },
   initializeAuthToken: EDITOR_AUTH_TOKEN,
   allowedProfiles: EDITOR_ALLOWED_PROFILES,
   onClientMessage: async (method, params, ctx) => {

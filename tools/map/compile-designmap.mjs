@@ -11,13 +11,9 @@
 // js/src/world/design-map-compile.mjs, gated directly by js/test/p_worldmap_compile.ts. This file
 // is deliberately thin: read two files, call that function, write the result, print a summary.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { compileDesignMap } from "../../js/src/world/design-map-compile.mjs";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const LIMINA_HOME = resolve(__dirname, "..", "..");
 
 function parseArgs(argv) {
   const args = { vaultDir: undefined, mapId: undefined, out: undefined };
@@ -39,6 +35,7 @@ if (!args.vaultDir) {
 }
 
 const vaultDir = resolve(args.vaultDir);
+const projectRoot = basename(vaultDir) === "design" ? dirname(vaultDir) : vaultDir;
 const mapsJsonPath = join(vaultDir, "maps.json");
 const worldBiblePath = join(vaultDir, "world-bible.md");
 if (!existsSync(mapsJsonPath)) { console.error(`not found: ${mapsJsonPath}`); process.exit(1); }
@@ -61,14 +58,21 @@ try {
 
 const outPath = args.out
   ? resolve(args.out)
-  : join(LIMINA_HOME, "assets", "maps", `${worldMap.id}.worldmap.json`);
+  : join(projectRoot, "assets", "maps", worldMap.id, `${worldMap.provenance.contentHash}.worldmap.json`);
 mkdirSync(dirname(outPath), { recursive: true });
 // Pretty-printed for human review; the content hash is computed over the STABLE (compact,
 // fixed-key-order) form, so pretty-printing here has no effect on verification.
-writeFileSync(outPath, JSON.stringify(worldMap, null, 2) + "\n", "utf8");
+const temporary = `${outPath}.tmp-${process.pid}`;
+try {
+  writeFileSync(temporary, JSON.stringify(worldMap, null, 2) + "\n", "utf8");
+  renameSync(temporary, outPath);
+} finally {
+  rmSync(temporary, { force: true });
+}
 
 for (const w of warnings) console.warn("warning:", w);
 console.log(`compiled map "${worldMap.id}" -> ${outPath}`);
+console.log(`  asset id:     ${outPath.slice(join(projectRoot, "assets").length + 1).replaceAll("\\", "/")}`);
 console.log(`  land rings:   ${worldMap.land.length}`);
 console.log(`  relief hints: ${worldMap.relief.length}`);
 console.log(`  biomes:       ${worldMap.biomes.length} (${worldMap.biomes.map((b) => b.biome).join(", ")})`);

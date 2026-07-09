@@ -8,8 +8,13 @@
   },
   "files": [
     "index.mjs",
-    "scaffold"
+    "scaffold",
+    "scripts/stage-scaffold.mjs"
   ],
+  "scripts": {
+    "prepack": "node scripts/stage-scaffold.mjs prepare",
+    "postpack": "node scripts/stage-scaffold.mjs cleanup"
+  },
   "engines": {
     "node": ">=18"
   },

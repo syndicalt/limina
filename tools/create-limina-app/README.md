@@ -29,13 +29,11 @@ create-limina-app <project-directory> [--force] [--help] [--version]
 
 ## Publishing
 
-This package bundles the scaffold template via the `files` field. In the limina
-repo the template lives at `tools/scaffold/`; before `npm publish`, copy it next
-to `index.mjs`:
+This package bundles the canonical `tools/scaffold/` template. The `prepack`
+lifecycle stages it beside `index.mjs`, and `postpack` removes that generated
+copy. Verify the actual publish artifact with:
 
 ```sh
-cp -r ../scaffold ./scaffold && npm publish
+npm pack --dry-run
+npm publish
 ```
-
-`index.mjs` finds the template at `../scaffold` (repo layout) or `./scaffold`
-(published layout) automatically.

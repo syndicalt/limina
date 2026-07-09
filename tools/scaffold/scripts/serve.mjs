@@ -63,7 +63,7 @@ const COOP_COEP = {
 
 // The repo asset root (repo/assets), served at /assets/** so the LIVE editor's op_read_asset
 // can fetch GLB/texture bytes (asset.place, vegetation.scatter) from the same origin.
-const ASSETS_ROOT = resolve(ROOT, "..", "assets");
+const ASSETS_ROOT = resolve(process.env.LIMINA_ASSETS_ROOT || resolve(ROOT, "..", "assets"));
 
 const server = createServer((req, res) => {
   try {
@@ -102,6 +102,6 @@ const server = createServer((req, res) => {
   }
 });
 
-server.listen(port, () => {
+server.listen(port, "127.0.0.1", () => {
   console.log(`\n  limina: serving ${argDir}/ at http://localhost:${port}/\n  (Ctrl-C to stop)\n`);
 });

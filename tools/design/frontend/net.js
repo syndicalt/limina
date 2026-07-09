@@ -4,10 +4,30 @@
 // map switch/create) await flushMapSave() instead. A beforeunload beacon flushes a pending save
 // so closing the tab mid-debounce can't drop the last edit.
 
+let sessionTokenPromise;
+let cachedSessionToken;
+
+async function sessionToken() {
+  if (!sessionTokenPromise) {
+    sessionTokenPromise = fetch("/api/session", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`design session failed: ${response.status}`);
+        return response.json();
+      })
+      .then((body) => {
+        if (typeof body.token !== "string" || body.token.length < 32) throw new Error("design session returned an invalid token");
+        cachedSessionToken = body.token;
+        return cachedSessionToken;
+      });
+  }
+  return sessionTokenPromise;
+}
+
 export async function postJSON(url, body) {
+  const token = await sessionToken();
   const r = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-limina-design-token": token },
     body: JSON.stringify(body),
   });
   return r.json();
@@ -19,16 +39,20 @@ let getPayload = null; // bound once by map.js: () => ({ maps, activeMapId })
 let mapsRev = null; // the on-disk revision this client's state derives from (compare-and-set)
 let onConflict = null; // bound by map.js: another session saved first → reload, don't clobber
 
-export function bindMapSaver(payloadFn) { getPayload = payloadFn; }
+export function bindMapSaver(payloadFn) {
+  getPayload = payloadFn;
+  void sessionToken().catch(() => {});
+}
 export function bindSaveConflict(fn) { onConflict = fn; }
 export function setMapsRev(rev) { mapsRev = typeof rev === "string" ? rev : null; }
 
 async function doSave() {
   if (!getPayload) return;
   try {
+    const token = await sessionToken();
     const r = await fetch("/api/map-save", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-limina-design-token": token },
       body: JSON.stringify({ ...getPayload(), baseRev: mapsRev }),
     });
     const j = await r.json();
@@ -56,8 +80,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && saveTimer) flushMapSave();
 });
 window.addEventListener("beforeunload", () => {
-  if (!saveTimer || !getPayload) return;
+  if (!saveTimer || !getPayload || !cachedSessionToken) return;
   clearTimeout(saveTimer); saveTimer = null;
-  const body = JSON.stringify({ ...getPayload(), baseRev: mapsRev });
+  const body = JSON.stringify({ ...getPayload(), baseRev: mapsRev, _token: cachedSessionToken });
   if (body.length < 60000) navigator.sendBeacon("/api/map-save", body);
 });

@@ -83,6 +83,7 @@
             maxRadius: view.maxRadius, maxHeight: view.maxHeight, far: view.far,
           } : undefined,
           onStatus: (phase, detail) => {
+            console.info('[limina] status', phase, detail || '');
             setStatus(detail ? phase + ': ' + detail : phase);
             if (phase === 'error') { canvas.classList.remove('ready'); }
             else if (phase === 'ready' || phase === 'playing' || phase === 'done') {

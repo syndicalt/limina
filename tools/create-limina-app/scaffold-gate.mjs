@@ -18,7 +18,7 @@ import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const CLI = join(ROOT, "tools/create-limina-app/index.mjs");
+const PACKAGE_DIR = join(ROOT, "tools/create-limina-app");
 
 let failed = false;
 const check = (name, cond) => { if (cond) console.log("  ok  " + name); else { console.error("  FAIL " + name); failed = true; } };
@@ -26,12 +26,22 @@ const check = (name, cond) => { if (cond) console.log("  ok  " + name); else { c
 const dir = mkdtempSync(join(tmpdir(), "onramp-gate-"));
 const app = join(dir, "sample-app");
 try {
-  execFileSync("node", [CLI, app], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], timeout: 60000 });
+  const packOutput = execFileSync("npm", ["pack", "--json", "--pack-destination", dir], {
+    cwd: PACKAGE_DIR, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60000,
+  });
+  const packed = JSON.parse(packOutput);
+  const tarball = join(dir, packed[0].filename);
+  const extracted = join(dir, "packed-create-limina-app");
+  execFileSync("mkdir", ["-p", extracted]);
+  execFileSync("tar", ["-xzf", tarball, "-C", extracted]);
+  const packedCli = join(extracted, "package", "index.mjs");
+  check("published tarball contains its scaffold", existsSync(join(extracted, "package", "scaffold", "world.ts")));
+  execFileSync("node", [packedCli, app], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], timeout: 60000 });
 
   // 1. File tree — a real project, not a stub.
-  for (const f of ["package.json", "world.ts", "tsconfig.json", "README.md", "AGENTS.md", "COORDINATOR.md",
+  for (const f of ["package.json", "package-lock.json", "limina.project.json", "world.ts", "tsconfig.json", "README.md", "AGENTS.md", "COORDINATOR.md",
                    "scripts/serve.mjs", "scripts/export.mjs", "scripts/editor.mjs",
-                   "public/index.html", "public/limina-player.js", "public/island/manifest.json"]) {
+                   "assets/pine.glb", "assets/rock.glb", "public/index.html", "public/limina-player.js", "public/island/manifest.json"]) {
     check("scaffolds " + f, existsSync(join(app, f)));
   }
 
@@ -53,6 +63,27 @@ try {
   const scriptTag = html.match(/<script[^>]*src=["']\.\/limina-player\.js["'][^>]*>/);
   check("index.html loads limina-player.js as a classic <script src>", !!scriptTag && !/type=["']module["']/.test(scriptTag[0]));
   check("index.html's loader gates on window.LiminaPlayer", /window\.LiminaPlayer/.test(html));
+
+  // 5. The committed instant-play sample must be the exact current world.ts export.
+  execFileSync("npm", ["run", "export"], {
+    cwd: app,
+    env: { ...process.env, LIMINA_HOME: ROOT, LIMINA_BIN: join(ROOT, "target", "release", "limina") },
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 120000,
+  });
+  for (const file of ["log.jsonl", "keyframes.jsonl", "tiles.jsonl", "assets.jsonl", "view.json"]) {
+    const samplePath = join(app, "public", "island", file);
+    const freshPath = join(app, "dist", file);
+    const bothAbsent = !existsSync(samplePath) && !existsSync(freshPath);
+    check(`prebuilt sample matches a fresh export: ${file}`, bothAbsent || (
+      existsSync(samplePath) && existsSync(freshPath)
+      && readFileSync(samplePath, "utf8") === readFileSync(freshPath, "utf8")
+    ));
+  }
+  const sampleManifest = JSON.parse(readFileSync(join(app, "public", "island", "manifest.json"), "utf8"));
+  const freshManifest = JSON.parse(readFileSync(join(app, "dist", "manifest.json"), "utf8"));
+  sampleManifest.worldId = freshManifest.worldId;
+  check("prebuilt sample matches a fresh export: manifest.json", JSON.stringify(sampleManifest) === JSON.stringify(freshManifest));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
