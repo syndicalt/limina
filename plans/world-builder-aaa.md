@@ -4,21 +4,30 @@ Turn the Design Space map painter into a full agent-native world editor — the 
 Unreal Landscape bar — whose every stroke compiles into a walkable, swimmable 3D world across surface,
 underground, and sky.
 
-- **Interactive plan:** `plan-1afde76922e149e5` (agent-native Plans). This file is the authoritative,
-  source-controlled copy.
-- **Status:** APPROVED 2026-07-09 (all decisions locked, below). Phase 0 underway — Slice 0.1 shipped
-  (`7819bdc`). See §Status & outcomes.
+- **Integrated implementation plan:** `plan-6c5cbc419f824a8d` (agent-native Plans). This file is the
+  authoritative, source-controlled execution copy.
+- **Status:** APPROVED 2026-07-09. The pre-Studio baseline is preserved and fully gated at tag
+  `studio-foundation-m0-baseline-20260709`; WB-F0 implementation is underway. See §Status & outcomes.
 
 ---
 
 ## Orientation
 
-**Two authoring surfaces, one IR.** The **Atlas** (2D top-down painter) owns what reads top-down:
+**Two authoring workspaces, one project.** The **Atlas** (2D top-down painter) owns what reads top-down:
 terrain shape at map scale, water bodies, rivers, coastlines, biome + climate painting, road/POI layout.
-The **3D editor** (in-engine viewport) owns what can't be top-down: cave/tunnel carving, overhangs,
-arches, cliff undercuts, fine sculpt, floating-island shaping, precise scatter. Both write the same
-`WorldMap` IR (+ a new underground layer). Rule of thumb: height/mask/polygon field → Atlas; true-volume
-or sub-metre → 3D editor.
+The **3D editor** owns local terrain detail, entities, prefabs, materials, lighting, and true-volume
+work. Their durable source is `MapDoc + non-destructive 3D edit layers + Scene + Assets`, committed
+through one authoritative transaction protocol. `WorldMap`, render meshes, collision, navigation,
+scatter, and exports are immutable content-addressed derived artifacts. Neither workspace writes a
+compiled `WorldMap` directly. Rule of thumb: height/mask/polygon field → Atlas; true-volume or
+sub-metre detail → 3D. Resolution/topology and other base changes use explicit conflict-preserving
+layer rebase; silent destructive resampling is forbidden.
+
+**Current foundation already reused.** Limina already has a serial tick-boundary authoritative server,
+success-only world-log finalization, deterministic replay/snapshots, content-addressed assets, a pure
+MapDoc compiler, 3D terrain sculpt/paint, hierarchy operations, browser/native export, PBR/IBL, water,
+scatter, and LOD. WB-F0 extends these systems. It does not create a second command processor, terrain
+renderer, history model, asset registry, or erosion implementation.
 
 **Systems vs. content.** The engine gains a small set of SYSTEMS (heightfield, multi-layer terrain,
 water/hydrology, a biome-definition registry, splat, scatter, POI stamps, streaming). The vast taxonomy
@@ -103,6 +112,12 @@ Expensive-to-undo IR shapes. Additive-optional + `migrateWorldMap` keep old maps
 - **BiomeDef** (new, registry) — `climate {tempC,moisture}`, material, vegPalette, resource/spawn tables, waterTint, audio.
 - **UndergroundLayer** (new) — `repr: voxel|SDF`, region, biome ref. Authored in the 3D editor.
 - **Waterway** (modified) — `class`/`order` (was dropped) drives depth/width; per-vertex `widths`.
+- **WorldProject** (new) — content refs for MapDoc, ordered terrain edit layers, Scene, Assets,
+  LookProfile, and the authoritative head revision.
+- **AuthoringTransaction** (new) — idempotent project/transaction id, exact base revision+hash,
+  bounded adapter-backed operations, guarded compensations, and a server-filled committed receipt.
+- **DerivedRevisionManifest** (new) — one dependency-consistent chunk set for one source revision;
+  atomically published after staged compilation, with stale-job rejection and last-known-good fallback.
 
 **HASH DISCIPLINE (load-bearing).** `js/src/world/worldmap-hash.mjs` hand-builds the canonical form
 field-by-field. Every new field above needs a matching serializer entry, emitted only-when-present, in
@@ -111,24 +126,29 @@ provenance/content-addressing). Established in Slice 0.1.
 
 ---
 
-## Sequencing (landable PRs)
+## Sequencing (landable, gated slices)
 
-A multi-month program in phases; each slice is its own commit + gate + (where visual) real-GPU proof.
+- **M0 · Baseline & measurement** — preserve/classify the repair wave, verify each commit, run the clean
+  release suite, tag the accepted baseline, and add a record-only Grey Field benchmark manifest.
+- **WB-F0 · Studio + terrain foundation** — authoritative project transactions and conflict-safe undo;
+  Atlas u16 painter (0.2), adaptive/local resolution and stable chunk ids (0.3), canonical erosion reuse
+  (0.4), compiler-owned invalidation, atomic derived-manifest publication, Atlas↔3D live updates and
+  edit-layer rebase; then Outliner/Inspector/Content Browser/build tasks/isolated Play and shared render
+  quality telemetry. Each numbered slice lands independently.
+- **WB-W1 · Water & swim** — minimal deterministic precipitation/drainage inputs, `WaterBody[]`, basin
+  fill, `WaterField`, ordered rivers, visible flow/waterfalls/shorelines, editing, and functional swim.
+- **WB-B2 · Biomes & surface** — `BiomeDef`, spatial climate, blends and rules, splat/PBR layers, existing
+  scatter/grass/LOD integration, representative biome proof, then the approved ~40-biome library.
+- **WB-U3 · Underground** — SDF + sparse-voxel caves, tunnels, arches, and overhangs.
+- **WB-A4 · Aerial worlds** — floating terrain and traversal.
+- **WB-S5 · Runtime scale** — paged tiles and camera-centred LOD rings using WB-F0 chunk identities.
+- **WB-C6 · Content & overlays** — roads-to-3D, POI/settlement/resource stamps, climate/wind, danger,
+  corruption, seasons/weather, and spawn tables.
 
-- **Phase 0 · Foundation** — u16 heightfield + range + encoding-version migration + hash discipline; wire
-  `erosion.mjs` in. (Slices 0.1 IR, 0.2 painter, 0.3 resolution, 0.4 erosion.)
-- **Phase 1 · Water & swim** — water bodies + the `WaterField` query seam (spike early for replay-safety);
-  rivers (order/flow/waterfalls); swimmable volume.
-- **Phase 2 · Biomes & surface** — biome registry + spatial climate + blends + auto-rules; splat materials;
-  flora scatter; the full ~40-biome starter library.
-- **Phase 3 · Multi-layer & scale** — SDF/voxel underground (caves/overhangs/arches); floating islands;
-  paged streaming. The two big architectural detours — after the surface world is solid.
-- **Phase 4 · Content & overlays** — POI/settlement/road/resource stamps + procedural; gameplay overlays.
-- **Ongoing** — content-library expansion (more biome defs, flora packs, landform stamps).
-
-Ordering rationale worth stating: erosion (Phase 0) runs BEFORE flood-fill (Phase 1) because it mutates
-the heightfield the basin detection reads; biomes (Phase 2) finalize BEFORE the river carve so the carve
-reads the final shaped surface.
+Ordering is explicit: erosion shapes the surface before hydrology; a minimal precipitation/drainage
+field lands before WB-W1 when climate drives flow. Hydrologic topology is recomputed only through an
+explicit deterministic transaction that rebases dependents. WB-B2 later finalizes biome-aware bank
+materials and vegetation; it does not silently recarve rivers.
 
 ---
 
@@ -140,6 +160,13 @@ reads the final shaped surface.
 - P3 swim: playtest — enter, float, swim, surface; replay-deterministic (no clock/RNG in buoyancy).
 - P4: a climate gradient renders distinct blended biomes; auto-rules place snow/rock correctly.
 - Every IR change migrates — existing maps still load + hash byte-identically (only-when-present serializers).
+- Transactions gate atomic failure, stale bases, duplicate ids, permissions, crash-before-ack durability,
+  guarded compensation, reconnect/restart replay, and two-client races.
+- Incremental compilation gates omitted client dirty hints, stale-job discard, dependency-complete
+  invalidation, atomic manifest publication, and last-known-good recovery.
+- Grey Field fixed-camera evidence records editor/browser/native images, CPU/GPU p50/p95, hitches,
+  draw calls, triangles, texture memory, shader warm-up, startup, and editor latency. M0 records the
+  baseline; numeric visual budgets lock only after the first controlled capture is reviewed.
 
 ---
 
@@ -151,6 +178,9 @@ reads the final shaped surface.
 - Streaming = **paged fixed-size tiles + LOD rings**.
 - Biome library v1 = **the full ~40** up front (slower to first playable, complete).
 - Atlas ↔ 3D split confirmed (height/mask/polygon → Atlas; true-volume/sub-metre → 3D).
+- Transaction authority = one server sequencer per project branch; exact-base commits, idempotent ids,
+  explicit branch/merge, no automatic semantic rebase in the first implementation.
+- Authoring source = `MapDoc + non-destructive 3D edit layers + Scene + Assets`; `WorldMap` is derived.
 - Swim scope = **functional** (buoyancy + swim-speed + submerged + underwater tint).
 - Streaming past ~1.5km and caves/underground are IN scope (upgraded from the initial recommended defer).
 
@@ -173,3 +203,8 @@ near-vertical cliffs before the SDF layer exists.
   `p_reliefgrid_u16` (Everest-scale peak reachable, u8 back-compat, mis-tag throws, hash discipline).
   Gates green: p_reliefgrid_u16, p_worldmap_compile, check:determinism, check:portability. Painter still
   writes u8 — Slice 0.2 flips it.
+- **2026-07-09 — Integrated Studio plan approved.** `plan-6c5cbc419f824a8d` unifies World Builder,
+  Atlas↔3D, production editor workflow, and measured fidelity.
+- **2026-07-09 — M0 code baseline accepted (`69c2931`).** Repair work preserved externally, partitioned
+  into coherent commits, contaminated root assets excluded, clean release suite green (266 JS tests,
+  all Rust tests, all headless host gates), and tagged `studio-foundation-m0-baseline-20260709`.

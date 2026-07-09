@@ -38,16 +38,21 @@ Phases 6–12 are **done** (host seams, authoring surface, browser export-playba
 | Phase / Item | Status | Plan |
 |---|---|---|
 | **13 — Ecosystem & Marketplace** | 🔲 Not started — **asset repository first** (decision 2026-07-07) | `plans/skills-exchange-roadmap.md` · public registry + external memory adapters |
-| **Capstone game = Beacon Quest** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 Gaps G1–G3 (dialogue→UI, HUD, NPC provider) **CLOSED** since June; `p14_*` gates green. Waves W1–W5 open (paint-authored world, quest content, look push, site export) | `plans/phase-12-playable-game-skills.md` · `plans/implementation-plan.md` |
-| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | 🔲 Deferred — kernel plan lands first (fixes the coexistence bug) | Sim-worker / SAB split (`plans/phase-8-run-anywhere-plan.md`, `plans/kernel-plan.md`) |
-| **On-Ramp** (`create-limina-app`, one-command outsider start) | 🔲 Not started — alpha bundle is the O1 head start | `plans/implementation-plan.md` (Bet 2) |
-| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🔲 Deferred — folds into the capstone's W4 look push | `plans/worldgen-roadmap.md` |
+| **Capstone game = Beacon Quest** | ✅ First integrated proof complete — functional/design/export/package/render dogfood gate green; retained as a regression world | `games/beacon-quest/` · `plans/phase-12-playable-game-skills.md` |
+| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | ✅ First cut shipped — sim-worker/SAB live authoring path and policy boundary are present and gated | `plans/phase-8-run-anywhere-plan.md` · `plans/kernel-plan.md` |
+| **On-Ramp** (`create-limina-app`, one-command outsider start) | ✅ First cut shipped — project-scoped editor persistence, self-contained scaffold, deterministic export, and scaffold gate | `tools/create-limina-app/` · `tools/scaffold/` |
+| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🟡 Active in **WB-F0 Slice 0.4** using the existing canonical erosion pipeline | `plans/world-builder-aaa.md` |
 | **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 **Re-scoped 2026-07-07** — the authored-map path is superseded by the Map Painter; only the pure-procedural hint API remains | `plans/worldgen-roadmap.md` |
 | **Worldgen W5** (native wgpu model port) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🔲 Deferred — folds into the capstone's W4 look push | `plans/worldgen-roadmap.md` |
+| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🟡 Sequenced in **WB-W1** after the Studio/terrain foundation | `plans/world-builder-aaa.md` |
 | **bmap pipeline** (real-world geo → limina world) | 🔲 Parked — un-park via its S0 | `plans/bmap-pipeline-spike.md` |
 
-The **immediate next sequence** — the Capstone Game (Beacon Quest) → the On-Ramp → Live Authoring → *then* Phase 13 (asset repository first) — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md) (strategy), with the milestone-level execution detail (work units, acceptance gates, what's reuse vs gap) in [`plans/implementation-plan.md`](./implementation-plan.md) and the unified track plan in `plan-89ac14290cd84b65`. The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
+The active execution sequence is the approved **Limina Studio Foundation + World Builder** program:
+M0 baseline/measurement → WB-F0 transactions, Atlas↔3D, editor loop, and fidelity contract → WB-W1
+water/swim → WB-B2 biomes/surface → separate underground, aerial, scale, content, and overlay milestones.
+The source-controlled execution detail is [`plans/world-builder-aaa.md`](./world-builder-aaa.md), with
+interactive review plan `plan-6c5cbc419f824a8d`. Older adoption and implementation plans remain
+historical evidence for the already-shipped Capstone, On-Ramp, and Live Authoring work.
 
 ## The arc
 
