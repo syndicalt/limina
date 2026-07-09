@@ -44,6 +44,8 @@ function reliefGrid(g) {
     rect: { x0: g.rect.x0, z0: g.rect.z0, w: g.rect.w, h: g.rect.h },
     minY: g.minY,
     maxY: g.maxY,
+    // Only-when-present (like every additive field) so a legacy u8 grid hashes byte-identically.
+    ...(g.encoding !== undefined ? { encoding: g.encoding } : {}),
     data: g.data,
   };
 }

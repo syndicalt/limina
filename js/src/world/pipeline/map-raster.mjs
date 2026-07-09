@@ -191,21 +191,27 @@ export function reliefGridSampler(worldMap) {
   const g = worldMap.reliefGrid;
   if (!g) return null;
   const { origin, unitsPerMeter } = worldMap;
-  const cells = b64ToU8(g.data);
-  if (cells.length !== g.w * g.h) throw new Error(`reliefGrid: data length ${cells.length} != w*h ${g.w * g.h}`);
+  const bytes = b64ToU8(g.data);
+  // u16 packs 2 little-endian bytes per cell (65,536 levels); absent/'u8' = 1 byte. Explicit LE
+  // decode (not a Uint16Array view) keeps the byte layout host-independent for determinism.
+  const u16 = g.encoding === "u16";
+  const need = g.w * g.h * (u16 ? 2 : 1);
+  if (bytes.length !== need) throw new Error(`reliefGrid: data length ${bytes.length} != ${need} (${u16 ? "u16" : "u8"}, w*h ${g.w * g.h})`);
+  const max = u16 ? 65535 : 255;
+  const cellAt = u16 ? (i) => bytes[2 * i] | (bytes[2 * i + 1] << 8) : (i) => bytes[i];
   const x0 = origin[0] + g.rect.x0 * unitsPerMeter;
   const z0 = origin[1] + g.rect.z0 * unitsPerMeter;
   const rw = g.rect.w * unitsPerMeter;
   const rh = g.rect.h * unitsPerMeter;
-  const yOf = (v) => g.minY + (v / 255) * (g.maxY - g.minY);
+  const yOf = (val) => g.minY + (val / max) * (g.maxY - g.minY);
   return (wx, wz) => {
     const u = Math.max(0, Math.min(g.w - 1, ((wx - x0) / rw) * (g.w - 1)));
     const v = Math.max(0, Math.min(g.h - 1, ((wz - z0) / rh) * (g.h - 1)));
     const c0 = Math.floor(u), r0 = Math.floor(v);
     const c1 = Math.min(g.w - 1, c0 + 1), r1 = Math.min(g.h - 1, r0 + 1);
     const fu = u - c0, fv = v - r0;
-    const a = cells[r0 * g.w + c0], b = cells[r0 * g.w + c1];
-    const c = cells[r1 * g.w + c0], d = cells[r1 * g.w + c1];
+    const a = cellAt(r0 * g.w + c0), b = cellAt(r0 * g.w + c1);
+    const c = cellAt(r1 * g.w + c0), d = cellAt(r1 * g.w + c1);
     return yOf((a * (1 - fu) + b * fu) * (1 - fv) + (c * (1 - fu) + d * fu) * fv);
   };
 }

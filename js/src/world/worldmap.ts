@@ -68,7 +68,12 @@ const ReliefGridSchema = z.object({
   rect: z.object({ x0: z.number(), z0: z.number(), w: z.number().positive(), h: z.number().positive() }).strict(),
   minY: z.number(),
   maxY: z.number(),
-  /** base64 of w*h u8 cell values. */
+  /** Vertical quantization of `data`: 'u16' packs each cell as 2 LITTLE-ENDIAN bytes (65,536 levels —
+   *  ~0.14m/step over a 9km range, real mountains without terracing); absent or 'u8' = the legacy
+   *  1-byte cell. ABSENT is the version discriminator: every pre-u16 map reads as u8 unchanged and
+   *  hashes byte-identically (worldmap-hash emits `encoding` only-when-present). */
+  encoding: z.enum(["u8", "u16"]).optional(),
+  /** base64 of w*h cells (u8 → w*h bytes; u16 → 2*w*h little-endian bytes). */
   data: z.string().min(1),
 }).strict();
 
