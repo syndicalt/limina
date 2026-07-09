@@ -24,11 +24,14 @@ function inRing(x, z, ring) {
 /**
  * Build the peek scene for a compiled WorldMap.
  * @param {object} worldMap  compiled WorldMap IR (land/biomes/waterways/anchors/seaLevel/...)
- * @param {object} opts      { project, mapFile } — vault project slug + the worldmap asset filename
- *                           (already written under assets/maps/ by the caller).
+ * @param {object} opts      { project, mapFile, vantage? } — vault project slug + the worldmap asset
+ *                           filename (already written under assets/maps/ by the caller). `vantage`,
+ *                           when present ({ pos:[x,z], yaw, eyeHeight? }), replaces the overview
+ *                           orbit with a positioned camera looking FROM a point on the map (Places
+ *                           Stage 2). Default (no vantage) = the overview turntable.
  * @returns {{ scene: object, sceneName: string, span: number }}
  */
-export function buildPeekScene(worldMap, { project = "project", mapFile }) {
+export function buildPeekScene(worldMap, { project = "project", mapFile, vantage } = {}) {
   // Frame the camera on the compiled land.
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const l of worldMap.land) for (const [x, z] of l.points) {
@@ -135,16 +138,31 @@ export function buildPeekScene(worldMap, { project = "project", mapFile }) {
           ground: true,
         } })),
     ],
-    // Rotating setpiece: engine-shots.mjs drives the orbit to EXACT yaw angles (i/N x 360°
-    // via the __setYaw hook) so the frame set always closes the full loop — autoSpin is 0,
-    // timing-based capture under-rotated on heavy scenes and the scrub jumped at the seam.
-    // 0.62/0.38 span frames the WHOLE island; the explicit far plane + FogExp2 density
-    // scaled 1/distance keep it vivid (far shore dissolving — the house look).
-    camera: {
-      center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
-      radius: Math.round(span * 0.62), height: Math.round(span * 0.38),
-      far: Math.round(span * 2.5), autoSpin: 0,
-    },
+    // The map's sea level is the ground reference the harness uses to lift a vantage camera to
+    // eye height (no terrain-height lookup in the offline harness — see engine-authored.html).
+    seaLevel: worldMap.seaLevel ?? 0,
+    // Camera: a positioned VANTAGE when requested (look FROM a point on the map, single frame),
+    // otherwise the overview turntable. Overview is the default.
+    //
+    // Overview: engine-shots.mjs drives the orbit to EXACT yaw angles (i/N x 360° via the
+    // __setYaw hook) so the frame set always closes the full loop — autoSpin is 0, timing-based
+    // capture under-rotated on heavy scenes and the scrub jumped at the seam. 0.62/0.38 span
+    // frames the WHOLE island; the explicit far plane + FogExp2 density scaled 1/distance keep
+    // it vivid (far shore dissolving — the house look).
+    camera: vantage
+      ? {
+        mode: "vantage",
+        pos: [Math.round(vantage.pos[0]), Math.round(vantage.pos[1])],
+        yaw: vantage.yaw ?? 0,
+        eyeHeight: vantage.eyeHeight ?? 1.7,
+        // A vantage stands ON the map: the far plane must still reach the far shore.
+        far: Math.round(span * 2.5),
+      }
+      : {
+        center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2],
+        radius: Math.round(span * 0.62), height: Math.round(span * 0.38),
+        far: Math.round(span * 2.5), autoSpin: 0,
+      },
     renderBaseline: {
       exposure: 1.05,
       sun: { color: 16770744, intensity: 4.6, direction: [-52, 34, 22] },

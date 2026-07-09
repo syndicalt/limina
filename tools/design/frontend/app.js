@@ -3,10 +3,10 @@
 // the late-binding function registry live in store.js (no module cycles — map.js reaches the
 // shell only through S.fn).
 
-import { esc, titleCaseName } from "./util.js";
+import { esc, titleCaseName, toast } from "./util.js";
 import { S } from "./store.js";
 import { postJSON, setMapsRev } from "./net.js";
-import { renderMap } from "./map.js";
+import { renderMap, openPlaceInspector } from "./map.js";
 
 const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", places:"⚲", cast:"☗", storyboard:"❧", "build-map":"⚑" };
 const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", places:"Places", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
@@ -186,7 +186,7 @@ function renderPlaces(center){
             ? '<span class="placed"><span class="pdot"></span>placed<span class="rtail">'
               +(n.binding==="area"&&n.radiusM?" · r"+n.radiusM+"m":" · "+n.position[0]+", "+n.position[1])+'</span></span>'
             : '<span class="unplaced">unplaced</span>';
-          rows.push('<div class="pnode" style="padding-left:'+(10+depth*22)+'px">'
+          rows.push('<div class="pnode" draggable="true" data-place-id="'+esc(n.id)+'" style="padding-left:'+(10+depth*22)+'px">'
             +'<span class="pkind">'+esc(n.kind||"place")+'</span>'
             +'<span class="pname">'+esc(n.name)+'</span>'+tail+'</div>');
         }
@@ -199,11 +199,42 @@ function renderPlaces(center){
   };
   center.innerHTML =
     '<div class="places-wrap">'
-    +'<div class="places-head"><h2>Places</h2><span class="cnt">'+placed+' of '+all.length+' placed</span></div>'
+    +'<div class="places-head"><h2>Places</h2><span class="cnt">'+placed+' of '+all.length+' placed</span>'
+    +'<button class="btn" id="places-new" style="margin-left:auto">＋ New place</button></div>'
     +'<input class="places-search" id="places-search" type="search" placeholder="Filter places by name…" autocomplete="off">'
     +'<div id="places-body">'+draw("")+'</div></div>';
+  bindPlaceRows();
   const box=document.getElementById("places-search");
-  if(box) box.oninput=()=>{ document.getElementById("places-body").innerHTML = draw(box.value.trim().toLowerCase()); };
+  if(box) box.oninput=()=>{ document.getElementById("places-body").innerHTML = draw(box.value.trim().toLowerCase()); bindPlaceRows(); };
+  const nb=document.getElementById("places-new"); if(nb) nb.onclick=newPlace;
+}
+// Rows: click to inspect, drag onto another row to reparent. A drop targets the row it lands on;
+// the server is the cycle authority (a reparent that would loop is rejected → we surface it).
+function bindPlaceRows(){
+  const body=document.getElementById("places-body"); if(!body) return;
+  body.querySelectorAll(".pnode[data-place-id]").forEach(row=>{
+    const id=row.dataset.placeId;
+    row.onclick=(e)=>{ if(row.classList.contains("dragging")) return; const p=(S.state.places||[]).find(x=>x.id===id); if(p) openPlaceInspector(p, e.clientX, e.clientY); };
+    row.addEventListener("dragstart",(e)=>{ row.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; e.dataTransfer.setData("text/plain", id); });
+    row.addEventListener("dragend",()=>{ row.classList.remove("dragging"); body.querySelectorAll(".pnode.drop-target").forEach(r=>r.classList.remove("drop-target")); });
+    row.addEventListener("dragover",(e)=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; if(!row.classList.contains("dragging")) row.classList.add("drop-target"); });
+    row.addEventListener("dragleave",()=>row.classList.remove("drop-target"));
+    row.addEventListener("drop",(e)=>{ e.preventDefault(); row.classList.remove("drop-target"); const dragId=e.dataTransfer.getData("text/plain"); if(dragId&&dragId!==id) reparentPlace(dragId, id); });
+  });
+}
+async function reparentPlace(id, parentId){
+  try{ const j=await postJSON("/api/edit-place",{op:"reparent",place:{id,parentId}});
+    if(j&&j.ok===false){ toast(j.error?("reparent rejected: "+j.error):"reparent rejected (would create a cycle)"); return; }
+    if(j&&Array.isArray(j.places)) S.state.places=j.places; else await load();
+    renderPlaces(document.getElementById("center"));
+  }catch(e){ toast("reparent failed: "+e); }
+}
+async function newPlace(){
+  try{ const j=await postJSON("/api/edit-place",{op:"add",place:{name:"New place",kind:"landmark"}});
+    if(j&&j.ok===false){ toast("add place failed"+(j.error?": "+j.error:"")); return; }
+    if(j&&Array.isArray(j.places)) S.state.places=j.places; else await load();
+    renderPlaces(document.getElementById("center"));
+  }catch(e){ toast("add place failed: "+e); }
 }
 
 function renderTeam(){
@@ -367,5 +398,7 @@ S.fn.reload = load;
 S.fn.surfaceCascade = surfaceCascade;
 S.fn.updateChatCtx = updateChatCtx;
 S.fn.chatOpen = () => !!chatAgent;
+// map.js calls this after a place mutation so the tree re-renders when it's the visible surface.
+S.fn.refreshPlaces = () => { if(S.activeView==="places") renderPlaces(document.getElementById("center")); };
 
 load();

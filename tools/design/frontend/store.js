@@ -11,5 +11,6 @@ export const S = {
     surfaceCascade: () => {},      // app.js cascade panel
     updateChatCtx: () => {},       // app.js chat context line
     chatOpen: () => false,         // whether the chat drawer has an agent
+    refreshPlaces: () => {},       // app.js re-render of the Places tree (after a map place edit)
   },
 };

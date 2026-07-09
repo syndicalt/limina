@@ -311,8 +311,83 @@ function moveLocation(id, x, z) {
   return saveDoc(doc.name, next);
 }
 
+// Structured PLACE authoring (Places Stage 2): add / update / move / reparent / delete a node in
+// the `kind: places` doc's `places:` array via a real parse -> modify -> serialize (not regex),
+// then save -> cascade — the exact shape editLocation uses for world-bible locations. The place
+// tree stays connected: reparent refuses a cycle, delete re-parents the victim's children.
+const ELP_B = "===ELP_BEGIN===", ELP_E = "===ELP_END===";
+function editPlace(op, place) {
+  let doc = readDocs().find((d) => /kind:\s*places/.test(d.content));
+  if (!doc) {
+    if (op !== "add") throw new Error("no places document");
+    createDoc("places", "places"); // first place authored → seed places.md (kind: places)
+    doc = readDocs().find((d) => /kind:\s*places/.test(d.content));
+    if (!doc) throw new Error("could not create a places document");
+  }
+  const src = `
+import { parseFrontmatter, replaceFrontmatter, parsePlaces } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
+const content = ${JSON.stringify(doc.content)};
+const fm = parseFrontmatter(content);
+let places = Array.isArray(fm.places) ? fm.places : [];
+const op = ${JSON.stringify(op)}, place = ${JSON.stringify(place)};
+// A root place carries NO parentId key (a null would round-trip to a bogus "null" parent).
+const withParent = (pl, pid) => { const n = { ...pl }; if (pid) n.parentId = pid; else delete n.parentId; return n; };
+const has = (id) => places.some((pl) => pl.id === id);
+let error = null;
+if (op === "add") {
+  const node = { id: place.id, name: place.name || place.id, kind: place.kind || "place" };
+  if (place.parentId) node.parentId = place.parentId;
+  if (Array.isArray(place.position) && place.position.length >= 2) node.position = [Number(place.position[0]), Number(place.position[1])];
+  if (place.binding) node.binding = place.binding;
+  if (typeof place.radiusM === "number") node.radiusM = place.radiusM;
+  if (place.regionId) node.regionId = place.regionId;
+  if (place.map) node.map = place.map;
+  if (Array.isArray(place.tags) && place.tags.length) node.tags = place.tags;
+  if (place.note) node.note = place.note;
+  places.push(node);
+} else if (!has(place.id)) {
+  error = "no such place: " + place.id;
+} else if (op === "update") {
+  const patch = { ...place }; delete patch.id;
+  places = places.map((pl) => pl.id === place.id ? { ...pl, ...patch } : pl);
+} else if (op === "move") {
+  if (!Array.isArray(place.position) || place.position.length < 2) error = "move needs position [x, z]";
+  else places = places.map((pl) => pl.id === place.id ? { ...pl, position: [Math.round(place.position[0]), Math.round(place.position[1])] } : pl);
+} else if (op === "reparent") {
+  const byId = new Map(places.map((pl) => [pl.id, pl]));
+  let cur = place.parentId || null, cyc = false; const seen = new Set();
+  while (cur != null) {
+    if (cur === place.id) { cyc = true; break; }
+    if (seen.has(cur)) break; seen.add(cur);
+    const par = byId.get(cur); cur = par ? (par.parentId || null) : null;
+  }
+  if (cyc) error = "reparent would make " + place.id + " its own ancestor (cycle refused)";
+  else places = places.map((pl) => pl.id === place.id ? withParent(pl, place.parentId || null) : pl);
+} else if (op === "delete") {
+  const victim = places.find((pl) => pl.id === place.id);
+  const newParent = (victim && victim.parentId) || null; // children re-home to the victim's parent
+  places = places.filter((pl) => pl.id !== place.id).map((pl) => pl.parentId === place.id ? withParent(pl, newParent) : pl);
+} else error = "unknown op: " + op;
+if (error) ops.op_log("${ELP_B}" + JSON.stringify({ error }) + "${ELP_E}");
+else { fm.places = places; const nextContent = replaceFrontmatter(content, fm); ops.op_log("${ELP_B}" + JSON.stringify({ content: nextContent, places: parsePlaces(parseFrontmatter(nextContent)) }) + "${ELP_E}"); }
+`;
+  const tmp = mkdtempSync(join(tmpdir(), "limina-elp-"));
+  const hp = join(tmp, "ep.ts");
+  writeFileSync(hp, src);
+  const r = spawnSync(LIMINA_BIN, [hp], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  rmSync(tmp, { recursive: true, force: true });
+  const out = (r.stdout || "") + (r.stderr || "");
+  const m = out.match(new RegExp(ELP_B + "([\\s\\S]*?)" + ELP_E));
+  if (!m) throw new Error("edit-place failed: " + out.slice(-300));
+  const parsed = JSON.parse(m[1]);
+  if (parsed.error) throw new Error(parsed.error);
+  const saveRes = saveDoc(doc.name, parsed.content);
+  return { ok: true, places: parsed.places, ...saveRes };
+}
+
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
+  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete"].includes(req.url)) {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
@@ -343,14 +418,19 @@ createServer((req, res) => {
           writeFileSync(join(LIMINA_HOME, "assets", "maps", mapFile), JSON.stringify(worldMap, null, 2));
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
           // author painted, including stamped asset-anchors, must appear in the peek.
-          const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapFile });
+          // An optional `camera` of shape { mode:'vantage', pos:[x,z], yaw, eyeHeight } swaps the
+          // overview turntable for a positioned camera looking FROM a point on the map (Places
+          // Stage 2). Default (no camera / non-vantage mode) = the overview turntable.
+          const vantage = (p.camera && p.camera.mode === "vantage") ? p.camera : undefined;
+          const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapFile, vantage });
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
           const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
           // 18 yaw frames at exact 20° steps (engine-shots' __setYaw mode — cheap per frame, and
-          // the loop always closes). The Atlas lightbox scrubs them as a turntable.
-          const FRAMES = 8;
+          // the loop always closes). The Atlas lightbox scrubs them as a turntable. A vantage is a
+          // single fixed-pose shot — one frame, no turntable.
+          const FRAMES = vantage ? 1 : 8;
           const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
           let errTail = "";
           child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
@@ -416,6 +496,20 @@ createServer((req, res) => {
           }
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(editLocation(p.op, p)));
+          return;
+        }
+        if (req.url === "/api/edit-place") {
+          // Body: { op, place } — op ∈ add|update|move|reparent|delete. On add without an id,
+          // slugify the name (uniqued against the current tree) so the client can add by name.
+          const place = p.place || {};
+          if (p.op === "add" && !place.id) {
+            const base = String(place.name || "place").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "place";
+            const existing = new Set((computeState().places || []).map((pl) => pl.id));
+            let id = base, n = 2; while (existing.has(id)) id = `${base}-${n++}`;
+            place.id = id;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(editPlace(p.op, place)));
           return;
         }
         const ctx = assembleContext(p.agentId, p.screen || {});

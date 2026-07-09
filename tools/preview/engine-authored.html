@@ -14,6 +14,14 @@ try {
   else {
     const canvas = document.getElementById("limina-canvas");
     const cam = scene.camera || { center: [0, 3, 0], radius: 24, height: 10 };
+    // POSITIONED VANTAGE (Places Stage 2): camera carries { mode:'vantage', pos:[x,z], yaw, eyeHeight }.
+    // World Y = eyeHeight above the map's sea level (a terrain-height lookup isn't available in this
+    // harness, so seaLevel+eyeHeight is the stand-in ground reference — see peek-scene.mjs). Otherwise
+    // the legacy overview orbit.
+    const isVantage = cam.mode === "vantage";
+    const camOpt = isVantage
+      ? { vantage: { pos: [cam.pos[0], (scene.seaLevel ?? 0) + (cam.eyeHeight ?? 1.7), cam.pos[1]], yaw: cam.yaw ?? 0, ...(cam.pitch !== undefined ? { pitch: cam.pitch } : {}), far: cam.far } }
+      : { orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin, far: cam.far } };
     const __t0 = performance.now();
     const running = await runLive({
       canvas, width: 1280, height: 800, commands: scene.commands,
@@ -22,7 +30,7 @@ try {
       renderBaseline: scene.renderBaseline,
       entityStream: scene.entityStream,
       terrainMountsPerFrame: 4096, // offline peek: mount the whole tile window at once (no ~40s 2/frame drain)
-      orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin, far: cam.far },
+      ...camOpt,
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);

@@ -462,6 +462,12 @@ export interface RunLiveOptions {
   orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number; far?: number };
   /** Opt-in browser camera controls for editor-style viewports. Falsy preserves the legacy auto-spin. */
   orbitControls?: boolean;
+  /** Positioned "vantage" camera (Places Stage 2): sit the camera AT `pos` (world space) and
+   *  look along `yaw` (radians; yaw=0 → forward is -Z, matching the first-person move basis),
+   *  with an optional downward `pitch` (radians). Static — no orbit, no auto-spin — for a
+   *  preview shot FROM a point on the map. When set it wins over the orbit auto-spin. `far`
+   *  pushes the far plane out like orbit.far. */
+  vantage?: { pos: [number, number, number]; yaw: number; pitch?: number; far?: number };
   /** Scene-level render-baseline override (lights/tonemapping/atmosphere/ground/camera). A world can
    *  carry its own look (e.g. golden-hour sun + fog) without touching DEFAULT_RENDER_BASELINE. Merged
    *  over the default by applyRenderBaseline; omit for the default look. */
@@ -1165,6 +1171,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cameraControls.update();
   }
 
+  // ── POSITIONED VANTAGE CAMERA (Places Stage 2). Sit AT a point on the map and look a fixed
+  //    heading — no orbit, no auto-spin. Same convention as the first-person branch below
+  //    (yaw=0 → forward is -Z). The pose is set ONCE here; the frame loop holds it. ──
+  const vantage = opts.vantage;
+  if (vantage !== undefined) {
+    const [vx, vy, vz] = vantage.pos;
+    const pitch = vantage.pitch ?? 0;
+    const cp = Math.cos(pitch);
+    camera.position.set(vx, vy, vz);
+    camera.lookAt(vx + Math.sin(vantage.yaw) * cp, vy + Math.sin(pitch), vz - Math.cos(vantage.yaw) * cp);
+    if (vantage.far !== undefined) {
+      const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
+      cam.far = streamingPlanned ? Math.max(vantage.far, 1500) : vantage.far;
+      cam.updateProjectionMatrix();
+    }
+  }
+
   // ── FIRST-PERSON CAMERA. When a player character was spawned (player.spawn is in the log), put the
   //    camera AT the player capsule's eye instead of auto-orbiting — so the settlement is WALKABLE and
   //    scale reads true against doorways (no avatar mesh needed; the player IS the camera). Gated on a
@@ -1244,6 +1267,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
       } else if (cameraControls !== undefined) {
         cameraControls.update();
+      } else if (vantage !== undefined) {
+        // Static positioned camera — pose was set once at boot; hold it. (Terrain streaming
+        // below still reads camera.position, which stays fixed at the vantage.)
       } else {
         angle += orbitSpin;
         camera.position.set(

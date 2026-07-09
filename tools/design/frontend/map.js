@@ -17,6 +17,11 @@ import * as LM from "./map-paint.js";
 
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
+// Places (Stage 2) draw as DIAMONDS to read distinctly from the round world-bible markers; the
+// fill is a violet-leaning palette (markers lean teal/green), default violet.
+const PLACE_FILL = { landmark:"#6d5f7a", settlement:"#3f7d57", region:"#2f6f7a", district:"#8a6f4a",
+  building:"#8a6f4a", dungeon:"#6d5f7a", camp:"#b9772b", ruin:"#a25151", wild:"#7a8a6a", poi:"#b9772b" };
+const PLACE_KINDS = ["landmark","settlement","region","district","building","dungeon","camp","ruin","wild","poi"];
 const KINDS = ["civic","dwelling","religious","military","marker","landmark","camp","ruin","wild"];
 const GLYPHS = ["mountain","hills","forest","desert","marsh","water","peak"];
 const GLYPH_LABEL = { mountain:"⛰ Mountains", hills:"⌒ Hills", forest:"♣ Forest", desert:"≈ Desert", marsh:"⍦ Marsh", water:"≋ Water", peak:"▲ Peak" };
@@ -26,6 +31,9 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select",
   drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
+// Camera vantage (Stage 2, session-only view state — never touches the doc): {x,z,yaw(rad)}.
+// yaw = atan2(dx,-dz) so 0 rad faces NORTH (-z) and grows clockwise (east = +x).
+let vantage=null;
 // Elevation brush state (S1). A stroke = one undo step: full-buffer snapshot at stroke start,
 // bbox-union of every dab, ONE cmdPatchRaster pushed {applied:true} at stroke end.
 let elevMode="raise", elevRadius=12, elevStrength=0.6, elevLevelY=4;
@@ -134,6 +142,9 @@ function primaryMapId(){ return (S.state.maps&&S.state.maps[0]&&S.state.maps[0].
 function activeMap(){ return (S.state.maps||[]).find(m=>m.id===activeMapId) || (S.state.maps||[])[0] || {id:"primary",features:[]}; }
 function curFeatures(){ const m=activeMap(); if(!Array.isArray(m.features)) m.features=[]; return m.features; }
 function mapMarkers(){ const pid=primaryMapId(); return (S.state.world&&S.state.world.locations||[]).filter(l=> l.map ? l.map===activeMapId : activeMapId===pid); }
+// Placed places on the ACTIVE map (position set, and place.map matches — defaulting to primary,
+// exactly like markers). Unplaced places live only in the Places tree.
+function mapPlaces(){ const pid=primaryMapId(); return (S.state.places||[]).filter(p=> Array.isArray(p.position) && (p.map ? p.map===activeMapId : activeMapId===pid)); }
 
 function glyphSVG(kind,x,y,s){
   const st='stroke="#6b6459" fill="none" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"';
@@ -156,7 +167,7 @@ export function renderMap(){
   // the terrain palette their decorative one. Existing glyph features render read-only.
   // Road is an inline SVG — the 🛤 emoji has spotty font coverage and renders as junk glyphs.
   const ICON_ROAD='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7.5 21 L10 3"/><path d="M16.5 21 L14 3"/><path d="M12 4.5v2.5M12 11v3M12 18v3"/></svg>';
-  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["marker","📍","Place marker"],["place","◈","Place a location (Places)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const elevControls = mapTool!=="elev" ? "" :
@@ -173,7 +184,13 @@ export function renderMap(){
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="ter-radius" min="8" max="300" step="4" value="'+terRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="ter-radius-val" style="margin-left:0">'+terRadius+'m</span>';
   const colorPick = !["river","road","border"].includes(mapTool) ? "" :
     '<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">';
-  const props = colorPick+elevControls+landControls+terrainControls;
+  // Camera vantage props: once a camera is placed, a facing readout + a "Preview from here" that
+  // renders a ground-level still through the SAME peek path (job poll + turntable lightbox).
+  const cameraControls = mapTool!=="camera" ? "" :
+    (vantage
+      ? '<span class="coord" id="cam-facing">facing '+Math.round(((vantage.yaw*180/Math.PI)%360+360)%360)+'°</span><button class="tool" id="cam-preview" title="Render a ground-level preview from this camera" style="width:auto;padding:0 10px;gap:5px">▶ Preview</button>'
+      : '<span class="coord">click to set a camera · drag to aim</span>');
+  const props = colorPick+elevControls+landControls+terrainControls+cameraControls;
   document.getElementById("center").innerHTML =
     // The svg is REBUILT on every render — it must carry the CURRENT viewBox, not a hardcoded
     // default: syncViewBox caches the container size and early-returns when unchanged, so a
@@ -220,6 +237,8 @@ function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
     land:"drag anywhere to "+(lmMode==="ocean"?"carve ocean":"paint land")+" (one stroke = one undo step) · the coastline derives from what you paint · painting REPLACES the traced coast at build time",
     terrain:"drag to paint "+(terKind==="erase"?"(erase ground cover)":terKind)+" (one stroke = one undo step) · ground shows on land only · painting REPLACES drawn biome regions at build time",
     marker:"click the map to place a marker",
+    place:"click the map to drop a place · drag a place to move it · click a place to edit it",
+    camera:"click to set a camera position · drag to aim it · use Preview to render a ground-level view",
     stamp:(stampAssetId?"click to place "+stampAssetId:"pick an asset from the catalog, then click to place")+" · select tool moves stamps · Delete removes",
     river:"drag to draw the river's course (smoothed on release)",
     road:"drag to draw the road (smoothed on release)",
@@ -360,6 +379,29 @@ function redrawMap(){
     return '<g class="pin" data-id="'+l.id+'" transform="translate('+sx+','+sy+')">'
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
       +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
+  // Places pins (Stage 2): DIAMOND glyphs (rotated square) to read apart from round markers; an
+  // area place adds a faint radius ring at its true world radius (radiusM * scale).
+  const placePins=mapPlaces().map(p=>{ const [sx,sy]=w2s(p.position[0],p.position[1]); const c=PLACE_FILL[p.kind]||"#6d5f7a";
+    const ring=(p.binding==="area"&&p.radiusM>0)
+      ? '<circle class="parea" r="'+(p.radiusM*mapScale)+'" fill="'+c+'" fill-opacity=".08" stroke="'+c+'" stroke-opacity=".55" stroke-dasharray="5 4" style="pointer-events:none"/>' : '';
+    return '<g class="ppin" data-place-id="'+esc(p.id)+'" transform="translate('+sx+','+sy+')">'
+      +ring+'<rect x="-6" y="-6" width="12" height="12" transform="rotate(45)" fill="'+c+'"/>'
+      +'<text x="12" y="4">'+esc(p.name)+'</text></g>'; }).join("");
+  // Camera vantage glyph + facing arrow (only while the Camera tool is active).
+  let vantageLayer="";
+  if(vantage&&mapTool==="camera"){
+    const [vx,vy]=w2s(vantage.x,vantage.z);
+    const fsx=Math.sin(vantage.yaw), fsz=-Math.cos(vantage.yaw); // world facing -> screen delta
+    const len=42, ax=vx+fsx*len, ay=vy+fsz*len;
+    const px=-fsz, py=fsx, hb=9, hw=6; // arrowhead: back along facing, spread on perpendicular
+    const h1x=ax-fsx*hb+px*hw, h1y=ay-fsz*hb+py*hw, h2x=ax-fsx*hb-px*hw, h2y=ay-fsz*hb-py*hw;
+    vantageLayer='<g class="vantage" style="pointer-events:none">'
+      +'<line x1="'+vx+'" y1="'+vy+'" x2="'+ax+'" y2="'+ay+'" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round"/>'
+      +'<polygon points="'+ax+','+ay+' '+h1x+','+h1y+' '+h2x+','+h2y+'" fill="var(--accent)"/>'
+      +'<circle cx="'+vx+'" cy="'+vy+'" r="9" fill="var(--accent)" stroke="#fff" stroke-width="2"/>'
+      +'<rect x="'+(vx-4)+'" y="'+(vy-2.5)+'" width="8" height="5.5" rx="1.2" fill="#fff"/>'
+      +'<circle cx="'+vx+'" cy="'+vy+'" r="1.6" fill="var(--accent)"/></g>';
+  }
   const compass='<g transform="translate('+(VBW-44)+',44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   // Bright white dashed ring with a dark drop-shadow casing — a var(--accent) hairline washed
   // out against sand/grass and the author lost the brush (a real UAT complaint).
@@ -368,9 +410,10 @@ function redrawMap(){
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
   // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons
   // for user-managed extent are gone.
-  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + compass + elevCursor + stampGhost;
+  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + compass + elevCursor + stampGhost;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
+  svg.querySelectorAll(".ppin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPlacePinDrag(e,p.dataset.placeId)); });
   svg.querySelectorAll(".stampf").forEach(el=>{
     el.style.cursor = mapTool==="select" ? "move" : "";
     el.addEventListener("mousedown",(e)=>{ if(mapTool!=="select") return; e.stopPropagation();
@@ -391,8 +434,57 @@ function featSwatch(f){
   if(f.type==="area") return f.kind==="outline"?"#dccfa6":(BIOME_BASE[f.biome]||"#8a8a86");
   if(f.type==="line") return f.kind==="border"?"#b23838":f.kind==="road"?"#8a6f4a":(f.color||"#5b7d9a");
   return "#6b6459"; }
+// The map-layers modal is TABBED: the painted-layer list + a Places list, so places are visible and
+// selectable from inside the Atlas without leaving for the Places view (they share this modal, per UAT).
+let layerTab="layers";
+function lyrTabsHtml(){
+  return '<div class="lyr-tabs">'
+    +'<button class="lyr-tab'+(layerTab==="layers"?" on":"")+'" data-lt="layers">Layers</button>'
+    +'<button class="lyr-tab'+(layerTab==="places"?" on":"")+'" data-lt="places">Places</button></div>';
+}
+function bindLyrTabs(el){ el.querySelectorAll(".lyr-tab[data-lt]").forEach(b=>b.onclick=()=>{ layerTab=b.dataset.lt; renderLayers(); }); }
+// The Places tab of the layer modal: the map's places as a nested list; click focuses the pin + opens
+// its inspector. Same data as the full Places view — this is the in-Atlas companion.
+function renderPlacesTab(el){
+  const all=S.state.places||[];
+  const placed=all.filter(p=>Array.isArray(p.position)).length;
+  const byId=new Map(all.map(p=>[p.id,{...p,children:[]}]));
+  const roots=[];
+  for(const p of byId.values()){ const par=p.parentId!=null&&byId.get(p.parentId); if(par)par.children.push(p); else roots.push(p); }
+  const rows=[];
+  const walk=(nodes,d)=>{ nodes.sort((a,b)=>a.name.localeCompare(b.name));
+    for(const n of nodes){
+      const pl=Array.isArray(n.position);
+      rows.push('<div class="plr" data-pid="'+esc(n.id)+'" style="padding-left:'+(8+d*16)+'px">'
+        +'<span class="pk">'+esc(n.kind||"place")+'</span><span class="pn">'+esc(n.name)+'</span>'
+        +(pl?'<span class="pd" title="placed"></span>':'<span class="pu">unplaced</span>')+'</div>');
+      if(n.children.length) walk(n.children,d+1);
+    } };
+  walk(roots,0);
+  el.innerHTML=lyrTabsHtml()
+    +'<div class="lh"><b>Places ('+placed+'/'+all.length+')</b><button class="clr" id="pl-new">＋ New</button></div>'
+    +(rows.length?rows.join(""):'<div class="lr"><span class="nm" style="color:var(--muted)">No places — drop one with the ◈ tool</span></div>');
+  const nb=document.getElementById("pl-new"); if(nb) nb.onclick=newUnplacedPlace;
+  el.querySelectorAll(".plr[data-pid]").forEach(r=>r.onclick=()=>{
+    const p=(S.state.places||[]).find(x=>x.id===r.dataset.pid); if(!p) return;
+    if(Array.isArray(p.position)){ mapPan.x=p.position[0]; mapPan.z=p.position[1]; renderMap(); }
+    openPlaceInspector(p);
+  });
+}
+async function newUnplacedPlace(){
+  const before=new Set((S.state.places||[]).map(p=>p.id));
+  try{
+    const j=await postJSON("/api/edit-place",{op:"add",place:{name:"New place",kind:"landmark"}});
+    if(j&&j.ok===false){ toast("add place failed"+(j.error?": "+j.error:"")); return; }
+    const places=Array.isArray(j.places)?j.places:(S.state.places||[]);
+    S.state.places=places; afterPlaceChange();
+    const added=places.find(p=>!before.has(p.id));
+    if(added) openPlaceInspector(added);
+  }catch(e){ toast("add place failed: "+e); }
+}
 function renderLayers(){
   const el=document.getElementById("map-layers"); if(!el) return;
+  if(layerTab==="places"){ el.className="map-layers"; renderPlacesTab(el); bindLyrTabs(el); return; }
   const m=activeMap();
   const f=curFeatures();
   // Painted layers are first-class: visible in the panel, deletable (undoable) — a stuck
@@ -406,10 +498,10 @@ function renderLayers(){
   // label reads as data loss (it happened).
   el.className="map-layers";
   if(!f.length&&!paints.length){
-    el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+'</b></div><div class="lr"><span class="nm" style="color:var(--muted)">empty map — paint or stamp to begin</span></div>';
-    return;
+    el.innerHTML=lyrTabsHtml()+'<div class="lh"><b>'+esc(m.name||m.id)+'</b></div><div class="lr"><span class="nm" style="color:var(--muted)">empty map — paint or stamp to begin</span></div>';
+    bindLyrTabs(el); return;
   }
-  el.innerHTML='<div class="lh"><b>'+esc(m.name||m.id)+' ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
+  el.innerHTML=lyrTabsHtml()+'<div class="lh"><b>'+esc(m.name||m.id)+' ('+(f.length+paints.length)+')</b>'+(f.length?'<button class="clr" id="lyr-clear">Clear features</button>':'')+'</div>'
     +paints.map(p=>{
       // currentColor SVG eye — the 👁 emoji is a dark glyph and vanishes on the dark theme.
       const eyeOn='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/></svg>';
@@ -436,6 +528,7 @@ function renderLayers(){
     commit(H.cmdDeleteFeatures(activeMapId, activeMap(), ids)); });
   el.querySelectorAll(".lr[data-i]").forEach(r=>{ r.onclick=()=>{ mapTool="select"; selFeat=curFeatures()[+r.dataset.i].id; renderMap(); };
     r.onmouseenter=()=>hlFeat(+r.dataset.i,true); r.onmouseleave=()=>hlFeat(+r.dataset.i,false); });
+  bindLyrTabs(el);
 }
 /** Delete a painted layer (landmass/elevation) as ONE undoable command. Dirty caches sync into
  *  the doc first so undo restores the user's LATEST paint, then the cache drops so the display
@@ -546,6 +639,7 @@ function bindMap(){
     renderMap(); };
   const imp=document.getElementById("map-import"); if(imp) imp.onclick=showImportMenu;
   const pk=document.getElementById("map-peek"); if(pk) pk.onclick=doPeek;
+  const cp=document.getElementById("cam-preview"); if(cp) cp.onclick=doVantagePeek;
   const cmp=document.getElementById("map-compile"); if(cmp) cmp.onclick=()=>doCompile(false);
   const zs=document.getElementById("zone-size"); if(zs) zs.onchange=async(e)=>{
     const v=Number(e.target.value);
@@ -618,6 +712,14 @@ function bindMap(){
       if(created) redrawMap();
       return; }
     if(mapTool==="marker"){ openInspector(null,{x:Math.round(x),z:Math.round(z)},e.clientX,e.clientY); return; }
+    if(mapTool==="place"){ addPlaceAt(Math.round(x),Math.round(z),e.clientX,e.clientY); return; }
+    if(mapTool==="camera"){
+      // Click plants the camera; the ensuing drag aims it (yaw). renderMap re-draws the props
+      // island with the facing readout + Preview button (window listeners dedupe on re-bind).
+      vantage={x:Math.round(x),z:Math.round(z),yaw:vantage?vantage.yaw:0};
+      mapDrag={type:"vantage"};
+      renderMap();
+      return; }
     if(mapTool==="stamp"){
       if(!stampAssetId){ toast("pick an asset from the catalog"); return; }
       commit(H.cmdAddStamp(activeMapId,{id:fid(),assetId:stampAssetId,x:Math.round(x),z:Math.round(z)}));
@@ -946,6 +1048,115 @@ function refreshElevImage(){
   });
 }
 function startPinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"pin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.pin[data-id="'+id+'"]').classList.add("drag"); }
+// Place-pin drag mirrors startPinDrag: click (no move) opens the inspector, drag persists a move.
+function startPlacePinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropagation(); const svg=document.getElementById("map-svg"); const [mx,my]=evtVB(e,svg); mapDrag={type:"placepin",id,mx,my,sx:mx,sy:my,moved:false,cx:e.clientX,cy:e.clientY}; svg.querySelector('.ppin[data-place-id="'+id+'"]')?.classList.add("drag"); }
+
+// ── Places (Stage 2) ─────────────────────────────────────────────────────────────────────────
+// After any place mutation, re-render whatever surface is showing them: the map (if active) and
+// the Places tree (app.js, via the S.fn registry — no map->app import).
+function afterPlaceChange(){ if(S.activeView==="map") renderMap(); if(S.fn.refreshPlaces) S.fn.refreshPlaces(); }
+// The ids of a place and everything under it — used to keep it (and its subtree) out of the
+// parent picker so the UI can't offer a reparent that would make a cycle.
+function placeDescendants(id){
+  const all=S.state.places||[]; const kids=new Map();
+  for(const p of all){ if(p.parentId!=null){ if(!kids.has(p.parentId)) kids.set(p.parentId,[]); kids.get(p.parentId).push(p.id); } }
+  const out=new Set(); const stack=[id];
+  while(stack.length){ const cur=stack.pop(); for(const k of (kids.get(cur)||[])){ if(!out.has(k)){ out.add(k); stack.push(k); } } }
+  return out;
+}
+// Drop a NEW placed place at [x,z] on the active map, then open its inspector to name it. The
+// server slugifies the id from the name; we diff the returned array against the pre-add id set to
+// find the fresh node (two "New place" clicks can't confuse it).
+async function addPlaceAt(x,z,cx,cy){
+  const before=new Set((S.state.places||[]).map(p=>p.id));
+  try{
+    const j=await postJSON("/api/edit-place",{op:"add",place:{name:"New place",kind:"landmark",position:[x,z],map:activeMapId}});
+    if(j&&j.ok===false){ toast("add place failed"+(j.error?": "+j.error:"")); return; }
+    const places=Array.isArray(j.places)?j.places:(S.state.places||[]);
+    S.state.places=places;
+    afterPlaceChange();
+    const added=places.find(p=>!before.has(p.id)) || places.find(p=>Array.isArray(p.position)&&p.position[0]===x&&p.position[1]===z);
+    if(added) openPlaceInspector(added,cx,cy);
+  }catch(e){ toast("add place failed: "+e); }
+}
+export function openPlaceInspector(place, cx, cy){
+  document.getElementById("insp")?.remove();
+  const all=S.state.places||[];
+  const p=all.find(x=>x.id===place.id)||place;
+  const banned=placeDescendants(p.id); banned.add(p.id);
+  const parents=all.filter(x=>!banned.has(x.id));
+  const isArea=p.binding==="area";
+  const kindOpt=(PLACE_KINDS.includes(p.kind)?PLACE_KINDS:[p.kind,...PLACE_KINDS]).filter(Boolean);
+  const el=document.createElement("div"); el.className="insp"; el.id="insp";
+  el.innerHTML='<h4>Edit place<button class="x" id="insp-x">×</button></h4>'
+    +'<label>Name</label><input id="pi-name" value="'+esc(p.name||"")+'">'
+    +'<div class="row"><div><label>Kind</label><select id="pi-kind">'+kindOpt.map(k=>'<option'+(k===p.kind?" selected":"")+'>'+esc(k)+'</option>').join("")+'</select></div>'
+    +'<div><label>Parent</label><select id="pi-parent"><option value="">— none (root) —</option>'
+      +parents.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===p.parentId?" selected":"")+'>'+esc(x.name||x.id)+'</option>').join("")+'</select></div></div>'
+    +'<label>Binding</label><div class="row"><select id="pi-binding"><option value="point"'+(!isArea?" selected":"")+'>Point</option><option value="area"'+(isArea?" selected":"")+'>Area</option></select>'
+      +'<input id="pi-radius" type="number" min="1" step="1" placeholder="radius m" value="'+(p.radiusM!=null?esc(p.radiusM):"")+'"'+(isArea?"":' style="display:none"')+'></div>'
+    +'<label>Tags (comma-separated)</label><input id="pi-tags" value="'+esc((p.tags||[]).join(", "))+'">'
+    +'<label>Note</label><input id="pi-note" value="'+esc(p.note||"")+'">'
+    +(Array.isArray(p.position)?'<div class="co">x '+p.position[0]+'  z '+p.position[1]+(p.map?"  · "+esc(p.map):"")+'</div>':'<div class="co">unplaced</div>')
+    +'<div class="actions"><button class="save" id="pi-save">Save</button><button class="del" id="pi-del">Delete</button></div>';
+  document.body.appendChild(el);
+  if(typeof cx==="number"){ const w=el.offsetWidth,h=el.offsetHeight; el.style.left=Math.min(cx+14, innerWidth-w-12)+"px"; el.style.top=Math.min(Math.max(cy-20,12), innerHeight-h-12)+"px"; el.style.right="auto"; }
+  document.getElementById("insp-x").onclick=()=>el.remove();
+  const bindSel=document.getElementById("pi-binding");
+  bindSel.onchange=()=>{ const r=document.getElementById("pi-radius"); r.style.display=bindSel.value==="area"?"":"none"; if(bindSel.value==="area") r.focus(); };
+  document.getElementById("pi-save").onclick=()=>savePlace(p.id);
+  document.getElementById("pi-del").onclick=()=>deletePlace(p.id);
+  document.getElementById("pi-name").focus();
+}
+async function savePlace(id){
+  const name=document.getElementById("pi-name").value.trim();
+  if(!name){ document.getElementById("pi-name").focus(); return; }
+  const kind=document.getElementById("pi-kind").value.trim()||"landmark";
+  const parentId=document.getElementById("pi-parent").value||null;
+  const binding=document.getElementById("pi-binding").value;
+  const tags=document.getElementById("pi-tags").value.split(",").map(s=>s.trim()).filter(Boolean);
+  const note=document.getElementById("pi-note").value.trim();
+  const place={id,name,kind,parentId,binding,tags,note};
+  if(binding==="area"){ const r=Number(document.getElementById("pi-radius").value); if(r>0) place.radiusM=r; }
+  const btn=document.getElementById("pi-save"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
+  try{ const j=await postJSON("/api/edit-place",{op:"update",place});
+    if(j&&j.ok===false){ toast("save failed"+(j.error?": "+j.error:"")); if(btn){ btn.disabled=false; btn.textContent="Save"; } return; }
+    if(j&&Array.isArray(j.places)) S.state.places=j.places; else await S.fn.reload();
+    document.getElementById("insp")?.remove();
+    afterPlaceChange();
+  }catch(e){ if(btn){ btn.disabled=false; btn.textContent="Save"; } toast("save failed: "+e); }
+}
+async function deletePlace(id){
+  const p=(S.state.places||[]).find(x=>x.id===id);
+  const hasKids=(S.state.places||[]).some(c=>c.parentId===id);
+  if(!confirm("Delete place '"+(p?p.name:id)+"'?"+(hasKids?" Its children are reparented by the server.":""))) return;
+  try{ const j=await postJSON("/api/edit-place",{op:"delete",place:{id}});
+    if(j&&j.ok===false){ toast("delete failed"+(j.error?": "+j.error:"")); return; }
+    if(j&&Array.isArray(j.places)) S.state.places=j.places; else await S.fn.reload();
+    document.getElementById("insp")?.remove();
+    afterPlaceChange();
+  }catch(e){ toast("delete failed: "+e); }
+}
+// Ground-level preview from the camera vantage. Mirrors doPeek's job-poll + turntable lightbox,
+// adding the `camera` field the /api/peek contract accepts (a single ground-level still).
+async function doVantagePeek(){
+  if(!vantage){ toast("set a camera first — click the map with the Camera tool"); return; }
+  if(!confirm("Render a ground-level preview from this camera? (~30–90s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
+  await flushMapSave();
+  let j;
+  try{ j=await postJSON("/api/peek",{mapId:activeMapId, camera:{mode:"vantage", pos:[vantage.x,vantage.z], yaw:vantage.yaw, eyeHeight:1.7}}); }
+  catch(e){ toast("preview failed: "+String(e), 6000); return; }
+  if(j.error){ toast("preview failed: "+j.error, 6000); return; }
+  if(j.editorHostUp) toast("note: the editor host is running — if its browser tab is open, the render may destabilize it", 6000);
+  showPeekLoading();
+  peekPoll=setInterval(async()=>{
+    try{
+      const s=await (await fetch("/api/peek/"+j.job)).json();
+      if(s.status==="done"){ clearInterval(peekPoll); peekPoll=null; if(document.getElementById("peek-box")) showPeek(s.frameUrls&&s.frameUrls.length?s.frameUrls:[s.url]); }
+      else if(s.status==="error"||s.status==="unknown"){ closePeekBox(); toast("preview failed: "+(s.error||s.status), 7000); }
+    }catch{ /* keep polling */ }
+  }, 2500);
+}
 function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(!svg) return; const [mx,my]=evtVB(e,svg);
   if(mapDrag.type==="pan"){ mapPan.x=mapDrag.px-(mx-mapDrag.mx)/mapScale; mapPan.z=mapDrag.pz-(my-mapDrag.my)/mapScale; redrawMap(); }
   else if(mapDrag.type==="elev"){
@@ -979,6 +1190,11 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
   else if(mapDrag.type==="lasso"){ mapDrag.x1=mx; mapDrag.y1=my; drawLassoRect(svg); }
   else if(mapDrag.type==="vertex"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my); if(mapDrag.idx<0){ f.x=Math.round(wx); f.z=Math.round(wz); } else if(f.points){ f.points[mapDrag.idx]=[Math.round(wx),Math.round(wz)]; } redrawMap(); } }
   else if(mapDrag.type==="featmove"){ const f=curFeatures().find(x=>x.id===mapDrag.fid); if(f){ const [wx,wz]=s2w(mx,my),[wx0,wz0]=s2w(mapDrag.mx0,mapDrag.my0); const dx=Math.round(wx-wx0),dz=Math.round(wz-wz0); if(f.type==="glyph"){ f.x=mapDrag.start.x+dx; f.z=mapDrag.start.z+dz; } else { f.points=mapDrag.start.points.map(p=>[p[0]+dx,p[1]+dz]); } redrawMap(); } }
+  else if(mapDrag.type==="vantage"){ if(!vantage) return; const [wx,wz]=s2w(mx,my); const dx=wx-vantage.x, dz=wz-vantage.z;
+    if(Math.hypot(dx,dz)>0.5){ vantage.yaw=Math.atan2(dx,-dz);
+      const fl=document.getElementById("cam-facing"); if(fl) fl.textContent="facing "+Math.round(((vantage.yaw*180/Math.PI)%360+360)%360)+"°";
+      redrawMap(); } }
+  else if(mapDrag.type==="placepin"){ if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const p=svg.querySelector('.ppin[data-place-id="'+mapDrag.id+'"]'); if(p) p.setAttribute("transform","translate("+mx+","+my+")"); }
   else { if(Math.abs(mx-mapDrag.sx)+Math.abs(my-mapDrag.sy)>5) mapDrag.moved=true; const p=svg.querySelector('.pin[data-id="'+mapDrag.id+'"]'); if(p) p.setAttribute("transform","translate("+mx+","+my+")"); } }
 function drawLassoRect(svg){ const d=mapDrag; let r=document.getElementById("lasso-rect");
   if(!r){ r=document.createElementNS(SVGNS,"rect"); r.id="lasso-rect"; r.setAttribute("class","lasso-rect"); svg.appendChild(r); }
@@ -1034,12 +1250,23 @@ async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementByI
       if(JSON.stringify(after)!==JSON.stringify(d.start))
         commit(H.cmdMoveFeature(activeMapId,d.fid,d.start,after),{applied:true}); }
     return; }
+  if(d.type==="vantage"){ redrawMap(); return; }
+  if(d.type==="placepin"){
+    // No drag = a click: open the inspector. A drag = a move → persist through /api/edit-place.
+    if(!d.moved){ redrawMap(); const p=mapPlaces().find(x=>x.id===d.id); if(p) openPlaceInspector(p,d.cx,d.cy); return; }
+    const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
+    try{ const j=await postJSON("/api/edit-place",{op:"move",place:{id:d.id,position:[Math.round(wx),Math.round(wz)]}});
+      if(j&&j.ok===false){ toast("move failed"+(j.error?": "+j.error:"")); redrawMap(); return; }
+      if(j&&Array.isArray(j.places)) S.state.places=j.places; else await S.fn.reload();
+      afterPlaceChange();
+    }catch(err){ redrawMap(); }
+    return; }
   if(d.type!=="pin") return;
   if(!d.moved){ redrawMap(); const loc=mapMarkers().find(l=>l.id===d.id); if(loc) openInspector(loc,null,d.cx,d.cy); return; }
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
   try{ const j=await postJSON("/api/edit-location",{op:"move",id:d.id,x:wx,z:wz}); await S.fn.reload(); renderMap(); if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts); }catch(err){ redrawMap(); } }
 
-async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]; selFeat=null; await flushMapSave(); renderMap(); }
+async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]; selFeat=null; vantage=null; await flushMapSave(); renderMap(); }
 async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
   const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||("map"+(S.state.maps.length+1));
   if(S.state.maps.some(m=>m.id===id)){ alert("a map with that id exists"); return; }

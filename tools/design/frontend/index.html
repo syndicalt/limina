@@ -142,6 +142,10 @@
     color:var(--amber); border:1px dashed var(--amber); border-radius:20px; padding:2px 9px; }
   .pnode .rtail { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); }
   .places-empty { padding:40px; text-align:center; color:var(--muted); }
+  /* Editable tree (Stage 2): rows are clickable (open inspector) and draggable (reparent). */
+  .pnode[data-place-id] { cursor:pointer; }
+  .pnode.dragging { opacity:.45; }
+  .pnode.drop-target { background:var(--accent-soft); outline:1px dashed var(--accent); outline-offset:-1px; }
 
   /* team rail */
   .rail h3 { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted); margin:2px 0 12px; }
@@ -249,6 +253,11 @@
   .pin circle { stroke:#fff; stroke-width:1.5; }
   .pin text { font-family:var(--sans); font-size:11px; fill:var(--ink); paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
   .pin.drag circle { stroke:var(--accent); stroke-width:3; }
+  /* Places pins: diamonds, to read apart from the round markers. */
+  .ppin { cursor:grab; }
+  .ppin rect { stroke:#fff; stroke-width:1.5; }
+  .ppin text { font-family:var(--sans); font-size:11px; fill:var(--ink); paint-order:stroke; stroke:var(--panel-2); stroke-width:3px; }
+  .ppin.drag rect { stroke:var(--accent); stroke-width:2.5; }
   .compass { font-family:var(--sans); font-size:12px; fill:var(--muted); }
   .map-hint { position:absolute; bottom:12px; left:16px; font-size:11px; color:var(--muted); background:var(--panel);
     border:1px solid var(--line); border-radius:8px; padding:5px 10px; opacity:.9; }
@@ -257,7 +266,7 @@
   svg.map.adding { cursor:crosshair; }
   svg.map.lassoing { cursor:crosshair; }
   .lasso-rect { fill:var(--accent); fill-opacity:.08; stroke:var(--accent); stroke-width:1; stroke-dasharray:4 3; }
-  .map-layers { position:absolute; bottom:48px; right:14px; width:210px; max-height:calc(100% - 130px); overflow:auto;
+  .map-layers { position:absolute; bottom:48px; right:14px; width:max-content; min-width:210px; max-width:min(460px, calc(100% - 28px)); max-height:calc(100% - 130px); overflow:auto;
     background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.12); font-size:12.5px; }
   .map-layers.empty { display:none; }
   .map-layers .lh { display:flex; align-items:center; gap:8px; padding:9px 11px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
@@ -268,6 +277,15 @@
   .map-layers .lr .sw { width:11px; height:11px; border-radius:3px; flex:none; }
   .map-layers .lr .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .map-layers .lr .x { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; line-height:1; }
+  .lyr-tabs { display:flex; gap:2px; padding:6px 8px 0; position:sticky; top:0; background:var(--panel); z-index:1; }
+  .lyr-tab { flex:1; font-size:11px; padding:5px 8px; background:var(--panel-2); border:1px solid var(--line); border-bottom:none; border-radius:5px 5px 0 0; color:var(--muted); cursor:pointer; }
+  .lyr-tab.on { background:var(--panel); color:var(--ink,#fff); font-weight:600; }
+  .map-layers .plr { display:flex; align-items:center; gap:6px; padding:5px 10px; cursor:pointer; font-size:12px; }
+  .map-layers .plr:hover { background:var(--panel-2); }
+  .map-layers .plr .pk { font-size:9px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); background:var(--panel-2); border-radius:3px; padding:1px 4px; flex:none; }
+  .map-layers .plr .pn { flex:none; white-space:nowrap; }
+  .map-layers .plr .pd { width:8px; height:8px; border-radius:999px; background:var(--amber); flex:none; }
+  .map-layers .plr .pu { font-size:9px; color:var(--muted); border:1px dashed var(--muted); border-radius:3px; padding:0 4px; flex:none; }
   .map-layers .lr .eye { background:none; border:none; cursor:pointer; line-height:0; padding:0 2px; color:var(--muted); }
   .map-layers .lr .eye:hover { color:var(--ink); }
   .map-layers .lr .eye.off { opacity:.6; }
