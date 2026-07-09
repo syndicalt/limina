@@ -6,23 +6,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compileDesignMap } from "../../js/src/world/design-map-compile.mjs";
+import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 
 function projectRootForVault(vaultDir) {
   return basename(vaultDir) === "design" ? dirname(vaultDir) : vaultDir;
 }
 
-function projectId(projectRoot) {
-  try {
-    const config = JSON.parse(readFileSync(join(projectRoot, "limina.project.json"), "utf8"));
-    if (config.schema === "limina-project/1" && /^[a-z0-9][a-z0-9._-]*$/.test(config.projectId)) return config.projectId;
-  } catch { /* package fallback below */ }
-  try {
-    const name = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")).name;
-    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
-  } catch { /* directory fallback below */ }
-  const fallback = basename(projectRoot);
-  if (/^[a-z0-9][a-z0-9._-]*$/.test(fallback)) return fallback;
-  throw new Error("project requires a lowercase npm-style projectId");
+export function loadBuildProjectConfig(vaultDir) {
+  const config = loadProjectConfig(projectRootForVault(resolve(vaultDir)));
+  return Object.freeze({ ...config, vaultDir: resolveProjectPath(config.projectRoot, vaultDir, "design vault") });
 }
 
 function projectAssetPath(projectRoot, assetId) {
@@ -38,8 +30,7 @@ function projectAssetPath(projectRoot, assetId) {
   return candidate;
 }
 
-function compileProjectMap(vaultDir, mapId) {
-  const projectRoot = projectRootForVault(vaultDir);
+function compileProjectMap(vaultDir, mapId, projectRoot) {
   const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
   const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
   const placesPath = join(vaultDir, "places.md");
@@ -226,8 +217,10 @@ async function main() {
   }
   if (!vault || !existsSync(join(vault, "maps.json"))) throw new Error("design vault not found; pass its directory or run from a project with design/maps.json");
   if (!token) throw new Error("need LIMINA_EDITOR_TOKEN (or pass the token as an argument)");
-  const compiled = compileProjectMap(vault, process.env.LIMINA_MAP_ID);
-  const project = projectId(compiled.projectRoot);
+  const projectConfig = loadBuildProjectConfig(vault);
+  vault = projectConfig.vaultDir;
+  const compiled = compileProjectMap(vault, process.env.LIMINA_MAP_ID, projectConfig.projectRoot);
+  const project = projectConfig.projectId;
   for (const warning of compiled.warnings) console.warn(`warning: ${warning}`);
   const seed = Number(process.env.LIMINA_BUILD_SEED ?? 11);
   if (!Number.isSafeInteger(seed)) throw new Error(`LIMINA_BUILD_SEED must be a safe integer, got ${process.env.LIMINA_BUILD_SEED}`);

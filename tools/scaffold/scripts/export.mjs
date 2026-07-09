@@ -42,14 +42,6 @@ function fail(msg) {
   throw new Error(msg);
 }
 
-function projectId() {
-  try {
-    const name = JSON.parse(readFileSync(join(PROJECT_DIR, "package.json"), "utf8")).name;
-    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
-  } catch { /* actionable error below */ }
-  fail("package.json must contain a lowercase npm-style project name");
-}
-
 /** Resolve the limina binary + source home, with clear, actionable errors.
  *  - LIMINA_BIN points at the binary (any location).
  *  - LIMINA_HOME points at the limina checkout (the dir holding js/ + assets/).
@@ -105,6 +97,15 @@ function resolveLimina() {
     );
   }
   return { bin, home };
+}
+
+export async function loadExportProjectConfig(home, projectRoot = PROJECT_DIR) {
+  const modulePath = join(home, "tools", "project-config.mjs");
+  if (!existsSync(modulePath)) {
+    fail(`selected LIMINA_HOME has no canonical project loader: ${modulePath}`);
+  }
+  const { loadProjectConfig } = await import(pathToFileURL(modulePath).href);
+  return loadProjectConfig(projectRoot);
 }
 
 /** The export harness source — runs entirely inside the native limina runtime.
@@ -207,10 +208,10 @@ function distIndexHtml() {
   return html.replace(/data-world="[^"]*"/, 'data-world="./"');
 }
 
-function main() {
+async function main() {
   if (!existsSync(WORLD_TS)) fail(`no world.ts found at ${WORLD_TS}`);
   const { bin, home } = resolveLimina();
-  const worldId = projectId();
+  const { projectId: worldId } = await loadExportProjectConfig(home);
   console.log(`limina export: using binary ${bin}`);
   console.log(`limina export: using source  ${home}`);
 
@@ -301,9 +302,10 @@ function main() {
   console.log(`\nPlay it:  npm run serve`);
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`\n  limina export: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(`\n  limina export: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }

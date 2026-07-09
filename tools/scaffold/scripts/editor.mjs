@@ -9,31 +9,16 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = resolve(__dirname, "..");
 const DEFAULT_EDITOR_PORT = 8787;
 const DEFAULT_UI_PORT = 5173;
 let cleanupChildren = () => {};
-
-function projectId() {
-  const fallback = PROJECT_DIR.split(/[\\/]/).filter(Boolean).at(-1) ?? "limina-project";
-  try {
-    const configured = JSON.parse(readFileSync(join(PROJECT_DIR, "limina.project.json"), "utf8"));
-    if (configured.schema === "limina-project/1" && typeof configured.projectId === "string"
-      && /^[a-z0-9][a-z0-9._-]*$/.test(configured.projectId)) return configured.projectId;
-  } catch { /* actionable fallback below */ }
-  try {
-    const name = JSON.parse(readFileSync(join(PROJECT_DIR, "package.json"), "utf8")).name;
-    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
-  } catch { /* actionable fallback below */ }
-  if (/^[a-z0-9][a-z0-9._-]*$/.test(fallback)) return fallback;
-  fail("package.json must contain a lowercase npm-style project name");
-}
 
 /** Print an actionable error and exit non-zero. */
 function fail(msg) {
@@ -88,6 +73,15 @@ function resolveLimina() {
     );
   }
   return { bin, home };
+}
+
+export async function loadEditorProjectConfig(home, projectRoot = PROJECT_DIR) {
+  const modulePath = join(home, "tools", "project-config.mjs");
+  if (!existsSync(modulePath)) {
+    throw new Error(`selected LIMINA_HOME has no canonical project loader: ${modulePath}`);
+  }
+  const { loadProjectConfig } = await import(pathToFileURL(modulePath).href);
+  return loadProjectConfig(projectRoot);
 }
 
 function parsePort(value, fallback, name) {
@@ -170,9 +164,24 @@ function printBanner({ home, uiPort, editorPort, token }) {
   console.log("Press Ctrl-C to stop.");
 }
 
+export function editorHostEnvironment({ projectId, editorPort, uiPort, token, projectRoot = PROJECT_DIR, environment = process.env }) {
+  return {
+    ...environment,
+    LIMINA_EDITOR_PORT: String(editorPort),
+    LIMINA_EDITOR_STATIC_PORT: String(uiPort),
+    LIMINA_EDITOR_TOKEN: token,
+    LIMINA_PROJECT_ID: projectId,
+    LIMINA_ASSET_ROOT: join(projectRoot, "assets"),
+    LIMINA_EDITOR_WORLDLOG: `${projectId}.editor.worldlog.jsonl`,
+    LIMINA_EDITOR_TRACE: `${projectId}.editor.trace.jsonl`,
+    LIMINA_EDITOR_CHAT: `${projectId}.editor.chat.jsonl`,
+    LIMINA_EDITOR_KERNEL_LOCK: `${projectId}.editor.kernel.lock.json`,
+  };
+}
+
 async function main() {
   const { bin, home } = resolveLimina();
-  const id = projectId();
+  const { projectId: id } = await loadEditorProjectConfig(home);
   const stateDir = join(PROJECT_DIR, ".limina");
   mkdirSync(stateDir, { recursive: true });
   const bundle = join(home, "editor", "vendor", "limina-runtime.js");
@@ -196,17 +205,7 @@ async function main() {
   const token = requestedToken ?? randomBytes(24).toString("base64url");
   const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
     cwd: stateDir,
-    env: {
-      ...process.env,
-      LIMINA_EDITOR_PORT: String(editorPort),
-      LIMINA_EDITOR_STATIC_PORT: String(uiPort),
-      LIMINA_EDITOR_TOKEN: token,
-      LIMINA_ASSET_ROOT: join(PROJECT_DIR, "assets"),
-      LIMINA_EDITOR_WORLDLOG: `${id}.editor.worldlog.jsonl`,
-      LIMINA_EDITOR_TRACE: `${id}.editor.trace.jsonl`,
-      LIMINA_EDITOR_CHAT: `${id}.editor.chat.jsonl`,
-      LIMINA_EDITOR_KERNEL_LOCK: `${id}.editor.kernel.lock.json`,
-    },
+    env: editorHostEnvironment({ projectId: id, editorPort, uiPort, token }),
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(editorHost.stderr, "[editor_host]");
@@ -265,7 +264,10 @@ async function main() {
   printBanner({ home, uiPort, editorPort, token });
 }
 
-main().catch((err) => {
-  cleanupChildren();
-  fail(err instanceof Error ? err.message : String(err));
-});
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
+if (import.meta.url === invokedPath) {
+  main().catch((err) => {
+    cleanupChildren();
+    fail(err instanceof Error ? err.message : String(err));
+  });
+}

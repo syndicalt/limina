@@ -16,6 +16,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
+import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 
 // 3D-peek render jobs (Painter P5): bounded in-memory status retained for recent jobs.
 const peekJobs = new Map();
@@ -45,8 +46,12 @@ const MIME = {
   ".jpg": "image/jpeg",
 };
 
-const vaultDir = resolve(process.argv[2] || process.cwd());
-const PROJECT_ROOT = basename(vaultDir) === "design" ? dirname(vaultDir) : vaultDir;
+const REQUESTED_VAULT_DIR = resolve(process.argv[2] || process.cwd());
+const REQUESTED_PROJECT_ROOT = basename(REQUESTED_VAULT_DIR) === "design" ? dirname(REQUESTED_VAULT_DIR) : REQUESTED_VAULT_DIR;
+const PROJECT_CONFIG = loadProjectConfig(REQUESTED_PROJECT_ROOT);
+const PROJECT_ROOT = PROJECT_CONFIG.projectRoot;
+const PROJECT_ID = PROJECT_CONFIG.projectId;
+const vaultDir = resolveProjectPath(PROJECT_ROOT, REQUESTED_VAULT_DIR, "design vault");
 const ASSETS_DIR = resolve(process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, "assets"));
 const port = Number(process.argv[3]) || 4321;
 const HOST = "127.0.0.1";
@@ -56,20 +61,6 @@ const MAX_PEEK_JOBS = 256;
 const MAX_CONCURRENT_PEEKS = 2;
 const PEEK_JOB_TTL_MS = 30 * 60 * 1000;
 const PEEK_TIMEOUT_MS = 2 * 60 * 1000;
-
-function projectId() {
-  try {
-    const config = JSON.parse(readFileSync(join(PROJECT_ROOT, "limina.project.json"), "utf8"));
-    if (config.schema === "limina-project/1" && /^[a-z0-9][a-z0-9._-]*$/.test(config.projectId)) return config.projectId;
-  } catch { /* package fallback below */ }
-  try {
-    const name = JSON.parse(readFileSync(join(PROJECT_ROOT, "package.json"), "utf8")).name;
-    if (typeof name === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(name)) return name;
-  } catch { /* directory fallback below */ }
-  const fallback = basename(PROJECT_ROOT);
-  if (/^[a-z0-9][a-z0-9._-]*$/.test(fallback)) return fallback;
-  throw new Error("project requires a lowercase npm-style projectId");
-}
 
 function writeWorldMap(worldMap) {
   const relativePath = join("maps", worldMap.id, `${worldMap.provenance.contentHash}.worldmap.json`);
@@ -202,8 +193,7 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world, places }) + "${END
   const out = (res.stdout || "") + (res.stderr || "");
   const m = out.match(new RegExp(BEGIN + "([\\s\\S]*?)" + END));
   const extra = m ? JSON.parse(m[1]) : { graph: { nodes: [], edges: [] }, build: { ok: false, error: out.slice(-400) }, places: [] };
-  const project = vaultDir.split("/").filter(Boolean).slice(-2, -1)[0] || "project";
-  return { project, docs, ...loadMaps(project), ...extra };
+  return { project: PROJECT_ID, docs, ...loadMaps(PROJECT_ID), ...extra };
 }
 
 // Multiple hierarchical maps (world -> region -> city) + a cartographic feature layer (glyphs,
@@ -574,7 +564,7 @@ createServer((req, res) => {
           const { compileDesignMap } = await import(join(LIMINA_HOME, "js/src/world/design-map-compile.mjs"));
           const mapsJsonText = readFileSync(join(vaultDir, "maps.json"), "utf8");
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
-          const project = projectId();
+          const project = PROJECT_ID;
           // Places (Stage 4): the compiled peek carries the gazetteer + place-marker anchors, so the
           // author sees placed places in the render (and NPC nav has its index). Absent doc = undefined.
           const placesTextPeek = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
