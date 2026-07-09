@@ -83,6 +83,11 @@ export interface WaterOptions {
    *  opaque deep by actual depth, with a clean shoreline). Omit for the legacy
    *  view-distance proxy (e.g. a bare lake with no heightfield to hand in). */
   depth?: WaterDepthOptions;
+  /** Overview PEEK render: from 2 km up the whole coarse-grid plane is in frame, so the near-mirror
+   *  sky reflection aliases into a grid of specular glints ("sun-glitter" fireflies). In peek mode the
+   *  surface goes calmer + rougher so the reflection is diffuse (no glint grid) — mirror detail is
+   *  invisible at that distance anyway. Absent/false keeps the pretty near-mirror eye-level water. */
+  peek?: boolean;
 }
 
 /** A large plane so an ocean reads as endless within the default camera far (200). */
@@ -229,7 +234,7 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   // Bump normal: tilt the plane's local +Z face normal by the wave slope, then take it
   // to view space so MeshStandardNodeMaterial lights + reflects off the rippled surface.
   // Strength tuned so it reads as water, not chop.
-  const NORMAL_STRENGTH = 0.34;
+  const NORMAL_STRENGTH = opts.peek === true ? 0.0 : 0.34; // peek overview: calmer surface, fewer glints
   const bumpN = T.vec3(slopeU.mul(-NORMAL_STRENGTH), slopeV.mul(-NORMAL_STRENGTH), 1).normalize();
   material.normalNode = T.transformNormalToView(bumpN);
 
@@ -240,7 +245,9 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   // Roughness: near-mirror calm tropical water with a faint shimmer off the wave height
   // so the IBL reflection has extra life. Small range → clean.
   const h01 = T.clamp(height.mul(0.18).add(0.5), 0, 1);
-  material.roughnessNode = T.float(0.05).add(h01.mul(0.07)); // 0.05 .. 0.12
+  // Peek overview: a flat, diffuse roughness so the bright sky-IBL reflection doesn't alias into a
+  // grid of specular glints across the coarse plane. Eye-level keeps the near-mirror shimmer.
+  material.roughnessNode = opts.peek === true ? T.float(0.9) : T.float(0.05).add(h01.mul(0.07)); // else 0.05 .. 0.12
 
   // ── Depth-based colour + opacity ──────────────────────────────────────────────────
   if (opts.depth !== undefined) {

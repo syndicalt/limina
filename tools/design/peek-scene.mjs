@@ -71,14 +71,22 @@ export function buildPeekScene(worldMap, { project = "project", mapFile }) {
   const swampDiscs = biomeDiscs("swamp");
 
   const scene = {
+    // Overview turntable of the whole map → runLive skips eye-level grass blades (thousands of
+    // sub-pixel instanced chunks on a km-scale slab); the painted ground tint reads the grass.
+    peek: true,
     commands: [
       { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
       { kind: "skill", tool: "terrain.create", input: {
-        // 385 on big maps: a span-scaled river channel (~11m on a 1.4km zone) needs the
-        // cell size under its half-width or the carve aliases away (the 257 grid's ~7m
-        // cells swallowed every drawn river).
-        size, resolution: size > 600 ? 385 : 129, origin: [0, 0, 0], color: 5926970,
-        generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: 12 },
+        // Resolution scales with the painted span to hold ~6 m terrain cells (clamped 129..513: a
+        // small map isn't over-tessellated, a km-scale one stays a single buildable slab). A fixed
+        // 385 made EVERY map above 600 m the same grid, so big maps came out coarse — a 3.5 km island
+        // was ~9 m cells, visibly stepped. ~6 m cells also stay under a span-scaled river's half-width
+        // so the carve doesn't alias away (the old 257 grid's ~7 m cells swallowed drawn rivers).
+        size, resolution: Math.min(513, Math.max(129, Math.round(size / 6))), origin: [0, 0, 0], color: 5926970,
+        // Amplitude scales with the painted span: a fixed 12 m reads as relief on a ~600 m hamlet
+        // but crushes a multi-km island (mountains flattened to a sliver) into a flat sheet at sea
+        // level. Span-proportional relief keeps big painted worlds legibly above the water.
+        generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: Math.max(12, Math.round(span * 0.03)) },
       } },
       ...(forestDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
         // ~8m candidate spacing regardless of tile size — painted woods read as CANOPY
@@ -103,7 +111,7 @@ export function buildPeekScene(worldMap, { project = "project", mapFile }) {
       } }] : []),
       // 4x: the plane must reach past the orbit camera's horizon in every yaw or its edge
       // reads as a sparkling seam against the void.
-      { kind: "skill", tool: "world.addWater", input: { size: Math.round(size * 4), color: 2841970 } },
+      { kind: "skill", tool: "world.addWater", input: { level: worldMap.seaLevel ?? 0, size: Math.round(size * 4), color: 2841970 } },
       // Terrain-following river ribbons along each waterway (deduped — a doc can carry
       // exact-duplicate river features). Slightly narrower than the carve so the edges
       // tuck into the banks.

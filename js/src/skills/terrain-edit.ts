@@ -254,6 +254,7 @@ export function registerTerrainEditSkills(
       let elevationColors: { seaLevel: number; amplitude: number } | undefined;
       let paintMat: Uint8Array | undefined;
       let paintW: Float32Array | undefined;
+      let blightMask: Float32Array | undefined;
       let mapHash: string | undefined;
       if (input.generate !== undefined && input.generate.source === "map") {
         const g = input.generate;
@@ -287,6 +288,7 @@ export function registerTerrainEditSkills(
         heights = raster.heights;
         paintMat = raster.paintMat;
         paintW = raster.paintW;
+        blightMask = raster.blight;
         elevationColors = { seaLevel: input.origin[1] + raster.seaLevelM, amplitude: raster.cfg.amplitude, snowFrac: 1.0 };
       } else if (input.generate !== undefined) {
         const g = input.generate;
@@ -322,6 +324,9 @@ export function registerTerrainEditSkills(
       // map-sourced tile starts already painted by its biome regions).
       if (paintMat !== undefined) tile.paintMat = paintMat;
       if (paintW !== undefined) tile.paintW = paintW;
+      // Caesura overlay (painted blight regions) — the elevation-color vertex path reads this to
+      // drain the ground toward ash. Absent = no blight painted, so the slab renders clean.
+      if (blightMask !== undefined) tile.blight = blightMask;
 
       // GROUND COLLIDER (the load-bearing fix so a spawned player stands on this layer instead of
       // falling forever). MIRRORS world.generateRegion (terrain.ts applyTile): build a Rapier
@@ -371,7 +376,10 @@ export function registerTerrainEditSkills(
       // provider reads the terrain's CURRENT settlement footprints, and the registered clear
       // closure lets village.build carve blades off its pads after it registers them (the same
       // "veg grows first, civilization clears" order vegetation.scatter/grass follow).
-      if (ctx.world.mode !== "headless" && scene !== undefined && typeof scene.add === "function") {
+      // An overview peek (ctx.world.peek) skips grass: from a whole-map turntable the blades are
+      // sub-pixel, but a km-scale painted slab grows THOUSANDS of instanced chunks (the dominant
+      // peek cost). The slab's own painted vertex-colors already tint the grassy ground.
+      if (ctx.world.mode !== "headless" && ctx.world.peek !== true && scene !== undefined && typeof scene.add === "function") {
         const grassSeed = input.generate?.seed ?? 1337;
         const seaLevel = elevationColors?.seaLevel;
         layer.grass = new TileGrass(

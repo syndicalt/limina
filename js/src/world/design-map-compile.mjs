@@ -28,7 +28,7 @@ const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
 // in js/src/world/worldmap.ts (this pure .mjs can't import the .ts — the mapstudio gate asserts
 // the two stay identical) and the frontend palette in tools/design/frontend/map-paint.js.
-export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"];
+export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"];
 // River width scales with the zone span (clamped): a fixed 3m channel is narrower than one
 // rasterizer cell on a km-scale map — it aliases away entirely and the drawn river never renders.
 // ~0.8% of span reads as a proper river at the map's own scale (1400m zone -> ~11m channel).

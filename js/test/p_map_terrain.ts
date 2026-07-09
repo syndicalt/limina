@@ -25,7 +25,7 @@ import { resolveProfile } from "../src/skills/permissions.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
 import { registerTerrainEditSkills, type EditableTerrain } from "../src/skills/terrain-edit.ts";
 import { AssetRegistry, assetContentHash } from "../src/asset-registry.ts";
-import { landClassifier } from "../src/world/pipeline/map-raster.mjs";
+import { landClassifier, rasterizeWorldMap } from "../src/world/pipeline/map-raster.mjs";
 import type { WorldMap } from "../src/world/worldmap.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -181,6 +181,32 @@ const b = await createMapTerrain("ses_map_b", assets);
     }
   }
   assert(found, `at least one river-polyline sample must sit >=0.8m below an off-channel point (best drop found: ${bestDrop.toFixed(3)}m)`);
+}
+
+// 6. Blight overlay (caesura): a painted `blight` biome region marks the per-cell corruption mask
+//    (rasterizeWorldMap.blight); a map WITHOUT one marks zero — falsifiable in both directions — and
+//    the mask is deterministic. This is the design-space Grey Field's caesura, sourced like any biome
+//    but treated as an OVERLAY (it drains the ground colour rather than being its own paint material).
+{
+  const rasterOpts = { size: SIZE, resolution: RESOLUTION, seed: 11, baseAmplitude: 30 };
+  const noBlight = worldMap.biomes.filter((b) => b.biome !== "blight");
+  const cleanRaster = rasterizeWorldMap({ ...worldMap, biomes: noBlight }, rasterOpts);
+  let cleanCells = 0;
+  for (const v of cleanRaster.blight) if (v > 0) cleanCells++;
+  assert(cleanCells === 0, `a map with no blight biome must mark zero blight cells (got ${cleanCells})`);
+
+  // Relabel an existing biome's ring as `blight` → those cells are marked (overlay, not a paint id).
+  const withBlight = { ...worldMap, biomes: [...noBlight, { biome: "blight" as const, points: worldMap.biomes[0].points }] };
+  const r1 = rasterizeWorldMap(withBlight, rasterOpts);
+  let blightCells = 0;
+  for (const v of r1.blight) if (v > 0) blightCells++;
+  assert(blightCells > 0, `a painted blight biome region must mark blight cells (got ${blightCells})`);
+
+  const r2 = rasterizeWorldMap(withBlight, rasterOpts);
+  let diff = -1;
+  for (let i = 0; i < r1.blight.length; i++) if (r1.blight[i] !== r2.blight[i]) { diff = i; break; }
+  assert(diff === -1, `blight mask must be deterministic (diverged at cell ${diff})`);
+  ops.op_log(`[js] p_map_terrain: blight overlay marks ${blightCells} cells (clean map marks 0), deterministic`);
 }
 
 ops.op_log(

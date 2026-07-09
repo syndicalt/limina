@@ -20,8 +20,8 @@ const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", mi
 const KINDS = ["civic","dwelling","religious","military","marker","landmark","camp","ruin","wild"];
 const GLYPHS = ["mountain","hills","forest","desert","marsh","water","peak"];
 const GLYPH_LABEL = { mountain:"⛰ Mountains", hills:"⌒ Hills", forest:"♣ Forest", desert:"≈ Desert", marsh:"⍦ Marsh", water:"≋ Water", peak:"▲ Peak" };
-const BIOME_LIST = ["grass","forest","mountain","desert","tundra","swamp","water"];
-const BIOME_BASE = { grass:"#8aa85f", forest:"#4a7a45", mountain:"#8f8d88", desert:"#d9c48f", tundra:"#dbe4ea", swamp:"#6b7a55", water:"#3f6ea5" };
+const BIOME_LIST = ["grass","forest","mountain","desert","tundra","swamp","water","blight"];
+const BIOME_BASE = { grass:"#8aa85f", forest:"#4a7a45", mountain:"#8f8d88", desert:"#d9c48f", tundra:"#dbe4ea", swamp:"#6b7a55", water:"#3f6ea5", blight:"#6b6a66" };
 const SVGNS = "http://www.w3.org/2000/svg";
 
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select",
@@ -102,6 +102,7 @@ function biomeDefs(){
    +p("desert",BIOME_BASE.desert,'<circle cx="4" cy="4" r=".9" fill="#bfa876"/><circle cx="11" cy="7" r=".9" fill="#bfa876"/><circle cx="7" cy="12" r=".9" fill="#bfa876"/>')
    +p("tundra",BIOME_BASE.tundra,'<circle cx="5" cy="6" r=".8" fill="#c3d0d8"/><circle cx="12" cy="11" r=".8" fill="#c3d0d8"/>')
    +p("swamp",BIOME_BASE.swamp,'<path d="M3 11 q2 -2 4 0 M9 13 q2 -2 4 0" stroke="#556442" stroke-width="1" fill="none"/>')
+   +p("blight",BIOME_BASE.blight,'<path d="M3 4 l3 5 l-2 3 M12 3 l-2 6 l3 3" stroke="#3d3c39" stroke-width="1" fill="none"/><circle cx="8" cy="8" r="1" fill="#48463f"/>')
    +p("water",BIOME_BASE.water,'<path d="M0 5 q4 -2 8 0 t8 0 M0 11 q4 -2 8 0 t8 0" stroke="#5b86b8" stroke-width="1" fill="none"/>')
    +'</defs>';
 }
@@ -168,7 +169,7 @@ export function renderMap(){
     '<select class="sw" id="lm-mode">'+[["land","Raise land"],["ocean","Carve ocean"]].map(m=>'<option value="'+m[0]+'"'+(m[0]===lmMode?" selected":"")+'>'+m[1]+'</option>').join("")+'</select>'
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="lm-radius" min="10" max="400" step="5" value="'+lmRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="lm-radius-val" style="margin-left:0">'+lmRadius+'m</span>';
   const terrainControls = mapTool!=="terrain" ? "" :
-    '<select class="sw" id="ter-kind">'+["grass","forest","mountain","desert","tundra","swamp"].map(k=>'<option value="'+k+'"'+(k===terKind?" selected":"")+'>'+k+'</option>').join("")+'<option value="erase"'+(terKind==="erase"?" selected":"")+'>erase</option></select>'
+    '<select class="sw" id="ter-kind">'+["grass","forest","mountain","desert","tundra","swamp","blight"].map(k=>'<option value="'+k+'"'+(k===terKind?" selected":"")+'>'+k+'</option>').join("")+'<option value="erase"'+(terKind==="erase"?" selected":"")+'>erase</option></select>'
     +'<label class="coord" style="margin-left:0">r</label><input type="range" id="ter-radius" min="8" max="300" step="4" value="'+terRadius+'" style="width:110px" title="Brush radius (m)"><span class="coord" id="ter-radius-val" style="margin-left:0">'+terRadius+'m</span>';
   const colorPick = !["river","road","border"].includes(mapTool) ? "" :
     '<input type="color" id="draw-color" value="'+drawColor+'" title="Line color" style="width:32px;height:28px;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer">';

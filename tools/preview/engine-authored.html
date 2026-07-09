@@ -14,15 +14,19 @@ try {
   else {
     const canvas = document.getElementById("limina-canvas");
     const cam = scene.camera || { center: [0, 3, 0], radius: 24, height: 10 };
+    const __t0 = performance.now();
     const running = await runLive({
       canvas, width: 1280, height: 800, commands: scene.commands,
       forceWebGL: true,
+      peek: scene.peek === true, // overview turntable → skip eye-level grass (see RunLiveOptions.peek)
       renderBaseline: scene.renderBaseline,
       entityStream: scene.entityStream,
+      terrainMountsPerFrame: 4096, // offline peek: mount the whole tile window at once (no ~40s 2/frame drain)
       orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin, far: cam.far },
       onStatus: (s, m) => window.__status.push(s + ": " + m),
     });
     window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
+    window.__log.push("PROF runLive() build " + (performance.now() - __t0).toFixed(0) + "ms");
     if (running && running.terrainStream) window.__log.push("terrainStream mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending());
     if (running && running.authoringFailures && running.authoringFailures.length) window.__log.push("authoringFailures=" + JSON.stringify(running.authoringFailures).slice(0, 500));
     await new Promise((r) => setTimeout(r, 3000));
@@ -33,7 +37,8 @@ try {
       while (running.terrainStream.pending() > 0 && Date.now() - t0 < 40000) await new Promise((r) => setTimeout(r, 250));
       window.__log.push("stream drain waited " + (Date.now() - t0) + "ms · pending=" + running.terrainStream.pending());
     }
-    if (running && running.scene) { let m = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) m++; }); window.__log.push("scene meshes=" + m); }
+    if (running && running.scene) { let m = 0, grassM = 0, inst = 0, grassInst = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) { m++; const g = (o.name || "").toLowerCase().includes("grass"); if (o.isInstancedMesh) { inst++; if (g) grassInst++; } if (g) grassM++; } }); window.__log.push("scene meshes=" + m + " (grass=" + grassM + " instancedMeshes=" + inst + " grassInstanced=" + grassInst + ")"); }
+    if (running && running.scene) { const inv = {}; running.scene.traverse((o) => { if (o === running.scene) return; const t = o.isPoints ? "Points" : o.isSprite ? "Sprite" : o.isLine ? "Line" : o.isInstancedMesh ? "InstancedMesh" : o.isMesh ? "Mesh" : o.type || "obj"; const key = t + (o.isPoints || o.isSprite || o.isLine ? "[" + (o.name || "?") + "]" : ""); inv[key] = (inv[key] || 0) + 1; }); window.__log.push("scene inventory: " + JSON.stringify(inv)); }
     if (running && running.scene) { let chunks = 0, total = 0; running.scene.traverse((o) => { if (o.isInstancedMesh && !(o.name || "").includes("grass")) { chunks++; total += o.count; } }); if (chunks) window.__log.push("instanced(non-grass): " + chunks + " chunks, " + total + " instances"); }
     // Water diagnostics: report each named water/river mesh's vertical extent so a buried or
     // mis-sampled ribbon is visible in the LOG, not just absent from the pixels.
@@ -53,6 +58,7 @@ try {
     // Exact-yaw hook for multi-shot drivers (engine-shots.mjs): place the orbit at a precise
     // azimuth instead of timing screenshots against the frame-rate-dependent autoSpin.
     window.__setYaw = (a) => { if (running && typeof running.setOrbitAzimuth === "function") { running.setOrbitAzimuth(a); return true; } return false; };
+    window.__log.push("PROF total-to-done " + (performance.now() - __t0).toFixed(0) + "ms");
     window.__done = true;
   }
 } catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }

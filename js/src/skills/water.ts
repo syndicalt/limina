@@ -270,7 +270,7 @@ export function registerWaterSkills(
           depth = deriveDepthFromLayer(layer);
         }
       }
-      const mesh = buildWaterSurface({ level, size: input.size, color: input.color, depth });
+      const mesh = buildWaterSurface({ level, size: input.size, color: input.color, depth, peek: ctx.world.peek === true });
       // Render-only: add to the scene graph ONLY. No spawnRenderable (ECS), no
       // ctx.world.entities.create, no op_physics_* — so sim state is untouched.
       ctx.world.scene.add(mesh);

@@ -26,7 +26,7 @@ import { stableStringifyWorldMap as stableStringifyWorldMapImpl, worldMapContent
 export const WORLD_MAP_VERSION = 1 as const;
 
 export const RELIEF_KINDS = ["mountain", "hills", "plateau", "peak", "depression"] as const;
-export const BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"] as const;
+export const BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"] as const;
 export const WATERWAY_CLASSES = ["river", "stream"] as const;
 export const ROUTE_CLASSES = ["road", "trail"] as const;
 export const ANCHOR_SOURCES = ["world-bible", "map"] as const;

@@ -481,6 +481,16 @@ export interface RunLiveOptions {
    *  nothing pops in visible air) / 300 m otherwise, `hysteresis` 50 m, `budget` 4 ops/frame.
    *  `enabled` forces it on/off regardless of the policy. */
   entityStream?: { enabled?: boolean; radius?: number; hysteresis?: number; budget?: number; threshold?: number };
+  /** Offline/preview override: tiles the terrain stream mounts per frame (live default 2, so the
+   *  frame loop never hitches). A headless render (the Atlas peek) protects no frame budget, so it
+   *  mounts the whole window at once — set high to drain the tile queue in a few frames instead of
+   *  ~40s at 2/frame on a multi-km painted map. */
+  terrainMountsPerFrame?: number;
+  /** Offline OVERVIEW render (design-space Atlas peek): a distant turntable of the whole map. Sets
+   *  ctx.world.peek so render-only skills skip eye-level detail invisible at that scale — chiefly the
+   *  paint-driven grass blades (thousands of sub-pixel instanced chunks that dominated peek time).
+   *  The painted ground tint already carries the grassy areas. Absent/false = normal (grass grows). */
+  peek?: boolean;
 }
 
 export interface RunningLive {
@@ -841,6 +851,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     width: opts.width,
     height: opts.height,
     mode: "windowed",
+    peek: opts.peek === true,
   };
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   const core = registerCoreSkills(registry, { assets: liveAssets });
@@ -959,7 +970,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // below — synchronous math + GPU upload only, no fetch/macrotask, ZERO entity slots. The
       // 60→110 m camera fade in the TSL material shrinks far blades into the painted ground tint,
       // so the grass edge never pops at the grow radius.
-      grassStream = new StreamedGrassManager(scene, {
+      // Grass is eye-level detail; an overview peek skips it (see RunLiveOptions.peek) — the painted
+      // ground tint already reads the grassy areas from that distance.
+      grassStream = opts.peek === true ? undefined : new StreamedGrassManager(scene, {
         tileSize: TILE_SIZE,
         source: () => ({ seed: 1337, elevationMin: mapSource.seaLevelM + 0.05, spacing: 0.34 }),
       });
@@ -968,7 +981,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         tileSize: TILE_SIZE,
         radius,
         hysteresis: 1,
-        maxLoadsPerUpdate: 2, // ≤2 tile builds/frame — no hitch (33×33 mesh + collider ≈ sub-ms each)
+        maxLoadsPerUpdate: opts.terrainMountsPerFrame ?? 2, // live: ≤2/frame (no hitch); offline peek raises it to drain the queue fast
         getTile: (c) => mapSource.generateTile({ seed: 0, tx: c.tx, tz: c.tz, lod: 0 }),
         isExternal: tileExternallyOwned,
         mount: (key, c, tile) => {
@@ -976,7 +989,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           applyPaintOverlay(mesh.geometry, tile);
           scene.add(mesh);
           tileMeshes.set(key, mesh);
-          grassStreamRef.noteTile(key, c, tile);
+          grassStreamRef?.noteTile(key, c, tile);
           // Local collider + the sim-worker mirror, so raycasts here AND the locally-simulated
           // player over there both stand on the streamed ground. Keyed view-support state.
           const [ox, oy, oz] = tile.origin;

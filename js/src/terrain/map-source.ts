@@ -241,6 +241,7 @@ export class MapTerrainSource implements TerrainSource {
     const paintMat = new Uint8Array(nrows * ncols);
     const paintW = new Float32Array(nrows * ncols);
     const climate = new Float32Array(CLIMATE_CHANNELS * nrows * ncols);
+    const blight = new Float32Array(nrows * ncols); // per-cell caesura mask (0 clean .. 1 corrupt)
     for (let r = 0; r < nrows; r++) {
       const wz = z0 + (r / (nrows - 1)) * TILE_SIZE;
       for (let c = 0; c < ncols; c++) {
@@ -260,9 +261,14 @@ export class MapTerrainSource implements TerrainSource {
         climate[cidx + CLIMATE_TEMP_C] = cl.tempC;
         climate[cidx + CLIMATE_PRECIP_MM] = cl.precipMm;
         climate[cidx + CLIMATE_BIOME] = cl.biome;
+        // Blight is an OVERLAY, not a climate biome: a painted `blight` region marks the cell
+        // corrupt regardless of the biome underneath, so the render can drain it (and, later, kill
+        // its vegetation) without losing what it used to be.
+        const bcell = cell !== undefined ? this.biomeCell[cell] : 0;
+        if (bcell > 0 && this.biomeKinds[bcell - 1] === "blight") blight[idx] = 1;
       }
     }
-    return { nrows, ncols, origin, scale, heights, paintMat, paintW, climate, climateChannels: CLIMATE_CHANNELS };
+    return { nrows, ncols, origin, scale, heights, paintMat, paintW, climate, climateChannels: CLIMATE_CHANNELS, blight };
   }
 
   /** O(1) point elevation (world meters) — a bilinear query of the SAME master field

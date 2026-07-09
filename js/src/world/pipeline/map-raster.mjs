@@ -306,6 +306,9 @@ export function rasterizeWorldMap(worldMap, opts) {
   const heights = new Float32Array(n * n);
   const paintMat = new Uint8Array(n * n);
   const paintW = new Float32Array(n * n);
+  // Per-cell caesura mask (0 clean .. 1 corrupt). Blight is an OVERLAY biome — it drains the color of
+  // whatever's painted beneath it rather than being a paint material of its own (see the biome loop).
+  const blight = new Float32Array(n * n);
 
   for (let row = 0; row < n; row++) {
     const wz = -half + row * step;
@@ -403,6 +406,10 @@ export function rasterizeWorldMap(worldMap, opts) {
       const edgeBand = Math.max(3, size * 0.03);
       for (const b of biomes) {
         if (!pointInRing(wx, wz, b.ring)) continue;
+        // Blight is an overlay, not a paint material: flag the mask (the render drains this cell's
+        // color) and let the underlying biome still win paintMat below, so the ground keeps its
+        // texture — just corrupted. Mirrors map-source.ts's streamed-tile blight channel.
+        if (b.biome === "blight") { blight[i] = 1; continue; }
         const id = biomePaintId(b.biome);
         if (id === undefined) continue;
         const bd = distToRing(wx, wz, b.ring);
@@ -519,6 +526,7 @@ export function rasterizeWorldMap(worldMap, opts) {
     heights,
     paintMat,
     paintW,
+    blight,
     seaLevelM: seaLevel,
     cfg: { seaLevelM: seaLevel, amplitude: baseAmplitude, noiseFrac, size, resolution: n, seed },
   };

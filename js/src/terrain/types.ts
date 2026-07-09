@@ -34,6 +34,10 @@ export interface TerrainTile {
    *  (source-agnostic) and may assert climateChannels === CLIMATE_CHANNELS. */
   climate?: Float32Array;
   climateChannels?: number;
+  /** OPTIONAL per-cell BLIGHT (caesura) mask, row-major, length nrows*ncols, 0 (clean) .. 1
+   *  (fully corrupt). Baked into the climate texture's alpha channel for a world-space desaturation
+   *  drain in the render ramp; absent = no blight. Sourced from painted blight regions. */
+  blight?: Float32Array;
 }
 
 /** The fixed channel layout of `TerrainTile.climate` (and the order a source must

@@ -292,9 +292,9 @@ export function syncLandmassIntoDoc(maps) {
 // js/src/world/worldmap.ts and BIOME_CLASSES in design-map-compile.mjs (the gate asserts the
 // sync). Fixed enum indices — no per-map palette array a reorder could silently repaint.
 
-export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water"];
+export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"];
 export const BIOME_SIZE = 256;
-const BIOME_BASE = { grass: "#8aa85f", forest: "#4a7a45", mountain: "#8f8d88", desert: "#d9c48f", tundra: "#dbe4ea", swamp: "#6b7a55", water: "#3f6ea5" };
+const BIOME_BASE = { grass: "#8aa85f", forest: "#4a7a45", mountain: "#8f8d88", desert: "#d9c48f", tundra: "#dbe4ea", swamp: "#6b7a55", water: "#3f6ea5", blight: "#6b6a66" };
 
 const bioCache = new Map(); // mapId -> {w, h, rect, cells, dirty, rev}
 const bioImgCache = new Map(); // mapId -> {key, url}

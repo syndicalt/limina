@@ -345,7 +345,7 @@ createServer((req, res) => {
           const jobId = "pk" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
           // 18 yaw frames at exact 20° steps (engine-shots' __setYaw mode — cheap per frame, and
           // the loop always closes). The Atlas lightbox scrubs them as a turntable.
-          const FRAMES = 18;
+          const FRAMES = 8;
           const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], { stdio: ["ignore", "pipe", "pipe"] });
           let errTail = "";
           child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
@@ -467,9 +467,10 @@ createServer((req, res) => {
     try {
       const name = basename(req.url.split("?")[0]);
       if (!/^[\w.-]+\.worldmap\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
+      const body = readFileSync(join(LIMINA_HOME, "assets", "maps", name), "utf8");
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(readFileSync(join(LIMINA_HOME, "assets", "maps", name), "utf8"));
-    } catch { res.writeHead(404); res.end(); }
+      res.end(body);
+    } catch { if (!res.headersSent) res.writeHead(404); res.end(); }
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/assets/qc/")) {
@@ -477,10 +478,12 @@ createServer((req, res) => {
     try {
       const name = basename(req.url.split("?")[0]);
       if (!/^[\w.-]+\.(png|jpg|jpeg)$/i.test(name)) { res.writeHead(404); res.end(); return; }
+      const bytes = readFileSync(join(LIMINA_HOME, "assets", "qc", name));
       res.writeHead(200, { "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg", "cache-control": "max-age=300" });
-      res.end(readFileSync(join(LIMINA_HOME, "assets", "qc", name)));
+      res.end(bytes);
     } catch {
-      res.writeHead(404); res.end();
+      if (!res.headersSent) res.writeHead(404);
+      res.end();
     }
     return;
   }

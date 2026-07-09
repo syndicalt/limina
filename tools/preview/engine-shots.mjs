@@ -24,7 +24,7 @@ page.on("console", m=>{ const t=m.text(); if(/authoringFail|error|throw/i.test(t
 const sceneUrl = process.argv[4] ? `?scene=${encodeURIComponent(process.argv[4])}` : "";
 const outPrefix = process.argv[5] || "village";
 await page.goto(`http://localhost:${port}/tools/preview/engine-authored.html${sceneUrl}`, { waitUntil:"load", timeout:40000 });
-try { await page.waitForFunction("window.__done===true", { timeout: 50000 }); } catch { console.error("TIMEOUT (froze?)"); }
+try { await page.waitForFunction("window.__done===true", { timeout: 180000 }); } catch { console.error("TIMEOUT (froze?)"); }
 for (const l of await page.evaluate("window.__log||[]")) console.error("LOG: "+l);
 for (const e of await page.evaluate("window.__err||[]")) console.error("ERR: "+e);
 const shots = Number(process.argv[2] || 4);

@@ -58,6 +58,11 @@ export interface WorldContext {
    *  (the render thread mounts the mesh). Distinct from `mode:"headless"`, which also covers the
    *  server recorder + gates, both of which DO parse/resolve normally. */
   simWorker?: boolean;
+  /** True for an offline OVERVIEW render (the design-space Atlas peek): a distant turntable of the
+   *  whole map. Render-only skills that add eye-level detail invisible at that scale — paint-driven
+   *  grass blades above all — skip it, so the peek renders the map's shape/paint without paying for
+   *  thousands of sub-pixel grass chunks. The painted ground tint already reads the grassy areas. */
+  peek?: boolean;
 }
 
 export interface ExecutionContext {
