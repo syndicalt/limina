@@ -265,3 +265,10 @@ near-vertical cliffs before the SDF layer exists.
   receipt/head/commit-record chain, and publishes the mutable `maps.json` mirror only afterward.
   Cross-process locking, stale-workspace CAS, at-most-once transport defaults, bounded frontend retry,
   and committed-mirror repair are adversarially gated without duplicate commits or revision churn.
+- **2026-07-09 — Atomic derived runtime shipped (`3045fa1`).** Exact-head manifests stage changed
+  chunks offscreen, retain unchanged runtime identity, activate one dependency-complete set atomically,
+  and retire replaced resources only after visibility commits. One-active/one-latest-pending scheduling,
+  independent caller cancellation, native `AbortSignal` callbacks, bounded diagnostics, reverse cleanup,
+  authority TOCTOU checks, and explicit rollback are gated. The shared pure-JS SHA-256 byte path now
+  hashes large artifacts directly in 64-byte blocks instead of cloning them into boxed-number arrays;
+  browser/simulation adapters still need to keep maximum-size synchronous hashing off the UI thread.
