@@ -3,6 +3,7 @@
 
 export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "builder.readWrite": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play", "terrain.read", "terrain.generate",
@@ -100,6 +101,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   ],
   // Terrain authoring (existing)
   "terrain.author": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "terrain.read", "terrain.generate",
   ],
@@ -114,13 +116,14 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "system.admin": ["system.admin", "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
   // Phase 7 human-in-the-loop (existing)
   "builder.review": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
     "design.read", "design.write",
     "catalog.read",
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read"],
+  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read"],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
