@@ -272,3 +272,10 @@ near-vertical cliffs before the SDF layer exists.
   authority TOCTOU checks, and explicit rollback are gated. The shared pure-JS SHA-256 byte path now
   hashes large artifacts directly in 64-byte blocks instead of cloning them into boxed-number arrays;
   browser/simulation adapters still need to keep maximum-size synchronous hashing off the UI thread.
+- **2026-07-09 — Authoritative build coordination shipped (`879eb92`).** Trusted compiler identity and
+  exact source heads produce deterministic build IDs; identical work coalesces, per-branch queues keep
+  only active plus latest pending intent, and a fair global scheduler caps concurrent compiles at two by
+  default. Authority is checked before compile, before publication, and by the publisher at its atomic
+  commit boundary. Strict manifest/artifact verification, last-known-good metadata, bounded O(1)
+  diagnostics, stale cancellation, and late-abort-after-commit semantics are covered by 44 combined
+  coordinator/publisher tests. Concrete terrain artifact compilation and service wiring remain open.
