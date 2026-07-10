@@ -42,6 +42,11 @@ export function crossOriginIsolatedAvailable(): boolean {
   return g.crossOriginIsolated === true && typeof g.SharedArrayBuffer === "function";
 }
 
+/** Render-side suspension gate shared by runLive and its headless render-spy proof. */
+export function shouldRenderLiveFrame(viewSuspended: boolean): boolean {
+  return viewSuspended === false;
+}
+
 /** Compose the render-main AUTHORING op surface: the live wasm-Rapier physics ops
  *  (so re-authoring the command log creates the same bodies → the same eids → the
  *  same meshes as the worker), and inert stubs for every other engine surface. The

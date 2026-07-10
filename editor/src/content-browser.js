@@ -1,4 +1,5 @@
 import { fetchCatalog, requestAsset } from "./write-client.js";
+import { playLifecycle } from "./play-lifecycle.js";
 
 export const MAX_CATALOG_ENTRIES = 20_000;
 export const CONTENT_ROW_HEIGHT = 46;
@@ -303,7 +304,7 @@ export function createContentBrowser(root, {
   maxEntries = MAX_CATALOG_ENTRIES,
 } = {}) {
   if (!root) throw new TypeError("content browser root is required");
-  const state = { entries: [], filtered: [], query: "", category: "all", type: "all", selectedId: undefined, phase: "idle" };
+  const state = { entries: [], filtered: [], query: "", category: "all", type: "all", selectedId: undefined, phase: "idle", authoringLocked: playLifecycle.isAuthoringLocked() };
   let entriesById = new Map();
   const optionIdPrefix = `content-option-${++browserInstance}-`;
 
@@ -411,6 +412,7 @@ export function createContentBrowser(root, {
   }
 
   function activate(entry) {
+    if (state.authoringLocked) return;
     state.selectedId = entry.id;
     if (placement.get().entry?.id === entry.id) placement.disarm();
     else placement.arm(entry);
@@ -428,6 +430,8 @@ export function createContentBrowser(root, {
     row.style.transform = `translateY(${index * CONTENT_ROW_HEIGHT}px)`;
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", String(state.selectedId === entry.id));
+    row.setAttribute("aria-disabled", String(state.authoringLocked));
+    row.disabled = state.authoringLocked;
     row.classList.toggle("selected", state.selectedId === entry.id);
     row.classList.toggle("armed", placement.get().entry?.id === entry.id);
     const image = thumbnail(entry);
@@ -581,6 +585,12 @@ export function createContentBrowser(root, {
   }
 
   newAsset.addEventListener("click", showNewAssetDialog);
+  const unsubscribePlay = playLifecycle.subscribe(({ authoringLocked }) => {
+    state.authoringLocked = authoringLocked;
+    newAsset.disabled = authoringLocked;
+    shell.classList.toggle("authoring-locked", authoringLocked);
+    renderWindow();
+  }, { emitCurrent: true });
   renderStatus("Open Content Browser to load assets");
   renderDetail();
 
@@ -591,6 +601,7 @@ export function createContentBrowser(root, {
     stateSnapshot() { return { ...state, entries: [...state.entries], filtered: [...state.filtered] }; },
     destroy() {
       unsubscribe();
+      unsubscribePlay();
       root.closest?.("#content-browser")?.removeEventListener("limina:window-open", onWindowOpen);
       root.replaceChildren();
     },

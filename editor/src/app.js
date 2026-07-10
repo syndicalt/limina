@@ -16,9 +16,15 @@ import { editorSelection } from "./selection-store.js";
 import { cueColorFor } from "./viewport.js";
 import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
 import { ingestTraceEvents } from "./trace-retention.js";
+import { assertEditorAuthoringAllowed, playLifecycle } from "./play-lifecycle.js";
 export { MAX_TRACE_EVENTS, ingestTraceEvents } from "./trace-retention.js";
 
 const $ = (id) => document.getElementById(id);
+// renderApprovals owns #approval-body and replaces its children. Retain the static developer
+// controls so every render can reattach the same nodes (and their listeners) instead of deleting
+// them and leaving lifecycle subscribers with null lookups.
+const proposeButton = $("propose");
+const proposeMoveButton = $("propose-move");
 
 const configuredServer = new URLSearchParams(location.search).get("server");
 if (configuredServer !== null && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServer)) {
@@ -575,6 +581,11 @@ function openQcLightbox(startSrc, frames) {
 function renderApprovals() {
   const root = $("approval-body");
   root.innerHTML = "";
+  if (proposeButton && proposeMoveButton) {
+    const devActions = el("div", "acc-actions");
+    devActions.append(proposeButton, proposeMoveButton);
+    root.appendChild(devActions);
+  }
   const badge = $("approval-count");
   badge.textContent = String(state.approvals.length);
   if (state.approvals.length === 0) {
@@ -639,8 +650,10 @@ function renderApprovals() {
     card.appendChild(pre);
     const actions = el("div", "approval-actions");
     const approve = el("button", "btn btn-approve", "Approve");
+    approve.disabled = playLifecycle.isAuthoringLocked();
     approve.onclick = () => resolve(a.approvalId, true);
     const reject = el("button", "btn btn-reject", "Reject");
+    reject.disabled = playLifecycle.isAuthoringLocked();
     reject.onclick = () => resolve(a.approvalId, false);
     actions.appendChild(approve);
     actions.appendChild(reject);
@@ -653,6 +666,7 @@ async function resolve(approvalId, grant) {
   const c = state.client;
   if (!c) return;
   try {
+    assertEditorAuthoringAllowed();
     if (grant) {
       const r = await c.callTool("approval.grant", { approvalId });
       logLine(`granted ${approvalId.slice(0, 24)}… applied=${r.applied}`, r.applied ? "ok" : "err");
@@ -685,6 +699,7 @@ async function ensureAgentClient() {
 
 async function proposeTestEdit() {
   try {
+    assertEditorAuthoringAllowed();
     const agent = await ensureAgentClient();
     const pos = [Math.round((Math.random() * 8 - 4) * 10) / 10, 0.5, Math.round((Math.random() * 8 - 4) * 10) / 10];
     try {
@@ -731,6 +746,7 @@ function movedPosition(position) {
 
 async function proposeAgentMove() {
   try {
+    assertEditorAuthoringAllowed();
     const target = firstMovableEntity();
     if (!target) {
       logLine("no entity to move — click + test and approve one first", "warn");
@@ -768,9 +784,14 @@ function fmt(n) { return (Math.round(n * 1000) / 1000).toString(); }
 
 $("connect").onclick = () => void connect();
 $("disconnect").onclick = () => { disconnect(); logLine("disconnected", "warn"); };
-$("propose").onclick = () => void proposeTestEdit();
-$("propose-move").onclick = () => void proposeAgentMove();
+if (proposeButton) proposeButton.onclick = () => void proposeTestEdit();
+if (proposeMoveButton) proposeMoveButton.onclick = () => void proposeAgentMove();
 $("interval").onchange = () => { if (state.client) startPolling(); };
+playLifecycle.subscribe(({ authoringLocked }) => {
+  if (proposeButton) proposeButton.disabled = authoringLocked;
+  if (proposeMoveButton) proposeMoveButton.disabled = authoringLocked;
+  renderApprovals();
+});
 
 // ---------------------------------------------------------------------------
 // Settings popover — shared model default (synced with the chat header picker), the

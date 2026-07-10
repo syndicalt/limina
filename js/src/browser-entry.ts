@@ -55,6 +55,7 @@ import {
   composeAuthoringOps,
   crossOriginIsolatedAvailable,
   LivePlayerInput,
+  shouldRenderLiveFrame,
   SnapshotRing,
 } from "./browser/live-runtime.ts";
 import { exportAssetBundle, loadExport, type LoadedExport } from "./export/package.ts";
@@ -500,6 +501,9 @@ export interface RunLiveOptions {
    *  paint-driven grass blades (thousands of sub-pixel instanced chunks that dominated peek time).
    *  The painted ground tint already carries the grassy areas. Absent/false = normal (grass grows). */
   peek?: boolean;
+  /** Release the renderer backend on stop. Use only when the canvas is permanently discarded:
+   *  Three's force-WebGL backend loses the canvas context during dispose. */
+  disposeRendererOnStop?: boolean;
 }
 
 export interface RunningLive {
@@ -507,7 +511,12 @@ export interface RunningLive {
   loop: AccumulatorLoopHandle;
   scene: SceneLike;
   camera: CameraLike;
-  renderer: { render(s: unknown, c: unknown): void; setSize(w: number, h: number, u?: boolean): void; domElement?: unknown };
+  renderer: {
+    render(s: unknown, c: unknown): void;
+    setSize(w: number, h: number, u?: boolean): void;
+    dispose?(): void | Promise<void>;
+    domElement?: unknown;
+  };
   entities: EntityTable;
   pickEntityId(object: { parent?: unknown }): string | undefined;
   cameraControls?: unknown;
@@ -534,7 +543,14 @@ export interface RunningLive {
   setCameraControlsEnabled(on: boolean): void;
   setOrbitAzimuth?(angle: number): void;
   setSyncSuppressed(eid: number, on: boolean): void;
-  stop(): void;
+  /** Acknowledged worker control: resolves only after the fixed-step driver has stopped. */
+  pause(): Promise<void>;
+  /** Resume the same worker/controller state; no world re-authoring occurs. */
+  resume(): Promise<void>;
+  isPaused(): boolean;
+  /** Suspend/resume render-main frame work without changing deterministic simulation state. */
+  setViewSuspended(on: boolean): void;
+  stop(): Promise<void>;
 }
 
 // Map Phase 3.3 — live handling of the STREAMED-terrain commands (decided, not defaulted):
@@ -741,6 +757,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // The loop is created far below; the error handler installed here (which can fire
   // any time after `ready`) tears it down via this forward reference.
   let liveLoop: AccumulatorLoopHandle | null = null;
+  let controlRequestId = 0;
+  const controlWaiters = new Map<number, {
+    expected: "paused" | "resumed";
+    resolve(): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   // A worker throw can arrive DURING startup (the worker self-drives at 60Hz the moment
   // it posts `ready`, while this thread is still building WebGPU/scene). `aborted` records
   // that so the startup path below bails instead of overwriting status back to
@@ -750,6 +773,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const failLive = (message: string): void => {
     aborted = true;
     status("error", message);
+    for (const waiter of controlWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(message));
+    }
+    controlWaiters.clear();
     liveLoop?.stop();
     worker.terminate();
   };
@@ -759,7 +787,25 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // keep handling messages after `ready` (instead of nulling onmessage) so that throw
   // is surfaced and the now-broken sim is torn down rather than dying silently.
   worker.onmessage = (ev: { data: unknown }): void => {
-    const msg = ev.data as { type?: string; phase?: string; message?: string; failures?: AuthorCommandFailure[] };
+    const msg = ev.data as { type?: string; phase?: string; message?: string; failures?: AuthorCommandFailure[]; requestId?: number; reason?: string };
+    if (msg.type === "controlRejected" && Number.isSafeInteger(msg.requestId)) {
+      const waiter = controlWaiters.get(msg.requestId!);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        controlWaiters.delete(msg.requestId!);
+        waiter.reject(new Error(msg.reason || "sim worker rejected control request"));
+      }
+      return;
+    }
+    if ((msg.type === "paused" || msg.type === "resumed") && Number.isSafeInteger(msg.requestId)) {
+      const waiter = controlWaiters.get(msg.requestId!);
+      if (waiter && waiter.expected === msg.type) {
+        clearTimeout(waiter.timer);
+        controlWaiters.delete(msg.requestId!);
+        waiter.resolve();
+      }
+      return;
+    }
     if (msg.type === "authoringFailures") {
       // NON-FATAL: the worker isolated a bad/out-of-band command (it kept stepping). The render
       // thread re-authors the same log and reports the same failures via `authoringFailures`, so this
@@ -783,6 +829,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const statusShared = typeof SharedArrayBuffer === "function" && ready.status instanceof SharedArrayBuffer;
   const statusView = new Int32Array(ready.status, 0, 1);
   const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
+  const requestWorkerControl = (type: "pause" | "resume"): Promise<void> => {
+    const requestId = ++controlRequestId;
+    const expected = type === "pause" ? "paused" : "resumed";
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        controlWaiters.delete(requestId);
+        reject(new Error(`sim worker ${type} acknowledgement timed out`));
+      }, 2_000);
+      controlWaiters.set(requestId, { expected, resolve, reject, timer });
+      try { worker.postMessage({ type, requestId }); }
+      catch (error) {
+        clearTimeout(timer);
+        controlWaiters.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
 
   // ── Pre-warm GLB assets BEFORE the renderer exists. GLTFLoader.parse (createImageBitmap) + an
   //    async fetch are macrotasks; one firing around a render on the WebGL2 backend permanently
@@ -1256,6 +1319,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // ── The accumulator rAF loop (host.ts). `step` consumes the worker's latest tick
   //    (freezing it for interpolation) at the fixed cadence; `frame(alpha)` pumps
   //    input, interpolates by alpha, syncs the scene, and renders. ──
+  let paused = false;
+  let viewSuspended = false;
   const loop = startAccumulatorLoop({
     step: (): void => {
       const t = readWorkerTick();
@@ -1266,6 +1331,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       }
     },
     frame: (alpha: number): void => {
+      // A hidden retained Edit runtime can suspend render work while its deterministic worker is
+      // paused. Visible Play remains composited while paused so its last state and editor UI render.
+      if (!shouldRenderLiveFrame(viewSuspended)) return;
       // Publish this frame's input into the M3 ring (consumed by the worker next tick).
       inputRing.writeInput(liveInput.frame(lastConsumed < 0 ? 0 : lastConsumed, inFrame));
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
@@ -1322,6 +1390,47 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     },
   });
   liveLoop = loop; // let the error handler above stop the loop on a worker throw
+
+  let stopped = false;
+  let controlTail = Promise.resolve();
+  const setPaused = (next: boolean): Promise<void> => {
+    const work = async (): Promise<void> => {
+      if (stopped) throw new Error("live runtime is stopped");
+      if (paused === next) return;
+      await requestWorkerControl(next ? "pause" : "resume");
+      paused = next;
+    };
+    const result = controlTail.then(work, work);
+    controlTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  let stopPromise: Promise<void> | undefined;
+  const stopLive = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopped = true;
+    for (const waiter of controlWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error("live runtime stopped during worker control request"));
+    }
+    controlWaiters.clear();
+    loop.stop();
+    try { worker.postMessage({ type: "stop" }); } catch { /* worker may already be gone during teardown */ }
+    worker.terminate();
+    if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
+    liveInput.detachPointer();
+    stopPromise = (async (): Promise<void> => {
+      grassStream?.clear();
+      terrainStream?.clear();
+      cameraControls?.dispose();
+      // Play/Edit repeatedly replaces runLive on the same canvas. WebGPURenderer disposal is async;
+      // await it so the replacement cannot overlap the old backend/context.
+      if (opts.disposeRendererOnStop === true) {
+        const disposableRenderer = renderer as unknown as { dispose?(): void | Promise<void> };
+        try { await disposableRenderer.dispose?.(); } catch (error) { console.warn("live renderer dispose failed during teardown", error); }
+      }
+    })();
+    return stopPromise;
+  };
 
   return {
     worker,
@@ -1474,18 +1583,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (on) suppressedEids.add(eid);
       else suppressedEids.delete(eid);
     },
-    stop: (): void => {
-      loop.stop();
-      // Tear the view stream down BEFORE the worker dies: unmount disposes every tile mesh +
-      // local collider (the worker-side mirror colliders die with the terminated worker).
-      grassStream?.clear();
-      terrainStream?.clear();
-      cameraControls?.dispose();
-      try { worker.postMessage({ type: "stop" }); } catch { /* worker may be gone */ }
-      worker.terminate();
-      if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
-      liveInput.detachPointer();
-    },
+    pause: (): Promise<void> => setPaused(true),
+    resume: (): Promise<void> => setPaused(false),
+    isPaused: (): boolean => paused,
+    setViewSuspended: (on: boolean): void => { viewSuspended = on; },
+    stop: stopLive,
   };
 }
 

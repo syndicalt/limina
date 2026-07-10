@@ -1,5 +1,6 @@
 import { McpClient } from "./mcp-client.js";
 import { ProjectAuthoringGateway } from "./authoring-gateway.js";
+import { assertEditorAuthoringAllowed } from "./play-lifecycle.js";
 
 const state = {
   client: undefined,
@@ -60,14 +61,17 @@ export async function ensureWriter() {
 }
 
 export function commitSceneOperations(operations) {
+  assertEditorAuthoringAllowed();
   return authoring.commit(operations);
 }
 
 export function undoSceneAuthoring() {
+  assertEditorAuthoringAllowed();
   return authoring.undo();
 }
 
 export function redoSceneAuthoring() {
+  assertEditorAuthoringAllowed();
   return authoring.redo();
 }
 
@@ -80,6 +84,7 @@ export function sceneAuthoringHistory() {
 }
 
 export async function writeUpdate(entity, component, value) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   const result = await client.callTool("ecs.updateComponent", { entity, component, value });
   if (!result || result.ok !== true) throw new Error(`ecs.updateComponent ${component} returned ok=false`);
@@ -91,6 +96,7 @@ export async function writeUpdate(entity, component, value) {
 // it in place. `center` is world [x,z]; mode is raise|lower|smooth|flatten. terrain.deform defaults to
 // the most-recently-created terrain layer when `entity` is omitted.
 export async function deformTerrain(center, radius, delta, mode, falloff) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   return client.callTool("terrain.deform", { center, radius, delta, mode, falloff });
 }
@@ -98,6 +104,7 @@ export async function deformTerrain(center, radius, delta, mode, falloff) {
 // Terrain material paint (Slice 3): blend a surface material (sand/grass/rock/dirt) onto the terrain.
 // strength is a 0..1 blend rate; erase pulls paint back out. Recorded like deform.
 export async function paintTerrain(center, radius, strength, falloff, material, erase) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   return client.callTool("terrain.paint", { center, radius, strength, falloff, material, erase: !!erase });
 }
@@ -112,6 +119,7 @@ export async function fetchCatalog() {
 // ＋New (Slice 5): record a build request for the architect — a description of an asset that doesn't
 // exist yet. Non-blocking; the architect authors it out-of-engine and proposes catalog.publish.
 export async function requestAsset(description, category, refImage) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   return client.callTool("asset.request", { description, category, ...(refImage ? { refImage } : {}) });
 }
@@ -119,11 +127,13 @@ export async function requestAsset(description, category, refImage) {
 // Catalog place tool (Slice 4): place a whole approved GLB through the same recorded command path.
 // ground:true snaps the asset base to the terrain surface at (x,z); rotation is Euler radians.
 export async function placeAsset(assetId, position, opts = {}) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   return client.callTool("asset.place", { assetId, position, ground: true, ...opts });
 }
 
 export async function writeMaterial(entity, material) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   const result = await client.callTool("three.setMaterial", { entity, ...material });
   if (!result || result.ok !== true) throw new Error(`three.setMaterial returned ok=false for ${entity}`);
@@ -131,6 +141,7 @@ export async function writeMaterial(entity, material) {
 }
 
 export async function addTag(entity, tag) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   const result = await client.callTool("ecs.addComponent", { entity, component: tag });
   if (!result || result.ok !== true) throw new Error(`ecs.addComponent returned ok=false for ${entity}`);
@@ -138,6 +149,7 @@ export async function addTag(entity, tag) {
 }
 
 export async function removeTag(entity, tag) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   const result = await client.callTool("ecs.removeComponent", { entity, component: tag });
   if (!result || result.ok !== true) throw new Error(`ecs.removeComponent returned ok=false for ${entity}`);
@@ -145,6 +157,7 @@ export async function removeTag(entity, tag) {
 }
 
 export async function destroyEntity(entity) {
+  assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   const result = await client.callTool("scene.destroyEntity", { entity });
   if (!result || result.removed !== true) throw new Error(`scene.destroyEntity returned removed=false for ${entity}`);

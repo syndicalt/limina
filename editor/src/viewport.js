@@ -35,9 +35,11 @@ import {
   paintTerrain,
   placeAsset,
   redoSceneAuthoring,
+  refreshAuthoringHead,
   resetWriter,
   undoSceneAuthoring,
 } from "./write-client.js";
+import { CoalescedTask, createPlaySnapshot, playLifecycle, RetainedEditRestore } from "./play-lifecycle.js";
 
 // Per-builder viewport cue colors. cueColorFor is the ONE source of truth for a builder's
 // color — the roster swatch (app.js) and the viewport BoxHelper both derive from it, so a
@@ -67,9 +69,19 @@ const viewportUi = {
   spaceToggle: document.getElementById("viewport-space-toggle"),
   gridToggle: document.getElementById("viewport-grid-toggle"),
   wireframeToggle: document.getElementById("viewport-wireframe-toggle"),
+  play: document.getElementById("viewport-play"),
+  pause: document.getElementById("viewport-pause"),
+  stop: document.getElementById("viewport-stop"),
+  playState: document.getElementById("viewport-play-state"),
+  playSource: document.getElementById("viewport-play-source"),
 };
 function setStatus(phase, detail) {
-  if (statusEl) statusEl.textContent = detail !== undefined ? `${phase}: ${detail}` : phase;
+  const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
+  if (statusEl) statusEl.textContent = bounded ? `${phase}: ${bounded}` : phase;
+}
+
+function setEditRuntimeStatus(phase, detail) {
+  setStatus(phase === "playing" ? "Edit" : phase, detail);
 }
 
 function logConsolePanel(message, kind = "err") {
@@ -169,7 +181,15 @@ const state = {
   spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
   paintMaterial: "grass", // active material for the paint tool (sand|grass|rock|dirt)
   placing: false,   // a placement round-trip is in flight — ignore further clicks until it lands
+  playRuntime: undefined,
+  playStart: undefined,
+  playStop: undefined,
+  playProgress: "",
+  playCanvas: undefined,
+  editRuntimeDuringPlay: undefined,
+  editRestore: new RetainedEditRestore(),
 };
+const pollTask = new CoalescedTask();
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 const CLICK_MOVE_TOLERANCE_PX = 5;
@@ -319,6 +339,9 @@ function toggleWireframe(force) {
 }
 
 function bindViewportUi() {
+  viewportUi.play?.addEventListener("click", () => { void startPlay(); });
+  viewportUi.pause?.addEventListener("click", () => { void togglePlayPause(); });
+  viewportUi.stop?.addEventListener("click", () => { void stopPlay(); });
   viewportUi.snapToggle?.addEventListener("click", () => toggleSnapping());
   viewportUi.spaceToggle?.addEventListener("click", () => {
     setTransformSpace(viewportOptions.transformSpace === "local" ? "world" : "local");
@@ -342,6 +365,45 @@ function bindViewportUi() {
     syncViewportUi();
   });
   syncViewportUi();
+}
+
+function syncPlayUi(view = playLifecycle.view()) {
+  const locked = view.authoringLocked;
+  document.body.classList.toggle("editor-authoring-locked", locked);
+  document.body.dataset.playPhase = view.phase;
+  if (viewportUi.play) viewportUi.play.disabled = view.phase !== "edit";
+  if (viewportUi.pause) {
+    viewportUi.pause.disabled = view.phase !== "playing" && view.phase !== "paused";
+    viewportUi.pause.textContent = view.phase === "paused" ? "▶" : "⏸";
+    viewportUi.pause.title = view.phase === "paused" ? "Resume Play (F7)" : "Pause Play (F7)";
+    viewportUi.pause.setAttribute("aria-label", view.phase === "paused" ? "Resume Play" : "Pause Play");
+    viewportUi.pause.setAttribute("aria-pressed", view.phase === "paused" ? "true" : "false");
+  }
+  if (viewportUi.stop) viewportUi.stop.disabled = view.phase === "edit" || view.phase === "stopping";
+  const label = view.phase[0].toUpperCase() + view.phase.slice(1);
+  if (viewportUi.playState) {
+    viewportUi.playState.textContent = `${label}${view.stale ? " · stale" : ""}`;
+    viewportUi.playState.dataset.phase = view.phase;
+  }
+  if (viewportUi.playSource) {
+    const source = view.snapshot?.source;
+    viewportUi.playSource.textContent = source
+      ? `${source.projectId} · r${source.revision} · ${source.headHash.slice(0, 15)}…${view.stale ? " · newer edits buffered" : ""}`
+      : view.error ? `error · ${view.error}` : view.phase === "starting" && state.playProgress ? state.playProgress : "no Play snapshot";
+    viewportUi.playSource.title = source ? `${source.projectId} revision ${source.revision} · ${source.headHash}` : view.error;
+  }
+  for (const control of [viewportUi.snapToggle, viewportUi.snapTranslate, viewportUi.snapRotate, viewportUi.snapScale, viewportUi.spaceToggle]) {
+    if (control) control.disabled = locked;
+  }
+  viewportToolsEl?.setAttribute("aria-disabled", String(locked));
+  if (locked) {
+    hideBrushRing();
+    hidePlaceGhost();
+    if (hud) hud.style.display = "none";
+  } else {
+    updateEditModeIndicator();
+  }
+  window.dispatchEvent(new CustomEvent("limina:authoring-mode", { detail: { locked, phase: view.phase } }));
 }
 
 // K4 (worldlog poll -> subscribe): the push notification method name. Mirrors
@@ -423,6 +485,9 @@ async function applyWorldlogBatchInner(res) {
   // reconnect) — applying it again would double-author every command it carries. `reset` always
   // resyncs from scratch regardless of `next` (mirrors worldlog.tail's own reset meaning).
   if (!res.reset && typeof res.next === "number" && res.next <= state.cursor) return;
+  if (playLifecycle.isAuthoringLocked() && (res.reset || (typeof res.next === "number" && res.next > state.cursor))) {
+    playLifecycle.markStale(res.reset ? undefined : res.next);
+  }
   if (res.reset) { state.commands = []; state.cursor = 0; state.quarantined.clear(); }
   if (Array.isArray(res.commands) && res.commands.length > 0) {
     const newCmds = res.commands;
@@ -430,7 +495,7 @@ async function applyWorldlogBatchInner(res) {
     for (const cmd of res.commands) state.commands.push(cmd);
     // While scrubbed into the past, accumulate new commands but don't hot-apply them to the
     // frozen past view (returning to live replays the full stream).
-    if (state.scrubLimit !== undefined) {
+    if (state.scrubLimit !== undefined || playLifecycle.isAuthoringLocked()) {
       // no-op: the past view stays put; state.commands keeps growing in the background
     } else if (state.running && !state.rebooting && !res.reset) {
       const r = await state.running.applyAuthorCommands(authorCmds);
@@ -444,28 +509,36 @@ async function applyWorldlogBatchInner(res) {
     if (newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void requestCatalogRefresh(`catalog.publish:${res.next ?? state.cursor}`);
   }
   if (typeof res.next === "number") state.cursor = res.next;
-  if (state.dirty && !state.rebooting) await reboot();
+  if (state.dirty && !state.rebooting && !playLifecycle.isAuthoringLocked()) await reboot();
 }
 
 // Explicit poll: worldlog.tail from the current cursor. Used as (a) the fallback loop when not
 // subscribed, (b) a slow liveness/resync check while subscribed (harmless — applyWorldlogBatch's
 // cursor guard makes a redundant poll a no-op), and (c) the immediate "pull the edit straight back"
 // call after a brush dab / catalog placement, regardless of subscription state.
-async function poll() {
+async function poll(throwOnError = false) {
   const c = state.client;
-  if (!c || state.polling) return; // re-entrancy guard: a brush dab triggers an immediate poll(); it
-  state.polling = true;            // must not race the scheduled poll and double-request worldlog.tail.
-  try {
-    const res = await c.callTool("worldlog.tail", { since: state.cursor });
-    await applyWorldlogBatch(res);
-  } catch (e) {
-    const message = e && e.message ? e.message : String(e);
-    console.warn("viewport poll failed", e);
-    logConsolePanel("viewport poll failed: " + message, "err");
-    setStatus("poll error", message);
-  } finally {
-    state.polling = false;
+  if (!c) {
+    if (throwOnError) throw new Error("viewport is not connected to the authoritative authoring stream");
+    return;
   }
+  return pollTask.run(async () => {
+    state.polling = true;
+    try {
+      const res = await c.callTool("worldlog.tail", { since: state.cursor });
+      await applyWorldlogBatch(res);
+    } finally {
+      state.polling = false;
+    }
+  }, {
+    strict: throwOnError,
+    onError: (e) => {
+      const message = e && e.message ? e.message : String(e);
+      console.warn("viewport poll failed", e);
+      logConsolePanel("viewport poll failed: " + message, "err");
+      setStatus("poll error", message);
+    },
+  });
 }
 
 function disposeMaterial(material) {
@@ -685,6 +758,7 @@ function deselectEntity() {
 }
 
 function pickEntity(event) {
+  if (playLifecycle.isAuthoringLocked()) return;
   const running = state.running;
   const controls = state.transformControls;
   if (!running || !controls || controls.dragging) return;
@@ -1024,7 +1098,7 @@ function updateEditModeIndicator() {
 }
 
 export function viewportIsReadOnly() {
-  return state.scrubLimit !== undefined;
+  return state.scrubLimit !== undefined || playLifecycle.isAuthoringLocked();
 }
 
 async function undoAuthoringEdit() {
@@ -1081,19 +1155,303 @@ async function commitSelectedTransform(selected, running) {
   }
 }
 
-async function reboot() {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForViewportIdle(timeoutMs = 5_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (state.applyingBatch || state.rebooting || state.polling) {
+    if (performance.now() >= deadline) throw new Error("viewport synchronization timed out");
+    await sleep(10);
+  }
+}
+
+function sameHead(a, b) {
+  return a?.projectId === b?.projectId && a?.revision === b?.revision && a?.headHash === b?.headHash;
+}
+
+function setPlayProgress(detail) {
+  state.playProgress = String(detail).slice(0, 160);
+  document.body.dataset.playProgress = state.playProgress;
+  if (viewportUi.playSource && playLifecycle.phase === "starting") viewportUi.playSource.textContent = state.playProgress;
+}
+
+async function captureSynchronizedPlaySnapshot() {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    setPlayProgress(`sync attempt ${attempt + 1} · waiting for viewport`);
+    setStatus("Starting", `synchronizing viewport · attempt ${attempt + 1}`);
+    await waitForViewportIdle();
+    setPlayProgress(`sync attempt ${attempt + 1} · validating head`);
+    setStatus("Starting", "validating project head");
+    const before = await refreshAuthoringHead();
+    setPlayProgress(`sync attempt ${attempt + 1} · pulling command tip`);
+    setStatus("Starting", "pulling authoritative command tip");
+    await poll(true);
+    setPlayProgress(`sync attempt ${attempt + 1} · verifying head`);
+    setStatus("Starting", "verifying stable project head");
+    await waitForViewportIdle();
+    const after = await refreshAuthoringHead();
+    if (sameHead(before, after)) return createPlaySnapshot(state.commands, after, state.cursor);
+  }
+  throw new Error("authoritative project head kept advancing while Play was starting");
+}
+
+function captureEditState() {
+  const running = state.running;
+  const placement = assetPlacement.get();
+  return {
+    selection: editorSelection.get(),
+    camera: running?.camera ? {
+      position: running.camera.position?.toArray?.(),
+      quaternion: running.camera.quaternion?.toArray?.(),
+      up: running.camera.up?.toArray?.(),
+      target: running.cameraControls?.target?.toArray?.(),
+    } : undefined,
+    editMode: state.editMode,
+    brushTool: state.brushTool,
+    brush: { ...state.brush },
+    paintMaterial: state.paintMaterial,
+    viewportOptions: { ...viewportOptions },
+    placement: { entry: placement.entry, yaw: placement.yaw },
+    commandCount: state.commands.length,
+    cursor: state.cursor,
+    forceReboot: false,
+  };
+}
+
+function restoreEditState(saved) {
+  if (!saved) return;
+  Object.assign(viewportOptions, saved.viewportOptions);
+  state.editMode = saved.editMode;
+  state.brushTool = saved.brushTool;
+  state.brush = { ...saved.brush };
+  state.paintMaterial = saved.paintMaterial;
+  if (saved.placement.entry) {
+    assetPlacement.arm(saved.placement.entry);
+    const currentYaw = assetPlacement.get().yaw;
+    assetPlacement.rotate(saved.placement.yaw - currentYaw);
+  } else assetPlacement.disarm();
+  if (saved.selection === undefined) editorSelection.clear("play-restore");
+  else editorSelection.select(saved.selection, "play-restore");
+  const running = state.running;
+  const camera = running?.camera;
+  if (camera && saved.camera) {
+    if (saved.camera.position) camera.position.fromArray?.(saved.camera.position);
+    if (saved.camera.quaternion) camera.quaternion.fromArray?.(saved.camera.quaternion);
+    if (saved.camera.up) camera.up.fromArray?.(saved.camera.up);
+    if (saved.camera.target && running.cameraControls?.target) running.cameraControls.target.fromArray?.(saved.camera.target);
+    running.cameraControls?.update?.();
+  }
+  applySnapSettings();
+  applyTransformSpace();
+  syncViewportUi();
+  updateEditModeIndicator();
+}
+
+async function stopRuntime(runtime) {
+  if (!runtime) return;
+  try { await runtime.stop(); } catch (error) { console.warn("Play runtime teardown failed", error); }
+}
+
+function createPlayCanvas(width, height) {
+  const playCanvas = document.createElement("canvas");
+  playCanvas.className = "editor-play-canvas";
+  playCanvas.width = width;
+  playCanvas.height = height;
+  playCanvas.setAttribute("aria-label", "Isolated Play viewport");
+  canvas.hidden = true;
+  canvas.parentElement?.appendChild(playCanvas);
+  state.playCanvas = playCanvas;
+  return playCanvas;
+}
+
+function releasePlayCanvas() {
+  state.playCanvas?.remove();
+  state.playCanvas = undefined;
+  canvas.hidden = false;
+}
+
+async function restoreEditWorld() {
+  if (!state.editRestore.hasPending()) return;
+  await stopRuntime(state.playRuntime);
+  if (state.running === state.playRuntime) state.running = undefined;
+  state.playRuntime = undefined;
+  releasePlayCanvas();
+  await state.editRestore.attempt(async (saved) => {
+    const editRuntime = state.editRuntimeDuringPlay;
+    const streamReset = state.commands.length < saved.commandCount || state.cursor < saved.cursor;
+    if (!editRuntime || saved.forceReboot || streamReset) {
+      if (editRuntime) await stopRuntime(editRuntime);
+      state.running = undefined;
+      state.dirty = true;
+      await reboot({ allowWhilePlay: true, restore: saved, throwOnError: true });
+      return;
+    }
+    state.running = editRuntime;
+    const delta = state.commands.slice(saved.commandCount);
+    if (delta.length > 0) {
+      const applied = await editRuntime.applyAuthorCommands(toAuthorCommands(delta));
+      if (applied.needsReboot) {
+        saved.forceReboot = true;
+        await stopRuntime(editRuntime);
+        state.running = undefined;
+        state.dirty = true;
+        await reboot({ allowWhilePlay: true, restore: saved, throwOnError: true });
+        return;
+      }
+    }
+    restoreEditState(saved);
+    editRuntime.setViewSuspended?.(false);
+    await editRuntime.resume();
+    state.dirty = false;
+  });
+  state.editRuntimeDuringPlay = undefined;
+}
+
+async function startPlay() {
+  if (state.playStart) return state.playStart;
+  if (state.scrubLimit !== undefined) {
+    setStatus("Play unavailable", "return History to live before starting");
+    return;
+  }
+  const begin = playLifecycle.begin();
+  if (!begin.accepted) return state.playStart;
+  const token = begin.token;
+  const work = (async () => {
+    try {
+      const snapshot = await captureSynchronizedPlaySnapshot();
+      if (!playLifecycle.is(token, "starting")) return;
+      playLifecycle.capture(token, snapshot);
+      state.playProgress = "";
+      state.editRestore.retain(captureEditState());
+      state.editRuntimeDuringPlay = state.running;
+      clearGizmo();
+      removeGridHelper();
+      restoreWireframeMaterials();
+      await state.editRuntimeDuringPlay?.pause?.();
+      state.editRuntimeDuringPlay?.setViewSuspended?.(true);
+      const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
+      canvas.width = w; canvas.height = h;
+      const playCanvas = createPlayCanvas(w, h);
+      const runtime = await runLive({
+        canvas: playCanvas, width: w, height: h,
+        commands: toAuthorCommands(snapshot.commands),
+        input: window,
+        onStatus: (phase, detail) => {
+          setStatus(phase, detail);
+          if (phase === "error" && (playLifecycle.is(token, "playing") || playLifecycle.is(token, "paused"))) {
+            playLifecycle.fail(token, detail || "live runtime failed");
+            void stopPlay(detail || "live runtime failed");
+          }
+        },
+        orbit: { center: [0, 1, 0], radius: 16, height: 8 },
+        orbitControls: true,
+        forceWebGL: true,
+        disposeRendererOnStop: true,
+      });
+      if (!playLifecycle.is(token, "starting")) {
+        await stopRuntime(runtime);
+        return;
+      }
+      if (!runtime) throw new Error("Play runtime could not start in this browser");
+      state.playRuntime = runtime;
+      state.running = runtime;
+      if (!playLifecycle.started(token)) {
+        await stopRuntime(runtime);
+        return;
+      }
+      setStatus("Play", `revision ${snapshot.source.revision}`);
+    } catch (error) {
+      if (playLifecycle.is(token, "starting")) {
+        playLifecycle.fail(token, error);
+        surfaceViewportWarning("Play start failed", error);
+        let detail = error?.message ?? String(error);
+        let restored = false;
+        try { await restoreEditWorld(); restored = true; }
+        catch (restoreError) {
+          detail = `${detail}; Edit restore failed: ${restoreError?.message ?? String(restoreError)}`;
+          surfaceViewportWarning("Edit restore failed", restoreError);
+          playLifecycle.restoreFailed(detail);
+        }
+        if (restored) {
+          state.playProgress = "";
+          playLifecycle.finishEdit({ error: detail });
+        }
+      }
+    }
+  })();
+  state.playStart = work.finally(() => { state.playStart = undefined; });
+  return state.playStart;
+}
+
+async function togglePlayPause() {
+  const runtime = state.playRuntime;
+  const token = playLifecycle.generation;
+  if (!runtime) return;
+  try {
+    if (playLifecycle.is(token, "playing")) {
+      await runtime.pause();
+      playLifecycle.paused(token);
+    } else if (playLifecycle.is(token, "paused")) {
+      await runtime.resume();
+      playLifecycle.resumed(token);
+    }
+  } catch (error) {
+    if (playLifecycle.phase !== "stopping") {
+      playLifecycle.fail(token, error);
+      surfaceViewportWarning("Play pause control failed", error);
+      await stopPlay(error?.message ?? String(error));
+    }
+  }
+}
+
+async function stopPlay(error = "") {
+  if (state.playStop) return state.playStop;
+  const request = playLifecycle.requestStop();
+  if (!request.accepted && playLifecycle.phase === "edit") return;
+  const work = (async () => {
+    let detail = error;
+    try {
+      await stopRuntime(state.playRuntime);
+      await state.playStart;
+      await restoreEditWorld();
+    } catch (restoreError) {
+      detail = detail ? `${detail}; ${restoreError?.message ?? String(restoreError)}` : restoreError?.message ?? String(restoreError);
+      surfaceViewportWarning("Edit restore failed", restoreError);
+      playLifecycle.restoreFailed(detail);
+      setStatus("Error", `Edit restore failed · Stop to retry · ${detail}`);
+      return;
+    }
+    if (!state.editRestore.hasPending()) {
+      state.playProgress = "";
+      playLifecycle.finishEdit({ error: detail });
+      setStatus(detail ? "Edit" : "Edit restored", detail || "following current authoring head");
+    }
+  })();
+  state.playStop = work.finally(() => { state.playStop = undefined; });
+  return state.playStop;
+}
+
+async function reboot({ allowWhilePlay = false, restore, throwOnError = false } = {}) {
+  if (playLifecycle.isAuthoringLocked() && !allowWhilePlay) { state.dirty = true; return; }
   // Time-travel: when scrubbed to a past point, replay only the authoring-command PREFIX up to
   // the playhead (state.scrubLimit); undefined = live (replay everything). state.commands still
   // accumulates in the background so returning to live is instant.
   const cmds = state.scrubLimit === undefined ? state.commands : state.commands.slice(0, state.scrubLimit);
-  if (cmds.length === 0) { setStatus("following", "empty — waiting for the agent to build"); return; }
+  if (cmds.length === 0) {
+    await stopRuntime(state.running);
+    state.running = undefined;
+    state.dirty = false;
+    restoreEditState(restore);
+    setStatus("following", "empty — waiting for the agent to build");
+    return;
+  }
   state.rebooting = true;
   state.dirty = false;
   try {
     clearGizmo();
     removeGridHelper();
     restoreWireframeMaterials();
-    if (state.running) { try { state.running.stop(); } catch { /* ignore */ } state.running = undefined; }
+    if (state.running) { await stopRuntime(state.running); state.running = undefined; }
     const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
     canvas.width = w; canvas.height = h;
     const past = state.scrubLimit !== undefined;
@@ -1107,7 +1465,7 @@ async function reboot() {
       canvas, width: w, height: h,
       commands: kept,
       input: window,
-      onStatus: setStatus,
+      onStatus: setEditRuntimeStatus,
       orbit: { center: [0, 1, 0], radius: 16, height: 8 },
       orbitControls: true,
       // WebGL2 backend: some drivers lose the WebGPU device mid-render (black canvas); the live
@@ -1119,6 +1477,7 @@ async function reboot() {
       // startup error). runLive already reported the SPECIFIC reason via onStatus=setStatus — do NOT
       // stomp it with a generic "no COOP/COEP or WebGPU" message (which masked real authoring/worker
       // failures as a fake GPU error). Leave the precise status runLive set.
+      if (throwOnError) throw new Error("Edit runtime could not be restored in this browser");
       return;
     }
     // A per-command authoring failure does NOT null the handle — the viewport came up with everything
@@ -1135,6 +1494,7 @@ async function reboot() {
     if (selectedId !== undefined) selectEntity(selectedId, state.running);
     installGridHelper(state.running);
     applyWireframeMode(state.running);
+    restoreEditState(restore);
     const authored = kept.length - failures.length;
     setStatus(
       past ? "past" : "live",
@@ -1144,9 +1504,10 @@ async function reboot() {
     );
   } catch (e) {
     setStatus("error", e && e.message ? e.message : String(e));
+    if (throwOnError) throw e;
   } finally {
     state.rebooting = false;
-    if (state.dirty) void reboot(); // a batch arrived while rebooting — coalesce into one more pass
+    if (state.dirty && !playLifecycle.isAuthoringLocked()) void reboot(); // a batch arrived while rebooting — coalesce into one more pass
   }
 }
 
@@ -1157,7 +1518,7 @@ canvas.addEventListener("pointerdown", (event) => {
   pointerClick.y = event.clientY;
   // Terrain edit mode: a drag on the ground sculpts — UNLESS Space is held, which hands the drag to the
   // camera so you can reframe and keep editing without leaving edit mode.
-  if (state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)) {
+  if (!playLifecycle.isAuthoringLocked() && state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)) {
     state.brushStroking = true;
     state.strokeDid = false;
     if (state.brushTool === "flatten") { const g = raycastGround(event); state.flattenTarget = g ? g.y : 0; }
@@ -1169,7 +1530,7 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 canvas.addEventListener("pointermove", (event) => {
   if (!event.isPrimary) return;
-  if (state.editMode) {
+  if (state.editMode && !playLifecycle.isAuthoringLocked()) {
     // The cursor overlay tracks the active tool: sculpt/paint → brush ring, catalog → footprint ghost.
     if (state.brushTool === "catalog") updatePlaceGhost(event);
     else updateBrushRing(event);
@@ -1194,6 +1555,7 @@ canvas.addEventListener("pointerup", (event) => {
     return; // a sculpt stroke never falls through to entity selection
   }
   if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) {
+    if (playLifecycle.isAuthoringLocked()) return;
     // Catalog place tool: a click on the ground places the armed asset (a drag still orbits the
     // camera — "catalog" is not in SCULPT_TOOLS, so no stroke ever starts).
     if (state.editMode && !state.spaceNav && state.brushTool === "catalog" && assetPlacement.get().entry) {
@@ -1216,6 +1578,7 @@ editorSelection.subscribe(({ selectedId }) => {
 }, { emitCurrent: true });
 let lastArmedAssetId;
 assetPlacement.subscribe(({ entry }) => {
+  if (playLifecycle.isAuthoringLocked()) { hidePlaceGhost(); return; }
   if (!entry) {
     lastArmedAssetId = undefined;
     hidePlaceGhost();
@@ -1236,6 +1599,11 @@ assetPlacement.subscribe(({ entry }) => {
 // History time-travel: the History panel scrubs over the authoring-command timeline and emits
 // the target here — replay the world to that prefix (limit=null → back to live/following).
 window.addEventListener("limina:scrub-to", (event) => {
+  if (playLifecycle.isAuthoringLocked()) {
+    setStatus("Play", "stop before viewing History");
+    window.dispatchEvent(new CustomEvent("limina:history-return-live"));
+    return;
+  }
   const limit = event instanceof CustomEvent ? event.detail?.limit : undefined;
   const next = (limit === null || limit === undefined) ? undefined : Math.max(0, Math.min(limit | 0, state.commands.length));
   if (next === state.scrubLimit) return;
@@ -1245,6 +1613,20 @@ window.addEventListener("limina:scrub-to", (event) => {
 window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
   if (isTextInputTarget(event.target)) return;
+  if (event.key === "F6") {
+    event.preventDefault();
+    if (event.shiftKey) void stopPlay();
+    else void startPlay();
+    return;
+  }
+  if (event.key === "F7") {
+    event.preventDefault();
+    void togglePlayPause();
+    return;
+  }
+  // Player WASD/mouse input is handled by runLive. The editor listener must stay inert while Play
+  // owns the canvas so those same familiar keys never trigger gizmo/terrain authoring shortcuts.
+  if (playLifecycle.isAuthoringLocked()) return;
   // Scene undo is an authoritative compensation transaction; redo is a new reapply transaction.
   if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
     event.preventDefault();
@@ -1335,6 +1717,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Delete" && event.key !== "Backspace") return;
   if (isTextInputTarget(event.target)) return;
+  if (viewportIsReadOnly()) return;
   const selected = state.selected;
   if (!selected) return;
   event.preventDefault();
@@ -1374,7 +1757,8 @@ let compassEl = null, compassNeedle = null, compassLast = 999;
 function ensureCompass() {
   if (compassEl) return;
   compassEl = document.createElement("div");
-  compassEl.style.cssText = "position:absolute;top:10px;right:10px;z-index:29;width:44px;height:44px;border-radius:999px;" +
+  compassEl.className = "viewport-compass";
+  compassEl.style.cssText = "width:44px;height:44px;border-radius:999px;" +
     "background:rgba(22,22,27,.85);border:1px solid #454550;display:flex;align-items:center;justify-content:center;" +
     "pointer-events:none;font:11px system-ui,sans-serif;color:#bbb";
   compassNeedle = document.createElement("div");
@@ -1409,9 +1793,10 @@ function ensureCompass() {
 // toggle would leave it stretched until the next re-author. Resizes the drawing buffer + the live
 // renderer + the camera aspect in place — no reboot, no scene rebuild.
 function resizeViewport() {
-  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const activeCanvas = state.playCanvas ?? canvas;
+  const w = activeCanvas.clientWidth, h = activeCanvas.clientHeight;
   if (!w || !h) return;
-  canvas.width = w; canvas.height = h;
+  activeCanvas.width = w; activeCanvas.height = h;
   const running = state.running;
   try { running?.renderer?.setSize?.(w, h, false); } catch { /* ignore */ }
   const cam = running?.camera;
@@ -1423,6 +1808,7 @@ window.addEventListener("resize", () => { cancelAnimationFrame(winResizeRaf); wi
 window.addEventListener("limina:layout-changed", () => { setTimeout(resizeViewport, 200); });
 
 bindViewportUi();
+playLifecycle.subscribe(syncPlayUi, { emitCurrent: true });
 setStatus("waiting", "connect the panels to follow the authoring stream");
 // Self-scheduling loop (NOT a fixed setInterval): the next tick is scheduled AFTER the
 // current poll/reboot finishes, so a slow re-author can never overlap the next poll into a
@@ -1449,10 +1835,15 @@ void viewportTick();
 
 window.addEventListener("beforeunload", () => {
   viewportLoopStopped = true;
+  state.scrubLimit = undefined;
+  window.dispatchEvent(new CustomEvent("limina:history-return-live"));
   clearAgentHighlight();
   clearGizmo();
   removeGridHelper();
   restoreWireframeMaterials();
-  try { state.running?.stop(); } catch { /* ignore */ }
+  void stopRuntime(state.playRuntime);
+  if (state.running !== state.playRuntime) void stopRuntime(state.running);
+  releasePlayCanvas();
+  playLifecycle.finishEdit();
   try { state.client?.close(); } catch { /* ignore */ }
 });

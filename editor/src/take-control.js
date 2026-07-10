@@ -5,12 +5,12 @@ import {
   closeWriter,
   commitSceneOperations,
   destroyEntity,
-  ensureWriter,
   resetWriter,
 } from "./write-client.js";
 import { sceneMaterialOperation, sceneTagsOperation, sceneTransformOperation } from "./authoring-gateway.js";
 import { parseTransformDraft } from "./inspector-draft.js";
 import { editorSelection } from "./selection-store.js";
+import { playLifecycle } from "./play-lifecycle.js";
 import { surfaceViewportWarning, viewportIsReadOnly } from "./viewport.js";
 
 const inspectorBody = document.getElementById("inspector-body");
@@ -403,6 +403,15 @@ function renderInspector() {
   status.textContent = "ready";
   form.appendChild(status);
   inspectorBody.appendChild(form);
+  syncInspectorReadOnly();
+}
+
+function syncInspectorReadOnly() {
+  if (!inspectorBody) return;
+  const locked = viewportIsReadOnly();
+  inspectorBody.setAttribute("aria-disabled", String(locked));
+  inspectorBody.classList.toggle("authoring-locked", locked);
+  for (const control of inspectorBody.querySelectorAll("input, select, textarea, button")) control.disabled = locked;
 }
 
 // Copied from js/src/kernel/math.ts eulerToQuaternion. Input is radians, XYZ order.
@@ -572,7 +581,6 @@ async function deleteEntity() {
   const entity = state.entity;
   try {
     setStatus("deleting...", "info");
-    await ensureWriter();
     await destroyEntity(entity);
     console.info("take-control destroyed", { entity });
     editorSelection.clear("delete");
@@ -624,6 +632,8 @@ if (inspectorBody) {
     if (selectedId === undefined) clearInspectorSelection();
     else selectEntity(selectedId);
   }, { emitCurrent: true });
+
+  playLifecycle.subscribe(syncInspectorReadOnly);
 }
 
 window.addEventListener("beforeunload", () => {

@@ -104,8 +104,19 @@
     <!-- CENTER: the live viewport (unchanged canvas); transform tools centred along the bottom. -->
     <section class="panel viewport" id="viewport">
       <div class="panel-head">
-        <h3>Live viewport</h3>
-        <span class="hint"><span id="viewport-status">idle</span></span>
+        <div class="viewport-heading">
+          <h3>Viewport</h3>
+          <span class="hint viewport-runtime-status" id="viewport-status">idle</span>
+        </div>
+        <div class="play-toolbar" role="toolbar" aria-label="Play controls">
+          <button id="viewport-play" class="play-control" type="button" title="Start isolated Play (F6)" aria-label="Start isolated Play">▶</button>
+          <button id="viewport-pause" class="play-control" type="button" title="Pause Play (F7)" aria-label="Pause Play" aria-pressed="false" disabled>⏸</button>
+          <button id="viewport-stop" class="play-control" type="button" title="Stop Play (Shift+F6)" aria-label="Stop Play" disabled>■</button>
+          <span class="play-identity" aria-live="polite">
+            <strong id="viewport-play-state" data-phase="edit">Edit</strong>
+            <span id="viewport-play-source" title="">no Play snapshot</span>
+          </span>
+        </div>
       </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>

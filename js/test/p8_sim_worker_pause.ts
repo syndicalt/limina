@@ -1,0 +1,73 @@
+import { installSimWorker } from "../src/browser/sim-worker.ts";
+import { shouldRenderLiveFrame } from "../src/browser/live-runtime.ts";
+
+function assert(condition: boolean, message: string): asserts condition {
+  if (!condition) throw new Error("p8_sim_worker_pause FAIL: " + message);
+}
+
+const messages: Array<Record<string, unknown>> = [];
+const scope = {
+  onmessage: null as ((event: { data: unknown }) => void) | null,
+  postMessage(message: unknown): void { messages.push(message as Record<string, unknown>); },
+};
+installSimWorker(scope);
+
+let renderSpy = 0;
+if (shouldRenderLiveFrame(true)) renderSpy++;
+assert(renderSpy === 0, "suspended view gate must suppress hidden runtime frame work");
+if (shouldRenderLiveFrame(false)) renderSpy++;
+assert(renderSpy === 1, "resumed view gate must allow frame work again");
+
+const waitFor = async (predicate: () => boolean, label: string, timeoutMs = 5_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`p8_sim_worker_pause FAIL: timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+};
+
+scope.onmessage?.({ data: { type: "pause", requestId: 1 } });
+await waitFor(() => messages.some((message) => message.type === "controlRejected" && message.requestId === 1), "pre-init rejection");
+assert(!messages.some((message) => message.type === "paused" && message.requestId === 1), "pre-init pause must not claim success");
+
+scope.onmessage?.({ data: {
+  type: "init",
+  commands: [{ kind: "physics", op: "op_physics_create_world", args: [-9.81] }],
+  hz: 240,
+} });
+await waitFor(() => messages.some((message) => message.type === "ready"), "ready");
+const ready = messages.find((message) => message.type === "ready")!;
+const status = new Int32Array(ready.status as SharedArrayBuffer | ArrayBuffer, 0, 1);
+await waitFor(() => Atomics.load(status, 0) >= 3, "initial ticks");
+
+scope.onmessage?.({ data: { type: "pause", requestId: 11 } });
+await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 11), "pause acknowledgement");
+const pausedAt = Atomics.load(status, 0);
+scope.onmessage?.({ data: { type: "step" } });
+scope.onmessage?.({ data: { type: "step" } });
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert(Atomics.load(status, 0) === pausedAt, "acknowledged pause must halt timer and injected deterministic ticks");
+
+scope.onmessage?.({ data: { type: "pause", requestId: 12 } });
+await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 12), "repeated pause acknowledgement");
+assert(Atomics.load(status, 0) === pausedAt, "repeated pause must be idempotent");
+
+scope.onmessage?.({ data: { type: "resume", requestId: 13 } });
+await waitFor(() => messages.some((message) => message.type === "resumed" && message.requestId === 13), "resume acknowledgement");
+await waitFor(() => Atomics.load(status, 0) > pausedAt, "resumed ticks");
+scope.onmessage?.({ data: { type: "resume", requestId: 14 } });
+await waitFor(() => messages.some((message) => message.type === "resumed" && message.requestId === 14), "repeated resume acknowledgement");
+const beforeFinalPause = Atomics.load(status, 0);
+scope.onmessage?.({ data: { type: "pause", requestId: 15 } });
+await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 15), "final pause acknowledgement");
+scope.onmessage?.({ data: { type: "stop" } });
+await new Promise((resolve) => setTimeout(resolve, 30));
+assert(Atomics.load(status, 0) >= beforeFinalPause, "stop during control must leave a valid final tick");
+const stoppedAt = Atomics.load(status, 0);
+await new Promise((resolve) => setTimeout(resolve, 30));
+assert(Atomics.load(status, 0) === stoppedAt, "stop must prevent every later tick");
+scope.onmessage?.({ data: { type: "resume", requestId: 16 } });
+await waitFor(() => messages.some((message) => message.type === "controlRejected" && message.requestId === 16), "post-stop rejection");
+assert(!messages.some((message) => message.type === "resumed" && message.requestId === 16), "post-stop resume must not claim success");
+
+console.log(`p8_sim_worker_pause OK: worker held tick ${pausedAt} across timer/manual-step pause, resumed, and stopped at ${stoppedAt}`);

@@ -98,6 +98,14 @@ export function createHistoryPanel(opts = {}) {
     try { onScrub({ commands: ctrl.commandsAtPlayhead(), live: ctrl.isLive() }); } catch (_e) { /* host viewport hook is optional */ }
   }
 
+  const returnLive = () => {
+    if (ctrl.isLive()) return;
+    ctrl.toLive();
+    emitScrub();
+    render();
+  };
+  window.addEventListener?.("limina:history-return-live", returnLive);
+
   render();
-  return { recordCommands, reset, controller: () => ctrl };
+  return { recordCommands, reset, controller: () => ctrl, destroy: () => window.removeEventListener?.("limina:history-return-live", returnLive) };
 }

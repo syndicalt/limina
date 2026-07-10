@@ -549,10 +549,12 @@ type InitMessage = {
 };
 type StepMessage = { type: "step" };
 type StopMessage = { type: "stop" };
+type PauseMessage = { type: "pause"; requestId?: number };
+type ResumeMessage = { type: "resume"; requestId?: number };
 type ApplyCommandsMessage = { type: "applyCommands"; commands?: AuthorCommand[] };
 /** Map Phase 3.3 — client-stream collider mirroring (view-support; see StreamTileColliderAdd). */
 type StreamTileCollidersMessage = { type: "streamTileColliders"; add?: StreamTileColliderAdd[]; remove?: string[] };
-type ShellMessage = InitMessage | StepMessage | StopMessage | ApplyCommandsMessage | StreamTileCollidersMessage;
+type ShellMessage = InitMessage | StepMessage | StopMessage | PauseMessage | ResumeMessage | ApplyCommandsMessage | StreamTileCollidersMessage;
 
 /** Install the Worker message wiring on a worker global. `init` builds the
  *  controller (importing rapier-compat — resolved by the browser bundle, never the
@@ -562,6 +564,8 @@ type ShellMessage = InitMessage | StepMessage | StopMessage | ApplyCommandsMessa
 export function installSimWorker(scope: WorkerScopeLike): void {
   let controller: SimWorkerController | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let driveHz = 60;
+  let paused = false;
 
   /** Post a structured error to the main thread so a throw is observable rather
    *  than a silent unhandledrejection (which would stop stepping unseen). */
@@ -589,12 +593,32 @@ export function installSimWorker(scope: WorkerScopeLike): void {
   const teardown = (): void => {
     if (timer !== undefined) { clearInterval(timer); timer = undefined; }
     if (controller !== null) { controller.dispose(); controller = null; }
+    paused = false;
+  };
+
+  const rejectControl = (operation: "pause" | "resume", requestId: number | undefined, reason: string): void => {
+    scope.postMessage({ type: "controlRejected", operation, requestId, reason });
+  };
+
+  const startDrive = (): void => {
+    if (timer !== undefined || controller === null || paused) return;
+    timer = setInterval((): void => {
+      if (controller === null) return;
+      try {
+        scope.postMessage({ type: "tick", tick: controller.tick() });
+      } catch (err) {
+        // A solver throw inside the timer would otherwise silently kill stepping.
+        teardown();
+        postError("tick", err);
+      }
+    }, 1000 / driveHz);
   };
 
   scope.onmessage = (ev: { data: unknown }): void => {
     const msg = ev.data as ShellMessage;
     void (async (): Promise<void> => {
       if (msg.type === "init") {
+        teardown();
         const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
         controller = await SimWorkerController.create({
           rapier,
@@ -610,20 +634,23 @@ export function installSimWorker(scope: WorkerScopeLike): void {
         }
         const b = controller.buffers;
         scope.postMessage({ type: "ready", buffer: b.sab, inputBuffer: b.input, status: b.status });
-        const hz = msg.hz ?? 60;
-        timer = setInterval((): void => {
-          if (controller === null) return;
-          try {
-            scope.postMessage({ type: "tick", tick: controller.tick() });
-          } catch (err) {
-            // A solver throw inside the timer would otherwise silently kill stepping —
-            // stop the now-broken sim and surface it to the main thread.
-            teardown();
-            postError("tick", err);
-          }
-        }, 1000 / hz);
+        driveHz = msg.hz ?? 60;
+        paused = false;
+        startDrive();
       } else if (msg.type === "step") {
-        if (controller !== null) scope.postMessage({ type: "tick", tick: controller.tick() });
+        if (controller !== null && !paused) scope.postMessage({ type: "tick", tick: controller.tick() });
+      } else if (msg.type === "pause") {
+        if (controller === null) { rejectControl("pause", msg.requestId, "sim worker is not initialized"); return; }
+        // Worker messages and interval callbacks run as serialized tasks. Clearing here and only
+        // then acknowledging proves that no later deterministic tick can start while paused.
+        if (timer !== undefined) { clearInterval(timer); timer = undefined; }
+        paused = true;
+        scope.postMessage({ type: "paused", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
+      } else if (msg.type === "resume") {
+        if (controller === null) { rejectControl("resume", msg.requestId, "sim worker is not initialized"); return; }
+        paused = false;
+        startDrive();
+        scope.postMessage({ type: "resumed", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
       } else if (msg.type === "applyCommands") {
         if (controller !== null && msg.commands !== undefined) {
           postAuthoringFailures("applyCommands", (await controller.loadWorldIsolated(msg.commands)).failures);
