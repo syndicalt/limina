@@ -406,8 +406,10 @@ near-vertical cliffs before the SDF layer exists.
   `hydrology-field` stage depends on the eroded master surface and precipitation while terrain chunks
   retain their existing dependencies. Threshold-only recipe edits reuse both terrain and field bytes;
   precipitation edits invalidate only the field, local edit layers invalidate only intersecting chunks,
-  and surface/erosion changes invalidate both the field and affected terrain. Live service profile
-  selection remains the final deployment seam for this compiler capability.
+  and surface/erosion changes invalidate both the field and affected terrain. The live service now
+  compiles the exact MapDoc once, selects and freezes the matching profile identity before queueing,
+  reuses prior artifacts only across an exact compiler-identity match, and fails profile drift closed
+  (`ccb53e2`).
 - **2026-07-09 — Coherent worker swim status shipped (`136fc79`).** Simulation workers publish tick,
   lowest-live-player id, and in-water/swimming/submerged flags through a 16-byte seqlocked shared status
   block after physics and transform synchronization. The browser reads into reusable scratch storage,
