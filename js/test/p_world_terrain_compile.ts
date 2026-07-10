@@ -91,11 +91,64 @@ assert(canonicalDerivedRevisionManifest(base.manifest) === canonicalDerivedRevis
 assert(canonicalCompilerSnapshot(base.snapshot) === canonicalCompilerSnapshot(repeat.snapshot), "repeat/reordered input changed snapshot bytes");
 assert(base.artifacts.length === repeat.artifacts.length && base.artifacts.every((artifact, index) => bytesEqual(artifact.bytes, repeat.artifacts[index].bytes)), "repeat/reordered input changed artifact bytes");
 assert(parseDerivedRevisionManifest(clone(base.manifest)).manifestHash === base.manifest.manifestHash, "manifest failed strict roundtrip");
+assert(base.reusedArtifacts.length === 0, "cold compile reported reused artifacts");
 for (const artifact of base.artifacts) {
   const decoded = decodeTerrainChunkArtifact(artifact.bytes);
   assert(decoded.tile.nrows === 33 && decoded.tile.ncols === 33, "artifact is not canonical 33x33 terrain");
   assert(decoded.tile.origin[1] === -500 && decoded.tile.scale[1] === 9500, "artifact did not use fixed configured vertical range");
 }
+
+const available = [...new Set(base.artifacts.map((artifact) => artifact.contentHash))].sort();
+const allReused = compileWorldTerrain({
+  ...input(),
+  previousSnapshot: base.snapshot,
+  previousManifest: base.manifest,
+  availableArtifactHashes: available,
+});
+assert(allReused.artifacts.length === 0 && allReused.reusedArtifacts.length === base.manifest.chunks.length, "unchanged compile materialized cached artifacts");
+assert(allReused.manifest.manifestHash === base.manifest.manifestHash, "sparse reuse changed the complete manifest");
+assert(allReused.reusedArtifacts.every((artifact, index) => artifact.chunkId === base.manifest.chunks[index].chunkId
+  && artifact.contentHash === base.manifest.chunks[index].artifacts[0].contentHash), "reused descriptor partition does not match manifest order");
+const unavailableHash = available[0];
+const oneUnavailable = compileWorldTerrain({
+  ...input(),
+  previousSnapshot: base.snapshot,
+  previousManifest: base.manifest,
+  availableArtifactHashes: available.filter((hash) => hash !== unavailableHash),
+});
+assert(oneUnavailable.artifacts.length >= 1, "missing cache availability did not force artifact generation");
+assert(oneUnavailable.artifacts.every((artifact) => artifact.contentHash === unavailableHash), "availability miss recompiled unrelated artifact content");
+assert(oneUnavailable.reusedArtifacts.length + oneUnavailable.artifacts.length === base.manifest.chunks.length, "sparse output did not partition complete manifest chunks");
+
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: base.snapshot, previousManifest: base.manifest }), /requires availableArtifactHashes/, "manifest without cache availability was accepted");
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: null, previousManifest: base.manifest, availableArtifactHashes: available }), /non-null previousSnapshot/, "cache reuse without planner snapshot was accepted");
+rejects(() => compileWorldTerrain({ ...input(), previousManifest: null, availableArtifactHashes: available }), /must be empty/, "availability without prior manifest was accepted");
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: base.snapshot, previousManifest: base.manifest, availableArtifactHashes: [...available].reverse() }), /strictly ordered/, "unordered availability was accepted");
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: base.snapshot, previousManifest: base.manifest, availableArtifactHashes: [...available, compilerContentHash({ unrelated: true })].sort() }), /not referenced/, "unreferenced cache hash was accepted");
+const mismatchedSnapshot = clone(base.snapshot);
+mismatchedSnapshot.stageKeys.render[base.manifest.chunks[0].chunkId] = compilerContentHash({ wrong: "stage" });
+const { snapshotHash: _oldSnapshotHash, ...mismatchedSnapshotCore } = mismatchedSnapshot;
+mismatchedSnapshot.snapshotHash = compilerContentHash(mismatchedSnapshotCore);
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: mismatchedSnapshot, previousManifest: base.manifest, availableArtifactHashes: available }), /manifest and snapshot hashes do not agree/, "manifest/snapshot mismatch was accepted for reuse");
+const wrongBranchManifest = clone(base.manifest);
+delete wrongBranchManifest.manifestHash;
+wrongBranchManifest.branchId = "other";
+const resealedWrongBranch = (await import("../src/world/compiler/index.mjs")).createDerivedRevisionManifest(wrongBranchManifest);
+rejects(() => compileWorldTerrain({ ...input(), previousSnapshot: base.snapshot, previousManifest: resealedWrongBranch, availableArtifactHashes: available }), /another project or branch/, "cross-branch cache manifest was accepted");
+
+const atlasMap = clone(map);
+atlasMap.provenance.sourceHash = MAP_DOC_HASH.slice("sha256:".length);
+atlasMap.provenance.contentHash = worldMapContentHash(atlasMap);
+const atlasCompile = compileWorldTerrain({
+  ...input(),
+  worldMap: atlasMap,
+  sourceRefs: {
+    mapDocument: mapDocumentRef,
+  },
+});
+assert(atlasCompile.manifest.source.contentRefs.length === 1 && atlasCompile.manifest.source.contentRefs[0].refType === "map-document/v1", "Atlas manifest retained a fake WorldMap/design-source authority");
+rejects(() => compileWorldTerrain({ ...input(), worldMap: atlasMap, sourceRefs: { mapDocument: { ...mapDocumentRef, contentHash: compilerContentHash({ wrong: true }) } } }), /MapDoc ref is not bound/, "Atlas compile accepted a MapDoc ref unrelated to provenance");
+rejects(() => compileWorldTerrain({ ...input(), sourceRefs: { mapDocument: mapDocumentRef, worldMap: worldMapRef } }), /must contain mapDocument, designSource, and worldMap together/, "partial legacy source-ref set was accepted");
 
 const tamperedMap = clone(map);
 tamperedMap.seaLevel = 1;
@@ -136,6 +189,17 @@ const localSecond = compileWorldTerrain({ ...input([localV2], [layerRef(localV2)
 assert(localSecond.invalidation.changedChunks.length === 1, `local edit invalidated ${localSecond.invalidation.changedChunks.length} chunks instead of one`);
 const unchangedArtifacts = localSecond.artifacts.filter((artifact) => localFirst.artifacts.find((prior) => prior.chunkId === artifact.chunkId)?.contentHash === artifact.contentHash);
 assert(unchangedArtifacts.length === localSecond.artifacts.length - 1, "local edit rewrote unrelated terrain artifacts");
+const localAvailable = [...new Set(localFirst.artifacts.map((artifact) => artifact.contentHash))].sort();
+const localSparse = compileWorldTerrain({
+  ...input([localV2], [layerRef(localV2)]),
+  previousSnapshot: localFirst.snapshot,
+  previousManifest: localFirst.manifest,
+  availableArtifactHashes: localAvailable,
+});
+assert(localSparse.artifacts.length === 1, `local sparse compile emitted ${localSparse.artifacts.length} artifacts instead of one`);
+assert(localSparse.reusedArtifacts.length === localFirst.manifest.chunks.length - 1, "local sparse compile did not reuse every unaffected chunk");
+assert(localSparse.manifest.manifestHash === localSecond.manifest.manifestHash, "sparse and full local compiles produced different complete manifests");
+assert(bytesEqual(localSparse.artifacts[0].bytes, localSecond.artifacts.find((artifact) => artifact.chunkId === localSparse.artifacts[0].chunkId)!.bytes), "sparse changed-chunk bytes differ from full compile");
 
 // Slice hashing must consume the prepared spatial buckets, not filter every source delta for
 // every chunk. These 256 interior deltas belong to exactly one chunk in a 16-chunk domain.
@@ -191,4 +255,4 @@ rejects(() => compileWorldTerrain({
   sourceRefs: { mapDocument: mapDocumentRef, designSource: designSourceRef, worldMap: { ...worldMapRef, contentHash: `sha256:${expensiveMap.provenance.contentHash}` } },
 }), /estimated work .* exceeds/, "adversarial cell-by-vector work was not rejected before rasterization");
 
-ops.op_log(`p_world_terrain_compile OK: ${base.artifacts.length} canonical chunks; deterministic bytes/manifest/snapshot, verified provenance, ordered local edits, exact seams, fixed vertical range, honest global erosion invalidation, strict snapshot/cache/cancellation/resource rejection, and bounded vector work.`);
+ops.op_log(`p_world_terrain_compile OK: ${base.artifacts.length} canonical chunks; deterministic bytes/manifest/snapshot, exact Atlas and legacy provenance, validated sparse cache reuse, ordered local edits, exact seams, fixed vertical range, honest global erosion invalidation, strict snapshot/cache/cancellation/resource rejection, and bounded vector work.`);

@@ -40,8 +40,7 @@ async function main(): Promise<void> {
   assert(sha256(float32LittleEndian(field.paintW)) === "b70d7202a6f3813ab09f968c4943cce2071305e367e6b4f2c27aec7ea4002352", "indexed raster changed paint weight bytes");
   assert(sha256(field.biomeCell) === "5756492c853c991b7c8439ed156f9581e2d2a940fdfba5d03c69cf18ae6f64a2", "indexed biome pass changed region bytes");
 
-  const compileStarted = performance.now();
-  const result = compileWorldTerrain({
+  const compileInput = {
     request: { projectId: "remnants-of-aethon", branchId: "grey-field", revision: 1, headHash: compilerContentHash({ benchmark: "grey-field" }) },
     worldMap: map,
     sourceRefs: {
@@ -62,12 +61,26 @@ async function main(): Promise<void> {
     } },
     previousSnapshot: null,
     cancellation: { shouldCancel: () => false },
-  });
+  };
+  const compileStarted = performance.now();
+  const result = compileWorldTerrain(compileInput);
   const compileMs = performance.now() - compileStarted;
   const artifactBytes = result.artifacts.reduce((total, artifact) => total + artifact.bytes.byteLength, 0);
   assert(result.artifacts.length === 6400, `expected 6400 artifacts, got ${result.artifacts.length}`);
   assert(artifactBytes === 174_771_200, `expected 174771200 artifact bytes, got ${artifactBytes}`);
-  console.log(`world-terrain-compile benchmark OK: master ${fieldMs.toFixed(1)}ms; compile ${compileMs.toFixed(1)}ms; 1050625 samples; 6400 chunks/artifacts; 174771200 bytes`);
+  const availableArtifactHashes = [...new Set(result.artifacts.map((artifact) => artifact.contentHash))].sort();
+  const sparseStarted = performance.now();
+  const sparse = compileWorldTerrain({
+    ...compileInput,
+    previousManifest: result.manifest,
+    previousSnapshot: result.snapshot,
+    availableArtifactHashes,
+  });
+  const sparseMs = performance.now() - sparseStarted;
+  assert(sparse.artifacts.length === 0, `unchanged sparse compile emitted ${sparse.artifacts.length} artifacts`);
+  assert(sparse.reusedArtifacts.length === 6400, `unchanged sparse compile reused ${sparse.reusedArtifacts.length} artifacts`);
+  assert(sparse.manifest.manifestHash === result.manifest.manifestHash, "sparse reuse changed complete manifest identity");
+  console.log(`world-terrain-compile benchmark OK: master ${fieldMs.toFixed(1)}ms; cold ${compileMs.toFixed(1)}ms/174771200 emitted bytes; sparse ${sparseMs.toFixed(1)}ms/0 emitted bytes/6400 reused; 1050625 samples`);
 }
 
 await main();

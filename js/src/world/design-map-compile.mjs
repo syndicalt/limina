@@ -20,6 +20,7 @@
 
 import { sha256 } from "./sha256.mjs";
 import { worldMapContentHash } from "./worldmap-hash.mjs";
+import { canonicalMapDocText } from "./mapdoc-canonical.mjs";
 import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
 import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 import { reliefGridSampler } from "./pipeline/map-raster.mjs";
@@ -38,6 +39,150 @@ const RIVER_MAX_WIDTH_M = 16;
 const riverWidthM = (sizeM) => Math.min(RIVER_MAX_WIDTH_M, Math.max(RIVER_MIN_WIDTH_M, Math.round(sizeM * 0.008)));
 const MOUNTAIN_BIOME_AMPLITUDE = 12;
 const GLYPH_AMPLITUDE = { mountain: 12, peak: 15, hills: 5 };
+const MAX_ATLAS_MAPS = 256;
+const MAX_ATLAS_FEATURES = 100_000;
+const MAX_ATLAS_STAMPS = 100_000;
+
+function atlasError(message) {
+  throw new Error(`compile-atlas-mapdoc: ${message}`);
+}
+
+function finiteAtlasNumber(value, path) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0)) atlasError(`${path} must be a finite canonical number`);
+  return value;
+}
+
+function atlasPoint(value, path) {
+  if (!Array.isArray(value) || value.length !== 2) atlasError(`${path} must be a two-number point`);
+  finiteAtlasNumber(value[0], `${path}[0]`);
+  finiteAtlasNumber(value[1], `${path}[1]`);
+}
+
+function atlasPoints(value, minimum, path) {
+  if (!Array.isArray(value) || value.length < minimum || value.length > 1_000_000) atlasError(`${path} must contain ${minimum}-1000000 points`);
+  for (let index = 0; index < value.length; index++) atlasPoint(value[index], `${path}[${index}]`);
+}
+
+function validateAtlasRaster(raster, path, elevation) {
+  if (raster === null || typeof raster !== "object" || Array.isArray(raster)) atlasError(`${path} must be an object`);
+  if (!Number.isInteger(raster.w) || raster.w < 2 || raster.w > 1024 || !Number.isInteger(raster.h) || raster.h < 2 || raster.h > 1024) {
+    atlasError(`${path} dimensions must be integers in [2, 1024]`);
+  }
+  const rect = raster.rect;
+  if (rect === null || typeof rect !== "object" || Array.isArray(rect)) atlasError(`${path}.rect must be an object`);
+  finiteAtlasNumber(rect.x0, `${path}.rect.x0`);
+  finiteAtlasNumber(rect.z0, `${path}.rect.z0`);
+  if (!(finiteAtlasNumber(rect.w, `${path}.rect.w`) > 0) || !(finiteAtlasNumber(rect.h, `${path}.rect.h`) > 0)) atlasError(`${path}.rect dimensions must be positive`);
+  if (typeof raster.data !== "string" || raster.data.length < 1 || raster.data.length > 2_796_204) atlasError(`${path}.data is invalid`);
+  if (elevation) {
+    const minY = finiteAtlasNumber(raster.minY, `${path}.minY`);
+    const maxY = finiteAtlasNumber(raster.maxY, `${path}.maxY`);
+    if (!(maxY > minY)) atlasError(`${path} requires maxY > minY`);
+    if (raster.encoding !== undefined && raster.encoding !== "u8" && raster.encoding !== "u16") atlasError(`${path}.encoding is invalid`);
+    try {
+      reliefGridSampler({
+        reliefGrid: {
+          w: raster.w,
+          h: raster.h,
+          rect: { x0: rect.x0, z0: rect.z0, w: rect.w, h: rect.h },
+          minY,
+          maxY,
+          ...(raster.encoding === undefined ? {} : { encoding: raster.encoding }),
+          data: raster.data,
+        },
+        origin: [0, 0],
+        unitsPerMeter: 1,
+      });
+    } catch (error) { atlasError(`${path} payload is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+  } else {
+    if (raster.enc !== undefined && raster.enc !== "rle8") atlasError(`${path}.enc is invalid`);
+    try { decodeRasterCells(raster, raster.w * raster.h); }
+    catch (error) { atlasError(`${path} payload is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+}
+
+function validateAtlasMapDoc(doc) {
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) atlasError("root must be an object");
+  if (doc.version !== 2) atlasError("version must be 2");
+  if (!Array.isArray(doc.maps) || doc.maps.length < 1 || doc.maps.length > MAX_ATLAS_MAPS) atlasError(`maps must contain 1-${MAX_ATLAS_MAPS} entries`);
+  if (typeof doc.activeMapId !== "string" || doc.activeMapId.length < 1 || doc.activeMapId.length > 128) atlasError("activeMapId is invalid");
+  const ids = new Set();
+  for (let mapIndex = 0; mapIndex < doc.maps.length; mapIndex++) {
+    const map = doc.maps[mapIndex];
+    const path = `maps[${mapIndex}]`;
+    if (map === null || typeof map !== "object" || Array.isArray(map)) atlasError(`${path} must be an object`);
+    if (typeof map.id !== "string" || map.id.length < 1 || map.id.length > 128) atlasError(`${path}.id is invalid`);
+    if (ids.has(map.id)) atlasError(`map id '${map.id}' is duplicated`);
+    ids.add(map.id);
+    if (typeof map.name !== "string" || map.name.length < 1 || typeof map.scope !== "string" || map.scope.length < 1) atlasError(`${path} name/scope are invalid`);
+    if (map.parent !== null && map.parent !== undefined && typeof map.parent !== "string") atlasError(`${path}.parent is invalid`);
+    if (map.units === null || typeof map.units !== "object" || Array.isArray(map.units)
+      || map.units.kind !== "m" || !(finiteAtlasNumber(map.units.unitsPerMeter, `${path}.units.unitsPerMeter`) > 0)) atlasError(`${path}.units is invalid`);
+    atlasPoint(map.units.origin, `${path}.units.origin`);
+    if (!Array.isArray(map.features) || map.features.length > MAX_ATLAS_FEATURES) atlasError(`${path}.features must contain at most ${MAX_ATLAS_FEATURES} entries`);
+    if (map.seaLevel !== undefined) finiteAtlasNumber(map.seaLevel, `${path}.seaLevel`);
+    if (map.waterBodies !== undefined) compileWater(map.waterBodies, parseAuthoredWaterBodies);
+    if (map.rasters !== undefined) {
+      if (map.rasters === null || typeof map.rasters !== "object" || Array.isArray(map.rasters)) atlasError(`${path}.rasters must be an object`);
+      if (map.rasters.elevation !== undefined) validateAtlasRaster(map.rasters.elevation, `${path}.rasters.elevation`, true);
+      if (map.rasters.landmass !== undefined) validateAtlasRaster(map.rasters.landmass, `${path}.rasters.landmass`, false);
+      if (map.rasters.biomes !== undefined) validateAtlasRaster(map.rasters.biomes, `${path}.rasters.biomes`, false);
+    }
+    if (map.stamps !== undefined) {
+      if (!Array.isArray(map.stamps) || map.stamps.length > MAX_ATLAS_STAMPS) atlasError(`${path}.stamps must contain at most ${MAX_ATLAS_STAMPS} entries`);
+      const stampIds = new Set();
+      for (let index = 0; index < map.stamps.length; index++) {
+        const stamp = map.stamps[index], stampPath = `${path}.stamps[${index}]`;
+        if (stamp === null || typeof stamp !== "object" || Array.isArray(stamp)
+          || typeof stamp.id !== "string" || stamp.id.length < 1 || typeof stamp.assetId !== "string" || stamp.assetId.length < 1) atlasError(`${stampPath} is invalid`);
+        if (stampIds.has(stamp.id)) atlasError(`${stampPath}.id is duplicated`);
+        stampIds.add(stamp.id);
+        finiteAtlasNumber(stamp.x, `${stampPath}.x`);
+        finiteAtlasNumber(stamp.z, `${stampPath}.z`);
+        if (stamp.rot !== undefined) finiteAtlasNumber(stamp.rot, `${stampPath}.rot`);
+        if (stamp.scale !== undefined && !(finiteAtlasNumber(stamp.scale, `${stampPath}.scale`) > 0)) atlasError(`${stampPath}.scale must be positive`);
+      }
+    }
+    const featureIds = new Set();
+    for (let featureIndex = 0; featureIndex < map.features.length; featureIndex++) {
+      const feature = map.features[featureIndex], featurePath = `${path}.features[${featureIndex}]`;
+      if (feature === null || typeof feature !== "object" || Array.isArray(feature)) atlasError(`${featurePath} must be an object`);
+      if (typeof feature.id !== "string" || feature.id.length < 1) atlasError(`${featurePath}.id is invalid`);
+      if (featureIds.has(feature.id)) atlasError(`${featurePath}.id is duplicated`);
+      featureIds.add(feature.id);
+      if (feature.type === "area" && (feature.kind === "outline" || feature.kind === "biome")) {
+        atlasPoints(feature.points, 3, `${featurePath}.points`);
+        if (feature.kind === "biome" && !BIOME_CLASSES.includes(feature.biome)) atlasError(`${featurePath}.biome is invalid`);
+      } else if (feature.type === "line" && feature.kind === "river") {
+        compileWater(feature, (value) => parseAuthoredWaterway(value, RIVER_MIN_WIDTH_M, featurePath));
+      } else if (feature.type === "line" && (feature.kind === "road" || feature.kind === "border")) {
+        atlasPoints(feature.points, 2, `${featurePath}.points`);
+      } else if (feature.type === "glyph") {
+        if (typeof feature.glyph !== "string" || feature.glyph.length < 1) atlasError(`${featurePath}.glyph is invalid`);
+        finiteAtlasNumber(feature.x, `${featurePath}.x`);
+        finiteAtlasNumber(feature.z, `${featurePath}.z`);
+      }
+    }
+  }
+  if (!ids.has(doc.activeMapId)) atlasError("activeMapId does not identify a map");
+  return doc.maps.find((map) => map.id === doc.activeMapId);
+}
+
+function atlasMapSizeM(map) {
+  let span = 1;
+  const includeRect = (rect) => { if (rect !== undefined) span = Math.max(span, rect.w, rect.h); };
+  includeRect(map.rasters?.elevation?.rect);
+  includeRect(map.rasters?.landmass?.rect);
+  includeRect(map.rasters?.biomes?.rect);
+  const pointSets = [];
+  for (const feature of map.features) if (Array.isArray(feature.points)) pointSets.push(feature.points);
+  for (const body of map.waterBodies ?? []) pointSets.push(body.footprint.points, ...(body.footprint.holes ?? []));
+  if (pointSets.length > 0) {
+    const bounds = bboxOf(pointSets);
+    span = Math.max(span, bounds.w, bounds.h);
+  }
+  return span / map.units.unitsPerMeter;
+}
 
 function toPoint(p) {
   return [Number(p[0]), Number(p[1])];
@@ -199,7 +344,7 @@ function readPlaces(placesText) {
  *                                      gazetteer / no place anchors (pre-Places vaults unchanged).
  * @returns {{ worldMap: object, warnings: string[] }}
  */
-export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesText }) {
+function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSourceHash, atlasMode = false }) {
   const warnings = [];
   const mapsDoc = JSON.parse(mapsJsonText);
   const targetId = mapId || mapsDoc.activeMapId;
@@ -257,9 +402,9 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     }
   }
 
-  const fm = frontmatterBlock(worldBibleText);
-  const sizeM = readZoneSizeM(fm);
-  const locations = readLocations(fm);
+  const fm = atlasMode ? undefined : frontmatterBlock(worldBibleText);
+  const sizeM = atlasMode ? atlasMapSizeM(map) : readZoneSizeM(fm);
+  const locations = atlasMode ? [] : readLocations(fm);
 
   const land = [];
   const relief = [];
@@ -433,7 +578,9 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     }
   }
 
-  const sourceHash = sha256(mapsJsonText + "\u0000" + worldBibleText + (typeof placesText === "string" ? "\u0000" + placesText : ""));
+  const sourceHash = atlasMode
+    ? atlasSourceHash
+    : sha256(mapsJsonText + "\u0000" + worldBibleText + (typeof placesText === "string" ? "\u0000" + placesText : ""));
 
   const worldMap = {
     version: 1,
@@ -464,4 +611,35 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
   worldMap.provenance.contentHash = worldMapContentHash(worldMap);
 
   return { worldMap, warnings };
+}
+
+export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesText }) {
+  return compileMap({ mapsJsonText, worldBibleText, mapId, placesText });
+}
+
+/** Compile the exact canonical MapDoc committed by Atlas. No mutable vault mirror or unrelated
+ * design document participates in this source identity. Legacy compileDesignMap remains the
+ * compatibility path for world-bible/places aggregation. */
+export function compileAtlasMapDoc(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype
+    || Object.getOwnPropertySymbols(input).length !== 0 || Object.getOwnPropertyNames(input).length !== 1
+    || !Object.hasOwn(input, "mapsJsonText")) atlasError("input must contain exactly mapsJsonText");
+  const descriptor = Object.getOwnPropertyDescriptor(input, "mapsJsonText");
+  if (!descriptor?.enumerable || descriptor.get !== undefined || descriptor.set !== undefined || typeof descriptor.value !== "string") {
+    atlasError("mapsJsonText must be an enumerable string data field");
+  }
+  let mapsDoc;
+  try { mapsDoc = JSON.parse(descriptor.value); }
+  catch (error) { atlasError(`source is invalid JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  let canonical;
+  try { canonical = canonicalMapDocText(mapsDoc); }
+  catch (error) { atlasError(error instanceof Error ? error.message : "source cannot be canonicalized"); }
+  if (descriptor.value !== canonical) atlasError("source bytes are not canonical Atlas MapDoc bytes");
+  const activeMap = validateAtlasMapDoc(mapsDoc);
+  return compileMap({
+    mapsJsonText: descriptor.value,
+    mapId: activeMap.id,
+    atlasSourceHash: sha256(descriptor.value),
+    atlasMode: true,
+  });
 }
