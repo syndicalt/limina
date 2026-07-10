@@ -241,6 +241,27 @@ const sampleView = new DataView(sampleA.bytes.buffer, sampleA.bytes.byteOffset, 
 assert(sampleView.getUint8(0) === WATER_SAMPLE_CLASS_DRY, "outside sample did not use scalar dry-ocean semantics");
 assert(sampleView.getUint8(12 * WATER_SAMPLE_RECORD_BYTES) === WATER_SAMPLE_CLASS_DRY, "center hole sample was not dry");
 assert(sampleView.getUint8(11 * WATER_SAMPLE_RECORD_BYTES) === WATER_SAMPLE_CLASS_BASIN, "basin sample classification changed");
+const compactMask = field.sampleBodyDepthMask({
+  bodyId: "island-pond",
+  rect: sampleOptions.rect,
+  rows: sampleOptions.rows,
+  cols: sampleOptions.cols,
+  maximumDepthM: 6,
+});
+assert(compactMask.bytes.length === 25 * 2 && compactMask.layout === "rg8-normalized-depth-coverage",
+  "compact body depth mask did not use its two-byte layout");
+for (let index = 0; index < 25; index++) {
+  const record = index * WATER_SAMPLE_RECORD_BYTES;
+  const mask = index * 2;
+  const selected = sampleView.getInt32(record + 4, true) === 0;
+  assert(compactMask.bytes[mask + 1] === (selected ? 255 : 0), `compact body coverage diverged at sample ${index}`);
+  if (selected) {
+    const expectedDepth = Math.round(Math.min(1, sampleView.getFloat64(record + 16, true) / 6) * 255);
+    assert(compactMask.bytes[mask] === expectedDepth, `compact body depth diverged at sample ${index}`);
+  }
+}
+rejects(() => field.sampleBodyDepthMask({ bodyId: "missing", rect: sampleOptions.rect, rows: 5, cols: 5, maximumDepthM: 6 }), /bodyId/,
+  "compact body depth mask accepted an unknown body");
 const unknownSample = oceanField.sampleGrid({ rect: { x0: 0, z0: 0, w: 1, h: 1 }, rows: 1, cols: 1 });
 assert(unknownSample.bytes[0] === WATER_SAMPLE_CLASS_OCEAN && unknownSample.bytes[1] === WATER_SAMPLE_SUBMERGED_UNKNOWN, "sample without terrain claimed ocean wetness");
 rejects(() => field.sampleGrid({ ...sampleOptions, rows: MAX_WATER_FIELD_ROWS + 1 }), /rows/, "sample row cap was not enforced");

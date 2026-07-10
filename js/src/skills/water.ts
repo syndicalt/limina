@@ -46,7 +46,7 @@ import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import { migrateWorldMap, verifyWorldMap, WorldMapSchema, type WorldMap } from "../world/worldmap.ts";
-import { createWaterField, WATER_SAMPLE_RECORD_BYTES } from "../world/water-field.mjs";
+import { createWaterField } from "../world/water-field.mjs";
 import { WATER_LIMITS } from "../world/water-ir.mjs";
 
 /** One water surface currently in the scene (for inspection / idempotent rebuild on
@@ -274,23 +274,14 @@ function bodyDepthTexture(
   maximumDepthM: number,
   resolution: number,
 ): THREE.DataTexture {
-  const sampled = field.sampleGrid({
+  const sampled = field.sampleBodyDepthMask({
+    bodyId,
     rect: { x0: bounds.minX, z0: bounds.minZ, w: bounds.maxX - bounds.minX, h: bounds.maxZ - bounds.minZ },
     rows: resolution,
     cols: resolution,
+    maximumDepthM,
   });
-  const bodyIndex = sampled.bodyIds.indexOf(bodyId);
-  if (bodyIndex < 0) throw new Error(`water body '${bodyId}' is absent from its verified WaterField`);
-  const source = new DataView(sampled.bytes.buffer, sampled.bytes.byteOffset, sampled.bytes.byteLength);
-  const data = new Uint8Array(resolution * resolution * 2);
-  for (let index = 0; index < resolution * resolution; index++) {
-    const record = index * WATER_SAMPLE_RECORD_BYTES;
-    if (source.getInt32(record + 4, true) !== bodyIndex) continue;
-    const depthM = source.getFloat64(record + 16, true);
-    data[index * 2] = Math.round(Math.min(1, Math.max(0, depthM / maximumDepthM)) * 255);
-    data[index * 2 + 1] = 255;
-  }
-  const texture = new THREE.DataTexture(data, resolution, resolution, THREE.RGFormat, THREE.UnsignedByteType);
+  const texture = new THREE.DataTexture(sampled.bytes, resolution, resolution, THREE.RGFormat, THREE.UnsignedByteType);
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;

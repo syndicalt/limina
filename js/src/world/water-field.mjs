@@ -780,6 +780,59 @@ class WaterField {
       bytes,
     });
   }
+
+  /** Compact RG8 depth/coverage raster for one authored body. This avoids materializing the
+   *  48-byte general gameplay record when the render path needs only normalized depth + ownership. */
+  sampleBodyDepthMask(options) {
+    const source = plainRecord(options, "water body depth mask options");
+    if (typeof source.bodyId !== "string" || !this.#bodyIndexById.has(source.bodyId)) {
+      fail("water body depth mask bodyId is not present in this field");
+    }
+    const bodyIndex = this.#bodyIndexById.get(source.bodyId);
+    const body = this.#bodies[bodyIndex];
+    if (body.source !== "authored") fail("water body depth masks require an authored body with depth zones");
+    const rect = plainRecord(source.rect, "water body depth mask rect");
+    const x0 = finite(rect.x0, "water body depth mask rect.x0");
+    const z0 = finite(rect.z0, "water body depth mask rect.z0");
+    const width = positiveFinite(rect.w, "water body depth mask rect.w");
+    const height = positiveFinite(rect.h, "water body depth mask rect.h");
+    finite(x0 + width, "water body depth mask rect max x");
+    finite(z0 + height, "water body depth mask rect max z");
+    const rows = sampleDimension(source.rows, "water body depth mask rows", MAX_WATER_FIELD_ROWS);
+    const cols = sampleDimension(source.cols, "water body depth mask cols", MAX_WATER_FIELD_COLS);
+    const maximumDepthM = positiveFinite(source.maximumDepthM, "water body depth mask maximumDepthM");
+    if (source.shouldCancel !== undefined && typeof source.shouldCancel !== "function") {
+      fail("water body depth mask shouldCancel must be a function");
+    }
+    if (source.shouldCancel?.()) throw new WaterFieldCancelledError();
+    const cells = rows * cols;
+    if (cells > MAX_WATER_FIELD_SAMPLES) fail(`water body depth mask exceeds ${MAX_WATER_FIELD_SAMPLES} cells`);
+    const bytes = new Uint8Array(cells * 2);
+    let work = 0;
+    for (let row = 0; row < rows; row++) {
+      const z = rows === 1 ? z0 + height / 2 : z0 + (row / (rows - 1)) * height;
+      for (let col = 0; col < cols; col++) {
+        checkpoint(source.shouldCancel, work++);
+        const x = cols === 1 ? x0 + width / 2 : x0 + (col / (cols - 1)) * width;
+        const queried = this.#queryRaw(x, z, undefined);
+        if (queried.bodyIndex !== bodyIndex || queried.result.authoredTargetDepthM === null) continue;
+        const offset = (row * cols + col) * 2;
+        bytes[offset] = Math.round(Math.min(1, queried.result.authoredTargetDepthM / maximumDepthM) * 255);
+        bytes[offset + 1] = 255;
+      }
+    }
+    if (source.shouldCancel?.()) throw new WaterFieldCancelledError();
+    return Object.freeze({
+      bodyId: source.bodyId,
+      rows,
+      cols,
+      cells,
+      rect: Object.freeze({ x0, z0, w: width, h: height }),
+      layout: "rg8-normalized-depth-coverage",
+      storage: "owned-row-major",
+      bytes,
+    });
+  }
 }
 
 export function createWaterField(worldMapInput, options = {}) {
