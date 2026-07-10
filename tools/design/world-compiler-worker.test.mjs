@@ -31,6 +31,38 @@ test("returns compiler output and transfers artifact ownership", async () => {
   } finally { fixture.cleanup(); }
 });
 
+test("transfers chunk plus two global artifacts and deduplicates shared backing buffers", async () => {
+  const fixture = compilerModule(`
+    export function compileWorldTerrain() {
+      const shared = new ArrayBuffer(8);
+      const chunk = new Uint8Array(shared, 0, 4);
+      const water = new Uint8Array(shared, 4, 4);
+      chunk.set([1, 2, 3, 4]);
+      water.set([9, 8, 7, 6]);
+      const field = Uint8Array.of(5, 5, 5);
+      return { artifacts: [
+        { scope: "chunk", artifactType: "terrain-chunk/v1", bytes: chunk },
+        { scope: "global", artifactType: "hydrology-field/v1", bytes: field },
+        { scope: "global", artifactType: "hydrology-water-topology/v1", bytes: water },
+      ] };
+    }
+  `);
+  try {
+    const output = await compileWorldTerrainInWorker({
+      bundlePath: fixture.path,
+      input: {},
+      signal: new AbortController().signal,
+    });
+    assert.deepEqual(output.artifacts.map((artifact) => [...artifact.bytes]), [
+      [1, 2, 3, 4], [5, 5, 5], [9, 8, 7, 6],
+    ]);
+    assert.strictEqual(output.artifacts[0].bytes.buffer, output.artifacts[2].bytes.buffer,
+      "shared compiler storage was cloned or transferred inconsistently");
+    assert.notStrictEqual(output.artifacts[0].bytes.buffer, output.artifacts[1].bytes.buffer,
+      "independent global storage was unexpectedly aliased");
+  } finally { fixture.cleanup(); }
+});
+
 test("AbortSignal updates the compiler cancellation checkpoint while its worker is CPU-bound", async () => {
   const fixture = compilerModule(`
     export function compileWorldTerrain(input) {
