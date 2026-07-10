@@ -8,6 +8,14 @@
 
 import { isPlainJsonData, parseAuthoredWaterBodies, WATER_LIMITS } from "./water-ir.mjs";
 import { worldMapContentHash } from "./worldmap-hash.mjs";
+import {
+  HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+  HYDROLOGY_WATER_ARTIFACT_TYPE,
+  MAX_HYDROLOGY_WATER_ARTIFACT_BYTES,
+  HydrologyWaterArtifactCancelledError,
+  decodeHydrologyWaterArtifact,
+} from "./hydrology-water-artifact.mjs";
+import { sha256 } from "./sha256.mjs";
 
 export const MAX_WATER_FIELD_ROWS = 257;
 export const MAX_WATER_FIELD_COLS = 257;
@@ -49,6 +57,12 @@ const WORLD_MAP_ROOT_KEYS = new Set([
 ]);
 const REQUIRED_ARRAY_KEYS = ["land", "relief", "biomes", "waterways", "routes", "anchors"];
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/;
+const DERIVED_CONTENT_HASH_RE = /^sha256:[0-9a-f]{64}$/;
+const GENERATED_INPUT_KEYS = new Set(["bytes", "descriptor", "expectedBindings"]);
+const GENERATED_DESCRIPTOR_KEYS = new Set(["artifactType", "mediaType", "contentHash", "byteLength"]);
+const GENERATED_BINDING_KEYS = new Set(["hydrologyFieldContentHash", "recipeHash", "erosionStageKey", "compilerGraphHash"]);
+const WATER_FIELD_OPTION_KEYS = new Set(["shouldCancel", "generatedWater"]);
+const verifiedGeneratedInputs = new WeakSet();
 const CANONICAL_NAN_BITS = 0x7ff8000000000000n;
 
 export class WaterFieldValidationError extends Error {
@@ -95,8 +109,88 @@ function plainRecord(value, label) {
   return value;
 }
 
+function exactDataRecord(value, keys, label, optional = new Set()) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    fail(`${label} must be a plain object`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail(`${label} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!keys.has(key)) fail(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor) || descriptor.enumerable !== true) fail(`${label}.${key} must be an enumerable data field`);
+  }
+  for (const key of keys) if (!optional.has(key) && !Object.hasOwn(value, key)) fail(`${label} is missing '${key}'`);
+  return descriptors;
+}
+
+function parseBindingHashes(value, label) {
+  const descriptors = exactDataRecord(value, GENERATED_BINDING_KEYS, label);
+  const parsed = {};
+  for (const key of GENERATED_BINDING_KEYS) {
+    const hash = descriptors[key].value;
+    if (typeof hash !== "string" || !DERIVED_CONTENT_HASH_RE.test(hash)) fail(`${label}.${key} must be a lowercase sha256 content hash`);
+    parsed[key] = hash;
+  }
+  return Object.freeze(parsed);
+}
+
 function checkpoint(shouldCancel, work) {
   if ((work & 255) === 0 && shouldCancel?.()) throw new WaterFieldCancelledError();
+}
+
+/** Canonically verify and own a decoded generated-water resource before it can enter gameplay. */
+export function prepareGeneratedWaterFieldInput(input, options = {}) {
+  const descriptors = exactDataRecord(input, GENERATED_INPUT_KEYS, "generated water field input");
+  const optionDescriptors = options === undefined
+    ? {}
+    : exactDataRecord(options, new Set(["shouldCancel"]), "generated water field options", new Set(["shouldCancel"]));
+  const shouldCancel = optionDescriptors.shouldCancel?.value;
+  if (shouldCancel !== undefined && typeof shouldCancel !== "function") fail("generated water field options.shouldCancel must be a function");
+  const descriptor = exactDataRecord(descriptors.descriptor.value, GENERATED_DESCRIPTOR_KEYS, "generated water artifact descriptor");
+  if (descriptor.artifactType.value !== HYDROLOGY_WATER_ARTIFACT_TYPE) fail(`generated water artifact type must be '${HYDROLOGY_WATER_ARTIFACT_TYPE}'`);
+  if (descriptor.mediaType.value !== HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE) fail(`generated water artifact media type must be '${HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE}'`);
+  const contentHash = descriptor.contentHash.value;
+  if (typeof contentHash !== "string" || !DERIVED_CONTENT_HASH_RE.test(contentHash)) fail("generated water artifact contentHash must be a lowercase sha256 content hash");
+  const byteLength = descriptor.byteLength.value;
+  if (!Number.isSafeInteger(byteLength) || byteLength < 256 || byteLength > MAX_HYDROLOGY_WATER_ARTIFACT_BYTES) {
+    fail(`generated water artifact byteLength must be an integer in [256, ${MAX_HYDROLOGY_WATER_ARTIFACT_BYTES}]`);
+  }
+  const expectedBindings = parseBindingHashes(descriptors.expectedBindings.value, "expected generated water bindings");
+  const bytes = descriptors.bytes.value;
+  let decoded;
+  try {
+    if (!ArrayBuffer.isView(bytes) || Object.getPrototypeOf(bytes) !== Uint8Array.prototype
+        || !(bytes.buffer instanceof ArrayBuffer) || bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength) {
+      fail("generated water artifact bytes must own a complete non-shared Uint8Array");
+    }
+    if (bytes.byteLength !== byteLength) fail(`generated water artifact byteLength mismatch: descriptor ${byteLength}, actual ${bytes.byteLength}`);
+    const actualHash = `sha256:${sha256(bytes)}`;
+    if (actualHash !== contentHash) fail(`generated water artifact content hash mismatch: expected ${contentHash}, actual ${actualHash}`);
+    decoded = decodeHydrologyWaterArtifact(
+      bytes,
+      expectedBindings,
+      shouldCancel === undefined ? undefined : { shouldCancel },
+    );
+  } catch (error) {
+    if (error instanceof WaterFieldValidationError || error instanceof WaterFieldCancelledError) throw error;
+    if (error instanceof HydrologyWaterArtifactCancelledError) throw new WaterFieldCancelledError();
+    fail(`generated water artifact verification failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const prepared = Object.freeze({
+    artifactContentHash: contentHash,
+    bindings: decoded.bindings,
+    topology: decoded.topology,
+  });
+  verifiedGeneratedInputs.add(prepared);
+  return prepared;
+}
+
+export function verifiedGeneratedWaterFieldContentHash(value) {
+  if (value === undefined) return null;
+  if (value === null || typeof value !== "object" || !verifiedGeneratedInputs.has(value)) {
+    fail("generated water field input is not a verified prepared envelope");
+  }
+  return value.artifactContentHash;
 }
 
 function validateWorldMapIdentity(input) {
@@ -263,10 +357,66 @@ function prepareBodies(parsedBodies, map, shouldCancel) {
       id: source.id,
       kind: source.kind,
       level: canonicalNumber(source.level),
+      source: "authored",
+      maxDepthM: null,
       outer,
       holes,
       edgeBvh,
       zones,
+      minX: bounds.minX,
+      maxX: bounds.maxX,
+      minZ: bounds.minZ,
+      maxZ: bounds.maxZ,
+      centerX: canonicalNumber((bounds.minX + bounds.maxX) / 2),
+      centerZ: canonicalNumber((bounds.minZ + bounds.maxZ) / 2),
+    });
+  }
+  bodies.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  return { bodies: Object.freeze(bodies), edgeCount, edgeNodeCount, transformWork: work.value };
+}
+
+function prepareGeneratedBodies(generatedWater, shouldCancel) {
+  const sourceBodies = generatedWater?.topology?.basins ?? [];
+  const bodies = new Array(sourceBodies.length);
+  const work = { value: 0 };
+  let edgeCount = 0, edgeNodeCount = 0;
+  for (let bodyIndex = 0; bodyIndex < sourceBodies.length; bodyIndex++) {
+    checkpoint(shouldCancel, work.value++);
+    const source = sourceBodies[bodyIndex];
+    const outer = boundedRing(
+      transformRing(source.footprint.points, 0, 0, 1, `generatedWater.basins[${bodyIndex}].footprint.points`, shouldCancel, work),
+      shouldCancel,
+      work,
+    );
+    const holes = Object.freeze((source.footprint.holes ?? []).map((hole, holeIndex) => boundedRing(
+      transformRing(hole, 0, 0, 1, `generatedWater.basins[${bodyIndex}].footprint.holes[${holeIndex}]`, shouldCancel, work),
+      shouldCancel,
+      work,
+    )));
+    const bounds = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+    ringBounds(outer.ring, bounds);
+    edgeCount += outer.ring.length;
+    for (const hole of holes) {
+      ringBounds(hole.ring, bounds);
+      edgeCount += hole.ring.length;
+    }
+    const edgeBvh = buildEdgeBvhFromSegments([
+      ...outer.edgeBvh.segments,
+      ...holes.flatMap((hole) => hole.edgeBvh.segments),
+    ], shouldCancel, work);
+    edgeNodeCount += edgeBvh.nodes.length + outer.edgeBvh.nodes.length
+      + holes.reduce((total, hole) => total + hole.edgeBvh.nodes.length, 0);
+    if (edgeNodeCount > MAX_WATER_FIELD_EDGE_BVH_NODES) fail(`generated water field edge BVHs exceed ${MAX_WATER_FIELD_EDGE_BVH_NODES} retained nodes`);
+    bodies[bodyIndex] = Object.freeze({
+      id: source.id,
+      kind: source.kind,
+      level: canonicalNumber(source.spillLevelM),
+      source: "generated",
+      maxDepthM: canonicalNumber(source.maxDepthM),
+      outer,
+      holes,
+      edgeBvh,
+      zones: null,
       minX: bounds.minX,
       maxX: bounds.maxX,
       minZ: bounds.minZ,
@@ -473,15 +623,20 @@ class WaterField {
   #order;
   #seaLevelM;
 
-  constructor(map, bodies, bvh, buildStats) {
+  constructor(map, bodies, bvh, buildStats, generatedArtifactContentHash) {
     this.#bodies = bodies;
     this.#bodyIndexById = new Map(bodies.map((body, index) => [body.id, index]));
     this.#nodes = bvh.nodes;
     this.#order = bvh.order;
     this.#seaLevelM = canonicalNumber(map.seaLevel);
     this.bodyIds = Object.freeze(bodies.map((body) => body.id));
+    this.worldMapContentHash = map.provenance.contentHash;
+    this.generatedArtifactContentHash = generatedArtifactContentHash;
+    this.identity = Object.freeze({ worldMapContentHash: map.provenance.contentHash, generatedArtifactContentHash });
     this.boundaryPolicy = "outer-wet-hole-dry; depth bands [min,max); final depth clamps beyond final max";
-    this.overlapPolicy = "highest surface level, then lexicographically smallest portable id";
+    this.overlapPolicy = generatedArtifactContentHash === null
+      ? "highest surface level, then lexicographically smallest portable id"
+      : "highest surface level, then authored over generated, then lexicographically smallest portable id";
     this.surfacePolicy = "proven-submerged ocean competes by surface level and wins only when strictly above the selected basin";
     this.buildStats = Object.freeze(buildStats);
     Object.freeze(this);
@@ -511,7 +666,9 @@ class WaterField {
           if (x < body.minX || x > body.maxX || z < body.minZ || z > body.maxZ) continue;
           stats.testedBodies++;
           if (!containsBody(body, x, z, stats)) continue;
-          if (winner === null || body.level > winner.level || (body.level === winner.level && body.id < winner.id)) winner = body;
+          if (winner === null || body.level > winner.level
+              || (body.level === winner.level && body.source === "authored" && winner.source === "generated")
+              || (body.level === winner.level && body.source === winner.source && body.id < winner.id)) winner = body;
         }
       }
     }
@@ -526,9 +683,12 @@ class WaterField {
     }
     if (winner !== null) {
       const shoreDistanceM = shorelineDistance(winner, x, z, stats);
-      const authoredTargetDepthM = targetDepth(winner, shoreDistanceM);
-      const targetFloorLevelM = canonicalNumber(winner.level - authoredTargetDepthM);
-      const actualSubmergedDepthM = terrainSupplied ? canonicalNumber(Math.max(0, winner.level - terrainHeightM)) : null;
+      const authored = winner.source === "authored";
+      const authoredTargetDepthM = authored ? targetDepth(winner, shoreDistanceM) : null;
+      const targetFloorLevelM = authored ? canonicalNumber(winner.level - authoredTargetDepthM) : null;
+      const actualSubmergedDepthM = terrainSupplied
+        ? canonicalNumber(Math.min(winner.maxDepthM ?? Infinity, Math.max(0, winner.level - terrainHeightM)))
+        : null;
       return {
         result: frozenResult("basin", terrainSupplied ? actualSubmergedDepthM > 0 : null, winner.id, winner.kind,
           winner.level, this.#seaLevelM, authoredTargetDepthM, targetFloorLevelM, actualSubmergedDepthM, shoreDistanceM),
@@ -623,9 +783,14 @@ class WaterField {
 }
 
 export function createWaterField(worldMapInput, options = {}) {
-  if (options === null || typeof options !== "object" || Array.isArray(options)) fail("water field options must be an object");
-  if (options.shouldCancel !== undefined && typeof options.shouldCancel !== "function") fail("water field shouldCancel must be a function");
-  if (options.shouldCancel?.()) throw new WaterFieldCancelledError();
+  const optionDescriptors = exactDataRecord(options, WATER_FIELD_OPTION_KEYS, "water field options", WATER_FIELD_OPTION_KEYS);
+  const shouldCancel = optionDescriptors.shouldCancel?.value;
+  if (shouldCancel !== undefined && typeof shouldCancel !== "function") fail("water field shouldCancel must be a function");
+  const generatedWater = optionDescriptors.generatedWater?.value;
+  if (generatedWater !== undefined && (generatedWater === null || typeof generatedWater !== "object" || !verifiedGeneratedInputs.has(generatedWater))) {
+    fail("water field generatedWater must be prepared by prepareGeneratedWaterFieldInput");
+  }
+  if (shouldCancel?.()) throw new WaterFieldCancelledError();
   const map = validateWorldMapIdentity(worldMapInput);
   let parsedBodies;
   try {
@@ -633,18 +798,32 @@ export function createWaterField(worldMapInput, options = {}) {
   } catch (error) {
     fail(`water field WaterBody contract rejected input: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const prepared = prepareBodies(parsedBodies, map, options.shouldCancel);
-  const bvh = buildBvh(prepared.bodies, options.shouldCancel);
-  if (options.shouldCancel?.()) throw new WaterFieldCancelledError();
-  return new WaterField(map, prepared.bodies, bvh, {
-    bodyCount: prepared.bodies.length,
-    edgeCount: prepared.edgeCount,
-    edgeNodeCount: prepared.edgeNodeCount,
+  const authored = prepareBodies(parsedBodies, map, shouldCancel);
+  const generated = generatedWater === undefined
+    ? { bodies: Object.freeze([]), edgeCount: 0, edgeNodeCount: 0, transformWork: 0 }
+    : prepareGeneratedBodies(generatedWater, shouldCancel);
+  const bodyCount = authored.bodies.length + generated.bodies.length;
+  if (bodyCount > WATER_LIMITS.bodies) fail(`composed water field exceeds ${WATER_LIMITS.bodies} bodies`);
+  const edgeCount = authored.edgeCount + generated.edgeCount;
+  const edgeNodeCount = authored.edgeNodeCount + generated.edgeNodeCount;
+  if (edgeCount > WATER_LIMITS.totalBodyPoints) fail(`composed water field exceeds ${WATER_LIMITS.totalBodyPoints} shoreline points`);
+  if (edgeNodeCount > MAX_WATER_FIELD_EDGE_BVH_NODES) fail(`composed water field edge BVHs exceed ${MAX_WATER_FIELD_EDGE_BVH_NODES} retained nodes`);
+  const authoredIds = new Set(authored.bodies.map((body) => body.id));
+  for (const body of generated.bodies) if (authoredIds.has(body.id)) fail(`authored/generated water id collision '${body.id}'`);
+  const bodies = Object.freeze([...authored.bodies, ...generated.bodies].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  const bvh = buildBvh(bodies, shouldCancel);
+  if (shouldCancel?.()) throw new WaterFieldCancelledError();
+  const buildStats = {
+    bodyCount,
+    edgeCount,
+    edgeNodeCount,
     retainedEdgeNodeCap: MAX_WATER_FIELD_EDGE_BVH_NODES,
     nodeCount: bvh.nodes.length,
     retainedNodeCap: MAX_WATER_FIELD_BVH_NODES,
     maxLeafBodies: bvh.maxLeafBodies,
-    transformWork: prepared.transformWork,
+    transformWork: authored.transformWork + generated.transformWork,
     bodyPairValidationWork: 0,
-  });
+    ...(generatedWater === undefined ? {} : { authoredBodyCount: authored.bodies.length, generatedBodyCount: generated.bodies.length }),
+  };
+  return new WaterField(map, bodies, bvh, buildStats, generatedWater?.artifactContentHash ?? null);
 }

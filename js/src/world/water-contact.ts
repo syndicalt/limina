@@ -1,6 +1,6 @@
 import type { TerrainTile } from "../terrain/types.ts";
 import type { WorldMap } from "./worldmap.ts";
-import { createWaterField } from "./water-field.mjs";
+import { createWaterField, verifiedGeneratedWaterFieldContentHash } from "./water-field.mjs";
 
 const CONTENT_HASH = /^[0-9a-f]{64}$/;
 
@@ -33,6 +33,8 @@ export interface WaterContactBindingSpec {
 
 export interface PreparedWaterContactBinding {
   readonly contentHash: string;
+  readonly generatedArtifactContentHash: string | null;
+  readonly identity: Readonly<{ worldMapContentHash: string; generatedArtifactContentHash: string | null }>;
   readonly bindingId: string;
   readonly offset: readonly [number, number, number];
   readonly bounds: Readonly<WaterContactBounds> | null;
@@ -83,6 +85,7 @@ function sameBounds(left: Readonly<WaterContactBounds> | null, right: Readonly<W
 
 function samePrepared(left: PreparedWaterContactBinding, right: PreparedWaterContactBinding): boolean {
   return left.contentHash === right.contentHash
+    && left.generatedArtifactContentHash === right.generatedArtifactContentHash
     && left.bindingId === right.bindingId
     && left.offset[0] === right.offset[0]
     && left.offset[1] === right.offset[1]
@@ -111,17 +114,19 @@ function drySample(terrainHeightM: number | null = null): WaterContactSample {
  * after the terrain source/layer succeeds. Querying never verifies, parses, or mutates world state.
  */
 export class WaterContactRuntime {
-  readonly #prepared = new WeakSet<object>();
-  #cached: { contentHash: string; field: WaterFieldLike } | null = null;
+  readonly #prepared = new WeakMap<object, { field: WaterFieldLike }>();
+  #cached: { contentHash: string; generatedArtifactContentHash: string | null; field: WaterFieldLike } | null = null;
   #active: ActiveBinding | null = null;
   #fieldBuildCount = 0;
 
   get activeContentHash(): string | null { return this.#active?.contentHash ?? null; }
+  get activeGeneratedArtifactContentHash(): string | null { return this.#active?.generatedArtifactContentHash ?? null; }
+  get activeIdentity(): PreparedWaterContactBinding["identity"] | null { return this.#active?.identity ?? null; }
   get activeBindingId(): string | null { return this.#active?.bindingId ?? null; }
   /** Diagnostic proving map verification/index construction stays off the query path. */
   get fieldBuildCount(): number { return this.#fieldBuildCount; }
 
-  prepareVerifiedMap(worldMap: WorldMap, spec: WaterContactBindingSpec): PreparedWaterContactBinding {
+  prepareVerifiedMap(worldMap: WorldMap, spec: WaterContactBindingSpec, generatedWater: unknown = undefined): PreparedWaterContactBinding {
     if (typeof spec?.bindingId !== "string" || spec.bindingId.length === 0 || spec.bindingId.length > 160) {
       throw new TypeError("water contact bindingId must be a non-empty string of at most 160 characters");
     }
@@ -129,6 +134,7 @@ export class WaterContactRuntime {
     if (typeof contentHash !== "string" || !CONTENT_HASH.test(contentHash)) {
       throw new TypeError("water contact requires a verified WorldMap content hash");
     }
+    const generatedArtifactContentHash = verifiedGeneratedWaterFieldContentHash(generatedWater);
     const offsetInput = spec.offset ?? [0, 0, 0];
     if (!Array.isArray(offsetInput) || offsetInput.length !== 3) {
       throw new TypeError("water contact offset must be a 3-tuple");
@@ -139,22 +145,30 @@ export class WaterContactRuntime {
       finite(offsetInput[2], "water contact offset[2]"),
     ]) as readonly [number, number, number];
     const bounds = parseBounds(spec.bounds);
-    const candidate = Object.freeze({ contentHash, bindingId: spec.bindingId, offset, bounds });
+    const identity = Object.freeze({ worldMapContentHash: contentHash, generatedArtifactContentHash });
+    const candidate = Object.freeze({ contentHash, generatedArtifactContentHash, identity, bindingId: spec.bindingId, offset, bounds });
 
-    if (this.#active !== null && !samePrepared(this.#active, candidate)) {
+    if (this.#active !== null && this.#active.bindingId !== candidate.bindingId) {
       throw new Error(
         `water contact binding conflict: '${this.#active.bindingId}'/${this.#active.contentHash} is active; `
         + `cannot bind '${candidate.bindingId}'/${candidate.contentHash}`,
       );
     }
-    // With no active owner, a legitimate source switch may replace the one-entry field cache.
-    // Keeping only one field bounds memory; clearing and rebinding the same hash still reuses it.
-    if (this.#cached !== null && this.#cached.contentHash !== contentHash) this.#cached = null;
-    if (this.#cached === null) {
-      this.#cached = { contentHash, field: createWaterField(worldMap) as WaterFieldLike };
+    if (this.#active !== null && this.#active.contentHash !== candidate.contentHash) {
+      throw new Error(`water contact map conflict: '${this.#active.contentHash}' is active; cannot replace it with '${candidate.contentHash}'`);
+    }
+    let field: WaterFieldLike | null = null;
+    if (this.#active !== null && this.#active.contentHash === contentHash
+        && this.#active.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#active.field;
+    else if (this.#cached !== null && this.#cached.contentHash === contentHash
+        && this.#cached.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#cached.field;
+    if (field === null) {
+      const built = createWaterField(worldMap, generatedWater === undefined ? {} : { generatedWater }) as WaterFieldLike;
+      this.#cached = { contentHash, generatedArtifactContentHash, field: built };
+      field = built;
       this.#fieldBuildCount++;
     }
-    this.#prepared.add(candidate);
+    this.#prepared.set(candidate, { field });
     return candidate;
   }
 
@@ -163,6 +177,7 @@ export class WaterContactRuntime {
       throw new TypeError("water contact activation requires a binding prepared by this runtime");
     }
     if (typeof sampleTerrainHeight !== "function") throw new TypeError("water contact terrain sampler must be a function");
+    const preparedState = this.#prepared.get(prepared as object)!;
     if (this.#active !== null) {
       if (samePrepared(this.#active, prepared)) {
         // A repeated source binding may carry a new deterministic terrain recipe under the same
@@ -171,12 +186,13 @@ export class WaterContactRuntime {
         this.#active = Object.freeze({ ...prepared, field: this.#active.field, sampleTerrainHeight });
         return;
       }
-      throw new Error(`water contact binding conflict: '${this.#active.bindingId}' is already active`);
+      if (this.#active.bindingId !== prepared.bindingId) {
+        throw new Error(`water contact binding conflict: '${this.#active.bindingId}' is already active`);
+      }
+      this.#active = Object.freeze({ ...prepared, field: preparedState.field, sampleTerrainHeight });
+      return;
     }
-    if (this.#cached === null || this.#cached.contentHash !== prepared.contentHash) {
-      throw new Error("water contact prepared field is no longer available");
-    }
-    this.#active = Object.freeze({ ...prepared, field: this.#cached.field, sampleTerrainHeight });
+    this.#active = Object.freeze({ ...prepared, field: preparedState.field, sampleTerrainHeight });
   }
 
   /** Clear only the named owner. A different terrain path cannot erase the active volume. */
