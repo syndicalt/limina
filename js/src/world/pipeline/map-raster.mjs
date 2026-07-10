@@ -379,7 +379,7 @@ function projectWaterways(worldMap) {
 }
 
 // terrain.paint's material ids (MUST match PAINT_MATERIALS in terrain-edit.ts / PAINT_ALBEDO in
-// terrain/render.ts): 0 none, 1 sand, 2 grass, 3 rock, 4 dirt, 5 snow. Biome -> paint mapping
+// terrain/render.ts): 0 none, 1 sand, 2 grass, 3 rock, 4 dirt, 5 snow, 6 murk, 7 tundra. Biome -> paint mapping
 // is a deliberate, sensible default (not load-bearing on exact ids beyond matching that
 // channel). Every biome the Map Painter palette exposes MUST paint something real here — a
 // brush that compiles to nothing is a silent UI lie (plan-8df2466225bf4213 review finding #1).
@@ -390,7 +390,7 @@ function biomePaintId(biome) {
     case "mountain": return 3;
     case "swamp": return 6; // murk (PAINT_ALBEDO[6] / PAINT_MATERIALS.murk) — dirt read as generic brown, invisible as wetland
     case "desert": return 1;
-    case "tundra": return 5; // snow (PAINT_ALBEDO[5] / PAINT_MATERIALS.snow)
+    case "tundra": return 7; // cold muted ground; snow remains an explicit authored surface
     case "water": return undefined; // never paints; it's below sea level anyway.
     default: return undefined;
   }

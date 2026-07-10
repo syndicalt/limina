@@ -11,6 +11,8 @@ import {
 } from "../render/water/generated-water-renderer.ts";
 import { VisibleWaterManager } from "../render/water/visible-water-manager.ts";
 import {
+  TERRAIN_ELEVATION_ALBEDO_HEX,
+  TERRAIN_PAINT_ALBEDO_HEX,
   TerrainMaterialPool,
   applyPaintOverlay,
   buildTerrainMesh,
@@ -399,10 +401,16 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
   });
 }
 
-const OVERVIEW_COLORS = Object.freeze([
-  [0.29, 0.47, 0.20], [0.20, 0.39, 0.18], [0.39, 0.37, 0.34], [0.60, 0.51, 0.29],
-  [0.63, 0.68, 0.70], [0.25, 0.40, 0.27], [0.16, 0.38, 0.50], [0.31, 0.22, 0.35],
-] as const);
+function hexRgb(hex: number): readonly [number, number, number] {
+  return Object.freeze([((hex >>> 16) & 0xff) / 255, ((hex >>> 8) & 0xff) / 255, (hex & 0xff) / 255]);
+}
+
+const OVERVIEW_PAINT_COLORS = Object.freeze(TERRAIN_PAINT_ALBEDO_HEX.map((hex) => (
+  hex === null ? null : hexRgb(hex)
+)));
+const OVERVIEW_GRASS = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.grass);
+const OVERVIEW_GRASS_DARK = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark);
+const OVERVIEW_ROCK = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.rock);
 
 function buildWorldOverviewMesh(
   overview: NonNullable<ParsedTransferredDerivedSnapshot["worldOverview"]>,
@@ -422,15 +430,29 @@ function buildWorldOverviewMesh(
       positions[vertex + 2] = row * grid.stepM;
       minY = Math.min(minY, grid.heights[cell]);
       maxY = Math.max(maxY, grid.heights[cell]);
-      const base = OVERVIEW_COLORS[Math.min(OVERVIEW_COLORS.length - 1, grid.paintMaterial[cell])]!;
+      const left = grid.heights[row * grid.cols + Math.max(0, col - 1)]!;
+      const right = grid.heights[row * grid.cols + Math.min(grid.cols - 1, col + 1)]!;
+      const top = grid.heights[Math.max(0, row - 1) * grid.cols + col]!;
+      const bottom = grid.heights[Math.min(grid.rows - 1, row + 1) * grid.cols + col]!;
+      const slope = Math.min(1, Math.hypot(right - left, bottom - top) / (2 * grid.stepM));
+      const worldX = grid.origin[0] + col * grid.stepM;
+      const worldZ = grid.origin[1] + row * grid.stepM;
+      const mottle = (Math.sin(worldX * 0.2 + worldZ * 0.2) * 0.5 + 0.5) * 0.3;
+      const rockWeight = Math.min(1, Math.max(0, (slope * 1.2 - 0.18) / 0.32));
+      const unpainted = [0, 1, 2].map((channel) => {
+        const grass = OVERVIEW_GRASS[channel]! + (OVERVIEW_GRASS_DARK[channel]! - OVERVIEW_GRASS[channel]!) * mottle;
+        return grass + (OVERVIEW_ROCK[channel]! - grass) * rockWeight;
+      });
+      const paint = OVERVIEW_PAINT_COLORS[grid.paintMaterial[cell]] ?? null;
       const weight = grid.paintWeight[cell] / 255;
-      colors[vertex] = Math.round(255 * (0.34 + base[0] * 0.66) * (0.72 + weight * 0.28));
-      colors[vertex + 1] = Math.round(255 * (0.34 + base[1] * 0.66) * (0.72 + weight * 0.28));
-      colors[vertex + 2] = Math.round(255 * (0.34 + base[2] * 0.66) * (0.72 + weight * 0.28));
+      for (let channel = 0; channel < 3; channel++) {
+        const value = paint === null ? unpainted[channel]! : unpainted[channel]! + (paint[channel]! - unpainted[channel]!) * weight;
+        colors[vertex + channel] = Math.round(255 * value);
+      }
     }
   }
-  // Fine chunks own their complete footprint. Remove intersecting coarse quads once during staging
-  // so the overview remains one draw without coplanar overlap or a per-frame visibility pass.
+  // Fine chunks own the proxy quad whose centre lies inside their footprint. This bounds overlap
+  // to half a proxy cell while avoiding the visible holes caused by removing every intersecting quad.
   const quadCols = grid.cols - 1, quadRows = grid.rows - 1;
   const covered = new Uint8Array(quadCols * quadRows);
   for (const entry of terrainWindow) {
@@ -439,10 +461,10 @@ function buildWorldOverviewMesh(
     const localMaxX = entry.tile.origin[0] + halfX - grid.origin[0];
     const localMinZ = entry.tile.origin[2] - halfZ - grid.origin[1];
     const localMaxZ = entry.tile.origin[2] + halfZ - grid.origin[1];
-    const minCol = Math.max(0, Math.floor(localMinX / grid.stepM));
-    const maxCol = Math.min(quadCols - 1, Math.ceil(localMaxX / grid.stepM) - 1);
-    const minRow = Math.max(0, Math.floor(localMinZ / grid.stepM));
-    const maxRow = Math.min(quadRows - 1, Math.ceil(localMaxZ / grid.stepM) - 1);
+    const minCol = Math.max(0, Math.ceil(localMinX / grid.stepM - 0.5));
+    const maxCol = Math.min(quadCols - 1, Math.floor(localMaxX / grid.stepM - 0.5));
+    const minRow = Math.max(0, Math.ceil(localMinZ / grid.stepM - 0.5));
+    const maxRow = Math.min(quadRows - 1, Math.floor(localMaxZ / grid.stepM - 0.5));
     for (let row = minRow; row <= maxRow; row++) {
       for (let col = minCol; col <= maxCol; col++) covered[row * quadCols + col] = 1;
     }
@@ -463,7 +485,10 @@ function buildWorldOverviewMesh(
   geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, offset), 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
-  const material = new THREE.MeshLambertMaterial({
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.95,
+    metalness: 0,
     vertexColors: true,
     polygonOffset: true,
     polygonOffsetFactor: 1,

@@ -47,7 +47,8 @@ async function paintSeq(session: string): Promise<PaintState> {
   await registry.invoke("terrain.paint", { entity, center: [0, 0], radius: 30, strength: 0.8, material: "sand" }, at(2));
   await registry.invoke("terrain.paint", { entity, center: [20, 10], radius: 18, strength: 0.5, material: "rock", falloff: "linear" }, at(3));
   await registry.invoke("terrain.paint", { entity, center: [-15, -12], radius: 14, strength: 0.6, material: "grass" }, at(4));
-  await registry.invoke("terrain.paint", { entity, center: [0, 0], radius: 8, strength: 0.4, material: "sand", erase: true }, at(5));
+  await registry.invoke("terrain.paint", { entity, center: [-38, 38], radius: 6, strength: 1, material: "tundra" }, at(5));
+  await registry.invoke("terrain.paint", { entity, center: [0, 0], radius: 8, strength: 0.4, material: "sand", erase: true }, at(6));
 
   const tile = layers.get(entity).tile as { paintMat?: Uint8Array; paintW?: Float32Array };
   assert(tile.paintMat !== undefined && tile.paintW !== undefined, "paint must allocate the tile channel");
@@ -65,6 +66,7 @@ for (let i = 0; i < a.mat.length; i++) {
 }
 assert(painted > 50, `paint must cover real area (got ${painted} cells)`);
 assert(seen.size >= 2, `multiple materials must be present (got ${seen.size})`);
+assert(seen.has(7), "terrain.paint did not expose canonical tundra material 7");
 // The center was painted sand then erased — its weight must have come back down.
 const center = 32 * N + 32;
 assert(a.w[center] < 0.85, `erase must pull the center weight back down (got ${a.w[center].toFixed(3)})`);
@@ -91,4 +93,4 @@ assert(identical, `paint sequence must be deterministic — channel diverged at 
   assert(heights.every((h) => h === 2), "terrain.paint must leave heights untouched (flat at baseHeight)");
 }
 
-ops.op_log("[js] p_terrain_paint OK: terrain.paint writes a per-vertex material-weight channel (sand/grass/rock/dirt) with brush radius/strength/falloff + erase, leaves heights untouched, and replays to a byte-identical channel (record-ops-not-bytes) — real, agent-callable, editable surface paint.");
+ops.op_log("[js] p_terrain_paint OK: terrain.paint writes a per-vertex material-weight channel (sand/grass/rock/dirt/snow/murk/tundra) with brush radius/strength/falloff + erase, leaves heights untouched, and replays to a byte-identical channel (record-ops-not-bytes) — real, agent-callable, editable surface paint.");

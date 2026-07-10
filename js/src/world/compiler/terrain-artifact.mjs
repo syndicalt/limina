@@ -55,8 +55,8 @@ const ALLOWED_FIELDS = new Set([...REQUIRED_FIELDS, "paintMat", "paintW", "clima
 const BIOME_MIN = 0;
 const BIOME_MAX = 6;
 // Runtime terrain paint defines 0 none, 1 sand, 2 grass, 3 rock, 4 dirt,
-// 5 snow, and 6 murk. The portable codec must preserve the complete channel.
-const PAINT_MATERIAL_MAX = 6;
+// 5 snow, 6 murk, and 7 tundra. The portable codec must preserve the complete channel.
+const PAINT_MATERIAL_MAX = 7;
 
 function plainRecord(value, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)

@@ -70,6 +70,8 @@ test("strict structure, geometry, channel, and framing validation fail closed", 
   assert.throws(() => encodeWorldOverviewArtifact(wrong), /own its complete/);
   const nonfinite = grid(); nonfinite.heights[2] = Infinity;
   assert.throws(() => encodeWorldOverviewArtifact(nonfinite), /finite canonical/);
+  const unknownMaterial = grid(); unknownMaterial.paintMaterial[2] = 8;
+  assert.throws(() => encodeWorldOverviewArtifact(unknownMaterial), /paintMaterial/);
 
   const valid = encodeWorldOverviewArtifact(grid());
   assert.throws(() => decodeWorldOverviewArtifact(valid.subarray(0, valid.length - 1)), /owned Uint8Array|byte length/);

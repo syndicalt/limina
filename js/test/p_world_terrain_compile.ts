@@ -114,7 +114,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 const base = compileWorldTerrain(input());
-assert(base.snapshot.snapshotHash === "sha256:c9d995fce4bfadff9afafd8c8930076e1958960c1f186e84816c1fdcc1ccc4c5", "default snapshot golden changed");
+assert(base.snapshot.snapshotHash === "sha256:6319cd47d082a2c4ccc39f77bb51f102e3dd4b293466b7b020d6e9d7655ef152", `default snapshot golden changed: ${base.snapshot.snapshotHash}`);
 assert(compilerContentHash(base.reusedArtifacts) === "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "legacy reuse envelope golden changed");
 assert(base.manifest.schema === "limina.derived-revision-manifest/v2", "terrain compile did not publish global-artifact manifest v2");
 const baseOverviewDescriptor = derivedGlobalArtifacts(base.manifest).find((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE);

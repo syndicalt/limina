@@ -561,7 +561,8 @@ near-vertical cliffs before the SDF layer exists.
   The maximum 100,000-subject index is 11.63 MiB and decoded in 72 ms in the combined stress gate; prefix
   lookup remains microsecond-scale and materializes at most 100 results. Runtime activation verifies and
   atomically swaps both globals with the bounded 225-chunk fine window. Frame World uses one ~32k-triangle
-  coarse draw with fine-owned holes, and temporarily scales local haze to world bounds while preserving the
+  coarse draw with centre-owned fine cutouts and at most half a proxy-cell of depth-offset overlap, avoiding
+  both coarse/fine tearing and visible coverage holes. It temporarily scales local haze to world bounds while preserving the
   exact local density for ordinary editing. MapDoc coordinates, reverse reveal, brush distances, and WorldMap
   import now share the canonical affine-frame contract. Durable `designRef` identity survives compiler,
   WorldMap hashing, asset placement origin, runtime POI search, and exact 3D-to-Atlas reveal. Grey Field cold
@@ -572,3 +573,11 @@ near-vertical cliffs before the SDF layer exists.
   navigated the exact `primary/place/grey-field` design reference with no page errors. Headless SwiftShader
   frame rate is not accepted as target-hardware performance evidence; hardware frame-time, hitch, and GPU
   memory gates remain required before the engine can claim the extreme-performance target.
+- **2026-07-10 — WB-F0-N visual-floor correction live-UAT passed.** Fine and overview terrain now share one
+  canonical paint-material palette and PBR lighting model. `tundra` compiles to distinct muted cold ground
+  instead of incorrectly aliasing explicit snow, and the versioned compiler graph invalidates incompatible
+  cached terrain. Grey Field UAT accepted the world-scale result. Near-field fidelity remains deliberately
+  unproven because the current world has no representative high-detail content. Before graphics-fidelity work
+  can pass, Limina needs a source-controlled reference scene with close-range PBR architecture, vegetation,
+  terrain layering, water, lighting, shadows, and atmosphere, evaluated at fixed camera paths against declared
+  frame-time, hitch, draw-call, triangle, texture-memory, and visual-regression budgets on target laptop hardware.

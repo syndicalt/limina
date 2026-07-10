@@ -116495,8 +116495,8 @@ function biomePaintId(biome) {
     case "desert":
       return 1;
     case "tundra":
-      return 5;
-    // snow (PAINT_ALBEDO[5] / PAINT_MATERIALS.snow)
+      return 7;
+    // cold muted ground; snow remains an explicit authored surface
     case "water":
       return void 0;
     // never paints; it's below sea level anyway.
@@ -117923,31 +117923,41 @@ function applyBiomeRamp(material, tile, baseRough, pal) {
   rough = T7.mix(rough, T7.float(0.97), blightAmt);
   material.roughnessNode = T7.clamp(rough, 0, 1);
 }
+var TERRAIN_ELEVATION_ALBEDO_HEX = Object.freeze({
+  sand: 12891790,
+  grass: 6258492,
+  grassDark: 4481066,
+  rock: 7564128,
+  rockDark: 5590854,
+  snow: 14870508
+});
 var ELEV_COL = {
-  sand: new Color(12891790),
-  grass: new Color(6258492),
-  grassDark: new Color(4481066),
-  rock: new Color(7564128),
-  rockDark: new Color(5590854),
-  // darker scree shade the rock band mottles toward
-  snow: new Color(14870508)
+  sand: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.sand),
+  grass: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.grass),
+  grassDark: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark),
+  rock: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.rock),
+  rockDark: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.rockDark),
+  snow: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.snow)
 };
-var PAINT_ALBEDO = [
+var TERRAIN_PAINT_ALBEDO_HEX = Object.freeze([
   null,
   // 0 = unpainted
-  new Color(12891790),
+  12891790,
   // 1 sand
-  new Color(6258492),
+  6258492,
   // 2 grass
-  new Color(7693911),
+  7693911,
   // 3 rock
-  new Color(7295796),
+  7295796,
   // 4 dirt
-  new Color(14870508),
-  // 5 snow (matches the eroded pipeline's snow band)
-  new Color(4804910)
-  // 6 murk — dark wet olive for marsh/swamp ground
-];
+  14870508,
+  // 5 snow
+  4804910,
+  // 6 murk
+  8884858
+  // 7 tundra
+]);
+var PAINT_ALBEDO = TERRAIN_PAINT_ALBEDO_HEX.map((hex3) => hex3 === null ? null : new Color(hex3));
 function applyPaintOverlay(geom, tile) {
   const { paintMat, paintW } = tile;
   if (paintMat === void 0 || paintW === void 0) return;
@@ -121907,14 +121917,14 @@ function hashNoise(col, row) {
   h2 = Math.imul(h2 ^ h2 >>> 13, 1274126177) | 0;
   return ((h2 ^ h2 >>> 16) >>> 0) / 4294967296;
 }
-var PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6 };
+var PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6, tundra: 7 };
 var paintInput = external_exports.object({
   entity: external_exports.string().optional(),
   center: external_exports.tuple([external_exports.number(), external_exports.number()]),
   radius: external_exports.number().positive(),
   strength: external_exports.number().min(0).max(1).default(0.5),
   falloff: external_exports.enum(FALLOFFS).default("smooth"),
-  material: external_exports.enum(["sand", "grass", "rock", "dirt", "snow", "murk"]).default("grass"),
+  material: external_exports.enum(["sand", "grass", "rock", "dirt", "snow", "murk", "tundra"]).default("grass"),
   erase: external_exports.boolean().default(false)
 });
 function applyBrushPaint(tile, input) {
@@ -141871,6 +141881,7 @@ var WORLD_OVERVIEW_MAX_CELLS = WORLD_OVERVIEW_MAX_DIMENSION ** 2;
 var WORLD_OVERVIEW_MAX_ORIGIN_ABS_M = 1e7;
 var WORLD_OVERVIEW_MAX_STEP_M = 1e6;
 var WORLD_OVERVIEW_MAX_HEIGHT_ABS_M = 1e5;
+var WORLD_OVERVIEW_MAX_PAINT_MATERIAL = 7;
 var WORLD_OVERVIEW_MAX_ARTIFACT_BYTES = WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES + WORLD_OVERVIEW_MAX_CELLS * 6;
 var MAGIC4 = Object.freeze([76, 77, 87, 79, 86, 82, 49, 0]);
 var GRID_KEYS = /* @__PURE__ */ new Set(["rows", "cols", "origin", "stepM", "heights", "paintMaterial", "paintWeight"]);
@@ -141987,6 +141998,9 @@ function parseGrid2(input, meter) {
     const height = heights[index];
     if (!Number.isFinite(height) || Object.is(height, -0) || Math.abs(height) > WORLD_OVERVIEW_MAX_HEIGHT_ABS_M) {
       fail5(`world overview heights[${index}] must be finite canonical metres within the supported range`);
+    }
+    if (paintMaterial[index] > WORLD_OVERVIEW_MAX_PAINT_MATERIAL) {
+      fail5(`world overview paintMaterial[${index}] exceeds ${WORLD_OVERVIEW_MAX_PAINT_MATERIAL}`);
     }
   }
   return Object.freeze({ rows, cols, cells, origin, stepM, heights, paintMaterial, paintWeight });
@@ -142770,16 +142784,13 @@ function parseTransferredDerivedRuntimeSnapshot(input) {
     generatedWater
   });
 }
-var OVERVIEW_COLORS = Object.freeze([
-  [0.29, 0.47, 0.2],
-  [0.2, 0.39, 0.18],
-  [0.39, 0.37, 0.34],
-  [0.6, 0.51, 0.29],
-  [0.63, 0.68, 0.7],
-  [0.25, 0.4, 0.27],
-  [0.16, 0.38, 0.5],
-  [0.31, 0.22, 0.35]
-]);
+function hexRgb(hex3) {
+  return Object.freeze([(hex3 >>> 16 & 255) / 255, (hex3 >>> 8 & 255) / 255, (hex3 & 255) / 255]);
+}
+var OVERVIEW_PAINT_COLORS = Object.freeze(TERRAIN_PAINT_ALBEDO_HEX.map((hex3) => hex3 === null ? null : hexRgb(hex3)));
+var OVERVIEW_GRASS = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.grass);
+var OVERVIEW_GRASS_DARK = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark);
+var OVERVIEW_ROCK = hexRgb(TERRAIN_ELEVATION_ALBEDO_HEX.rock);
 function buildWorldOverviewMesh(overview, terrainWindow) {
   const { grid } = overview;
   const count = grid.rows * grid.cols;
@@ -142795,11 +142806,25 @@ function buildWorldOverviewMesh(overview, terrainWindow) {
       positions[vertex + 2] = row * grid.stepM;
       minY = Math.min(minY, grid.heights[cell]);
       maxY = Math.max(maxY, grid.heights[cell]);
-      const base = OVERVIEW_COLORS[Math.min(OVERVIEW_COLORS.length - 1, grid.paintMaterial[cell])];
+      const left = grid.heights[row * grid.cols + Math.max(0, col - 1)];
+      const right = grid.heights[row * grid.cols + Math.min(grid.cols - 1, col + 1)];
+      const top = grid.heights[Math.max(0, row - 1) * grid.cols + col];
+      const bottom = grid.heights[Math.min(grid.rows - 1, row + 1) * grid.cols + col];
+      const slope = Math.min(1, Math.hypot(right - left, bottom - top) / (2 * grid.stepM));
+      const worldX = grid.origin[0] + col * grid.stepM;
+      const worldZ = grid.origin[1] + row * grid.stepM;
+      const mottle = (Math.sin(worldX * 0.2 + worldZ * 0.2) * 0.5 + 0.5) * 0.3;
+      const rockWeight = Math.min(1, Math.max(0, (slope * 1.2 - 0.18) / 0.32));
+      const unpainted = [0, 1, 2].map((channel) => {
+        const grass = OVERVIEW_GRASS[channel] + (OVERVIEW_GRASS_DARK[channel] - OVERVIEW_GRASS[channel]) * mottle;
+        return grass + (OVERVIEW_ROCK[channel] - grass) * rockWeight;
+      });
+      const paint = OVERVIEW_PAINT_COLORS[grid.paintMaterial[cell]] ?? null;
       const weight = grid.paintWeight[cell] / 255;
-      colors[vertex] = Math.round(255 * (0.34 + base[0] * 0.66) * (0.72 + weight * 0.28));
-      colors[vertex + 1] = Math.round(255 * (0.34 + base[1] * 0.66) * (0.72 + weight * 0.28));
-      colors[vertex + 2] = Math.round(255 * (0.34 + base[2] * 0.66) * (0.72 + weight * 0.28));
+      for (let channel = 0; channel < 3; channel++) {
+        const value = paint === null ? unpainted[channel] : unpainted[channel] + (paint[channel] - unpainted[channel]) * weight;
+        colors[vertex + channel] = Math.round(255 * value);
+      }
     }
   }
   const quadCols = grid.cols - 1, quadRows = grid.rows - 1;
@@ -142810,10 +142835,10 @@ function buildWorldOverviewMesh(overview, terrainWindow) {
     const localMaxX = entry.tile.origin[0] + halfX - grid.origin[0];
     const localMinZ = entry.tile.origin[2] - halfZ - grid.origin[1];
     const localMaxZ = entry.tile.origin[2] + halfZ - grid.origin[1];
-    const minCol = Math.max(0, Math.floor(localMinX / grid.stepM));
-    const maxCol = Math.min(quadCols - 1, Math.ceil(localMaxX / grid.stepM) - 1);
-    const minRow = Math.max(0, Math.floor(localMinZ / grid.stepM));
-    const maxRow = Math.min(quadRows - 1, Math.ceil(localMaxZ / grid.stepM) - 1);
+    const minCol = Math.max(0, Math.ceil(localMinX / grid.stepM - 0.5));
+    const maxCol = Math.min(quadCols - 1, Math.floor(localMaxX / grid.stepM - 0.5));
+    const minRow = Math.max(0, Math.ceil(localMinZ / grid.stepM - 0.5));
+    const maxRow = Math.min(quadRows - 1, Math.floor(localMaxZ / grid.stepM - 0.5));
     for (let row = minRow; row <= maxRow; row++) {
       for (let col = minCol; col <= maxCol; col++) covered[row * quadCols + col] = 1;
     }
@@ -142838,7 +142863,10 @@ function buildWorldOverviewMesh(overview, terrainWindow) {
   geometry.setIndex(new BufferAttribute(indices.subarray(0, offset), 1));
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
-  const material = new MeshLambertMaterial({
+  const material = new MeshStandardMaterial({
+    color: 16777215,
+    roughness: 0.95,
+    metalness: 0,
     vertexColors: true,
     polygonOffset: true,
     polygonOffsetFactor: 1,

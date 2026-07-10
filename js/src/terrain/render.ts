@@ -355,13 +355,22 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
 // Out of scope for the demo (whose answer is the falloff); logged so it isn't lost.
 /** The eroded-pipeline elevation palette (world/pipeline/terrain.mjs COL) — the SAME band
  *  colors so a generated engine tile matches the preview's terrain look. */
+export const TERRAIN_ELEVATION_ALBEDO_HEX = Object.freeze({
+  sand: 0xc4b68e,
+  grass: 0x5f7f3c,
+  grassDark: 0x44602a,
+  rock: 0x736b60,
+  rockDark: 0x554f46,
+  snow: 0xe2e7ec,
+});
+
 const ELEV_COL = {
-  sand: new THREE.Color(0xc4b68e),
-  grass: new THREE.Color(0x5f7f3c),
-  grassDark: new THREE.Color(0x44602a),
-  rock: new THREE.Color(0x736b60),
-  rockDark: new THREE.Color(0x554f46), // darker scree shade the rock band mottles toward
-  snow: new THREE.Color(0xe2e7ec),
+  sand: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.sand),
+  grass: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.grass),
+  grassDark: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark),
+  rock: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.rock),
+  rockDark: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.rockDark),
+  snow: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.snow),
 } as const;
 
 /** Write a per-vertex `color` attribute onto a tile geometry from world-Y + local slope, using
@@ -371,15 +380,20 @@ export interface ElevationColorRamp { seaLevel: number; amplitude: number; snowF
 
 // Surface-material palette painted by terrain.paint, keyed to the same albedo families as the
 // elevation ramp so painted patches sit naturally in the world. Index = tile.paintMat id.
-const PAINT_ALBEDO: (THREE.Color | null)[] = [
-  null,                       // 0 = unpainted
-  new THREE.Color(0xc4b68e),  // 1 sand
-  new THREE.Color(0x5f7f3c),  // 2 grass
-  new THREE.Color(0x756657),  // 3 rock
-  new THREE.Color(0x6f5334),  // 4 dirt
-  new THREE.Color(0xe2e7ec),  // 5 snow (matches the eroded pipeline's snow band)
-  new THREE.Color(0x49512e),  // 6 murk — dark wet olive for marsh/swamp ground
-];
+export const TERRAIN_PAINT_ALBEDO_HEX = Object.freeze([
+  null,       // 0 = unpainted
+  0xc4b68e,   // 1 sand
+  0x5f7f3c,   // 2 grass
+  0x756657,   // 3 rock
+  0x6f5334,   // 4 dirt
+  0xe2e7ec,   // 5 snow
+  0x49512e,   // 6 murk
+  0x87927a,   // 7 tundra
+] as const);
+
+const PAINT_ALBEDO: (THREE.Color | null)[] = TERRAIN_PAINT_ALBEDO_HEX.map((hex) => (
+  hex === null ? null : new THREE.Color(hex)
+));
 
 /** Blend a tile's paint channel into an existing per-vertex `color` attribute (the one
  *  applyElevationColors built). A PURE function of tile.paintMat/paintW, so replay recomputes the

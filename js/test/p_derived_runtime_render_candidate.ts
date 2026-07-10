@@ -102,14 +102,18 @@ function terrain(tx: number, heights: number[]) {
 const terrain0 = terrain(0, [0, 0.25, 0.5, 0.25, 0.5, 0.75, 0.5, 0.75, 1]);
 const terrain1 = terrain(1, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
 const overviewCells = 129 * 129;
+const overviewPaintMaterial = new Uint8Array(overviewCells).fill(2);
+const overviewPaintWeight = new Uint8Array(overviewCells).fill(128);
+overviewPaintMaterial[0] = 5;
+overviewPaintWeight[0] = 255;
 const overviewBytes = encodeWorldOverviewArtifact({
   rows: 129,
   cols: 129,
   origin: [FAR, FAR],
   stepM: 200,
   heights: new Float32Array(overviewCells).fill(100),
-  paintMaterial: new Uint8Array(overviewCells).fill(2),
-  paintWeight: new Uint8Array(overviewCells).fill(128),
+  paintMaterial: overviewPaintMaterial,
+  paintWeight: overviewPaintWeight,
 });
 const overviewDescriptor = {
   artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
@@ -266,8 +270,8 @@ assert(candidate.terrainMeshCount === 2 && candidate.waterFragmentCount === 1, "
 assert(candidate.terrainRoot.children.length === 2 && candidate.waterRoot.children.length === 1
   && candidate.overviewRoot.children.length === 1 && candidate.overviewMeshCount === 1,
 "revision root does not own its complete staged window and single overview draw");
-assert(candidate.overviewTriangleCount === 32_766,
-  `fine chunk ownership did not remove exactly one intersecting coarse quad (${candidate.overviewTriangleCount} triangles)`);
+assert(candidate.overviewTriangleCount === 32_768,
+  `sub-proxy-cell fine residency created a coarse coverage hole (${candidate.overviewTriangleCount} triangles)`);
 assert(Object.isFrozen(candidate.overviewBounds) && candidate.overviewBounds?.minX === FAR
   && candidate.overviewBounds.minY === 100 && candidate.overviewBounds.minZ === FAR
   && candidate.overviewBounds.maxX === FAR + 25_600 && candidate.overviewBounds.maxY === 100
@@ -275,8 +279,11 @@ assert(Object.isFrozen(candidate.overviewBounds) && candidate.overviewBounds?.mi
 "candidate did not retain immutable overview bounds from its mesh-build pass");
 const overviewMesh = candidate.overviewRoot.children[0] as THREE.Mesh;
 const overviewPositions = overviewMesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+const overviewColors = overviewMesh.geometry.getAttribute("color") as THREE.BufferAttribute;
 assert(overviewMesh.position.x === FAR && overviewMesh.position.z === FAR && overviewPositions.getX(0) === 0 && overviewPositions.getZ(0) === 0,
   "overview geometry is not feature-local at large world coordinates");
+assert(overviewColors.getX(0) === 0xe2 / 0xff && overviewColors.getY(0) === 0xe7 / 0xff && overviewColors.getZ(0) === 0xec / 0xff,
+  "overview snow material does not use the canonical fine-terrain albedo");
 assert(Object.isFrozen(candidate.terrainWindow()) && candidate.terrainWindow().length === 2
   && candidate.terrainWindow().every((entry) => Object.isFrozen(entry) && entry.key === `${entry.tx},${entry.tz}`),
 "candidate did not expose an immutable exact initial collider window");

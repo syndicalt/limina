@@ -107,6 +107,12 @@ for (let mask = 0; mask <= 0b1111; mask++) {
   assert(decoded.metadata.byteLength === first.byteLength && decoded.metadata.offsets.end === first.byteLength, `mask ${mask} byte layout is not exact`);
 }
 
+const tundraTile = makeTile(2, 2, TERRAIN_ARTIFACT_FLAG_PAINT_MAT | TERRAIN_ARTIFACT_FLAG_PAINT_WEIGHT);
+tundraTile.paintMat!.fill(7);
+const tundraDecoded = decodeTerrainChunkArtifact(encodeTerrainChunkArtifact(tundraTile));
+assert(tundraDecoded.tile.paintMat?.every((material) => material === 7) === true,
+  "canonical tundra material did not survive the portable terrain artifact");
+
 // Format-vector proof: this constant must match in Node and in the Limina native host.
 const vectorTile = makeTile(2, 2, 0b1111);
 vectorTile.origin = [-12.5, 3, 7.25];
@@ -247,7 +253,7 @@ for (const [mutate, pattern, label] of [
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = Number.NaN; }, /finite/, "NaN height"],
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = -0; }, /negative zero/, "negative-zero height"],
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = 1.01; }, /\[0, 1\]/, "height above one"],
-  [(tile: ReturnType<typeof makeTile>) => { tile.paintMat![0] = 7; }, /paintMat/, "unknown material id"],
+  [(tile: ReturnType<typeof makeTile>) => { tile.paintMat![0] = 8; }, /paintMat/, "unknown material id"],
   [(tile: ReturnType<typeof makeTile>) => { tile.paintW![0] = -0.1; }, /\[0, 1\]/, "negative paint weight"],
   [(tile: ReturnType<typeof makeTile>) => { tile.climate![0] = Number.POSITIVE_INFINITY; }, /finite/, "infinite climate value"],
   [(tile: ReturnType<typeof makeTile>) => { tile.climate![2] = 1.5; }, /biome/, "fractional biome"],

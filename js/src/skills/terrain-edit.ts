@@ -148,14 +148,14 @@ function hashNoise(col: number, row: number): number {
 }
 
 // Material ids for terrain.paint — MUST match PAINT_ALBEDO in terrain/render.ts.
-const PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6 } as const;
+const PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6, tundra: 7 } as const;
 const paintInput = z.object({
   entity: z.string().optional(),
   center: z.tuple([z.number(), z.number()]),
   radius: z.number().positive(),
   strength: z.number().min(0).max(1).default(0.5),
   falloff: z.enum(FALLOFFS).default("smooth"),
-  material: z.enum(["sand", "grass", "rock", "dirt", "snow", "murk"]).default("grass"),
+  material: z.enum(["sand", "grass", "rock", "dirt", "snow", "murk", "tundra"]).default("grass"),
   erase: z.boolean().default(false),
 });
 /** Apply one paint stamp to a tile's material-weight channel, in place (mirrors applyBrush; pure +

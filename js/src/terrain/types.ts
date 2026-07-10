@@ -21,7 +21,8 @@ export interface TerrainTile {
   /** Row-major elevation samples (index = row*ncols + col), length nrows*ncols. */
   heights: Float32Array;
   /** OPTIONAL surface-material paint (in-game terrain.paint). Row-major, length nrows*ncols.
-   *  paintMat[i] = material id (0 none, 1 sand, 2 grass, 3 rock, 4 dirt); paintW[i] = blend weight
+   *  paintMat[i] = material id (0 none, 1 sand, 2 grass, 3 rock, 4 dirt, 5 snow, 6 murk, 7 tundra);
+   *  paintW[i] = blend weight
    *  0..1 toward that material's albedo. Like heights, reconstructed deterministically from the
    *  terrain.paint commands on replay (never snapshotted). Absent until the tile is first painted. */
   paintMat?: Uint8Array;

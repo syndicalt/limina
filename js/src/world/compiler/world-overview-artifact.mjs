@@ -11,6 +11,7 @@ export const WORLD_OVERVIEW_MAX_CELLS = WORLD_OVERVIEW_MAX_DIMENSION ** 2;
 export const WORLD_OVERVIEW_MAX_ORIGIN_ABS_M = 10_000_000;
 export const WORLD_OVERVIEW_MAX_STEP_M = 1_000_000;
 export const WORLD_OVERVIEW_MAX_HEIGHT_ABS_M = 100_000;
+export const WORLD_OVERVIEW_MAX_PAINT_MATERIAL = 7;
 export const WORLD_OVERVIEW_MAX_ARTIFACT_BYTES = WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES + WORLD_OVERVIEW_MAX_CELLS * 6;
 
 const MAGIC = Object.freeze([0x4c, 0x4d, 0x57, 0x4f, 0x56, 0x52, 0x31, 0x00]); // LMWOVR1\0
@@ -136,6 +137,9 @@ function parseGrid(input, meter) {
     const height = heights[index];
     if (!Number.isFinite(height) || Object.is(height, -0) || Math.abs(height) > WORLD_OVERVIEW_MAX_HEIGHT_ABS_M) {
       fail(`world overview heights[${index}] must be finite canonical metres within the supported range`);
+    }
+    if (paintMaterial[index] > WORLD_OVERVIEW_MAX_PAINT_MATERIAL) {
+      fail(`world overview paintMaterial[${index}] exceeds ${WORLD_OVERVIEW_MAX_PAINT_MATERIAL}`);
     }
   }
   return Object.freeze({ rows, cols, cells, origin, stepM, heights, paintMaterial, paintWeight });

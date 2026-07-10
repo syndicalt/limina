@@ -188,7 +188,7 @@ export const INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
   {
     schema: COMPILER_STAGE_SCHEMA,
     stageId: "base-height",
-    stageVersion: "1.0.0",
+    stageVersion: "1.1.0",
     scope: "global",
     dependencies: ["worldmap"],
     sourceInputs: [],

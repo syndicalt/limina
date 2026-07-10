@@ -97,6 +97,16 @@ const mapText = new TextDecoder().decode(ops.op_read_asset(MAP_ASSET_ID));
 const worldMap = JSON.parse(mapText) as WorldMap;
 const seaLevelM = worldMap.seaLevel;
 
+{
+  const tundraMap = {
+    ...worldMap,
+    biomes: [{ biome: "tundra" as const, points: [[-HALF, -HALF], [HALF, -HALF], [HALF, HALF], [-HALF, HALF]] as [number, number][] }],
+  };
+  const tundra = rasterizeWorldMap(tundraMap, { size: SIZE, resolution: 17, seed: 11, baseAmplitude: 30 });
+  assert(tundra.paintMat.some((material: number, index: number) => material === 7 && tundra.paintW[index] > 0),
+    "tundra biome must compile to cold ground rather than explicit snow");
+}
+
 // seaLevel comes from the IR: both land (>seaLevel) and sea (<seaLevel) cells must be present.
 {
   let anyAboveSea = false, anyBelowSea = false;
