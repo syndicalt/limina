@@ -11,6 +11,8 @@ export const HYDROLOGY_WATER_TOPOLOGY_SCHEMA = "limina.hydrology-water-topology/
 export const HYDROLOGY_WATER_TOPOLOGY_VERSION = 1;
 export const HYDROLOGY_REACH_TOPOLOGY_SCHEMA = "limina.hydrology-reaches/v1";
 export const HYDROLOGY_REACH_TOPOLOGY_VERSION = 1;
+export const HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA = "limina.hydrology-generated-water/v1";
+export const HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION = 1;
 
 const INPUT_KEYS = new Set(["heightsM", "topology", "placement", "recipe"]);
 const CONTROL_KEYS = new Set(["shouldCancel"]);
@@ -292,9 +294,7 @@ function verifyExtractionInput(input, controlInput) {
   return { heightsM, recipe, shouldCancel, topology, placement };
 }
 
-/** Extract thresholded standing-water basins without mutating authored WorldMap water. */
-export function extractHydrologyBasins(input, controlInput = undefined) {
-  const { heightsM, recipe, shouldCancel, topology, placement } = verifyExtractionInput(input, controlInput);
+function extractBasinsVerified({ heightsM, recipe, shouldCancel, topology, placement }) {
   const meter = createMeter(shouldCancel, topology.cellCount * 96 + WATER_LIMITS.topologyWorkUnits * 4 + 4096);
   meter.check();
 
@@ -467,6 +467,11 @@ export function extractHydrologyBasins(input, controlInput = undefined) {
   });
 }
 
+/** Extract thresholded standing-water basins without mutating authored WorldMap water. */
+export function extractHydrologyBasins(input, controlInput = undefined) {
+  return extractBasinsVerified(verifyExtractionInput(input, controlInput));
+}
+
 function reachPoint(index, topology, placement) {
   const row = Math.floor(index / topology.cols), col = index - row * topology.cols;
   let x = placement.originX + col * topology.cellSizeM;
@@ -503,9 +508,7 @@ function freezeWaterfall(span) {
   });
 }
 
-/** Extract a thresholded, confluence-exact directed channel graph from the verified drainage field. */
-export function extractHydrologyReaches(input, controlInput = undefined) {
-  const { heightsM, recipe, shouldCancel, topology, placement } = verifyExtractionInput(input, controlInput);
+function extractReachesVerified({ heightsM, recipe, shouldCancel, topology, placement }) {
   const meter = createMeter(shouldCancel, topology.cellCount * 80 + WATER_LIMITS.totalWaterwayPoints * 16 + 4096);
   meter.check();
   const active = new Uint8Array(topology.cellCount);
@@ -664,6 +667,33 @@ export function extractHydrologyReaches(input, controlInput = undefined) {
       waterfallSpanCount,
       ownedTerrainBytes: heightsM.byteLength,
       typedScratchBytes: active.byteLength + activeDonors.byteLength + visitedEdges.byteLength,
+    }),
+  });
+}
+
+/** Extract a thresholded, confluence-exact directed channel graph from the verified drainage field. */
+export function extractHydrologyReaches(input, controlInput = undefined) {
+  return extractReachesVerified(verifyExtractionInput(input, controlInput));
+}
+
+/** Verify and snapshot the field/terrain once, then derive both generated standing and flowing water. */
+export function extractHydrologyWaterTopology(input, controlInput = undefined) {
+  const verified = verifyExtractionInput(input, controlInput);
+  const basinResult = extractBasinsVerified(verified);
+  const reachResult = extractReachesVerified(verified);
+  return Object.freeze({
+    schema: HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA,
+    version: HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION,
+    placement: verified.placement,
+    rows: verified.topology.rows,
+    cols: verified.topology.cols,
+    cellSizeM: verified.topology.cellSizeM,
+    basins: basinResult.basins,
+    reaches: reachResult.reaches,
+    diagnostics: Object.freeze({
+      verificationPasses: 1,
+      basins: basinResult.diagnostics,
+      reaches: reachResult.diagnostics,
     }),
   });
 }
