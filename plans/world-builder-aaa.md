@@ -353,3 +353,10 @@ near-vertical cliffs before the SDF layer exists.
   entities and streamed terrain reattach/unmount exhaustively. Real Chromium gates cover 21 world
   replacements with one renderer, bounded GPU counters, responsive DPR backing, cleanup fault injection,
   worker-fatal recovery, pixel-bearing output, and repeated isolated Play/Stop restoration.
+- **2026-07-09 — Editor graphics workflow shipped (`0dcb281`).** A persisted accessible
+  Performance/Balanced/Cinematic selector now updates the active Edit or isolated Play runtime without a
+  world rebuild, preserves the selected tier across Play/Stop restoration, and exposes bounded FPS, p95
+  frame time, draw-call, triangle, backing-resolution, DPR, and GPU-resource telemetry. Storage, runtime,
+  and sampling failures are isolated; hidden tabs do not poll. Real Chromium gates cover keyboard and
+  mobile layout, explicit launch-server precedence, authenticated viewport startup, DPR 1/1.5/2 backing,
+  Play propagation, Edit restoration, and non-empty live telemetry without page errors.
