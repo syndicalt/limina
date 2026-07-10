@@ -324,6 +324,12 @@ near-vertical cliffs before the SDF layer exists.
   central hostile gates cover 4,096 bodies/16,384 edges (100,000 queries in 89 ms) and a legal near-budget
   1,952-edge basin at 1,967,086 topology units (257x257 sample in 288 ms). Rendering, collision, hydrology,
   authoring tools, and functional swim remain open WB-W1 slices.
+- **2026-07-09 — Canonical hydrology recipe shipped (`0f15dca`).** Atlas and WorldMap now share one
+  strict optional `limina.hydrology-recipe/v1` contract for precipitation, river catchment, basin area
+  and depth, and waterfall thresholds. No defaults are materialized, every field participates in the
+  canonical hash, malformed inactive Atlas maps fail closed, and all legacy WorldMap bytes and hashes
+  remain exact. Hostile accessor, prototype, symbol, non-canonical number, missing/unknown-field, and
+  resource-bound cases are gated; valid recipe-bearing maps remain accepted by `WaterField`.
 - **2026-07-09 — Isolated editor Play shipped (`2d76f7d`).** Play captures an immutable, validated
   authoritative project head plus command prefix, locks every editor write surface, pauses and
   render-suspends the retained Edit runtime, and runs simulation on a disposable canvas. New authoritative
