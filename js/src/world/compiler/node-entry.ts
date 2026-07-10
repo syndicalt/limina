@@ -1,13 +1,14 @@
 import { compileAtlasMapDoc } from "../design-map-compile.mjs";
 import { DEFAULT_MAP_EROSION_RECIPE } from "../pipeline/erosion.mjs";
 import { compilerContentHash } from "./canonical.mjs";
-import { createInitialWorldCompilerGraph } from "./graph.mjs";
+import { createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph } from "./graph.mjs";
 import {
   compileWorldTerrain,
   MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES,
   MAX_WORLD_TERRAIN_COMPILE_CHUNKS,
   MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES,
   WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
+  WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION,
 } from "./terrain-compile.ts";
 
 export { compileAtlasMapDoc, compileWorldTerrain };
@@ -15,10 +16,9 @@ export { compileAtlasMapDoc, compileWorldTerrain };
 export const WORLD_COMPILER_BUNDLE_SCHEMA = "limina.world-compiler-bundle/v1";
 export const WORLD_TERRAIN_COMPILER_VERSION = "1.0.0";
 
-/** Build the pinned compiler profile used by the project-local sidecar. */
-export function createDefaultWorldTerrainCompiler(projectId: string) {
+function createWorldTerrainCompilerConfig(projectId: string) {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(projectId)) throw new Error("world compiler projectId is invalid");
-  const config = Object.freeze({
+  return Object.freeze({
     schema: WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
     seed: 11,
     baseAmplitude: 12,
@@ -31,15 +31,36 @@ export function createDefaultWorldTerrainCompiler(projectId: string) {
       maxArtifactBytes: MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES,
     }),
   });
-  const graph = createInitialWorldCompilerGraph();
+}
+
+function createWorldTerrainCompilerBundle(
+  projectId: string,
+  version: string,
+  graph: ReturnType<typeof createInitialWorldCompilerGraph>,
+) {
+  const config = createWorldTerrainCompilerConfig(projectId);
   return Object.freeze({
     schema: WORLD_COMPILER_BUNDLE_SCHEMA,
-    version: WORLD_TERRAIN_COMPILER_VERSION,
+    version,
     config,
     identity: Object.freeze({
-      version: WORLD_TERRAIN_COMPILER_VERSION,
+      version,
       configHash: compilerContentHash(config),
       graphHash: graph.graphHash,
     }),
   });
+}
+
+/** Build the pinned compiler profile used by the project-local sidecar. */
+export function createDefaultWorldTerrainCompiler(projectId: string) {
+  return createWorldTerrainCompilerBundle(projectId, WORLD_TERRAIN_COMPILER_VERSION, createInitialWorldCompilerGraph());
+}
+
+/** Build the pinned compiler profile for recipe-bearing hydrology maps. */
+export function createHydrologyWorldTerrainCompiler(projectId: string) {
+  return createWorldTerrainCompilerBundle(
+    projectId,
+    WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION,
+    createHydrologyWorldCompilerGraph(),
+  );
 }

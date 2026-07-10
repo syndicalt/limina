@@ -226,3 +226,20 @@ export const INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
 export function createInitialWorldCompilerGraph() {
   return createCompilerGraph(INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS);
 }
+
+export const HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
+  ...INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS,
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "hydrology-field",
+    stageVersion: "1.0.0",
+    scope: "global",
+    dependencies: ["erosion"],
+    sourceInputs: [{ inputId: "hydrology.precipitation", scope: "global" }],
+    footprint: { haloChunks: 0 },
+  },
+]);
+
+export function createHydrologyWorldCompilerGraph() {
+  return createCompilerGraph(HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS);
+}
