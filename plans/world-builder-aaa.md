@@ -324,3 +324,12 @@ near-vertical cliffs before the SDF layer exists.
   central hostile gates cover 4,096 bodies/16,384 edges (100,000 queries in 89 ms) and a legal near-budget
   1,952-edge basin at 1,967,086 topology units (257x257 sample in 288 ms). Rendering, collision, hydrology,
   authoring tools, and functional swim remain open WB-W1 slices.
+- **2026-07-09 — Isolated editor Play shipped (`2d76f7d`).** Play captures an immutable, validated
+  authoritative project head plus command prefix, locks every editor write surface, pauses and
+  render-suspends the retained Edit runtime, and runs simulation on a disposable canvas. New authoritative
+  edits mark the session stale without mutating it; Stop applies the buffered delta or performs a guarded
+  reboot, retains recovery state across failures, and unlocks authoring only after Edit is restored. Worker
+  pause/resume is acknowledged and halts both timer and manual stepping. Unit, type, composition,
+  desktop/mobile layout, pixel-bearing viewport, and a real repeated Play/pause/external-edit/Stop browser
+  workflow are green. Packaged builds and derived-terrain runtime activation remain part of the open
+  Atlas-to-3D build-service bridge.
