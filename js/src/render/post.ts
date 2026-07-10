@@ -210,12 +210,18 @@ export interface PostPipeline {
   bloomNode: unknown;
   /** The godrays node (null if disabled or no shadow-casting sun was found). */
   godraysNode: unknown;
+  /** The depth-of-field node (null when disabled). */
+  dofNode: unknown;
+  /** The Sobel outline node (null when disabled). */
+  outlineNode: unknown;
   /** The resolved preset this pipeline was built from. */
   preset: PostPreset;
   /** Render one frame through the post stack (replaces renderer.render). */
   render(): void;
   /** Keep AO/bloom internal targets sized with the swapchain (call on resize). */
   setSize(width: number, height: number): void;
+  /** Release every render target and node owned by this graph. Idempotent. */
+  dispose(): void;
 }
 
 /** Build the render-only post-processing pipeline over a scene/camera. The caller
@@ -298,16 +304,21 @@ export function buildPostPipeline(
   }
 
   // ── 2c. DEPTH OF FIELD — depth-driven bokeh (blurs the composited colour) ────
+  // deno-lint-ignore no-explicit-any
+  let dofNode: any = null;
   if (preset.dof.enabled) {
     const viewZ = scenePass.getViewZNode();
-    composited = DOF(composited, viewZ, T.float(preset.dof.focusDistance), T.float(preset.dof.focalLength), T.float(preset.dof.bokehScale));
+    dofNode = DOF(composited, viewZ, T.float(preset.dof.focusDistance), T.float(preset.dof.focalLength), T.float(preset.dof.bokehScale));
+    composited = dofNode;
   }
 
   // ── 2d. OUTLINE — full-scene Sobel cel edge (darkens where the edge fires) ───
+  // deno-lint-ignore no-explicit-any
+  let outlineNode: any = null;
   if (preset.outline.enabled) {
-    const edge = SOBEL(composited);
+    outlineNode = SOBEL(composited);
     // Sobel output is a grayscale edge magnitude; use .r and darken the colour there.
-    const ink = T.float(1.0).sub(edge.r.mul(T.float(preset.outline.strength))).max(0.0);
+    const ink = T.float(1.0).sub(outlineNode.r.mul(T.float(preset.outline.strength))).max(0.0);
     composited = composited.mul(T.vec4(T.vec3(ink), 1.0));
   }
 
@@ -329,6 +340,7 @@ export function buildPostPipeline(
   }
 
   post.outputNode = outputNode;
+  let disposed = false;
 
   return {
     postProcessing: post,
@@ -338,6 +350,8 @@ export function buildPostPipeline(
     aoNode,
     bloomNode,
     godraysNode,
+    dofNode,
+    outlineNode,
     preset,
     render(): void {
       // Refresh the camera's world matrix from the LIVE transform BEFORE the scene
@@ -361,5 +375,16 @@ export function buildPostPipeline(
     // calling the nodes' setSize() here would crash before their internals are built
     // (they are lazily set up on the first render).
     setSize(_width: number, _height: number): void {},
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      const seen = new Set<unknown>();
+      for (const resource of [scenePass, aoNode, bloomNode, godraysNode, dofNode, outlineNode, post]) {
+        if (resource === null || resource === undefined || seen.has(resource)) continue;
+        seen.add(resource);
+        try { (resource as { dispose?(): void }).dispose?.(); }
+        catch (error) { console.warn("post-processing resource cleanup failed", error); }
+      }
+    },
   };
 }

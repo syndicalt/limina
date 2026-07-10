@@ -10,11 +10,9 @@
 // reads NOTHING from and writes NOTHING to the sim / physics / world-log / replay — a
 // world renders identically (and logs/replays bit-for-bit) with or without it.
 //
-// STATIC / CINEMATIC-ONLY, OPT-IN: on this WebGPU windowed backend the post composite does
-// not reliably present a FRESH frame per camera move (the known native present-frame
-// limitation — see render/post.ts and the USE_POST notes in the windowed demos), so the
-// view can stick while the camera moves. Use it for SCREENSHOTS / FIXED-CAMERA shots until
-// that native fix lands; for live free-fly navigation drive the bare renderer.render path.
+// Camera matrices are refreshed from the live transform before every post frame, so orbit and
+// free-fly navigation use current camera state. Execution quality may cap the authored AO/bloom
+// cost, but it never mutates the recorded artistic preset.
 
 import { z } from "../../build/zod.bundle.mjs";
 import { buildPostPipeline, resolvePostPreset, type PostPipeline } from "../render/post.ts";
@@ -99,7 +97,7 @@ export function registerRenderSkills(registry: SkillRegistry): void {
   const enablePost: SkillDefinition<z.infer<typeof enablePostInput>, z.infer<typeof enablePostOutput>> = {
     name: "render.enablePost",
     version: "1.0.0",
-    description: "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset + materialization status. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation).",
+    description: "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset and materialization status.",
     category: "world",
     permissions: ["scene.write"],
     input: enablePostInput,
@@ -134,6 +132,7 @@ export function registerRenderSkills(registry: SkillRegistry): void {
         godrays: input.godrays, dof: input.dof, outline: input.outline,
       });
       // Stash the live pipeline on the world so the render loop can drive it.
+      (ctx.world.post as { dispose?(): void } | undefined)?.dispose?.();
       ctx.world.post = pipeline;
       ctx.emit("render.post.enabled", {
         ao: pipeline.preset.ao.enabled, bloom: pipeline.preset.bloom.enabled, grade: pipeline.preset.grade.enabled,

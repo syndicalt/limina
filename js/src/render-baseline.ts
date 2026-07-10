@@ -19,6 +19,7 @@
 // throws. No `Deno.*`, no host ops: this is pure three.js, so it is portable.
 
 import * as THREE from "../build/three.bundle.mjs";
+import type { RenderQualityProfile } from "./render/quality.ts";
 
 // ---- Preset --------------------------------------------------------------
 
@@ -182,7 +183,7 @@ export type RenderBaselineOverride = DeepPartial<RenderBaselinePreset>;
 // shape — the full Engine, the browser playback target, or a test stub.
 
 interface BaselineTarget {
-  scene: { add(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number; fog?: unknown; fogNode?: unknown };
+  scene: { add(o: unknown): void; remove?(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number; fog?: unknown; fogNode?: unknown };
   camera?: {
     position?: { set(x: number, y: number, z: number): void };
     lookAt?(x: number, y: number, z: number): void;
@@ -212,6 +213,12 @@ export interface AppliedRenderBaseline {
   atmosphereMode: "exp" | "height" | "none";
   /** The fog object that was installed (FogExp2) or the fog node (height mode). */
   fog?: unknown;
+  /** Move the directional-shadow frustum with the active camera/orbit focus. */
+  updateShadowFocus(focus: readonly [number, number, number]): void;
+  /** Apply execution-quality shadow limits without changing the authored look. */
+  setQuality(profile: Pick<RenderQualityProfile, "shadowMapSize" | "shadowHalfExtent">): void;
+  /** Release every baseline-owned scene and GPU resource. Idempotent. */
+  dispose(): void;
 }
 
 // ---- Helpers -------------------------------------------------------------
@@ -309,9 +316,23 @@ export function applyRenderBaseline(
   override?: RenderBaselineOverride,
 ): AppliedRenderBaseline {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
-  if (!preset.enabled) return { preset, environmentMode: "none", atmosphereMode: "none" };
+  if (!preset.enabled) return {
+    preset,
+    environmentMode: "none",
+    atmosphereMode: "none",
+    updateShadowFocus(): void {},
+    setQuality(): void {},
+    dispose(): void {},
+  };
 
   const { scene, renderer, camera } = target;
+  const previousScene = {
+    background: scene.background,
+    environment: scene.environment,
+    environmentIntensity: scene.environmentIntensity,
+    fog: scene.fog,
+    fogNode: scene.fogNode,
+  };
 
   // 1. Renderer: ACES tonemapping + exposure + soft shadows (overridable).
   if (renderer !== undefined) {
@@ -329,18 +350,22 @@ export function applyRenderBaseline(
   const [sx, sy, sz] = preset.sun.direction;
   const sun = new THREE.DirectionalLight(preset.sun.color, preset.sun.intensity);
   sun.position.set(sx, sy, sz);
+  const sunDistance = Math.max(1, sun.position.length());
+  const sunDirection = sun.position.clone().normalize();
+  let shadowHalfExtent = Math.max(10, preset.ground.size * 0.35);
+  let shadowMapSize = 2048;
   if (preset.shadows) {
     sun.castShadow = true;
     // A tight ortho frustum around the default ground keeps shadow texels dense.
     const cam = sun.shadow.camera as { left: number; right: number; top: number; bottom: number; near: number; far: number };
-    const half = Math.max(10, preset.ground.size * 0.35);
-    cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+    cam.left = -shadowHalfExtent; cam.right = shadowHalfExtent; cam.top = shadowHalfExtent; cam.bottom = -shadowHalfExtent;
     cam.near = 0.5; cam.far = 200;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
   }
   scene.add(sun);
+  scene.add(sun.target);
 
   const hemi = new THREE.HemisphereLight(
     preset.hemisphere.skyColor,
@@ -362,24 +387,30 @@ export function applyRenderBaseline(
   }
 
   let environmentMode: AppliedRenderBaseline["environmentMode"] = "none";
+  let environmentTexture: unknown;
+  let pmremTarget: { texture?: unknown; dispose?(): void } | undefined;
   if (preset.environment) {
     let envTexture: unknown = skyTex; // fallback: the gradient itself
     if (rendererIsUsable(renderer)) {
       // PMREM needs a live renderer/GPU. Try it; on ANY failure fall back to
       // the cheap gradient (never ship a broken environment, never throw).
+      let pmrem: { fromEquirectangular(texture: unknown): unknown; dispose(): void } | undefined;
       try {
-        const pmrem = new THREE.PMREMGenerator(renderer as never);
-        const rt = pmrem.fromEquirectangular(skyTex as never);
-        envTexture = (rt as { texture: unknown }).texture;
-        pmrem.dispose();
+        pmrem = new THREE.PMREMGenerator(renderer as never);
+        const rt = pmrem.fromEquirectangular(skyTex) as { texture: unknown; dispose?(): void };
+        pmremTarget = rt;
+        envTexture = rt.texture;
         environmentMode = "pmrem";
       } catch {
         envTexture = skyTex;
         environmentMode = "gradient";
+      } finally {
+        pmrem?.dispose();
       }
     } else {
       environmentMode = "gradient";
     }
+    environmentTexture = envTexture;
     scene.environment = envTexture;
     if ("environmentIntensity" in scene) {
       scene.environmentIntensity = preset.environmentIntensity;
@@ -444,5 +475,101 @@ export function applyRenderBaseline(
     camera.lookAt?.(tx, ty, tz);
   }
 
-  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode, atmosphereMode, fog };
+  const shadowRight = new THREE.Vector3();
+  const shadowUp = new THREE.Vector3();
+  const shadowFocus = new THREE.Vector3();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  shadowRight.crossVectors(worldUp, sunDirection);
+  if (shadowRight.lengthSq() < 1e-10) shadowRight.set(1, 0, 0);
+  else shadowRight.normalize();
+  shadowUp.crossVectors(sunDirection, shadowRight).normalize();
+
+  const updateShadowFocus = (focus: readonly [number, number, number]): void => {
+    if (!preset.shadows) return;
+    if (focus.length !== 3 || focus.some((value) => !Number.isFinite(value))) {
+      throw new TypeError("shadow focus must contain three finite world coordinates");
+    }
+    shadowFocus.set(focus[0], focus[1], focus[2]);
+    const texel = (2 * shadowHalfExtent) / shadowMapSize;
+    const right = Math.round(shadowFocus.dot(shadowRight) / texel) * texel;
+    const up = Math.round(shadowFocus.dot(shadowUp) / texel) * texel;
+    const depth = shadowFocus.dot(sunDirection);
+    shadowFocus.copy(shadowRight).multiplyScalar(right)
+      .addScaledVector(shadowUp, up)
+      .addScaledVector(sunDirection, depth);
+    sun.target.position.copy(shadowFocus);
+    sun.position.copy(shadowFocus).addScaledVector(sunDirection, sunDistance);
+    sun.target.updateMatrixWorld();
+    sun.updateMatrixWorld();
+  };
+
+  const setQuality = (profile: Pick<RenderQualityProfile, "shadowMapSize" | "shadowHalfExtent">): void => {
+    if (!preset.shadows) return;
+    const nextMapSize = profile?.shadowMapSize;
+    const nextHalfExtent = profile?.shadowHalfExtent;
+    if (!Number.isSafeInteger(nextMapSize) || nextMapSize < 256 || nextMapSize > 8192 || (nextMapSize & (nextMapSize - 1)) !== 0) {
+      throw new RangeError("shadowMapSize must be a power-of-two integer in [256, 8192]");
+    }
+    if (typeof nextHalfExtent !== "number" || !Number.isFinite(nextHalfExtent) || nextHalfExtent < 8 || nextHalfExtent > 2048) {
+      throw new RangeError("shadowHalfExtent must be finite and in [8, 2048]");
+    }
+    const mapChanged = shadowMapSize !== nextMapSize;
+    shadowMapSize = nextMapSize;
+    shadowHalfExtent = nextHalfExtent;
+    const shadowCamera = sun.shadow.camera as { left: number; right: number; top: number; bottom: number; updateProjectionMatrix?(): void };
+    shadowCamera.left = -shadowHalfExtent;
+    shadowCamera.right = shadowHalfExtent;
+    shadowCamera.top = shadowHalfExtent;
+    shadowCamera.bottom = -shadowHalfExtent;
+    shadowCamera.updateProjectionMatrix?.();
+    sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+    if (mapChanged && sun.shadow.map !== null) {
+      try { sun.shadow.map?.dispose(); }
+      finally { sun.shadow.map = null; }
+    }
+  };
+
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    const cleanup = (label: string, operation: () => void): void => {
+      try { operation(); }
+      catch (error) { console.warn(`render baseline ${label} cleanup failed`, error); }
+    };
+    if (ground !== undefined) cleanup("ground scene", () => scene.remove?.(ground));
+    if (ambient !== undefined) cleanup("ambient scene", () => scene.remove?.(ambient));
+    cleanup("hemisphere scene", () => scene.remove?.(hemi));
+    cleanup("sun target scene", () => scene.remove?.(sun.target));
+    cleanup("sun scene", () => scene.remove?.(sun));
+    const ownedGround = ground as { geometry?: { dispose?(): void }; material?: { dispose?(): void } } | undefined;
+    cleanup("ground geometry", () => ownedGround?.geometry?.dispose?.());
+    cleanup("ground material", () => ownedGround?.material?.dispose?.());
+    cleanup("sun", () => sun.dispose());
+    cleanup("environment", () => pmremTarget?.dispose?.());
+    cleanup("sky", () => (skyTex as { dispose?(): void }).dispose?.());
+    if (scene.background === skyTex) scene.background = previousScene.background;
+    if (preset.environment && scene.environment === environmentTexture) {
+      scene.environment = previousScene.environment;
+      if ("environmentIntensity" in scene) scene.environmentIntensity = previousScene.environmentIntensity;
+    }
+    if (atmosphereMode === "height" && scene.fogNode === fog) scene.fogNode = previousScene.fogNode;
+    if (atmosphereMode === "height" && scene.fog === null) scene.fog = previousScene.fog;
+    if (atmosphereMode === "exp" && scene.fog === fog) scene.fog = previousScene.fog;
+    if (atmosphereMode === "exp" && scene.fogNode === null) scene.fogNode = previousScene.fogNode;
+  };
+
+  return {
+    preset,
+    sun,
+    hemisphere: hemi,
+    ambient,
+    ground,
+    environmentMode,
+    atmosphereMode,
+    fog,
+    updateShadowFocus,
+    setQuality,
+    dispose,
+  };
 }

@@ -211,15 +211,18 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   assert(res.godrays === false && res.dof === false && res.outline === false, "opt-in stages (godrays/dof/outline) must be OFF by default");
 
   // The live pipeline is stowed on world.post for the render loop to drive.
-  const pipe = world.post as { aoNode?: unknown; bloomNode?: unknown; depthNode?: unknown; normalNode?: unknown; render?: unknown } | undefined;
+  const pipe = world.post as { aoNode?: unknown; bloomNode?: unknown; depthNode?: unknown; normalNode?: unknown; render?: unknown; dispose?(): void } | undefined;
   assert(pipe !== undefined, "render.enablePost did not stow the pipeline on world.post");
   assert(pipe.aoNode != null && pipe.bloomNode != null, "world.post missing the GTAO/bloom nodes");
   assert(pipe.depthNode != null && pipe.normalNode != null, "world.post missing depth/normal pre-pass nodes");
   assert(typeof pipe.render === "function", "world.post has no render() driver");
+  let replacedDisposals = 0;
+  pipe.dispose = () => { replacedDisposals++; };
 
   // Falsifiable: disabling stages drops their nodes.
   const off = ok(await registry.invoke("render.enablePost", { ao: { enabled: false }, bloom: { enabled: false } }, base));
   assert(off.ao === false && off.bloom === false, "disabling AO/bloom did not drop the stages");
+  assert(replacedDisposals === 1, "replacing world.post did not dispose the prior pipeline exactly once");
 
   // Opt-in stages wire when enabled (dof/outline are camera/scene-agnostic; godrays needs a
   // shadow-casting sun so it is GPU-verified separately, not asserted here).

@@ -50,7 +50,8 @@ const stubRenderer = {} as unknown;
   assert(pipe.postProcessing !== undefined && pipe.postProcessing !== null, "no PostProcessing object");
   assert((pipe.postProcessing as { outputNode?: unknown }).outputNode !== undefined, "PostProcessing.outputNode not set");
   assert(pipe.scenePass !== undefined && pipe.scenePass !== null, "no scene pass node");
-  assert(typeof pipe.render === "function" && typeof pipe.setSize === "function", "driver methods missing");
+  assert(typeof pipe.render === "function" && typeof pipe.setSize === "function" && typeof pipe.dispose === "function", "driver/lifecycle methods missing");
+  assert(pipe.dofNode === null && pipe.outlineNode === null, "disabled optional nodes were materialized");
 }
 
 // ===========================================================================
@@ -175,6 +176,37 @@ const stubRenderer = {} as unknown;
   assert(m1[12] !== m2[12] || m1[14] !== m2[14], "camera matrix did NOT change frame-to-frame (navigation frozen)");
 }
 
+// ===========================================================================
+// (7) LIFECYCLE — every graph resource is disposed once, even if the public
+//     handle is disposed repeatedly. DOF and outline nodes are exposed so their
+//     owned render targets cannot disappear behind an untestable graph seam.
+// ===========================================================================
+{
+  const { scene, camera } = makeSceneCamera();
+  const pipe = buildPostPipeline(stubRenderer, scene, camera, {
+    dof: { enabled: true },
+    outline: { enabled: true },
+  });
+  assert(pipe.dofNode !== null && pipe.outlineNode !== null, "enabled DOF/outline nodes were not exposed");
+  const resources = [pipe.scenePass, pipe.aoNode, pipe.bloomNode, pipe.godraysNode, pipe.dofNode, pipe.outlineNode, pipe.postProcessing]
+    .filter((resource, index, all) => resource !== null && resource !== undefined && all.indexOf(resource) === index) as Array<{ dispose?: () => void }>;
+  const counts = new Map<object, number>();
+  for (let index = 0; index < resources.length; index++) {
+    const resource = resources[index];
+    resource.dispose = () => {
+      counts.set(resource, (counts.get(resource) ?? 0) + 1);
+      if (index === 0) throw new Error("injected post cleanup failure");
+    };
+  }
+  const originalWarn = console.warn;
+  let cleanupWarnings = 0;
+  console.warn = () => { cleanupWarnings++; };
+  try { pipe.dispose(); } finally { console.warn = originalWarn; }
+  pipe.dispose();
+  assert(resources.every((resource) => counts.get(resource) === 1), "post resources were not disposed exactly once");
+  assert(cleanupWarnings === 1, "post cleanup failure was hidden or aborted later cleanup");
+}
+
 ops.op_log(
   "p11_post OK: post pipeline constructs (PostProcessing + scene pass + outputNode); " +
   "REAL depth+normal pre-pass (sampleable depth/normal texture nodes + MRT); " +
@@ -182,6 +214,6 @@ ops.op_log(
   "bloom present (strength/radius/threshold from preset); " +
   "grade + preset FALSIFIABLE (overrides change node params; disabled stages drop to null); " +
   "NAVIGATION guard: pipeline.render() refreshes the camera world matrix from the live transform " +
-  "each frame (tracks position frame-to-frame — no frozen view). " +
+  "each frame (tracks position frame-to-frame — no frozen view); graph teardown disposes each owned node once. " +
   "GPU path proven by the windowed demo boot.",
 );
