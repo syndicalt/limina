@@ -1,4 +1,4 @@
-export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v2";
+export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v3";
 export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 export const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-access/v1";
 export const DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
@@ -184,10 +184,11 @@ function validateDiscovery(value) {
 
 function validatePinnedSource(value) {
   const source = plainRecord(value, "derived pinned source");
-  exactDataKeys(source, ["revision", "headHash"], [], "derived pinned source");
+  exactDataKeys(source, ["revision", "headHash"], ["manifestHash"], "derived pinned source");
   return Object.freeze({
     revision: safeInteger(source.revision, "derived pinned source.revision"),
     headHash: contentHash(source.headHash, "derived pinned source.headHash"),
+    ...(source.manifestHash === undefined ? {} : { manifestHash: contentHash(source.manifestHash, "derived pinned source.manifestHash") }),
   });
 }
 
@@ -221,6 +222,25 @@ function nextRequestId(prefix) {
   return `${prefix}-${requestSequence}`;
 }
 
+function sameResidency(left, right) {
+  return left !== undefined && right !== undefined
+    && left.schema === right.schema
+    && left.lod === right.lod
+    && left.radius === right.radius
+    && left.center[0] === right.center[0]
+    && left.center[1] === right.center[1];
+}
+
+function residencyDeferred(residency) {
+  let resolve;
+  let reject;
+  const promise = new Promise((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { residency, promise, resolve, reject };
+}
+
 export class DerivedRuntimeClient {
   #activate;
   #onStatus;
@@ -242,6 +262,10 @@ export class DerivedRuntimeClient {
   #closeTimer;
   #pinnedRevision;
   #pinnedHeadHash;
+  #pinnedManifestHash;
+  #acceptedResidency;
+  #sentResidency;
+  #pendingResidency;
 
   constructor({
     activate,
@@ -289,6 +313,8 @@ export class DerivedRuntimeClient {
     this.#mode = mode;
     this.#pinnedRevision = pin?.revision;
     this.#pinnedHeadHash = pin?.headHash;
+    this.#pinnedManifestHash = pin?.manifestHash;
+    this.#acceptedResidency = resident;
     this.#expected = Object.freeze({ projectId: discovery.projectId, branchId: discovery.branchId, residency: resident });
     this.#initRequestId = nextRequestId("derived-init");
     worker.onmessage = (event) => { void this.#handleMessage(event?.data, generation); };
@@ -317,6 +343,61 @@ export class DerivedRuntimeClient {
     return this;
   }
 
+  setResidency(residencyInput) {
+    if (this.#phase === "idle") throw new Error("derived runtime client must be started before setting residency");
+    if (this.#phase === "closing" || this.#phase === "closed") {
+      return Promise.reject(new Error("derived runtime client is closed"));
+    }
+    const resident = validateResidency(residencyInput);
+    if (sameResidency(resident, this.#sentResidency?.residency)) {
+      if (this.#pendingResidency === undefined) return this.#sentResidency.promise;
+      // Preserve last-write-wins semantics when the camera returns to the in-flight window.
+      this.#pendingResidency.residency = resident;
+      return this.#pendingResidency.promise;
+    }
+    if (sameResidency(resident, this.#pendingResidency?.residency)) return this.#pendingResidency.promise;
+    if (this.#sentResidency === undefined && this.#pendingResidency === undefined
+        && sameResidency(resident, this.#acceptedResidency)) return Promise.resolve();
+
+    if (this.#sentResidency !== undefined || this.#pendingResidency !== undefined || this.#phase === "starting") {
+      if (this.#pendingResidency === undefined) this.#pendingResidency = residencyDeferred(resident);
+      else this.#pendingResidency.residency = resident;
+      return this.#pendingResidency.promise;
+    }
+
+    const pending = residencyDeferred(resident);
+    this.#sendResidency(pending);
+    return pending.promise;
+  }
+
+  #sendResidency(pending) {
+    const requestId = nextRequestId("derived-residency");
+    this.#sentResidency = { ...pending, requestId };
+    try {
+      this.#worker.postMessage({
+        schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+        type: "set-residency",
+        requestId,
+        residency: pending.residency,
+      });
+    } catch (error) {
+      this.#sentResidency = undefined;
+      pending.reject(error);
+      this.#failProtocol("WORKER_ERROR", this.#generation);
+    }
+  }
+
+  #flushPendingResidency() {
+    if (this.#phase !== "ready" || this.#sentResidency !== undefined || this.#pendingResidency === undefined) return;
+    const pending = this.#pendingResidency;
+    this.#pendingResidency = undefined;
+    if (sameResidency(pending.residency, this.#acceptedResidency)) {
+      pending.resolve();
+      return;
+    }
+    this.#sendResidency(pending);
+  }
+
   async #handleMessage(input, generation) {
     if (generation !== this.#generation || this.#phase === "closing" || this.#phase === "closed") return;
     try {
@@ -331,6 +412,23 @@ export class DerivedRuntimeClient {
         }
         this.#phase = "ready";
         this.#emit({ phase: "ready", mode: this.#mode });
+        this.#flushPendingResidency();
+        return;
+      }
+      if (message.type === "residency-ack") {
+        exactDataKeys(message, ["schema", "type", "requestId", "residency"], [], "derived runtime residency acknowledgement");
+        const sent = this.#sentResidency;
+        const resident = validateResidency(message.residency);
+        if (this.#phase !== "ready" || this.#activationId !== undefined || sent === undefined || message.requestId !== sent.requestId
+            || !REQUEST_ID.test(message.requestId) || !sameResidency(resident, sent.residency)) {
+          throw protocolError("derived runtime residency acknowledgement does not match its request");
+        }
+        this.#sentResidency = undefined;
+        this.#acceptedResidency = resident;
+        this.#expected = Object.freeze({ ...this.#expected, residency: resident });
+        sent.resolve();
+        this.#emit({ phase: "residency", mode: this.#mode, residency: resident });
+        this.#flushPendingResidency();
         return;
       }
       if (message.type === "activate") {
@@ -339,7 +437,9 @@ export class DerivedRuntimeClient {
           throw protocolError("derived runtime activation identity or ordering is invalid");
         }
         const snapshot = validateSnapshot(message.snapshot, this.#expected);
-        if (this.#mode === "pinned" && (snapshot.source.revision !== this.#pinnedRevision || snapshot.source.headHash !== this.#pinnedHeadHash)) {
+        if (this.#mode === "pinned" && (snapshot.source.revision !== this.#pinnedRevision
+            || snapshot.source.headHash !== this.#pinnedHeadHash
+            || (this.#pinnedManifestHash !== undefined && snapshot.manifestHash !== this.#pinnedManifestHash))) {
           throw protocolError("derived runtime activation does not match the pinned source");
         }
         this.#activationId = message.activationId;
@@ -413,6 +513,11 @@ export class DerivedRuntimeClient {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#phase === "closed") return Promise.resolve();
     this.#phase = "closing";
+    const closedError = new Error("derived runtime client closed before residency acknowledgement");
+    this.#sentResidency?.reject(closedError);
+    this.#pendingResidency?.reject(closedError);
+    this.#sentResidency = undefined;
+    this.#pendingResidency = undefined;
     this.#activationAbort?.abort(new Error("derived runtime client closed during activation"));
     this.#activationAbort = undefined;
     const generation = ++this.#generation;

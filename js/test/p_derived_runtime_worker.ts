@@ -253,6 +253,7 @@ class FakeTransport {
   readonly artifactOrder: string[] = [];
   fetchCurrentCount = 0;
   currentHook: ((previous: DerivedRuntimeCurrent | undefined, signal: AbortSignal | undefined) => Promise<DerivedRuntimeCurrent> | DerivedRuntimeCurrent) | null = null;
+  artifactHook: ((descriptor: typeof terrainDescriptor, signal: AbortSignal | undefined) => Promise<void> | void) | null = null;
 
   constructor(initial: DerivedRuntimeCurrent) {
     this.current = initial;
@@ -270,6 +271,8 @@ class FakeTransport {
   async fetchArtifact(_publication: DerivedRuntimeCurrent, descriptor: typeof terrainDescriptor, options: { signal?: AbortSignal } = {}) {
     if (options.signal?.aborted) throw options.signal.reason;
     this.artifactOrder.push(descriptor.artifactType);
+    await this.artifactHook?.(descriptor, options.signal);
+    if (options.signal?.aborted) throw options.signal.reason;
     const bytes = this.artifacts.get(descriptor.contentHash);
     if (bytes === undefined) throw new Error(`missing artifact ${descriptor.contentHash}`);
     return Object.freeze({ status: "artifact" as const, contentHash: descriptor.contentHash, bytes });
@@ -293,7 +296,7 @@ function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
       posted.push({ message: clone as Record<string, unknown>, transferCount: transfers.length });
     },
   });
-  const init = (mode: "watch" | "pinned" = "watch", pinnedSource?: { revision: number; headHash: string }) => controller.handleMessage({
+  const init = (mode: "watch" | "pinned" = "watch", pinnedSource?: { revision: number; headHash: string; manifestHash?: string }) => controller.handleMessage({
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
     type: "init",
     requestId: "init-1",
@@ -303,6 +306,15 @@ function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
     ...(pinnedSource === undefined ? {} : { pinnedSource }),
   });
   return { timers, transport, posted, controller, init };
+}
+
+function setResidency(state: ReturnType<typeof harness>, requestId: string, center: readonly [number, number], radius = 7): Promise<void> {
+  return state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "set-residency",
+    requestId,
+    residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center, lod: 0, radius },
+  });
 }
 
 function messages(state: ReturnType<typeof harness>, type: string): Record<string, unknown>[] {
@@ -332,6 +344,12 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main" }, mode: "watch",
   residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 7 },
   pinnedSource: { revision: 1, headHash: hash("head-1") } }), /forbids/, "watch accepted a pinned source");
+rejectsSync(() => parseDerivedRuntimeWorkerInput({
+  schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+  type: "set-residency",
+  requestId: "residency-1",
+  residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 8 },
+}), /residency is invalid/, "set-residency accepted an out-of-bounds radius");
 
 // Watch mode activates current, polls deterministically, reuses worker-owned buffers, and keeps credentials out of output.
 {
@@ -396,6 +414,145 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   await eventually(() => messages(state, "revision").length === 1, "pinned activation");
   assert(state.timers.activeCount() === 0, "matching pinned mode continued polling after activation");
   await state.controller.close("close-pinned");
+}
+
+// A changed residency is acknowledged only after an older in-flight submission can no longer
+// activate, then a 304 publication still submits the same manifest with the captured new window.
+{
+  const large = largeManifest(41);
+  const state = harness(current(large.manifest));
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  let releaseArtifact: (() => void) | undefined;
+  let delayed = false;
+  state.transport.artifactHook = (_descriptor, signal) => {
+    if (delayed) return;
+    delayed = true;
+    return new Promise<void>((resolve, reject) => {
+      releaseArtifact = resolve;
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  };
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => releaseArtifact !== undefined, "delayed initial artifact load");
+  await setResidency(state, "residency-during-load", [192, 0]);
+  assert(messages(state, "residency-ack").length === 0, "residency was acknowledged while an older load could still activate");
+  releaseArtifact!();
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "residency-ack").length === 1, "serialized residency acknowledgement");
+  assert(messages(state, "revision").length === 1, "older submission did not finish before residency acknowledgement");
+  const oldActivation = messages(state, "activate")[0].snapshot as { residency: { center: readonly number[] } };
+  assert(oldActivation.residency.center[0] === 0, "in-flight activation observed a mutable residency");
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 2, "same-manifest residency activation");
+  const nextActivation = messages(state, "activate")[1].snapshot as { residency: { center: readonly number[] }; chunks: unknown[] };
+  assert(nextActivation.residency.center[0] === 192 && nextActivation.chunks.length === 210,
+    `replacement activation used the wrong captured window (${nextActivation.residency.center[0]}, ${nextActivation.chunks.length})`);
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 2, "replacement residency revision");
+  await state.controller.close("close-residency-during-load");
+}
+
+// Pinned mode permits explicit window replacement but never resumes periodic polling and never
+// follows a republished manifest, even when its source revision/head are unchanged.
+{
+  const large = largeManifest(42);
+  const publication = current(large.manifest);
+  const state = harness(publication);
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  await state.init("pinned", {
+    revision: publication.source.revision,
+    headHash: publication.source.headHash,
+    manifestHash: publication.manifestHash,
+  });
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "pinned residency baseline");
+  assert(state.timers.activeCount() === 0, "pinned baseline retained a periodic timer");
+
+  await setResidency(state, "pinned-residency-1", [192, 0]);
+  assert(messages(state, "residency-ack").length === 1 && state.timers.activeCount() === 1,
+    "pinned explicit residency was not acknowledged and scheduled exactly once");
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 2, "pinned explicit activation");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 2, "pinned explicit revision");
+  assert(state.timers.activeCount() === 0, "pinned explicit activation restarted periodic polling");
+
+  state.transport.current = current(manifest(42, { graphHash: hash("republished-graph") }), 2);
+  await setResidency(state, "pinned-residency-2", [-192, 0]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").some((entry) => entry.code === "PINNED_MANIFEST_MISMATCH"), "pinned manifest mismatch");
+  assert(messages(state, "activate").length === 2 && state.timers.activeCount() === 0,
+    "pinned runtime followed another manifest or retried a fatal mismatch");
+  await state.controller.close("close-pinned-residency");
+}
+
+// A residency update arriving while main-thread activation is awaiting acknowledgement remains
+// unacknowledged until that exact older activation has committed or rolled back.
+{
+  const large = largeManifest(421);
+  const state = harness(current(large.manifest));
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 1, "activation held for residency update");
+  await setResidency(state, "residency-during-activation", [-192, 0]);
+  assert(messages(state, "residency-ack").length === 0,
+    "residency acknowledgement overtook an older activation awaiting main-thread commit");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[0].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 1 && messages(state, "residency-ack").length === 1,
+    "residency acknowledgement after older activation completion");
+  const order = state.posted.map(({ message }) => message.type);
+  assert(order.indexOf("revision") < order.indexOf("residency-ack"),
+    `residency acknowledgement was not serialized after the older revision (${order.join(",")})`);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 2, "post-activation residency replacement");
+  const replacement = messages(state, "activate")[1].snapshot as { residency: { center: readonly number[] } };
+  assert(replacement.residency.center[0] === -192, "replacement activation did not capture the acknowledged residency");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 2, "post-activation residency revision");
+  await state.controller.close("close-residency-during-activation");
+}
+
+// Outside-domain residency preserves the prior live set and does not spin until a new residency arrives.
+{
+  const state = harness(current(manifest(43)));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "outside-domain baseline");
+  await setResidency(state, "outside-domain", [100_000, 100_000]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").some((entry) => entry.code === "RESIDENCY_OUTSIDE_DOMAIN"), "outside-domain status");
+  assert(messages(state, "activate").length === 1 && state.timers.activeCount() === 0,
+    "outside-domain residency replaced the live set or entered a retry loop");
+  await setResidency(state, "return-domain", [0, 0]);
+  assert(state.timers.activeCount() === 1, "a new valid residency did not restart reconciliation");
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "revision").length === 2, "return-domain unchanged revision");
+  assert(messages(state, "activate").length === 1, "returning to the already-live residency reactivated resources");
+  await state.controller.close("close-outside-domain");
 }
 
 // Changing authority between discovery and manager validation rejects stale work, then retries at the base bound.
@@ -545,6 +702,6 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   await state.controller.close("close-rollback");
 }
 
-const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned polling, 400-chunk identity with exact 225-chunk residency, stale-head rejection, cancellation/coalescing, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned reconciliation, serialized dynamic residency acknowledgements, exact pinned manifests, bounded 225-chunk windows, no-spin outside-domain recovery, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
 if (ops?.op_log === undefined) console.log(completion);
 else ops.op_log(completion);

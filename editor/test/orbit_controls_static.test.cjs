@@ -32,6 +32,12 @@ if (!/setCameraControlsEnabled/.test(browserEntry)) {
 if (!/orbitControls: true/.test(viewport)) {
   fail("editor viewport does not opt into OrbitControls");
 }
+if (/orbit:\s*\{\s*center:\s*\[0,\s*1,\s*0\],\s*radius:\s*16,\s*height:\s*8\s*\}/.test(viewport)) {
+  fail("editor viewport still overrides runtime auto-framing with the legacy origin orbit");
+}
+if ((viewport.match(/orbitControls: true/g) || []).length < 2) {
+  fail("both Edit and Play must opt into OrbitControls while using runtime auto-framing");
+}
 if (!/setCameraControlsEnabled\(false\)/.test(viewport) || !/setCameraControlsEnabled\(true\)/.test(viewport)) {
   fail("gizmo dragging does not suspend and restore camera controls");
 }

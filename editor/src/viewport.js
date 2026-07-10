@@ -200,6 +200,8 @@ const state = {
   derivedEditActivation: undefined,
   derivedEditRestartTimer: undefined,
   derivedPlayActivation: undefined,
+  derivedEditResidencyUnsubscribe: undefined,
+  derivedPlayResidencyUnsubscribe: undefined,
   latestEditDerivedRevision: undefined,
   editRuntimeEpoch: 0,
   historyTransition: undefined,
@@ -478,6 +480,56 @@ function invalidateEditDerivedRevision() {
   return true;
 }
 
+function releaseEditDerivedResidency() {
+  const unsubscribe = state.derivedEditResidencyUnsubscribe;
+  state.derivedEditResidencyUnsubscribe = undefined;
+  try { unsubscribe?.(); } catch { /* runtime teardown must continue */ }
+}
+
+function releasePlayDerivedResidency() {
+  const unsubscribe = state.derivedPlayResidencyUnsubscribe;
+  state.derivedPlayResidencyUnsubscribe = undefined;
+  try { unsubscribe?.(); } catch { /* runtime teardown must continue */ }
+}
+
+function subscribeDerivedResidency(runtime, client, isCurrent, failureCode) {
+  let closed = false;
+  let pending;
+  let flushing = false;
+
+  const flush = async () => {
+    try {
+      while (!closed && isCurrent() && pending !== undefined) {
+        const residency = pending;
+        pending = undefined;
+        await client.setResidency(residency);
+      }
+    } catch {
+      if (!closed && isCurrent()) setStatus("derived", failureCode);
+    } finally {
+      flushing = false;
+      if (!closed && isCurrent() && pending !== undefined) {
+        flushing = true;
+        void flush();
+      }
+    }
+  };
+
+  const unsubscribe = runtime.subscribeDerivedTerrainResidency((residency) => {
+    if (closed || !isCurrent()) return;
+    pending = residency;
+    if (flushing) return;
+    flushing = true;
+    void flush();
+  });
+  return () => {
+    if (closed) return;
+    closed = true;
+    pending = undefined;
+    unsubscribe();
+  };
+}
+
 async function closeEditDerivedClient() {
   if (state.derivedEditRestartTimer !== undefined) {
     clearTimeout(state.derivedEditRestartTimer);
@@ -485,6 +537,7 @@ async function closeEditDerivedClient() {
   }
   const client = state.derivedEditClient;
   const activation = state.derivedEditActivation;
+  releaseEditDerivedResidency();
   state.derivedEditClient = undefined;
   state.editRuntimeEpoch++;
   const settled = Promise.all([
@@ -514,6 +567,7 @@ function rejectPlayDerivedActivation(code) {
 
 async function closePlayDerivedClient() {
   const client = state.derivedPlayClient;
+  releasePlayDerivedResidency();
   state.derivedPlayClient = undefined;
   rejectPlayDerivedActivation("DERIVED_PLAY_CLOSED");
   if (!client) return;
@@ -594,6 +648,7 @@ async function ensureEditDerivedClient() {
       } else if (status.phase === "error" || status.phase === "activation-failed") {
         setStatus("derived", derivedStatusDetail(status));
       } else if (status.phase === "closed") {
+        releaseEditDerivedResidency();
         state.derivedEditClient = undefined;
         state.derivedEditRestartTimer = setTimeout(() => {
           state.derivedEditRestartTimer = undefined;
@@ -605,7 +660,16 @@ async function ensureEditDerivedClient() {
   state.derivedEditClient = client;
   try {
     client.start(discovery, { mode: "watch", residency: state.running.derivedTerrainResidency() });
+    const runtime = state.running;
+    state.derivedEditResidencyUnsubscribe = subscribeDerivedResidency(
+      runtime,
+      client,
+      () => state.derivedEditClient === client && state.running === runtime &&
+        state.running !== state.playRuntime && !state.rebooting && !playLifecycle.isAuthoringLocked(),
+      "DERIVED_EDIT_RESIDENCY_UPDATE_FAILED",
+    );
   } catch (error) {
+    releaseEditDerivedResidency();
     if (state.derivedEditClient === client) state.derivedEditClient = undefined;
     await client.close();
     throw error;
@@ -659,12 +723,25 @@ function startPinnedDerivedClient(runtime, source, token) {
   });
   state.derivedPlayClient = client;
   try {
+    const activeManifestHash = runtime.derivedRevision()?.manifestHash;
     client.start(discovery, {
       mode: "pinned",
-      pinnedSource: { revision: source.revision, headHash: source.headHash },
+      pinnedSource: {
+        revision: source.revision,
+        headHash: source.headHash,
+        ...(typeof activeManifestHash === "string" ? { manifestHash: activeManifestHash } : {}),
+      },
       residency: runtime.derivedTerrainResidency(),
     });
+    state.derivedPlayResidencyUnsubscribe = subscribeDerivedResidency(
+      runtime,
+      client,
+      () => state.derivedPlayClient === client && state.playRuntime === runtime &&
+        playLifecycle.generation === token,
+      "DERIVED_PLAY_RESIDENCY_UPDATE_FAILED",
+    );
   } catch (error) {
+    releasePlayDerivedResidency();
     state.derivedPlayClient = undefined;
     activation.settled = true;
     clearTimeout(activation.timer);
@@ -1683,7 +1760,6 @@ async function startPlay() {
               void stopPlay(detail || "live runtime failed");
             }
           },
-          orbit: { center: [0, 1, 0], radius: 16, height: 8 },
           orbitControls: true,
           forceWebGL: true,
           quality: graphicsSettings.tier,
@@ -1796,6 +1872,7 @@ async function stopPlay(error = "") {
 async function reboot({ allowWhilePlay = false, restore, throwOnError = false } = {}) {
   if (playLifecycle.isAuthoringLocked() && !allowWhilePlay) { state.dirty = true; return; }
   if (state.rebooting) { state.dirty = true; return; }
+  const savedEditState = restore ?? captureEditState();
   state.rebooting = true;
   state.editRuntimeEpoch++;
   state.dirty = false;
@@ -1804,7 +1881,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     // then close its worker so the activation is aborted and bounded before stopping that runtime.
     // New activations reject while the reboot flag is set, so presentation and replacement cannot
     // interleave.
-    if (state.derivedEditActivation) await closeEditDerivedClient();
+    await closeEditDerivedClient();
     // Time-travel: when scrubbed to a past point, replay only the authoring-command PREFIX up to
     // the playhead (state.scrubLimit); undefined = live (replay everything). state.commands still
     // accumulates in the background so returning to live is instant.
@@ -1813,7 +1890,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
       await stopRuntime(state.running);
       state.running = undefined;
       state.dirty = false;
-      restoreEditState(restore);
+      restoreEditState(savedEditState);
       setStatus("following", "empty — waiting for the agent to build");
       return;
     }
@@ -1844,7 +1921,6 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
             : detail,
         ),
         ...(initialDerivedRevision === undefined ? {} : { initialDerivedRevision }),
-        orbit: { center: [0, 1, 0], radius: 16, height: 8 },
         orbitControls: true,
         // WebGL2 backend: some drivers lose the WebGPU device mid-render (black canvas); the live
         // /examples site + the old viewport force WebGL2 for the same reason.
@@ -1881,7 +1957,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     if (selectedId !== undefined) selectEntity(selectedId, state.running);
     installGridHelper(state.running);
     applyWireframeMode(state.running);
-    restoreEditState(restore);
+    restoreEditState(savedEditState);
     const authored = kept.length - failures.length;
     setStatus(
       past ? "past" : "live",

@@ -3330,6 +3330,10 @@ function parseDerivedTerrainResidency(input) {
     radius: value.radius
   });
 }
+function derivedTerrainResidencyKey(input) {
+  const residency = parseDerivedTerrainResidency(input);
+  return `${residency.lod}:${residency.center[0]}:${residency.center[1]}:${residency.radius}`;
+}
 function selectDerivedTerrainChunks(manifest, residencyInput) {
   const residency = parseDerivedTerrainResidency(residencyInput);
   const anchor = terrainWorldToChunk(manifest.grid, residency.center[0], residency.center[1]);
@@ -3342,7 +3346,7 @@ function selectDerivedTerrainChunks(manifest, residencyInput) {
 }
 
 // src/browser/derived-runtime-worker.ts
-var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v2";
+var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v3";
 var DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 var DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1e3, 2e3, 4e3, 8e3]);
 var DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15e3;
@@ -3392,11 +3396,15 @@ function requestId(value, label) {
 }
 function parsePinnedSource(value) {
   const record = plainRecord(value, "derived runtime pinnedSource");
-  exactDataKeys(record, ["revision", "headHash"], [], "derived runtime pinnedSource");
-  if (!Number.isSafeInteger(record.revision) || record.revision < 0 || typeof record.headHash !== "string" || !HASH3.test(record.headHash)) {
+  exactDataKeys(record, ["revision", "headHash"], ["manifestHash"], "derived runtime pinnedSource");
+  if (!Number.isSafeInteger(record.revision) || record.revision < 0 || typeof record.headHash !== "string" || !HASH3.test(record.headHash) || record.manifestHash !== void 0 && (typeof record.manifestHash !== "string" || !HASH3.test(record.manifestHash))) {
     throw fatal2("INVALID_MESSAGE", "derived runtime pinnedSource is invalid");
   }
-  return Object.freeze({ revision: record.revision, headHash: record.headHash });
+  return Object.freeze({
+    revision: record.revision,
+    headHash: record.headHash,
+    ...record.manifestHash === void 0 ? {} : { manifestHash: record.manifestHash }
+  });
 }
 function parseInit(value) {
   exactDataKeys(value, ["schema", "type", "requestId", "config", "mode", "residency"], ["pinnedSource"], "derived runtime init");
@@ -3442,6 +3450,24 @@ function parseAck(value) {
     ...value.errorCode === void 0 ? {} : { errorCode: value.errorCode }
   });
 }
+function parseSetResidency(value) {
+  exactDataKeys(value, ["schema", "type", "requestId", "residency"], [], "derived runtime set-residency");
+  if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "set-residency") {
+    throw fatal2("INVALID_MESSAGE", "derived runtime set-residency schema/type is invalid");
+  }
+  let residency;
+  try {
+    residency = parseDerivedTerrainResidency(value.residency);
+  } catch (error) {
+    throw fatal2("INVALID_MESSAGE", error instanceof Error ? error.message : "derived runtime residency is invalid");
+  }
+  return Object.freeze({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "set-residency",
+    requestId: requestId(value.requestId, "derived runtime set-residency requestId"),
+    residency
+  });
+}
 function parseClose(value) {
   exactDataKeys(value, ["schema", "type", "requestId"], [], "derived runtime close");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "close") throw fatal2("INVALID_MESSAGE", "derived runtime close schema/type is invalid");
@@ -3455,6 +3481,7 @@ function parseDerivedRuntimeWorkerInput(value) {
   const record = plainRecord(value, "derived runtime worker message");
   const type = Object.getOwnPropertyDescriptor(record, "type")?.value;
   if (type === "init") return parseInit(record);
+  if (type === "set-residency") return parseSetResidency(record);
   if (type === "activation-ack") return parseAck(record);
   if (type === "close") return parseClose(record);
   throw fatal2("INVALID_MESSAGE", "derived runtime worker message type is unsupported");
@@ -3473,6 +3500,9 @@ function shortError(error) {
   if (error instanceof DerivedRevisionRuntimeError) {
     const transientCodes = /* @__PURE__ */ new Set(["STALE_SOURCE_HEAD", "DERIVED_REVISION_CANCELLED"]);
     return { code: error.code, classification: transientCodes.has(error.code) ? "transient" : "fatal", message };
+  }
+  if (error instanceof RangeError && error.message === "derived terrain residency contains no manifest chunks") {
+    return { code: "RESIDENCY_OUTSIDE_DOMAIN", classification: "transient", message };
   }
   return { code: "INTERNAL_ERROR", classification: "fatal", message };
 }
@@ -3542,10 +3572,15 @@ var DerivedRuntimeWorkerController = class {
   #branchId = "";
   #mode = null;
   #pinnedSource = null;
-  #residency;
+  #pinnedManifestHash = null;
+  #desiredResidency;
+  #submissionResidency = null;
+  #appliedResidencyKey = null;
+  #pendingResidency = null;
   #observed;
   #submissionCurrent = null;
   #pollTimer = null;
+  #pollTimerExplicit = false;
   #polling = false;
   #backoffIndex = 0;
   #activationSequence = 0;
@@ -3586,6 +3621,10 @@ var DerivedRuntimeWorkerController = class {
         this.#initialize(message);
         return;
       }
+      if (message.type === "set-residency") {
+        this.#setResidency(message);
+        return;
+      }
       if (message.type === "activation-ack") {
         this.#acknowledge(message);
         return;
@@ -3603,14 +3642,20 @@ var DerivedRuntimeWorkerController = class {
     this.#branchId = message.config.branchId;
     this.#mode = message.mode;
     this.#pinnedSource = message.pinnedSource ?? null;
-    this.#residency = message.residency;
+    this.#pinnedManifestHash = message.pinnedSource?.manifestHash ?? null;
+    this.#desiredResidency = message.residency;
     this.#transport = transport;
     this.#manager = new DerivedRevisionManager({
       projectId: this.#projectId,
       branchId: this.#branchId,
       getAuthoritativeSource: () => this.#getAuthoritativeSource(),
       loadArtifact: (input) => this.#loadArtifact(input.manifest.manifestHash, input.artifact, input.signal),
-      selectChunks: (manifest) => selectDerivedTerrainChunks(manifest, this.#residency),
+      selectChunks: (manifest) => {
+        if (this.#submissionResidency === null) {
+          throw fatal2("NO_SUBMISSION_RESIDENCY", "derived runtime has no residency bound to the active submission");
+        }
+        return selectDerivedTerrainChunks(manifest, this.#submissionResidency);
+      },
       stageChunk: (input) => this.#stageChunk(input.artifacts, input.signal),
       stageGlobal: (input) => this.#stageGlobal(input),
       activateRevision: (input) => this.#activate(input),
@@ -3626,7 +3671,43 @@ var DerivedRuntimeWorkerController = class {
       requestId: message.requestId,
       mode: message.mode
     }));
-    this.#schedulePoll(0);
+    this.#schedulePoll(0, true);
+  }
+  #setResidency(message) {
+    if (this.#closed) throw fatal2("DERIVED_RUNTIME_CLOSED", "derived runtime worker is closed");
+    if (!this.#initialized) throw fatal2("NOT_INITIALIZED", "derived runtime worker is not initialized");
+    if (this.#pendingResidency !== null) {
+      throw fatal2("RESIDENCY_UPDATE_OVERLAP", "derived runtime already has a residency update awaiting acknowledgement");
+    }
+    if (derivedTerrainResidencyKey(message.residency) === derivedTerrainResidencyKey(this.#desiredResidency)) {
+      this.#postResidencyAck(message.requestId, message.residency);
+      return;
+    }
+    this.#pendingResidency = Object.freeze({ requestId: message.requestId, residency: message.residency });
+    if (!this.#polling) this.#acceptPendingResidency();
+  }
+  #postResidencyAck(requestId2, residency) {
+    this.#postMessage(Object.freeze({
+      schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+      type: "residency-ack",
+      requestId: requestId2,
+      residency
+    }));
+  }
+  #acceptPendingResidency() {
+    const pending = this.#pendingResidency;
+    if (pending === null || this.#closed) return false;
+    this.#pendingResidency = null;
+    this.#desiredResidency = pending.residency;
+    this.#backoffIndex = 0;
+    if (this.#pollTimer !== null) {
+      this.#timers.clearTimeout(this.#pollTimer);
+      this.#pollTimer = null;
+      this.#pollTimerExplicit = false;
+    }
+    this.#postResidencyAck(pending.requestId, pending.residency);
+    this.#schedulePoll(0, true);
+    return true;
   }
   async #getAuthoritativeSource() {
     const transport = this.#requireTransport();
@@ -3634,6 +3715,15 @@ var DerivedRuntimeWorkerController = class {
     if (current === null) throw fatal2("NO_SUBMISSION_PUBLICATION", "derived runtime has no publication bound to the active submission");
     const result = await transport.fetchCurrent({ previous: current, signal: this.#lifecycle.signal });
     this.#observed = result.current;
+    if (this.#mode === "pinned" && !sourceMatches(result.current.source, this.#pinnedSource)) {
+      throw fatal2("PINNED_SOURCE_MISMATCH", "published source changed during pinned residency activation");
+    }
+    if (result.current.manifestHash !== current.manifestHash && this.#mode === "pinned") {
+      throw fatal2("PINNED_MANIFEST_MISMATCH", "published derived manifest changed during pinned residency activation");
+    }
+    if (result.current.manifestHash !== current.manifestHash && result.current.source.revision === current.source.revision && result.current.source.headHash === current.source.headHash) {
+      throw transient2("CURRENT_CHANGED", "published derived manifest changed during residency activation");
+    }
     return Object.freeze({
       projectId: this.#projectId,
       branchId: this.#branchId,
@@ -3706,6 +3796,8 @@ var DerivedRuntimeWorkerController = class {
       globals: [...activation.globals.values()]
     }, transfers);
     const activationId = `derived-activation-${++this.#activationSequence}`;
+    const residency = this.#submissionResidency;
+    if (residency === null) throw fatal2("NO_SUBMISSION_RESIDENCY", "derived runtime activation has no bound residency");
     const snapshot = {
       schema: DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
       projectId: this.#projectId,
@@ -3713,7 +3805,7 @@ var DerivedRuntimeWorkerController = class {
       manifestHash: candidate.manifest.manifestHash,
       source: candidate.manifest.source,
       manifest: candidate.manifest,
-      residency: this.#residency,
+      residency,
       chunks: candidate.chunks,
       globals: candidate.globals
     };
@@ -3749,16 +3841,27 @@ var DerivedRuntimeWorkerController = class {
     if (message.accepted) pending.resolve();
     else pending.reject(transient2("ACTIVATION_REJECTED", `main thread rejected activation (${message.errorCode})`));
   }
-  #schedulePoll(delayMs) {
-    if (this.#closed || this.#pollTimer !== null || this.#mode === "pinned" && this.#manager?.current !== null) return;
-    this.#pollTimer = this.#timers.setTimeout(() => {
+  #schedulePoll(delayMs, explicit = false) {
+    if (this.#closed || this.#mode === "pinned" && !explicit) return;
+    if (this.#pollTimer !== null) {
+      if (!explicit || this.#pollTimerExplicit) return;
+      this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;
-      void this.#poll();
+    }
+    this.#pollTimerExplicit = explicit;
+    this.#pollTimer = this.#timers.setTimeout(() => {
+      const wasExplicit = this.#pollTimerExplicit;
+      this.#pollTimer = null;
+      this.#pollTimerExplicit = false;
+      void this.#poll(wasExplicit);
     }, delayMs);
   }
-  async #poll() {
+  async #poll(explicit) {
     if (this.#closed || this.#polling) return;
     this.#polling = true;
+    const submissionResidency = this.#desiredResidency;
+    const submissionResidencyKey = derivedTerrainResidencyKey(submissionResidency);
+    let canContinue = true;
     try {
       const result = await this.#requireTransport().fetchCurrent({ previous: this.#observed, signal: this.#lifecycle.signal });
       const current = result.current;
@@ -3769,7 +3872,13 @@ var DerivedRuntimeWorkerController = class {
           `published source ${current.source.revision}/${current.source.headHash} does not match the pinned source`
         );
       }
-      if (result.status === "not-modified" && this.#manager.current?.manifest.manifestHash === current.manifestHash) {
+      if (this.#mode === "pinned") {
+        if (this.#pinnedManifestHash === null) this.#pinnedManifestHash = current.manifestHash;
+        else if (current.manifestHash !== this.#pinnedManifestHash) {
+          throw fatal2("PINNED_MANIFEST_MISMATCH", "published derived manifest does not match the pinned manifest");
+        }
+      }
+      if (result.status === "not-modified" && this.#manager.current?.manifest.manifestHash === current.manifestHash && this.#appliedResidencyKey === submissionResidencyKey) {
         this.#backoffIndex = 0;
         this.#postMessage(Object.freeze({
           schema: DERIVED_RUNTIME_WORKER_SCHEMA,
@@ -3778,13 +3887,16 @@ var DerivedRuntimeWorkerController = class {
           manifestHash: current.manifestHash,
           revision: current.source.revision
         }));
-        if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+        if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
         return;
       }
       this.#submissionCurrent = current;
+      this.#submissionResidency = submissionResidency;
       const submit = this.#manager.submit;
       const outcome = await submit.call(this.#manager, current.manifest, { signal: this.#lifecycle.signal });
+      this.#appliedResidencyKey = submissionResidencyKey;
       this.#submissionCurrent = null;
+      this.#submissionResidency = null;
       this.#backoffIndex = 0;
       this.#postMessage(Object.freeze({
         schema: DERIVED_RUNTIME_WORKER_SCHEMA,
@@ -3793,19 +3905,22 @@ var DerivedRuntimeWorkerController = class {
         manifestHash: outcome.manifestHash,
         revision: outcome.revision
       }));
-      if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+      if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
     } catch (error) {
       this.#submissionCurrent = null;
+      this.#submissionResidency = null;
       if (this.#closed) return;
       const summary = shortError(error);
       this.#emitError(error);
-      if (summary.classification === "transient") {
+      canContinue = summary.classification !== "fatal";
+      if (summary.classification === "transient" && summary.code !== "RESIDENCY_OUTSIDE_DOMAIN") {
         const delay = DERIVED_RUNTIME_POLL_DELAYS_MS[Math.min(this.#backoffIndex, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1)];
         this.#backoffIndex = Math.min(this.#backoffIndex + 1, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1);
-        this.#schedulePoll(delay);
+        this.#schedulePoll(delay, explicit || this.#mode === "pinned");
       }
     } finally {
       this.#polling = false;
+      if (canContinue) this.#acceptPendingResidency();
     }
   }
   #requireTransport() {
@@ -3830,6 +3945,8 @@ var DerivedRuntimeWorkerController = class {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;
     }
+    this.#pollTimerExplicit = false;
+    this.#pendingResidency = null;
     const pending = this.#pendingActivation;
     if (pending !== null) {
       this.#timers.clearTimeout(pending.timeout);

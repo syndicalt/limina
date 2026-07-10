@@ -23,7 +23,7 @@ function discovery() {
   };
 }
 
-function snapshot(revision = 7) {
+function snapshot(revision = 7, resident = residency()) {
   const source = {
     revision,
     headHash: hash("a"),
@@ -49,7 +49,7 @@ function snapshot(revision = 7) {
     manifestHash,
     source,
     manifest,
-    residency: residency(),
+    residency: resident,
     chunks: [{ chunkId: chunk.chunkId, chunk, resource: {} }],
     globals: [],
   };
@@ -113,7 +113,7 @@ test("watch initialization sends the capability only to one worker and exposes b
 
 test("pinned initialization requires and forwards the exact source", () => {
   const state = harness();
-  const pinnedSource = { revision: 7, headHash: hash("a") };
+  const pinnedSource = { revision: 7, headHash: hash("a"), manifestHash: hash("c") };
   state.client.start(discovery(), { mode: "pinned", pinnedSource, residency: residency() });
   assert.deepEqual(state.worker.sent[0].pinnedSource, pinnedSource);
   ready(state, "pinned");
@@ -122,6 +122,129 @@ test("pinned initialization requires and forwards the exact source", () => {
   assert.throws(() => harness().client.start(discovery(), { mode: "watch", pinnedSource, residency: residency() }), /forbids/);
   assert.throws(() => harness().client.start(discovery(), { mode: "watch", residency: residency([0, 0], 8) }), /terrain residency/);
   assert.throws(() => harness().client.start(discovery(), { mode: "watch" }), /terrain residency/);
+});
+
+test("residency updates wait for an exact acknowledgement and coalesce to one latest pending request", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  const beforeReady = state.client.setResidency(residency([64, 0]));
+  const coalescedBeforeReady = state.client.setResidency(residency([128, 0]));
+  assert.equal(beforeReady, coalescedBeforeReady);
+  assert.equal(state.worker.sent.filter(({ type }) => type === "set-residency").length, 0);
+
+  ready(state, "watch");
+  const first = state.worker.sent.at(-1);
+  assert.deepEqual(first.residency, residency([128, 0]));
+  const duplicate = state.client.setResidency(residency([128, 0]));
+  assert.equal(duplicate, beforeReady);
+  const pending = state.client.setResidency(residency([192, 0]));
+  const latestPending = state.client.setResidency(residency([256, 0]));
+  assert.equal(pending, latestPending);
+  assert.equal(state.worker.sent.filter(({ type }) => type === "set-residency").length, 1);
+
+  state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "residency-ack",
+    requestId: first.requestId,
+    residency: first.residency,
+  });
+  await beforeReady;
+  const second = state.worker.sent.at(-1);
+  assert.equal(second.type, "set-residency");
+  assert.deepEqual(second.residency, residency([256, 0]));
+  state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "residency-ack",
+    requestId: second.requestId,
+    residency: second.residency,
+  });
+  await pending;
+  activation(state, snapshot(7, residency([256, 0])));
+  await tick();
+  assert.equal(state.worker.sent.at(-1).type, "activation-ack");
+  assert.equal(state.statuses.filter(({ phase }) => phase === "residency").length, 2);
+});
+
+test("residency coalescing preserves the final camera window when it returns to the in-flight value", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const windowA = state.client.setResidency(residency([64, 0]));
+  const first = state.worker.sent.at(-1);
+  const coalesced = state.client.setResidency(residency([128, 0]));
+  const returnedToA = state.client.setResidency(residency([64, 0]));
+  assert.equal(returnedToA, coalesced, "the final update must remain behind the in-flight serialization boundary");
+
+  state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "residency-ack",
+    requestId: first.requestId,
+    residency: first.residency,
+  });
+  await Promise.all([windowA, coalesced]);
+  assert.equal(state.worker.sent.filter(({ type }) => type === "set-residency").length, 1,
+    "returning to the accepted in-flight window must not send a stale intermediate window");
+});
+
+test("an older activation remains valid until the worker acknowledges the new residency", async () => {
+  let release;
+  let calls = 0;
+  const state = harness({ activate: () => ++calls === 1 ? new Promise((resolve) => { release = resolve; }) : Promise.resolve() });
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const update = state.client.setResidency(residency([64, 0]));
+  const request = state.worker.sent.at(-1);
+  activation(state, snapshot());
+  await tick();
+  assert.equal(state.client.phase, "ready");
+  release();
+  await tick();
+  state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "residency-ack",
+    requestId: request.requestId,
+    residency: request.residency,
+  });
+  await update;
+  activation(state, snapshot(7, residency([64, 0])), "derived-activation-2");
+  await tick();
+  assert.equal(state.client.phase, "ready");
+  assert.equal(state.worker.sent.at(-1).activationId, "derived-activation-2");
+});
+
+test("malformed residency acknowledgements fail closed without advancing expected residency", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const update = state.client.setResidency(residency([64, 0]));
+  update.catch(() => {});
+  const request = state.worker.sent.at(-1);
+  state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "residency-ack",
+    requestId: `${request.requestId}-wrong`,
+    residency: request.residency,
+  });
+  await tick();
+  assert.equal(state.client.phase, "closing");
+  assert.equal(state.statuses.some(({ code }) => code === "PROTOCOL_ERROR"), true);
+});
+
+test("close rejects sent and pending residency work and emits no late update", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const sent = state.client.setResidency(residency([64, 0]));
+  const pending = state.client.setResidency(residency([128, 0]));
+  const sentRejected = assert.rejects(sent, /closed before residency acknowledgement/);
+  const pendingRejected = assert.rejects(pending, /closed before residency acknowledgement/);
+  const closing = state.client.close();
+  await Promise.all([sentRejected, pendingRejected]);
+  const closeRequest = state.worker.sent.at(-1);
+  assert.equal(closeRequest.type, "close");
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "closed", requestId: closeRequest.requestId });
+  await closing;
+  assert.equal(state.worker.sent.filter(({ type }) => type === "set-residency").length, 1);
 });
 
 test("successful activation awaits the adapter before accepting", async () => {
@@ -227,6 +350,17 @@ test("snapshot source, manifest envelope, and pin mismatches are rejected", asyn
   activation(pinned, snapshot(7));
   await tick();
   assert.equal(pinned.client.phase, "closing");
+
+  const manifestPinned = harness();
+  manifestPinned.client.start(discovery(), {
+    mode: "pinned",
+    pinnedSource: { revision: 7, headHash: hash("a"), manifestHash: hash("e") },
+    residency: residency(),
+  });
+  ready(manifestPinned, "pinned");
+  activation(manifestPinned, snapshot(7));
+  await tick();
+  assert.equal(manifestPinned.client.phase, "closing");
 });
 
 test("fatal worker errors expose codes only and trigger bounded close", async () => {

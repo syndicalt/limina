@@ -110327,8 +110327,8 @@ function terrainSurfaceHeight(layers, x3, z4) {
   const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
   const dx = sizeX / (n2 - 1), dz = sizeZ / (nr - 1);
   const heights = tile.heights;
-  const clamp6 = (v3, a3, b4) => Math.min(b4, Math.max(a3, v3));
-  const fc = clamp6((x3 - x0) / dx, 0, n2 - 1), fr = clamp6((z4 - z0) / dz, 0, nr - 1);
+  const clamp7 = (v3, a3, b4) => Math.min(b4, Math.max(a3, v3));
+  const fc = clamp7((x3 - x0) / dx, 0, n2 - 1), fr = clamp7((z4 - z0) / dz, 0, nr - 1);
   const c0 = Math.floor(fc), r0 = Math.floor(fr);
   const c1 = Math.min(n2 - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
   const tx = fc - c0, tz = fr - r0;
@@ -117856,10 +117856,10 @@ function applyElevationColors(geom, tile, ramp) {
   const [sx, sy, sz] = scale2;
   const x0 = ox - sx / 2, z0 = oz - sz / 2;
   const dxStep = sx / (ncols - 1), dzStep = sz / (nrows - 1);
-  const clamp6 = (v3, a2, b3) => Math.min(b3, Math.max(a2, v3));
+  const clamp7 = (v3, a2, b3) => Math.min(b3, Math.max(a2, v3));
   const heightAt2 = (x3, z4) => {
-    const fc = clamp6((x3 - x0) / dxStep, 0, ncols - 1);
-    const fr = clamp6((z4 - z0) / dzStep, 0, nrows - 1);
+    const fc = clamp7((x3 - x0) / dxStep, 0, ncols - 1);
+    const fr = clamp7((z4 - z0) / dzStep, 0, nrows - 1);
     const c0 = Math.floor(fc), r0 = Math.floor(fr);
     const c1 = Math.min(ncols - 1, c0 + 1), r1 = Math.min(nrows - 1, r0 + 1);
     const tx = fc - c0, tz = fr - r0;
@@ -117873,8 +117873,8 @@ function applyElevationColors(geom, tile, ramp) {
   const blightGrid = tile.blight;
   const blightAt = (x3, z4) => {
     if (blightGrid === void 0) return 0;
-    const fc = clamp6((x3 - x0) / dxStep, 0, ncols - 1);
-    const fr = clamp6((z4 - z0) / dzStep, 0, nrows - 1);
+    const fc = clamp7((x3 - x0) / dxStep, 0, ncols - 1);
+    const fr = clamp7((z4 - z0) / dzStep, 0, nrows - 1);
     const c0 = Math.floor(fc), r0 = Math.floor(fr);
     const c1 = Math.min(ncols - 1, c0 + 1), r1 = Math.min(nrows - 1, r0 + 1);
     const tx = fc - c0, tz = fr - r0;
@@ -123731,7 +123731,7 @@ function makeMaterials(THREE, direction2, rng) {
       metalness: 0
     });
   };
-  const plain4 = (c2, roughness3) => new THREE.MeshStandardMaterial({ color: weathered ? shade(c2, 0.93) : c2, roughness: roughness3, metalness: 0 });
+  const plain5 = (c2, roughness3) => new THREE.MeshStandardMaterial({ color: weathered ? shade(c2, 0.93) : c2, roughness: roughness3, metalness: 0 });
   const timberC = col("timber", "trim", "stone");
   const mats = {
     stone: mk(paintAshlar, col("stone", "slate", "plaster"), { repeat: 2.2, rough: 0.92, normal: 1.7 }),
@@ -123741,8 +123741,8 @@ function makeMaterials(THREE, direction2, rng) {
     thatch: mk(paintThatch, col("thatch", "timber"), { repeat: 0.32, rough: 1, normal: 1.5 }),
     slate: mk(paintSlate, col("slate", "stone", "trim"), { repeat: 0.4, rough: 0.75, normal: 1.2 }),
     terracotta: mk(paintTiles, col("terracotta", "slate", "thatch"), { repeat: 0.3, rough: 0.8, normal: 1.5 }),
-    trim: plain4(col("trim", "timber"), 0.8),
-    opening: plain4(shade(col("trim", "slate"), 0.3), 0.95),
+    trim: plain5(col("trim", "timber"), 0.8),
+    opening: plain5(shade(col("trim", "slate"), 0.3), 0.95),
     earth: mk(paintEarth, col("timber", "trim").lerp(col("trim", "stone"), 0.45).lerp(new THREE.Color(16777215), 0.18), { repeat: 0.3, rough: 1, normal: 1.4 }),
     gravel: mk(paintGravel, col("stone", "slate").lerp(col("timber", "trim"), 0.28).lerp(new THREE.Color(16777215), 0.06), { repeat: 0.6, rough: 1, normal: 1.9 }),
     cobble: mk(paintCobble, shade(col("stone", "trim").lerp(timberC, 0.35), 0.92), { repeat: 0.32, rough: 0.9, normal: 2 })
@@ -130397,14 +130397,14 @@ var StatsManager = class {
   /** Apply a delta to a stat. Clamps to [min,max] when `clamp` (default). Fires the stat's
    *  onZero action when this mutation crosses DOWN to the floor (value <= minValue, having
    *  been above it before) — returned for the handler to emit. */
-  modifyStat(entity, statName, delta, clamp6 = true) {
+  modifyStat(entity, statName, delta, clamp7 = true) {
     const es = this.entityStats.get(entity);
     if (es === void 0) return void 0;
     const stat = es.stats.get(statName);
     if (stat === void 0) return void 0;
     const prev = stat.value;
     const raw = prev + delta;
-    stat.value = clamp6 ? Math.max(stat.minValue, Math.min(stat.maxValue, raw)) : raw;
+    stat.value = clamp7 ? Math.max(stat.minValue, Math.min(stat.maxValue, raw)) : raw;
     const fired = stat.value <= stat.minValue && prev > stat.minValue && stat.onZero !== void 0 ? stat.onZero : null;
     return { value: stat.value, fired };
   }
@@ -142088,6 +142088,145 @@ var DetachedDerivedRenderCandidate = class {
   }
 };
 
+// src/browser/camera-framing.ts
+var DEFAULT_FRAME = Object.freeze({
+  largeMapTerrain: false,
+  target: Object.freeze([0, 1, 0]),
+  terrainSizeM: 0,
+  orbitRadiusM: 16,
+  orbitHeightM: 8,
+  farM: 200,
+  atmosphereDensity: 11e-4,
+  controls: Object.freeze({ minDistanceM: 2, maxDistanceM: 64, maxPolarAngleRad: Math.PI / 2 - 0.04 })
+});
+function clamp6(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+function plain4(value) {
+  return value !== null && !Array.isArray(value) && typeof value === "object" ? value : null;
+}
+function finite7(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function deriveCommandCameraFrame(commands) {
+  let selected = null;
+  for (const command of commands) {
+    if (command?.kind !== "skill" || command.tool !== "terrain.create") continue;
+    const input = plain4(command.input);
+    const generate = plain4(input?.generate);
+    if (input === null || generate?.source !== "map") continue;
+    const size = finite7(input.size, 256);
+    if (!(size > 0) || size > 1e6) continue;
+    const rawOrigin = input.origin;
+    const origin = Array.isArray(rawOrigin) && rawOrigin.length === 3 && rawOrigin.every((value) => typeof value === "number" && Number.isFinite(value)) ? [rawOrigin[0], rawOrigin[1], rawOrigin[2]] : [0, 0, 0];
+    const amplitude = Math.max(1, finite7(generate.amplitude, 12));
+    if (selected === null || size > selected.size) selected = { size, origin, amplitude };
+  }
+  if (selected === null) return DEFAULT_FRAME;
+  const orbitRadiusM = clamp6(selected.size * 0.35, 32, 192);
+  const orbitHeightM = clamp6(selected.size * 0.18, 16, 96);
+  const farM = Math.max(1500, orbitRadiusM * 8);
+  const fogCharacteristicM = clamp6(selected.size * 1.5, 600, 1200);
+  const targetY = selected.origin[1] + Math.max(1, selected.amplitude * 0.25);
+  return Object.freeze({
+    largeMapTerrain: true,
+    target: Object.freeze([selected.origin[0], targetY, selected.origin[2]]),
+    terrainSizeM: selected.size,
+    orbitRadiusM,
+    orbitHeightM,
+    farM,
+    atmosphereDensity: 1 / fogCharacteristicM,
+    controls: Object.freeze({
+      minDistanceM: Math.max(2, orbitRadiusM * 0.08),
+      maxDistanceM: clamp6(orbitRadiusM * 3, 128, 576),
+      maxPolarAngleRad: Math.PI / 2 - 0.04
+    })
+  });
+}
+var DerivedTerrainResidencyTracker = class {
+  #radius;
+  #thresholdChunks;
+  #listeners = /* @__PURE__ */ new Set();
+  #onListenerError;
+  #current;
+  #gridOriginX = 0;
+  #gridOriginZ = 0;
+  #chunkSizeM = 0;
+  #anchorTx = 0;
+  #anchorTz = 0;
+  #disposed = false;
+  constructor(options) {
+    const center = options?.center;
+    if (!Array.isArray(center) || center.length !== 2 || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+      throw new TypeError("derived residency tracker center must be finite [x,z]");
+    }
+    this.#radius = options.radius ?? 7;
+    this.#thresholdChunks = options.thresholdChunks ?? 2;
+    if (!Number.isSafeInteger(this.#radius) || this.#radius < 0 || this.#radius > 7) throw new RangeError("derived residency tracker radius is invalid");
+    if (!Number.isSafeInteger(this.#thresholdChunks) || this.#thresholdChunks < 0 || this.#thresholdChunks > 7) {
+      throw new RangeError("derived residency tracker threshold is invalid");
+    }
+    this.#onListenerError = options.onListenerError ?? (() => {
+    });
+    this.#current = this.#makeResidency(center[0], center[1]);
+  }
+  current() {
+    return this.#current;
+  }
+  setGrid(grid) {
+    if (this.#disposed) return;
+    if (!Array.isArray(grid?.origin) || grid.origin.length !== 2 || !Number.isFinite(grid.origin[0]) || !Number.isFinite(grid.origin[1]) || !Number.isFinite(grid.chunkSizeM) || !(grid.chunkSizeM > 0)) {
+      throw new TypeError("derived residency tracker grid is invalid");
+    }
+    this.#gridOriginX = grid.origin[0];
+    this.#gridOriginZ = grid.origin[1];
+    this.#chunkSizeM = grid.chunkSizeM;
+    this.#anchorTx = Math.floor((this.#current.center[0] - this.#gridOriginX) / this.#chunkSizeM);
+    this.#anchorTz = Math.floor((this.#current.center[1] - this.#gridOriginZ) / this.#chunkSizeM);
+  }
+  update(anchorX, anchorZ) {
+    if (this.#disposed || this.#chunkSizeM === 0 || !Number.isFinite(anchorX) || !Number.isFinite(anchorZ)) return false;
+    const tx = Math.floor((anchorX - this.#gridOriginX) / this.#chunkSizeM);
+    const tz = Math.floor((anchorZ - this.#gridOriginZ) / this.#chunkSizeM);
+    if (Math.max(Math.abs(tx - this.#anchorTx), Math.abs(tz - this.#anchorTz)) <= this.#thresholdChunks) return false;
+    this.#anchorTx = tx;
+    this.#anchorTz = tz;
+    this.#current = this.#makeResidency(anchorX, anchorZ);
+    for (const listener of this.#listeners) {
+      try {
+        listener(this.#current);
+      } catch (error51) {
+        this.#onListenerError(error51);
+      }
+    }
+    return true;
+  }
+  subscribe(listener) {
+    if (this.#disposed) throw new Error("derived residency tracker is disposed");
+    if (typeof listener !== "function") throw new TypeError("derived residency listener must be a function");
+    this.#listeners.add(listener);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.#listeners.delete(listener);
+    };
+  }
+  dispose() {
+    this.#disposed = true;
+    this.#listeners.clear();
+    this.#chunkSizeM = 0;
+  }
+  #makeResidency(x3, z4) {
+    return Object.freeze({
+      schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA,
+      center: Object.freeze([Object.is(x3, -0) ? 0 : x3, Object.is(z4, -0) ? 0 : z4]),
+      lod: 0,
+      radius: this.#radius
+    });
+  }
+};
+
 // src/render/toon.ts
 function toonRamp(bands) {
   const n2 = Math.max(2, bands);
@@ -142734,6 +142873,7 @@ async function runLive(opts) {
   let cleanupTerrainMaterialPool;
   let cleanupGrassStream;
   let cleanupEntityStream;
+  let cleanupDerivedTerrainResidency;
   let cleanupInput;
   let cleanupCameraControls;
   let cleanupUnderwater;
@@ -142823,6 +142963,7 @@ async function runLive(opts) {
       });
       await step3("camera controls", () => cleanupCameraControls?.dispose());
       await step3("entity residency", () => cleanupEntityStream?.clear());
+      await step3("derived terrain residency", () => cleanupDerivedTerrainResidency?.());
       await step3("grass stream", () => cleanupGrassStream?.clear());
       await step3("terrain stream", () => cleanupTerrainStream?.clear());
       await step3("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
@@ -142998,11 +143139,16 @@ async function runLive(opts) {
     const streamingPlanned = opts.commands.some(
       (cmd) => cmd.kind === "skill" && cmd.tool === "world.setTerrainSource" && cmd.input?.kind === "map"
     );
-    const streamedAtmosphere = { camera: { far: 1500 }, atmosphere: { density: 1 / 600 } };
+    const commandCameraFrame = deriveCommandCameraFrame(opts.commands);
+    const largeMapTerrainPlanned = streamingPlanned || commandCameraFrame.largeMapTerrain;
+    const streamedAtmosphere = {
+      camera: { far: commandCameraFrame.largeMapTerrain ? commandCameraFrame.farM : 1500 },
+      atmosphere: { density: commandCameraFrame.largeMapTerrain ? commandCameraFrame.atmosphereDensity : 1 / 600 }
+    };
     const terrainAuthored = opts.commands.some(
       (cmd) => cmd.kind === "skill" && (cmd.tool === "terrain.create" || cmd.tool === "world.generateRegion")
     );
-    const liveBaseline = streamingPlanned ? { ground: { enabled: false }, ...streamedAtmosphere, ...opts.renderBaseline ?? {} } : terrainAuthored ? { ground: { enabled: false }, ...opts.renderBaseline ?? {} } : opts.renderBaseline ?? {};
+    const liveBaseline = largeMapTerrainPlanned ? { ground: { enabled: false }, ...streamedAtmosphere, ...opts.renderBaseline ?? {} } : terrainAuthored ? { ground: { enabled: false }, ...opts.renderBaseline ?? {} } : opts.renderBaseline ?? {};
     status("loading", "starting WebGPU");
     const renderSession = await renderHost.acquireWorld({
       width: opts.width,
@@ -143286,14 +143432,18 @@ async function runLive(opts) {
     cleanupInput = liveInput;
     if (opts.input !== void 0) liveInput.attach(opts.input);
     const inFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
-    const orbitCenter = opts.orbit?.center ?? [0, 1, 0];
+    const orbitCenter = opts.orbit?.center ?? [
+      commandCameraFrame.target[0],
+      commandCameraFrame.target[1],
+      commandCameraFrame.target[2]
+    ];
     const orbitSpin = opts.orbit?.autoSpin ?? 4e-3;
     let angle = 0;
-    const radius = opts.orbit?.radius ?? 16;
-    const camHeight = opts.orbit?.height ?? 8;
+    const radius = opts.orbit?.radius ?? commandCameraFrame.orbitRadiusM;
+    const camHeight = opts.orbit?.height ?? commandCameraFrame.orbitHeightM;
     if (opts.orbit?.far !== void 0) {
       const cam = camera;
-      cam.far = streamingPlanned ? Math.max(opts.orbit.far, 1500) : opts.orbit.far;
+      cam.far = opts.orbit.far;
       cam.updateProjectionMatrix();
     }
     let cameraControls;
@@ -143311,6 +143461,13 @@ async function runLive(opts) {
       cameraControls.enableZoom = true;
       cameraControls.enablePan = true;
       cameraControls.enableDamping = true;
+      cameraControls.minDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
+      cameraControls.maxDistance = Math.max(
+        cameraControls.minDistance + 1,
+        opts.orbit?.radius === void 0 ? commandCameraFrame.controls.maxDistanceM : Math.min(576, Math.max(128, radius * 3))
+      );
+      cameraControls.minPolarAngle = 0.04;
+      cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
       cameraControls.update();
     }
     const vantage = opts.vantage;
@@ -143322,7 +143479,7 @@ async function runLive(opts) {
       camera.lookAt(vx + Math.sin(vantage.yaw) * cp, vy + Math.sin(pitch), vz - Math.cos(vantage.yaw) * cp);
       if (vantage.far !== void 0) {
         const cam = camera;
-        cam.far = streamingPlanned ? Math.max(vantage.far, 1500) : vantage.far;
+        cam.far = vantage.far;
         cam.updateProjectionMatrix();
       }
     }
@@ -143337,6 +143494,24 @@ async function runLive(opts) {
       }
     }
     const EYE_OFFSET = 0.7;
+    const residencyStartX = cameraControls !== void 0 ? cameraControls.target.x : playerEid !== void 0 ? Position.x[playerEid] : camera.position.x;
+    const residencyStartZ = cameraControls !== void 0 ? cameraControls.target.z : playerEid !== void 0 ? Position.z[playerEid] : camera.position.z;
+    const derivedTerrainResidencyTracker = new DerivedTerrainResidencyTracker({
+      center: [residencyStartX, residencyStartZ],
+      radius: 7,
+      thresholdChunks: 2,
+      onListenerError: (error51) => console.warn("derived terrain residency listener failed", error51)
+    });
+    cleanupDerivedTerrainResidency = () => derivedTerrainResidencyTracker.dispose();
+    const updateDerivedTerrainResidency = () => {
+      if (cameraControls !== void 0) {
+        derivedTerrainResidencyTracker.update(cameraControls.target.x, cameraControls.target.z);
+      } else if (playerEid !== void 0) {
+        derivedTerrainResidencyTracker.update(Position.x[playerEid], Position.z[playerEid]);
+      } else {
+        derivedTerrainResidencyTracker.update(camera.position.x, camera.position.z);
+      }
+    };
     if (aborted2) {
       await teardown("sim worker aborted during startup").catch(reportTeardownFailure);
       return null;
@@ -143397,6 +143572,7 @@ async function runLive(opts) {
           );
           camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
         }
+        updateDerivedTerrainResidency();
         if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
         if (terrainStream !== void 0 || entityStream !== void 0) {
           const camPos = camera.position;
@@ -143588,6 +143764,7 @@ async function runLive(opts) {
           simCommitted = true;
           cancelled();
           suppressAuthoredTerrainPresentation();
+          derivedTerrainResidencyTracker.setGrid(candidate.snapshot.manifest.grid);
           const prior = activeDerivedRevision;
           activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
           cleanupDerivedRevision = () => {
@@ -143840,12 +144017,8 @@ async function runLive(opts) {
       playerWaterState: () => readSimStatus(statusView),
       activateDerivedRevision,
       derivedRevision: () => activeDerivedRevision?.identity ?? null,
-      derivedTerrainResidency: () => activeDerivedRevision?.candidate.snapshot.residency ?? Object.freeze({
-        schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA,
-        center: Object.freeze([camera.position.x, camera.position.z]),
-        lod: 0,
-        radius: 7
-      }),
+      derivedTerrainResidency: () => derivedTerrainResidencyTracker.current(),
+      subscribeDerivedTerrainResidency: (listener) => derivedTerrainResidencyTracker.subscribe(listener),
       stop: stopLive
     };
     if (opts.initialDerivedRevision !== void 0) await runningLive.activateDerivedRevision(opts.initialDerivedRevision);

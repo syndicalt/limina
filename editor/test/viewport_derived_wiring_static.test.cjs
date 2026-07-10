@@ -54,16 +54,29 @@ test("Edit activation is runtime-specific, epoch guarded, retained, and reboot-s
   ], "Edit derived activation");
   const reboot = functionBody("reboot");
   ordered(reboot, [
+    "const savedEditState = restore ?? captureEditState()",
     "state.rebooting = true",
     "state.editRuntimeEpoch++",
     "await closeEditDerivedClient()",
     "await stopRuntime(state.running)",
     "initialDerivedRevision",
+    "restoreEditState(savedEditState)",
     "state.rebooting = false",
   ], "Edit reboot barrier");
   assert.match(functionBody("ensureEditDerivedClient"), /mode: "watch"/);
   assert.match(functionBody("ensureEditDerivedClient"), /residency: state\.running\.derivedTerrainResidency\(\)/);
+  ordered(functionBody("ensureEditDerivedClient"), [
+    "client.start(discovery",
+    "subscribeDerivedResidency(",
+    "state.derivedEditClient === client",
+    "state.running === runtime",
+  ], "Edit residency subscription");
   assert.match(functionBody("closeEditDerivedClient"), /DERIVED_CLOSE_BARRIER_TIMEOUT_MS/);
+  ordered(functionBody("closeEditDerivedClient"), [
+    "releaseEditDerivedResidency()",
+    "state.derivedEditClient = undefined",
+    "client?.close()",
+  ], "Edit residency teardown");
   const invalidation = functionBody("invalidateEditDerivedRevision");
   assert.match(invalidation, /state\.latestEditDerivedRevision = undefined/);
   assert.match(invalidation, /state\.editRuntimeEpoch\+\+/);
@@ -88,9 +101,21 @@ test("History removes current derived presentation before replaying a past prefi
 test("Play uses a separate exact pin and cannot declare Playing before activation", () => {
   const pinned = functionBody("startPinnedDerivedClient");
   assert.match(pinned, /mode: "pinned"/);
-  assert.match(pinned, /pinnedSource: \{ revision: source\.revision, headHash: source\.headHash \}/);
+  assert.match(pinned, /const activeManifestHash = runtime\.derivedRevision\(\)\?\.manifestHash/);
+  assert.match(pinned, /manifestHash: activeManifestHash/);
   assert.match(pinned, /residency: runtime\.derivedTerrainResidency\(\)/);
   assert.match(pinned, /runtime\.activateDerivedRevision\(snapshot, \{ signal \}\)/);
+  ordered(pinned, [
+    "client.start(discovery",
+    "subscribeDerivedResidency(",
+    "state.derivedPlayClient === client",
+    "state.playRuntime === runtime",
+  ], "Play residency subscription");
+  ordered(functionBody("closePlayDerivedClient"), [
+    "releasePlayDerivedResidency()",
+    "state.derivedPlayClient = undefined",
+    "client.close()",
+  ], "Play residency teardown");
 
   const play = functionBody("startPlay");
   ordered(play, [
@@ -102,6 +127,21 @@ test("Play uses a separate exact pin and cannot declare Playing before activatio
   ], "pinned Play startup");
   assert.match(functionBody("stopPlay"), /await closePlayDerivedClient\(\)/);
   assert.match(functionBody("restoreEditWorld"), /await closePlayDerivedClient\(\)/);
+});
+
+test("camera residency forwarding coalesces updates and contains stale callbacks and failures", () => {
+  const subscription = functionBody("subscribeDerivedResidency");
+  assert.match(subscription, /pending = residency/);
+  assert.match(subscription, /if \(flushing\) return/);
+  assert.match(subscription, /await client\.setResidency\(residency\)/);
+  assert.match(subscription, /closed \|\| !isCurrent\(\)/);
+  assert.match(subscription, /if \(!closed && isCurrent\(\)\) setStatus\("derived", failureCode\)/);
+  ordered(subscription, [
+    "closed = true",
+    "pending = undefined",
+    "unsubscribe()",
+  ], "residency unsubscribe");
+  assert.match(functionBody("reboot"), /await closeEditDerivedClient\(\)/);
 });
 
 test("disconnect and unload forget the capability and bound both client shutdowns", () => {

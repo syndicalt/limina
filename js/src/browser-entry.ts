@@ -109,10 +109,14 @@ import {
   DetachedDerivedRenderCandidate,
 } from "./browser/derived-runtime-render-candidate.ts";
 import {
-  DERIVED_TERRAIN_RESIDENCY_SCHEMA,
   derivedTerrainResidencyKey,
   type DerivedTerrainResidency,
 } from "./browser/derived-terrain-residency.ts";
+import {
+  deriveCommandCameraFrame,
+  DerivedTerrainResidencyTracker,
+  type DerivedTerrainResidencyListener,
+} from "./browser/camera-framing.ts";
 import { buildPostPipeline, constrainPostPreset, type PostPipeline, type PostPreset } from "./render/post.ts";
 export { createBrowserRenderHost } from "./render/browser-host.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
@@ -604,6 +608,8 @@ export interface RunningLive {
   derivedRevision(): Readonly<{ manifestHash: string; revision: number; headHash: string }> | null;
   /** Immutable LOD0 camera residency used by the next derived worker and active revision. */
   derivedTerrainResidency(): Readonly<DerivedTerrainResidency>;
+  /** Subscribe to threshold-crossing residency changes. Does not emit the current value immediately. */
+  subscribeDerivedTerrainResidency(listener: DerivedTerrainResidencyListener): () => void;
   stop(): Promise<void>;
 }
 
@@ -808,6 +814,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupTerrainMaterialPool: TerrainMaterialPool | undefined;
   let cleanupGrassStream: StreamedGrassManager | undefined;
   let cleanupEntityStream: EntityResidencyStream | undefined;
+  let cleanupDerivedTerrainResidency: (() => void) | undefined;
   let cleanupInput: LivePlayerInput | undefined;
   let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
   let cleanupUnderwater: UnderwaterEffect | undefined;
@@ -892,6 +899,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       });
       await step("camera controls", () => cleanupCameraControls?.dispose());
       await step("entity residency", () => cleanupEntityStream?.clear());
+      await step("derived terrain residency", () => cleanupDerivedTerrainResidency?.());
       await step("grass stream", () => cleanupGrassStream?.clear());
       await step("terrain stream", () => cleanupTerrainStream?.clear());
       await step("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
@@ -1131,21 +1139,15 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cmd.kind === "skill" && cmd.tool === "world.setTerrainSource" &&
     (cmd.input as { kind?: unknown } | undefined)?.kind === "map"
   );
-  // Map Phase 3.4: an honest DISTANCE TREATMENT for kilometer-scale streamed worlds. A hand-tuned demo
-  // far plane (run()'s fly-cam far=900, or a proof's own hard-coded orbit.far) clips client-streamed
-  // terrain with a hard edge — no atmosphere to hide it. Only for map-streamed worlds (the same
-  // `streamingPlanned` signal that suppresses the baseline ground): widen the far plane to 1500 m and
-  // hand-tune the DEFAULT atmosphere's density so the haze reads as real by ~600 m out. The haze colour
-  // is left at `atmosphere.color: null` (untouched, inherited from base) — see render-baseline.ts:
-  // that auto-matches `sky.horizon`, i.e. the SAME colour already painted as `scene.background`, so
-  // distant terrain melts into the sky instead of hitting a grey wall. Non-streamed worlds: this
-  // object is never constructed, so nothing about their camera/fog changes.
-  // FogExp2's "characteristic distance" (where 1-exp(-(density*d)^2) reaches the 1/e point, i.e.
-  // ~63% faded) at density = 1/600 sits at d=600 m — the requested "fog from ~600 m" read literally.
-  // By the 1500 m far plane distance*density ≈ 2.5, i.e. >99% faded: geometry is already the fog
-  // colour (which matches the sky/horizon — see the doc above) well before the clip plane, so nothing
-  // pops when it's culled by `far`.
-  const streamedAtmosphere: RenderBaselineOverride = { camera: { far: 1500 }, atmosphere: { density: 1 / 600 } };
+  const commandCameraFrame = deriveCommandCameraFrame(opts.commands);
+  const largeMapTerrainPlanned = streamingPlanned || commandCameraFrame.largeMapTerrain;
+  // Both streamed map worlds and editable terrain generated from a map need a production-scale
+  // far plane and atmosphere. Map-generated terrain derives those values from its bounded local
+  // editor frame; streamed maps retain the established 1500 m / 600 m-distance defaults.
+  const streamedAtmosphere: RenderBaselineOverride = {
+    camera: { far: commandCameraFrame.largeMapTerrain ? commandCameraFrame.farM : 1500 },
+    atmosphere: { density: commandCameraFrame.largeMapTerrain ? commandCameraFrame.atmosphereDensity : 1 / 600 },
+  };
   // Task #71: a world that AUTHORS real terrain (terrain.create editable layer, or generated
   // regions) renders its own ground — the baseline's flat 80×80 slate plane at y=0 would sit
   // ABOVE any seabed/river bed below y=0 and show through the transparent water as a dark
@@ -1156,7 +1158,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const terrainAuthored = opts.commands.some((cmd) =>
     cmd.kind === "skill" && (cmd.tool === "terrain.create" || cmd.tool === "world.generateRegion")
   );
-  const liveBaseline: RenderBaselineOverride = streamingPlanned
+  const liveBaseline: RenderBaselineOverride = largeMapTerrainPlanned
     ? { ground: { enabled: false }, ...streamedAtmosphere, ...(opts.renderBaseline ?? {}) }
     : terrainAuthored
     ? { ground: { enabled: false }, ...(opts.renderBaseline ?? {}) }
@@ -1547,18 +1549,19 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   if (opts.input !== undefined) liveInput.attach(opts.input as Parameters<LivePlayerInput["attach"]>[0]);
   const inFrame = { move: [0, 0, 0] as [number, number, number], look: [0, 0] as [number, number], buttons: [0, 0] as [number, number], tick: 0 };
 
-  const orbitCenter = opts.orbit?.center ?? [0, 1, 0];
+  const orbitCenter = opts.orbit?.center ?? [
+    commandCameraFrame.target[0],
+    commandCameraFrame.target[1],
+    commandCameraFrame.target[2],
+  ];
   const orbitSpin = opts.orbit?.autoSpin ?? 0.004;
   let angle = 0;
-  const radius = opts.orbit?.radius ?? 16;
-  const camHeight = opts.orbit?.height ?? 8;
+  const radius = opts.orbit?.radius ?? commandCameraFrame.orbitRadiusM;
+  const camHeight = opts.orbit?.height ?? commandCameraFrame.orbitHeightM;
   if (opts.orbit?.far !== undefined) {
     const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
-    // Map Phase 3.4: a map-streamed world's far plane floors at 1500 m (applied above via
-    // liveBaseline.camera.far) — an explicit orbit.far only WIDENS that floor, never narrows it back
-    // down (a proof authored before this policy existed, e.g. stream-proof.json's far:700, must not
-    // undo it). Non-streamed worlds: unchanged — exactly `cam.far = opts.orbit.far` as before.
-    cam.far = streamingPlanned ? Math.max(opts.orbit.far, 1500) : opts.orbit.far;
+    // RunLive orbit fields are explicit caller authority; command-derived framing supplies defaults.
+    cam.far = opts.orbit.far;
     cam.updateProjectionMatrix();
   }
   let cameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
@@ -1576,6 +1579,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cameraControls.enableZoom = true;
     cameraControls.enablePan = true;
     cameraControls.enableDamping = true;
+    cameraControls.minDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
+    cameraControls.maxDistance = Math.max(
+      cameraControls.minDistance + 1,
+      opts.orbit?.radius === undefined ? commandCameraFrame.controls.maxDistanceM : Math.min(576, Math.max(128, radius * 3)),
+    );
+    cameraControls.minPolarAngle = 0.04;
+    cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
     cameraControls.update();
   }
 
@@ -1591,7 +1601,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     camera.lookAt(vx + Math.sin(vantage.yaw) * cp, vy + Math.sin(pitch), vz - Math.cos(vantage.yaw) * cp);
     if (vantage.far !== undefined) {
       const cam = camera as unknown as { far: number; updateProjectionMatrix(): void };
-      cam.far = streamingPlanned ? Math.max(vantage.far, 1500) : vantage.far;
+      cam.far = vantage.far;
       cam.updateProjectionMatrix();
     }
   }
@@ -1617,6 +1627,33 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   }
   // Eye height above the capsule CENTER (center rests at ~0.9 m for the 1.8 m capsule → eye ~1.6 m).
   const EYE_OFFSET = 0.7;
+  const residencyStartX = cameraControls !== undefined
+    ? cameraControls.target.x
+    : playerEid !== undefined
+    ? Position.x[playerEid]
+    : camera.position.x;
+  const residencyStartZ = cameraControls !== undefined
+    ? cameraControls.target.z
+    : playerEid !== undefined
+    ? Position.z[playerEid]
+    : camera.position.z;
+  const derivedTerrainResidencyTracker = new DerivedTerrainResidencyTracker({
+    center: [residencyStartX, residencyStartZ],
+    radius: 7,
+    thresholdChunks: 2,
+    onListenerError: (error) => console.warn("derived terrain residency listener failed", error),
+  });
+  cleanupDerivedTerrainResidency = () => derivedTerrainResidencyTracker.dispose();
+
+  const updateDerivedTerrainResidency = (): void => {
+    if (cameraControls !== undefined) {
+      derivedTerrainResidencyTracker.update(cameraControls.target.x, cameraControls.target.z);
+    } else if (playerEid !== undefined) {
+      derivedTerrainResidencyTracker.update(Position.x[playerEid], Position.z[playerEid]);
+    } else {
+      derivedTerrainResidencyTracker.update(camera.position.x, camera.position.z);
+    }
+  };
 
   // If the worker already threw during the WebGPU/scene build above, bail now instead
   // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
@@ -1695,6 +1732,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         );
         camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
       }
+      updateDerivedTerrainResidency();
       if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
       // Map Phase 3.3: stream terrain around wherever the ACTIVE camera actually is this frame
       // (player eye, OrbitControls, or auto-orbit — the pose was just set above). Budgeted pure
@@ -1904,6 +1942,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // No frame or fixed step can observe the transition: render is gated and simulation remains
         // paused until the new group, local colliders, and sim contact/colliders all agree.
         suppressAuthoredTerrainPresentation();
+        derivedTerrainResidencyTracker.setGrid(candidate.snapshot.manifest.grid);
         const prior = activeDerivedRevision;
         activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
         cleanupDerivedRevision = () => {
@@ -2142,12 +2181,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     playerWaterState: (): Readonly<SimStatusSnapshot> | null => readSimStatus(statusView),
     activateDerivedRevision,
     derivedRevision: () => activeDerivedRevision?.identity ?? null,
-    derivedTerrainResidency: () => activeDerivedRevision?.candidate.snapshot.residency ?? Object.freeze({
-      schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA,
-      center: Object.freeze([camera.position.x, camera.position.z] as [number, number]),
-      lod: 0,
-      radius: 7,
-    }),
+    derivedTerrainResidency: (): Readonly<DerivedTerrainResidency> => derivedTerrainResidencyTracker.current(),
+    subscribeDerivedTerrainResidency: (listener: DerivedTerrainResidencyListener): (() => void) => (
+      derivedTerrainResidencyTracker.subscribe(listener)
+    ),
     stop: stopLive,
   };
   if (opts.initialDerivedRevision !== undefined) await runningLive.activateDerivedRevision(opts.initialDerivedRevision);
