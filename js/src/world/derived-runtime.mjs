@@ -1,5 +1,5 @@
 import { compilerContentHash } from "./compiler/canonical.mjs";
-import { derivedArtifactContentHash, parseDerivedRevisionManifest } from "./compiler/manifest.mjs";
+import { derivedArtifactContentHash, derivedGlobalArtifacts, parseDerivedRevisionManifest } from "./compiler/manifest.mjs";
 
 export const DERIVED_RUNTIME_DIAGNOSTICS_LIMIT = 64;
 export const MAX_DERIVED_RUNTIME_DIAGNOSTICS = 256;
@@ -65,12 +65,24 @@ function chunkRuntimeIdentity(chunk, grid) {
   });
 }
 
+function globalRuntimeIdentity(artifact) {
+  return compilerContentHash(artifact);
+}
+
 function publicChunks(liveChunks) {
   return freezeArray([...liveChunks.values()].map((entry) => ({
     chunkId: entry.chunk.chunkId,
     chunk: entry.chunk,
     resource: entry.resource,
   })));
+}
+
+function publicGlobals(liveGlobals) {
+  return new Map([...liveGlobals].map(([artifactType, entry]) => [artifactType, Object.freeze({
+    artifactType,
+    artifact: entry.artifact,
+    resource: entry.resource,
+  })]));
 }
 
 function assertAuthority(authority, projectId, branchId) {
@@ -103,7 +115,7 @@ export class DerivedRevisionRuntimeError extends Error {
  * Transactional owner of one project's live derived chunk set.
  *
  * `stageChunk` must create resources without making them visible. `activateRevision`
- * receives the complete next set and must swap it atomically: rejection means it left
+ * receives the complete next chunk/global sets and must swap them atomically: rejection means it left
  * the previously supplied set visible. This boundary is what lets the manager preserve
  * the live revision across loader, staging, cancellation, and activation failures.
  * If `stageChunk` throws before returning a resource, it owns cleanup of allocations it
@@ -115,8 +127,10 @@ export class DerivedRevisionManager {
   #getAuthoritativeSource;
   #loadArtifact;
   #stageChunk;
+  #stageGlobal;
   #activateRevision;
   #disposeChunk;
+  #disposeGlobal;
   #now;
   #diagnosticsLimit;
   #diagnostics = [];
@@ -128,15 +142,17 @@ export class DerivedRevisionManager {
   constructor(input) {
     const options = assertOptions(input, new Set([
       "projectId", "branchId", "getAuthoritativeSource", "loadArtifact", "stageChunk",
-      "activateRevision", "disposeChunk", "diagnosticsLimit", "now",
+      "stageGlobal", "activateRevision", "disposeChunk", "disposeGlobal", "diagnosticsLimit", "now",
     ]), "derived revision manager options");
     this.#projectId = assertIdentifier(options.projectId, PROJECT_ID, "derived revision manager projectId");
     this.#branchId = assertIdentifier(options.branchId, BRANCH_ID, "derived revision manager branchId");
     this.#getAuthoritativeSource = assertFunction(options.getAuthoritativeSource, "getAuthoritativeSource");
     this.#loadArtifact = assertFunction(options.loadArtifact, "loadArtifact");
     this.#stageChunk = assertFunction(options.stageChunk, "stageChunk");
+    this.#stageGlobal = options.stageGlobal === undefined ? undefined : assertFunction(options.stageGlobal, "stageGlobal");
     this.#activateRevision = assertFunction(options.activateRevision, "activateRevision");
     this.#disposeChunk = assertFunction(options.disposeChunk, "disposeChunk");
+    this.#disposeGlobal = options.disposeGlobal === undefined ? undefined : assertFunction(options.disposeGlobal, "disposeGlobal");
     if (typeof globalThis.AbortController !== "function") {
       throw new Error("DerivedRevisionManager requires the platform AbortController API");
     }
@@ -164,6 +180,7 @@ export class DerivedRevisionManager {
     return Object.freeze({
       manifest: this.#live.manifest,
       chunks: publicChunks(this.#live.chunks),
+      globals: publicGlobals(this.#live.globals),
     });
   }
 
@@ -306,11 +323,47 @@ export class DerivedRevisionManager {
     }
   }
 
+  async #loadVerifiedArtifact(request, artifact, loaderInput, cache, timings, counts) {
+    let pending = cache.get(artifact.contentHash);
+    if (pending === undefined) {
+      pending = (async () => {
+        const phaseAt = this.#now();
+        try {
+          return await this.#loadArtifact(Object.freeze(loaderInput));
+        } finally {
+          timings.load += elapsed(this.#now, phaseAt);
+        }
+      })();
+      cache.set(artifact.contentHash, pending);
+    }
+    const bytes = await pending;
+    throwIfCancelled(request.signal);
+    if (!(bytes instanceof Uint8Array)) {
+      throw new DerivedRevisionRuntimeError("INVALID_ARTIFACT_BYTES", `artifact '${artifact.artifactType}' loader did not return Uint8Array`);
+    }
+    if (bytes.byteLength !== artifact.byteLength) {
+      throw new DerivedRevisionRuntimeError("ARTIFACT_LENGTH_MISMATCH", `artifact '${artifact.artifactType}' byteLength mismatch`);
+    }
+    // Re-verify every descriptor even on a content-addressed cache hit. Deduplication reduces loader
+    // I/O only; it never weakens the declared length/hash boundary.
+    if (derivedArtifactContentHash(bytes) !== artifact.contentHash) {
+      throw new DerivedRevisionRuntimeError("ARTIFACT_HASH_MISMATCH", `artifact '${artifact.artifactType}' content hash mismatch`);
+    }
+    counts.artifacts++;
+    counts.artifactBytes += bytes.byteLength;
+    return bytes;
+  }
+
   async #apply(request) {
     const startedAt = this.#now();
     const timingsMs = { authority: 0, load: 0, stage: 0, activation: 0, retirement: 0, total: 0 };
-    const counts = { changed: 0, unchanged: 0, removed: 0, artifacts: 0, artifactBytes: 0, retirementFailures: 0 };
+    const counts = {
+      changed: 0, unchanged: 0, removed: 0,
+      changedGlobals: 0, unchangedGlobals: 0, removedGlobals: 0,
+      artifacts: 0, artifactBytes: 0, retirementFailures: 0,
+    };
     const staged = [];
+    const artifactCache = new Map();
     let failurePhase = "validation";
     try {
       throwIfCancelled(request.signal);
@@ -324,17 +377,49 @@ export class DerivedRevisionManager {
       timingsMs.authority += elapsed(this.#now, phaseAt);
       throwIfCancelled(request.signal);
 
+      // The helper accepts only the verified object returned by parseDerivedRevisionManifest above;
+      // v1 maps to its canonical frozen empty set without normalizing the manifest shape.
+      failurePhase = "validation";
+      const manifestGlobals = derivedGlobalArtifacts(request.manifest);
+      if (manifestGlobals.length > 0 && (this.#stageGlobal === undefined || this.#disposeGlobal === undefined)) {
+        throw new DerivedRevisionRuntimeError(
+          "GLOBAL_LIFECYCLE_UNAVAILABLE",
+          "derived manifest carries global artifacts but stageGlobal/disposeGlobal are unavailable",
+        );
+      }
+
       if (this.#live?.manifest.manifestHash === request.manifest.manifestHash) {
         timingsMs.total = elapsed(this.#now, startedAt);
         counts.unchanged = request.manifest.chunks.length;
+        counts.unchangedGlobals = manifestGlobals.length;
         const outcome = this.#outcome("unchanged", request.manifest, counts);
         this.#recordDiagnostic(request, "unchanged", { timingsMs, counts, errors: [] });
         return outcome;
       }
 
       const priorChunks = this.#live?.chunks ?? new Map();
+      const priorGlobals = this.#live?.globals ?? new Map();
       const nextChunks = new Map();
+      const nextGlobals = new Map();
       const changedChunks = [];
+      const changedGlobals = [];
+      for (const artifact of manifestGlobals) {
+        const identity = globalRuntimeIdentity(artifact);
+        const prior = priorGlobals.get(artifact.artifactType);
+        if (prior?.identity === identity) {
+          nextGlobals.set(artifact.artifactType, prior);
+          counts.unchangedGlobals++;
+        } else {
+          changedGlobals.push({ artifact, identity });
+          counts.changedGlobals++;
+        }
+      }
+      const changedGlobalTypes = new Set(changedGlobals.map((changed) => changed.artifact.artifactType));
+      const removedGlobals = [...priorGlobals.values()].filter((entry) => (
+        !nextGlobals.has(entry.artifact.artifactType) && !changedGlobalTypes.has(entry.artifact.artifactType)
+      ));
+      counts.removedGlobals = removedGlobals.length;
+
       for (const chunk of request.manifest.chunks) {
         const identity = chunkRuntimeIdentity(chunk, request.manifest.grid);
         const prior = priorChunks.get(chunk.chunkId);
@@ -350,31 +435,53 @@ export class DerivedRevisionManager {
       const removedChunks = [...priorChunks.values()].filter((entry) => !nextChunks.has(entry.chunk.chunkId) && !changedChunkIds.has(entry.chunk.chunkId));
       counts.removed = removedChunks.length;
 
+      for (const changed of changedGlobals) {
+        throwIfCancelled(request.signal);
+        failurePhase = "load";
+        const bytes = await this.#loadVerifiedArtifact(
+          request,
+          changed.artifact,
+          {
+            manifest: request.manifest,
+            artifact: changed.artifact,
+            globalArtifact: changed.artifact,
+            signal: request.signal,
+          },
+          artifactCache,
+          timingsMs,
+          counts,
+        );
+        failurePhase = "stage";
+        phaseAt = this.#now();
+        const resource = await this.#stageGlobal(Object.freeze({
+          manifest: request.manifest,
+          artifact: changed.artifact,
+          bytes,
+          signal: request.signal,
+        }));
+        timingsMs.stage += elapsed(this.#now, phaseAt);
+        if (resource === undefined) {
+          throw new DerivedRevisionRuntimeError("INVALID_STAGED_RESOURCE", `global '${changed.artifact.artifactType}' staging returned undefined`);
+        }
+        const liveEntry = Object.freeze({ artifact: changed.artifact, identity: changed.identity, resource });
+        staged.push({ kind: "global", entry: liveEntry });
+        nextGlobals.set(changed.artifact.artifactType, liveEntry);
+        throwIfCancelled(request.signal);
+      }
+
       for (const changed of changedChunks) {
         throwIfCancelled(request.signal);
         const artifactPayloads = [];
         for (const artifact of changed.chunk.artifacts) {
           failurePhase = "load";
-          phaseAt = this.#now();
-          const bytes = await this.#loadArtifact(Object.freeze({
-            manifest: request.manifest,
-            chunk: changed.chunk,
+          const bytes = await this.#loadVerifiedArtifact(
+            request,
             artifact,
-            signal: request.signal,
-          }));
-          timingsMs.load += elapsed(this.#now, phaseAt);
-          throwIfCancelled(request.signal);
-          if (!(bytes instanceof Uint8Array)) {
-            throw new DerivedRevisionRuntimeError("INVALID_ARTIFACT_BYTES", `artifact '${artifact.artifactType}' loader did not return Uint8Array`);
-          }
-          if (bytes.byteLength !== artifact.byteLength) {
-            throw new DerivedRevisionRuntimeError("ARTIFACT_LENGTH_MISMATCH", `artifact '${artifact.artifactType}' byteLength mismatch`);
-          }
-          if (derivedArtifactContentHash(bytes) !== artifact.contentHash) {
-            throw new DerivedRevisionRuntimeError("ARTIFACT_HASH_MISMATCH", `artifact '${artifact.artifactType}' content hash mismatch`);
-          }
-          counts.artifacts++;
-          counts.artifactBytes += bytes.byteLength;
+            { manifest: request.manifest, chunk: changed.chunk, artifact, signal: request.signal },
+            artifactCache,
+            timingsMs,
+            counts,
+          );
           artifactPayloads.push(Object.freeze({ artifact, bytes }));
         }
 
@@ -389,21 +496,30 @@ export class DerivedRevisionManager {
         timingsMs.stage += elapsed(this.#now, phaseAt);
         if (resource === undefined) throw new DerivedRevisionRuntimeError("INVALID_STAGED_RESOURCE", `chunk '${changed.chunk.chunkId}' staging returned undefined`);
         const liveEntry = Object.freeze({ chunk: changed.chunk, identity: changed.identity, resource });
-        staged.push(liveEntry);
+        staged.push({ kind: "chunk", entry: liveEntry });
         nextChunks.set(changed.chunk.chunkId, liveEntry);
         throwIfCancelled(request.signal);
       }
 
+      const orderedNextGlobals = new Map(manifestGlobals.map((artifact) => [artifact.artifactType, nextGlobals.get(artifact.artifactType)]));
       const orderedNextChunks = new Map(request.manifest.chunks.map((chunk) => [chunk.chunkId, nextChunks.get(chunk.chunkId)]));
       const replacedChunks = changedChunks
         .map((changed) => priorChunks.get(changed.chunk.chunkId))
         .filter((entry) => entry !== undefined);
       const replacedChunkIds = new Set(replacedChunks.map((entry) => entry.chunk.chunkId));
-      const retirementQueue = [...replacedChunks, ...removedChunks].map((entry) => ({
+      const chunkRetirementQueue = [...replacedChunks, ...removedChunks].map((entry) => ({
         entry,
         reason: replacedChunkIds.has(entry.chunk.chunkId) ? "replaced" : "removed",
       }));
-      const nextLive = Object.freeze({ manifest: request.manifest, chunks: orderedNextChunks });
+      const replacedGlobals = changedGlobals
+        .map((changed) => priorGlobals.get(changed.artifact.artifactType))
+        .filter((entry) => entry !== undefined);
+      const replacedGlobalTypes = new Set(replacedGlobals.map((entry) => entry.artifact.artifactType));
+      const globalRetirementQueue = [...replacedGlobals, ...removedGlobals].map((entry) => ({
+        entry,
+        reason: replacedGlobalTypes.has(entry.artifact.artifactType) ? "replaced" : "removed",
+      }));
+      const nextLive = Object.freeze({ manifest: request.manifest, chunks: orderedNextChunks, globals: orderedNextGlobals });
       failurePhase = "authority";
       phaseAt = this.#now();
       await this.#authoritativeSource(request.manifest);
@@ -418,8 +534,12 @@ export class DerivedRevisionManager {
         previousManifest: this.#live?.manifest ?? null,
         chunks: publicChunks(orderedNextChunks),
         previousChunks: this.#live === null ? Object.freeze([]) : publicChunks(this.#live.chunks),
+        globals: publicGlobals(orderedNextGlobals),
+        previousGlobals: this.#live === null ? new Map() : publicGlobals(this.#live.globals),
         changedChunkIds: Object.freeze(changedChunks.map((entry) => entry.chunk.chunkId)),
         removedChunkIds: Object.freeze(removedChunks.map((entry) => entry.chunk.chunkId)),
+        changedGlobalArtifactTypes: Object.freeze(changedGlobals.map((entry) => entry.artifact.artifactType)),
+        removedGlobalArtifactTypes: Object.freeze(removedGlobals.map((entry) => entry.artifact.artifactType)),
         signal: request.signal,
       }));
       this.#live = nextLive;
@@ -430,12 +550,27 @@ export class DerivedRevisionManager {
       phaseAt = this.#now();
       const retirementErrors = [];
       let retirementFailureCount = 0;
-      for (const retirement of retirementQueue) {
+      // Chunk resources can depend on global resources. Retire chunks first, then globals.
+      for (const retirement of chunkRetirementQueue) {
         const { entry } = retirement;
         try {
           await this.#disposeChunk(Object.freeze({
             chunkId: entry.chunk.chunkId,
             chunk: entry.chunk,
+            resource: entry.resource,
+            reason: retirement.reason,
+          }));
+        } catch (error) {
+          retirementFailureCount++;
+          if (retirementErrors.length < MAX_DERIVED_RUNTIME_ERROR_SUMMARIES) retirementErrors.push(errorSummary(error));
+        }
+      }
+      for (const retirement of globalRetirementQueue) {
+        const { entry } = retirement;
+        try {
+          await this.#disposeGlobal(Object.freeze({
+            artifactType: entry.artifact.artifactType,
+            artifact: entry.artifact,
             resource: entry.resource,
             reason: retirement.reason,
           }));
@@ -475,9 +610,19 @@ export class DerivedRevisionManager {
     const failures = [];
     let failureCount = 0;
     for (let index = staged.length - 1; index >= 0; index--) {
-      const entry = staged[index];
+      const stagedEntry = staged[index];
+      const entry = stagedEntry.entry;
       try {
-        await this.#disposeChunk(Object.freeze({ chunkId: entry.chunk.chunkId, chunk: entry.chunk, resource: entry.resource, reason }));
+        if (stagedEntry.kind === "chunk") {
+          await this.#disposeChunk(Object.freeze({ chunkId: entry.chunk.chunkId, chunk: entry.chunk, resource: entry.resource, reason }));
+        } else {
+          await this.#disposeGlobal(Object.freeze({
+            artifactType: entry.artifact.artifactType,
+            artifact: entry.artifact,
+            resource: entry.resource,
+            reason,
+          }));
+        }
       } catch (error) {
         failureCount++;
         if (failures.length < MAX_DERIVED_RUNTIME_ERROR_SUMMARIES - 1) failures.push(error);
@@ -494,13 +639,20 @@ export class DerivedRevisionManager {
       changedChunks: counts.changed,
       unchangedChunks: counts.unchanged,
       removedChunks: counts.removed,
+      changedGlobals: counts.changedGlobals,
+      unchangedGlobals: counts.unchangedGlobals,
+      removedGlobals: counts.removedGlobals,
       retirementFailures: counts.retirementFailures,
     });
   }
 
   #recordDiagnostic(request, status, details = {}) {
     const timingsMs = details.timingsMs ?? { authority: 0, load: 0, stage: 0, activation: 0, retirement: 0, total: elapsed(this.#now, request.queuedAt) };
-    const counts = details.counts ?? { changed: 0, unchanged: 0, removed: 0, artifacts: 0, artifactBytes: 0, retirementFailures: 0 };
+    const counts = details.counts ?? {
+      changed: 0, unchanged: 0, removed: 0,
+      changedGlobals: 0, unchangedGlobals: 0, removedGlobals: 0,
+      artifacts: 0, artifactBytes: 0, retirementFailures: 0,
+    };
     const errorCount = details.errorCount ?? details.errors?.length ?? 0;
     const retainedErrors = [...(details.errors ?? [])].slice(0, MAX_DERIVED_RUNTIME_ERROR_SUMMARIES);
     this.#diagnostics.push(Object.freeze({
@@ -511,6 +663,9 @@ export class DerivedRevisionManager {
       changedChunks: counts.changed,
       unchangedChunks: counts.unchanged,
       removedChunks: counts.removed,
+      changedGlobals: counts.changedGlobals,
+      unchangedGlobals: counts.unchangedGlobals,
+      removedGlobals: counts.removedGlobals,
       artifactsLoaded: counts.artifacts,
       artifactBytesLoaded: counts.artifactBytes,
       retirementFailures: counts.retirementFailures,

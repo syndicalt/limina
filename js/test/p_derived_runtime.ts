@@ -1,7 +1,8 @@
 import { ops } from "../src/engine.ts";
 import { terrainChunkId, createTerrainGridSpec } from "../src/terrain/grid.mjs";
 import {
-  DERIVED_REVISION_MANIFEST_SCHEMA,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V2,
   compilerContentHash,
   createDerivedRevisionManifest,
   derivedArtifactContentHash,
@@ -58,7 +59,18 @@ type ChunkSpec = {
   bytes?: Uint8Array;
 };
 
-function makeManifest(revision: number, specs: ChunkSpec[]) {
+type GlobalSpec = {
+  artifactType: string;
+  bytes: Uint8Array;
+  mediaType?: string;
+};
+
+function makeManifest(
+  revision: number,
+  specs: ChunkSpec[],
+  globalSpecs: GlobalSpec[] = [],
+  schema: typeof DERIVED_REVISION_MANIFEST_SCHEMA_V1 | typeof DERIVED_REVISION_MANIFEST_SCHEMA_V2 = DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+) {
   const chunks = specs.map((spec) => {
     const bytes = spec.bytes ?? new Uint8Array([spec.tx & 0xff, revision & 0xff, 17]);
     return {
@@ -78,8 +90,14 @@ function makeManifest(revision: number, specs: ChunkSpec[]) {
       fixtureBytes: bytes,
     };
   }).sort((a, b) => codeUnitCompare(a.chunkId, b.chunkId));
+  const globalArtifacts = globalSpecs.map((spec) => ({
+    artifactType: spec.artifactType,
+    contentHash: derivedArtifactContentHash(spec.bytes),
+    byteLength: spec.bytes.byteLength,
+    mediaType: spec.mediaType ?? "application/octet-stream",
+  })).sort((a, b) => codeUnitCompare(a.artifactType, b.artifactType));
   const manifest = createDerivedRevisionManifest({
-    schema: DERIVED_REVISION_MANIFEST_SCHEMA,
+    schema,
     projectId: "grey-field",
     branchId: "main",
     source: {
@@ -97,9 +115,13 @@ function makeManifest(revision: number, specs: ChunkSpec[]) {
       snapshotHash: hash(`snapshot:${revision}`),
     },
     grid,
+    ...(schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2 ? { globalArtifacts } : {}),
     chunks: chunks.map(({ fixtureBytes: _fixtureBytes, ...chunk }) => chunk),
   });
-  const artifacts = new Map(chunks.map((chunk) => [chunk.artifacts[0].contentHash, chunk.fixtureBytes]));
+  const artifacts = new Map([
+    ...chunks.map((chunk) => [chunk.artifacts[0].contentHash, chunk.fixtureBytes] as const),
+    ...globalSpecs.map((spec) => [derivedArtifactContentHash(spec.bytes), spec.bytes] as const),
+  ]);
   return { manifest, artifacts };
 }
 
@@ -111,13 +133,18 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
   let authorityManifest = initialAuthority;
   let resourceSequence = 0;
   let failStageChunkId: string | null = null;
+  let failStageGlobalType: string | null = null;
   let failActivation = false;
   let artifactOverride: ((input: any) => Promise<Uint8Array> | Uint8Array) | null = null;
   const artifactSets: Map<string, Uint8Array>[] = [];
   const staged: any[] = [];
   const disposed: any[] = [];
+  const stagedGlobals: any[] = [];
+  const disposedGlobals: any[] = [];
+  const retirementOrder: string[] = [];
   const activations: any[] = [];
   let visible: readonly any[] = [];
+  let visibleGlobals = new Map<string, any>();
   const manager = new DerivedRevisionManager({
     projectId: "grey-field",
     branchId: "main",
@@ -142,22 +169,35 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
       staged.push(resource);
       return resource;
     },
+    stageGlobal: async (input: any) => {
+      if (input.artifact.artifactType === failStageGlobalType) throw new Error(`global stage failed for ${input.artifact.artifactType}`);
+      const resource = Object.freeze({ id: ++resourceSequence, artifactType: input.artifact.artifactType });
+      stagedGlobals.push(resource);
+      return resource;
+    },
     activateRevision: async (input: any) => {
       if (failActivation) throw new Error("activation failed before atomic swap");
       visible = input.chunks;
+      visibleGlobals = input.globals;
       activations.push(input);
     },
-    disposeChunk: async (input: any) => { disposed.push(input); },
+    disposeChunk: async (input: any) => { disposed.push(input); retirementOrder.push(`chunk:${input.chunkId}:${input.reason}`); },
+    disposeGlobal: async (input: any) => { disposedGlobals.push(input); retirementOrder.push(`global:${input.artifactType}:${input.reason}`); },
   });
   return {
     manager,
     artifactSets,
     staged,
+    stagedGlobals,
     disposed,
+    disposedGlobals,
+    retirementOrder,
     activations,
     visible: () => visible,
+    visibleGlobals: () => visibleGlobals,
     setAuthority: (value: any) => { authorityManifest = value; },
     setStageFailure: (chunkId: string | null) => { failStageChunkId = chunkId; },
+    setGlobalStageFailure: (artifactType: string | null) => { failStageGlobalType = artifactType; },
     setActivationFailure: (value: boolean) => { failActivation = value; },
     setArtifactOverride: (value: typeof artifactOverride) => { artifactOverride = value; },
   };
@@ -416,6 +456,239 @@ await rejects(liveHarness.manager.submit(first.manifest), /rollback requires for
 const rollbackOutcome = await liveHarness.manager.submit(first.manifest, { force: true });
 assert(rollbackOutcome.status === "activated" && liveHarness.manager.current.manifest.source.revision === 1, "forced authoritative rollback did not activate");
 
+// V1 and v2-empty manifests remain compatible when no global lifecycle callbacks are installed.
+for (const [revision, schema] of [[80, DERIVED_REVISION_MANIFEST_SCHEMA_V1], [81, DERIVED_REVISION_MANIFEST_SCHEMA_V2]] as const) {
+  const fixture = makeManifest(revision, [{ tx: revision - 80 }], [], schema);
+  let activationGlobals: Map<string, unknown> | null = null;
+  const manager = new DerivedRevisionManager({
+    projectId: "grey-field",
+    branchId: "main",
+    getAuthoritativeSource: () => ({ projectId: "grey-field", branchId: "main", revision, headHash: fixture.manifest.source.headHash }),
+    loadArtifact: (input: any) => fixture.artifacts.get(input.artifact.contentHash)!,
+    stageChunk: async (input: any) => ({ chunkId: input.chunk.chunkId }),
+    activateRevision: async (input: any) => { activationGlobals = input.globals; },
+    disposeChunk: async () => {},
+  });
+  const outcome = await manager.submit(fixture.manifest);
+  assert(outcome.changedGlobals === 0 && outcome.unchangedGlobals === 0 && outcome.removedGlobals === 0, `${schema} changed additive global counts`);
+  assert(manager.current.globals instanceof Map && manager.current.globals.size === 0, `${schema} did not expose an empty globals Map`);
+  assert(activationGlobals instanceof Map && activationGlobals.size === 0, `${schema} activation did not receive an empty globals Map`);
+}
+
+// A non-empty v2 manifest fails closed before artifact I/O when global lifecycle ownership is absent.
+{
+  const fixture = makeManifest(82, [{ tx: 0 }], [{ artifactType: "hydrology-field/v1", bytes: new Uint8Array([8, 2]) }]);
+  let loads = 0, stages = 0, activations = 0;
+  const manager = new DerivedRevisionManager({
+    projectId: "grey-field",
+    branchId: "main",
+    getAuthoritativeSource: () => ({ projectId: "grey-field", branchId: "main", revision: 82, headHash: fixture.manifest.source.headHash }),
+    loadArtifact: () => { loads++; throw new Error("must not load"); },
+    stageChunk: async () => { stages++; return {}; },
+    activateRevision: async () => { activations++; },
+    disposeChunk: async () => {},
+  });
+  await rejects(manager.submit(fixture.manifest), /stageGlobal\/disposeGlobal are unavailable/, "non-empty globals ran without lifecycle callbacks");
+  assert(loads === 0 && stages === 0 && activations === 0 && manager.current === null, "missing global callbacks caused side effects");
+}
+
+// Exact global descriptor identity drives changed-only staging independently from chunk identity.
+const stableChunkBytes = new Uint8Array([9, 0, 9]);
+const globalBase = makeManifest(90, [{ tx: 0, bytes: stableChunkBytes }], [
+  { artifactType: "hydrology-field/v1", bytes: new Uint8Array([1, 2, 3]) },
+]);
+const globalOnly = makeManifest(91, [{ tx: 0, bytes: stableChunkBytes }], [
+  { artifactType: "hydrology-field/v1", bytes: new Uint8Array([4, 5, 6]) },
+]);
+const globalDescriptorOnly = makeManifest(92, [{ tx: 0, bytes: stableChunkBytes }], [
+  { artifactType: "hydrology-field/v1", bytes: new Uint8Array([4, 5, 6]), mediaType: "application/json" },
+]);
+const chunkOnly = makeManifest(93, [{ tx: 0, bytes: stableChunkBytes, topology: "chunk-only-change" }], [
+  { artifactType: "hydrology-field/v1", bytes: new Uint8Array([4, 5, 6]), mediaType: "application/json" },
+]);
+const globalHarness = createHarness(globalBase);
+globalHarness.artifactSets.push(globalBase.artifacts, globalOnly.artifacts, globalDescriptorOnly.artifacts, chunkOnly.artifacts);
+await globalHarness.manager.submit(globalBase.manifest);
+const baseChunkResource = globalHarness.manager.current.chunks[0].resource;
+const baseGlobalResource = globalHarness.manager.current.globals.get("hydrology-field/v1").resource;
+globalHarness.setAuthority(globalOnly);
+const globalOnlyOutcome = await globalHarness.manager.submit(globalOnly.manifest);
+const changedGlobalResource = globalHarness.manager.current.globals.get("hydrology-field/v1").resource;
+assert(globalOnlyOutcome.changedGlobals === 1 && globalOnlyOutcome.unchangedGlobals === 0 && globalOnlyOutcome.changedChunks === 0 && globalOnlyOutcome.unchangedChunks === 1,
+  "global-only diff counts are wrong");
+assert(globalHarness.manager.current.chunks[0].resource === baseChunkResource, "global-only update replaced an unchanged chunk");
+assert(changedGlobalResource !== baseGlobalResource, "changed global descriptor reused its resource");
+const globalActivation = globalHarness.activations.at(-1);
+assert(globalActivation.globals instanceof Map && globalActivation.previousGlobals instanceof Map
+  && globalActivation.changedGlobalArtifactTypes.join(",") === "hydrology-field/v1"
+  && globalActivation.removedGlobalArtifactTypes.length === 0,
+"activation did not receive complete current/previous global sets and changed types");
+
+globalHarness.setAuthority(globalDescriptorOnly);
+await globalHarness.manager.submit(globalDescriptorOnly.manifest);
+const descriptorGlobalResource = globalHarness.manager.current.globals.get("hydrology-field/v1").resource;
+assert(descriptorGlobalResource !== changedGlobalResource, "mediaType-only descriptor change did not replace the global resource");
+globalHarness.setAuthority(chunkOnly);
+const chunkOnlyOutcome = await globalHarness.manager.submit(chunkOnly.manifest);
+assert(chunkOnlyOutcome.changedChunks === 1 && chunkOnlyOutcome.unchangedGlobals === 1 && chunkOnlyOutcome.changedGlobals === 0,
+  "chunk-only diff counts are wrong");
+assert(globalHarness.manager.current.globals.get("hydrology-field/v1").resource === descriptorGlobalResource,
+  "chunk-only update replaced an unchanged global");
+
+// `current.globals` is a defensive Map: caller mutation cannot corrupt the live set.
+const publicGlobals = globalHarness.manager.current.globals;
+publicGlobals.clear();
+assert(globalHarness.manager.current.globals.size === 1, "caller mutated the manager's internal global Map");
+
+const withoutGlobal = makeManifest(94, [{ tx: 0, bytes: stableChunkBytes, topology: "chunk-only-change" }]);
+globalHarness.artifactSets.push(withoutGlobal.artifacts);
+globalHarness.setAuthority(withoutGlobal);
+const removeGlobalOutcome = await globalHarness.manager.submit(withoutGlobal.manifest);
+assert(removeGlobalOutcome.removedGlobals === 1 && globalHarness.manager.current.globals.size === 0, "removed global remained live");
+assert(globalHarness.disposedGlobals.some((entry) => entry.artifactType === "hydrology-field/v1" && entry.reason === "removed"),
+  "removed global resource was not retired");
+
+// Content-addressed load I/O is shared across global/chunk descriptors, but each descriptor is verified and counted.
+{
+  const sharedBytes = new Uint8Array([7, 7, 7, 7]);
+  const fixture = makeManifest(95, [{ tx: 0, bytes: sharedBytes }], [{ artifactType: "hydrology-field/v1", bytes: sharedBytes }]);
+  let loaderCalls = 0;
+  const manager = new DerivedRevisionManager({
+    projectId: "grey-field", branchId: "main",
+    getAuthoritativeSource: () => ({ projectId: "grey-field", branchId: "main", revision: 95, headHash: fixture.manifest.source.headHash }),
+    loadArtifact: (input: any) => { loaderCalls++; return fixture.artifacts.get(input.artifact.contentHash)!; },
+    stageGlobal: async (input: any) => ({ bytes: input.bytes, type: input.artifact.artifactType }),
+    stageChunk: async (input: any) => ({ bytes: input.artifacts[0].bytes, id: input.chunk.chunkId }),
+    activateRevision: async () => {},
+    disposeGlobal: async () => {}, disposeChunk: async () => {},
+  });
+  await manager.submit(fixture.manifest);
+  assert(loaderCalls === 1, `shared global/chunk content performed ${loaderCalls} loader calls`);
+  const diagnostic = manager.getDiagnostics().at(-1);
+  assert(diagnostic.artifactsLoaded === 2 && diagnostic.artifactBytesLoaded === sharedBytes.byteLength * 2,
+    "deduplicated I/O weakened per-descriptor verification accounting");
+}
+
+// Global length/hash failures occur before staging and preserve the prior complete live set.
+{
+  const base = makeManifest(96, [{ tx: 0 }], [{ artifactType: "hydrology-field/v1", bytes: new Uint8Array([1, 1, 1]) }]);
+  const next = makeManifest(97, [{ tx: 0, bytes: base.artifacts.get(base.manifest.chunks[0].artifacts[0].contentHash)! }], [
+    { artifactType: "hydrology-field/v1", bytes: new Uint8Array([2, 2, 2, 2]) },
+  ]);
+  const harness = createHarness(base);
+  harness.artifactSets.push(base.artifacts, next.artifacts);
+  await harness.manager.submit(base.manifest);
+  const priorChunk = harness.manager.current.chunks[0].resource;
+  const priorGlobal = harness.manager.current.globals.get("hydrology-field/v1").resource;
+  harness.setAuthority(next);
+  harness.setArtifactOverride((input: any) => input.globalArtifact ? new Uint8Array([2]) : next.artifacts.get(input.artifact.contentHash)!);
+  await rejects(harness.manager.submit(next.manifest), /byteLength mismatch/, "global length mismatch was accepted");
+  harness.setArtifactOverride((input: any) => input.globalArtifact ? new Uint8Array([2, 2, 2, 3]) : next.artifacts.get(input.artifact.contentHash)!);
+  await rejects(harness.manager.submit(next.manifest), /content hash mismatch/, "global hash mismatch was accepted");
+  assert(harness.manager.current.chunks[0].resource === priorChunk
+    && harness.manager.current.globals.get("hydrology-field/v1").resource === priorGlobal,
+  "global byte failure changed the live chunk/global set");
+}
+
+// Partial global staging and mixed cancellation reverse-dispose every resource staged so far.
+{
+  const fixture = makeManifest(98, [{ tx: 0 }], [
+    { artifactType: "climate-field/v1", bytes: new Uint8Array([1]) },
+    { artifactType: "hydrology-field/v1", bytes: new Uint8Array([2]) },
+  ]);
+  const harness = createHarness(fixture);
+  harness.artifactSets.push(fixture.artifacts);
+  harness.setGlobalStageFailure("hydrology-field/v1");
+  await rejects(harness.manager.submit(fixture.manifest), /global stage failed/, "partial global stage failure was swallowed");
+  assert(harness.disposedGlobals.length === 1 && harness.disposedGlobals[0].artifactType === "climate-field/v1"
+    && harness.disposedGlobals[0].reason === "staging-failed", "staged global prefix was not reverse-cleaned");
+  assert(harness.manager.current === null, "partial global stage failure created a live revision");
+}
+{
+  const base = makeManifest(99, [{ tx: 0 }]);
+  const next = makeManifest(100, [{ tx: 0, topology: "cancel-after-global" }], [
+    { artifactType: "hydrology-field/v1", bytes: new Uint8Array([1, 0, 0]) },
+  ]);
+  const harness = createHarness(base);
+  harness.artifactSets.push(base.artifacts, next.artifacts);
+  await harness.manager.submit(base.manifest);
+  const priorChunk = harness.manager.current.chunks[0].resource;
+  harness.setAuthority(next);
+  const chunkLoadStarted = deferred();
+  const releaseChunkLoad = deferred();
+  harness.setArtifactOverride(async (input: any) => {
+    if (input.chunk) { chunkLoadStarted.resolve(); await releaseChunkLoad.promise; }
+    return next.artifacts.get(input.artifact.contentHash)!;
+  });
+  const signal = new TestAbortSignal();
+  const pending = harness.manager.submit(next.manifest, { signal });
+  await chunkLoadStarted.promise;
+  signal.abort();
+  releaseChunkLoad.resolve();
+  await rejects(pending, /cancelled/, "mixed global/chunk update ignored cancellation");
+  assert(harness.manager.current.chunks[0].resource === priorChunk && harness.manager.current.globals.size === 0,
+    "cancelled mixed update changed the live set");
+  assert(harness.disposedGlobals.some((entry) => entry.reason === "cancelled"), "cancelled mixed update leaked its staged global");
+}
+
+// Activation failure preserves both prior sets; successful replacement retires chunks before globals.
+const atomicBase = makeManifest(101, [{ tx: 0 }], [{ artifactType: "hydrology-field/v1", bytes: new Uint8Array([1]) }]);
+const atomicNext = makeManifest(102, [{ tx: 0, topology: "atomic-next" }], [{ artifactType: "hydrology-field/v1", bytes: new Uint8Array([2]) }]);
+const atomicHarness = createHarness(atomicBase);
+atomicHarness.artifactSets.push(atomicBase.artifacts, atomicNext.artifacts);
+await atomicHarness.manager.submit(atomicBase.manifest);
+const atomicPriorChunk = atomicHarness.manager.current.chunks[0].resource;
+const atomicPriorGlobal = atomicHarness.manager.current.globals.get("hydrology-field/v1").resource;
+atomicHarness.setAuthority(atomicNext);
+atomicHarness.setActivationFailure(true);
+await rejects(atomicHarness.manager.submit(atomicNext.manifest), /activation failed/, "mixed activation failure was swallowed");
+assert(atomicHarness.manager.current.chunks[0].resource === atomicPriorChunk
+  && atomicHarness.manager.current.globals.get("hydrology-field/v1").resource === atomicPriorGlobal,
+"mixed activation failure changed manager visibility");
+assert(atomicHarness.disposed.some((entry) => entry.reason === "activation-failed")
+  && atomicHarness.disposedGlobals.some((entry) => entry.reason === "activation-failed"),
+"mixed activation failure leaked staged resources");
+atomicHarness.setActivationFailure(false);
+await atomicHarness.manager.submit(atomicNext.manifest);
+const retirementTail = atomicHarness.retirementOrder.filter((entry) => entry.endsWith(":replaced")).slice(-2);
+assert(retirementTail[0]?.startsWith("chunk:") && retirementTail[1]?.startsWith("global:"),
+  `replacement retirement order was not chunk then global (${retirementTail.join(",")})`);
+
+// Retirement failures are diagnostic only, and forced authoritative rollback restores both domains.
+{
+  let authority = atomicBase;
+  let failRetirement = false;
+  const order: string[] = [];
+  let sequence = 0;
+  const artifacts = new Map([...atomicBase.artifacts, ...atomicNext.artifacts]);
+  const manager = new DerivedRevisionManager({
+    projectId: "grey-field", branchId: "main",
+    getAuthoritativeSource: () => ({ projectId: "grey-field", branchId: "main", revision: authority.manifest.source.revision, headHash: authority.manifest.source.headHash }),
+    loadArtifact: (input: any) => artifacts.get(input.artifact.contentHash)!,
+    stageChunk: async (input: any) => ({ id: ++sequence, chunk: input.chunk.chunkId }),
+    stageGlobal: async (input: any) => ({ id: ++sequence, global: input.artifact.artifactType }),
+    activateRevision: async () => {},
+    disposeChunk: async (input: any) => { order.push(`chunk:${input.reason}`); if (failRetirement) throw new Error("chunk retire failed"); },
+    disposeGlobal: async (input: any) => { order.push(`global:${input.reason}`); if (failRetirement) throw new Error("global retire failed"); },
+  });
+  await manager.submit(atomicBase.manifest);
+  authority = atomicNext;
+  failRetirement = true;
+  const outcome = await manager.submit(atomicNext.manifest);
+  assert(outcome.status === "activated" && outcome.retirementFailures === 2 && manager.current.manifest.source.revision === 102,
+    "retirement failure blocked successful activation");
+  assert(order.slice(-2).join(",") === "chunk:replaced,global:replaced", "failed retirement did not preserve dependency order");
+  const diagnostic = manager.getDiagnostics().at(-1);
+  assert(diagnostic.retirementFailures === 2 && diagnostic.errorCount === 2, "retirement failures were not diagnostic");
+  authority = atomicBase;
+  failRetirement = false;
+  const rollback = await manager.submit(atomicBase.manifest, { force: true });
+  assert(rollback.status === "activated" && manager.current.manifest.source.revision === 101
+    && manager.current.chunks[0].chunk.topologyHash === atomicBase.manifest.chunks[0].topologyHash
+    && manager.current.globals.get("hydrology-field/v1").artifact.contentHash === atomicBase.manifest.globalArtifacts[0].contentHash,
+  "forced rollback did not restore both chunk and global descriptors");
+}
+
 ops.op_log(
-  "p_derived_runtime OK: exact-head validated revisions activate atomically; stable chunk identity preserves unchanged resources; changed topology/slices/artifacts replace only affected chunks; corrupt/missing bytes, staging/activation failure and cancellation preserve the prior live set with cleanup; queued work coalesces and rollback is explicit.",
+  "p_derived_runtime OK: exact-head validated revisions atomically activate complete chunk/global sets; exact descriptor identity preserves unchanged resources; content-addressed loads verify length/hash; v1/v2-empty compatibility, missing lifecycle fail-closed, failure/cancellation cleanup, dependency-ordered retirement, queued work, and forced two-domain rollback proven.",
 );
