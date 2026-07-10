@@ -136,6 +136,14 @@ provenance/content-addressing). Established in Slice 0.1.
   (0.4), compiler-owned invalidation, atomic derived-manifest publication, Atlas↔3D live updates and
   edit-layer rebase; then Outliner/Inspector/Content Browser/build tasks/isolated Play and shared render
   quality telemetry. Each numbered slice lands independently.
+- **WB-F0-N · Project-scale editor navigation** — make multi-kilometer world traversal comparable to a
+  production UE/Unity editor rather than relying on one OrbitControls gesture. Add selectable orbit and
+  fly navigation, tunable movement speed with temporary boost/precision modifiers, frame-selection and
+  frame-world commands, coordinate/POI search and jump, named camera bookmarks plus recent locations,
+  and an always-available map overview. Bridge Atlas selection/double-click to an exact 3D focus target
+  and provide the reverse 3D-to-Atlas reveal. Destination changes must prefetch a bounded terrain window,
+  expose loading/failure state, swap only after the target window is ready, preserve the prior view on
+  failure, and never create authoritative world mutations or contaminate Edit/Play camera ownership.
 - **WB-W1 · Water & swim** — minimal deterministic precipitation/drainage inputs, `WaterBody[]`, basin
   fill, `WaterField`, ordered rivers, visible flow/waterfalls/shorelines, editing, and functional swim.
 - **WB-B2 · Biomes & surface** — `BiomeDef`, spatial climate, blends and rules, splat/PBR layers, existing
@@ -168,6 +176,10 @@ materials and vegetation; it does not silently recarve rivers.
 - Grey Field fixed-camera evidence records editor/browser/native images, CPU/GPU p50/p95, hitches,
   draw calls, triangles, texture memory, shader warm-up, startup, and editor latency. M0 records the
   baseline; numeric visual budgets lock only after the first controlled capture is reviewed.
+- Grey Field navigation UAT crosses the 3.6 km map through fly controls, Atlas-to-3D focus, coordinate
+  jump, selection framing, and a saved bookmark/return cycle. Every route must land on the requested
+  world-space target with a nonblank bounded-residency frame, clear progress/error feedback, no stale
+  chunk activation, no authoritative command-log change, and exact Edit camera restoration after Play.
 
 ---
 
@@ -495,3 +507,9 @@ near-vertical cliffs before the SDF layer exists.
   one right-drag, with visible terrain, horizon, trees, and river before/after the pan; desktop and
   390x844 Edit/Play/pause/Stop/repeat workflows also passed against rebuilt bundles. Whole-world Atlas
   handoff remains a separate overview workflow rather than an editor camera default.
+- **2026-07-10 — Project-scale navigation gap promoted after UAT.** The new framing and moving bounded
+  residency make local orbit/pan usable, but UAT confirmed that moving between distant areas of a 3.6 km
+  map remains slow and opaque. WB-F0-N is now an explicit open roadmap slice: UE/Unity-style fly/orbit
+  controls, speed scaling, focus/jump/search, bookmarks/history, overview navigation, and bidirectional
+  Atlas-to-3D focus backed by transactional destination prefetch. Camera retuning alone does not satisfy
+  this milestone.
