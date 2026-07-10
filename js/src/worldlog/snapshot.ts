@@ -58,13 +58,14 @@ export const SNAPSHOT_VERSION = 3;
 
 /** A character controller's body-LESS resume state at the snapshot tick. The
  *  kinematic body's TRANSFORM rides in the native physics blob, but a controller's
- *  vertical velocity / grounded flag / facing are JS-owned (not reconstructable
+ *  vertical velocity / grounded flag / facing / swim hysteresis state are JS-owned (not reconstructable
  *  from the transform) and must be captured for an exact mid-stream resume. */
 export interface CharacterSnapshotEntry {
   bodyId: number;
   vy: number;
   grounded: boolean;
   heading: number;
+  swimming: boolean;
 }
 
 /** Structural shape a snapshot reads/writes for a character controller. The
@@ -72,8 +73,8 @@ export interface CharacterSnapshotEntry {
  *  interface keeps the worldlog layer free of a dependency on the world layer. */
 export interface SnapshotableCharacter {
   readonly bodyId: number;
-  serializeState(): { vy: number; grounded: boolean; heading: number };
-  restoreState(state: { vy: number; grounded: boolean; heading: number }): void;
+  serializeState(): { vy: number; grounded: boolean; heading: number; swimming?: boolean };
+  restoreState(state: { vy: number; grounded: boolean; heading: number; swimming?: boolean }): void;
 }
 
 /** The bitECS entity-index allocator state (see createEntityIndex). Capturing it
@@ -315,7 +316,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
     const s = c.serializeState();
-    return { bodyId: c.bodyId, vy: s.vy, grounded: s.grounded, heading: s.heading };
+    return { bodyId: c.bodyId, vy: s.vy, grounded: s.grounded, heading: s.heading, swimming: s.swimming ?? false };
   });
   const physics = world.ops.op_physics_snapshot();
   return {
@@ -402,6 +403,8 @@ const characterSnapshotSchema = z.object({
   vy: finite,
   grounded: z.boolean(),
   heading: finite,
+  // Additive within schema v3: old v3 snapshots default to the legacy dry state.
+  swimming: z.boolean().optional().default(false),
 });
 const worldSnapshotSchema = z.object({
   snapshotVersion: z.literal(SNAPSHOT_VERSION),
@@ -497,7 +500,7 @@ export function restoreSnapshot(
   // World-level events: replace the registry's contents with the snapshot's baked definitions, so
   // a self-sufficient restore reloads them without replaying the pre-snapshot event.define stream.
   if (events !== undefined) events.restoreEventSpecs(snapshot.events);
-  // 6. Character controllers: reinstall the JS-owned vy/grounded/heading the
+  // 6. Character controllers: reinstall the JS-owned vy/grounded/heading/swim mode the
   //    native blob cannot carry (matched to live controllers by body id). The
   //    body transform itself was restored in step 2.
   if (characters !== undefined && snapshot.characters.length > 0) {
@@ -505,7 +508,7 @@ export function restoreSnapshot(
     for (const entry of snapshot.characters) {
       const controller = byId.get(entry.bodyId);
       if (controller !== undefined) {
-        controller.restoreState({ vy: entry.vy, grounded: entry.grounded, heading: entry.heading });
+        controller.restoreState({ vy: entry.vy, grounded: entry.grounded, heading: entry.heading, swimming: entry.swimming });
       }
     }
   }

@@ -271,7 +271,7 @@ export function registerCoreSkills(
   // Phase 12: playable game skills — player, camera, animation, interaction,
   // inventory, game state, triggers/events, quests, combat/stats, behavior/dialogue,
   // navigation, VFX, save/load, progression, world state, and audio extensions.
-  const player = registerPlayerSkills(registry);
+  const player = registerPlayerSkills(registry, { waterContact });
   const camera = registerCameraSkills(registry);
   const animation = registerAnimationSkills(registry);
   const inventory = registerInventorySkills(registry);
