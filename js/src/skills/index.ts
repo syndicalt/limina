@@ -61,6 +61,7 @@ import { registerSaveSkills, type SaveManager } from "./save.ts";
 import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
 import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMManager, type ReverbManager } from "./worldstate.ts";
 import { registerDesignSkills } from "./design.ts";
+import { WaterContactRuntime } from "../world/water-contact.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -77,7 +78,7 @@ export interface CoreSkills {
   terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
   assets: AssetRegistry;
   materials: MaterialRegistry;
-  water: { surfaces: WaterSurfaceState[]; rivers: unknown[] };
+  water: { surfaces: WaterSurfaceState[]; rivers: unknown[]; contact: WaterContactRuntime };
   /** Phase 12: player input and movement surface. */
   player: { input: InputRegistry; controllers: CharacterControllerRegistry };
   /** Phase 12: camera rigs and control. */
@@ -154,6 +155,7 @@ export function registerCoreSkills(
   // swap propagates to every consumer (terrain.*, asset.scatter, water) at once. A world
   // whose log never issues that command behaves byte-identically (pure delegation).
   const terrainSource: TerrainSource = new SwappableTerrainSource(opts?.terrainSource ?? new ProceduralTerrainSource());
+  const waterContact = new WaterContactRuntime();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   // The region table is shared by the terrain.* skills (which populate it in
   // world.generateRegion) and asset.scatter (which binds a scatter to a region by id,
@@ -212,7 +214,7 @@ export function registerCoreSkills(
   // with asset.scatter, along with the region table). A runtime can override the
   // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
-  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions, assets);
+  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions, assets, waterContact);
   // Shared settlement-footprint registry (keyed by terrain id): village.build fills it with the
   // built ground's keep-out discs and vegetation.scatter auto-excludes them, so "build a village
   // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors
@@ -234,7 +236,7 @@ export function registerCoreSkills(
   // map to scatter a forest on the sculpt. The footprint + clear registries are shared so the
   // PAINT-DRIVEN grass (blades wherever the paint channel says grass) honours settlement
   // footprints exactly like vegetation.scatter / vegetation.grass.
-  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears);
+  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact);
   registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears);
   // village.build: ONE skill that lays a terrain-aware settlement onto an editable
   // terrain layer by placing curated library GLBs (via asset.place) at transforms from
@@ -258,7 +260,8 @@ export function registerCoreSkills(
   // from the field the terrain was generated with, and absent one the depth is auto-derived
   // from the regions already generated in this world (the camera-distance proxy is used only
   // when there is no terrain at all). Read-only — never sim/ECS/log state.
-  const water = registerWaterSkills(registry, terrainSource, terrainRegions, terrainLayers, assets);
+  const renderWater = registerWaterSkills(registry, terrainSource, terrainRegions, terrainLayers, assets);
+  const water = { ...renderWater, contact: waterContact };
   // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
   // map is supplied (the worker loop needs real providers); without it the engine
   // behaves exactly as before — no `delegate` skill registered.

@@ -20,7 +20,12 @@ import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
 import { rasterizeWorldMap } from "../world/pipeline/map-raster.mjs";
 import { MapErosionRecipeSchema } from "../world/pipeline/erosion-schema.ts";
-import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
+import { WorldMapSchema, verifyWorldMap, migrateWorldMap, type WorldMap } from "../world/worldmap.ts";
+import {
+  editableTerrainHeightSampler,
+  type PreparedWaterContactBinding,
+  type WaterContactBindingSpec,
+} from "../world/water-contact.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 
@@ -31,6 +36,11 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
 export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: TileGrass; blightMist?: MeshLike; }
 interface MeshLike { geometry: { dispose?: () => void }; }
+
+export interface EditableTerrainWaterContactHooks {
+  prepareVerifiedMap(worldMap: WorldMap, spec: WaterContactBindingSpec): PreparedWaterContactBinding;
+  activate(prepared: PreparedWaterContactBinding, sampleTerrainHeight: (worldX: number, worldZ: number) => number): void;
+}
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -241,6 +251,7 @@ export function registerTerrainEditSkills(
   /** Shared VEGETATION-CLEAR registry (keyed by terrain id). The paint-grass registers a
    *  refresh closure so village.build's footprint registration carves already-grown blades. */
   vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
+  waterContact?: EditableTerrainWaterContactHooks,
 ): { layers: Map<string, EditableTerrain> } {
   const create: SkillDefinition<z.infer<typeof createInput>, { entity: string; mapHash?: string }> = {
     name: "terrain.create",
@@ -264,6 +275,7 @@ export function registerTerrainEditSkills(
       let paintW: Float32Array | undefined;
       let blightMask: Float32Array | undefined;
       let mapHash: string | undefined;
+      let preparedWater: PreparedWaterContactBinding | undefined;
       if (input.generate !== undefined && input.generate.source === "map") {
         const g = input.generate;
         if (assets === undefined) {
@@ -294,6 +306,16 @@ export function registerTerrainEditSkills(
           throw new Error(`terrain.create: map asset '${g.mapAssetId}' identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this terrain was authored`);
         }
         mapHash = worldMap.provenance.contentHash;
+        preparedWater = waterContact?.prepareVerifiedMap(worldMap, {
+          bindingId: `editable-terrain:${layers.size}`,
+          offset: input.origin,
+          bounds: {
+            minX: input.origin[0] - input.size / 2,
+            maxX: input.origin[0] + input.size / 2,
+            minZ: input.origin[2] - input.size / 2,
+            maxZ: input.origin[2] + input.size / 2,
+          },
+        });
         const raster = rasterizeWorldMap(worldMap, {
           size: input.size,
           resolution: n,
@@ -430,6 +452,7 @@ export function registerTerrainEditSkills(
         const mist = buildBlightMist(tile);
         if (mist !== undefined) { scene.add(mist); layer.blightMist = mist as unknown as MeshLike; }
       }
+      if (preparedWater !== undefined) waterContact!.activate(preparedWater, editableTerrainHeightSampler(tile));
       ctx.emit("terrain.created", { entity, size: input.size, resolution: n, ...(mapHash !== undefined ? { mapHash } : {}) });
       return { entity, ...(mapHash !== undefined ? { mapHash } : {}) };
     },

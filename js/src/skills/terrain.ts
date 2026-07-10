@@ -28,7 +28,8 @@ import { MapTerrainSource } from "../terrain/map-source.ts";
 import { MapErosionRecipeSchema } from "../world/pipeline/erosion-schema.ts";
 import { NO_EROSION_RECIPE } from "../world/pipeline/erosion.mjs";
 import { SwappableTerrainSource } from "../terrain/swappable.ts";
-import { WorldMapSchema, verifyWorldMap, migrateWorldMap } from "../world/worldmap.ts";
+import { WorldMapSchema, verifyWorldMap, migrateWorldMap, type WorldMap } from "../world/worldmap.ts";
+import type { PreparedWaterContactBinding, WaterContactBindingSpec } from "../world/water-contact.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import { TERRAIN_TYPE_NAMES, terrainTypeHints, type RegionBounds, type TerrainTypeName } from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
@@ -80,6 +81,15 @@ export interface RegionState {
    *  InstancedMeshes). These are not sim/log state; they must be removed/disposed
    *  when the region's applied tile set is replaced or streamed away. */
   renderDisposables?: (() => void)[];
+}
+
+/** Optional per-world contact binding injected by registerCoreSkills. The terrain skill keeps map
+ * verification authoritative; the contact runtime prepares before source mutation and activates only
+ * after the new source is ready. */
+export interface TerrainWaterContactHooks {
+  prepareVerifiedMap(worldMap: WorldMap, spec: WaterContactBindingSpec): PreparedWaterContactBinding;
+  activate(prepared: PreparedWaterContactBinding, sampleTerrainHeight: (worldX: number, worldZ: number) => number): void;
+  clear(bindingId: string): boolean;
 }
 
 /** A stable region handle derived from the request (deterministic across runs). */
@@ -223,6 +233,7 @@ export function registerTerrainSkills(
   cache: TileCache = new TileCache(),
   regions: Map<string, RegionState> = new Map(),
   assets?: AssetRegistry,
+  waterContact?: TerrainWaterContactHooks,
 ): { cache: TileCache; regions: Map<string, RegionState> } {
 
   /** Resolve + apply one tile: build the native heightfield collider, register a
@@ -451,6 +462,7 @@ export function registerTerrainSkills(
         if (input.seed !== undefined || input.baseAmplitude !== undefined || input.erosion !== undefined) {
           throw new Error("world.setTerrainSource: seed, baseAmplitude, and erosion are map-only inputs");
         }
+        waterContact?.clear("terrain-source");
         source.swap(new ProceduralTerrainSource());
         ctx.emit("terrain.source_changed", { kind: "procedural", source: source.name });
         return { kind: "procedural" as const, source: source.name };
@@ -481,12 +493,17 @@ export function registerTerrainSkills(
         throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this world was authored`);
       }
       const hash = worldMap.provenance.contentHash;
-      source.swap(new MapTerrainSource({
+      const nextSource = new MapTerrainSource({
         worldMap,
         ...(input.seed !== undefined ? { seed: input.seed } : {}),
         ...(input.baseAmplitude !== undefined ? { baseAmplitude: input.baseAmplitude } : {}),
         ...(input.erosion !== undefined ? { erosionRecipe: input.erosion } : {}),
-      }));
+      });
+      const preparedWater = waterContact?.prepareVerifiedMap(worldMap, { bindingId: "terrain-source" });
+      if (preparedWater !== undefined) {
+        waterContact!.activate(preparedWater, (x, z) => nextSource.sampleHeight(input.seed ?? 1, x, z, 0));
+      }
+      source.swap(nextSource);
       ctx.emit("terrain.source_changed", {
         kind: "map",
         source: source.name,
