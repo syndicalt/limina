@@ -1422,6 +1422,26 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let derivedActivationInProgress = false;
   const suppressedAuthoredTerrainBodies = new Set<number>();
 
+  const configureAuthoredTerrainFarField = (input: unknown): void => {
+    if (!(input instanceof THREE.Mesh)) return;
+    input.visible = true;
+    input.castShadow = false;
+    input.renderOrder = -100;
+    input.raycast = () => {};
+    input.userData.derivedTerrainFarField = true;
+    const materials = Array.isArray(input.material) ? input.material : [input.material];
+    for (const material of materials) {
+      if (material.userData.derivedTerrainFarField === true) continue;
+      // The authored full-map slab fills the view beyond the bounded LOD0 window. Render it first
+      // and bias its depth back so resident derived chunks remain authoritative without z-fighting.
+      material.polygonOffset = true;
+      material.polygonOffsetFactor = 1;
+      material.polygonOffsetUnits = 4;
+      material.userData.derivedTerrainFarField = true;
+      material.needsUpdate = true;
+    }
+  };
+
   const suppressAuthoredTerrainPresentation = (): void => {
     const currentBodies = new Set<number>();
     for (const layer of core.terrain.layers.values()) {
@@ -1429,7 +1449,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (!suppressedAuthoredTerrainBodies.has(layer.bodyId)) {
         ops.op_physics_remove_body(layer.bodyId);
       }
-      if (layer.mesh !== undefined) (layer.mesh as unknown as { visible: boolean }).visible = false;
+      if (layer.mesh !== undefined) configureAuthoredTerrainFarField(layer.mesh);
       if (layer.grass !== undefined) (layer.grass as unknown as { visible?: boolean }).visible = false;
       if (layer.blightMist !== undefined) (layer.blightMist as unknown as { visible: boolean }).visible = false;
     }

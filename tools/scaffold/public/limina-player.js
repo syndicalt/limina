@@ -115766,10 +115766,16 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const baseAmplitude = opts.baseAmplitude ?? 12;
     if (!(size > 0)) throw new Error("rasterizeWorldMap: size must be > 0");
     if (!(n2 >= 2)) throw new Error("rasterizeWorldMap: resolution must be >= 2");
+    const center = opts.center ?? [0, 0];
+    if (!Array.isArray(center) || center.length !== 2 || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+      throw new Error("rasterizeWorldMap: center must be finite [x,z]");
+    }
     const seaLevel = worldMap.seaLevel;
     const landBase = seaLevel + 2;
     const half = size / 2;
     const step3 = size / (n2 - 1);
+    const minX = center[0] - half;
+    const minZ = center[1] - half;
     const landPolys = projectLandPolys(worldMap);
     const landBoundaryIndex = buildLandBoundaryIndex(landPolys);
     const reliefs = projectRelief(worldMap);
@@ -115797,10 +115803,10 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     const paintW = new Float32Array(n2 * n2);
     const blight = new Float32Array(n2 * n2);
     for (let row = 0; row < n2; row++) {
-      const wz = -half + row * step3;
+      const wz = minZ + row * step3;
       for (let col = 0; col < n2; col++) {
         if ((row * n2 + col & 1023) === 0 && opts.shouldCancel?.()) throw new MapRasterCancelledError();
-        const wx = -half + col * step3;
+        const wx = minX + col * step3;
         const i2 = row * n2 + col;
         const inLand = isInsideLandPolys(landPolys, wx, wz);
         let coastD = distToLandBoundary(landBoundaryIndex, wx, wz);
@@ -115917,9 +115923,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (erosionBake.erosionPasses === 1) heights.set(erosionBake.heights);
     const channelFloor = seaLevel - 0.6;
     for (let row = 0; row < n2; row++) {
-      const wz = -half + row * step3;
+      const wz = minZ + row * step3;
       for (let col = 0; col < n2; col++) {
-        const wx = -half + col * step3;
+        const wx = minX + col * step3;
         const i2 = row * n2 + col;
         let carve = 0;
         for (const w5 of waterways) {
@@ -115946,9 +115952,9 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     if (swampRings.length > 0) {
       const poolFloor = seaLevel - 0.7;
       for (let row = 0; row < n2; row++) {
-        const wz = -half + row * step3;
+        const wz = minZ + row * step3;
         for (let col = 0; col < n2; col++) {
-          const wx = -half + col * step3;
+          const wx = minX + col * step3;
           const i2 = row * n2 + col;
           if (heights[i2] <= seaLevel || heights[i2] > seaLevel + 2.5) continue;
           let inSwamp = false;
@@ -121972,6 +121978,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           const raster = rasterizeWorldMap(worldMap, {
             size: input.size,
             resolution: n2,
+            center: [input.origin[0], input.origin[2]],
             seed: g3.seed,
             baseAmplitude: g3.amplitude,
             ...g3.erosion !== void 0 ? { erosion: g3.erosion } : {}
@@ -143875,6 +143882,24 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       let stagingDerivedCandidate = null;
       let derivedActivationInProgress = false;
       const suppressedAuthoredTerrainBodies = /* @__PURE__ */ new Set();
+      const configureAuthoredTerrainFarField = (input) => {
+        if (!(input instanceof Mesh)) return;
+        input.visible = true;
+        input.castShadow = false;
+        input.renderOrder = -100;
+        input.raycast = () => {
+        };
+        input.userData.derivedTerrainFarField = true;
+        const materials = Array.isArray(input.material) ? input.material : [input.material];
+        for (const material of materials) {
+          if (material.userData.derivedTerrainFarField === true) continue;
+          material.polygonOffset = true;
+          material.polygonOffsetFactor = 1;
+          material.polygonOffsetUnits = 4;
+          material.userData.derivedTerrainFarField = true;
+          material.needsUpdate = true;
+        }
+      };
       const suppressAuthoredTerrainPresentation = () => {
         const currentBodies = /* @__PURE__ */ new Set();
         for (const layer of core.terrain.layers.values()) {
@@ -143882,7 +143907,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (!suppressedAuthoredTerrainBodies.has(layer.bodyId)) {
             ops2.op_physics_remove_body(layer.bodyId);
           }
-          if (layer.mesh !== void 0) layer.mesh.visible = false;
+          if (layer.mesh !== void 0) configureAuthoredTerrainFarField(layer.mesh);
           if (layer.grass !== void 0) layer.grass.visible = false;
           if (layer.blightMist !== void 0) layer.blightMist.visible = false;
         }

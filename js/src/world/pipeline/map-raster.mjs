@@ -8,11 +8,10 @@
 // OWN local units (`unitsPerMeter` scales them to meters; `origin` is where the map's local
 // (0,0) sits in WORLD space). This module maps every IR point to WORLD METERS
 // (worldX = origin[0] + x*unitsPerMeter, worldZ = origin[1] + y*unitsPerMeter) and rasterizes
-// a `size`x`size` grid CENTERED ON WORLD (0,0) — the same convention terrain-heightfield.mjs's
-// generateHeightfield uses (its shape is generated in a frame centered at its own origin;
-// terrain.create then places the tile at `input.origin`). A map-sourced terrain.create is
-// therefore expected to be authored at world origin [0,0,0] (the default), so the rasterized
-// grid's local frame lines up with the WorldMap's own coordinate space.
+// a `size`x`size` grid centered on `opts.center` in WORLD space (default (0,0)). The returned
+// height array remains tile-local row/column data; terrain.create places it at the same center.
+// This keeps non-zero terrain origins aligned with WorldMap rivers, biomes, and relief instead
+// of translating the rasterized features a second time when the mesh is positioned.
 //
 // LAYERING (outside -> in): sea/shore falloff by distance-to-coast (a TIGHT band so the
 // rendered coast tracks the drawn polygon, incl. concavities like a pinched waist, instead of
@@ -403,7 +402,7 @@ function biomePaintId(biome) {
  * every host.
  *
  * @param {import("../worldmap.ts").WorldMap} worldMap
- * @param {{ size: number, resolution: number, seed?: number, noiseFrac?: number, baseAmplitude?: number,
+ * @param {{ size: number, resolution: number, center?: readonly [number, number], seed?: number, noiseFrac?: number, baseAmplitude?: number,
  *           erosion?: object, shouldCancel?: () => boolean }} opts
  * @returns {{ heights: Float32Array, paintMat: Uint8Array, paintW: Float32Array, seaLevelM: number,
  *             erosion: object, erosionPasses: number,
@@ -417,11 +416,17 @@ export function rasterizeWorldMap(worldMap, opts) {
   const baseAmplitude = opts.baseAmplitude ?? 12;
   if (!(size > 0)) throw new Error("rasterizeWorldMap: size must be > 0");
   if (!(n >= 2)) throw new Error("rasterizeWorldMap: resolution must be >= 2");
+  const center = opts.center ?? [0, 0];
+  if (!Array.isArray(center) || center.length !== 2 || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+    throw new Error("rasterizeWorldMap: center must be finite [x,z]");
+  }
 
   const seaLevel = worldMap.seaLevel;
   const landBase = seaLevel + 2;
   const half = size / 2;
   const step = size / (n - 1);
+  const minX = center[0] - half;
+  const minZ = center[1] - half;
 
   const landPolys = projectLandPolys(worldMap);
   const landBoundaryIndex = buildLandBoundaryIndex(landPolys);
@@ -465,10 +470,10 @@ export function rasterizeWorldMap(worldMap, opts) {
   const blight = new Float32Array(n * n);
 
   for (let row = 0; row < n; row++) {
-    const wz = -half + row * step;
+    const wz = minZ + row * step;
     for (let col = 0; col < n; col++) {
       if (((row * n + col) & 1023) === 0 && opts.shouldCancel?.()) throw new MapRasterCancelledError();
-      const wx = -half + col * step;
+      const wx = minX + col * step;
       const i = row * n + col;
 
       // ── 1+2. Base surface: either the PAINTED raster (authoritative — replaces both the
@@ -639,9 +644,9 @@ export function rasterizeWorldMap(worldMap, opts) {
   //    the carve reads relative to the already-shaped surface, not fighting it. ─────────────────
   const channelFloor = seaLevel - 0.6;
   for (let row = 0; row < n; row++) {
-    const wz = -half + row * step;
+    const wz = minZ + row * step;
     for (let col = 0; col < n; col++) {
-      const wx = -half + col * step;
+      const wx = minX + col * step;
       const i = row * n + col;
       let carve = 0;
       for (const w of waterways) {
@@ -682,9 +687,9 @@ export function rasterizeWorldMap(worldMap, opts) {
   if (swampRings.length > 0) {
     const poolFloor = seaLevel - 0.7;
     for (let row = 0; row < n; row++) {
-      const wz = -half + row * step;
+      const wz = minZ + row * step;
       for (let col = 0; col < n; col++) {
-        const wx = -half + col * step;
+        const wx = minX + col * step;
         const i = row * n + col;
         if (heights[i] <= seaLevel || heights[i] > seaLevel + 2.5) continue;
         let inSwamp = false;

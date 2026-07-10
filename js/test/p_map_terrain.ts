@@ -49,10 +49,14 @@ const RESOLUTION = 129;
 const HALF = SIZE / 2;
 const STEP = SIZE / (RESOLUTION - 1);
 
-interface TileLike { heights: Float32Array; paintMat?: Uint8Array; paintW?: Float32Array }
+interface TileLike { origin: [number, number, number]; heights: Float32Array; paintMat?: Uint8Array; paintW?: Float32Array }
 interface CreateOut { tile: TileLike; entity: string; mapHash?: string }
 
-async function createMapTerrain(session: string, assets: AssetRegistry): Promise<CreateOut> {
+async function createMapTerrain(
+  session: string,
+  assets: AssetRegistry,
+  origin: [number, number, number] = [0, 0, 0],
+): Promise<CreateOut> {
   const world = makeHeadlessWorld();
   const layers = new Map<string, EditableTerrain>();
   const registry = new SkillRegistry(new LiminaTracer(session));
@@ -60,7 +64,8 @@ async function createMapTerrain(session: string, assets: AssetRegistry): Promise
   const at = (tick: number) => ({ agentId: "agt_map", sessionId: session, permissions: perms, tick, world });
 
   const res = await registry.invoke("terrain.create", {
-    size: SIZE, resolution: RESOLUTION, generate: { source: "map", mapAssetId: MAP_ASSET_ID, seed: 11 },
+    size: SIZE, resolution: RESOLUTION, origin,
+    generate: { source: "map", mapAssetId: MAP_ASSET_ID, seed: 11 },
   }, at(1));
   assert(res.success, `terrain.create (map source) must succeed: ${res.success ? "" : JSON.stringify(res.error)}`);
   const out = res.result as { entity: string; mapHash?: string };
@@ -135,6 +140,30 @@ const b = await createMapTerrain("ses_map_b", assets);
   const iou = union > 0 ? intersection / union : 1;
   ops.op_log(`[js] p_map_terrain: land-mask IoU = ${iou.toFixed(4)} (${intersection}/${union})`);
   assert(iou >= 0.85, `land-mask IoU must be >= 0.85 (got ${iou.toFixed(4)})`);
+}
+
+// 3b. A translated terrain samples the same WORLD-space map window that its mesh occupies.
+// The old origin-zero rasterizer shifted every carved/painted feature by the terrain origin.
+{
+  const origin: [number, number, number] = [20, 0, -10];
+  const translated = await createMapTerrain("ses_map_translated", assets, origin);
+  assert(translated.tile.origin[0] === origin[0] && translated.tile.origin[2] === origin[2],
+    "translated terrain did not retain its authored origin");
+  const classify = landClassifier(worldMap);
+  let intersection = 0, union = 0;
+  for (let row = 0; row < RESOLUTION; row++) {
+    const wz = origin[2] - HALF + row * STEP;
+    for (let col = 0; col < RESOLUTION; col++) {
+      const wx = origin[0] - HALF + col * STEP;
+      const index = row * RESOLUTION + col;
+      const truth = classify.isLand(wx, wz);
+      const built = translated.tile.heights[index] > seaLevelM;
+      if (truth || built) union++;
+      if (truth && built) intersection++;
+    }
+  }
+  const iou = union > 0 ? intersection / union : 1;
+  assert(iou >= 0.85, `translated terrain/map world-space alignment IoU must be >= 0.85 (got ${iou.toFixed(4)})`);
 }
 
 // 4. Tamper: flip a byte in a copied IR fixture -> terrain.create THROWS (hash mismatch, or a

@@ -42,6 +42,12 @@ test("authoring and derived activation share one mutation queue", () => {
 test("quality, suppression, and disposal lifecycle remain bounded", () => {
   assert.match(source, /candidate\.setQuality\(renderSession\.quality\(\)\.tier\);[\s\S]{0,100}scene\.add\(candidate\.root\)/);
   assert.match(source, /stagingDerivedCandidate\?\.setQuality\(nextTier\)/);
+  assert.match(source, /configureAuthoredTerrainFarField\(layer\.mesh\)/,
+    "derived activation does not retain the authored full-map far-field underlay");
+  assert.match(source, /input\.raycast = \(\) => \{\};/,
+    "far-field terrain can intercept editor raycasts");
+  assert.match(source, /material\.polygonOffset = true;[\s\S]{0,160}material\.polygonOffsetUnits = 4;/,
+    "far-field terrain can z-fight the derived window");
   assert.match(source, /suppressedAuthoredTerrainBodies\.clear\(\);\s*for \(const bodyId of currentBodies\)/);
   assert.match(source, /MAX_FAILED_DERIVED_DISPOSALS = 8/);
   assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,100}new DetachedDerivedRenderCandidate/);

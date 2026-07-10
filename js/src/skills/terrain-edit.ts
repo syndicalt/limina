@@ -319,6 +319,7 @@ export function registerTerrainEditSkills(
         const raster = rasterizeWorldMap(worldMap, {
           size: input.size,
           resolution: n,
+          center: [input.origin[0], input.origin[2]],
           seed: g.seed,
           baseAmplitude: g.amplitude,
           ...(g.erosion !== undefined ? { erosion: g.erosion } : {}),
