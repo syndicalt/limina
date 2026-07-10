@@ -523,6 +523,17 @@ near-vertical cliffs before the SDF layer exists.
   controls for the transaction. Grey Field Chromium UAT flew 1,103.7 m, activated the requested 1,200 m /
   1,200 m target with exactly 225 bounded artifacts, restored an exact named Orbit bookmark, survived
   Play/Stop, rendered nonblank frames, and left authoritative head r1 unchanged. Desktop/mobile Play and
-  the 99-test editor/static sweep remain green. **WB-F0-N is still open:** frame-world, POI search, the
-  always-available overview, Atlas-to-3D focus, reverse 3D-to-Atlas reveal, and the full Atlas/selection
-  navigation UAT route have not shipped.
+  the 99-test editor/static sweep remain green.
+- **2026-07-10 — Docked Atlas/3D workflow bridge shipped (`590ec72`).** The canonical generated-app
+  launcher now owns Atlas, derived build, editor host, and UI as one failure-bounded lifecycle, with an
+  isolated same-origin Atlas proxy and a responsive docked overview workspace. Atlas flushes its CAS save,
+  captures the authoritative revision/head, and emits a strict source-fenced focus request; the editor waits
+  for that exact derived source, activates bounded destination residency, samples height from the ready
+  terrain, and commits the camera only while the source remains current. Editor selection reveals its exact
+  world coordinate in Atlas without unsafe name/proximity inference, and overview fit includes rasters,
+  features, stamps, markers, and placed Places. The mirrored protocol rejects hostile prototypes, accessors,
+  symbols, sparse arrays, extra fields, unbounded values, foreign origins/sources, and noncanonical map units.
+  Grey Field Chromium UAT passed dock isolation, exact terrain focus, reverse coordinate reveal, recents,
+  mobile bounds, and unchanged authoring head; the fresh `create-limina-app` scaffold gate also passed.
+  **WB-F0-N remains open:** frame-world, POI search, durable Atlas `designRef` provenance for exact entity/POI
+  identity, and defined normalization for maps whose units or origin are not canonical meters at `[0,0]`.
