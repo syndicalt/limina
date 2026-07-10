@@ -483,7 +483,16 @@ export class DerivedRuntimeWorkerController {
         expectedBindings: bindings,
       }, { shouldCancel: () => input.signal.aborted });
       if (input.signal.aborted) throw input.signal.reason;
-      return Object.freeze({ kind: "hydrology-water-topology/v1", prepared });
+      // The prepared envelope is worker-local branded state. Its decoded topology is safe for
+      // render staging after structured clone, but simulation must independently re-verify and
+      // re-brand the canonical bytes in the sim worker before gameplay contact can change.
+      return Object.freeze({
+        kind: "hydrology-water-topology/v1",
+        artifact: input.artifact,
+        bytes: input.bytes,
+        bindings,
+        prepared,
+      });
     }
     throw fatal("UNSUPPORTED_GLOBAL_ARTIFACT", `derived runtime does not support global artifact '${input.artifact.artifactType}'`);
   }

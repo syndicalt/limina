@@ -365,9 +365,15 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   await eventually(() => messages(state, "revision").length === 1, "global activation");
   assert(state.transport.artifactOrder.join(",") === `${HYDROLOGY_FIELD_ARTIFACT_TYPE},${HYDROLOGY_WATER_ARTIFACT_TYPE},terrain-chunk/v1`,
     `global dependency staging order changed (${state.transport.artifactOrder.join(",")})`);
-  const snapshot = messages(state, "activate")[0].snapshot as { globals: Array<{ resource: { kind: string } }> };
+  const snapshot = messages(state, "activate")[0].snapshot as {
+    globals: Array<{ resource: { kind: string; bytes?: Uint8Array; artifact?: { contentHash: string } } }>;
+  };
   assert(snapshot.globals.map((entry) => entry.resource.kind).join(",") === "hydrology-field/v1,hydrology-water-topology/v1",
     "complete global resource snapshot changed dependency order or omitted water");
+  const transferredWater = snapshot.globals[1].resource;
+  assert(transferredWater.bytes instanceof Uint8Array && transferredWater.bytes.byteLength === waterBytes.byteLength
+    && transferredWater.artifact?.contentHash === waterDescriptor.contentHash,
+  "activation omitted canonical water bytes needed for independent simulation verification");
   await state.controller.close("close-globals");
 }
 

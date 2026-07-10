@@ -123,16 +123,29 @@ assert(runtime.fieldBuildCount === 2, "active replacement identity was rebuilt")
 runtime.activate(replacementAgain, () => 21);
 assert(runtime.query(101, -49).columnDepthM === 1, "unchanged identity did not accept a new live terrain sampler");
 
+// Runtime integration can stage a realm-verified generated replacement without retaining or
+// retransferring the authored map outside the contact owner.
+const activeReplacement = runtime.prepareGeneratedForActive(first);
+assert(runtime.activeGeneratedArtifactContentHash === second.artifactContentHash
+  && runtime.query(101, -49).surfaceLevelM === 22,
+"prepareGeneratedForActive changed live contact before activation");
+runtime.activate(activeReplacement, () => 19);
+assert(runtime.activeGeneratedArtifactContentHash === first.artifactContentHash
+  && runtime.query(101, -49).surfaceLevelM === 20 && runtime.query(101, -49).columnDepthM === 1,
+"active-map generated replacement did not activate with the derived terrain sampler");
+assert(runtime.fieldBuildCount === 3, "active-map generated replacement did not build exactly one field");
+
 // Failed preparation leaves the currently active field and sampler untouched.
 rejects(() => runtime.prepareVerifiedMap(map, spec, colliding), /id collision/, "colliding replacement prepared successfully");
-assert(runtime.fieldBuildCount === 2 && runtime.query(101, -49).columnDepthM === 1
-  && runtime.activeGeneratedArtifactContentHash === second.artifactContentHash, "failed replacement mutated active state or build count");
+assert(runtime.fieldBuildCount === 3 && runtime.query(101, -49).columnDepthM === 1
+  && runtime.activeGeneratedArtifactContentHash === first.artifactContentHash, "failed replacement mutated active state or build count");
 
 rejects(() => runtime.prepareVerifiedMap(map, { ...spec, bindingId: "editable-terrain:0" }, first), /binding conflict/,
   "competing owner prepared over active composite field");
 rejects(() => runtime.prepareVerifiedMap(sealedMap(-90), spec, first), /map conflict/,
   "same owner replaced the active verified WorldMap");
 const otherRuntime = new WaterContactRuntime();
+rejects(() => otherRuntime.prepareGeneratedForActive(first), /active verified map/, "generated replacement prepared without an active map");
 rejects(() => otherRuntime.activate(prepared, () => 0), /prepared by this runtime/, "prepared composite token crossed runtime ownership");
 rejects(() => runtime.prepareVerifiedMap(map, spec, { artifactContentHash: first.artifactContentHash } as any), /verified prepared envelope/,
   "unverified generated resource entered contact preparation");
@@ -144,7 +157,7 @@ runtime.activate(authoredOnly, () => 0);
 assert(runtime.activeGeneratedArtifactContentHash === null && runtime.activeIdentity?.generatedArtifactContentHash === null,
   "authored-only replacement retained generated identity");
 assert(!runtime.query(101, -49).wet, "generated basin survived authored-only replacement");
-assert(runtime.fieldBuildCount === 3, "authored-only composite identity build count changed");
+assert(runtime.fieldBuildCount === 4, "authored-only composite identity build count changed");
 assert(runtime.clear("terrain-source"), "authored-only contact did not clear");
 
 ops.op_log(

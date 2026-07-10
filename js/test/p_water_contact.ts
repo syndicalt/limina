@@ -95,6 +95,8 @@ const preparedAgain = runtime.prepareVerifiedMap(map, spec);
 assert(runtime.fieldBuildCount === 1, `same verified hash built ${runtime.fieldBuildCount} fields instead of one`);
 runtime.activate(prepared, () => { terrainSamples++; return terrainHeight; });
 runtime.activate(preparedAgain, () => { terrainSamples++; return terrainHeight; });
+assert(typeof runtime.activeTerrainSampler === "function" && runtime.activeTerrainSampler(0, 0) === terrainHeight,
+  "active terrain sampler was not retained for staged derived fallback");
 
 // Coordinate translation, overlap precedence, outer-wet/hole-dry, and exact surface policy.
 const lake = runtime.query(106, -50);
@@ -126,6 +128,7 @@ const otherRuntime = new WaterContactRuntime();
 rejects(() => otherRuntime.activate(prepared, () => 0), /prepared by this runtime/, "prepared binding crossed world ownership");
 assert(!runtime.clear("terrain-source"), "another terrain owner cleared the active contact field");
 assert(runtime.clear("editable-terrain:0") && !runtime.query(112, -50).wet, "clear did not restore no-map dry behavior");
+assert(runtime.activeTerrainSampler === null, "clear retained the active terrain sampler");
 const rebound = runtime.prepareVerifiedMap(map, spec);
 runtime.activate(rebound, () => terrainHeight);
 assert(runtime.fieldBuildCount === 1, "same hash rebuilt its WaterField after a source reset");

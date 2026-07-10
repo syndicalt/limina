@@ -55,6 +55,7 @@ export type TerrainHeightSampler = (worldX: number, worldZ: number) => number;
 
 interface ActiveBinding extends PreparedWaterContactBinding {
   field: WaterFieldLike;
+  worldMap: WorldMap;
   sampleTerrainHeight: TerrainHeightSampler;
 }
 
@@ -114,7 +115,7 @@ function drySample(terrainHeightM: number | null = null): WaterContactSample {
  * after the terrain source/layer succeeds. Querying never verifies, parses, or mutates world state.
  */
 export class WaterContactRuntime {
-  readonly #prepared = new WeakMap<object, { field: WaterFieldLike }>();
+  readonly #prepared = new WeakMap<object, { field: WaterFieldLike; worldMap: WorldMap }>();
   #cached: { contentHash: string; generatedArtifactContentHash: string | null; field: WaterFieldLike } | null = null;
   #active: ActiveBinding | null = null;
   #fieldBuildCount = 0;
@@ -123,6 +124,8 @@ export class WaterContactRuntime {
   get activeGeneratedArtifactContentHash(): string | null { return this.#active?.generatedArtifactContentHash ?? null; }
   get activeIdentity(): PreparedWaterContactBinding["identity"] | null { return this.#active?.identity ?? null; }
   get activeBindingId(): string | null { return this.#active?.bindingId ?? null; }
+  /** Current verified terrain sampler for bounded derived-field fallback during staged replacement. */
+  get activeTerrainSampler(): TerrainHeightSampler | null { return this.#active?.sampleTerrainHeight ?? null; }
   /** Diagnostic proving map verification/index construction stays off the query path. */
   get fieldBuildCount(): number { return this.#fieldBuildCount; }
 
@@ -168,8 +171,24 @@ export class WaterContactRuntime {
       field = built;
       this.#fieldBuildCount++;
     }
-    this.#prepared.set(candidate, { field });
+    this.#prepared.set(candidate, { field, worldMap });
     return candidate;
+  }
+
+  /**
+   * Prepare a generated-water replacement against the exact verified map and owner that are
+   * currently active. The generated envelope must have been verified in this JavaScript realm.
+   * Preparation is side-effect free; callers activate only after the matching derived terrain
+   * presentation/collision revision has committed.
+   */
+  prepareGeneratedForActive(generatedWater: unknown): PreparedWaterContactBinding {
+    const active = this.#active;
+    if (active === null) throw new Error("generated water contact requires an active verified map binding");
+    return this.prepareVerifiedMap(active.worldMap, {
+      bindingId: active.bindingId,
+      offset: active.offset,
+      ...(active.bounds === null ? {} : { bounds: active.bounds }),
+    }, generatedWater);
   }
 
   activate(prepared: PreparedWaterContactBinding, sampleTerrainHeight: TerrainHeightSampler): void {
@@ -183,16 +202,21 @@ export class WaterContactRuntime {
         // A repeated source binding may carry a new deterministic terrain recipe under the same
         // verified map. Reuse the expensive immutable field while following the newly installed
         // exact height source.
-        this.#active = Object.freeze({ ...prepared, field: this.#active.field, sampleTerrainHeight });
+        this.#active = Object.freeze({
+          ...prepared,
+          field: this.#active.field,
+          worldMap: preparedState.worldMap,
+          sampleTerrainHeight,
+        });
         return;
       }
       if (this.#active.bindingId !== prepared.bindingId) {
         throw new Error(`water contact binding conflict: '${this.#active.bindingId}' is already active`);
       }
-      this.#active = Object.freeze({ ...prepared, field: preparedState.field, sampleTerrainHeight });
+      this.#active = Object.freeze({ ...prepared, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
       return;
     }
-    this.#active = Object.freeze({ ...prepared, field: preparedState.field, sampleTerrainHeight });
+    this.#active = Object.freeze({ ...prepared, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
   }
 
   /** Clear only the named owner. A different terrain path cannot erase the active volume. */
