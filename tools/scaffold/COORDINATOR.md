@@ -17,6 +17,11 @@ log, and gates. Your agent is the coordinator.
 4. Keep this file open as the local protocol. Builder subagents should each run
    their own bridge instance with a distinct `LIMINA_AGENT_ID`.
 
+The launcher owns the editor host, UI, and derived-build sidecar. A clean project's
+seed MapDoc is committed through `authoring.commit`; every later Atlas revision is
+read atomically through `authoring.sourceSnapshot`, compiled, and published without
+replacing the last-known-good derived revision until the new one is verified.
+
 ## Protocol
 
 1. Read the human's intent and any project design notes. If the brief is not

@@ -154,6 +154,14 @@ export class AuthoringTransactionKernel {
     return this.#durableByteLength;
   }
 
+  /** Run a synchronous authority read after prior commits and before later ones. */
+  readCurrent<T>(reader: (head: WorldProjectHead) => T): Promise<T> {
+    if (typeof reader !== "function") return Promise.reject(new TypeError("authoring readCurrent requires a reader"));
+    const pending = this.#tail.then(() => reader(this.#head));
+    this.#tail = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
   get latestDurableRecord(): DurableAuthoringRecord | undefined {
     return this.#durableRecords[this.#durableRecords.length - 1];
   }

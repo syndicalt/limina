@@ -64,7 +64,11 @@ class FakeAuthority {
   constructor() {
     this.head = { schema: "limina.world-project-head/v1", projectId: "test-project", revision: 0, headHash: hash("genesis") };
     this.mapDoc = null;
-    this.stateHash = hash("state:0");
+    this.stateHash = canonicalHash({
+      schema: "limina.world-project-state/v1",
+      projectId: "test-project",
+      refs: { mapDoc: null, terrainEditLayers: [], scene: null, assets: [], lookProfile: null },
+    });
     this.commits = [];
     this.beforeCommit = undefined;
     this.commitFailure = undefined;
@@ -73,13 +77,22 @@ class FakeAuthority {
   }
 
   async callTool(name, args, options) {
-    if (name === "authoring.head") return { ...this.head };
-    if (name === "authoring.projectState") {
-      return {
+    if (name === "authoring.sourceSnapshot") {
+      const projectState = {
         schema: "limina.world-project-state/v1",
         projectId: "test-project",
         refs: { mapDoc: this.mapDoc, terrainEditLayers: [], scene: null, assets: [], lookProfile: null },
         stateHash: this.stateHash,
+      };
+      return {
+        schema: "limina.world-project-source-snapshot/v1",
+        head: { ...this.head },
+        projectState,
+        snapshotHash: canonicalHash({
+          schema: "limina.world-project-source-snapshot/v1",
+          head: this.head,
+          projectState,
+        }),
       };
     }
     assert.equal(name, "authoring.commit");
@@ -163,6 +176,7 @@ test("persists canonical content-addressed MapDoc, commits its exact ref, then m
   const fx = fixture();
   try {
     const authority = new FakeAuthority();
+    const initialStateHash = authority.stateHash;
     let committedAtMirror = false;
     const original = readFileSync(join(fx.vaultDir, "maps.json"));
     const result = await bridge(fx, authority, {
@@ -179,7 +193,7 @@ test("persists canonical content-addressed MapDoc, commits its exact ref, then m
     const operation = authority.commits[0].operations[0];
     assert.equal(operation.adapter, "project-state");
     assert.equal(operation.action, "refs.patch");
-    assert.equal(operation.guard.beforeHash, hash("state:0"));
+    assert.equal(operation.guard.beforeHash, initialStateHash);
     assert.deepEqual(operation.input.patch.mapDoc, result.source);
     const sourcePath = join(fx.projectRoot, result.source.assetId);
     const sourceBytes = readFileSync(sourcePath);

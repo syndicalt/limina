@@ -148,6 +148,7 @@ test("editor, export, and Atlas build wrappers return the same canonical identit
       projectId: editor.projectId, editorPort: 8787, uiPort: 5173, token: "x".repeat(32), projectRoot: root, environment: {},
     });
     assert.equal(hostEnvironment.LIMINA_PROJECT_ID, "shared.identity-1");
+    assert.equal(hostEnvironment.LIMINA_ASSET_ROOT, join(root, "assets"));
     assert.equal(hostEnvironment.LIMINA_EDITOR_WORLDLOG, "shared.identity-1.editor.worldlog.jsonl");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -54,6 +54,7 @@ const EDITOR_ALLOWED_PROFILES = new Set([
   "reviewer",
   "system.readonly",
   "system.admin",
+  "system.derived-build",
   "reviewer.coordinator",
   "builder.review",
   "builder.readWrite",

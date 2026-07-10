@@ -1,8 +1,8 @@
 # __APP_NAME__
 
-A [Limina](https://github.com/syndicalt/limina) world. You author the world in
-**one file** — `world.ts` — through typed, permissioned skills, then export it to
-a portable bundle that plays in a browser tab.
+A [Limina](https://github.com/syndicalt/limina) world. Author through the live editor
+and its Atlas MapDoc, or through typed, permissioned skills in `world.ts`, then export
+to a portable bundle that plays in a browser tab.
 
 ## Zero to a running world
 
@@ -24,6 +24,20 @@ get instant gratification with nothing to compile.
 
 ## Author your own world
 
+Start the authoritative editor workflow:
+
+```sh
+LIMINA_HOME=/path/to/limina npm run editor
+```
+
+The launcher starts the editor host, browser UI, and derived-build sidecar as one
+lifecycle. On the first clean boot it canonicalizes `design/maps.json`, writes the
+content-addressed source under `assets/sources/map-doc/`, and commits that ref as
+revision 1. Later boots preserve the existing authority and reuse its published
+terrain revision.
+
+The source-first `world.ts` workflow remains available:
+
 ```sh
 # 4. Edit the world.
 $EDITOR world.ts
@@ -42,10 +56,10 @@ hand-rolled geometry. The starter builds a textured island with depth-aware wate
 biome-correct scatter, and one interactive treasure. Change the `SEED`, the terrain
 `type`, or add NPCs / quests / triggers.
 
-## The native binary (only `export` needs it)
+## The native binary
 
-`npm run dev` is browser-only. `npm run export` runs your `world.ts` through the
-real deterministic engine — the native `limina` runtime — so it needs the binary:
+`npm run dev` is browser-only. `npm run editor` and `npm run export` run the real
+deterministic engine, so they need the native `limina` binary:
 
 - **`LIMINA_BIN`** — path to the `limina` binary, e.g.
   `LIMINA_BIN=/path/to/limina/target/release/limina npm run export`
@@ -88,8 +102,12 @@ __APP_NAME__/
 ├─ limina.d.ts         ← editor types for buildWorld (erased at runtime)
 ├─ tsconfig.json
 ├─ package.json
+├─ design/
+│  └─ maps.json        ← seed Atlas MapDoc; first editor boot commits its canonical CAS ref
+├─ assets/             ← project-local source and content-addressed build inputs
 ├─ scripts/
 │  ├─ export.mjs       ← world.ts → dist/  (drives the native limina binary)
+│  ├─ editor.mjs       ← editor host + derived-build sidecar + browser UI
 │  └─ serve.mjs        ← a zero-dependency static server
 └─ public/
    ├─ index.html       ← the player page (WebGL2 gate + poster fallback)

@@ -72,6 +72,8 @@ export interface WorldContext {
 export interface ExecutionContext {
   agentId: string;
   sessionId: string;
+  /** Caller profile retained for domain-level least-privilege constraints. */
+  profile?: string;
   permissions: ReadonlySet<string>;
   tick: number;
   world: WorldContext;
@@ -470,6 +472,7 @@ export class SkillRegistry {
     const ctx: ExecutionContext = {
       agentId: base.agentId,
       sessionId: base.sessionId,
+      profile: base.profile,
       permissions: base.permissions,
       tick: base.tick,
       world: base.world,

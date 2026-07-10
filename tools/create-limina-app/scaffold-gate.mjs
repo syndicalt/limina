@@ -41,6 +41,7 @@ try {
   // 1. File tree — a real project, not a stub.
   for (const f of ["package.json", "package-lock.json", "limina.project.json", "world.ts", "tsconfig.json", "README.md", "AGENTS.md", "COORDINATOR.md",
                    "scripts/serve.mjs", "scripts/export.mjs", "scripts/editor.mjs",
+                   "design/maps.json",
                    "assets/pine.glb", "assets/rock.glb", "public/index.html", "public/limina-player.js", "public/island/manifest.json"]) {
     check("scaffolds " + f, existsSync(join(app, f)));
   }
@@ -64,7 +65,15 @@ try {
   check("index.html loads limina-player.js as a classic <script src>", !!scriptTag && !/type=["']module["']/.test(scriptTag[0]));
   check("index.html's loader gates on window.LiminaPlayer", /window\.LiminaPlayer/.test(html));
 
-  // 5. The committed instant-play sample must be the exact current world.ts export.
+  // 5. The production editor workflow owns the derived sidecar, and the seed MapDoc is substituted.
+  const editorLauncher = readFileSync(join(app, "scripts", "editor.mjs"), "utf8");
+  check("editor launcher owns the derived-build sidecar", /derived-build-service\.mjs/.test(editorLauncher));
+  check("editor launcher requires the Node world-compiler bundle", /world-compiler\.bundle\.mjs/.test(editorLauncher));
+  const seedMapDoc = JSON.parse(readFileSync(join(app, "design", "maps.json"), "utf8"));
+  check("seed MapDoc is project-specific and valid-shaped", seedMapDoc.version === 2
+    && seedMapDoc.activeMapId === "primary" && seedMapDoc.maps?.[0]?.name === "sample-app World");
+
+  // 6. The committed instant-play sample must be the exact current world.ts export.
   execFileSync("npm", ["run", "export"], {
     cwd: app,
     env: { ...process.env, LIMINA_HOME: ROOT, LIMINA_BIN: join(ROOT, "target", "release", "limina") },

@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "activeMapId": "primary",
+  "maps": [
+    {
+      "id": "primary",
+      "name": "__APP_NAME__ World",
+      "scope": "world",
+      "parent": null,
+      "features": [],
+      "seaLevel": 0,
+      "units": {
+        "kind": "m",
+        "unitsPerMeter": 1,
+        "origin": [
+          0,
+          0
+        ]
+      }
+    }
+  ]
+}

@@ -114,6 +114,9 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   /** Runtime maintenance identity. Deliberately separate from builder and readonly
    *  profiles because dev.reload replaces code and rebuilds scene state. */
   "system.admin": ["system.admin", "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
+  /** Project-local derived-build sidecar. authoring.commit additionally restricts
+   *  this profile to one guarded revision-zero MapDoc bootstrap transaction. */
+  "system.derived-build": ["authoring.read", "authoring.write"],
   // Phase 7 human-in-the-loop (existing)
   "builder.review": [
     "authoring.read", "authoring.write",

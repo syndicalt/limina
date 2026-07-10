@@ -154,6 +154,7 @@ function printBanner({ home, uiPort, editorPort, token }) {
   console.log("");
   console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
+  console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
   console.log(`  Token:       ${token}`);
   console.log("");
   console.log("Register this MCP server with your coding agent:");
@@ -164,14 +165,22 @@ function printBanner({ home, uiPort, editorPort, token }) {
   console.log("Press Ctrl-C to stop.");
 }
 
-export function editorHostEnvironment({ projectId, editorPort, uiPort, token, projectRoot = PROJECT_DIR, environment = process.env }) {
+export function editorHostEnvironment({
+  projectId,
+  editorPort,
+  uiPort,
+  token,
+  projectRoot = PROJECT_DIR,
+  assetRoot = join(projectRoot, "assets"),
+  environment = process.env,
+}) {
   return {
     ...environment,
     LIMINA_EDITOR_PORT: String(editorPort),
     LIMINA_EDITOR_STATIC_PORT: String(uiPort),
     LIMINA_EDITOR_TOKEN: token,
     LIMINA_PROJECT_ID: projectId,
-    LIMINA_ASSET_ROOT: join(projectRoot, "assets"),
+    LIMINA_ASSET_ROOT: assetRoot,
     LIMINA_EDITOR_WORLDLOG: `${projectId}.editor.worldlog.jsonl`,
     LIMINA_EDITOR_TRACE: `${projectId}.editor.trace.jsonl`,
     LIMINA_EDITOR_CHAT: `${projectId}.editor.chat.jsonl`,
@@ -232,12 +241,76 @@ export function ensureFreshEditorBundles(home, dependencies = {}) {
   return { rebuilt: true, bundles };
 }
 
+/** Ensure the Node-target compiler bundle consumed by the derived-build sidecar is current. */
+export function ensureFreshWorldCompilerBundle(home, dependencies = {}) {
+  const fsApi = {
+    existsSync: dependencies.existsSync ?? existsSync,
+    readdirSync: dependencies.readdirSync ?? readdirSync,
+    statSync: dependencies.statSync ?? statSync,
+  };
+  const run = dependencies.spawnSync ?? spawnSync;
+  const sourceRoot = join(home, "js", "src");
+  const packageJson = join(home, "js", "package.json");
+  const bundle = join(home, "js", "build", "world-compiler.bundle.mjs");
+  if (!fsApi.existsSync(sourceRoot) || !fsApi.existsSync(packageJson)) {
+    throw new Error(
+      `cannot build world compiler: Limina source/build metadata is missing under ${join(home, "js")}. ` +
+      "Install a complete Limina release or set LIMINA_HOME to a source checkout.",
+    );
+  }
+  const sourceMtime = newestSourceMtime(sourceRoot, fsApi);
+  if (fsApi.existsSync(bundle) && fsApi.statSync(bundle).mtimeMs >= sourceMtime) return { rebuilt: false, bundle };
+  const result = run("npm", ["--prefix", join(home, "js"), "run", "bundle:world-compiler"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    const detail = String(result.error?.message ?? result.stderr ?? result.stdout ?? "unknown build failure").trim();
+    throw new Error(
+      `failed to build world compiler with 'npm --prefix ${join(home, "js")} run bundle:world-compiler': ${detail}. ` +
+      "Install the Limina JavaScript dependencies and retry.",
+    );
+  }
+  if (!fsApi.existsSync(bundle)) throw new Error(`world compiler build reported success but did not create: ${bundle}`);
+  return { rebuilt: true, bundle };
+}
+
+function waitForOutput(child, stream, marker, label) {
+  return new Promise((resolveReady, rejectReady) => {
+    let output = "";
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error(`${label} did not report readiness within 15 seconds.`)), 15_000);
+    const onData = (chunk) => {
+      output = `${output}${String(chunk)}`.slice(-64 * 1024);
+      if (output.includes(marker)) finish();
+    };
+    const onExit = (code, signal) => finish(new Error(`${label} exited before readiness (${signal ?? `exit ${code}`}).`));
+    const onError = (error) => finish(new Error(`${label} failed before readiness: ${error.message}`));
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.off("data", onData);
+      child.off("exit", onExit);
+      child.off("error", onError);
+      if (error) rejectReady(error);
+      else resolveReady();
+    };
+    stream.on("data", onData);
+    child.once("exit", onExit);
+    child.once("error", onError);
+  });
+}
+
 async function main() {
   const { bin, home } = resolveLimina();
-  const { projectId: id } = await loadEditorProjectConfig(home);
-  const stateDir = join(PROJECT_DIR, ".limina");
+  const projectConfig = await loadEditorProjectConfig(home);
+  const id = projectConfig.projectId;
+  const assetRoot = join(projectConfig.projectRoot, projectConfig.assetRoot ?? "assets");
+  const stateDir = join(projectConfig.projectRoot, projectConfig.stateDir ?? ".limina");
   mkdirSync(stateDir, { recursive: true });
   try { ensureFreshEditorBundles(home); } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  let worldCompiler;
+  try { worldCompiler = ensureFreshWorldCompilerBundle(home); } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
 
@@ -251,17 +324,20 @@ async function main() {
     fail("LIMINA_EDITOR_TOKEN must be 32-128 URL-safe characters");
   }
   const token = requestedToken ?? randomBytes(24).toString("base64url");
+  const hostEnvironment = editorHostEnvironment({ projectId: id, editorPort, uiPort, token, assetRoot });
   const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
     cwd: stateDir,
-    env: editorHostEnvironment({ projectId: id, editorPort, uiPort, token }),
+    env: hostEnvironment,
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(editorHost.stderr, "[editor_host]");
 
   let staticServer;
+  let derivedBuildService;
   let shuttingDown = false;
   cleanupChildren = () => {
     if (staticServer && staticServer.exitCode === null) staticServer.kill("SIGTERM");
+    if (derivedBuildService && derivedBuildService.exitCode === null) derivedBuildService.kill("SIGTERM");
     if (editorHost.exitCode === null) editorHost.kill("SIGTERM");
   };
   const shutdown = (signal) => {
@@ -289,9 +365,34 @@ async function main() {
 
   await waitForPort(editorPort, "editor_host", editorHost);
 
+  derivedBuildService = spawn(process.execPath, [join(home, "tools", "design", "derived-build-service.mjs"), PROJECT_DIR], {
+    cwd: PROJECT_DIR,
+    env: {
+      ...hostEnvironment,
+      LIMINA_EDITOR_URL: `ws://127.0.0.1:${editorPort}/`,
+      LIMINA_WORLD_COMPILER_BUNDLE: worldCompiler.bundle,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  prefixStream(derivedBuildService.stdout, "[derived_build]");
+  prefixStream(derivedBuildService.stderr, "[derived_build]");
+  derivedBuildService.once("error", (err) => {
+    if (!shuttingDown) {
+      shutdown();
+      fail(`failed to launch derived build service: ${err.message}`);
+    }
+  });
+  derivedBuildService.once("exit", (code, signal) => {
+    if (!shuttingDown) {
+      shutdown();
+      fail(`derived build service stopped unexpectedly (${signal ?? `exit ${code}`}).`);
+    }
+  });
+  await waitForOutput(derivedBuildService, derivedBuildService.stdout, "[derived-build] watching", "derived build service");
+
   staticServer = spawn(process.execPath, [join(PROJECT_DIR, "scripts", "serve.mjs"), join(home, "editor"), String(uiPort)], {
     cwd: PROJECT_DIR,
-    env: { ...process.env, LIMINA_ASSETS_ROOT: join(PROJECT_DIR, "assets") },
+    env: { ...process.env, LIMINA_ASSETS_ROOT: assetRoot },
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(staticServer.stderr, "[editor_ui]");

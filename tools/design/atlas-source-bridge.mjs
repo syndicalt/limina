@@ -16,8 +16,9 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { migrateMapDoc, serializeMapDoc } from "./map-doc.mjs";
+import { canonicalMapDocText, MAX_CANONICAL_MAPDOC_BYTES } from "../../js/src/world/mapdoc-canonical.mjs";
 
-const MAX_MAPDOC_BYTES = 16 * 1024 * 1024;
+const MAX_MAPDOC_BYTES = MAX_CANONICAL_MAPDOC_BYTES;
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const ASSET_SEGMENT_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -142,11 +143,17 @@ function canonicalValue(value, path = "$", active = new Set()) {
 }
 
 export function canonicalMapDocBytes(doc) {
-  const bytes = Buffer.from(`${canonicalJson(doc)}\n`, "utf8");
-  if (bytes.length > MAX_MAPDOC_BYTES) {
-    throw new AtlasSourceBridgeError("mapdoc_too_large", `canonical MapDoc exceeds ${MAX_MAPDOC_BYTES} bytes`, { status: 413 });
+  try {
+    return Buffer.from(canonicalMapDocText(doc), "utf8");
+  } catch (error) {
+    if (error instanceof AtlasSourceBridgeError) throw error;
+    const tooLarge = error instanceof Error && error.message.includes("canonical MapDoc exceeds");
+    throw new AtlasSourceBridgeError(
+      tooLarge ? "mapdoc_too_large" : "invalid_mapdoc",
+      error instanceof Error ? error.message : "MapDoc canonicalization failed",
+      { status: tooLarge ? 413 : 400, cause: error },
+    );
   }
-  return bytes;
 }
 
 function canonicalJson(value) {
@@ -361,21 +368,53 @@ export function atomicWriteWorkspace(path, bytes) {
 }
 
 function validateHead(input, projectId) {
-  if (!input || input.schema !== "limina.world-project-head/v1" || input.projectId !== projectId
+  if (!exactKeys(input, ["schema", "projectId", "revision", "headHash"])
+      || input.schema !== "limina.world-project-head/v1" || input.projectId !== projectId
       || !Number.isSafeInteger(input.revision) || input.revision < 0 || !HASH_PATTERN.test(input.headHash)) {
-    throw new AtlasSourceBridgeError("invalid_authority_response", "authoring.head returned an invalid or wrong-project head", { status: 502 });
+    throw new AtlasSourceBridgeError("invalid_authority_response", "authority returned an invalid or wrong-project head", { status: 502 });
   }
   return input;
 }
 
 function validateProjectState(input, projectId) {
   const mapDoc = input?.refs?.mapDoc;
-  if (!input || input.schema !== "limina.world-project-state/v1" || input.projectId !== projectId
+  if (!exactKeys(input, ["schema", "projectId", "refs", "stateHash"])
+      || input.schema !== "limina.world-project-state/v1" || input.projectId !== projectId
       || !HASH_PATTERN.test(input.stateHash) || !input.refs || typeof input.refs !== "object"
-      || (mapDoc !== null && (typeof mapDoc?.assetId !== "string" || !HASH_PATTERN.test(mapDoc?.hash)))) {
-    throw new AtlasSourceBridgeError("invalid_authority_response", "authoring.projectState returned invalid or wrong-project state", { status: 502 });
+      || !exactKeys(input.refs, ["mapDoc", "terrainEditLayers", "scene", "assets", "lookProfile"])
+      || !Array.isArray(input.refs.terrainEditLayers) || !Array.isArray(input.refs.assets)
+      || (mapDoc !== null && (!exactKeys(mapDoc, ["assetId", "hash"])
+        || typeof mapDoc.assetId !== "string" || !HASH_PATTERN.test(mapDoc.hash)))) {
+    throw new AtlasSourceBridgeError("invalid_authority_response", "authority returned invalid or wrong-project state", { status: 502 });
+  }
+  const expectedStateHash = hashCanonical({
+    schema: "limina.world-project-state/v1",
+    projectId,
+    refs: input.refs,
+  });
+  if (input.stateHash !== expectedStateHash) {
+    throw new AtlasSourceBridgeError("invalid_authority_response", "authority returned a project state with an invalid binding hash", { status: 502 });
   }
   return input;
+}
+
+function validateSourceSnapshot(input, projectId) {
+  if (!exactKeys(input, ["schema", "head", "projectState", "snapshotHash"])
+      || input.schema !== "limina.world-project-source-snapshot/v1"
+      || !HASH_PATTERN.test(input.snapshotHash)) {
+    throw new AtlasSourceBridgeError("invalid_authority_response", "authoring.sourceSnapshot returned an invalid envelope", { status: 502 });
+  }
+  const head = validateHead(input.head, projectId);
+  const projectState = validateProjectState(input.projectState, projectId);
+  const expectedSnapshotHash = hashCanonical({
+    schema: "limina.world-project-source-snapshot/v1",
+    head,
+    projectState,
+  });
+  if (input.snapshotHash !== expectedSnapshotHash) {
+    throw new AtlasSourceBridgeError("invalid_authority_response", "authoring.sourceSnapshot returned an invalid binding hash", { status: 502 });
+  }
+  return { head, projectState, snapshotHash: input.snapshotHash };
 }
 
 function sameReference(left, right) {
@@ -419,7 +458,7 @@ function transactionFor(projectId, head, projectState, source) {
   };
 }
 
-function validateCommitResult(input, transaction, projectState, sourceRef) {
+export function validateAuthoringProjectStateCommit(input, transaction, projectState, sourceRef) {
   const receipt = input?.receipt;
   const operationReceipt = receipt?.operations?.[0];
   const expectedTransactionHash = hashCanonical(transaction);
@@ -554,17 +593,23 @@ export class AtlasMapDocBridge {
 
     let authoring;
     try {
-      const head = validateHead(await this.authoringClient.callTool("authoring.head", {}), this.projectId);
-      const projectState = validateProjectState(await this.authoringClient.callTool("authoring.projectState", {}), this.projectId);
+      const snapshot = validateSourceSnapshot(
+        await this.authoringClient.callTool("authoring.sourceSnapshot", {}),
+        this.projectId,
+      );
+      const { head, projectState } = snapshot;
       if (sameReference(projectState.refs.mapDoc, sourceRef)) {
-        const confirmedHead = validateHead(await this.authoringClient.callTool("authoring.head", {}), this.projectId);
-        if (confirmedHead.revision !== head.revision || confirmedHead.headHash !== head.headHash) {
+        const confirmed = validateSourceSnapshot(
+          await this.authoringClient.callTool("authoring.sourceSnapshot", {}),
+          this.projectId,
+        );
+        if (confirmed.snapshotHash !== snapshot.snapshotHash) {
           throw new AtlasSourceBridgeError("authoring_conflict", "authoritative head changed while confirming an idempotent Atlas save", { status: 409 });
         }
-        authoring = { committed: false, head: confirmedHead };
+        authoring = { committed: false, head: confirmed.head };
       } else {
         const transaction = transactionFor(this.projectId, head, projectState, source);
-        authoring = validateCommitResult(
+        authoring = validateAuthoringProjectStateCommit(
           await this.authoringClient.callTool("authoring.commit", { transaction }, { retryTransport: true }),
           transaction,
           projectState,
@@ -576,9 +621,12 @@ export class AtlasMapDocBridge {
       throw authorityError(error, source);
     }
 
-    let confirmedState;
+    let confirmedSnapshot;
     try {
-      confirmedState = validateProjectState(await this.authoringClient.callTool("authoring.projectState", {}), this.projectId);
+      confirmedSnapshot = validateSourceSnapshot(
+        await this.authoringClient.callTool("authoring.sourceSnapshot", {}),
+        this.projectId,
+      );
     } catch (error) {
       throw new AtlasSourceBridgeError("post_commit_verification_failed", `Atlas source may be committed, but its authoritative ref could not be verified: ${error.message}`, {
         status: 503,
@@ -587,11 +635,11 @@ export class AtlasMapDocBridge {
         cause: error,
       });
     }
-    if (!sameReference(confirmedState.refs.mapDoc, sourceRef)) {
+    if (!sameReference(confirmedSnapshot.projectState.refs.mapDoc, sourceRef)) {
       throw new AtlasSourceBridgeError("authoring_advanced", "Atlas source committed, but another authoritative MapDoc superseded it before workspace publication", {
         status: 409,
         committed: true,
-        details: { source: sourceRef, authoring, currentMapDoc: confirmedState.refs.mapDoc },
+        details: { source: sourceRef, authoring, currentMapDoc: confirmedSnapshot.projectState.refs.mapDoc },
       });
     }
 

@@ -11,6 +11,7 @@ dist/
 # global ignore file contains a broad `build/` rule.
 !js/build/
 !js/build/*.d.mts
+js/build/world-compiler.bundle.mjs
 
 # --- Secrets & machine-specific local config (never publish) ---
 .env

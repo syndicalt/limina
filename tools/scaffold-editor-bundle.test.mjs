@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ensureFreshEditorBundles } from "./scaffold/scripts/editor.mjs";
+import { ensureFreshEditorBundles, ensureFreshWorldCompilerBundle } from "./scaffold/scripts/editor.mjs";
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "limina-editor-bundle-"));
@@ -28,6 +28,15 @@ function fixture() {
   setMtime(runtime, 20);
   setMtime(worker, 20);
   return { home, source, packageJson, runtime, worker, setMtime, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+function compilerFixture() {
+  const f = fixture();
+  const bundle = join(f.home, "js", "build", "world-compiler.bundle.mjs");
+  mkdirSync(join(f.home, "js", "build"), { recursive: true });
+  writeFileSync(bundle, "compiler\n");
+  f.setMtime(bundle, 20);
+  return { ...f, bundle };
 }
 
 {
@@ -81,4 +90,44 @@ function fixture() {
   } finally { f.cleanup(); }
 }
 
-console.log("scaffold-editor-bundle.test OK: fresh, missing, stale-failure, and incomplete-release paths");
+{
+  const f = compilerFixture();
+  try {
+    let spawned = false;
+    const result = ensureFreshWorldCompilerBundle(f.home, { spawnSync: () => { spawned = true; return { status: 0 }; } });
+    assert.equal(result.rebuilt, false);
+    assert.equal(result.bundle, f.bundle);
+    assert.equal(spawned, false, "fresh world compiler must not rebuild");
+  } finally { f.cleanup(); }
+}
+
+{
+  const f = compilerFixture();
+  try {
+    rmSync(f.bundle);
+    let invocation;
+    const result = ensureFreshWorldCompilerBundle(f.home, { spawnSync: (command, args) => {
+      invocation = { command, args };
+      writeFileSync(f.bundle, "rebuilt compiler\n");
+      return { status: 0, stdout: "ok", stderr: "" };
+    } });
+    assert.equal(result.rebuilt, true);
+    assert.deepEqual(invocation, {
+      command: "npm",
+      args: ["--prefix", join(f.home, "js"), "run", "bundle:world-compiler"],
+    });
+  } finally { f.cleanup(); }
+}
+
+{
+  const f = compilerFixture();
+  try {
+    f.setMtime(f.source, 30);
+    assert.throws(
+      () => ensureFreshWorldCompilerBundle(f.home, { spawnSync: () => ({ status: 1, stderr: "compiler build failed" }) }),
+      /failed to build world compiler.*compiler build failed.*Install the Limina JavaScript dependencies/,
+    );
+  } finally { f.cleanup(); }
+}
+
+console.log("scaffold-editor-bundle.test OK: editor and world-compiler fresh, missing, stale-failure, and incomplete-release paths");

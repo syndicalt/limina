@@ -5,7 +5,16 @@ import { AuthoringError, type AuthoringErrorCode } from "./errors.ts";
 import { AuthoringTransactionKernel, createWorldProjectHead } from "./kernel.ts";
 import { AuthoringTransactionSchema, CommittedAuthoringReceiptSchema, WorldProjectHeadSchema } from "./schema.ts";
 import type { AuthoringAdapterAllowlist } from "./adapter.ts";
-import { WorldProjectStateSchema, type WorldProjectStateReader } from "./project-state.ts";
+import {
+  WorldProjectAssetReferenceSchema,
+  WorldProjectIdSchema,
+  WorldProjectStateSchema,
+  type WorldProjectStateReader,
+} from "./project-state.ts";
+import {
+  WorldProjectSourceSnapshotSchema,
+  createWorldProjectSourceSnapshot,
+} from "./source-snapshot.ts";
 import { SkillInvocationError, type SkillDefinition, type SkillRegistry } from "../skills/registry.ts";
 
 export interface AuthoringSkillOptions {
@@ -30,6 +39,11 @@ const commitOutputSchema = z.object({
   receipt: CommittedAuthoringReceiptSchema,
   commitRecord: DurableAuthoringRecordSchema,
   committed: z.boolean(),
+}).strict();
+
+const derivedBuildBootstrapInputSchema = z.object({
+  projectId: WorldProjectIdSchema,
+  patch: z.object({ mapDoc: WorldProjectAssetReferenceSchema }).strict(),
 }).strict();
 
 type CommitInput = z.infer<typeof commitInputSchema>;
@@ -67,6 +81,26 @@ function mapAuthoringError(error: unknown): never {
   }
 }
 
+function enforceRestrictedCommitProfile(transaction: z.infer<typeof AuthoringTransactionSchema>, profile: string | undefined): void {
+  if (profile !== "system.derived-build") return;
+  const operation = transaction.operations[0];
+  const allowed = transaction.compensates === undefined
+    && transaction.baseRevision === 0
+    && transaction.transactionId.startsWith("bootstrap-mapdoc-")
+    && transaction.operations.length === 1
+    && operation?.adapter === "project-state"
+    && operation.adapterVersion === "1.0.0"
+    && operation.action === "refs.patch"
+    && operation.guard?.beforeHash !== undefined
+    && derivedBuildBootstrapInputSchema.safeParse(operation.input).success;
+  if (!allowed) {
+    throw new SkillInvocationError(
+      "forbidden",
+      "system.derived-build may only commit one guarded genesis MapDoc bootstrap transaction",
+    );
+  }
+}
+
 export function registerAuthoringSkills(registry: SkillRegistry, options: AuthoringSkillOptions): AuthoringSkillRuntime {
   if (options.projectState !== undefined && options.projectState.projectId !== options.projectId) {
     throw new Error(`authoring project-state store '${options.projectState.projectId}' does not match '${options.projectId}'`);
@@ -89,8 +123,9 @@ export function registerAuthoringSkills(registry: SkillRegistry, options: Author
     output: commitOutputSchema,
     commitFields: ["commitRecord"],
     shouldRecordResult: (result) => result.committed,
-    handler: async (input) => {
+    handler: async (input, context) => {
       try {
+        enforceRestrictedCommitProfile(input.transaction, context.profile);
         if (input.commitRecord !== undefined) {
           const existed = kernel.durableRecordForTransaction(input.transaction.transactionId) !== undefined;
           const receipt = await kernel.commitRecorded(input.transaction, input.commitRecord);
@@ -116,7 +151,7 @@ export function registerAuthoringSkills(registry: SkillRegistry, options: Author
     priority: "core",
     input: z.object({}).strict(),
     output: WorldProjectHeadSchema,
-    handler: () => kernel.head,
+    handler: () => kernel.readCurrent((currentHead) => currentHead),
   };
 
   registry.register(commit);
@@ -132,9 +167,25 @@ export function registerAuthoringSkills(registry: SkillRegistry, options: Author
       priority: "core",
       input: z.object({}).strict(),
       output: WorldProjectStateSchema,
-      handler: () => options.projectState!.state,
+      handler: () => kernel.readCurrent(() => options.projectState!.state),
     };
     registry.register(projectState);
+
+    const sourceSnapshot: SkillDefinition<Record<string, never>, z.infer<typeof WorldProjectSourceSnapshotSchema>> = {
+      name: "authoring.sourceSnapshot",
+      version: "1.0.0",
+      description: "Atomically read the authoritative WorldProject head and source references as one hash-bound snapshot.",
+      category: "world",
+      permissions: ["authoring.read"],
+      effect: "read",
+      priority: "core",
+      input: z.object({}).strict(),
+      output: WorldProjectSourceSnapshotSchema,
+      handler: () => kernel.readCurrent((currentHead) =>
+        createWorldProjectSourceSnapshot(options.sha256, currentHead, options.projectState!.state)
+      ),
+    };
+    registry.register(sourceSnapshot);
   }
   return { kernel, projectState: options.projectState };
 }
