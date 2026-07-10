@@ -141,6 +141,7 @@
             <button id="viewport-navigation-focus" class="navigation-command" type="button" title="Frame selection (F)">Focus</button>
             <button id="viewport-navigation-goto-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-goto" aria-expanded="false">Go to</button>
             <button id="viewport-navigation-views-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-views" aria-expanded="false">Views</button>
+            <button id="viewport-atlas-toggle" class="navigation-command" type="button" aria-controls="viewport-atlas" aria-expanded="false">Atlas</button>
           </div>
 
           <form id="viewport-navigation-goto" class="navigation-popover navigation-goto" role="dialog" aria-labelledby="viewport-navigation-goto-title" hidden>
@@ -183,6 +184,15 @@
       </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
+        <section id="viewport-atlas" class="atlas-overview" aria-labelledby="viewport-atlas-title" hidden>
+          <div class="atlas-overview-head">
+            <h4 id="viewport-atlas-title">Atlas</h4>
+            <output id="viewport-atlas-status" aria-live="polite">connecting</output>
+            <button id="viewport-atlas-reveal" type="button" title="Reveal the selected entity position" aria-label="Reveal the selected entity position">◎</button>
+            <button id="viewport-atlas-close" type="button" title="Close Atlas" aria-label="Close Atlas">×</button>
+          </div>
+          <iframe id="viewport-atlas-frame" title="Atlas world builder" loading="lazy"></iframe>
+        </section>
       </div>
       <div class="viewport-tools" aria-label="Viewport controls">
         <button id="viewport-snap-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle snapping (S)">Snap off</button>

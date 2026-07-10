@@ -92,7 +92,7 @@ export function scheduleMapSave() {
 
 export async function flushMapSave() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  await doSave();
+  return doSave();
 }
 
 // The close-tab safety net. Primary: flush with a NORMAL fetch when the tab goes hidden —

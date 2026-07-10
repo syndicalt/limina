@@ -74,8 +74,11 @@ export function createNavigationDestinationCoordinator({
     catch { /* status observers cannot break navigation cleanup */ }
   };
 
-  async function navigate(pose, { label = "destination", metadata } = {}) {
+  async function navigate(pose, { label = "destination", metadata, resolvePose } = {}) {
     if (active !== undefined) throw codedError("NAVIGATION_BUSY", "another navigation destination is loading");
+    if (resolvePose !== undefined && typeof resolvePose !== "function") {
+      throw new TypeError("navigation destination pose resolver must be a function");
+    }
     const context = requireContext(getContext());
     const priorPose = context.navigation.snapshot();
     const priorResidency = context.runtime.derivedTerrainResidency();
@@ -96,7 +99,20 @@ export function createNavigationDestinationCoordinator({
       if (active !== ticket || !context.isCurrent()) {
         throw codedError("NAVIGATION_STALE_CONTEXT", "editor navigation context changed while loading");
       }
-      context.navigation.restore(pose);
+      const committedPose = resolvePose === undefined
+        ? pose
+        : resolvePose(Object.freeze({ context, pose, residency, result }));
+      if (committedPose && typeof committedPose.then === "function") {
+        throw new TypeError("navigation destination pose resolver must be synchronous");
+      }
+      if (active !== ticket || !context.isCurrent()) {
+        throw codedError("NAVIGATION_STALE_CONTEXT", "editor navigation context changed while resolving the destination");
+      }
+      const committedCenter = finiteCenter(context.navigation.residencyCenter(committedPose));
+      if (committedCenter[0] !== residency.center[0] || committedCenter[1] !== residency.center[1]) {
+        throw codedError("NAVIGATION_DESTINATION_CHANGED", "resolved destination moved outside the ready terrain residency");
+      }
+      context.navigation.restore(committedPose);
       const committed = Object.freeze({ pose: context.navigation.snapshot(), residency, result, metadata });
       try { onCommit(committed); } catch { /* persistence/telemetry cannot roll back a ready destination */ }
       publish(false, label);

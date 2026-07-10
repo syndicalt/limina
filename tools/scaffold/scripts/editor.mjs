@@ -18,10 +18,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = resolve(__dirname, "..");
 const DEFAULT_EDITOR_PORT = 8787;
 const DEFAULT_UI_PORT = 5173;
+const DEFAULT_ATLAS_PORT = 4321;
 const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-discovery/v1";
 const DERIVED_RUNTIME_DISCOVERY_PREFIX = "[derived-runtime] ready ";
 const MAX_DERIVED_RUNTIME_DISCOVERY_BYTES = 1_024;
 const DEFAULT_DERIVED_RUNTIME_BRANCH = "main";
+const MAX_EDITOR_HOST_READINESS_BYTES = 64 * 1024;
 let cleanupChildren = () => {};
 
 /** Print an actionable error and exit non-zero. */
@@ -121,6 +123,16 @@ export function derivedRuntimeLaunchConfig({ uiPort, environment = process.env, 
   });
 }
 
+export function atlasLaunchConfig({ environment = process.env } = {}) {
+  const configuredPort = environment.LIMINA_ATLAS_PORT;
+  if (configuredPort !== undefined && (!/^[1-9][0-9]{0,4}$/.test(configuredPort)
+      || Number(configuredPort) > 65_535 || String(Number(configuredPort)) !== configuredPort)) {
+    throw new Error(`LIMINA_ATLAS_PORT must be a canonical TCP port, got: ${configuredPort}`);
+  }
+  const port = configuredPort === undefined ? DEFAULT_ATLAS_PORT : Number(configuredPort);
+  return Object.freeze({ port, origin: `http://127.0.0.1:${port}` });
+}
+
 export function parseDerivedRuntimeDiscoveryLine(line, expectedPort) {
   if (typeof line !== "string" || Buffer.byteLength(line, "utf8") > MAX_DERIVED_RUNTIME_DISCOVERY_BYTES
       || !line.startsWith(DERIVED_RUNTIME_DISCOVERY_PREFIX)) {
@@ -189,6 +201,40 @@ async function waitForPort(port, label, child) {
   throw new Error(`${label} did not start listening on port ${port}.`);
 }
 
+export function waitForEditorHostReady(child, stream, expectedPort) {
+  const marker = `editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:${expectedPort}/`;
+  return new Promise((resolveReady, rejectReady) => {
+    let pending = "";
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error("editor_host did not report readiness within 15 seconds.")), 15_000);
+    const onData = (chunk) => {
+      pending += String(chunk);
+      if (Buffer.byteLength(pending, "utf8") > MAX_EDITOR_HOST_READINESS_BYTES) {
+        finish(new Error("editor_host emitted an overlong readiness stream."));
+        return;
+      }
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      if (lines.some((line) => line.includes(marker))) finish();
+    };
+    const onExit = (code, signal) => finish(new Error(`editor_host exited before readiness (${signal ?? `exit ${code}`}).`));
+    const onError = (error) => finish(new Error(`editor_host failed before readiness: ${error.message}`));
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.off("data", onData);
+      child.off("exit", onExit);
+      child.off("error", onError);
+      if (error) rejectReady(error);
+      else resolveReady();
+    };
+    stream.on("data", onData);
+    child.once("exit", onExit);
+    child.once("error", onError);
+  });
+}
+
 function bridgeConfig(home, editorUrl, token) {
   return {
     mcpServers: {
@@ -211,6 +257,7 @@ function printBanner({ home, uiPort, editorPort, token, runtimeDiscovery }) {
   console.log("");
   console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
+  console.log(`  Atlas:       http://localhost:${uiPort}/atlas/`);
   console.log(`  Derived API: ${runtimeDiscovery.baseUrl}`);
   console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
   console.log(`  Editor key:  ${token}`);
@@ -398,12 +445,19 @@ async function main() {
   let runtimeLaunch;
   try { runtimeLaunch = derivedRuntimeLaunchConfig({ uiPort }); }
   catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+  let atlasLaunch;
+  try { atlasLaunch = atlasLaunchConfig(); }
+  catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   if (runtimeLaunch.port === editorPort || runtimeLaunch.port === uiPort) {
     fail("LIMINA_DERIVED_RUNTIME_PORT must differ from the editor host and UI ports");
+  }
+  if (atlasLaunch.port === editorPort || atlasLaunch.port === uiPort || atlasLaunch.port === runtimeLaunch.port) {
+    fail("LIMINA_ATLAS_PORT must differ from the editor host, UI, and derived runtime ports");
   }
   if (await canConnect(editorPort)) fail(`LIMINA_EDITOR_PORT is already in use: ${editorPort}`);
   if (await canConnect(uiPort)) fail(`editor UI port is already in use: ${uiPort}`);
   if (await canConnect(runtimeLaunch.port)) fail(`derived runtime port is already in use: ${runtimeLaunch.port}`);
+  if (await canConnect(atlasLaunch.port)) fail(`LIMINA_ATLAS_PORT is already in use: ${atlasLaunch.port}`);
 
   const requestedToken = process.env.LIMINA_EDITOR_TOKEN;
   if (requestedToken !== undefined && !/^[A-Za-z0-9_-]{32,128}$/.test(requestedToken)) {
@@ -425,16 +479,19 @@ async function main() {
   const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
     cwd: stateDir,
     env: hostEnvironment,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  const editorHostReady = waitForEditorHostReady(editorHost, editorHost.stdout, editorPort);
   prefixStream(editorHost.stderr, "[editor_host]");
 
   let staticServer;
   let derivedBuildService;
+  let atlasServer;
   let shuttingDown = false;
   cleanupChildren = () => {
     if (staticServer && staticServer.exitCode === null) staticServer.kill("SIGTERM");
     if (derivedBuildService && derivedBuildService.exitCode === null) derivedBuildService.kill("SIGTERM");
+    if (atlasServer && atlasServer.exitCode === null) atlasServer.kill("SIGTERM");
     if (editorHost.exitCode === null) editorHost.kill("SIGTERM");
   };
   const shutdown = (signal) => {
@@ -460,7 +517,10 @@ async function main() {
     }
   });
 
-  await waitForPort(editorPort, "editor_host", editorHost);
+  await editorHostReady;
+  // Readiness is the only stdout record the launcher consumes. Drain subsequent output privately so
+  // a verbose host can never fill the child pipe and deadlock while token-bearing banners stay hidden.
+  editorHost.stdout.resume();
 
   derivedBuildService = spawn(process.execPath, [join(home, "tools", "design", "derived-build-service.mjs"), PROJECT_DIR], {
     cwd: PROJECT_DIR,
@@ -495,9 +555,39 @@ async function main() {
   });
   const runtimeDiscovery = await runtimeDiscoveryPromise;
 
+  atlasServer = spawn(process.execPath, [
+    join(home, "tools", "design", "serve-design.mjs"),
+    join(projectConfig.projectRoot, "design"),
+    String(atlasLaunch.port),
+  ], {
+    cwd: projectConfig.projectRoot,
+    env: {
+      ...process.env,
+      LIMINA_EDITOR_URL: `ws://127.0.0.1:${editorPort}/`,
+      LIMINA_EDITOR_TOKEN: token,
+      LIMINA_ASSETS_ROOT: assetRoot,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  prefixStream(atlasServer.stdout, "[atlas]");
+  prefixStream(atlasServer.stderr, "[atlas]");
+  atlasServer.once("error", (err) => {
+    if (!shuttingDown) {
+      shutdown();
+      fail(`failed to launch Atlas: ${err.message}`);
+    }
+  });
+  atlasServer.once("exit", (code, signal) => {
+    if (!shuttingDown) {
+      shutdown();
+      fail(`Atlas stopped unexpectedly (${signal ?? `exit ${code}`}).`);
+    }
+  });
+  await waitForPort(atlasLaunch.port, "Atlas", atlasServer);
+
   staticServer = spawn(process.execPath, [join(PROJECT_DIR, "scripts", "serve.mjs"), join(home, "editor"), String(uiPort)], {
     cwd: PROJECT_DIR,
-    env: { ...process.env, LIMINA_ASSETS_ROOT: assetRoot },
+    env: { ...process.env, LIMINA_ASSETS_ROOT: assetRoot, LIMINA_ATLAS_ORIGIN: atlasLaunch.origin },
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(staticServer.stderr, "[editor_ui]");

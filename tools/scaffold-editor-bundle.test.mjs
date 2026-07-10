@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import {
   mkdirSync,
   mkdtempSync,
@@ -8,13 +9,48 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import {
+  atlasLaunchConfig,
   derivedRuntimeLaunchConfig,
   ensureFreshEditorBundles,
   ensureFreshWorldCompilerBundle,
   parseDerivedRuntimeDiscoveryLine,
+  waitForEditorHostReady,
 } from "./scaffold/scripts/editor.mjs";
+
+{
+  assert.deepEqual(atlasLaunchConfig({ environment: {} }), {
+    port: 4321,
+    origin: "http://127.0.0.1:4321",
+  });
+  assert.deepEqual(atlasLaunchConfig({ environment: { LIMINA_ATLAS_PORT: "61001" } }), {
+    port: 61_001,
+    origin: "http://127.0.0.1:61001",
+  });
+  for (const port of ["0", "04321", "65536", "1.5", "not-a-port", ""]) {
+    assert.throws(
+      () => atlasLaunchConfig({ environment: { LIMINA_ATLAS_PORT: port } }),
+      /canonical TCP port/,
+    );
+  }
+}
+
+{
+  const child = new EventEmitter();
+  const stdout = new PassThrough();
+  const ready = waitForEditorHostReady(child, stdout, 8787);
+  stdout.write("[js] editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:8787/ (profiles)\n");
+  await ready;
+
+  const wrongChild = new EventEmitter();
+  const wrongStdout = new PassThrough();
+  const wrongReady = waitForEditorHostReady(wrongChild, wrongStdout, 8787);
+  wrongStdout.write("editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:8788/\n");
+  wrongChild.emit("exit", 1, null);
+  await assert.rejects(wrongReady, /exited before readiness/);
+}
 
 {
   const runtime = derivedRuntimeLaunchConfig({
@@ -193,4 +229,4 @@ function compilerFixture() {
   } finally { f.cleanup(); }
 }
 
-console.log("scaffold-editor-bundle.test OK: editor and world-compiler fresh, missing, stale-failure, and incomplete-release paths");
+console.log("scaffold-editor-bundle.test OK: Atlas/runtime launch config and editor/compiler bundle freshness paths");

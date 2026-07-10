@@ -624,6 +624,8 @@ export interface RunningLive {
   derivedRevision(): Readonly<{ manifestHash: string; revision: number; headHash: string }> | null;
   /** Immutable LOD0 camera residency used by the next derived worker and active revision. */
   derivedTerrainResidency(): Readonly<DerivedTerrainResidency>;
+  /** Read-only height sample from the exact active derived terrain revision. */
+  derivedTerrainHeightAt(worldX: number, worldZ: number): number | null;
   /** Subscribe to threshold-crossing residency changes. Does not emit the current value immediately. */
   subscribeDerivedTerrainResidency(listener: DerivedTerrainResidencyListener): () => void;
   stop(): Promise<void>;
@@ -2281,6 +2283,16 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     activateDerivedRevision,
     derivedRevision: () => activeDerivedRevision?.identity ?? null,
     derivedTerrainResidency: (): Readonly<DerivedTerrainResidency> => derivedTerrainResidencyTracker.current(),
+    derivedTerrainHeightAt: (worldX: number, worldZ: number): number | null => {
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        throw new TypeError("derived terrain height coordinates must be finite");
+      }
+      const terrain = activeDerivedRevision?.candidate.snapshot.terrain;
+      if (terrain === undefined) return null;
+      const height = terrain.sampleHeight(Object.is(worldX, -0) ? 0 : worldX, Object.is(worldZ, -0) ? 0 : worldZ);
+      if (!Number.isFinite(height)) throw new Error("active derived terrain returned a non-finite height");
+      return Object.is(height, -0) ? 0 : height;
+    },
     subscribeDerivedTerrainResidency: (listener: DerivedTerrainResidencyListener): (() => void) => (
       derivedTerrainResidencyTracker.subscribe(listener)
     ),

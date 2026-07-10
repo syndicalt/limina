@@ -11,6 +11,13 @@
 import { esc, toast } from "./util.js";
 import { S } from "./store.js";
 import { postJSON, bindMapSaver, bindSaveConflict, bindSaveError, scheduleMapSave, flushMapSave } from "./net.js";
+import {
+  ATLAS_EDITOR_BRIDGE_SCHEMA,
+  ATLAS_FOCUS_REQUEST,
+  EDITOR_REVEAL_REQUEST,
+  atlasLocalToCanonicalWorld,
+  parseTrustedAtlasEditorMessageEvent,
+} from "./atlas-editor-protocol.js";
 import * as H from "./map-commands.js";
 import * as EL from "./map-elevation.js";
 import * as LM from "./map-paint.js";
@@ -31,6 +38,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select",
   drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
+let bridgeRequestId=0, bridgeReveal=null;
 // Camera vantage (Stage 2, session-only view state — never touches the doc): {x,z,yaw(rad)}.
 // yaw = atan2(dx,-dz) so 0 rad faces NORTH (-z) and grows clockwise (east = +x).
 let vantage=null;
@@ -147,6 +155,69 @@ function mapMarkers(){ const pid=primaryMapId(); return (S.state.world&&S.state.
 // exactly like markers). Unplaced places live only in the Places tree.
 function mapPlaces(){ const pid=primaryMapId(); return (S.state.places||[]).filter(p=> Array.isArray(p.position) && (p.map ? p.map===activeMapId : activeMapId===pid)); }
 
+function nextBridgeRequestId(){ bridgeRequestId=bridgeRequestId>=Number.MAX_SAFE_INTEGER?1:bridgeRequestId+1; return bridgeRequestId; }
+function bridgeLabel(value,fallback){
+  const label=String(value||fallback).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,256);
+  return label||fallback;
+}
+async function focusEditorFromAtlas(kind,id,label,local,radiusM){
+  if(window.parent===window) return;
+  try{
+    const map=activeMap();
+    const world=atlasLocalToCanonicalWorld(map.units,[local[0],local[1]]);
+    const saved=await flushMapSave();
+    const head=saved&&saved.authoring&&saved.authoring.head;
+    const message={
+      schema:ATLAS_EDITOR_BRIDGE_SCHEMA,
+      type:ATLAS_FOCUS_REQUEST,
+      requestId:nextBridgeRequestId(),
+      source:{revision:head&&head.revision,headHash:head&&head.headHash},
+      mapId:map.id,
+      subject:{kind,id:String(id),label:bridgeLabel(label,"Atlas destination")},
+      world,
+      ...(Number.isFinite(radiusM)&&radiusM>0?{radiusM}:{}),
+    };
+    window.parent.postMessage(message,window.location.origin);
+  }catch(error){ toast("3D focus unavailable: "+(error&&error.message?error.message:String(error)),5000); }
+}
+
+function revealEditorCoordinate(message){
+  const mapId=primaryMapId();
+  const map=(S.state.maps||[]).find(candidate=>candidate.id===mapId);
+  try{ atlasLocalToCanonicalWorld(map&&map.units,message.world); }
+  catch(error){ toast("3D reveal unavailable: "+(error&&error.message?error.message:String(error)),5000); return; }
+  activeMapId=mapId; S.state.activeMapId=mapId; fittedMap=mapId;
+  mapPan={x:message.world[0],z:message.world[1]};
+  bridgeReveal={world:message.world,label:message.label};
+  drawPts=[]; selFeat=null; vantage=null;
+  renderMap();
+}
+
+window.addEventListener("message",(event)=>{
+  if(window.parent===window) return;
+  let message;
+  try{ message=parseTrustedAtlasEditorMessageEvent(event,window.parent,window.location.origin); }
+  catch{ return; }
+  if(message.type===EDITOR_REVEAL_REQUEST) revealEditorCoordinate(message);
+});
+
+function activeMapBoundsPoints(){
+  const map=activeMap(), points=[];
+  for(const marker of mapMarkers()) points.push([marker.x,marker.z]);
+  for(const place of mapPlaces()) points.push(place.position);
+  for(const stamp of map.stamps||[]) points.push([stamp.x,stamp.z]);
+  for(const feature of map.features||[]){
+    if(feature.type==="glyph") points.push([feature.x,feature.z]);
+    else for(const point of feature.points||[]) points.push(point);
+  }
+  for(const raster of Object.values(map.rasters||{})){
+    const rect=raster&&raster.rect;
+    if(!rect) continue;
+    points.push([rect.x0,rect.z0],[rect.x0+rect.w,rect.z0+rect.h]);
+  }
+  return points.filter(point=>Array.isArray(point)&&point.length===2&&Number.isFinite(point[0])&&Number.isFinite(point[1]));
+}
+
 function glyphSVG(kind,x,y,s){
   const st='stroke="#6b6459" fill="none" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"';
   if(kind==="mountain") return `<path ${st} d="M${x-s} ${y+s*.5} L${x-s*.3} ${y-s*.6} L${x+s*.1} ${y} L${x+s*.5} ${y-s*.8} L${x+s} ${y+s*.5}"/>`;
@@ -228,11 +299,11 @@ export function renderMap(){
     +'<div class="map-hint" id="map-hint"></div></div></div>';
   // Fit the view to content only when first opening this map — NOT on every re-render
   // (tool change, sea toggle, edit), so the pan/zoom stays put while you work.
-  const marks=mapMarkers();
-  if(fittedMap!==activeMapId && marks.length){ const xs=marks.map(l=>l.x),zs=marks.map(l=>l.z);
+  const boundsPoints=activeMapBoundsPoints();
+  if(fittedMap!==activeMapId && boundsPoints.length){ const xs=boundsPoints.map(point=>point[0]),zs=boundsPoints.map(point=>point[1]);
     mapPan={x:(Math.min(...xs)+Math.max(...xs))/2, z:(Math.min(...zs)+Math.max(...zs))/2};
     const spanX=Math.max(30,Math.max(...xs)-Math.min(...xs)), spanZ=Math.max(30,Math.max(...zs)-Math.min(...zs));
-    mapScale=Math.max(1, Math.min((VBW-120)/spanX, (VBH-120)/spanZ)); fittedMap=activeMapId; }
+    mapScale=Math.max(.05, Math.min((VBW-120)/spanX, (VBH-120)/spanZ)); fittedMap=activeMapId; }
   syncViewBox(); bindMap(); redrawMap();
 }
 function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
@@ -407,6 +478,15 @@ function redrawMap(){
       +'<rect x="'+(vx-4)+'" y="'+(vy-2.5)+'" width="8" height="5.5" rx="1.2" fill="#fff"/>'
       +'<circle cx="'+vx+'" cy="'+vy+'" r="1.6" fill="var(--accent)"/></g>';
   }
+  let bridgeRevealLayer="";
+  if(bridgeReveal){
+    const [rx,ry]=w2s(bridgeReveal.world[0],bridgeReveal.world[1]);
+    bridgeRevealLayer='<g class="bridge-reveal" style="pointer-events:none">'
+      +'<circle cx="'+rx+'" cy="'+ry+'" r="12" fill="none" stroke="var(--accent)" stroke-width="2.5"/>'
+      +'<line x1="'+(rx-18)+'" y1="'+ry+'" x2="'+(rx+18)+'" y2="'+ry+'" stroke="var(--accent)" stroke-width="1.5"/>'
+      +'<line x1="'+rx+'" y1="'+(ry-18)+'" x2="'+rx+'" y2="'+(ry+18)+'" stroke="var(--accent)" stroke-width="1.5"/>'
+      +'<text x="'+(rx+16)+'" y="'+(ry-15)+'" fill="var(--ink)" stroke="var(--panel)" stroke-width="3" paint-order="stroke">'+esc(bridgeReveal.label)+'</text></g>';
+  }
   const compass='<g transform="translate('+(VBW-44)+',44)"><circle r="18" fill="var(--panel)" stroke="var(--line)"/><text class="compass" x="0" y="-6" text-anchor="middle">N</text><line class="map-axis" x1="0" y1="10" x2="0" y2="-2" stroke="var(--muted)"/></g>';
   // Bright white dashed ring with a dark drop-shadow casing — a var(--accent) hairline washed
   // out against sand/grass and the author lost the brush (a real UAT complaint).
@@ -415,11 +495,11 @@ function redrawMap(){
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
   // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons
   // for user-managed extent are gone.
-  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + compass + elevCursor + stampGhost;
+  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + bridgeRevealLayer + compass + elevCursor + stampGhost;
   renderLayers(); syncUndoButtons();
-  svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(loc&&loc.mapLink) switchMap(loc.mapLink);}); });
+  svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(!loc)return; if(loc.mapLink) switchMap(loc.mapLink); else void focusEditorFromAtlas("marker",loc.id,loc.name,[loc.x,loc.z],32);}); });
   svg.querySelectorAll(".ppin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPlacePinDrag(e,p.dataset.placeId));
-    p.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const pl=mapPlaces().find(x=>x.id===p.dataset.placeId); if(pl&&pl.mapLink) switchMap(pl.mapLink); }); });
+    p.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const pl=mapPlaces().find(x=>x.id===p.dataset.placeId); if(!pl)return; if(pl.mapLink) switchMap(pl.mapLink); else void focusEditorFromAtlas("place",pl.id,pl.name,pl.position,pl.radiusM||32); }); });
   svg.querySelectorAll(".stampf").forEach(el=>{
     el.style.cursor = mapTool==="select" ? "move" : "";
     el.addEventListener("mousedown",(e)=>{ if(mapTool!=="select") return; e.stopPropagation();
@@ -427,6 +507,7 @@ function redrawMap(){
       const s=(activeMap().stamps||[]).find(x=>x.id===sid); if(!s) return;
       mapDrag={type:"stampmove",sid,start:{x:s.x,z:s.z,rot:s.rot,scale:s.scale},moved:false};
       redrawMap(); });
+    el.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const s=(activeMap().stamps||[]).find(x=>x.id===el.dataset.sid); if(s) void focusEditorFromAtlas("stamp",s.id,s.assetId,[s.x,s.z],32); });
   });
   if(mapTool==="select") bindFeatureEditing(svg);
   hint();
@@ -574,6 +655,7 @@ function bindFeatureEditing(svg){
       const f=curFeatures().find(x=>x.id===featId); if(!f) return; const [mx,my]=evtVB(e,svg);
       mapDrag={type:"featmove",fid:featId,mx0:mx,my0:my, start: f.type==="glyph"?{x:f.x,z:f.z}:{points:f.points.map(p=>p.slice())}}; });
     el.addEventListener("contextmenu",(e)=>{ e.preventDefault(); e.stopPropagation(); selFeat=featId; redrawMap(); showFeatMenu(featId,e.clientX,e.clientY); });
+    el.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const f=curFeatures().find(x=>x.id===featId); if(!f)return; const [mx,my]=evtVB(e,svg); void focusEditorFromAtlas("feature",f.id,featLabel(f),s2w(mx,my),64); });
   });
   if(selFeat){ const f=curFeatures().find(x=>x.id===selFeat);
     if(!f){ selFeat=null; return; }
@@ -633,6 +715,12 @@ function openFeatInspector(f,cx,cy){
 function bindMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
   svg.addEventListener("contextmenu",(e)=>e.preventDefault());
+  svg.addEventListener("dblclick",(e)=>{
+    if(e.target.closest&&e.target.closest(".pin,.ppin,.stampf,.feat")) return;
+    const [mx,my]=evtVB(e,svg), local=s2w(mx,my);
+    const id=(activeMapId+":"+Math.round(local[0])+":"+Math.round(local[1])).slice(0,128);
+    void focusEditorFromAtlas("coordinate",id,"Map coordinate",local,64);
+  });
   document.getElementById("map-sw").onchange=(e)=>switchMap(e.target.value);
   document.getElementById("map-new").onclick=newMap;
   document.getElementById("map-undo").onclick=doUndo;

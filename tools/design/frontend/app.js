@@ -8,6 +8,12 @@ import { S } from "./store.js";
 import { postJSON, setMapsRev } from "./net.js";
 import { renderMap, openPlaceInspector } from "./map.js";
 
+const EMBEDDED_ATLAS = new URLSearchParams(window.location.search).get("embed") === "editor";
+if (EMBEDDED_ATLAS) {
+  S.activeView = "map";
+  document.body.classList.add("embedded-atlas");
+}
+
 const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", places:"⚲", cast:"☗", storyboard:"❧", "build-map":"⚑" };
 const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", places:"Places", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
 const NODE_COLOR = { region:"#dfeadf", location:"#e2eef0", player:"#e7e0f0", npc:"#f6ecdd", creature:"#f0dede", beat:"#e6ecf2" };

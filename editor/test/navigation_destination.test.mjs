@@ -90,6 +90,54 @@ test("destination pose is committed only after exact residency readiness", async
   assert.equal(state.reverted.length, 0);
 });
 
+test("post-activation pose resolution samples ready terrain before camera commit", async () => {
+  const state = harness();
+  const provisional = pose(1_200);
+  const grounded = Object.freeze({ ...provisional, target: Object.freeze([1_200, 87, 4]) });
+  const order = [];
+  const navigation = state.coordinator.navigate(provisional, {
+    label: "Atlas destination",
+    resolvePose: ({ result, residency }) => {
+      order.push("resolve");
+      assert.equal(result.status, "activated");
+      assert.deepEqual(residency.center, [1_200, 4]);
+      assert.equal(state.livePose().target[0], 0, "camera moved before post-activation resolution");
+      return grounded;
+    },
+  });
+  await Promise.resolve();
+  assert.deepEqual(order, []);
+  state.reconciliation.resolve(Object.freeze({ status: "activated", manifestHash: "sha256:" + "9".repeat(64), revision: 2 }));
+  const committed = await navigation;
+  assert.deepEqual(order, ["resolve"]);
+  assert.equal(committed.pose.target[1], 87);
+  assert.equal(state.livePose().target[1], 87);
+});
+
+test("post-activation pose resolution cannot escape the ready residency", async () => {
+  const state = harness();
+  const navigation = state.coordinator.navigate(pose(500), {
+    resolvePose: () => pose(900),
+  });
+  await Promise.resolve();
+  state.reconciliation.resolve(Object.freeze({ status: "activated", manifestHash: "sha256:" + "8".repeat(64), revision: 2 }));
+  await assert.rejects(navigation, (error) => error.code === "NAVIGATION_DESTINATION_CHANGED");
+  assert.equal(state.livePose().target[0], 0);
+  assert.deepEqual(state.reconciled.map((value) => value.center), [[500, 4], [0, 4]]);
+});
+
+test("post-activation pose resolution rejects asynchronous work before it can retain the input lease", async () => {
+  const state = harness();
+  const navigation = state.coordinator.navigate(pose(600), {
+    resolvePose: async () => pose(600),
+  });
+  await Promise.resolve();
+  state.reconciliation.resolve(Object.freeze({ status: "activated", manifestHash: "sha256:" + "7".repeat(64), revision: 2 }));
+  await assert.rejects(navigation, /pose resolver must be synchronous/);
+  assert.equal(state.livePose().target[0], 0);
+  assert.deepEqual(state.enabled, [false, true]);
+});
+
 test("failed destination retains the prior pose and requests the prior residency", async () => {
   const state = harness();
   const navigation = state.coordinator.navigate(pose(2_048));

@@ -145,6 +145,9 @@ else
   hostfail=1
 fi
 if [ "$editor_bundle_ok" = 1 ] && node editor/test/history_panel.test.mjs >/dev/null 2>&1; then echo "   editor history panel: PASS"; else echo "   editor history panel: FAIL"; hostfail=1; fi
+if node tools/scaffold-editor-bundle.test.mjs >/dev/null 2>&1; then echo "   scaffold editor lifecycle: PASS"; else echo "   scaffold editor lifecycle: FAIL"; hostfail=1; fi
+if node tools/scaffold-serve.test.mjs >/dev/null 2>&1; then echo "   scaffold Atlas proxy: PASS"; else echo "   scaffold Atlas proxy: FAIL"; hostfail=1; fi
+if node --test editor/test/atlas_editor_protocol.test.mjs editor/test/atlas_bridge_wiring_static.test.mjs >/dev/null 2>&1; then echo "   Atlas editor bridge: PASS"; else echo "   Atlas editor bridge: FAIL"; hostfail=1; fi
 if node editor/test/app_event_retention.test.mjs >/dev/null 2>&1; then echo "   editor event retention: PASS"; else echo "   editor event retention: FAIL"; hostfail=1; fi
 if node editor/test/artifacts.test.cjs >/dev/null 2>&1; then echo "   editor artifacts: PASS"; else echo "   editor artifacts: FAIL"; hostfail=1; fi
 editor_host_log="$(mktemp)"

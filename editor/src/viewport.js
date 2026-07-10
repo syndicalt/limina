@@ -27,6 +27,13 @@ import { createGraphicsSettings, readGraphicsQuality } from "./graphics-settings
 import { createDerivedRuntimeClient } from "./derived-runtime-client.js";
 import { createNavigationDestinationCoordinator } from "./navigation-destination.js";
 import {
+  ATLAS_EDITOR_BRIDGE_SCHEMA,
+  ATLAS_FOCUS_REQUEST,
+  EDITOR_REVEAL_REQUEST,
+  parseEditorRevealRequest,
+  parseTrustedAtlasEditorMessageEvent,
+} from "./atlas-editor-protocol.js";
+import {
   DEFAULT_NAVIGATION_SPEED_MPS,
   createNavigationStateController,
   parseNavigationCoordinate,
@@ -111,6 +118,12 @@ const viewportUi = {
   navigationBookmarkSave: document.getElementById("viewport-navigation-bookmark-save"),
   navigationBookmarks: document.getElementById("viewport-navigation-bookmarks"),
   navigationRecents: document.getElementById("viewport-navigation-recents"),
+  atlasToggle: document.getElementById("viewport-atlas-toggle"),
+  atlasPanel: document.getElementById("viewport-atlas"),
+  atlasFrame: document.getElementById("viewport-atlas-frame"),
+  atlasStatus: document.getElementById("viewport-atlas-status"),
+  atlasReveal: document.getElementById("viewport-atlas-reveal"),
+  atlasClose: document.getElementById("viewport-atlas-close"),
 };
 function setStatus(phase, detail) {
   const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
@@ -237,6 +250,7 @@ const state = {
   historyTransition: undefined,
   connectionReset: undefined,
   navigationBusy: false,
+  atlasFocusPending: false,
 };
 // The discovery response contains the runtime capability. Keep it in this module closure only: it
 // must never enter DOM state, browser storage, console output, trace payloads, or status strings.
@@ -287,6 +301,139 @@ const navigationDestination = createNavigationDestinationCoordinator({
         && !playLifecycle.isAuthoringLocked()) requestEditDerivedClient();
   },
 });
+const ATLAS_SOURCE_WAIT_MS = 30_000;
+const atlasWorldPosition = new THREE.Vector3();
+let atlasRevealRequestId = 0;
+let atlasFocusGeneration = 0;
+
+function setAtlasStatus(message) {
+  if (viewportUi.atlasStatus) viewportUi.atlasStatus.textContent = String(message ?? "").slice(0, 120);
+}
+
+function atlasOpen() {
+  return viewportUi.atlasPanel?.hidden === false;
+}
+
+function setAtlasOpen(open) {
+  if (!viewportUi.atlasPanel || !viewportUi.atlasFrame) return;
+  viewportUi.atlasPanel.hidden = !open;
+  viewportUi.atlasToggle?.setAttribute("aria-expanded", String(open));
+  viewportUi.atlasToggle?.classList.toggle("active", open);
+  document.body.classList.toggle("atlas-overview-open", open);
+  if (!open && state.atlasFocusPending) atlasFocusGeneration++;
+  if (open && viewportUi.atlasFrame.getAttribute("src") === null) {
+    setAtlasStatus("loading");
+    viewportUi.atlasFrame.src = "/atlas/?embed=editor";
+  }
+  requestAnimationFrame(resizeViewport);
+}
+
+function postAtlasReveal(world, label) {
+  const target = viewportUi.atlasFrame?.contentWindow;
+  if (!atlasOpen() || !target) return false;
+  atlasRevealRequestId = atlasRevealRequestId >= Number.MAX_SAFE_INTEGER ? 1 : atlasRevealRequestId + 1;
+  let message;
+  try {
+    message = parseEditorRevealRequest({
+      schema: ATLAS_EDITOR_BRIDGE_SCHEMA,
+      type: EDITOR_REVEAL_REQUEST,
+      requestId: atlasRevealRequestId,
+      world,
+      label,
+    });
+  } catch (error) {
+    setAtlasStatus(error instanceof Error ? error.message : "reveal unavailable");
+    return false;
+  }
+  target.postMessage(message, window.location.origin);
+  setAtlasStatus(`revealed ${message.label}`);
+  return true;
+}
+
+function revealSelectionInAtlas() {
+  const selected = state.selected;
+  if (!selected?.mesh) {
+    setAtlasStatus("select an entity to reveal");
+    return false;
+  }
+  selected.mesh.getWorldPosition(atlasWorldPosition);
+  return postAtlasReveal(
+    [atlasWorldPosition.x, atlasWorldPosition.z],
+    `Selection ${selected.id}`.slice(0, 256),
+  );
+}
+
+async function waitForAtlasDerivedSource(source, generation) {
+  const deadline = performance.now() + ATLAS_SOURCE_WAIT_MS;
+  while (performance.now() < deadline) {
+    if (generation !== atlasFocusGeneration) throw Object.assign(new Error("Atlas focus was superseded"), { code: "ATLAS_FOCUS_SUPERSEDED" });
+    if (!atlasOpen()) throw Object.assign(new Error("Atlas focus was cancelled"), { code: "ATLAS_FOCUS_SUPERSEDED" });
+    if (playLifecycle.isAuthoringLocked() || state.scrubLimit !== undefined || state.rebooting) {
+      throw Object.assign(new Error("Atlas focus is unavailable outside live Edit"), { code: "ATLAS_FOCUS_UNAVAILABLE" });
+    }
+    const active = state.running?.derivedRevision?.();
+    if (active?.revision === source.revision && active?.headHash === source.headHash) return;
+    if (Number.isSafeInteger(active?.revision) && active.revision >= source.revision) {
+      throw Object.assign(new Error("Atlas source was superseded before it became active"), { code: "ATLAS_SOURCE_SUPERSEDED" });
+    }
+    setAtlasStatus(`building Atlas revision ${source.revision}`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  throw Object.assign(new Error("Atlas revision did not become ready in time"), { code: "ATLAS_SOURCE_TIMEOUT" });
+}
+
+async function focusAtlasRequest(message) {
+  if (!navigationDiscreteReady() || state.atlasFocusPending) {
+    setAtlasStatus("3D focus unavailable");
+    return;
+  }
+  const generation = ++atlasFocusGeneration;
+  state.atlasFocusPending = true;
+  syncNavigationUi();
+  try {
+    await waitForAtlasDerivedSource(message.source, generation);
+    const navigation = state.running?.editorNavigation;
+    if (!navigation) throw Object.assign(new Error("editor navigation is unavailable"), { code: "NAVIGATION_UNAVAILABLE" });
+    const current = navigation.snapshot();
+    const target = [message.world[0], current.target[1], message.world[1]];
+    const provisional = navigation.destinationPose(target, message.radiusM);
+    const committed = await navigateToPose(provisional, {
+      kind: "atlas",
+      label: message.subject.label.slice(0, 64),
+    }, {
+      resolvePose: ({ context }) => {
+        const active = context.runtime.derivedRevision();
+        if (generation !== atlasFocusGeneration || !atlasOpen()
+            || active?.revision !== message.source.revision || active?.headHash !== message.source.headHash) {
+          throw Object.assign(new Error("Atlas source changed before camera commit"), { code: "ATLAS_SOURCE_CHANGED" });
+        }
+        const height = context.runtime.derivedTerrainHeightAt(message.world[0], message.world[1]);
+        if (height === null) throw Object.assign(new Error("Atlas destination terrain is unavailable"), { code: "ATLAS_TERRAIN_UNAVAILABLE" });
+        return context.navigation.destinationPose(
+          [message.world[0], height, message.world[1]],
+          message.radiusM,
+        );
+      },
+    });
+    setAtlasStatus(committed ? `focused ${message.subject.label}` : "3D focus failed");
+  } catch (error) {
+    const code = typeof error?.code === "string" ? error.code : "ATLAS_FOCUS_FAILED";
+    setAtlasStatus(code);
+    setStatus("navigation", code);
+  } finally {
+    state.atlasFocusPending = false;
+    syncNavigationUi();
+  }
+}
+
+function onAtlasMessage(event) {
+  const source = viewportUi.atlasFrame?.contentWindow;
+  if (!atlasOpen() || !source) return;
+  let message;
+  try { message = parseTrustedAtlasEditorMessageEvent(event, source, window.location.origin); }
+  catch { return; }
+  if (message.type === ATLAS_FOCUS_REQUEST) void focusAtlasRequest(message);
+}
 const pollTask = new CoalescedTask();
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -446,13 +593,13 @@ function closeNavigationPanels() {
 
 function navigationDiscreteReady() {
   return Boolean(state.running?.editorNavigation && state.derivedEditClient && state.scrubLimit === undefined
-    && !state.rebooting && !state.navigationBusy && !playLifecycle.isAuthoringLocked());
+    && !state.rebooting && !state.navigationBusy && !state.atlasFocusPending && !playLifecycle.isAuthoringLocked());
 }
 
 function syncNavigationUi() {
   const navigation = state.running?.editorNavigation;
   const locked = playLifecycle.isAuthoringLocked();
-  const localReady = Boolean(navigation) && !locked && !state.rebooting && !state.navigationBusy;
+  const localReady = Boolean(navigation) && !locked && !state.rebooting && !state.navigationBusy && !state.atlasFocusPending;
   const mode = navigation?.mode?.() ?? navigationPreferences.mode;
   for (const [button, value] of [[viewportUi.navigationOrbit, "orbit"], [viewportUi.navigationFly, "fly"]]) {
     if (!button) continue;
@@ -470,6 +617,7 @@ function syncNavigationUi() {
   if (viewportUi.navigationGotoToggle) viewportUi.navigationGotoToggle.disabled = !discreteReady;
   if (viewportUi.navigationViewsToggle) viewportUi.navigationViewsToggle.disabled = !localReady || !navigationStateController || state.navigationBusy;
   if (viewportUi.navigationBookmarkSave) viewportUi.navigationBookmarkSave.disabled = !localReady || !navigationStateController || state.navigationBusy;
+  if (viewportUi.atlasReveal) viewportUi.atlasReveal.disabled = locked || !state.selected;
   for (const button of document.querySelectorAll("[data-navigation-entry]")) button.disabled = !discreteReady;
   document.body.classList.toggle("editor-navigation-fly", mode === "fly" && localReady);
   if (locked) closeNavigationPanels();
@@ -524,9 +672,9 @@ function openNavigationViews() {
   viewportUi.navigationBookmarkName?.focus();
 }
 
-async function navigateToPose(pose, metadata) {
+async function navigateToPose(pose, metadata, { resolvePose } = {}) {
   try {
-    const result = await navigationDestination.navigate(pose, { label: metadata.label, metadata });
+    const result = await navigationDestination.navigate(pose, { label: metadata.label, metadata, resolvePose });
     closeNavigationPanels();
     return result;
   } catch (error) {
@@ -684,6 +832,17 @@ function bindViewportUi() {
     }
   });
   viewportUi.navigationFocus?.addEventListener("click", focusNavigationSelection);
+  viewportUi.atlasToggle?.addEventListener("click", () => {
+    setAtlasOpen(!atlasOpen());
+    if (atlasOpen()) requestAnimationFrame(revealSelectionInAtlas);
+  });
+  viewportUi.atlasClose?.addEventListener("click", () => setAtlasOpen(false));
+  viewportUi.atlasReveal?.addEventListener("click", revealSelectionInAtlas);
+  viewportUi.atlasFrame?.addEventListener("load", () => {
+    setAtlasStatus("ready");
+    revealSelectionInAtlas();
+  });
+  window.addEventListener("message", onAtlasMessage);
   viewportUi.navigationGotoToggle?.addEventListener("click", () => {
     if (viewportUi.navigationGoto?.hidden === false) closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
     else openNavigationGoto();
@@ -2438,6 +2597,7 @@ canvas.addEventListener("pointercancel", (event) => {
 editorSelection.subscribe(({ selectedId }) => {
   if (selectedId === undefined) deselectEntity();
   else selectEntity(selectedId, state.running);
+  if (atlasOpen() && selectedId !== undefined) revealSelectionInAtlas();
 }, { emitCurrent: true });
 let lastArmedAssetId;
 assetPlacement.subscribe(({ entry }) => {
