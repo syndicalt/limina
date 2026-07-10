@@ -287,3 +287,11 @@ near-vertical cliffs before the SDF layer exists.
   handoff, and asserts the terrain HUD and viewport controls never overlap while placement is armed or
   restored. The server catalog remains intentionally capped at 20,000 entries until its API supports
   pagination.
+- **2026-07-09 — Portable terrain chunk artifact codec shipped (`ceb8c89`).** Versioned little-endian
+  binary artifacts now carry exact dimensions, world origin/scale, normalized heights, and independently
+  optional paint, climate, and blight channels with canonical padding and strict numeric/resource bounds.
+  Decoding rejects malformed/trailing/aliased data and returns owned channel storage. All 16 channel
+  combinations, shared-edge equality, mutation-sensitive hashes, corrupt headers/payloads, misaligned
+  subarrays, and 2x2 through 257x257 limits are gated in both Node and the Limina host against the same
+  fixed content-hash vector. The central 257x257 full-channel measurement was 1,651,308 bytes, 31.7 ms
+  encode, and 24.0 ms decode in Node; concrete source-to-artifact compilation remains the next slice.
