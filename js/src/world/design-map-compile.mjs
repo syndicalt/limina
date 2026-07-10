@@ -23,6 +23,7 @@ import { worldMapContentHash } from "./worldmap-hash.mjs";
 import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
 import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 import { reliefGridSampler } from "./pipeline/map-raster.mjs";
+import { parseAuthoredWaterBodies, parseAuthoredWaterway, WATER_LIMITS, WaterIrValidationError } from "./water-ir.mjs";
 
 const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
@@ -44,6 +45,19 @@ function toPoint(p) {
 
 function toPoints(pts) {
   return pts.map(toPoint);
+}
+
+function waterError(message) {
+  throw new Error(`compile-designmap: ${message}`);
+}
+
+function compileWater(value, parse) {
+  try {
+    return parse(value);
+  } catch (error) {
+    if (error instanceof WaterIrValidationError) waterError(error.message);
+    throw error;
+  }
 }
 
 function bboxOf(pointArrays) {
@@ -252,6 +266,10 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
   const biomes = [];
   const waterways = [];
   const routes = [];
+  // MapDoc stores per-basin water directly on the map, not as overloaded generic area features.
+  // Presence is preserved exactly: absent stays absent; an authored empty array stays present.
+  const waterBodies = map.waterBodies === undefined ? undefined : compileWater(map.waterBodies, parseAuthoredWaterBodies);
+  let waterwayPointCount = 0;
 
   if (landmass) {
     const lw = Number(landmass.w), lh = Number(landmass.h);
@@ -307,7 +325,8 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     }
   }
 
-  for (const f of map.features) {
+  for (let featureIndex = 0; featureIndex < map.features.length; featureIndex++) {
+    const f = map.features[featureIndex];
     if (f.type === "area" && f.kind === "outline") {
       if (landmass) { warnings.push(`ignored outline feature "${f.id}" (a painted landmass mask is authoritative)`); continue; }
       land.push({ points: toPoints(f.points) });
@@ -319,7 +338,11 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
         relief.push({ kind: "mountain", shape: { polygon: points }, amplitude: MOUNTAIN_BIOME_AMPLITUDE });
       }
     } else if (f.type === "line" && f.kind === "river") {
-      waterways.push({ points: toPoints(f.points), widthM: Number(f.widthM) > 0 ? Number(f.widthM) : riverWidthM(sizeM), class: "river" });
+      if (waterways.length >= WATER_LIMITS.waterways) waterError(`waterways exceeds ${WATER_LIMITS.waterways} entries`);
+      const waterway = compileWater(f, (feature) => parseAuthoredWaterway(feature, riverWidthM(sizeM), `features[${featureIndex}]`));
+      waterwayPointCount += waterway.points.length;
+      if (waterwayPointCount > WATER_LIMITS.totalWaterwayPoints) waterError(`waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points`);
+      waterways.push(waterway);
     } else if (f.type === "line" && f.kind === "road") {
       routes.push({ points: toPoints(f.points), class: "road" });
     } else if (f.type === "line" && f.kind === "border") {
@@ -351,6 +374,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     ...land.map((l) => l.points),
     ...biomes.map((b) => b.points),
     ...waterways.map((w) => w.points),
+    ...(waterBodies ?? []).flatMap((body) => [body.footprint.points, ...(body.footprint.holes ?? [])]),
     ...routes.map((r) => r.points),
   ];
   const bbox = bboxOf(allPointArrays.length > 0 ? allPointArrays : [[[0, 0]]]);
@@ -425,6 +449,7 @@ export function compileDesignMap({ mapsJsonText, worldBibleText, mapId, placesTe
     } : {}),
     biomes,
     waterways,
+    ...(waterBodies !== undefined ? { waterBodies } : {}),
     routes,
     anchors,
     // Emitted only when the vault has placed places, so pre-Places maps keep their bytes/hash.

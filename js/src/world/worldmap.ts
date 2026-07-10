@@ -22,18 +22,36 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { stableStringifyWorldMap as stableStringifyWorldMapImpl, worldMapContentHash as worldMapContentHashImpl } from "./worldmap-hash.mjs";
+import { inspectWaterBodyTopology, isPlainJsonData, isPortableWaterId, WATER_BODY_KINDS, WATER_LIMITS, WATERWAY_CLASSES } from "./water-ir.mjs";
+
+export { WATER_BODY_KINDS, WATERWAY_CLASSES } from "./water-ir.mjs";
 
 export const WORLD_MAP_VERSION = 1 as const;
 
 export const RELIEF_KINDS = ["mountain", "hills", "plateau", "peak", "depression"] as const;
 export const BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"] as const;
-export const WATERWAY_CLASSES = ["river", "stream"] as const;
 export const ROUTE_CLASSES = ["road", "trail"] as const;
 export const ANCHOR_SOURCES = ["world-bible", "map", "places"] as const;
 export const PROVENANCE_TOOLS = ["design-space", "fmg"] as const;
 
 const PointSchema = z.tuple([z.number(), z.number()]);
 const PointsSchema = z.array(PointSchema);
+
+const FiniteWaterCoordinateSchema = z.number().finite().min(-WATER_LIMITS.absCoordinateM).max(WATER_LIMITS.absCoordinateM);
+const FinitePointSchema = z.tuple([FiniteWaterCoordinateSchema, FiniteWaterCoordinateSchema]);
+
+const INVALID_PLAIN_DATA = Symbol("invalid-plain-json-data");
+function plainJson<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => isPlainJsonData(value) ? value : INVALID_PLAIN_DATA, schema);
+}
+
+function isPlainRootRecord(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
+  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => "value" in descriptor && descriptor.enumerable);
+}
 
 const PolygonSchema = z.object({
   points: PointsSchema.min(3),
@@ -83,11 +101,79 @@ const BiomeRegionSchema = z.object({
   points: PointsSchema.min(3),
 }).strict();
 
-const WaterwaySchema = z.object({
-  points: PointsSchema.min(2),
-  widthM: z.number().positive().optional(),
+const WaterwaySchema = plainJson(z.object({
+  points: z.array(FinitePointSchema).min(2).max(WATER_LIMITS.waterwayPoints),
+  widthM: z.number().finite().positive().max(WATER_LIMITS.widthM).optional(),
   class: z.enum(WATERWAY_CLASSES),
+  /** Strahler stream order: 1=headwater, increasing only at equal-order confluences. */
+  order: z.number().int().min(1).max(WATER_LIMITS.streamOrder).optional(),
+  /** Per-vertex channel widths in metres. When present, length exactly matches `points`. */
+  widths: z.array(z.number().finite().positive().max(WATER_LIMITS.widthM)).min(2).max(WATER_LIMITS.waterwayPoints).optional(),
+}).strict().superRefine((waterway, ctx) => {
+  if (waterway.widths !== undefined && waterway.widths.length !== waterway.points.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["widths"], message: "waterway widths must have exactly one value per point" });
+  }
+}));
+
+const WaterDepthZoneSchema = z.object({
+  /** Inclusive horizontal distance inward from the shoreline, in metres. */
+  minShoreDistanceM: z.number().finite().min(0).max(WATER_LIMITS.shoreDistanceM),
+  /** Exclusive outer edge of this band. */
+  maxShoreDistanceM: z.number().finite().positive().max(WATER_LIMITS.shoreDistanceM),
+  /** Positive depth below this body's level, in metres. */
+  depthM: z.number().finite().positive().max(WATER_LIMITS.depthM),
+}).strict().refine((zone) => zone.maxShoreDistanceM > zone.minShoreDistanceM, {
+  message: "depth zone maxShoreDistanceM must be greater than minShoreDistanceM",
+});
+
+const WaterFootprintSchema = z.object({
+  points: z.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints),
+  holes: z.array(z.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints)).max(WATER_LIMITS.holes).optional(),
 }).strict();
+
+const WaterBodySchema = z.object({
+  /** Stable lowercase ASCII id; path separators, whitespace and host-case ambiguity are forbidden. */
+  id: z.string().min(1).max(128).refine(isPortableWaterId, { message: "water body id must be portable lowercase ASCII" }),
+  kind: z.enum(WATER_BODY_KINDS),
+  level: z.number().finite().min(-WATER_LIMITS.absLevelM).max(WATER_LIMITS.absLevelM),
+  footprint: WaterFootprintSchema,
+  /** Contiguous shore-to-interior bands: first min=0, each next min=previous max, and depth
+   *  strictly increases inward. This leaves no undefined bathymetry for WaterField consumers. */
+  depthZones: z.array(WaterDepthZoneSchema).min(1).max(WATER_LIMITS.depthZones),
+}).strict().superRefine((body, ctx) => {
+  let previousMax = -Infinity, previousDepth = -Infinity;
+  for (let index = 0; index < body.depthZones.length; index++) {
+    const zone = body.depthZones[index];
+    if (index === 0 && zone.minShoreDistanceM !== 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["depthZones", index, "minShoreDistanceM"], message: "the first depth zone must start at the shoreline (0m)" });
+    }
+    if (index > 0 && zone.minShoreDistanceM !== previousMax) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["depthZones", index], message: "depth zones must be ordered and contiguous without gaps or overlaps" });
+    }
+    if (zone.depthM <= previousDepth) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["depthZones", index, "depthM"], message: "depth must increase monotonically toward the interior" });
+    }
+    previousMax = zone.maxShoreDistanceM;
+    previousDepth = zone.depthM;
+  }
+});
+
+const WaterBodiesSchema = plainJson(z.array(WaterBodySchema).max(WATER_LIMITS.bodies).superRefine((bodies, ctx) => {
+  const ids = new Set<string>();
+  let points = 0;
+  for (let index = 0; index < bodies.length; index++) {
+    const body = bodies[index];
+    if (ids.has(body.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, "id"], message: "water body ids must be unique" });
+    ids.add(body.id);
+    points += body.footprint.points.length;
+    for (const hole of body.footprint.holes ?? []) points += hole.length;
+    const bodyPoints = body.footprint.points.length + (body.footprint.holes ?? []).reduce((total, hole) => total + hole.length, 0);
+    if (bodyPoints > WATER_LIMITS.bodyPoints) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, "footprint"], message: `water body footprint exceeds ${WATER_LIMITS.bodyPoints} points` });
+  }
+  if (points > WATER_LIMITS.totalBodyPoints) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `water body geometry exceeds ${WATER_LIMITS.totalBodyPoints} points` });
+  const topology = inspectWaterBodyTopology(bodies);
+  if (!topology.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, message: topology.message ?? "invalid water body topology" });
+}));
 
 const RouteSchema = z.object({
   points: PointsSchema.min(2),
@@ -145,7 +231,7 @@ const ProvenanceSchema = z.object({
   cropOf: CropOfSchema.optional(),
 }).strict();
 
-export const WorldMapSchema = z.object({
+const WorldMapObjectSchema = z.object({
   version: z.literal(WORLD_MAP_VERSION),
   id: z.string().min(1),
   unitsPerMeter: z.number().positive(),
@@ -156,7 +242,12 @@ export const WorldMapSchema = z.object({
   relief: z.array(ReliefHintSchema),
   reliefGrid: ReliefGridSchema.optional(),
   biomes: z.array(BiomeRegionSchema),
-  waterways: z.array(WaterwaySchema),
+  waterways: z.array(WaterwaySchema).max(WATER_LIMITS.waterways).superRefine((waterways, ctx) => {
+    const points = waterways.reduce((total, waterway) => total + waterway.points.length, 0);
+    if (points > WATER_LIMITS.totalWaterwayPoints) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points` });
+  }),
+  // Optional + additive: absent on every pre-WB-W1 map and never defaulted during migration.
+  waterBodies: WaterBodiesSchema.optional(),
   routes: z.array(RouteSchema),
   anchors: z.array(AnchorSchema),
   // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
@@ -164,12 +255,17 @@ export const WorldMapSchema = z.object({
   provenance: ProvenanceSchema,
 }).strict();
 
+// Inspect root descriptors before Zod reads any field. JSON.parse always produces this shape;
+// direct engine callers cannot smuggle an accessor or polluted prototype into the public parser.
+export const WorldMapSchema = z.preprocess((value) => isPlainRootRecord(value) ? value : INVALID_PLAIN_DATA, WorldMapObjectSchema);
+
 export type Point = z.infer<typeof PointSchema>;
 export type Polygon = z.infer<typeof PolygonSchema>;
 export type ReliefHint = z.infer<typeof ReliefHintSchema>;
 export type ReliefGrid = z.infer<typeof ReliefGridSchema>;
 export type BiomeRegion = z.infer<typeof BiomeRegionSchema>;
 export type Waterway = z.infer<typeof WaterwaySchema>;
+export type WaterBody = z.infer<typeof WaterBodySchema>;
 export type Route = z.infer<typeof RouteSchema>;
 export type Anchor = z.infer<typeof AnchorSchema>;
 export type GazetteerEntry = z.infer<typeof GazetteerEntrySchema>;

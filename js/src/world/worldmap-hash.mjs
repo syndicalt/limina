@@ -58,7 +58,23 @@ function waterway(w) {
   const out = { points: points(w.points) };
   if (w.widthM !== undefined) out.widthM = w.widthM;
   out.class = w.class;
+  if (w.order !== undefined) out.order = w.order;
+  if (w.widths !== undefined) out.widths = [...w.widths];
   return out;
+}
+
+function waterBody(w) {
+  return {
+    id: w.id,
+    kind: w.kind,
+    level: w.level,
+    footprint: polygon(w.footprint),
+    depthZones: w.depthZones.map((zone) => ({
+      minShoreDistanceM: zone.minShoreDistanceM,
+      maxShoreDistanceM: zone.maxShoreDistanceM,
+      depthM: zone.depthM,
+    })),
+  };
 }
 
 function route(r) {
@@ -114,6 +130,8 @@ export function stableStringifyWorldMap(map, opts = {}) {
     ...(map.reliefGrid !== undefined ? { reliefGrid: reliefGrid(map.reliefGrid) } : {}),
     biomes: map.biomes.map(biomeRegion),
     waterways: map.waterways.map(waterway),
+    // Optional additive field: never materialize it for legacy maps.
+    ...(map.waterBodies !== undefined ? { waterBodies: map.waterBodies.map(waterBody) } : {}),
     routes: map.routes.map(route),
     anchors: map.anchors.map(anchor),
     // Optional additive field: emitted ONLY when present, so every pre-Places map hashes
