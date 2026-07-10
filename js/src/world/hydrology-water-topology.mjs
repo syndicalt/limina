@@ -9,6 +9,8 @@ import { inspectWaterBodyTopology, WATER_LIMITS } from "./water-ir.mjs";
 
 export const HYDROLOGY_WATER_TOPOLOGY_SCHEMA = "limina.hydrology-water-topology/v1";
 export const HYDROLOGY_WATER_TOPOLOGY_VERSION = 1;
+export const HYDROLOGY_REACH_TOPOLOGY_SCHEMA = "limina.hydrology-reaches/v1";
+export const HYDROLOGY_REACH_TOPOLOGY_VERSION = 1;
 
 const INPUT_KEYS = new Set(["heightsM", "topology", "placement", "recipe"]);
 const CONTROL_KEYS = new Set(["shouldCancel"]);
@@ -53,17 +55,17 @@ function exactRecord(value, keys, label) {
 function snapshotHeights(value) {
   if (!ArrayBuffer.isView(value)
       || (Object.getPrototypeOf(value) !== Float32Array.prototype && Object.getPrototypeOf(value) !== Float64Array.prototype)) {
-    fail("hydrology basin heightsM must be a Float32Array or Float64Array");
+    fail("hydrology extraction heightsM must be a Float32Array or Float64Array");
   }
   if (!(value.buffer instanceof ArrayBuffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
-    fail("hydrology basin heightsM must own its complete non-shared ArrayBuffer");
+    fail("hydrology extraction heightsM must own its complete non-shared ArrayBuffer");
   }
-  if (value.length < 4 || value.length > MAX_HYDROLOGY_CELLS) fail("hydrology basin heightsM length is outside supported bounds");
+  if (value.length < 4 || value.length > MAX_HYDROLOGY_CELLS) fail("hydrology extraction heightsM length is outside supported bounds");
   const copy = new Float64Array(value.length);
   for (let index = 0; index < value.length; index++) {
     const height = value[index];
     if (!Number.isFinite(height) || Object.is(height, -0) || Math.abs(height) > MAX_HYDROLOGY_ABS_HEIGHT_M) {
-      fail(`hydrology basin heightsM[${index}] must be finite, canonical, and within +/-${MAX_HYDROLOGY_ABS_HEIGHT_M}m`);
+      fail(`hydrology extraction heightsM[${index}] must be finite, canonical, and within +/-${MAX_HYDROLOGY_ABS_HEIGHT_M}m`);
     }
     copy[index] = height;
   }
@@ -72,8 +74,8 @@ function snapshotHeights(value) {
 
 function parseControl(value) {
   if (value === undefined) return undefined;
-  const descriptors = exactRecord(value, CONTROL_KEYS, "hydrology basin control");
-  if (typeof descriptors.shouldCancel.value !== "function") fail("hydrology basin control.shouldCancel must be a function");
+  const descriptors = exactRecord(value, CONTROL_KEYS, "hydrology extraction control");
+  if (typeof descriptors.shouldCancel.value !== "function") fail("hydrology extraction control.shouldCancel must be a function");
   return descriptors.shouldCancel.value;
 }
 
@@ -263,13 +265,12 @@ function appendQuadSegments(segments, labels, indexes, candidateByLabel, col, ro
   }
 }
 
-/** Extract thresholded standing-water basins without mutating authored WorldMap water. */
-export function extractHydrologyBasins(input, controlInput = undefined) {
-  const descriptors = exactRecord(input, INPUT_KEYS, "hydrology basin input");
+function verifyExtractionInput(input, controlInput) {
+  const descriptors = exactRecord(input, INPUT_KEYS, "hydrology extraction input");
   const heightsM = snapshotHeights(descriptors.heightsM.value);
   let recipe;
   try { recipe = parseAuthoredHydrologyRecipe(descriptors.recipe.value); }
-  catch (error) { fail(error instanceof Error ? error.message : "hydrology basin recipe is invalid"); }
+  catch (error) { fail(error instanceof Error ? error.message : "hydrology extraction recipe is invalid"); }
   const shouldCancel = parseControl(controlInput);
   let verified;
   try {
@@ -281,13 +282,19 @@ export function extractHydrologyBasins(input, controlInput = undefined) {
     verified = decodeHydrologyFieldArtifact(bytes, shouldCancel === undefined ? undefined : { shouldCancel });
   } catch (error) {
     if (error instanceof HydrologyArtifactCancelledError) throw new HydrologyWaterTopologyCancelledError();
-    fail(error instanceof Error ? error.message : "hydrology basin topology is invalid");
+    fail(error instanceof Error ? error.message : "hydrology extraction topology is invalid");
   }
   const topology = verified.topology, placement = verified.placement;
-  if (heightsM.length !== topology.cellCount) fail("hydrology basin heightsM length does not match topology dimensions");
+  if (heightsM.length !== topology.cellCount) fail("hydrology extraction heightsM length does not match topology dimensions");
   if (recipe.precipitationMmPerYear !== topology.precipitationMmPerYear) {
-    fail("hydrology basin recipe precipitation does not match hydrology topology");
+    fail("hydrology extraction recipe precipitation does not match hydrology topology");
   }
+  return { heightsM, recipe, shouldCancel, topology, placement };
+}
+
+/** Extract thresholded standing-water basins without mutating authored WorldMap water. */
+export function extractHydrologyBasins(input, controlInput = undefined) {
+  const { heightsM, recipe, shouldCancel, topology, placement } = verifyExtractionInput(input, controlInput);
   const meter = createMeter(shouldCancel, topology.cellCount * 96 + WATER_LIMITS.topologyWorkUnits * 4 + 4096);
   meter.check();
 
@@ -456,6 +463,207 @@ export function extractHydrologyBasins(input, controlInput = undefined) {
       constrainedSimplificationToleranceM: topology.cellSizeM * 0.25,
       constrainedSimplificationApplied: false,
       simplificationPolicy: "exact-collinear-only; over-limit contours fail closed",
+    }),
+  });
+}
+
+function reachPoint(index, topology, placement) {
+  const row = Math.floor(index / topology.cols), col = index - row * topology.cols;
+  let x = placement.originX + col * topology.cellSizeM;
+  let z = placement.originZ + row * topology.cellSizeM;
+  if (Object.is(x, -0)) x = 0;
+  if (Object.is(z, -0)) z = 0;
+  if (!Number.isFinite(x) || !Number.isFinite(z)
+      || Math.abs(x) > WATER_LIMITS.absCoordinateM || Math.abs(z) > WATER_LIMITS.absCoordinateM) {
+    fail(`hydrology reach coordinate must be canonical and within +/-${WATER_LIMITS.absCoordinateM}m`);
+  }
+  return Object.freeze([x, z]);
+}
+
+function reachWidth(index, topology, minimumCatchmentAreaM2) {
+  const ratio = topology.catchmentAreaM2[index] / minimumCatchmentAreaM2;
+  const widthM = Math.min(
+    32 * topology.cellSizeM,
+    Math.max(0.5 * topology.cellSizeM, topology.cellSizeM * Math.sqrt(ratio)),
+  );
+  if (!Number.isFinite(widthM) || !(widthM > 0) || widthM > WATER_LIMITS.widthM) {
+    fail(`hydrology reach width at cell ${index} must be finite, positive, and at most ${WATER_LIMITS.widthM}m`);
+  }
+  return widthM;
+}
+
+function freezeWaterfall(span) {
+  return Object.freeze({
+    startSegment: span.startSegment,
+    endSegmentExclusive: span.endSegmentExclusive,
+    startCell: span.startCell,
+    endCell: span.endCell,
+    totalDropM: span.totalDropM,
+    maxEdgeDropM: span.maxEdgeDropM,
+  });
+}
+
+/** Extract a thresholded, confluence-exact directed channel graph from the verified drainage field. */
+export function extractHydrologyReaches(input, controlInput = undefined) {
+  const { heightsM, recipe, shouldCancel, topology, placement } = verifyExtractionInput(input, controlInput);
+  const meter = createMeter(shouldCancel, topology.cellCount * 80 + WATER_LIMITS.totalWaterwayPoints * 16 + 4096);
+  meter.check();
+  const active = new Uint8Array(topology.cellCount);
+  const activeDonors = new Uint8Array(topology.cellCount);
+  const visitedEdges = new Uint8Array(topology.cellCount);
+  let activeCellCount = 0;
+  for (let index = 0; index < topology.cellCount; index++) {
+    meter.work();
+    if (topology.oceanMask[index] === 0 && topology.catchmentAreaM2[index] >= recipe.riverMinCatchmentAreaM2) {
+      active[index] = 1;
+      activeCellCount++;
+    }
+  }
+
+  let expectedEdgeCount = 0;
+  for (let index = 0; index < topology.cellCount; index++) {
+    meter.work();
+    if (active[index] === 0) continue;
+    const receiver = topology.receiver[index];
+    if (receiver < 0) continue;
+    const row = Math.floor(index / topology.cols), col = index - row * topology.cols;
+    const receiverRow = Math.floor(receiver / topology.cols), receiverCol = receiver - receiverRow * topology.cols;
+    if (Math.abs(receiverRow - row) > 1 || Math.abs(receiverCol - col) > 1
+        || (receiverRow === row && receiverCol === col)) {
+      fail(`hydrology reach receiver edge ${index}->${receiver} is not D8-adjacent`);
+    }
+    expectedEdgeCount++;
+    if (active[receiver] !== 0) {
+      if (activeDonors[receiver] === 255) fail(`hydrology reach active donor count overflows at cell ${receiver}`);
+      activeDonors[receiver]++;
+    }
+  }
+
+  const isNode = (index) => {
+    if (active[index] === 0) return false;
+    const receiver = topology.receiver[index];
+    return activeDonors[index] !== 1 || receiver < 0 || active[receiver] === 0 || topology.oceanMask[receiver] !== 0;
+  };
+  let nodeCount = 0, outgoingNodeCount = 0;
+  for (let index = 0; index < topology.cellCount; index++) {
+    meter.work();
+    if (!isNode(index)) continue;
+    nodeCount++;
+    if (topology.receiver[index] >= 0) outgoingNodeCount++;
+  }
+  if (outgoingNodeCount > WATER_LIMITS.waterways) {
+    fail(`generated hydrology reaches exceed ${WATER_LIMITS.waterways} waterways`);
+  }
+  if (expectedEdgeCount + outgoingNodeCount > WATER_LIMITS.totalWaterwayPoints) {
+    fail(`generated hydrology reach geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} total points`);
+  }
+
+  const reaches = [];
+  let totalPoints = 0, visitedEdgeCount = 0, waterfallSpanCount = 0;
+  for (let start = 0; start < topology.cellCount; start++) {
+    meter.work();
+    if (!isNode(start) || topology.receiver[start] < 0) continue;
+    const points = [reachPoint(start, topology, placement)];
+    const widths = [reachWidth(start, topology, recipe.riverMinCatchmentAreaM2)];
+    const terrainElevationsM = [heightsM[start]];
+    const surfaceElevationsM = [topology.filledHeightM[start]];
+    const waterfalls = [];
+    let openWaterfall = null;
+    let current = start, end = start, maximumOrder = topology.streamOrder[start];
+    for (;;) {
+      meter.work();
+      const downstream = topology.receiver[current];
+      if (downstream < 0) fail(`hydrology reach from cell ${start} terminated before its declared node edge`);
+      if (visitedEdges[current] !== 0) fail(`hydrology reach edge from cell ${current} was traced more than once`);
+      visitedEdges[current] = 1;
+      visitedEdgeCount++;
+      const segment = points.length - 1;
+      end = downstream;
+      points.push(reachPoint(downstream, topology, placement));
+      widths.push(reachWidth(downstream, topology, recipe.riverMinCatchmentAreaM2));
+      terrainElevationsM.push(heightsM[downstream]);
+      surfaceElevationsM.push(topology.filledHeightM[downstream]);
+
+      const dropM = heightsM[current] - heightsM[downstream];
+      if (!Number.isFinite(dropM)) fail(`hydrology reach terrain drop at cell ${current} is non-finite`);
+      if (dropM >= recipe.waterfallMinDropM) {
+        if (openWaterfall === null) {
+          openWaterfall = { startSegment: segment, endSegmentExclusive: segment + 1, startCell: current,
+            endCell: downstream, totalDropM: dropM, maxEdgeDropM: dropM };
+        } else {
+          openWaterfall.endSegmentExclusive = segment + 1;
+          openWaterfall.endCell = downstream;
+          openWaterfall.totalDropM += dropM;
+          if (dropM > openWaterfall.maxEdgeDropM) openWaterfall.maxEdgeDropM = dropM;
+          if (!Number.isFinite(openWaterfall.totalDropM)) fail("hydrology reach waterfall drop accumulation is non-finite");
+        }
+      } else if (openWaterfall !== null) {
+        waterfalls.push(freezeWaterfall(openWaterfall));
+        waterfallSpanCount++;
+        openWaterfall = null;
+      }
+      if (points.length > WATER_LIMITS.waterwayPoints) {
+        fail(`generated hydrology reach from cell ${start} exceeds ${WATER_LIMITS.waterwayPoints} points`);
+      }
+      if (active[downstream] === 0 || isNode(downstream)) break;
+      current = downstream;
+      // Strahler order belongs to an outgoing drainage edge. The terminal node's order
+      // belongs to the next reach and must not relabel its incoming tributaries.
+      if (topology.streamOrder[current] > maximumOrder) maximumOrder = topology.streamOrder[current];
+    }
+    if (openWaterfall !== null) {
+      waterfalls.push(freezeWaterfall(openWaterfall));
+      waterfallSpanCount++;
+    }
+    if (waterfallSpanCount > WATER_LIMITS.totalWaterwayPoints) fail("generated hydrology waterfall spans exceed bounded metadata limits");
+    if (maximumOrder < 1 || maximumOrder > WATER_LIMITS.streamOrder) {
+      fail(`generated hydrology reach order ${maximumOrder} is outside [1, ${WATER_LIMITS.streamOrder}]`);
+    }
+    totalPoints += points.length;
+    if (totalPoints > WATER_LIMITS.totalWaterwayPoints) {
+      fail(`generated hydrology reach geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} total points`);
+    }
+    reaches.push(Object.freeze({
+      id: `gen-r-${start.toString(36)}-${end.toString(36)}`,
+      class: maximumOrder <= 2 ? "stream" : "river",
+      order: maximumOrder,
+      startCell: start,
+      endCell: end,
+      points: Object.freeze(points),
+      widths: Object.freeze(widths),
+      terrainElevationsM: Object.freeze(terrainElevationsM),
+      surfaceElevationsM: Object.freeze(surfaceElevationsM),
+      waterfalls: Object.freeze(waterfalls),
+    }));
+  }
+  if (reaches.length !== outgoingNodeCount) fail("hydrology reach count does not match outgoing network nodes");
+  for (let index = 0; index < topology.cellCount; index++) {
+    meter.work();
+    const expected = active[index] !== 0 && topology.receiver[index] >= 0;
+    if ((visitedEdges[index] !== 0) !== expected) fail(`hydrology reach edge ownership is incomplete at cell ${index}`);
+  }
+  if (visitedEdgeCount !== expectedEdgeCount) fail("hydrology reach edge count is not conservative");
+  meter.check();
+  return Object.freeze({
+    schema: HYDROLOGY_REACH_TOPOLOGY_SCHEMA,
+    version: HYDROLOGY_REACH_TOPOLOGY_VERSION,
+    placement,
+    rows: topology.rows,
+    cols: topology.cols,
+    cellSizeM: topology.cellSizeM,
+    reaches: Object.freeze(reaches),
+    diagnostics: Object.freeze({
+      ...meter.snapshot(),
+      activeCellCount,
+      nodeCount,
+      outgoingNodeCount,
+      expectedEdgeCount,
+      visitedEdgeCount,
+      reachCount: reaches.length,
+      totalPoints,
+      waterfallSpanCount,
+      ownedTerrainBytes: heightsM.byteLength,
+      typedScratchBytes: active.byteLength + activeDonors.byteLength + visitedEdges.byteLength,
     }),
   });
 }
