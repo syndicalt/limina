@@ -19,24 +19,33 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  MAX_DERIVED_ARTIFACTS,
   MAX_DERIVED_ARTIFACT_BYTES,
   MAX_DERIVED_MANIFEST_BYTES,
   MAX_DERIVED_TOTAL_ARTIFACT_BYTES,
   canonicalDerivedRevisionManifest,
   parseDerivedRevisionManifest,
 } from "../../js/src/world/compiler/manifest.mjs";
+import {
+  MAX_COMPILER_SNAPSHOT_BYTES,
+  canonicalCompilerSnapshot,
+  parseCompilerSnapshot,
+} from "../../js/src/world/compiler/planner.mjs";
 import { canonicalCompilerJson, validateCompilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 
-export const DERIVED_PUBLICATION_POINTER_SCHEMA = "limina.derived-publication-pointer/v1";
+export const DERIVED_PUBLICATION_POINTER_SCHEMA_V1 = "limina.derived-publication-pointer/v1";
+export const DERIVED_PUBLICATION_POINTER_SCHEMA = "limina.derived-publication-pointer/v2";
 export const DERIVED_PUBLICATION_LOCK_SCHEMA = "limina.derived-publication-lock/v1";
 export const DERIVED_PUBLICATION_STAGE_SCHEMA = "limina.derived-publication-stage/v1";
 export const PUBLICATION_FAULT_POINTS = Object.freeze([
   "after-artifact-stage",
   "after-manifest-stage",
+  "after-snapshot-stage",
   "before-artifact-install",
   "after-artifact-install",
   "after-manifest-install",
+  "after-snapshot-install",
   "before-pointer-write",
   "before-lock-acquire",
   "after-lock-acquire",
@@ -95,6 +104,22 @@ function assertId(value, pattern, label) {
   return value;
 }
 
+function exactDataObject(value, keys, label) {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new Error(`${label} must be a plain object`);
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).sort().join(",") !== [...keys].sort().join(",")) {
+    throw new Error(`${label} has unsupported or missing fields`);
+  }
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor?.get !== undefined || descriptor?.set !== undefined || descriptor?.enumerable !== true) {
+      throw new Error(`${label}.${key} must be an enumerable data field`);
+    }
+  }
+  return value;
+}
+
 function isMissing(error) { return error?.code === "ENOENT"; }
 function isExists(error) { return error?.code === "EEXIST"; }
 
@@ -142,6 +167,7 @@ function publicationPaths(projectRoot, branchId, fs) {
     branchRoot,
     artifacts: ensureDirectory(fs, stateRoot, join(branchRoot, "artifacts")),
     manifests: ensureDirectory(fs, stateRoot, join(branchRoot, "manifests")),
+    snapshots: ensureDirectory(fs, stateRoot, join(branchRoot, "snapshots")),
     staging: ensureDirectory(fs, stateRoot, join(branchRoot, "staging")),
     pointer: join(branchRoot, "published.json"),
     lock: join(branchRoot, "publication.lock"),
@@ -150,6 +176,7 @@ function publicationPaths(projectRoot, branchId, fs) {
 
 function artifactPath(paths, hash) { return join(paths.artifacts, `${validateCompilerContentHash(hash).slice(7)}.bin`); }
 function manifestPath(paths, hash) { return join(paths.manifests, `${validateCompilerContentHash(hash).slice(7)}.json`); }
+function snapshotPath(paths, hash) { return join(paths.snapshots, `${validateCompilerContentHash(hash).slice(7)}.json`); }
 
 function parsePointer(input, projectId, branchId) {
   const pointer = input;
@@ -158,22 +185,33 @@ function parsePointer(input, projectId, branchId) {
   if (canonicalCompilerJson(keys) !== canonicalCompilerJson(["branchId", "current", "generation", "previous", "projectId", "schema"])) {
     throw new Error("derived publication pointer has unsupported or missing fields");
   }
-  if (pointer.schema !== DERIVED_PUBLICATION_POINTER_SCHEMA || pointer.projectId !== projectId || pointer.branchId !== branchId) {
+  if ((pointer.schema !== DERIVED_PUBLICATION_POINTER_SCHEMA && pointer.schema !== DERIVED_PUBLICATION_POINTER_SCHEMA_V1)
+    || pointer.projectId !== projectId || pointer.branchId !== branchId) {
     throw new Error("derived publication pointer identity or schema mismatch");
   }
+  const legacy = pointer.schema === DERIVED_PUBLICATION_POINTER_SCHEMA_V1;
   if (!Number.isSafeInteger(pointer.generation) || pointer.generation < 1) throw new Error("derived publication pointer generation is invalid");
-  const ref = (value, label) => {
+  const ref = (value, label, snapshotMode) => {
     if (value === null) return null;
-    if (value === null || Array.isArray(value) || typeof value !== "object" || Object.keys(value).length !== 1 || !("manifestHash" in value)) {
+    const keys = value !== null && !Array.isArray(value) && typeof value === "object" ? Object.keys(value).sort().join(",") : "";
+    const validKeys = snapshotMode === "required"
+      ? keys === "manifestHash,snapshotHash"
+      : snapshotMode === "forbidden"
+      ? keys === "manifestHash"
+      : keys === "manifestHash" || keys === "manifestHash,snapshotHash";
+    if (!validKeys) {
       throw new Error(`${label} must be a manifest reference or null`);
     }
-    return { manifestHash: validateCompilerContentHash(value.manifestHash, `${label} manifestHash`) };
+    return {
+      manifestHash: validateCompilerContentHash(value.manifestHash, `${label} manifestHash`),
+      ...(keys === "manifestHash,snapshotHash" ? { snapshotHash: validateCompilerContentHash(value.snapshotHash, `${label} snapshotHash`) } : {}),
+    };
   };
-  const current = ref(pointer.current, "current publication");
+  const current = ref(pointer.current, "current publication", legacy ? "forbidden" : "required");
   if (current === null) throw new Error("derived publication pointer current cannot be null");
-  const previous = ref(pointer.previous, "previous publication");
+  const previous = ref(pointer.previous, "previous publication", legacy ? "forbidden" : "optional");
   if (previous?.manifestHash === current.manifestHash) throw new Error("derived publication pointer current and previous must differ");
-  return { schema: DERIVED_PUBLICATION_POINTER_SCHEMA, projectId, branchId, generation: pointer.generation, current, previous };
+  return { schema: pointer.schema, projectId, branchId, generation: pointer.generation, current, previous };
 }
 
 function readBoundedText(fs, path, maximum, label) {
@@ -181,7 +219,23 @@ function readBoundedText(fs, path, maximum, label) {
   if (stat === undefined) return undefined;
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${label} is not a regular file`);
   if (stat.size > maximum) throw new Error(`${label} exceeds ${maximum} bytes`);
-  return fs.readFileSync(path, "utf8");
+  const descriptor = fs.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.size !== stat.size || opened.dev !== stat.dev || opened.ino !== stat.ino) {
+      throw new Error(`${label} changed while it was being opened`);
+    }
+    const bytes = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const count = fs.readSync(descriptor, bytes, offset, bytes.byteLength - offset, null);
+      if (count === 0) throw new Error(`${label} was truncated during read`);
+      offset += count;
+    }
+    return bytes.toString("utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function readPointer(fs, paths) {
@@ -317,20 +371,61 @@ function artifactDescriptors(manifest) {
   return descriptors;
 }
 
+function artifactReferences(manifest) {
+  const references = new Map();
+  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) {
+    references.set(`${chunk.chunkId}\u0000${artifact.artifactType}`, { chunkId: chunk.chunkId, ...artifact });
+  }
+  return references;
+}
+
 function nodeArtifactContentHash(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function validateArtifactInputs(manifest, inputs) {
-  if (!Array.isArray(inputs)) throw new Error("publication artifacts must be an array");
+function parseReusedArtifactInputs(manifest, reusedInputs, suppliedHashes = new Set()) {
+  if (!Array.isArray(reusedInputs) || reusedInputs.length > MAX_DERIVED_ARTIFACTS) {
+    throw new Error(`publication reusedArtifacts must be an array with at most ${MAX_DERIVED_ARTIFACTS} entries`);
+  }
+  const references = artifactReferences(manifest);
+  const reusedReferences = new Set();
+  const reused = new Map();
+  let previousReferenceKey;
+  for (let index = 0; index < reusedInputs.length; index++) {
+    const input = exactDataObject(
+      reusedInputs[index],
+      ["chunkId", "artifactType", "mediaType", "contentHash", "byteLength"],
+      `publication reused artifact ${index}`,
+    );
+    const referenceKey = `${input.chunkId}\u0000${input.artifactType}`;
+    if (previousReferenceKey !== undefined && previousReferenceKey >= referenceKey) {
+      throw new Error("publication reusedArtifacts must be strictly ordered and unique");
+    }
+    previousReferenceKey = referenceKey;
+    if (reusedReferences.has(referenceKey)) throw new Error(`publication reused artifacts contain duplicate ${referenceKey}`);
+    const descriptor = references.get(referenceKey);
+    if (descriptor === undefined
+      || descriptor.contentHash !== input.contentHash
+      || descriptor.byteLength !== input.byteLength
+      || descriptor.mediaType !== input.mediaType) {
+      throw new Error(`publication reused artifact ${index} does not match the manifest`);
+    }
+    if (suppliedHashes.has(descriptor.contentHash)) throw new Error(`publication artifact ${descriptor.contentHash} is both supplied and reused`);
+    reusedReferences.add(referenceKey);
+    reused.set(descriptor.contentHash, descriptor);
+  }
+  return reused;
+}
+
+function validateArtifactInputs(manifest, inputs, reusedInputs) {
+  if (!Array.isArray(inputs) || inputs.length > MAX_DERIVED_ARTIFACTS) {
+    throw new Error(`publication artifacts must be an array with at most ${MAX_DERIVED_ARTIFACTS} entries`);
+  }
   const required = artifactDescriptors(manifest);
   const supplied = new Map();
   let total = 0;
   for (let index = 0; index < inputs.length; index++) {
-    const input = inputs[index];
-    if (input === null || typeof input !== "object" || Array.isArray(input) || Object.keys(input).sort().join(",") !== "bytes,contentHash") {
-      throw new Error(`publication artifact ${index} must contain exactly contentHash and bytes`);
-    }
+    const input = exactDataObject(inputs[index], ["contentHash", "bytes"], `publication artifact ${index}`);
     const hash = validateCompilerContentHash(input.contentHash, `publication artifact ${index} contentHash`);
     if (!(input.bytes instanceof Uint8Array)) throw new Error(`publication artifact ${index} bytes must be Uint8Array`);
     if (supplied.has(hash)) throw new Error(`publication artifacts contain duplicate ${hash}`);
@@ -342,11 +437,14 @@ function validateArtifactInputs(manifest, inputs) {
     if (total > MAX_DERIVED_TOTAL_ARTIFACT_BYTES) throw new Error("publication artifact bytes exceed the total resource bound");
     supplied.set(hash, input.bytes);
   }
-  for (const hash of required.keys()) if (!supplied.has(hash)) throw new Error(`publication is missing artifact ${hash}`);
-  return supplied;
+  const reused = parseReusedArtifactInputs(manifest, reusedInputs, new Set(supplied.keys()));
+  for (const hash of required.keys()) {
+    if (!supplied.has(hash) && !reused.has(hash)) throw new Error(`publication is missing artifact ${hash}`);
+  }
+  return { supplied, reused: new Set(reused.keys()) };
 }
 
-function validateInstalledArtifact(fs, path, descriptor) {
+function validateInstalledArtifact(fs, path, descriptor, shouldCancel) {
   const stat = safeLstat(fs, path);
   if (stat === undefined || stat.isSymbolicLink() || !stat.isFile()) throw new Error(`derived artifact ${descriptor.contentHash} is missing or not regular`);
   if (stat.size !== descriptor.byteLength || stat.size > MAX_DERIVED_ARTIFACT_BYTES) throw new Error(`derived artifact ${descriptor.contentHash} byteLength mismatch`);
@@ -360,6 +458,7 @@ function validateInstalledArtifact(fs, path, descriptor) {
     const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, opened.size)));
     let remaining = opened.size;
     while (remaining > 0) {
+      maybeCancel(shouldCancel);
       const count = fs.readSync(descriptorFd, buffer, 0, Math.min(buffer.byteLength, remaining), null);
       if (count === 0) throw new Error(`derived artifact ${descriptor.contentHash} was truncated during validation`);
       hash.update(buffer.subarray(0, count));
@@ -371,7 +470,48 @@ function validateInstalledArtifact(fs, path, descriptor) {
   if (`sha256:${hash.digest("hex")}` !== descriptor.contentHash) throw new Error(`derived artifact ${descriptor.contentHash} hash mismatch`);
 }
 
-function validateInstalledManifest(fs, paths, ref) {
+export function verifyPublishedDerivedArtifacts(options) {
+  const fs = options?.fs ?? nodePublicationFs;
+  const manifest = parseDerivedRevisionManifest(options?.manifest);
+  const branchId = assertId(options?.branchId, BRANCH_ID, "derived branchId");
+  if (branchId !== manifest.branchId) throw new Error("reuse verification branchId does not match the derived manifest");
+  const paths = publicationPaths(options?.projectRoot, branchId, fs);
+  if (manifest.projectId !== paths.config.projectId) throw new Error("derived manifest projectId does not match Limina project identity");
+  const reused = parseReusedArtifactInputs(manifest, options?.reusedArtifacts);
+  maybeCancel(options?.shouldCancel);
+  for (const descriptor of reused.values()) {
+    validateInstalledArtifact(fs, artifactPath(paths, descriptor.contentHash), descriptor, options?.shouldCancel);
+  }
+  maybeCancel(options?.shouldCancel);
+  return Object.freeze({ verified: true, artifactCount: reused.size });
+}
+
+function validateSnapshotInput(input, manifest) {
+  let snapshot;
+  try { snapshot = parseCompilerSnapshot(input); }
+  catch (error) { throw new Error(`publication compiler snapshot is invalid: ${error.message}`); }
+  if (snapshot.snapshotHash !== manifest.compiler.snapshotHash) {
+    throw new Error("publication compiler snapshot hash does not match the derived manifest");
+  }
+  if (snapshot.graphHash !== manifest.compiler.graphHash) {
+    throw new Error("publication compiler snapshot graph does not match the derived manifest");
+  }
+  return { snapshot, canonical: `${canonicalCompilerSnapshot(snapshot)}\n` };
+}
+
+function validateInstalledSnapshot(fs, paths, ref) {
+  if (ref.snapshotHash === undefined) return null;
+  const raw = readBoundedText(fs, snapshotPath(paths, ref.snapshotHash), MAX_COMPILER_SNAPSHOT_BYTES + 1, "compiler snapshot");
+  if (raw === undefined) throw new Error(`compiler snapshot ${ref.snapshotHash} is missing`);
+  let snapshot;
+  try { snapshot = parseCompilerSnapshot(JSON.parse(raw)); }
+  catch (error) { throw new Error(`compiler snapshot ${ref.snapshotHash} is invalid: ${error.message}`); }
+  if (snapshot.snapshotHash !== ref.snapshotHash) throw new Error(`compiler snapshot ${ref.snapshotHash} identity mismatch`);
+  if (raw !== `${canonicalCompilerSnapshot(snapshot)}\n`) throw new Error(`compiler snapshot ${ref.snapshotHash} is not canonical`);
+  return snapshot;
+}
+
+function validateInstalledManifest(fs, paths, ref, shouldCancel, artifactHashes) {
   const raw = readBoundedText(fs, manifestPath(paths, ref.manifestHash), MAX_DERIVED_MANIFEST_BYTES, "derived revision manifest");
   if (raw === undefined) throw new Error(`derived manifest ${ref.manifestHash} is missing`);
   let manifest;
@@ -380,8 +520,23 @@ function validateInstalledManifest(fs, paths, ref) {
     throw new Error(`derived manifest ${ref.manifestHash} identity mismatch`);
   }
   const descriptors = artifactDescriptors(manifest);
-  for (const descriptor of descriptors.values()) validateInstalledArtifact(fs, artifactPath(paths, descriptor.contentHash), descriptor);
+  for (const descriptor of descriptors.values()) {
+    if (artifactHashes === undefined || artifactHashes.has(descriptor.contentHash)) {
+      validateInstalledArtifact(fs, artifactPath(paths, descriptor.contentHash), descriptor, shouldCancel);
+    }
+  }
   return manifest;
+}
+
+function validateInstalledRevision(fs, paths, ref, shouldCancel, artifactHashes) {
+  const manifest = validateInstalledManifest(fs, paths, ref, shouldCancel, artifactHashes);
+  maybeCancel(shouldCancel);
+  const snapshot = validateInstalledSnapshot(fs, paths, ref);
+  maybeCancel(shouldCancel);
+  if (snapshot !== null && manifest.compiler.snapshotHash !== snapshot.snapshotHash) {
+    throw new Error(`derived manifest ${manifest.manifestHash} does not bind compiler snapshot ${snapshot.snapshotHash}`);
+  }
+  return { manifest, snapshot };
 }
 
 function maybeCancel(shouldCancel) {
@@ -433,13 +588,30 @@ export async function publishDerivedRevision(options) {
   if (typeof isProcessAlive !== "function") throw new Error("derived publication isProcessAlive must be a function");
   const nowMs = options.nowMs ?? Date.now();
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("derived publication clock must be a non-negative safe integer");
-  const artifacts = validateArtifactInputs(manifest, options.artifacts);
+  const legacyManifestOnly = options?.allowLegacyManifestOnly === true;
+  if (options?.allowLegacyManifestOnly !== undefined && options.allowLegacyManifestOnly !== true) {
+    throw new Error("publication allowLegacyManifestOnly must be true when provided");
+  }
+  if (legacyManifestOnly && options.snapshot !== undefined) {
+    throw new Error("legacy manifest-only publication cannot include a compiler snapshot");
+  }
+  if (!legacyManifestOnly && options.snapshot === undefined) {
+    throw new Error("derived publication requires a compiler snapshot; set allowLegacyManifestOnly only for explicit legacy migration");
+  }
+  const snapshotInput = legacyManifestOnly ? undefined : validateSnapshotInput(options.snapshot, manifest);
+  const reusedInputs = options.reusedArtifacts === undefined ? [] : options.reusedArtifacts;
+  const { supplied: artifacts, reused } = validateArtifactInputs(manifest, options.artifacts, reusedInputs);
+  if (legacyManifestOnly && reused.size > 0) throw new Error("legacy manifest-only publication cannot reuse installed artifacts");
   const baseline = readPointer(fs, paths);
+  if (legacyManifestOnly && baseline.pointer !== undefined && baseline.pointer.schema !== DERIVED_PUBLICATION_POINTER_SCHEMA_V1) {
+    throw new Error("legacy manifest-only publication cannot replace a snapshot-bound publication");
+  }
   const stageRoot = join(paths.staging, jobId);
   if (safeLstat(fs, stageRoot) !== undefined) throw new Error(`derived publication job '${jobId}' already exists`);
   fs.mkdirSync(stageRoot);
   let stageArtifacts;
   const stageManifest = join(stageRoot, "manifest.json");
+  const stageSnapshot = join(stageRoot, "snapshot.json");
   const pointerTemp = join(paths.branchRoot, `published.json.tmp-${jobId}`);
   let cleanedStages = 0;
   let lockOwner;
@@ -459,6 +631,11 @@ export async function publishDerivedRevision(options) {
     writeExclusive(fs, stageManifest, `${canonicalDerivedRevisionManifest(manifest)}\n`);
     fsyncDirectory(fs, stageRoot);
     faultAt(options.fault, "after-manifest-stage", { manifestHash: manifest.manifestHash });
+    if (snapshotInput !== undefined) {
+      writeExclusive(fs, stageSnapshot, snapshotInput.canonical);
+      fsyncDirectory(fs, stageRoot);
+      faultAt(options.fault, "after-snapshot-stage", { snapshotHash: snapshotInput.snapshot.snapshotHash });
+    }
 
     faultAt(options.fault, "before-artifact-install", {});
     const descriptors = artifactDescriptors(manifest);
@@ -467,17 +644,31 @@ export async function publishDerivedRevision(options) {
       const final = artifactPath(paths, hash);
       if (safeLstat(fs, final) === undefined) fs.renameSync(staged, final);
       else {
-        validateInstalledArtifact(fs, final, descriptors.get(hash));
+        validateInstalledArtifact(fs, final, descriptors.get(hash), options.shouldCancel);
         fs.unlinkSync(staged);
       }
     }
     fsyncDirectory(fs, paths.artifacts);
     faultAt(options.fault, "after-artifact-install", {});
 
+    if (snapshotInput !== undefined) {
+      const finalSnapshot = snapshotPath(paths, snapshotInput.snapshot.snapshotHash);
+      if (safeLstat(fs, finalSnapshot) === undefined) fs.renameSync(stageSnapshot, finalSnapshot);
+      else {
+        const installed = validateInstalledSnapshot(fs, paths, { snapshotHash: snapshotInput.snapshot.snapshotHash });
+        if (canonicalCompilerSnapshot(installed) !== canonicalCompilerSnapshot(snapshotInput.snapshot)) {
+          throw new Error(`compiler snapshot ${snapshotInput.snapshot.snapshotHash} canonical bytes mismatch`);
+        }
+        fs.unlinkSync(stageSnapshot);
+      }
+      fsyncDirectory(fs, paths.snapshots);
+      faultAt(options.fault, "after-snapshot-install", { snapshotHash: snapshotInput.snapshot.snapshotHash });
+    }
+
     const finalManifest = manifestPath(paths, manifest.manifestHash);
     if (safeLstat(fs, finalManifest) === undefined) fs.renameSync(stageManifest, finalManifest);
     else {
-      validateInstalledManifest(fs, paths, { manifestHash: manifest.manifestHash });
+      validateInstalledManifest(fs, paths, { manifestHash: manifest.manifestHash }, options.shouldCancel);
       fs.unlinkSync(stageManifest);
     }
     fsyncDirectory(fs, paths.manifests);
@@ -486,11 +677,14 @@ export async function publishDerivedRevision(options) {
 
     if (baseline.pointer?.generation === Number.MAX_SAFE_INTEGER) throw new Error("derived publication pointer generation exhausted");
     const pointer = {
-      schema: DERIVED_PUBLICATION_POINTER_SCHEMA,
+      schema: snapshotInput === undefined ? DERIVED_PUBLICATION_POINTER_SCHEMA_V1 : DERIVED_PUBLICATION_POINTER_SCHEMA,
       projectId: manifest.projectId,
       branchId: manifest.branchId,
       generation: (baseline.pointer?.generation ?? 0) + 1,
-      current: { manifestHash: manifest.manifestHash },
+      current: {
+        manifestHash: manifest.manifestHash,
+        ...(snapshotInput === undefined ? {} : { snapshotHash: snapshotInput.snapshot.snapshotHash }),
+      },
       previous: baseline.pointer?.current ?? null,
     };
     if (pointer.previous?.manifestHash === pointer.current.manifestHash) pointer.previous = baseline.pointer?.previous ?? null;
@@ -515,9 +709,14 @@ export async function publishDerivedRevision(options) {
       faultAt(options.fault, "before-pointer-rename", { pointer });
       maybeCancel(options.shouldCancel);
       assertPublicationLockOwner(fs, paths, lockOwner);
+      // Re-open the complete revision at the commit boundary. Both newly
+      // installed and reused files can be replaced after staging by another
+      // local process; the pointer must never publish either class on trust.
+      validateInstalledRevision(fs, paths, pointer.current, options.shouldCancel);
+      maybeCancel(options.shouldCancel);
       fs.renameSync(pointerTemp, paths.pointer);
       fsyncDirectory(fs, paths.branchRoot);
-      return { published: true, manifest, pointer, cleanedStages };
+      return { published: true, manifest, snapshot: snapshotInput?.snapshot ?? null, pointer, cleanedStages };
     } finally {
       if (lockOwner !== undefined) releasePublicationLock(fs, paths, lockOwner);
       lockOwner = undefined;
@@ -536,15 +735,15 @@ export async function readPublishedDerivedRevision(options) {
   const { pointer } = readPointer(fs, paths);
   if (pointer === undefined) throw new Error("no derived revision has been published");
   let currentError;
-  let manifest;
+  let revision;
   let usedFallback = false;
   try {
-    manifest = validateInstalledManifest(fs, paths, pointer.current);
+    revision = validateInstalledRevision(fs, paths, pointer.current);
   } catch (error) {
     currentError = error instanceof Error ? error.message : String(error);
     if (pointer.previous === null) throw new Error(`current derived revision is unusable and no previous revision exists: ${currentError}`);
     try {
-      manifest = validateInstalledManifest(fs, paths, pointer.previous);
+      revision = validateInstalledRevision(fs, paths, pointer.previous);
       usedFallback = true;
     } catch (previousError) {
       throw new Error(
@@ -552,6 +751,7 @@ export async function readPublishedDerivedRevision(options) {
       );
     }
   }
+  const { manifest, snapshot } = revision;
   const head = validateHeadShape(await options.readHead());
   const sourceMatches = !usedFallback
     && head.projectId === manifest.projectId
@@ -561,6 +761,7 @@ export async function readPublishedDerivedRevision(options) {
   return {
     status: usedFallback ? "fallback" : sourceMatches ? "current" : "stale",
     manifest,
+    snapshot,
     pointer,
     diagnostics: {
       usedFallback,

@@ -97,6 +97,22 @@ function compileFixture(identity, tag = `r${identity.revision}`, branchId = "mai
   return { manifest, artifacts: [{ contentHash, bytes }] };
 }
 
+function reusedDescriptor(fixture) {
+  const chunk = fixture.manifest.chunks[0];
+  const artifact = chunk.artifacts[0];
+  return {
+    chunkId: chunk.chunkId,
+    artifactType: artifact.artifactType,
+    mediaType: artifact.mediaType,
+    contentHash: artifact.contentHash,
+    byteLength: artifact.byteLength,
+  };
+}
+
+function sparseFixture(fixture) {
+  return { manifest: fixture.manifest, artifacts: [], reusedArtifacts: [reusedDescriptor(fixture)] };
+}
+
 async function confirmingPublish({ manifest, readHead }) {
   await readHead();
   return { published: true, manifestHash: manifest.manifestHash };
@@ -247,6 +263,94 @@ test("manifest identity mismatch is rejected before publication", async () => {
   const wrong = compileFixture(source(2));
   const setup = coordinator({ compile: async () => wrong });
   await assert.rejects(setup.coordinator.submit(request(1)), /source or compiler identity/);
+});
+
+test("sparse compile output requires independent reuse verification before publication", async () => {
+  const fixture = compileFixture(source(1), "sparse");
+  const phases = [];
+  const setup = coordinator({
+    compile: async () => sparseFixture(fixture),
+    verifyReusableArtifacts: async ({ manifest, reusedArtifacts, signal }) => {
+      phases.push("verify");
+      assert.equal(signal.aborted, false);
+      assert.equal(manifest.manifestHash, fixture.manifest.manifestHash);
+      assert.deepEqual(reusedArtifacts, [reusedDescriptor(fixture)]);
+    },
+    publish: async ({ reusedArtifacts, readHead }) => {
+      phases.push("publish");
+      assert.deepEqual(reusedArtifacts, [reusedDescriptor(fixture)]);
+      await readHead();
+      return { published: true, manifestHash: fixture.manifest.manifestHash };
+    },
+  });
+  assert.equal((await setup.coordinator.submit(request(1))).status, "published");
+  assert.deepEqual(phases, ["verify", "publish"]);
+});
+
+test("sparse compile fails closed without a reuse verifier or when verification fails", async (t) => {
+  const fixture = compileFixture(source(1), "sparse-verifier");
+  await t.test("missing verifier", async () => {
+    let publishCalls = 0;
+    const setup = coordinator({
+      compile: async () => sparseFixture(fixture),
+      publish: async () => { publishCalls++; return { published: true, manifestHash: fixture.manifest.manifestHash }; },
+    });
+    await assert.rejects(setup.coordinator.submit(request(1)), assertCode("REUSE_VERIFIER_REQUIRED"));
+    assert.equal(publishCalls, 0);
+  });
+  await t.test("failed verifier", async () => {
+    let publishCalls = 0;
+    const setup = coordinator({
+      compile: async () => sparseFixture(fixture),
+      verifyReusableArtifacts: async () => { throw new Error("reused artifact vanished"); },
+      publish: async () => { publishCalls++; return { published: true, manifestHash: fixture.manifest.manifestHash }; },
+    });
+    await assert.rejects(setup.coordinator.submit(request(1)), /reused artifact vanished/);
+    assert.equal(publishCalls, 0);
+  });
+});
+
+test("sparse artifact partitions reject overlap and forged reuse descriptors", async (t) => {
+  const fixture = compileFixture(source(1), "sparse-invalid");
+  const descriptor = reusedDescriptor(fixture);
+  const cases = [
+    ["overlap", { manifest: fixture.manifest, artifacts: fixture.artifacts, reusedArtifacts: [descriptor] }, /both supplied and reused/],
+    ["forged byte length", { manifest: fixture.manifest, artifacts: [], reusedArtifacts: [{ ...descriptor, byteLength: descriptor.byteLength + 1 }] }, /does not match/],
+    ["forged location", { manifest: fixture.manifest, artifacts: [], reusedArtifacts: [{ ...descriptor, chunkId: "grey-field.surface:l0:1:0" }] }, /does not match/],
+  ];
+  for (const [name, output, pattern] of cases) await t.test(name, async () => {
+    const setup = coordinator({ compile: async () => output, verifyReusableArtifacts: async () => {} });
+    await assert.rejects(setup.coordinator.submit(request(1)), (error) => assertCode("INVALID_COMPILE_OUTPUT")(error) && pattern.test(error.message));
+  });
+});
+
+test("supersession aborts reuse verification and never publishes the superseded revision", async () => {
+  let entered;
+  const verifying = new Promise((resolve) => { entered = resolve; });
+  const published = [];
+  const setup = coordinator({
+    compile: async ({ revision, compiler: compilerIdentity }) => {
+      const fixture = compileFixture(source(revision), `reuse-${revision}`, "main", compilerIdentity);
+      return revision === 1 ? sparseFixture(fixture) : fixture;
+    },
+    verifyReusableArtifacts: async ({ signal }) => {
+      entered();
+      await new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    },
+    publish: async ({ manifest, readHead }) => {
+      published.push(manifest.source.revision);
+      await readHead();
+      return { published: true, manifestHash: manifest.manifestHash };
+    },
+  });
+  const first = setup.coordinator.submit(request(1));
+  const firstError = first.catch((error) => error);
+  await verifying;
+  setup.setHead(source(2));
+  const second = setup.coordinator.submit(request(2));
+  assert.equal((await firstError).code, "BUILD_SUPERSEDED");
+  assert.equal((await second).revision, 2);
+  assert.deepEqual(published, [2]);
 });
 
 test("trusted constructor compiler identity participates in build identity and manifest validation", async () => {
@@ -465,6 +569,44 @@ test("a failed running branch releases capacity for queued work", async () => {
   assert.equal((await second).branchId, "second");
   assert.deepEqual(starts, ["main", "second"]);
   assert.equal(scheduler.diagnostics().capacity.running, 0);
+});
+
+test("close aborts active work, rejects queued work, and resolves only after the coordinator is idle", async () => {
+  let activeStarted;
+  const started = new Promise((resolve) => { activeStarted = resolve; });
+  const published = [];
+  const scheduler = new DerivedBuildCoordinator({
+    projectId: "grey-field",
+    projectRoot: "/not-used-by-test-publisher",
+    compiler: compiler(),
+    maxConcurrentBuilds: 1,
+    readHead: async ({ branchId }) => authority(source(1), branchId),
+    compile: async ({ branchId, signal }) => {
+      if (branchId === "main") {
+        activeStarted();
+        await new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      }
+      return compileFixture(source(1), branchId, branchId);
+    },
+    publish: async ({ manifest, readHead }) => {
+      published.push(manifest.branchId);
+      await readHead();
+      return { published: true, manifestHash: manifest.manifestHash };
+    },
+  });
+  const active = scheduler.submit(request(1));
+  const activeError = active.catch((error) => error);
+  await started;
+  const queued = scheduler.submit(request(1, { branchId: "queued" }));
+  const queuedError = queued.catch((error) => error);
+  const closing = scheduler.close("test shutdown");
+  assert.equal((await activeError).code, "BUILD_CANCELLED");
+  assert.equal((await queuedError).code, "BUILD_CANCELLED");
+  await closing;
+  await scheduler.whenIdle();
+  assert.deepEqual(published, []);
+  assert.equal(scheduler.diagnostics().capacity.running, 0);
+  assert.throws(() => scheduler.submit(request(1)), assertCode("COORDINATOR_CLOSED"));
 });
 
 test("default publisher adapter writes a validated derived revision", async () => {

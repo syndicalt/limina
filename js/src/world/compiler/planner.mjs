@@ -368,6 +368,11 @@ function validatePreviousSnapshot(snapshot) {
   return value;
 }
 
+export function parseCompilerSnapshot(snapshot) {
+  const canonical = canonicalCompilerJson(snapshot, SNAPSHOT_CANONICAL_LIMITS);
+  return validatePreviousSnapshot(JSON.parse(canonical));
+}
+
 export function canonicalCompilerSnapshot(snapshot) {
   return canonicalCompilerJson(snapshot, SNAPSHOT_CANONICAL_LIMITS);
 }

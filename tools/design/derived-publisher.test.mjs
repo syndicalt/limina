@@ -15,6 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createTerrainGridSpec, terrainChunkId } from "../../js/src/terrain/grid.mjs";
 import {
+  COMPILER_SNAPSHOT_SCHEMA,
   DERIVED_REVISION_MANIFEST_SCHEMA,
   compilerContentHash,
   createDerivedRevisionManifest,
@@ -22,6 +23,8 @@ import {
 } from "../../js/src/world/compiler/index.mjs";
 import {
   MAX_STALE_STAGE_CLEANUPS,
+  DERIVED_PUBLICATION_POINTER_SCHEMA,
+  DERIVED_PUBLICATION_POINTER_SCHEMA_V1,
   DERIVED_PUBLICATION_LOCK_SCHEMA,
   DERIVED_PUBLICATION_STAGE_SCHEMA,
   PUBLICATION_FAULT_POINTS,
@@ -32,6 +35,7 @@ import {
   nodePublicationFs,
   publishDerivedRevision,
   readPublishedDerivedRevision,
+  verifyPublishedDerivedArtifacts,
 } from "./derived-publisher.mjs";
 
 function hash(label) { return compilerContentHash({ label }); }
@@ -49,10 +53,19 @@ function projectFixture(createState = true) {
   return root;
 }
 
-function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }) {
-  const bytes = new Uint8Array([...Buffer.from(`artifact:${tag}`, "utf8")]);
+function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }, artifactTag = tag) {
+  const bytes = new Uint8Array([...Buffer.from(`artifact:${artifactTag}`, "utf8")]);
   const contentHash = derivedArtifactContentHash(bytes);
   const grid = createTerrainGridSpec({ gridId: "grey-field.surface", origin: [0, 0], chunkSizeM: 64, defaultSamples: 65 });
+  const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
+  const graphHash = hash("graph:1");
+  const snapshotCore = {
+    schema: COMPILER_SNAPSHOT_SCHEMA,
+    graphHash,
+    chunks: [{ chunkId, gridId: grid.gridId, lod: 0, tx: 0, tz: 0, chunkTopologyHash: hash("topology:0:0") }],
+    stageKeys: { render: { [chunkId]: hash(`render-stage:${tag}`) } },
+  };
+  const snapshot = { ...snapshotCore, snapshotHash: compilerContentHash(snapshotCore) };
   const manifest = createDerivedRevisionManifest({
     schema: DERIVED_REVISION_MANIFEST_SCHEMA,
     projectId: "grey-field",
@@ -68,12 +81,12 @@ function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }
     compiler: {
       version: "1.0.0",
       configHash: hash(`config:${tag}`),
-      graphHash: hash("graph:1"),
-      snapshotHash: hash(`snapshot:${tag}`),
+      graphHash,
+      snapshotHash: snapshot.snapshotHash,
     },
     grid,
     chunks: [{
-      chunkId: terrainChunkId(grid.gridId, 0, 0, 0),
+      chunkId,
       gridId: grid.gridId,
       lod: 0,
       tx: 0,
@@ -83,7 +96,7 @@ function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }
       artifacts: [{ artifactType: "render-mesh/v1", contentHash, byteLength: bytes.byteLength, mediaType: "model/gltf-binary" }],
     }],
   });
-  return { manifest, artifacts: [{ contentHash, bytes }] };
+  return { manifest, artifacts: [{ contentHash, bytes }], snapshot };
 }
 
 function authoritative(source = { revision: 7, headHash: hash("head:7") }) {
@@ -93,6 +106,7 @@ function authoritative(source = { revision: 7, headHash: hash("head:7") }) {
 function pointerPath(root) { return join(root, ".limina", "derived", "main", "published.json"); }
 function manifestPath(root, manifestHash) { return join(root, ".limina", "derived", "main", "manifests", `${manifestHash.slice(7)}.json`); }
 function artifactPath(root, contentHash) { return join(root, ".limina", "derived", "main", "artifacts", `${contentHash.slice(7)}.bin`); }
+function snapshotPath(root, snapshotHash) { return join(root, ".limina", "derived", "main", "snapshots", `${snapshotHash.slice(7)}.json`); }
 
 async function publish(root, fixture, jobId, overrides = {}) {
   return publishDerivedRevision({
@@ -102,6 +116,22 @@ async function publish(root, fixture, jobId, overrides = {}) {
     readHead: async () => authoritative(),
     ...overrides,
   });
+}
+
+function reusedDescriptor(fixture) {
+  const chunk = fixture.manifest.chunks[0];
+  const artifact = chunk.artifacts[0];
+  return {
+    chunkId: chunk.chunkId,
+    artifactType: artifact.artifactType,
+    mediaType: artifact.mediaType,
+    contentHash: artifact.contentHash,
+    byteLength: artifact.byteLength,
+  };
+}
+
+function sparseFixture(fixture) {
+  return { ...fixture, artifacts: [], reusedArtifacts: [reusedDescriptor(fixture)] };
 }
 
 test("publishes a fully validated current revision and reports source staleness explicitly", async () => {
@@ -121,6 +151,182 @@ test("publishes a fully validated current revision and reports source staleness 
     });
     assert.equal(stale.status, "stale");
     assert.equal(stale.diagnostics.matchesCurrentSource, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("publishes sparse output only after hash-verifying installed reused artifacts", async () => {
+  const root = projectFixture();
+  try {
+    const baseline = revisionFixture("reuse-baseline");
+    await publish(root, baseline, "job-reuse-baseline");
+    const candidate = revisionFixture("reuse-candidate", undefined, "reuse-baseline");
+    assert.deepEqual(verifyPublishedDerivedArtifacts({
+      projectRoot: root,
+      branchId: "main",
+      manifest: candidate.manifest,
+      reusedArtifacts: [reusedDescriptor(candidate)],
+    }), { verified: true, artifactCount: 1 });
+    const published = await publish(root, sparseFixture(candidate), "job-reuse-candidate");
+    assert.equal(published.pointer.generation, 2);
+    assert.equal(published.pointer.current.snapshotHash, candidate.snapshot.snapshotHash);
+    assert.equal(published.pointer.previous.manifestHash, baseline.manifest.manifestHash);
+    const read = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(read.manifest.manifestHash, candidate.manifest.manifestHash);
+    assert.equal(read.snapshot.snapshotHash, candidate.snapshot.snapshotHash);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("targeted reuse verification is cancellable and branch-bound", async () => {
+  const root = projectFixture();
+  try {
+    const baseline = revisionFixture("targeted-verifier");
+    await publish(root, baseline, "job-targeted-verifier");
+    const options = {
+      projectRoot: root,
+      branchId: "main",
+      manifest: baseline.manifest,
+      reusedArtifacts: [reusedDescriptor(baseline)],
+    };
+    assert.throws(() => verifyPublishedDerivedArtifacts({ ...options, branchId: "other" }), /branchId does not match/);
+    assert.throws(() => verifyPublishedDerivedArtifacts({ ...options, shouldCancel: () => true }), PublicationCancelledError);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("sparse reuse rejects corrupt and symlink-swapped cache entries without moving the LKG pointer", async (t) => {
+  await t.test("corrupt bytes", async () => {
+    const root = projectFixture();
+    try {
+      const baseline = revisionFixture("reuse-corrupt-base");
+      await publish(root, baseline, "job-reuse-corrupt-base");
+      const before = readFileSync(pointerPath(root), "utf8");
+      const corrupt = new Uint8Array(baseline.artifacts[0].bytes);
+      corrupt[0] ^= 0xff;
+      writeFileSync(artifactPath(root, baseline.artifacts[0].contentHash), corrupt);
+      const candidate = revisionFixture("reuse-corrupt-next", undefined, "reuse-corrupt-base");
+      await assert.rejects(publish(root, sparseFixture(candidate), "job-reuse-corrupt-next"), /hash mismatch/);
+      assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  await t.test("no-follow symlink swap", async () => {
+    const root = projectFixture();
+    const outside = mkdtempSync(join(tmpdir(), "limina-reused-artifact-outside-"));
+    try {
+      const baseline = revisionFixture("reuse-symlink-base");
+      await publish(root, baseline, "job-reuse-symlink-base");
+      const before = readFileSync(pointerPath(root), "utf8");
+      const target = join(outside, "matching.bin");
+      writeFileSync(target, baseline.artifacts[0].bytes);
+      const path = artifactPath(root, baseline.artifacts[0].contentHash);
+      unlinkSync(path);
+      symlinkSync(target, path);
+      const candidate = revisionFixture("reuse-symlink-next", undefined, "reuse-symlink-base");
+      await assert.rejects(publish(root, sparseFixture(candidate), "job-reuse-symlink-next"), /missing or not regular/);
+      assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+  await t.test("lstat-to-open symlink race", async () => {
+    const root = projectFixture();
+    const outside = mkdtempSync(join(tmpdir(), "limina-reused-race-outside-"));
+    try {
+      const baseline = revisionFixture("reuse-race-base");
+      await publish(root, baseline, "job-reuse-race-base");
+      const target = join(outside, "matching.bin");
+      writeFileSync(target, baseline.artifacts[0].bytes);
+      const path = artifactPath(root, baseline.artifacts[0].contentHash);
+      let swapped = false;
+      const racingFs = {
+        ...nodePublicationFs,
+        openSync(candidate, flags) {
+          if (candidate === path && !swapped) {
+            swapped = true;
+            unlinkSync(path);
+            symlinkSync(target, path);
+          }
+          return nodePublicationFs.openSync(candidate, flags);
+        },
+      };
+      assert.throws(
+        () => verifyPublishedDerivedArtifacts({
+          projectRoot: root,
+          branchId: "main",
+          manifest: baseline.manifest,
+          reusedArtifacts: [reusedDescriptor(baseline)],
+          fs: racingFs,
+        }),
+        (error) => swapped && (error?.code === "ELOOP" || /symbolic link|not regular/i.test(error?.message ?? "")),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("snapshot sidecars are canonical, pointer-bound, and participate in LKG fallback", async () => {
+  const root = projectFixture();
+  try {
+    const previous = revisionFixture("snapshot-previous");
+    const current = revisionFixture("snapshot-current");
+    await publish(root, previous, "job-snapshot-previous");
+    await publish(root, current, "job-snapshot-current");
+    const pointer = JSON.parse(readFileSync(pointerPath(root), "utf8"));
+    assert.equal(pointer.schema, DERIVED_PUBLICATION_POINTER_SCHEMA);
+    assert.equal(pointer.current.snapshotHash, current.snapshot.snapshotHash);
+    assert.equal(JSON.parse(readFileSync(snapshotPath(root, current.snapshot.snapshotHash), "utf8")).snapshotHash, current.snapshot.snapshotHash);
+    writeFileSync(snapshotPath(root, current.snapshot.snapshotHash), "{\"truncated\":");
+    const fallback = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(fallback.status, "fallback");
+    assert.equal(fallback.manifest.manifestHash, previous.manifest.manifestHash);
+    assert.equal(fallback.snapshot.snapshotHash, previous.snapshot.snapshotHash);
+    assert.match(fallback.diagnostics.currentError, /snapshot.*invalid/i);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("reader migrates legacy manifest-only pointers without discarding the legacy LKG", async () => {
+  const root = projectFixture();
+  try {
+    const legacy = revisionFixture("legacy-pointer");
+    await assert.rejects(publishDerivedRevision({
+      projectRoot: root,
+      jobId: "job-implicit-legacy",
+      manifest: legacy.manifest,
+      artifacts: legacy.artifacts,
+      readHead: async () => authoritative(),
+    }), /requires a compiler snapshot/);
+    await publishDerivedRevision({
+      projectRoot: root,
+      jobId: "job-legacy-pointer",
+      manifest: legacy.manifest,
+      artifacts: legacy.artifacts,
+      allowLegacyManifestOnly: true,
+      readHead: async () => authoritative(),
+    });
+    assert.equal(JSON.parse(readFileSync(pointerPath(root), "utf8")).schema, DERIVED_PUBLICATION_POINTER_SCHEMA_V1);
+    const legacyRead = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(legacyRead.snapshot, null);
+    const validLegacyPointer = readFileSync(pointerPath(root), "utf8");
+    const forgedLegacyPointer = JSON.parse(validLegacyPointer);
+    forgedLegacyPointer.current.snapshotHash = legacy.snapshot.snapshotHash;
+    writeFileSync(pointerPath(root), `${JSON.stringify(forgedLegacyPointer)}\n`);
+    await assert.rejects(
+      readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() }),
+      /manifest reference/,
+    );
+    writeFileSync(pointerPath(root), validLegacyPointer);
+
+    const current = revisionFixture("legacy-migration-current");
+    await publish(root, current, "job-legacy-migration-current");
+    const migrated = JSON.parse(readFileSync(pointerPath(root), "utf8"));
+    assert.equal(migrated.schema, DERIVED_PUBLICATION_POINTER_SCHEMA);
+    assert.deepEqual(Object.keys(migrated.previous), ["manifestHash"]);
+    writeFileSync(manifestPath(root, current.manifest.manifestHash), "{\"truncated\":");
+    const fallback = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(fallback.status, "fallback");
+    assert.equal(fallback.manifest.manifestHash, legacy.manifest.manifestHash);
+    assert.equal(fallback.snapshot, null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -294,6 +500,22 @@ test("artifact byte length, content hash, and completeness are validated before 
       publish(root, { ...fixture, artifacts: [{ ...fixture.artifacts[0], bytes: wrong }] }, "job-hash"),
       /content hash mismatch/,
     );
+    assert.equal(nodePublicationFs.existsSync(pointerPath(root)), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("re-hashes newly installed artifacts at the pointer commit boundary", async () => {
+  const root = projectFixture();
+  try {
+    const fixture = revisionFixture("supplied-commit-race");
+    await assert.rejects(publish(root, fixture, "job-supplied-commit-race", {
+      fault: (point) => {
+        if (point !== "after-manifest-install") return;
+        const corrupted = new Uint8Array(fixture.artifacts[0].bytes);
+        corrupted[0] ^= 0xff;
+        writeFileSync(artifactPath(root, fixture.artifacts[0].contentHash), corrupted);
+      },
+    }), /hash mismatch/);
     assert.equal(nodePublicationFs.existsSync(pointerPath(root)), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

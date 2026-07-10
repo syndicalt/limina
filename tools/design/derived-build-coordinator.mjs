@@ -170,9 +170,19 @@ function artifactDescriptors(manifest) {
   return descriptors;
 }
 
+function artifactReferences(manifest) {
+  const references = new Map();
+  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) {
+    references.set(`${chunk.chunkId}\u0000${artifact.artifactType}`, { chunkId: chunk.chunkId, ...artifact });
+  }
+  return references;
+}
+
 function parseCompileOutputUnchecked(input, request) {
   const output = plainObject(input, "derived compile output");
-  exactKeys(output, new Set(["manifest", "artifacts"]), "derived compile output");
+  const outputKeys = new Set(Object.getOwnPropertyNames(output));
+  const sparse = outputKeys.has("reusedArtifacts");
+  exactKeys(output, new Set(sparse ? ["manifest", "artifacts", "reusedArtifacts"] : ["manifest", "artifacts"]), "derived compile output");
   let manifest;
   try {
     manifest = parseDerivedRevisionManifest(output.manifest);
@@ -197,12 +207,19 @@ function parseCompileOutputUnchecked(input, request) {
     );
   }
   const required = artifactDescriptors(manifest);
+  const references = artifactReferences(manifest);
   const supplied = new Set();
   const artifacts = [];
   let totalBytes = 0;
   for (let index = 0; index < output.artifacts.length; index++) {
     const artifact = plainObject(output.artifacts[index], `derived compile artifact ${index}`);
-    exactKeys(artifact, new Set(["contentHash", "bytes"]), `derived compile artifact ${index}`);
+    const artifactKeys = new Set(Object.getOwnPropertyNames(artifact));
+    const rich = artifactKeys.has("chunkId") || artifactKeys.has("artifactType") || artifactKeys.has("mediaType");
+    exactKeys(
+      artifact,
+      new Set(rich ? ["chunkId", "artifactType", "mediaType", "contentHash", "bytes"] : ["contentHash", "bytes"]),
+      `derived compile artifact ${index}`,
+    );
     const contentHash = validateCompilerContentHash(artifact.contentHash, `derived compile artifact ${index} contentHash`);
     if (!(artifact.bytes instanceof Uint8Array)) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${index} bytes must be Uint8Array`);
@@ -217,6 +234,12 @@ function parseCompileOutputUnchecked(input, request) {
     if (artifact.bytes.byteLength !== descriptor.byteLength) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${contentHash} byteLength mismatch`);
     }
+    if (rich) {
+      const reference = references.get(`${artifact.chunkId}\u0000${artifact.artifactType}`);
+      if (reference === undefined || reference.contentHash !== contentHash || reference.mediaType !== artifact.mediaType) {
+        throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${index} does not match the manifest`);
+      }
+    }
     if (derivedArtifactContentHash(artifact.bytes) !== contentHash) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${contentHash} content hash mismatch`);
     }
@@ -227,12 +250,50 @@ function parseCompileOutputUnchecked(input, request) {
     supplied.add(contentHash);
     artifacts.push(Object.freeze({ contentHash, bytes: artifact.bytes }));
   }
+  const reusedArtifacts = [];
+  const reusedHashes = new Set();
+  const reusedReferences = new Set();
+  let previousReuseKey;
+  if (sparse && (!Array.isArray(output.reusedArtifacts) || output.reusedArtifacts.length > MAX_DERIVED_ARTIFACTS)) {
+    throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile reusedArtifacts must be an array with at most ${MAX_DERIVED_ARTIFACTS} entries`);
+  }
+  const reusedInputs = sparse ? output.reusedArtifacts : [];
+  for (let index = 0; index < reusedInputs.length; index++) {
+    const reused = plainObject(reusedInputs[index], `derived compile reused artifact ${index}`);
+    exactKeys(reused, new Set(["chunkId", "artifactType", "mediaType", "contentHash", "byteLength"]), `derived compile reused artifact ${index}`);
+    const contentHash = validateCompilerContentHash(reused.contentHash, `derived compile reused artifact ${index} contentHash`);
+    const key = `${reused.chunkId}\u0000${reused.artifactType}`;
+    if (previousReuseKey !== undefined && previousReuseKey >= key) {
+      throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", "derived compile reusedArtifacts must be strictly ordered and unique");
+    }
+    previousReuseKey = key;
+    if (reusedReferences.has(key)) throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile reused artifacts contain duplicate ${key}`);
+    const reference = references.get(key);
+    if (reference === undefined
+      || reference.contentHash !== contentHash
+      || reference.byteLength !== reused.byteLength
+      || reference.mediaType !== reused.mediaType) {
+      throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile reused artifact ${index} does not match the manifest`);
+    }
+    if (supplied.has(contentHash)) {
+      throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${contentHash} is both supplied and reused`);
+    }
+    reusedReferences.add(key);
+    reusedHashes.add(contentHash);
+    reusedArtifacts.push(Object.freeze({
+      chunkId: reference.chunkId,
+      artifactType: reference.artifactType,
+      mediaType: reference.mediaType,
+      contentHash,
+      byteLength: reference.byteLength,
+    }));
+  }
   for (const contentHash of required.keys()) {
-    if (!supplied.has(contentHash)) {
+    if (!supplied.has(contentHash) && !reusedHashes.has(contentHash)) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile is missing artifact ${contentHash}`);
     }
   }
-  return { manifest, artifacts: Object.freeze(artifacts) };
+  return { manifest, artifacts: Object.freeze(artifacts), reusedArtifacts: Object.freeze(reusedArtifacts) };
 }
 
 function parseCompileOutput(input, request) {
@@ -292,12 +353,15 @@ function immutableResult(job, manifestHash, durationMs) {
   });
 }
 
-async function defaultPublish({ projectRoot, buildId, manifest, artifacts, readHead, signal }) {
+async function defaultPublish({ projectRoot, buildId, manifest, artifacts, reusedArtifacts, readHead, signal }) {
+  if (reusedArtifacts.length > 0) throw new Error("default derived publisher cannot publish sparse output without a compiler snapshot");
   const result = await publishDerivedRevision({
     projectRoot,
     jobId: buildId,
     manifest,
     artifacts,
+    reusedArtifacts,
+    allowLegacyManifestOnly: true,
     readHead,
     shouldCancel: () => signal.aborted,
   });
@@ -307,8 +371,8 @@ async function defaultPublish({ projectRoot, buildId, manifest, artifacts, readH
 /**
  * Callback ownership contract:
  * - readHead returns the exact project/branch authority requested by its argument.
- * - compile returns a manifest plus complete artifact bytes and relinquishes those
- *   byte references until publish settles.
+ * - compile returns either complete artifact bytes or a strict supplied/reused
+ *   partition. Reused entries require an independent verifier callback.
  * - publish does not mutate artifact bytes, calls its provided readHead immediately
  *   before its atomic commit, and returns only { published, manifestHash }.
  * The coordinator retains metadata, never artifact bytes, after settlement.
@@ -320,6 +384,7 @@ export class DerivedBuildCoordinator {
   #readHead;
   #compile;
   #publish;
+  #verifyReusableArtifacts;
   #now;
   #maxTrackedBranches;
   #maxDiagnostics;
@@ -329,6 +394,8 @@ export class DerivedBuildCoordinator {
   #readyCursor = 0;
   #readyJobs = new Map();
   #runningBuilds = 0;
+  #closed = false;
+  #idleWaiters = new Set();
   #records = [];
   #recordCursor = 0;
   #counts = {
@@ -346,7 +413,7 @@ export class DerivedBuildCoordinator {
     const options = plainObject(input, "derived build coordinator options");
     const allowed = new Set([
       "projectId", "projectRoot", "compiler", "readHead", "compile", "publish", "now", "maxTrackedBranches", "maxDiagnostics",
-      "maxConcurrentBuilds",
+      "maxConcurrentBuilds", "verifyReusableArtifacts",
     ]);
     const required = new Set(["projectId", "projectRoot", "compiler", "readHead", "compile"]);
     const names = Object.getOwnPropertyNames(options);
@@ -370,6 +437,9 @@ export class DerivedBuildCoordinator {
     if (options.publish !== undefined && typeof options.publish !== "function") {
       throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator publish must be a function");
     }
+    if (options.verifyReusableArtifacts !== undefined && typeof options.verifyReusableArtifacts !== "function") {
+      throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator verifyReusableArtifacts must be a function");
+    }
     if (options.now !== undefined && typeof options.now !== "function") {
       throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator now must be a function");
     }
@@ -378,6 +448,7 @@ export class DerivedBuildCoordinator {
     this.#readHead = options.readHead;
     this.#compile = options.compile;
     this.#publish = options.publish ?? defaultPublish;
+    this.#verifyReusableArtifacts = options.verifyReusableArtifacts;
     this.#now = options.now ?? Date.now;
     this.#maxTrackedBranches = boundedInteger(options.maxTrackedBranches, DEFAULT_MAX_TRACKED_BRANCHES, 1, 1024, "maxTrackedBranches");
     this.#maxDiagnostics = boundedInteger(options.maxDiagnostics, DEFAULT_MAX_DIAGNOSTICS, 1, 4096, "maxDiagnostics");
@@ -386,6 +457,10 @@ export class DerivedBuildCoordinator {
 
   submit(input) {
     const request = parseRequest(input, this.#projectId, this.#compilerIdentity);
+    if (this.#closed) {
+      this.#counts.rejected++;
+      throw new DerivedBuildCoordinatorError("COORDINATOR_CLOSED", "derived build coordinator is closed");
+    }
     this.#counts.submitted++;
     let state = this.#branches.get(request.branchId);
     if (state === undefined) {
@@ -462,6 +537,39 @@ export class DerivedBuildCoordinator {
       lastKnownGood: Object.freeze(lastKnownGood),
       recent: Object.freeze(this.#orderedRecords().map((entry) => Object.freeze({ ...entry }))),
     });
+  }
+
+  close(reason = "derived build coordinator is shutting down") {
+    if (typeof reason !== "string" || reason.length < 1) {
+      throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator close reason must be a non-empty string");
+    }
+    if (this.#closed) return this.whenIdle();
+    this.#closed = true;
+    const error = new DerivedBuildCoordinatorError("BUILD_CANCELLED", reason);
+    this.#readyJobs.clear();
+    this.#readyBranches = [];
+    this.#readyCursor = 0;
+    for (const state of this.#branches.values()) {
+      if (state.pending !== undefined) {
+        this.#cancelUnstarted(state.pending, error);
+        state.pending = undefined;
+      }
+      if (state.active === undefined) continue;
+      if (state.active.running) state.active.controller.abort(error);
+      else {
+        this.#cancelUnstarted(state.active, error);
+        state.active = undefined;
+      }
+    }
+    this.#notifyIdle();
+    return this.whenIdle();
+  }
+
+  whenIdle() {
+    if (this.#isIdle()) return Promise.resolve();
+    const completion = deferred();
+    this.#idleWaiters.add(completion.resolve);
+    return completion.promise;
   }
 
   #rejectStale(request, latest, detail = "request is older than the latest accepted build intent") {
@@ -547,6 +655,7 @@ export class DerivedBuildCoordinator {
       this.#enqueue(state, next);
     }
     this.#drain();
+    this.#notifyIdle();
     if (error === undefined) resolve(result);
     else reject(error);
   }
@@ -554,6 +663,7 @@ export class DerivedBuildCoordinator {
   async #run(job) {
     let manifest;
     let artifacts;
+    let reusedArtifacts;
     try {
       job.phase = "authority-before-compile";
       this.#throwIfAborted(job);
@@ -572,8 +682,26 @@ export class DerivedBuildCoordinator {
         signal: job.controller.signal,
       }));
       this.#throwIfAborted(job);
-      ({ manifest, artifacts } = parseCompileOutput(output, job.request));
+      ({ manifest, artifacts, reusedArtifacts } = parseCompileOutput(output, job.request));
       this.#throwIfAborted(job);
+
+      if (reusedArtifacts.length > 0) {
+        if (this.#verifyReusableArtifacts === undefined) {
+          throw new DerivedBuildCoordinatorError(
+            "REUSE_VERIFIER_REQUIRED",
+            "sparse derived compile output requires verifyReusableArtifacts",
+          );
+        }
+        job.phase = "verify-reuse";
+        await this.#verifyReusableArtifacts(Object.freeze({
+          projectRoot: this.#projectRoot,
+          buildId: job.buildId,
+          manifest,
+          reusedArtifacts,
+          signal: job.controller.signal,
+        }));
+        this.#throwIfAborted(job);
+      }
 
       job.phase = "authority-before-publish";
       const prePublishHead = await this.#readAuthoritative(job, job.phase);
@@ -593,6 +721,7 @@ export class DerivedBuildCoordinator {
         buildId: job.buildId,
         manifest,
         artifacts,
+        reusedArtifacts,
         readHead: publicationReadHead,
         signal: job.controller.signal,
       }));
@@ -642,6 +771,7 @@ export class DerivedBuildCoordinator {
     } finally {
       manifest = undefined;
       artifacts = undefined;
+      reusedArtifacts = undefined;
     }
   }
 
@@ -722,6 +852,40 @@ export class DerivedBuildCoordinator {
     replacement.phase = "waiting-for-capacity";
     state.active = replacement;
     this.#readyJobs.set(replacement.request.branchId, { state, job: replacement });
+  }
+
+  #cancelUnstarted(job, error) {
+    this.#counts.cancelled++;
+    this.#record({
+      status: "cancelled",
+      buildId: job.buildId,
+      branchId: job.request.branchId,
+      revision: job.request.revision,
+      headHash: job.request.headHash,
+      compiler: job.request.compiler,
+      manifestHash: null,
+      phase: job.phase,
+      durationMs: this.#duration(job),
+      errorCode: error.code,
+      errorMessage: error.message,
+    });
+    job.reject(error);
+    job.controller.abort(error);
+    job.controller = undefined;
+    job.resolve = undefined;
+    job.reject = undefined;
+  }
+
+  #isIdle() {
+    if (this.#runningBuilds !== 0 || this.#readyJobs.size !== 0) return false;
+    for (const state of this.#branches.values()) if (state.active !== undefined || state.pending !== undefined) return false;
+    return true;
+  }
+
+  #notifyIdle() {
+    if (!this.#isIdle()) return;
+    for (const resolve of this.#idleWaiters) resolve();
+    this.#idleWaiters.clear();
   }
 
   #clock() {
