@@ -295,6 +295,17 @@ near-vertical cliffs before the SDF layer exists.
   subarrays, and 2x2 through 257x257 limits are gated in both Node and the Limina host against the same
   fixed content-hash vector. The central 257x257 full-channel measurement was 1,651,308 bytes, 31.7 ms
   encode, and 24.0 ms decode in Node; concrete source-to-artifact compilation remains the next slice.
+- **2026-07-09 — Deterministic WorldMap terrain compiler shipped (`838e265`).** One globally rasterized
+  and eroded master field now feeds stable 33x33 LOD0 chunks, ordered metre edit layers, fixed
+  `[-500, 9000]`-compatible vertical normalization, portable artifacts, compiler snapshots,
+  invalidation diagnostics, and dependency-complete derived manifests. The production DAG now models
+  WorldMap, base height, and erosion as genuinely global stages before chunk-scoped edits, collision,
+  and rendering. Exact scanline indexes, segment BVHs, AABB pruning, and prepared edit-layer buckets
+  removed both cell-by-all-vector and chunk-by-all-delta scans without changing legacy raster bytes.
+  The external Grey Field benchmark builds the 1,050,625-sample master in 1.833 seconds and all 6,400
+  chunks/174,771,200 artifact bytes in 8.942 seconds on the central host (405,456 KiB peak RSS).
+  Content-addressed reuse is deliberately not faked: this compiler still emits every artifact, so the
+  authoritative build-service/cache slice must make local iteration proportional to changed chunks.
 - **2026-07-09 — Canonical basin water IR shipped (`75957bb`).** Optional, additive `WaterBody[]` now
   represents bounded standing-water basins with stable ids, typed kinds, explicit levels, simple polygon
   footprints and holes, and contiguous shore-to-interior depth bands. Waterways retain legacy bytes while
