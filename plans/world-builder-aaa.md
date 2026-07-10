@@ -333,3 +333,23 @@ near-vertical cliffs before the SDF layer exists.
   desktop/mobile layout, pixel-bearing viewport, and a real repeated Play/pause/external-edit/Stop browser
   workflow are green. Packaged builds and derived-terrain runtime activation remain part of the open
   Atlas-to-3D build-service bridge.
+- **2026-07-09 — Sparse authoritative compiler and publisher shipped (`845d867`, `44bd6da`).** The
+  WorldProject source snapshot now compiles through compiler-owned sparse planning, independently
+  verifies reused artifacts, stages dependency-complete manifests plus compiler snapshots, and atomically
+  publishes a v2 pointer with cancellation, stale-head rejection, corruption recovery, and v1 migration.
+  Repeated identical builds retain artifact identity instead of rewriting unchanged chunks.
+- **2026-07-09 — Derived build service and scaffold bootstrap shipped (`00b2d74`).** A worker-thread
+  service consumes one atomic, hash-bound `authoring.sourceSnapshot`, compiles with cooperative
+  cancellation, and publishes through the real coordinator. The generated-app launcher owns the editor,
+  sidecar, and build-service lifecycle; a least-privilege system profile can perform only the guarded
+  revision-zero MapDoc bootstrap. A fresh packed scaffold UAT survives restart without source, pointer,
+  WorldLog, or CAS churn.
+- **2026-07-09 — Persistent renderer lifecycle shipped (`80859b5`, `8055115`, `e8f1274`).** Edit reuses
+  one exclusive lazy renderer host while each world receives reset scene/camera/renderer state, bounded
+  telemetry, tiered DPR/shadow/post budgets, and exhaustive teardown. Content-addressed per-host GLTF
+  caches reject active-world misses, rotate changed bytes under the same asset id, deduplicate concurrent
+  parses, enforce entry/byte limits, isolate hosts, and release shared geometry/textures at host disposal.
+  Terrain materials are world-pooled and bounded; authored light ids reset per logical world; dormant
+  entities and streamed terrain reattach/unmount exhaustively. Real Chromium gates cover 21 world
+  replacements with one renderer, bounded GPU counters, responsive DPR backing, cleanup fault injection,
+  worker-fatal recovery, pixel-bearing output, and repeated isolated Play/Stop restoration.
