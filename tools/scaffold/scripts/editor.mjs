@@ -24,6 +24,7 @@ const DERIVED_RUNTIME_DISCOVERY_PREFIX = "[derived-runtime] ready ";
 const MAX_DERIVED_RUNTIME_DISCOVERY_BYTES = 1_024;
 const DEFAULT_DERIVED_RUNTIME_BRANCH = "main";
 const MAX_EDITOR_HOST_READINESS_BYTES = 64 * 1024;
+const EDITOR_HOST_READINESS_TIMEOUT_MS = 90_000;
 let cleanupChildren = () => {};
 
 /** Print an actionable error and exit non-zero. */
@@ -206,7 +207,7 @@ export function waitForEditorHostReady(child, stream, expectedPort) {
   return new Promise((resolveReady, rejectReady) => {
     let pending = "";
     let settled = false;
-    const timer = setTimeout(() => finish(new Error("editor_host did not report readiness within 15 seconds.")), 15_000);
+    const timer = setTimeout(() => finish(new Error("editor_host did not report readiness within 90 seconds.")), EDITOR_HOST_READINESS_TIMEOUT_MS);
     const onData = (chunk) => {
       pending += String(chunk);
       if (Buffer.byteLength(pending, "utf8") > MAX_EDITOR_HOST_READINESS_BYTES) {

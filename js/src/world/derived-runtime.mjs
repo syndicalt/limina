@@ -12,6 +12,8 @@ const MAX_GLOBAL_DEPENDENCY_TYPES = 64;
 const MAX_GLOBAL_DEPENDENCIES_PER_TYPE = 8;
 const EMPTY_GLOBAL_DEPENDENCIES = Object.freeze([]);
 const GLOBAL_DEPENDENCY_REGISTRY = Object.freeze({
+  "world-overview-terrain/v1": EMPTY_GLOBAL_DEPENDENCIES,
+  "navigation-index/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-water-topology/v1": Object.freeze(["hydrology-field/v1"]),
 });

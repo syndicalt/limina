@@ -2,6 +2,7 @@ import * as THREE from "../build/three.bundle.mjs";
 import {
   DetachedDerivedRenderCandidate,
   parseTransferredDerivedRuntimeSnapshot,
+  searchTransferredDerivedNavigation,
 } from "../src/browser/derived-runtime-render-candidate.ts";
 import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "../src/browser/derived-runtime-worker.ts";
 import { DERIVED_TERRAIN_RESIDENCY_SCHEMA } from "../src/browser/derived-terrain-residency.ts";
@@ -16,6 +17,18 @@ import {
   decodeTerrainChunkArtifact,
   encodeTerrainChunkArtifact,
 } from "../src/world/compiler/terrain-artifact.mjs";
+import {
+  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+  WORLD_OVERVIEW_ARTIFACT_TYPE,
+  decodeWorldOverviewArtifact,
+  encodeWorldOverviewArtifact,
+} from "../src/world/compiler/world-overview-artifact.mjs";
+import {
+  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+  NAVIGATION_INDEX_ARTIFACT_TYPE,
+  encodeNavigationIndexArtifact,
+} from "../src/world/compiler/navigation-index-artifact.mjs";
+import { ATLAS_DESIGN_REF_SCHEMA } from "../src/world/design-ref.mjs";
 import {
   HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
   HYDROLOGY_FIELD_ARTIFACT_TYPE,
@@ -36,6 +49,28 @@ function rejects(fn: () => unknown, pattern: RegExp, message: string): void {
   let error: unknown;
   try { fn(); } catch (caught) { error = caught; }
   assert(error instanceof Error && pattern.test(error.message), `${message}: ${error instanceof Error ? error.message : "did not throw"}`);
+}
+
+function structuredCloneFixture<T>(value: T, seen = new Map<object, unknown>()): T {
+  if (value === null || typeof value !== "object") return value;
+  const prior = seen.get(value);
+  if (prior !== undefined) return prior as T;
+  if (value instanceof ArrayBuffer) return value.slice(0) as T;
+  if (ArrayBuffer.isView(value)) {
+    const source = value as Exclude<ArrayBufferView, DataView>;
+    const Constructor = source.constructor as { new (source: ArrayLike<number>): typeof source };
+    return new Constructor(source as unknown as ArrayLike<number>) as T;
+  }
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    seen.set(value, copy);
+    for (const entry of value) copy.push(structuredCloneFixture(entry, seen));
+    return copy as T;
+  }
+  const copy: Record<string, unknown> = {};
+  seen.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) copy[key] = structuredCloneFixture(entry, seen);
+  return copy as T;
 }
 
 const hash = (label: string): string => derivedArtifactContentHash(new TextEncoder().encode(label));
@@ -66,6 +101,39 @@ function terrain(tx: number, heights: number[]) {
 
 const terrain0 = terrain(0, [0, 0.25, 0.5, 0.25, 0.5, 0.75, 0.5, 0.75, 1]);
 const terrain1 = terrain(1, [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+const overviewCells = 129 * 129;
+const overviewBytes = encodeWorldOverviewArtifact({
+  rows: 129,
+  cols: 129,
+  origin: [FAR, FAR],
+  stepM: 200,
+  heights: new Float32Array(overviewCells).fill(100),
+  paintMaterial: new Uint8Array(overviewCells).fill(2),
+  paintWeight: new Uint8Array(overviewCells).fill(128),
+});
+const overviewDescriptor = {
+  artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(overviewBytes),
+  byteLength: overviewBytes.byteLength,
+  mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+};
+const navigationBytes = encodeNavigationIndexArtifact({
+  worldBounds: { minX: FAR, minZ: FAR, maxX: FAR + 25_600, maxZ: FAR + 25_600 },
+  entries: [{
+    designRef: { schema: ATLAS_DESIGN_REF_SCHEMA, mapId: "primary", kind: "place", id: "old-mill" },
+    position: [FAR + 320, FAR + 640],
+    radiusM: 24,
+    label: "Old Mill",
+    kind: "village",
+    searchKeys: ["old mill", "mill"],
+  }],
+});
+const navigationDescriptor = {
+  artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(navigationBytes),
+  byteLength: navigationBytes.byteLength,
+  mediaType: NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+};
 const fieldDescriptor = {
   artifactType: HYDROLOGY_FIELD_ARTIFACT_TYPE,
   contentHash: hash("field"),
@@ -124,7 +192,7 @@ const manifest = createDerivedRevisionManifest({
   },
   compiler: { version: "1.2.0", configHash: hash("config"), graphHash, snapshotHash: hash("snapshot") },
   grid,
-  globalArtifacts: [fieldDescriptor, waterDescriptor],
+  globalArtifacts: [fieldDescriptor, waterDescriptor, navigationDescriptor, overviewDescriptor],
   chunks: Array.from({ length: 400 }, (_, tx) => ({
     chunkId: terrainChunkId(grid.gridId, 0, tx, 0),
     gridId: grid.gridId,
@@ -158,16 +226,34 @@ function snapshot(): any {
         artifact: waterDescriptor,
         resource: { kind: HYDROLOGY_WATER_ARTIFACT_TYPE, artifact: waterDescriptor, bytes: waterBytes, bindings: waterBindings, prepared: preparedWater },
       },
+      {
+        artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+        artifact: navigationDescriptor,
+        resource: { kind: NAVIGATION_INDEX_ARTIFACT_TYPE, bytes: navigationBytes },
+      },
+      {
+        artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+        artifact: overviewDescriptor,
+        resource: { kind: WORLD_OVERVIEW_ARTIFACT_TYPE, decoded: decodeWorldOverviewArtifact(overviewBytes) },
+      },
     ],
   };
 }
 
-const transferred = snapshot();
+const transferred = structuredCloneFixture(snapshot());
 const parsed = parseTransferredDerivedRuntimeSnapshot(transferred);
 assert(parsed.manifestHash === manifest.manifestHash && parsed.manifest.chunks.length === 400 && parsed.terrain.size === 2,
   "full manifest identity or exact bounded terrain index changed");
-assert(parsed.generatedWater?.bytes === waterBytes && parsed.generatedWater.artifact.contentHash === waterDescriptor.contentHash,
+assert(parsed.generatedWater?.bytes.byteLength === waterBytes.byteLength
+  && parsed.generatedWater.artifact.contentHash === waterDescriptor.contentHash,
   "canonical raw water resource was not retained for simulation verification");
+assert(parsed.worldOverview?.metadata.byteLength === overviewBytes.byteLength,
+  "canonical world overview was not retained for render staging");
+const navigationResult = searchTransferredDerivedNavigation(parsed, "old m", 1)[0];
+assert(navigationResult?.designRef.schema === ATLAS_DESIGN_REF_SCHEMA
+  && navigationResult.designRef.mapId === "primary" && navigationResult.designRef.kind === "place"
+  && navigationResult.designRef.id === "old-mill" && navigationResult.position[0] === FAR + 320,
+"structured-cloned navigation bytes did not rebuild searchable main-realm codec state with exact refs");
 assert(parsed.terrain.sampleHeight(FAR + 32, FAR + 32) === 105, "O(1) centre sample changed");
 assert(parsed.terrain.sampleHeight(FAR + 64, FAR + 32) === 105, "exact shared-edge sample did not select the canonical adjacent chunk");
 assert(parsed.terrain.sampleHeight(FAR - 1, FAR + 32) === null, "out-of-domain sample did not fail bounded");
@@ -177,7 +263,20 @@ const externalScene = new THREE.Scene();
 const candidate = new DetachedDerivedRenderCandidate(transferred, {});
 assert(externalScene.children.length === 0 && candidate.root.parent === null, "detached candidate mutated or attached to a live scene");
 assert(candidate.terrainMeshCount === 2 && candidate.waterFragmentCount === 1, "bounded terrain/water window did not mount expected resources");
-assert(candidate.terrainRoot.children.length === 2 && candidate.waterRoot.children.length === 1, "revision root does not own its complete staged window");
+assert(candidate.terrainRoot.children.length === 2 && candidate.waterRoot.children.length === 1
+  && candidate.overviewRoot.children.length === 1 && candidate.overviewMeshCount === 1,
+"revision root does not own its complete staged window and single overview draw");
+assert(candidate.overviewTriangleCount === 32_766,
+  `fine chunk ownership did not remove exactly one intersecting coarse quad (${candidate.overviewTriangleCount} triangles)`);
+assert(Object.isFrozen(candidate.overviewBounds) && candidate.overviewBounds?.minX === FAR
+  && candidate.overviewBounds.minY === 100 && candidate.overviewBounds.minZ === FAR
+  && candidate.overviewBounds.maxX === FAR + 25_600 && candidate.overviewBounds.maxY === 100
+  && candidate.overviewBounds.maxZ === FAR + 25_600,
+"candidate did not retain immutable overview bounds from its mesh-build pass");
+const overviewMesh = candidate.overviewRoot.children[0] as THREE.Mesh;
+const overviewPositions = overviewMesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+assert(overviewMesh.position.x === FAR && overviewMesh.position.z === FAR && overviewPositions.getX(0) === 0 && overviewPositions.getZ(0) === 0,
+  "overview geometry is not feature-local at large world coordinates");
 assert(Object.isFrozen(candidate.terrainWindow()) && candidate.terrainWindow().length === 2
   && candidate.terrainWindow().every((entry) => Object.isFrozen(entry) && entry.key === `${entry.tx},${entry.tz}`),
 "candidate did not expose an immutable exact initial collider window");
@@ -191,9 +290,15 @@ for (const object of candidate.terrainRoot.children) {
   }
 }
 const waterMesh = candidate.waterRoot.children[0] as THREE.Mesh;
+const stableWindow = candidate.terrainWindow();
+const stableOverviewPositionArray = overviewPositions.array;
+const stableOverviewIndexArray = overviewMesh.geometry.index!.array;
 candidate.setQuality("cinematic");
 assert(candidate.waterRoot.children[0] === waterMesh && candidate.quality.waveCount === 4,
   "quality update replaced semantic water ownership or did not reach the candidate manager");
+assert(candidate.terrainWindow() === stableWindow && overviewPositions.array === stableOverviewPositionArray
+  && overviewMesh.geometry.index!.array === stableOverviewIndexArray,
+"runtime quality/frame-facing reads rebuilt overview arrays after staging");
 
 const wrongSource = snapshot();
 wrongSource.source = { ...wrongSource.source, revision: 13 };
@@ -220,6 +325,19 @@ const corruptWater = snapshot();
 corruptWater.globals[1].resource.bytes = waterBytes.slice();
 corruptWater.globals[1].resource.bytes[corruptWater.globals[1].resource.bytes.length - 1] ^= 1;
 rejects(() => parseTransferredDerivedRuntimeSnapshot(corruptWater), /canonical descriptor/, "corrupt raw water bytes were accepted");
+const corruptOverview = snapshot();
+corruptOverview.globals[3].resource.decoded.grid.heights[0] += 1;
+rejects(() => parseTransferredDerivedRuntimeSnapshot(corruptOverview), /canonical descriptor/,
+  "overview decoded bytes that disagreed with the manifest descriptor were accepted");
+const corruptNavigation = snapshot();
+corruptNavigation.globals[2].resource.bytes = navigationBytes.slice();
+corruptNavigation.globals[2].resource.bytes[0] ^= 0xff;
+rejects(() => parseTransferredDerivedRuntimeSnapshot(corruptNavigation), /canonical descriptor/,
+  "corrupt navigation bytes were decoded before descriptor verification");
+const wrongNavigationDescriptor = snapshot();
+wrongNavigationDescriptor.globals[2].artifact = { ...navigationDescriptor, mediaType: "application/octet-stream" };
+rejects(() => parseTransferredDerivedRuntimeSnapshot(wrongNavigationDescriptor), /identity does not match/,
+  "malformed navigation descriptor reached decode or activation");
 const wrongPlacement = snapshot();
 const misplacedBytes = encodeTerrainChunkArtifact({
   nrows: 3, ncols: 3, origin: [FAR + 31, 100, FAR + 32], scale: [64, 10, 64],
@@ -237,7 +355,18 @@ rejects(() => new DetachedDerivedRenderCandidate(emptyResidency, {}), /no manife
 
 candidate.dispose();
 candidate.dispose();
-assert(candidate.disposed && candidate.root.children.length === 0 && candidate.terrainMeshCount === 0 && candidate.waterFragmentCount === 0,
+assert(candidate.disposed && candidate.root.children.length === 0 && candidate.terrainMeshCount === 0
+  && candidate.waterFragmentCount === 0 && candidate.overviewMeshCount === 0,
   "candidate disposal leaked revision-scoped resources or was not idempotent");
 
-console.log("[js] p_derived_runtime_render_candidate OK: strict 400-chunk snapshot identity with exact bounded resources, canonical raw water, O(1) LOD0 sampling, feature-local detached terrain/water staging, quality, faults, and disposal proven");
+const faultCandidate = new DetachedDerivedRenderCandidate(snapshot(), {});
+const faultOverview = faultCandidate.overviewRoot.children[0] as THREE.Mesh;
+let materialDisposed = false;
+(faultOverview.geometry as any).dispose = () => { throw new Error("geometry disposal fault"); };
+(faultOverview.material as any).dispose = () => { materialDisposed = true; };
+rejects(() => faultCandidate.dispose(), /disposal failed/, "overview disposal fault did not surface as an aggregate failure");
+assert(faultCandidate.disposed && faultCandidate.root.children.length === 0 && materialDisposed,
+  "faulting overview disposal did not atomically retire the candidate and continue cleanup");
+faultCandidate.dispose();
+
+console.log("[js] p_derived_runtime_render_candidate OK: strict descriptor-bound navigation/overview/water snapshot, structured-clone-safe navigation search, feature-local coarse draw, O(1) sampling, and atomic disposal proven");

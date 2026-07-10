@@ -22,6 +22,16 @@ import {
 } from "../world/hydrology-water-artifact.mjs";
 import { prepareGeneratedWaterFieldInput } from "../world/water-field.mjs";
 import {
+  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+  WORLD_OVERVIEW_ARTIFACT_TYPE,
+  decodeWorldOverviewArtifact,
+} from "../world/compiler/world-overview-artifact.mjs";
+import {
+  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+  NAVIGATION_INDEX_ARTIFACT_TYPE,
+  decodeNavigationIndexArtifact,
+} from "../world/compiler/navigation-index-artifact.mjs";
+import {
   derivedTerrainResidencyKey,
   parseDerivedTerrainResidency,
   selectDerivedTerrainChunks,
@@ -615,6 +625,18 @@ export class DerivedRuntimeWorkerController {
     signal: AbortSignal;
   }): unknown {
     if (input.signal.aborted) throw input.signal.reason;
+    if (input.artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, WORLD_OVERVIEW_ARTIFACT_TYPE, WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE, "world overview");
+      const decoded = decodeWorldOverviewArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: WORLD_OVERVIEW_ARTIFACT_TYPE, decoded });
+    }
+    if (input.artifact.artifactType === NAVIGATION_INDEX_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, NAVIGATION_INDEX_ARTIFACT_TYPE, NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE, "navigation index");
+      decodeNavigationIndexArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: NAVIGATION_INDEX_ARTIFACT_TYPE, bytes: input.bytes });
+    }
     if (input.artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE) {
       validateDescriptor(input.artifact, HYDROLOGY_FIELD_ARTIFACT_TYPE, HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE, "hydrology field");
       const decode = decodeHydrologyFieldArtifact as unknown as (

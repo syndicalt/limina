@@ -53,3 +53,13 @@ test("quality, suppression, and disposal lifecycle remain bounded", () => {
   assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,100}new DetachedDerivedRenderCandidate/);
   assert.match(source, /await step\(\"derived disposal retries\", retryFailedDerivedDisposals\)/);
 });
+
+test("active navigation API searches only the verified active candidate snapshot", () => {
+  assert.match(source, /searchDerivedNavigation: \(prefix: string, limit = 20\) => searchTransferredDerivedNavigation\(\s*activeDerivedRevision\?\.candidate\.snapshot \?\? null,\s*prefix,\s*limit,/);
+});
+
+test("world overview presentation bounds fog and restores the captured local density", () => {
+  assert.match(source, /if \(localFogDensity === undefined\) localFogDensity = fog\.density;/);
+  assert.match(source, /if \(!enabled\) \{\s*fog\.density = localFogDensity;\s*return true;/);
+  assert.match(source, /Math\.min\(localFogDensity, 1 \/ Math\.max\(2_400, span \* 3\)\)/);
+});

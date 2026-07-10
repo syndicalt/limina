@@ -107,6 +107,7 @@ import {
 } from "./browser/sim-worker.ts";
 import {
   DetachedDerivedRenderCandidate,
+  searchTransferredDerivedNavigation,
 } from "./browser/derived-runtime-render-candidate.ts";
 import {
   derivedTerrainResidencyKey,
@@ -626,6 +627,22 @@ export interface RunningLive {
   derivedTerrainResidency(): Readonly<DerivedTerrainResidency>;
   /** Read-only height sample from the exact active derived terrain revision. */
   derivedTerrainHeightAt(worldX: number, worldZ: number): number | null;
+  /** Immutable whole-world bounds compiled with the exact active derived revision. */
+  derivedWorldBounds(): Readonly<{
+    minX: number; minY: number; minZ: number;
+    maxX: number; maxY: number; maxZ: number;
+  }> | null;
+  /** Prefix search over the exact active source-fenced navigation artifact. */
+  searchDerivedNavigation(prefix: string, limit?: number): readonly Readonly<{
+    designRef: Readonly<{ schema: string; mapId: string; kind: string; id: string }>;
+    position: readonly [number, number];
+    label: string;
+    kind: string;
+    searchKeys: readonly string[];
+    radiusM?: number;
+  }>[];
+  /** Scale distance haze for whole-world inspection and restore the exact local value on exit. */
+  setWorldOverviewPresentation(enabled: boolean): boolean;
   /** Subscribe to threshold-crossing residency changes. Does not emit the current value immediately. */
   subscribeDerivedTerrainResidency(listener: DerivedTerrainResidencyListener): () => void;
   stop(): Promise<void>;
@@ -1907,6 +1924,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     return result;
   };
   let stopPromise: Promise<void> | undefined;
+  let localFogDensity: number | undefined;
   const stopLive = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopped = true;
@@ -2292,6 +2310,26 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       const height = terrain.sampleHeight(Object.is(worldX, -0) ? 0 : worldX, Object.is(worldZ, -0) ? 0 : worldZ);
       if (!Number.isFinite(height)) throw new Error("active derived terrain returned a non-finite height");
       return Object.is(height, -0) ? 0 : height;
+    },
+    derivedWorldBounds: () => activeDerivedRevision?.candidate.overviewBounds ?? null,
+    searchDerivedNavigation: (prefix: string, limit = 20) => searchTransferredDerivedNavigation(
+      activeDerivedRevision?.candidate.snapshot ?? null,
+      prefix,
+      limit,
+    ),
+    setWorldOverviewPresentation: (enabled: boolean): boolean => {
+      const fog = scene.fog as unknown as { density?: number } | null;
+      if (fog === null || typeof fog.density !== "number" || !Number.isFinite(fog.density) || !(fog.density > 0)) return false;
+      if (localFogDensity === undefined) localFogDensity = fog.density;
+      if (!enabled) {
+        fog.density = localFogDensity;
+        return true;
+      }
+      const bounds = activeDerivedRevision?.candidate.overviewBounds;
+      if (bounds === null || bounds === undefined) return false;
+      const span = Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ);
+      fog.density = Math.min(localFogDensity, 1 / Math.max(2_400, span * 3));
+      return true;
     },
     subscribeDerivedTerrainResidency: (listener: DerivedTerrainResidencyListener): (() => void) => (
       derivedTerrainResidencyTracker.subscribe(listener)

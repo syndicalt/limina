@@ -43,6 +43,7 @@ export interface RunningEditorNavigation {
   snapshot(): Readonly<EditorCameraPose>;
   restore(pose: unknown): void;
   destinationPose(target: readonly [number, number, number], radiusM?: number): Readonly<EditorCameraPose>;
+  worldPose(bounds: unknown): Readonly<EditorCameraPose>;
   framePoint(target: readonly [number, number, number], radiusM?: number): Readonly<EditorCameraPose>;
   objectPose(object: InstanceType<typeof THREE.Object3D>, padding?: number): Readonly<EditorCameraPose>;
   frameObject(object: InstanceType<typeof THREE.Object3D>, padding?: number): Readonly<EditorCameraPose>;
@@ -196,6 +197,7 @@ export class EditorNavigationController implements RunningEditorNavigation {
   #focusDistanceM: number;
   #lastUpdateMs: number | undefined;
   #configuredMaxDistanceM: number;
+  readonly #configuredFarM: number;
 
   constructor(options: Readonly<{
     camera: InstanceType<typeof THREE.PerspectiveCamera>;
@@ -226,6 +228,7 @@ export class EditorNavigationController implements RunningEditorNavigation {
     if (maxDistance <= minDistance) throw new RangeError("editor navigation maximum distance must exceed its minimum distance");
     const maxPolar = finitePositive(options.navigation.maxPolarAngleRad, "editor navigation maximum polar angle");
     this.#configuredMaxDistanceM = maxDistance;
+    this.#configuredFarM = this.#camera.far;
 
     this.orbitControls = new THREE.OrbitControls(this.#camera, this.#element);
     this.orbitControls.target.set(target[0]!, target[1]!, target[2]!);
@@ -408,6 +411,7 @@ export class EditorNavigationController implements RunningEditorNavigation {
 
   destinationPose(targetInput: readonly [number, number, number], radiusM?: number): Readonly<EditorCameraPose> {
     this.#requireLive();
+    this.#restoreLocalViewLimits();
     const target = finiteTuple(targetInput, 3, "editor navigation destination");
     this.#frameTarget.set(target[0]!, target[1]!, target[2]!);
     this.#frameOffset.copy(this.#camera.position).sub(this.orbitControls.target);
@@ -431,6 +435,66 @@ export class EditorNavigationController implements RunningEditorNavigation {
       [this.#frameCamera.quaternion.x, this.#frameCamera.quaternion.y, this.#frameCamera.quaternion.z, this.#frameCamera.quaternion.w],
       [this.#frameCamera.up.x, this.#frameCamera.up.y, this.#frameCamera.up.z],
       [this.#frameTarget.x, this.#frameTarget.y, this.#frameTarget.z],
+      "orbit",
+      this.#speedMps,
+    );
+  }
+
+  worldPose(boundsInput: unknown): Readonly<EditorCameraPose> {
+    this.#requireLive();
+    if (boundsInput === null || Array.isArray(boundsInput) || typeof boundsInput !== "object"
+        || Object.getPrototypeOf(boundsInput) !== Object.prototype) {
+      throw new TypeError("editor navigation world bounds must be a plain object");
+    }
+    const bounds = boundsInput as Record<string, unknown>;
+    const keys = ["minX", "minY", "minZ", "maxX", "maxY", "maxZ"];
+    const names = Object.getOwnPropertyNames(bounds);
+    if (Object.getOwnPropertySymbols(bounds).length !== 0 || names.length !== keys.length
+        || names.some((name) => !keys.includes(name))) {
+      throw new TypeError("editor navigation world bounds fields are invalid");
+    }
+    const values = keys.map((key) => {
+      const field = Object.getOwnPropertyDescriptor(bounds, key);
+      if (field?.enumerable !== true || field.get !== undefined || field.set !== undefined
+          || typeof field.value !== "number" || !Number.isFinite(field.value)) {
+        throw new TypeError(`editor navigation world bounds.${key} must be a finite data field`);
+      }
+      return Object.is(field.value, -0) ? 0 : field.value;
+    });
+    const [minX, minY, minZ, maxX, maxY, maxZ] = values;
+    if (!(maxX! > minX!) || !(maxZ! > minZ!) || maxY! < minY!) {
+      throw new RangeError("editor navigation world bounds are empty or inverted");
+    }
+    const target: [number, number, number] = [
+      (minX! + maxX!) * 0.5,
+      (minY! + maxY!) * 0.5,
+      (minZ! + maxZ!) * 0.5,
+    ];
+    const radius = Math.max(MIN_FRAME_RADIUS_M, Math.hypot(
+      (maxX! - minX!) * 0.5,
+      (maxY! - minY!) * 0.5,
+      (maxZ! - minZ!) * 0.5,
+    ));
+    const fovRadians = THREE.MathUtils.degToRad(this.#camera.fov);
+    const distance = radius * DEFAULT_FRAME_PADDING / Math.tan(Math.max(0.01, fovRadians * 0.5));
+    if (!Number.isFinite(distance) || distance > 10_000_000) {
+      throw new RangeError("editor navigation world bounds exceed the supported overview range");
+    }
+    this.orbitControls.maxDistance = Math.max(this.#configuredMaxDistanceM, distance * 1.05);
+    this.#camera.far = Math.max(this.#configuredFarM, distance + radius * 2);
+    this.#camera.updateProjectionMatrix();
+    this.#frameTarget.set(target[0], target[1], target[2]);
+    this.#frameOffset.copy(this.#camera.position).sub(this.orbitControls.target);
+    if (this.#frameOffset.lengthSq() < 1e-8) this.#frameOffset.set(1, 0.75, 1).normalize();
+    else this.#frameOffset.normalize();
+    this.#frameCamera.position.copy(this.#frameTarget).addScaledVector(this.#frameOffset, distance);
+    this.#frameCamera.up.copy(this.#camera.up);
+    this.#frameCamera.lookAt(this.#frameTarget);
+    return frozenPose(
+      [this.#frameCamera.position.x, this.#frameCamera.position.y, this.#frameCamera.position.z],
+      [this.#frameCamera.quaternion.x, this.#frameCamera.quaternion.y, this.#frameCamera.quaternion.z, this.#frameCamera.quaternion.w],
+      [this.#frameCamera.up.x, this.#frameCamera.up.y, this.#frameCamera.up.z],
+      target,
       "orbit",
       this.#speedMps,
     );
@@ -488,6 +552,20 @@ export class EditorNavigationController implements RunningEditorNavigation {
     );
     if (this.#mode === "orbit") this.orbitControls.update();
     return this.orbitControls.maxDistance;
+  }
+
+  #restoreLocalViewLimits(): void {
+    let changed = false;
+    if (this.orbitControls.maxDistance > this.#configuredMaxDistanceM) {
+      this.orbitControls.maxDistance = this.#configuredMaxDistanceM;
+      changed = true;
+    }
+    if (this.#camera.far !== this.#configuredFarM) {
+      this.#camera.far = this.#configuredFarM;
+      this.#camera.updateProjectionMatrix();
+      changed = true;
+    }
+    if (changed && this.#mode === "orbit") this.orbitControls.update();
   }
 
   dispose(): void {

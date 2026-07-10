@@ -31,6 +31,7 @@ import { WorldRecorder } from "../src/worldlog/recorder.ts";
 import { replayCommands } from "../src/worldlog/replay.ts";
 import type { SkillCommand } from "../src/worldlog/log.ts";
 import type { MCPResponse } from "../src/mcp/protocol.ts";
+import { ATLAS_DESIGN_REF_SCHEMA } from "../src/world/design-ref.mjs";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p11_asset_place FAIL: " + msg);
@@ -75,11 +76,15 @@ const authReg = new SkillRegistry(recTracer);
 const authCore = registerCoreSkills(authReg);
 const recorder = new WorldRecorder("ses_p11_author");
 recorder.attach(authReg); // patches invoke to record + commit-back
-const placeArgs = { assetId: ASSET, position: [1, 2, 3], rotation: [0, Math.PI / 2, 0], scale: [2, 2, 2] };
+const designRef = { schema: ATLAS_DESIGN_REF_SCHEMA, mapId: "primary", kind: "stamp", id: "fixture-stamp" };
+const placeArgs = { assetId: ASSET, position: [1, 2, 3], rotation: [0, Math.PI / 2, 0], scale: [2, 2, 2], designRef };
 const authCtx = { agentId: "agt_builder", sessionId: "ses_p11_author", permissions: BUILDER, tick: 0, world: recWorld };
 const placed = ok(await authReg.invoke("asset.place", placeArgs, authCtx));
 assert(placed.hash === r1.hash, "authoring resolved a different content hash than the registry");
 assert((placed.resource as Record<string, unknown>).hash === placed.hash, "resource metadata is missing the content hash");
+const placedEntity = recWorld.entities.resolve(String(placed.entity));
+assert(placedEntity?.origin?.tool === "asset.place", "placed entity is missing its exact asset.place origin");
+assert(JSON.stringify(placedEntity.origin.input.designRef) === JSON.stringify(designRef), "placed entity origin lost its Atlas designRef");
 
 // The place REQUEST rode the trace (assetId + transform + hash; no bytes).
 const placeEvent = recTracer.trace("agt_builder").find((ev) => ev.type === "asset.placed");
@@ -93,6 +98,16 @@ const placeCmd = recorder.commands.find((c): c is SkillCommand => c.kind === "sk
 assert(placeCmd !== undefined, "asset.place not recorded as a command");
 const cmdInput = placeCmd.input as Record<string, unknown>;
 assert(cmdInput.hash === r1.hash, "recorder did NOT commit the content hash into the replay log (authored identity unpinned)");
+assert(JSON.stringify(cmdInput.designRef) === JSON.stringify(designRef), "recorded command lost its Atlas designRef");
+
+// The sim worker intentionally skips GLTF parsing and starts with a generic asset.load fallback;
+// asset.place must overwrite that fallback with the same durable origin as the mesh path.
+const workerWorld = makeWorld(ops);
+workerWorld.simWorker = true;
+const workerPlaced = ok(await authReg.invoke("asset.place", placeArgs, { ...authCtx, world: workerWorld }));
+const workerEntity = workerWorld.entities.resolve(String(workerPlaced.entity));
+assert(workerEntity?.origin?.tool === "asset.place", "sim-worker entity kept a generic asset.load origin");
+assert(JSON.stringify(workerEntity.origin.input.designRef) === JSON.stringify(designRef), "sim-worker origin lost its Atlas designRef");
 assert(cmdInput.assetId === ASSET && !("bytes" in cmdInput) && !("b64" in cmdInput), "recorded command must carry the request, not bytes");
 
 // 4. Assemble the export — bytes ride assets.jsonl; the LOG carries no bytes -------

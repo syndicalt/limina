@@ -53,6 +53,18 @@ import {
   HYDROLOGY_WATER_ARTIFACT_TYPE,
   inspectHydrologyWaterArtifactBindings,
 } from "../world/hydrology-water-artifact.mjs";
+import {
+  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+  WORLD_OVERVIEW_ARTIFACT_TYPE,
+  decodeWorldOverviewArtifact,
+  encodeWorldOverviewArtifact,
+} from "../world/compiler/world-overview-artifact.mjs";
+import {
+  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+  NAVIGATION_INDEX_ARTIFACT_TYPE,
+  decodeNavigationIndexArtifact,
+  searchNavigationIndexPrefix,
+} from "../world/compiler/navigation-index-artifact.mjs";
 
 export const MAX_DETACHED_DERIVED_TERRAIN_RADIUS = MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS;
 export const MAX_DETACHED_DERIVED_TERRAIN_MESHES = MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS;
@@ -97,6 +109,8 @@ export interface ParsedTransferredDerivedSnapshot {
   readonly manifest: ParsedManifest;
   readonly residency: Readonly<DerivedTerrainResidency>;
   readonly terrain: DerivedLod0TerrainIndex;
+  readonly worldOverview: ReturnType<typeof decodeWorldOverviewArtifact> | null;
+  readonly navigationIndex: ReturnType<typeof decodeNavigationIndexArtifact> | null;
   readonly generatedWater: ParsedGeneratedWaterResource | null;
 }
 
@@ -110,6 +124,34 @@ export interface DetachedDerivedTerrainWindowEntry {
   readonly tx: number;
   readonly tz: number;
   readonly tile: TerrainTile;
+}
+
+export type DerivedNavigationSearchResult = Readonly<{
+  designRef: Readonly<{ schema: string; mapId: string; kind: string; id: string }>;
+  position: readonly [number, number];
+  label: string;
+  kind: string;
+  searchKeys: readonly string[];
+  radiusM?: number;
+}>;
+
+/** Search only the main-realm index reconstructed by snapshot verification. */
+export function searchTransferredDerivedNavigation(
+  snapshot: Pick<ParsedTransferredDerivedSnapshot, "navigationIndex"> | null,
+  prefix: string,
+  limit = 20,
+): readonly DerivedNavigationSearchResult[] {
+  if (snapshot?.navigationIndex === null || snapshot?.navigationIndex === undefined) return Object.freeze([]);
+  return searchNavigationIndexPrefix(snapshot.navigationIndex, prefix, { limit }) as readonly DerivedNavigationSearchResult[];
+}
+
+export interface DetachedWorldOverviewBounds {
+  readonly minX: number;
+  readonly minY: number;
+  readonly minZ: number;
+  readonly maxX: number;
+  readonly maxY: number;
+  readonly maxZ: number;
 }
 
 function plain(value: unknown, label: string): Record<string, unknown> {
@@ -268,6 +310,34 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
   }
 
   let generatedWater: ParsedGeneratedWaterResource | null = null;
+  let worldOverview: ReturnType<typeof decodeWorldOverviewArtifact> | null = null;
+  let navigationIndex: ReturnType<typeof decodeNavigationIndexArtifact> | null = null;
+  const overview = globals.get(WORLD_OVERVIEW_ARTIFACT_TYPE);
+  if (overview !== undefined) {
+    exact(overview.resource, ["kind", "decoded"], "world overview resource");
+    if (overview.resource.kind !== WORLD_OVERVIEW_ARTIFACT_TYPE) throw new Error("world overview resource kind is unsupported");
+    const decodedEnvelope = plain(overview.resource.decoded, "world overview decoded resource");
+    exact(decodedEnvelope, ["grid", "metadata"], "world overview decoded resource");
+    const canonicalBytes = encodeWorldOverviewArtifact(decodedEnvelope.grid);
+    if (overview.artifact.mediaType !== WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE
+        || canonicalBytes.byteLength !== overview.artifact.byteLength
+        || derivedArtifactContentHash(canonicalBytes) !== overview.artifact.contentHash) {
+      throw new Error("world overview resource does not match its canonical descriptor");
+    }
+    worldOverview = decodeWorldOverviewArtifact(canonicalBytes);
+  }
+  const navigation = globals.get(NAVIGATION_INDEX_ARTIFACT_TYPE);
+  if (navigation !== undefined) {
+    exact(navigation.resource, ["kind", "bytes"], "navigation index resource");
+    if (navigation.resource.kind !== NAVIGATION_INDEX_ARTIFACT_TYPE) throw new Error("navigation index resource kind is unsupported");
+    const canonicalBytes = completeUint8(navigation.resource.bytes, "navigation index resource bytes");
+    if (navigation.artifact.mediaType !== NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE
+        || canonicalBytes.byteLength !== navigation.artifact.byteLength
+        || derivedArtifactContentHash(canonicalBytes) !== navigation.artifact.contentHash) {
+      throw new Error("navigation index resource does not match its canonical descriptor");
+    }
+    navigationIndex = decodeNavigationIndexArtifact(canonicalBytes);
+  }
   const water = globals.get(HYDROLOGY_WATER_ARTIFACT_TYPE);
   const hydrologyField = globals.get(HYDROLOGY_FIELD_ARTIFACT_TYPE);
   if (hydrologyField !== undefined) {
@@ -275,7 +345,8 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
     if (hydrologyField.resource.kind !== HYDROLOGY_FIELD_ARTIFACT_TYPE) throw new Error("hydrology field resource kind is unsupported");
   }
   for (const artifactType of globals.keys()) {
-    if (artifactType !== HYDROLOGY_FIELD_ARTIFACT_TYPE && artifactType !== HYDROLOGY_WATER_ARTIFACT_TYPE) {
+    if (artifactType !== HYDROLOGY_FIELD_ARTIFACT_TYPE && artifactType !== HYDROLOGY_WATER_ARTIFACT_TYPE
+        && artifactType !== WORLD_OVERVIEW_ARTIFACT_TYPE && artifactType !== NAVIGATION_INDEX_ARTIFACT_TYPE) {
       throw new Error(`derived render candidate does not support global '${artifactType}'`);
     }
   }
@@ -322,7 +393,97 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
     manifest,
     residency,
     terrain: new DerivedLod0TerrainIndex(indexed, manifest.grid),
+    worldOverview,
+    navigationIndex,
     generatedWater,
+  });
+}
+
+const OVERVIEW_COLORS = Object.freeze([
+  [0.29, 0.47, 0.20], [0.20, 0.39, 0.18], [0.39, 0.37, 0.34], [0.60, 0.51, 0.29],
+  [0.63, 0.68, 0.70], [0.25, 0.40, 0.27], [0.16, 0.38, 0.50], [0.31, 0.22, 0.35],
+] as const);
+
+function buildWorldOverviewMesh(
+  overview: NonNullable<ParsedTransferredDerivedSnapshot["worldOverview"]>,
+  terrainWindow: readonly DetachedDerivedTerrainWindowEntry[],
+): Readonly<{ mesh: THREE.Mesh; bounds: Readonly<DetachedWorldOverviewBounds> }> {
+  const { grid } = overview;
+  const count = grid.rows * grid.cols;
+  const positions = new Float32Array(count * 3);
+  const colors = new Uint8Array(count * 3);
+  let minY = Infinity, maxY = -Infinity;
+  for (let row = 0; row < grid.rows; row++) {
+    for (let col = 0; col < grid.cols; col++) {
+      const cell = row * grid.cols + col;
+      const vertex = cell * 3;
+      positions[vertex] = col * grid.stepM;
+      positions[vertex + 1] = grid.heights[cell];
+      positions[vertex + 2] = row * grid.stepM;
+      minY = Math.min(minY, grid.heights[cell]);
+      maxY = Math.max(maxY, grid.heights[cell]);
+      const base = OVERVIEW_COLORS[Math.min(OVERVIEW_COLORS.length - 1, grid.paintMaterial[cell])]!;
+      const weight = grid.paintWeight[cell] / 255;
+      colors[vertex] = Math.round(255 * (0.34 + base[0] * 0.66) * (0.72 + weight * 0.28));
+      colors[vertex + 1] = Math.round(255 * (0.34 + base[1] * 0.66) * (0.72 + weight * 0.28));
+      colors[vertex + 2] = Math.round(255 * (0.34 + base[2] * 0.66) * (0.72 + weight * 0.28));
+    }
+  }
+  // Fine chunks own their complete footprint. Remove intersecting coarse quads once during staging
+  // so the overview remains one draw without coplanar overlap or a per-frame visibility pass.
+  const quadCols = grid.cols - 1, quadRows = grid.rows - 1;
+  const covered = new Uint8Array(quadCols * quadRows);
+  for (const entry of terrainWindow) {
+    const halfX = entry.tile.scale[0] / 2, halfZ = entry.tile.scale[2] / 2;
+    const localMinX = entry.tile.origin[0] - halfX - grid.origin[0];
+    const localMaxX = entry.tile.origin[0] + halfX - grid.origin[0];
+    const localMinZ = entry.tile.origin[2] - halfZ - grid.origin[1];
+    const localMaxZ = entry.tile.origin[2] + halfZ - grid.origin[1];
+    const minCol = Math.max(0, Math.floor(localMinX / grid.stepM));
+    const maxCol = Math.min(quadCols - 1, Math.ceil(localMaxX / grid.stepM) - 1);
+    const minRow = Math.max(0, Math.floor(localMinZ / grid.stepM));
+    const maxRow = Math.min(quadRows - 1, Math.ceil(localMaxZ / grid.stepM) - 1);
+    for (let row = minRow; row <= maxRow; row++) {
+      for (let col = minCol; col <= maxCol; col++) covered[row * quadCols + col] = 1;
+    }
+  }
+  const indices = new Uint16Array(quadRows * quadCols * 6);
+  let offset = 0;
+  for (let row = 0; row < quadRows; row++) {
+    for (let col = 0; col < quadCols; col++) {
+      if (covered[row * quadCols + col] !== 0) continue;
+      const a = row * grid.cols + col, b = a + 1, c = a + grid.cols, d = c + 1;
+      indices[offset++] = a; indices[offset++] = c; indices[offset++] = b;
+      indices[offset++] = b; indices[offset++] = c; indices[offset++] = d;
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3, true));
+  geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, offset), 1));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingSphere();
+  const material = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(grid.origin[0], 0, grid.origin[1]);
+  mesh.name = "limina:world-overview-terrain";
+  mesh.userData.derivedWorldOverview = true;
+  mesh.frustumCulled = true;
+  return Object.freeze({
+    mesh,
+    bounds: Object.freeze({
+      minX: grid.origin[0],
+      minY,
+      minZ: grid.origin[1],
+      maxX: grid.origin[0] + (grid.cols - 1) * grid.stepM,
+      maxY,
+      maxZ: grid.origin[1] + (grid.rows - 1) * grid.stepM,
+    }),
   });
 }
 
@@ -348,10 +509,13 @@ export class DetachedDerivedRenderCandidate {
   readonly root = new THREE.Group();
   readonly terrainRoot = new THREE.Group();
   readonly waterRoot = new THREE.Group();
+  readonly overviewRoot = new THREE.Group();
+  readonly overviewBounds: Readonly<DetachedWorldOverviewBounds> | null;
   readonly #terrainMeshes = new Map<string, THREE.Mesh>();
   readonly #terrainMaterials = new TerrainMaterialPool();
   readonly #waterManager: VisibleWaterManager;
   readonly #waterMount: GeneratedWaterRenderMount | null;
+  #overviewMesh: THREE.Mesh | null;
   readonly #terrainWindow: readonly DetachedDerivedTerrainWindowEntry[];
   #disposed = false;
 
@@ -380,9 +544,12 @@ export class DetachedDerivedRenderCandidate {
     this.root.name = `limina:derived-revision:${this.snapshot.manifestHash}`;
     this.terrainRoot.name = "limina:derived-terrain";
     this.waterRoot.name = "limina:derived-water";
-    this.root.add(this.terrainRoot, this.waterRoot);
+    this.overviewRoot.name = "limina:world-overview";
+    this.root.add(this.overviewRoot, this.terrainRoot, this.waterRoot);
     this.#waterManager = new VisibleWaterManager(this.waterRoot, quality.water);
     let waterMount: GeneratedWaterRenderMount | null = null;
+    let overviewMesh: THREE.Mesh | null = null;
+    let overviewBounds: Readonly<DetachedWorldOverviewBounds> | null = null;
     const terrainWindow: DetachedDerivedTerrainWindowEntry[] = [];
     try {
       const available = selectDerivedTerrainChunks(this.snapshot.manifest, this.snapshot.residency);
@@ -395,12 +562,23 @@ export class DetachedDerivedRenderCandidate {
         terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile }));
         this.terrainRoot.add(mesh);
       }
+      if (this.snapshot.worldOverview !== null) {
+        const built = buildWorldOverviewMesh(this.snapshot.worldOverview, terrainWindow);
+        overviewMesh = built.mesh;
+        overviewBounds = built.bounds;
+        this.overviewRoot.add(overviewMesh);
+      }
       if (this.snapshot.generatedWater !== null) {
         waterMount = mountGeneratedWaterResource(this.snapshot.generatedWater.render, this.#waterManager);
       }
     } catch (error) {
       try { waterMount?.dispose(); } catch { /* preserve the staging error */ }
       try { this.#waterManager.dispose(); } catch { /* preserve the staging error */ }
+      if (overviewMesh !== null) {
+        this.overviewRoot.remove(overviewMesh);
+        try { overviewMesh.geometry.dispose(); } catch { /* preserve the staging error */ }
+        try { (overviewMesh.material as THREE.Material).dispose(); } catch { /* preserve the staging error */ }
+      }
       for (const mesh of this.#terrainMeshes.values()) {
         this.terrainRoot.remove(mesh);
         try { disposeTerrainMesh(mesh); } catch { /* preserve the staging error */ }
@@ -411,12 +589,19 @@ export class DetachedDerivedRenderCandidate {
       throw error;
     }
     this.#waterMount = waterMount;
+    this.#overviewMesh = overviewMesh;
+    this.overviewBounds = overviewBounds;
     this.#terrainWindow = Object.freeze(terrainWindow);
   }
 
   get disposed(): boolean { return this.#disposed; }
   get terrainMeshCount(): number { return this.#terrainMeshes.size; }
   get waterFragmentCount(): number { return this.#waterManager.size; }
+  get overviewMeshCount(): number { return this.#disposed || this.#overviewMesh === null ? 0 : 1; }
+  get overviewTriangleCount(): number {
+    const index = this.#overviewMesh?.geometry.index;
+    return this.#disposed || index === null || index === undefined ? 0 : index.count / 3;
+  }
   get quality(): Readonly<WaterRenderQuality> { return this.#waterManager.quality; }
 
   /** Exact initial bounded window for main/sim collider staging; no internal mutable map escapes. */
@@ -431,9 +616,17 @@ export class DetachedDerivedRenderCandidate {
 
   dispose(): void {
     if (this.#disposed) return;
+    this.#disposed = true;
     const errors: unknown[] = [];
     try { this.#waterMount?.dispose(); } catch (error) { errors.push(error); }
     try { this.#waterManager.dispose(); } catch (error) { errors.push(error); }
+    const overviewMesh = this.#overviewMesh;
+    this.#overviewMesh = null;
+    if (overviewMesh !== null) {
+      this.overviewRoot.remove(overviewMesh);
+      try { overviewMesh.geometry.dispose(); } catch (error) { errors.push(error); }
+      try { (overviewMesh.material as THREE.Material).dispose(); } catch (error) { errors.push(error); }
+    }
     for (const mesh of this.#terrainMeshes.values()) {
       this.terrainRoot.remove(mesh);
       try { disposeTerrainMesh(mesh); } catch (error) { errors.push(error); }
@@ -441,7 +634,6 @@ export class DetachedDerivedRenderCandidate {
     this.#terrainMeshes.clear();
     try { this.#terrainMaterials.dispose(); } catch (error) { errors.push(error); }
     this.root.clear();
-    if (errors.length === 0) this.#disposed = true;
     if (errors.length > 0) throw new AggregateError(errors, "detached derived render candidate disposal failed");
   }
 }

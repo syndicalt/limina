@@ -178,6 +178,15 @@ export const INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
   },
   {
     schema: COMPILER_STAGE_SCHEMA,
+    stageId: "navigation-index",
+    stageVersion: "1.0.0",
+    scope: "global",
+    dependencies: [],
+    sourceInputs: [{ inputId: "navigation.index", scope: "global" }],
+    footprint: { haloChunks: 0 },
+  },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
     stageId: "base-height",
     stageVersion: "1.0.0",
     scope: "global",

@@ -249,7 +249,12 @@ try {
   if (wbDoc) {
     const fm = parseFrontmatter(wbDoc.content);
     world.regions = (fm.regions || []).map((r) => ({ id: r.id, name: r.name, biome: r.biome }));
-    world.locations = (fm.locations || []).map((l) => ({ id: l.id, name: l.name, kind: l.kind, region: l.region, x: (l.position||[0,0])[0], z: (l.position||[0,0])[1], tags: l.tags || [], map: l.map || "", mapLink: l.mapLink || "" }));
+    world.locations = (fm.locations || []).map((l) => ({
+      id: l.id, name: l.name, kind: l.kind, region: l.region, regionId: l.regionId,
+      x: (l.position||[0,0])[0], z: (l.position||[0,0])[1], tags: l.tags || [],
+      map: l.map || "", mapLink: l.mapLink || "", count: l.count, radiusM: l.radiusM,
+      assetId: l.assetId, note: l.note || l.description,
+    }));
   }
 } catch (e) { world = { regions: [], locations: [] }; }
 var places = [];

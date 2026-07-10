@@ -79,6 +79,21 @@ test("focus and reveal requests parse into deeply frozen normalized data", () =>
   }
 });
 
+test("editor reveal preserves an exact durable Atlas designRef", () => {
+  for (const protocol of modules) {
+    const reveal = protocol.parseEditorRevealRequest({
+      schema: protocol.ATLAS_EDITOR_BRIDGE_SCHEMA,
+      type: protocol.EDITOR_REVEAL_REQUEST,
+      requestId: 9,
+      world: [1, 2],
+      label: "same name",
+      designRef: { schema: protocol.ATLAS_DESIGN_REF_SCHEMA, mapId: "north", kind: "place", id: "same-name-2" },
+    });
+    assert.deepEqual(reveal.designRef, { schema: protocol.ATLAS_DESIGN_REF_SCHEMA, mapId: "north", kind: "place", id: "same-name-2" });
+    assert.equal(Object.isFrozen(reveal.designRef), true);
+  }
+});
+
 test("schemas, types, exact keys, request ids, subjects, and strings fail closed", () => {
   invalidForEveryModule(() => focus({ schema: "limina.atlas-editor-bridge/v2" }), /schema/);
   invalidForEveryModule(() => focus({ type: "atlas.focus" }), /type/);
@@ -192,7 +207,7 @@ test("world tuples reject sparse, extended, accessor, subclassed, and non-finite
   }
 });
 
-test("canonical Atlas local coordinates pass only for meter units at origin zero", () => {
+test("Atlas local/world coordinates round-trip through noncanonical meter frames", () => {
   const canonical = { kind: "m", unitsPerMeter: 1, origin: [-0, 0] };
   for (const protocol of modules) {
     const world = protocol.atlasLocalToCanonicalWorld(canonical, [-0, -12]);
@@ -201,10 +216,16 @@ test("canonical Atlas local coordinates pass only for meter units at origin zero
     assert.equal(Object.is(world[0], -0), false);
   }
 
+  const noncanonical = { kind: "m", unitsPerMeter: 4, origin: [100, -50] };
+  for (const protocol of modules) {
+    assert.deepEqual(protocol.atlasLocalToCanonicalWorld(noncanonical, [20, 8]), [105, -48]);
+    assert.deepEqual(protocol.canonicalWorldToAtlasLocal(noncanonical, [105, -48]), [20, 8]);
+  }
+
   for (const units of [
     { kind: "km", unitsPerMeter: 1, origin: [0, 0] },
-    { kind: "m", unitsPerMeter: 2, origin: [0, 0] },
-    { kind: "m", unitsPerMeter: 1, origin: [1, 0] },
+    { kind: "m", unitsPerMeter: 0, origin: [0, 0] },
+    { kind: "m", unitsPerMeter: Infinity, origin: [1, 0] },
     { kind: "m", unitsPerMeter: 1, origin: [0, 0], scale: 1 },
   ]) {
     for (const protocol of modules) {

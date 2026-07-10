@@ -17,6 +17,7 @@ import {
   EDITOR_REVEAL_REQUEST,
   EDITOR_HANDOFF_READY,
   atlasLocalToCanonicalWorld,
+  canonicalWorldToAtlasLocal,
   parseAtlasFocusRequest,
   parseEditorHandoffReady,
   parseTrustedAtlasEditorMessageEvent,
@@ -24,6 +25,8 @@ import {
 import * as H from "./map-commands.js";
 import * as EL from "./map-elevation.js";
 import * as LM from "./map-paint.js";
+import { projectNavigationSubjects } from "./map-navigation-projection.js";
+import { requireCommittedMapSave } from "./map-save-freshness.js";
 
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
@@ -98,7 +101,25 @@ function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = nu
 function dropPaintCachesFor(mapId){ EL.dropElevationCache(mapId); LM.dropLandmassCache(mapId); LM.dropBiomesCache(mapId); }
 
 // Dirty rasters serialize into the doc at save-payload time (stroke-end debounce), never per dab.
-bindMapSaver(() => { EL.syncElevationIntoDoc(S.state.maps); LM.syncLandmassIntoDoc(S.state.maps); LM.syncBiomesIntoDoc(S.state.maps); return { maps: S.state.maps, activeMapId }; });
+bindMapSaver(() => {
+  EL.syncElevationIntoDoc(S.state.maps);
+  LM.syncLandmassIntoDoc(S.state.maps);
+  LM.syncBiomesIntoDoc(S.state.maps);
+  return {
+    maps: projectNavigationSubjects(S.state.maps, S.state.places, S.state.world?.locations),
+    activeMapId: activeMapId||S.state.activeMapId||primaryMapId(),
+  };
+});
+
+export function reconcileNavigationProjection() {
+  const maps=S.state.maps||[];
+  if(!maps.length) return false;
+  const projected=projectNavigationSubjects(maps,S.state.places,S.state.world?.locations);
+  const fields=(list)=>JSON.stringify(list.map(map=>({id:map.id,places:map.places||[],markers:map.markers||[]})));
+  if(fields(projected)===fields(maps)) return false;
+  scheduleMapSave();
+  return true;
+}
 
 // A save bounced 409: another session saved since this tab loaded. Reload the authoritative
 // state instead of clobbering it — this tab's unsaved edits are dropped, visibly. Stale caches
@@ -189,7 +210,8 @@ async function focusEditorFromAtlas(kind,id,label,local,radiusM){
     if(!activeMapId) activeMapId=S.state.activeMapId||primaryMapId();
     const map=activeMap();
     const world=atlasLocalToCanonicalWorld(map.units,[local[0],local[1]]);
-    const [saved,launch]=await Promise.all([flushMapSave(),standalone?getEditorLaunchConfig():Promise.resolve(undefined)]);
+    const [saveResult,launch]=await Promise.all([flushMapSave(),standalone?getEditorLaunchConfig():Promise.resolve(undefined)]);
+    const saved=requireCommittedMapSave(saveResult,"Open in Editor");
     if(standalone&&launch.atlasOrigin!==window.location.origin){
       throw new Error("Open in Editor is available from the Atlas solo URL shown by the editor launcher");
     }
@@ -220,14 +242,17 @@ export function openCurrentMapInEditor(){
 }
 
 function revealEditorCoordinate(message){
-  const mapId=primaryMapId();
+  const mapId=message.designRef?.mapId||primaryMapId();
   const map=(S.state.maps||[]).find(candidate=>candidate.id===mapId);
-  try{ atlasLocalToCanonicalWorld(map&&map.units,message.world); }
+  let local;
+  try{ local=canonicalWorldToAtlasLocal(map&&map.units,message.world); }
   catch(error){ toast("3D reveal unavailable: "+(error&&error.message?error.message:String(error)),5000); return; }
   activeMapId=mapId; S.state.activeMapId=mapId; fittedMap=mapId;
-  mapPan={x:message.world[0],z:message.world[1]};
-  bridgeReveal={world:message.world,label:message.label};
-  drawPts=[]; selFeat=null; vantage=null;
+  mapPan={x:local[0],z:local[1]};
+  bridgeReveal={world:local,label:message.label};
+  drawPts=[]; selFeat=message.designRef?.kind==="feature"?message.designRef.id:null;
+  selStamp=message.designRef?.kind==="stamp"?message.designRef.id:null; vantage=null;
+  bridgeReveal.designRef=message.designRef;
   renderMap();
 }
 
@@ -378,18 +403,18 @@ function redrawMap(){
   // (units.unitsPerMeter — 1 for plain engine-meter maps, so behavior is unchanged by default).
   // (a) axis tick labels at every gridline — x values along the bottom edge, z along the left;
   // (b) a zoom-adaptive scale bar (1/2/5×10^n meters, 60-150px) bottom-right, m→km rollover.
-  const upm=(activeMap().units&&activeMap().units.unitsPerMeter)||1;
-  const fmtM=(v)=>{ const m=v*upm; return Math.abs(m)>=1000?(Math.round(m/100)/10)+"km":Math.round(m)+"m"; };
+  const units=activeMap().units||{unitsPerMeter:1,origin:[0,0]}, upm=units.unitsPerMeter||1, origin=units.origin||[0,0];
+  const fmtM=(m)=>Math.abs(m)>=1000?(Math.round(m/100)/10)+"km":Math.round(m)+"m";
   for(let x=Math.ceil(wx0/step)*step; x<=wx1; x+=step){ const [sx]=w2s(x,0);
-    if(sx>28&&sx<VBW-28) g+='<text class="map-tick" x="'+(sx+3)+'" y="'+(VBH-6)+'">'+fmtM(x)+'</text>'; }
+    if(sx>28&&sx<VBW-28) g+='<text class="map-tick" x="'+(sx+3)+'" y="'+(VBH-6)+'">'+fmtM(origin[0]+x/upm)+'</text>'; }
   for(let z=Math.ceil(wzTop/step)*step; z<=wzBot; z+=step){ const [,sy]=w2s(0,z);
-    if(sy>16&&sy<VBH-12) g+='<text class="map-tick" x="4" y="'+(sy-3)+'">'+fmtM(z)+'</text>'; }
+    if(sy>16&&sy<VBH-12) g+='<text class="map-tick" x="4" y="'+(sy-3)+'">'+fmtM(origin[1]+z/upm)+'</text>'; }
   let bar=step; while(bar*mapScale<60) bar*=2; while(bar*mapScale>150) bar/=2;
   const bpx=bar*mapScale, bx1=VBW-24-bpx, by=VBH-18;
   g+='<line class="map-scalebar" x1="'+bx1+'" y1="'+by+'" x2="'+(bx1+bpx)+'" y2="'+by+'"/>'
     +'<line class="map-scalebar" x1="'+bx1+'" y1="'+(by-4)+'" x2="'+bx1+'" y2="'+(by+4)+'"/>'
     +'<line class="map-scalebar" x1="'+(bx1+bpx)+'" y1="'+(by-4)+'" x2="'+(bx1+bpx)+'" y2="'+(by+4)+'"/>'
-    +'<text class="map-scalebar-label" x="'+(bx1+bpx/2)+'" y="'+(by-8)+'" text-anchor="middle">'+fmtM(bar)+'</text>';
+    +'<text class="map-scalebar-label" x="'+(bx1+bpx/2)+'" y="'+(by-8)+'" text-anchor="middle">'+fmtM(bar/upm)+'</text>';
   // features (outline first, then areas, lines, glyphs)
   const feats=curFeatures();
   const poly=(pts)=>pts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return sx+","+sy;}).join(" ");
@@ -490,16 +515,20 @@ function redrawMap(){
       +drawPts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return '<circle cx="'+sx+'" cy="'+sy+'" r="3" fill="'+drawColor+'"/>';}).join(""); }
   // markers
   const pins=mapMarkers().map(l=>{ const [sx,sy]=w2s(l.x,l.z); const c=KIND_FILL[l.kind]||"#2f6f7a";
+    const exact=bridgeReveal?.designRef?.kind==="marker"&&bridgeReveal.designRef.id===l.id
+      ? '<circle r="12" fill="none" stroke="var(--accent)" stroke-width="2.5"/>' : '';
     return '<g class="pin" data-id="'+l.id+'" transform="translate('+sx+','+sy+')">'
       +(l.mapLink?'<circle r="12" fill="none" stroke="'+c+'" stroke-dasharray="2 2" opacity=".7"/>':'')
-      +'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
+      +exact+'<circle r="7" fill="'+c+'"/><text x="11" y="4">'+esc(l.name)+(l.mapLink?' ⤢':'')+'</text></g>'; }).join("");
   // Places pins (Stage 2): DIAMOND glyphs (rotated square) to read apart from round markers; an
   // area place adds a faint radius ring at its true world radius (radiusM * scale).
   const placePins=mapPlaces().map(p=>{ const [sx,sy]=w2s(p.position[0],p.position[1]); const c=PLACE_FILL[p.kind]||"#6d5f7a";
     const ring=(p.binding==="area"&&p.radiusM>0)
-      ? '<circle class="parea" r="'+(p.radiusM*mapScale)+'" fill="'+c+'" fill-opacity=".08" stroke="'+c+'" stroke-opacity=".55" stroke-dasharray="5 4" style="pointer-events:none"/>' : '';
+      ? '<circle class="parea" r="'+(p.radiusM*upm*mapScale)+'" fill="'+c+'" fill-opacity=".08" stroke="'+c+'" stroke-opacity=".55" stroke-dasharray="5 4" style="pointer-events:none"/>' : '';
+    const exact=bridgeReveal?.designRef?.kind==="place"&&bridgeReveal.designRef.id===p.id
+      ? '<circle r="13" fill="none" stroke="var(--accent)" stroke-width="2.5"/>' : '';
     return '<g class="ppin" data-place-id="'+esc(p.id)+'" transform="translate('+sx+','+sy+')">'
-      +ring+'<rect x="-6" y="-6" width="12" height="12" transform="rotate(45)" fill="'+c+'"/>'
+      +ring+exact+'<rect x="-6" y="-6" width="12" height="12" transform="rotate(45)" fill="'+c+'"/>'
       +'<text x="12" y="4">'+esc(p.name)+'</text></g>'; }).join("");
   // Camera vantage glyph + facing arrow (only while the Camera tool is active).
   let vantageLayer="";
@@ -938,7 +967,8 @@ function decimatePts(pts,minD){
 /** Compile the active map to a world asset. On a scale-contract refusal, offer to grow the
  *  declared world size to fit and retry ONCE — assisted, never silent. */
 async function doCompile(retried){
-  await flushMapSave(); // compile what's on disk = what you see
+  try{ requireCommittedMapSave(await flushMapSave(),"Compile"); }
+  catch(error){ toast("compile blocked: "+String(error.message||error),6000); return; }
   let msg="";
   try{
     const j=await postJSON("/api/compile-map",{mapId:activeMapId});
@@ -1013,7 +1043,8 @@ function showPeekLoading(){
 }
 async function doPeek(){
   if(!confirm("Render a 3D peek of this map? (~30–90s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
-  await flushMapSave();
+  try{ requireCommittedMapSave(await flushMapSave(),"3D peek"); }
+  catch(error){ toast("peek blocked: "+String(error.message||error),6000); return; }
   let j;
   try{ j=await postJSON("/api/peek",{mapId:activeMapId}); }
   catch(e){ toast("peek failed: "+String(e), 6000); return; }
@@ -1081,7 +1112,7 @@ async function importWorldMap(file){
   try{ wm=await (await fetch("/api/worldmaps/"+encodeURIComponent(file))).json(); }
   catch{ toast("failed to load "+file); return; }
   let after;
-  try{ after=LM.importWorldMapIntoLayers(wm); }
+  try{ after=LM.importWorldMapIntoLayers(wm, activeMap().units); }
   catch(e){ toast(String(e.message||e)); return; }
   const em=activeMap();
   EL.dropElevationCache(em.id); LM.dropLandmassCache(em.id); LM.dropBiomesCache(em.id);
@@ -1189,7 +1220,8 @@ function startPlacePinDrag(e,id){ if(mapTool!=="select"){ return; } e.stopPropag
 // ── Places (Stage 2) ─────────────────────────────────────────────────────────────────────────
 // After any place mutation, re-render whatever surface is showing them: the map (if active) and
 // the Places tree (app.js, via the S.fn registry — no map->app import).
-function afterPlaceChange(){ if(S.activeView==="map") renderMap(); if(S.fn.refreshPlaces) S.fn.refreshPlaces(); }
+function afterPlaceChange(){ scheduleMapSave(); if(S.activeView==="map") renderMap(); if(S.fn.refreshPlaces) S.fn.refreshPlaces(); }
+function afterMarkerChange(){ scheduleMapSave(); renderMap(); }
 // The ids of a place and everything under it — used to keep it (and its subtree) out of the
 // parent picker so the UI can't offer a reparent that would make a cycle.
 function placeDescendants(id){
@@ -1283,7 +1315,8 @@ async function deletePlace(id){
 async function doVantagePeek(){
   if(!vantage){ toast("set a camera first — click the map with the Camera tool"); return; }
   if(!confirm("Render a ground-level preview from this camera? (~30–90s)\n\n⚠ If the limina 3D EDITOR is open in a browser tab, close it first — a headless GPU render beside it can crash its graphics context.")) return;
-  await flushMapSave();
+  try{ requireCommittedMapSave(await flushMapSave(),"Camera preview"); }
+  catch(error){ toast("preview blocked: "+String(error.message||error),6000); return; }
   let j;
   try{ j=await postJSON("/api/peek",{mapId:activeMapId, camera:{mode:"vantage", pos:[vantage.x,vantage.z], yaw:vantage.yaw, eyeHeight:1.7}}); }
   catch(e){ toast("preview failed: "+String(e), 6000); return; }
@@ -1354,9 +1387,10 @@ async function finishLasso(d){
   if(linked.length) msg="⚠ "+linked.map(l=>l.name+" → map '"+l.mapLink+"'").join(", ")+"\nThose links will be removed (the linked maps are kept).\n\n"+msg;
   if(!confirm(msg)) return;
   if(feats.length) commit(H.cmdDeleteFeatures(activeMapId, activeMap(), feats.map(f=>f.id)));
-  await flushMapSave();
+  try{ requireCommittedMapSave(await flushMapSave(),"Lasso edit"); }
+  catch(error){ toast("edit blocked: "+String(error.message||error),6000); return; }
   if(marks.length){ try{ await postJSON("/api/edit-location",{op:"unlink",ids:marks.map(l=>l.id)}); }catch(e){} }
-  await S.fn.reload(); renderMap();
+  await S.fn.reload(); afterMarkerChange();
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
@@ -1405,7 +1439,7 @@ async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementByI
   if(d.type!=="pin") return;
   if(!d.moved){ redrawMap(); const loc=mapMarkers().find(l=>l.id===d.id); if(loc) openInspector(loc,null,d.cx,d.cy); return; }
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
-  try{ const j=await postJSON("/api/edit-location",{op:"move",id:d.id,x:wx,z:wz}); await S.fn.reload(); renderMap(); if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts); }catch(err){ redrawMap(); } }
+  try{ const j=await postJSON("/api/edit-location",{op:"move",id:d.id,x:wx,z:wz}); await S.fn.reload(); afterMarkerChange(); if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts); }catch(err){ redrawMap(); } }
 
 async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]; selFeat=null; vantage=null; await flushMapSave(); renderMap(); }
 async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
@@ -1440,7 +1474,7 @@ function openInspector(marker, pos, cx, cy){
 }
 async function unlinkMarker(id){
   try{ await postJSON("/api/edit-location",{op:"unlink",ids:[id]});
-    document.getElementById("insp")?.remove(); await S.fn.reload(); renderMap();
+    document.getElementById("insp")?.remove(); await S.fn.reload(); afterMarkerChange();
   }catch(e){} }
 async function saveMarker(id, pos){
   const name=document.getElementById("i-name").value.trim();
@@ -1451,7 +1485,7 @@ async function saveMarker(id, pos){
   const body = id ? {op:"update",id,name,kind,region,tags,mapLink} : {op:"add",name,kind,region,tags,mapLink,x:pos.x,z:pos.z,map:(activeMapId!==primaryMapId()?activeMapId:"")};
   const btn=document.getElementById("insp-save"); btn.disabled=true; btn.textContent="Saving…";
   try{ const j=await postJSON("/api/edit-location",body);
-    document.getElementById("insp")?.remove(); await S.fn.reload(); renderMap();
+    document.getElementById("insp")?.remove(); await S.fn.reload(); afterMarkerChange();
     if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts);
   }catch(e){ btn.disabled=false; btn.textContent="Save"; } }
 async function deleteMarker(id){
@@ -1460,6 +1494,6 @@ async function deleteMarker(id){
   if(loc&&loc.mapLink) warn="⚠ This marker links to map '"+loc.mapLink+"'. Deleting removes the marker (the linked map is kept).\n\n"+warn;
   if(!confirm(warn)) return;
   try{ const j=await postJSON("/api/edit-location",{op:"delete",id});
-    document.getElementById("insp")?.remove(); await S.fn.reload(); renderMap();
+    document.getElementById("insp")?.remove(); await S.fn.reload(); afterMarkerChange();
     if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts);
   }catch(e){} }

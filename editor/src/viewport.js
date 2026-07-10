@@ -111,6 +111,7 @@ const viewportUi = {
   navigationFly: document.getElementById("viewport-navigation-fly"),
   navigationSpeed: document.getElementById("viewport-navigation-speed"),
   navigationFocus: document.getElementById("viewport-navigation-focus"),
+  navigationWorld: document.getElementById("viewport-navigation-world"),
   navigationGotoToggle: document.getElementById("viewport-navigation-goto-toggle"),
   navigationGoto: document.getElementById("viewport-navigation-goto"),
   navigationGotoClose: document.getElementById("viewport-navigation-goto-close"),
@@ -119,6 +120,11 @@ const viewportUi = {
   navigationY: document.getElementById("viewport-navigation-y"),
   navigationZ: document.getElementById("viewport-navigation-z"),
   navigationGotoStatus: document.getElementById("viewport-navigation-goto-status"),
+  navigationSearchToggle: document.getElementById("viewport-navigation-search-toggle"),
+  navigationSearch: document.getElementById("viewport-navigation-search"),
+  navigationSearchClose: document.getElementById("viewport-navigation-search-close"),
+  navigationSearchInput: document.getElementById("viewport-navigation-search-input"),
+  navigationSearchResults: document.getElementById("viewport-navigation-search-results"),
   navigationViewsToggle: document.getElementById("viewport-navigation-views-toggle"),
   navigationViews: document.getElementById("viewport-navigation-views"),
   navigationViewsClose: document.getElementById("viewport-navigation-views-close"),
@@ -449,7 +455,7 @@ function resizeAtlasWithKeyboard(event) {
   setAtlasWorkspaceWidth(next, { persist: true });
 }
 
-function postAtlasReveal(world, label) {
+function postAtlasReveal(world, label, designRef) {
   const target = viewportUi.atlasFrame?.contentWindow;
   if (!atlasOpen() || !target) return false;
   atlasRevealRequestId = atlasRevealRequestId >= Number.MAX_SAFE_INTEGER ? 1 : atlasRevealRequestId + 1;
@@ -461,6 +467,7 @@ function postAtlasReveal(world, label) {
       requestId: atlasRevealRequestId,
       world,
       label,
+      ...(designRef === undefined ? {} : { designRef }),
     });
   } catch (error) {
     setAtlasStatus(error instanceof Error ? error.message : "reveal unavailable");
@@ -478,9 +485,12 @@ function revealSelectionInAtlas() {
     return false;
   }
   selected.mesh.getWorldPosition(atlasWorldPosition);
+  const record = typeof window.liminaEntity === "function" ? window.liminaEntity(selected.id) : undefined;
+  const designRef = record?.origin?.input?.designRef;
   return postAtlasReveal(
     [atlasWorldPosition.x, atlasWorldPosition.z],
     `Selection ${selected.id}`.slice(0, 256),
+    designRef,
   );
 }
 
@@ -510,6 +520,7 @@ async function focusAtlasRequest(message, { requireAtlasOpen = true } = {}) {
   }
   const generation = ++atlasFocusGeneration;
   state.atlasFocusPending = true;
+  leaveWorldOverviewPresentation();
   atlasFocusRequiresOpen = requireAtlasOpen;
   syncNavigationUi();
   try {
@@ -721,6 +732,7 @@ function closeNavigationPanel(panel, toggle) {
 
 function closeNavigationPanels() {
   closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
+  closeNavigationPanel(viewportUi.navigationSearch, viewportUi.navigationSearchToggle);
   closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
 }
 
@@ -747,7 +759,9 @@ function syncNavigationUi() {
   if (viewportUi.navigationSpeed) viewportUi.navigationSpeed.disabled = !localReady;
   const discreteReady = navigationDiscreteReady();
   if (viewportUi.navigationFocus) viewportUi.navigationFocus.disabled = !discreteReady || !state.selected;
+  if (viewportUi.navigationWorld) viewportUi.navigationWorld.disabled = !discreteReady || !state.running?.derivedWorldBounds?.();
   if (viewportUi.navigationGotoToggle) viewportUi.navigationGotoToggle.disabled = !discreteReady;
+  if (viewportUi.navigationSearchToggle) viewportUi.navigationSearchToggle.disabled = !discreteReady;
   if (viewportUi.navigationViewsToggle) viewportUi.navigationViewsToggle.disabled = !localReady || !navigationStateController || state.navigationBusy;
   if (viewportUi.navigationBookmarkSave) viewportUi.navigationBookmarkSave.disabled = !localReady || !navigationStateController || state.navigationBusy;
   if (viewportUi.atlasReveal) viewportUi.atlasReveal.disabled = locked || !state.selected;
@@ -787,6 +801,7 @@ function openNavigationGoto() {
   const pose = state.running?.editorNavigation?.snapshot?.();
   if (!pose || !navigationDiscreteReady()) return;
   closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
+  closeNavigationPanel(viewportUi.navigationSearch, viewportUi.navigationSearchToggle);
   if (viewportUi.navigationX) viewportUi.navigationX.value = String(pose.target[0]);
   if (viewportUi.navigationY) viewportUi.navigationY.value = String(pose.target[1]);
   if (viewportUi.navigationZ) viewportUi.navigationZ.value = String(pose.target[2]);
@@ -795,6 +810,64 @@ function openNavigationGoto() {
   viewportUi.navigationGotoToggle?.setAttribute("aria-expanded", "true");
   viewportUi.navigationX?.focus();
   viewportUi.navigationX?.select?.();
+}
+
+function renderNavigationSearch() {
+  const container = viewportUi.navigationSearchResults;
+  if (!container) return;
+  container.replaceChildren();
+  const query = viewportUi.navigationSearchInput?.value.trim() ?? "";
+  if (query.length === 0) return;
+  let results;
+  try { results = state.running?.searchDerivedNavigation?.(query, 20) ?? []; }
+  catch (error) { container.textContent = error instanceof Error ? error.message : "Search unavailable"; return; }
+  if (results.length === 0) { container.textContent = "No matches"; return; }
+  for (const entry of results) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "navigation-search-result";
+    button.setAttribute("role", "option");
+    button.dataset.navigationSearchMap = entry.designRef.mapId;
+    button.dataset.navigationSearchKind = entry.designRef.kind;
+    button.dataset.navigationSearchId = entry.designRef.id;
+    const label = document.createElement("strong");
+    label.textContent = entry.label;
+    const detail = document.createElement("span");
+    detail.textContent = `${entry.kind}  ${entry.position[0]}, ${entry.position[1]}`;
+    button.append(label, detail);
+    button.addEventListener("click", () => navigateToSearchResult(entry));
+    container.appendChild(button);
+  }
+}
+
+function openNavigationSearch() {
+  if (!navigationDiscreteReady()) return;
+  closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
+  closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
+  if (viewportUi.navigationSearch) viewportUi.navigationSearch.hidden = false;
+  viewportUi.navigationSearchToggle?.setAttribute("aria-expanded", "true");
+  renderNavigationSearch();
+  viewportUi.navigationSearchInput?.focus();
+  viewportUi.navigationSearchInput?.select?.();
+}
+
+function navigateToSearchResult(entry) {
+  const navigation = state.running?.editorNavigation;
+  if (!navigation || !navigationDiscreteReady()) return;
+  leaveWorldOverviewPresentation();
+  const current = navigation.snapshot();
+  const provisional = navigation.destinationPose([entry.position[0], current.target[1], entry.position[1]], entry.radiusM ?? 32);
+  void navigateToPose(provisional, {
+    kind: "poi",
+    label: entry.label.slice(0, 64),
+    designRef: entry.designRef,
+  }, {
+    resolvePose: ({ context }) => {
+      const height = context.runtime.derivedTerrainHeightAt(entry.position[0], entry.position[1]);
+      if (height === null) throw Object.assign(new Error("POI terrain is unavailable"), { code: "POI_TERRAIN_UNAVAILABLE" });
+      return context.navigation.destinationPose([entry.position[0], height, entry.position[1]], entry.radiusM ?? 32);
+    },
+  });
 }
 
 function openNavigationViews() {
@@ -819,6 +892,11 @@ async function navigateToPose(pose, metadata, { resolvePose } = {}) {
   }
 }
 
+function leaveWorldOverviewPresentation() {
+  try { state.running?.setWorldOverviewPresentation?.(false); }
+  catch (error) { surfaceViewportWarning("world overview presentation restore failed", error); }
+}
+
 function focusNavigationSelection() {
   const navigation = state.running?.editorNavigation;
   const selected = state.selected;
@@ -827,10 +905,34 @@ function focusNavigationSelection() {
     return;
   }
   let pose;
+  leaveWorldOverviewPresentation();
   try { pose = navigation.objectPose(selected.mesh); }
   catch (error) { surfaceViewportWarning("selection focus failed", error); return; }
   const label = `Selection ${selected.id}`.slice(0, 64);
   void navigateToPose(pose, { kind: "selection", label });
+}
+
+function frameNavigationWorld() {
+  const runtime = state.running;
+  const navigation = runtime?.editorNavigation;
+  const bounds = runtime?.derivedWorldBounds?.();
+  if (!navigation || !bounds || !navigationDiscreteReady()) {
+    setStatus("navigation", "world overview unavailable");
+    return;
+  }
+  let pose;
+  try { pose = navigation.worldPose(bounds); }
+  catch (error) { surfaceViewportWarning("world framing failed", error); return; }
+  void navigateToPose(pose, { kind: "world", label: "World" }, {
+    resolvePose: ({ context }) => {
+      const currentBounds = context.runtime.derivedWorldBounds?.();
+      if (!currentBounds) throw Object.assign(new Error("world overview is unavailable after activation"), { code: "WORLD_OVERVIEW_UNAVAILABLE" });
+      return context.navigation.worldPose(currentBounds);
+    },
+  }).then((result) => {
+    if (result) runtime.setWorldOverviewPresentation?.(true);
+    else leaveWorldOverviewPresentation();
+  });
 }
 
 function applySnapSettings() {
@@ -966,6 +1068,13 @@ function bindViewportUi() {
     }
   });
   viewportUi.navigationFocus?.addEventListener("click", focusNavigationSelection);
+  viewportUi.navigationWorld?.addEventListener("click", frameNavigationWorld);
+  viewportUi.navigationSearchToggle?.addEventListener("click", () => {
+    if (viewportUi.navigationSearch?.hidden === false) closeNavigationPanel(viewportUi.navigationSearch, viewportUi.navigationSearchToggle);
+    else openNavigationSearch();
+  });
+  viewportUi.navigationSearchClose?.addEventListener("click", () => closeNavigationPanel(viewportUi.navigationSearch, viewportUi.navigationSearchToggle));
+  viewportUi.navigationSearchInput?.addEventListener("input", renderNavigationSearch);
   viewportUi.atlasToggle?.addEventListener("click", () => {
     setAtlasOpen(!atlasOpen());
     if (atlasOpen()) requestAnimationFrame(revealSelectionInAtlas);
@@ -996,6 +1105,7 @@ function bindViewportUi() {
     event.preventDefault();
     const navigation = state.running?.editorNavigation;
     if (!navigation || !navigationDiscreteReady()) return;
+    leaveWorldOverviewPresentation();
     try {
       const values = [viewportUi.navigationX?.value, viewportUi.navigationY?.value, viewportUi.navigationZ?.value];
       if (values.some((value) => typeof value !== "string" || value.trim() === "")) throw new TypeError("X, Y, and Z are required");
@@ -1043,6 +1153,7 @@ function bindViewportUi() {
       ? navigationState.bookmarks.find((candidate) => candidate.id === activate.dataset.navigationEntry)
       : navigationState.recents.find((candidate) => candidate.id === activate.dataset.navigationEntry);
     if (!entry) return;
+    leaveWorldOverviewPresentation();
     const label = kind === "bookmark" ? entry.name : entry.label;
     void navigateToPose(runtimeNavigationPose(entry.pose), { kind: kind === "bookmark" ? "bookmark" : entry.kind, label });
   });
@@ -2804,11 +2915,12 @@ window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   const gotoOpen = viewportUi.navigationGoto?.hidden === false;
   const viewsOpen = viewportUi.navigationViews?.hidden === false;
-  if (gotoOpen || viewsOpen) {
+  const searchOpen = viewportUi.navigationSearch?.hidden === false;
+  if (gotoOpen || viewsOpen || searchOpen) {
     event.preventDefault();
     event.stopImmediatePropagation();
     closeNavigationPanels();
-    (gotoOpen ? viewportUi.navigationGotoToggle : viewportUi.navigationViewsToggle)?.focus();
+    (gotoOpen ? viewportUi.navigationGotoToggle : searchOpen ? viewportUi.navigationSearchToggle : viewportUi.navigationViewsToggle)?.focus();
   }
 });
 window.addEventListener("keydown", (event) => {
@@ -2911,6 +3023,11 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (event.shiftKey) toggleWireframe();
     else focusNavigationSelection();
+    return;
+  }
+  if (key === "home") {
+    event.preventDefault();
+    frameNavigationWorld();
     return;
   }
   if (!controls) return;

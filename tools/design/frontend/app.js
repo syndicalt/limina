@@ -5,8 +5,8 @@
 
 import { esc, titleCaseName, toast } from "./util.js";
 import { S } from "./store.js";
-import { postJSON, setMapsRev } from "./net.js";
-import { renderMap, openPlaceInspector, openCurrentMapInEditor } from "./map.js";
+import { postJSON, scheduleMapSave, setMapsRev } from "./net.js";
+import { renderMap, openPlaceInspector, openCurrentMapInEditor, reconcileNavigationProjection } from "./map.js";
 
 const EMBEDDED_ATLAS = new URLSearchParams(window.location.search).get("embed") === "editor";
 if (EMBEDDED_ATLAS) {
@@ -16,6 +16,8 @@ if (EMBEDDED_ATLAS) {
 
 const KIND_ICON = { home:"⌂", concept:"◆", "art-direction":"✦", "world-bible":"◈", places:"⚲", cast:"☗", storyboard:"❧", "build-map":"⚑" };
 const KIND_LABEL = { home:"Home", concept:"Concept", "art-direction":"Art", "world-bible":"World", places:"Places", cast:"Cast", storyboard:"Beats", "build-map":"Build map" };
+const NAVIGATION_DOC_KINDS = new Set(["places", "world-bible"]);
+const affectsNavigationProjection = (content) => NAVIGATION_DOC_KINDS.has(kindOf(content));
 const NODE_COLOR = { region:"#dfeadf", location:"#e2eef0", player:"#e7e0f0", npc:"#f6ecdd", creature:"#f0dede", beat:"#e6ecf2" };
 const NODE_STROKE = { region:"#3f7d57", location:"#2f6f7a", player:"#6d5f7a", npc:"#b9772b", creature:"#a25151", beat:"#5c6773" };
 const TEAM = [
@@ -232,6 +234,7 @@ async function reparentPlace(id, parentId){
   try{ const j=await postJSON("/api/edit-place",{op:"reparent",place:{id,parentId}});
     if(j&&j.ok===false){ toast(j.error?("reparent rejected: "+j.error):"reparent rejected (would create a cycle)"); return; }
     if(j&&Array.isArray(j.places)) S.state.places=j.places; else await load();
+    scheduleMapSave();
     renderPlaces(document.getElementById("center"));
   }catch(e){ toast("reparent failed: "+e); }
 }
@@ -239,6 +242,7 @@ async function newPlace(){
   try{ const j=await postJSON("/api/edit-place",{op:"add",place:{name:"New place",kind:"landmark"}});
     if(j&&j.ok===false){ toast("add place failed"+(j.error?": "+j.error:"")); return; }
     if(j&&Array.isArray(j.places)) S.state.places=j.places; else await load();
+    scheduleMapSave();
     renderPlaces(document.getElementById("center"));
   }catch(e){ toast("add place failed: "+e); }
 }
@@ -368,14 +372,15 @@ async function createDocNow(){
   if(!title){ document.getElementById("nd-title").focus(); return; }
   try{ const j=await postJSON("/api/doc-create",{title,kind});
     if(j.error){ pushToast(j.error); return; }
-    document.getElementById("insp")?.remove(); await load(); S.activeView="docs"; setTabs(); openDoc(j.name); openEditor(j.name);
+    document.getElementById("insp")?.remove(); await load(); if(NAVIGATION_DOC_KINDS.has(kind)) scheduleMapSave(); S.activeView="docs"; setTabs(); openDoc(j.name); openEditor(j.name);
   }catch(e){ pushToast("create failed: "+e); } }
 async function deleteDoc(name){
   if(!name) return;
+  const navigationDoc=affectsNavigationProjection((S.state.docs.find(d=>d.name===name)||{}).content||"");
   if(!confirm("Delete '"+name+"'? This removes the file. (world-bible / cast / storyboard feed the build.)")) return;
   try{ const j=await postJSON("/api/doc-delete",{name});
     if(j.error){ pushToast(j.error); return; }
-    S.activeDoc=null; await load(); const first=(S.state.docs.find(d=>kindOf(d.content)==="home")||S.state.docs[0]); if(first) openDoc(first.name);
+    S.activeDoc=null; await load(); if(navigationDoc) scheduleMapSave(); const first=(S.state.docs.find(d=>kindOf(d.content)==="home")||S.state.docs[0]); if(first) openDoc(first.name);
   }catch(e){ pushToast("delete failed: "+e); } }
 
 // ---- full markdown editor + save -> cascade surfacing ----
@@ -394,10 +399,12 @@ function openEditor(name){
 }
 async function saveEditor(name, content){
   const btn=document.getElementById("ed-save"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
+  const previous=(S.state.docs.find(d=>d.name===name)||{}).content||"";
+  const navigationDoc=affectsNavigationProjection(previous)||affectsNavigationProjection(content);
   try{
     const j=await postJSON("/api/save",{name,content});
     const d=S.state.docs.find(x=>x.name===name); if(d) d.content=content;
-    await load(); S.activeDoc=name; S.activeView="docs"; setTabs(); openDoc(name);
+    await load(); if(navigationDoc) scheduleMapSave(); S.activeDoc=name; S.activeView="docs"; setTabs(); openDoc(name);
     if(j.impacts && j.impacts.length) surfaceCascade(j.impacts);
   }catch(e){ if(btn){ btn.disabled=false; btn.textContent="Save"; } pushToast("save failed: "+e); }
 }
@@ -450,6 +457,7 @@ document.getElementById("chat-input").addEventListener("keydown",e=>{ if(e.key==
 async function load(){
   const r = await fetch("/api/state"); S.state = await r.json();
   setMapsRev(S.state.mapsRev); // compare-and-set token: every map save echoes the rev it derives from
+  reconcileNavigationProjection();
   document.getElementById("projname").textContent = titleCaseName(S.state.project||"Design Space");
   document.title = document.getElementById("projname").textContent + " — Design Space";
   renderTeam(); renderNav();

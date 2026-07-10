@@ -11,6 +11,17 @@ import {
   encodeTerrainChunkArtifact,
 } from "../src/world/compiler/terrain-artifact.mjs";
 import {
+  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+  WORLD_OVERVIEW_ARTIFACT_TYPE,
+  encodeWorldOverviewArtifact,
+} from "../src/world/compiler/world-overview-artifact.mjs";
+import {
+  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+  NAVIGATION_INDEX_ARTIFACT_TYPE,
+  encodeNavigationIndexArtifact,
+} from "../src/world/compiler/navigation-index-artifact.mjs";
+import { ATLAS_DESIGN_REF_SCHEMA } from "../src/world/design-ref.mjs";
+import {
   HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
   HYDROLOGY_FIELD_ARTIFACT_TYPE,
   encodeHydrologyFieldArtifact,
@@ -30,6 +41,10 @@ import {
   parseDerivedRuntimeWorkerInput,
 } from "../src/browser/derived-runtime-worker.ts";
 import { DERIVED_TERRAIN_RESIDENCY_SCHEMA } from "../src/browser/derived-terrain-residency.ts";
+import {
+  parseTransferredDerivedRuntimeSnapshot,
+  searchTransferredDerivedNavigation,
+} from "../src/browser/derived-runtime-render-candidate.ts";
 import type { DerivedRuntimeCurrent } from "../src/browser/derived-runtime-transport.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -80,7 +95,7 @@ const graphHash = hash("hydrology-graph");
 const terrainBytes = encodeTerrainChunkArtifact({
   nrows: 2,
   ncols: 2,
-  origin: [0, 0, 0],
+  origin: [32, 0, 32],
   scale: [64, 10, 64],
   heights: new Float32Array([0, 0.25, 0.5, 1]),
 });
@@ -89,6 +104,37 @@ const terrainDescriptor = Object.freeze({
   contentHash: derivedArtifactContentHash(terrainBytes),
   byteLength: terrainBytes.byteLength,
   mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
+});
+const overviewBytes = encodeWorldOverviewArtifact({
+  rows: 3,
+  cols: 3,
+  origin: [-64, -64],
+  stepM: 64,
+  heights: new Float32Array([0, 1, 2, 1, 2, 3, 2, 3, 4]),
+  paintMaterial: new Uint8Array(9).fill(2),
+  paintWeight: new Uint8Array(9).fill(128),
+});
+const overviewDescriptor = Object.freeze({
+  artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(overviewBytes),
+  byteLength: overviewBytes.byteLength,
+  mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+});
+const navigationBytes = encodeNavigationIndexArtifact({
+  worldBounds: { minX: -64, minZ: -64, maxX: 64, maxZ: 64 },
+  entries: [{
+    designRef: { schema: ATLAS_DESIGN_REF_SCHEMA, mapId: "primary", kind: "place", id: "old-mill" },
+    position: [12, -8],
+    label: "Old Mill",
+    kind: "village",
+    searchKeys: ["old mill", "mill"],
+  }],
+});
+const navigationDescriptor = Object.freeze({
+  artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(navigationBytes),
+  byteLength: navigationBytes.byteLength,
+  mediaType: NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
 });
 const hydrology = createHydrologyTopology({
   rows: 2,
@@ -129,7 +175,13 @@ const waterDescriptor = Object.freeze({
   mediaType: HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
 });
 
-function manifest(revision: number, options: { globals?: boolean; terrain?: Uint8Array; graphHash?: string } = {}) {
+function manifest(revision: number, options: {
+  globals?: boolean;
+  overview?: boolean;
+  navigation?: typeof navigationDescriptor | Readonly<{ artifactType: string; contentHash: string; byteLength: number; mediaType: string }>;
+  terrain?: Uint8Array;
+  graphHash?: string;
+} = {}) {
   const terrain = options.terrain ?? terrainBytes;
   const descriptor = terrain === terrainBytes ? terrainDescriptor : {
     ...terrainDescriptor,
@@ -158,7 +210,11 @@ function manifest(revision: number, options: { globals?: boolean; terrain?: Uint
       snapshotHash: hash(`snapshot-${revision}`),
     },
     grid,
-    globalArtifacts: options.globals ? [fieldDescriptor, waterDescriptor] : [],
+    globalArtifacts: [
+      ...(options.globals ? [fieldDescriptor, waterDescriptor] : []),
+      ...(options.navigation === undefined ? [] : [options.navigation]),
+      ...(options.overview ? [overviewDescriptor] : []),
+    ],
     chunks: [{
       chunkId: terrainChunkId(grid.gridId, 0, 0, 0),
       gridId: grid.gridId,
@@ -258,6 +314,8 @@ class FakeTransport {
   constructor(initial: DerivedRuntimeCurrent) {
     this.current = initial;
     this.artifacts.set(terrainDescriptor.contentHash, terrainBytes);
+    this.artifacts.set(overviewDescriptor.contentHash, overviewBytes);
+    this.artifacts.set(navigationDescriptor.contentHash, navigationBytes);
     this.artifacts.set(fieldDescriptor.contentHash, fieldBytes);
     this.artifacts.set(waterDescriptor.contentHash, waterBytes);
   }
@@ -732,6 +790,100 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-globals");
 }
 
+// The overview is descriptor-verified before decode, staged once globally, and transferred with
+// complete owned channel buffers for detached candidate construction.
+{
+  const state = harness(current(manifest(80, { overview: true })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "overview activation");
+  assert(state.transport.artifactOrder.join(",") === `${WORLD_OVERVIEW_ARTIFACT_TYPE},terrain-chunk/v1`,
+    `overview staging order changed (${state.transport.artifactOrder.join(",")})`);
+  const activation = messages(state, "activate")[0];
+  const snapshot = activation.snapshot as {
+    globals: Array<{ resource: { kind: string; decoded: { grid: { heights: Float32Array; paintMaterial: Uint8Array; paintWeight: Uint8Array } } } }>;
+  };
+  const transferred = snapshot.globals[0].resource;
+  assert(transferred.kind === WORLD_OVERVIEW_ARTIFACT_TYPE && transferred.decoded.grid.heights.length === 9
+    && transferred.decoded.grid.paintMaterial.buffer.byteLength === 9 && transferred.decoded.grid.paintWeight.buffer.byteLength === 9,
+  "worker omitted transfer-friendly overview channels");
+  assert(state.posted.find((entry) => entry.message === activation)!.transferCount >= 4,
+    "overview activation did not transfer terrain plus three overview channel buffers");
+  await state.controller.close("close-overview");
+}
+
+{
+  const state = harness(current(manifest(82, { overview: true })));
+  const corrupt = overviewBytes.slice();
+  corrupt[corrupt.length - 1] ^= 1;
+  state.transport.artifacts.set(overviewDescriptor.contentHash, corrupt);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "corrupt overview descriptor rejection");
+  assert(messages(state, "activate").length === 0 && messages(state, "error")[0].code === "ARTIFACT_HASH_MISMATCH",
+    "corrupt overview bytes reached staging or lost descriptor-verification error identity");
+  await state.controller.close("close-corrupt-overview");
+}
+
+// Navigation stays as canonical bytes across the worker boundary. Main independently verifies
+// the descriptor/hash and decodes a fresh realm-local index before the active search API uses it.
+{
+  const state = harness(current(manifest(84, { navigation: navigationDescriptor })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "navigation activation");
+  assert(state.transport.artifactOrder.join(",") === `${NAVIGATION_INDEX_ARTIFACT_TYPE},terrain-chunk/v1`,
+    `navigation staging order changed (${state.transport.artifactOrder.join(",")})`);
+  const activation = messages(state, "activate")[0];
+  const navigationResource = activation.snapshot.globals[0].resource;
+  assert(navigationResource.kind === NAVIGATION_INDEX_ARTIFACT_TYPE
+    && navigationResource.bytes instanceof Uint8Array
+    && Object.keys(navigationResource).sort().join(",") === "bytes,kind",
+  "worker transferred decoded navigation state instead of canonical bytes");
+  assert(state.posted.find((entry) => entry.message === activation)!.transferCount >= 2,
+    "navigation activation did not transfer owned navigation and terrain buffers");
+  // `activation.snapshot` is already the output of the worker's clone-for-transfer walk; no
+  // decoded index object or worker-realm WeakMap brand crosses this boundary.
+  const parsed = parseTransferredDerivedRuntimeSnapshot(activation.snapshot);
+  const result = searchTransferredDerivedNavigation(parsed, "old m", 1)[0];
+  assert(result?.designRef.schema === ATLAS_DESIGN_REF_SCHEMA && result.designRef.mapId === "primary"
+    && result.designRef.kind === "place" && result.designRef.id === "old-mill"
+    && result.position[0] === 12 && result.position[1] === -8,
+  "main-realm navigation decode lost WeakMap codec state or changed the exact design ref");
+  await state.controller.close("close-navigation");
+}
+
+{
+  const malformedBytes = navigationBytes.slice();
+  malformedBytes[0] ^= 0xff;
+  const malformedDescriptor = Object.freeze({
+    ...navigationDescriptor,
+    contentHash: derivedArtifactContentHash(malformedBytes),
+  });
+  const state = harness(current(manifest(86, { navigation: malformedDescriptor })));
+  state.transport.artifacts.set(malformedDescriptor.contentHash, malformedBytes);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "malformed navigation byte rejection");
+  assert(messages(state, "activate").length === 0 && messages(state, "error")[0].code === "INTERNAL_ERROR",
+    "malformed canonical-hash-bound navigation bytes reached activation");
+  await state.controller.close("close-malformed-navigation");
+}
+
+{
+  const wrongMediaDescriptor = Object.freeze({ ...navigationDescriptor, mediaType: "application/octet-stream" });
+  const state = harness(current(manifest(88, { navigation: wrongMediaDescriptor })));
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "navigation descriptor rejection");
+  assert(messages(state, "activate").length === 0
+    && messages(state, "error")[0].code === "ARTIFACT_CONTRACT_MISMATCH",
+  "malformed navigation descriptor reached decode or activation");
+  await state.controller.close("close-navigation-descriptor");
+}
+
 // A large publication retains full manifest identity while fetching and transferring only the
 // exact radius-7 terrain window plus complete global artifacts.
 {
@@ -822,6 +974,6 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-rollback");
 }
 
-const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned reconciliation, exact correlated jump readiness, serialized dynamic residency acknowledgements, exact pinned manifests, bounded 225-chunk windows, no-spin outside-domain recovery, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic reconciliation, descriptor-bound canonical navigation transfer, bounded windows, fail-closed decode, acknowledged rollback, and reusable ownership proven.";
 if (ops?.op_log === undefined) console.log(completion);
 else ops.op_log(completion);

@@ -24,6 +24,14 @@ import { z } from "../../build/zod.bundle.mjs";
 import { stableStringifyWorldMap as stableStringifyWorldMapImpl, worldMapContentHash as worldMapContentHashImpl } from "./worldmap-hash.mjs";
 import { inspectWaterBodyTopology, isPlainJsonData, isPortableWaterId, WATER_BODY_KINDS, WATER_LIMITS, WATERWAY_CLASSES } from "./water-ir.mjs";
 import { HYDROLOGY_LIMITS, HYDROLOGY_RECIPE_SCHEMA, parseAuthoredHydrologyRecipe } from "./hydrology-ir.mjs";
+import {
+  ATLAS_DESIGN_REF_KINDS,
+  ATLAS_DESIGN_REF_SCHEMA,
+  MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS,
+  MAX_DESIGN_INDEX_ENTRIES,
+  atlasDesignRefKey,
+  parseAtlasDesignRef,
+} from "./design-ref.mjs";
 
 export { WATER_BODY_KINDS, WATERWAY_CLASSES } from "./water-ir.mjs";
 export { HYDROLOGY_LIMITS, HYDROLOGY_RECIPE_SCHEMA } from "./hydrology-ir.mjs";
@@ -43,6 +51,7 @@ const FiniteWaterCoordinateSchema = z.number().finite().min(-WATER_LIMITS.absCoo
 const FinitePointSchema = z.tuple([FiniteWaterCoordinateSchema, FiniteWaterCoordinateSchema]);
 
 const INVALID_PLAIN_DATA = Symbol("invalid-plain-json-data");
+const INVALID_DESIGN_REF = Symbol("invalid-atlas-design-ref");
 function plainJson<T extends z.ZodTypeAny>(schema: T) {
   return z.preprocess((value) => isPlainJsonData(value) ? value : INVALID_PLAIN_DATA, schema);
 }
@@ -54,6 +63,16 @@ function isPlainRootRecord(value: unknown): boolean {
   if (Object.getOwnPropertySymbols(value).length !== 0) return false;
   return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => "value" in descriptor && descriptor.enumerable);
 }
+
+export const AtlasDesignRefSchema = z.preprocess((value) => {
+  try { return parseAtlasDesignRef(value); }
+  catch { return INVALID_DESIGN_REF; }
+}, z.object({
+  schema: z.literal(ATLAS_DESIGN_REF_SCHEMA),
+  mapId: z.string().min(1).max(MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS),
+  kind: z.enum(ATLAS_DESIGN_REF_KINDS),
+  id: z.string().min(1).max(MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS),
+}).strict());
 
 const PolygonSchema = z.object({
   points: PointsSchema.min(3),
@@ -206,6 +225,7 @@ const AnchorSchema = z.object({
   assetId: z.string().min(1).optional(),
   rot: z.number().optional(),
   scale: z.number().positive().optional(),
+  designRef: AtlasDesignRefSchema.optional(),
   source: z.enum(ANCHOR_SOURCES),
 }).strict();
 
@@ -229,7 +249,27 @@ const GazetteerEntrySchema = z.object({
   parentId: z.string().min(1).nullable(),
   position: PointSchema,
   radiusM: z.number().positive().optional(),
+  designRef: AtlasDesignRefSchema.optional(),
 }).strict();
+
+const DesignIndexEntrySchema = z.object({
+  designRef: AtlasDesignRefSchema,
+  position: PointSchema,
+  radiusM: z.number().positive().optional(),
+}).strict();
+
+const DesignIndexSchema = z.array(DesignIndexEntrySchema).max(MAX_DESIGN_INDEX_ENTRIES).superRefine((entries, ctx) => {
+  const seen = new Set<string>();
+  for (let index = 0; index < entries.length; index++) {
+    const key = atlasDesignRefKey(entries[index].designRef);
+    if (seen.has(key)) ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [index, "designRef"],
+      message: "duplicate Atlas designRef",
+    });
+    seen.add(key);
+  }
+});
 
 const CropOfSchema = z.object({
   anchor: z.string().min(1),
@@ -268,6 +308,9 @@ const WorldMapObjectSchema = z.object({
   anchors: z.array(AnchorSchema),
   // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
   gazetteer: z.array(GazetteerEntrySchema).optional(),
+  // Exact reverse lookup for Atlas subjects, including features that do not materialize as entities.
+  // Optional so every legacy WorldMap retains its original canonical bytes and content hash.
+  designIndex: DesignIndexSchema.optional(),
   provenance: ProvenanceSchema,
 }).strict();
 
@@ -286,6 +329,8 @@ export type HydrologyRecipe = z.infer<typeof HydrologyRecipeSchema>;
 export type Route = z.infer<typeof RouteSchema>;
 export type Anchor = z.infer<typeof AnchorSchema>;
 export type GazetteerEntry = z.infer<typeof GazetteerEntrySchema>;
+export type AtlasDesignRef = z.infer<typeof AtlasDesignRefSchema>;
+export type DesignIndexEntry = z.infer<typeof DesignIndexEntrySchema>;
 export type WorldMapProvenance = z.infer<typeof ProvenanceSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
 

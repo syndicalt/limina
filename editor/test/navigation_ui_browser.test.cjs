@@ -40,6 +40,7 @@ function overlaps(left, right) {
         graphics: rect(".viewport-graphics"),
         navigation: rect(".navigation-toolbar"),
         goto: rect("#viewport-navigation-goto"),
+        search: rect("#viewport-navigation-search"),
         views: rect("#viewport-navigation-views"),
         tools: rect(".viewport-tools"),
         documentWidth: document.documentElement.scrollWidth,
@@ -51,7 +52,7 @@ function overlaps(left, right) {
     });
 
     const initial = await measure();
-    if (!initial.viewport || !initial.graphics || !initial.navigation || initial.goto || initial.views) {
+    if (!initial.viewport || !initial.graphics || !initial.navigation || initial.goto || initial.search || initial.views) {
       fail(`navigation overlay did not initialize correctly: ${JSON.stringify(initial)}`);
     }
     if (initial.navigation.top < initial.graphics.bottom - 1 || !inside(initial.navigation, initial.viewport)) {
@@ -73,6 +74,15 @@ function overlaps(left, right) {
     }
     await page.evaluate(() => {
       document.getElementById("viewport-navigation-goto").hidden = true;
+      document.getElementById("viewport-navigation-search").hidden = false;
+    });
+    const mobileSearch = await measure();
+    if (!mobileSearch.search || mobileSearch.documentWidth > mobileSearch.windowWidth
+        || mobileSearch.search.left < 0 || mobileSearch.search.right > mobileSearch.windowWidth) {
+      fail(`mobile search panel overflows: ${JSON.stringify(mobileSearch)}`);
+    }
+    await page.evaluate(() => {
+      document.getElementById("viewport-navigation-search").hidden = true;
       document.getElementById("viewport-navigation-views").hidden = false;
     });
     const mobileViews = await measure();

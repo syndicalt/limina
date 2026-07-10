@@ -195,6 +195,14 @@ body.atlas-workspace-maximized .viewport-compass, body.atlas-workspace-compact .
 .navigation-command:hover:not(:disabled) { color: var(--text); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
 .navigation-command:focus-visible, .navigation-popover-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .navigation-command:disabled, .navigation-speed:has(input:disabled), .navigation-segment:disabled { opacity: .45; cursor: default; }
+.navigation-search { width: min(360px, calc(100vw - 32px)); }
+.navigation-search-field { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+.navigation-search-field input { min-width: 0; width: 100%; }
+.navigation-search-results { display: grid; gap: 2px; max-height: min(360px, 48vh); overflow: auto; }
+.navigation-search-result { display: grid; gap: 2px; width: 100%; padding: 7px 8px; border: 1px solid transparent; background: transparent; color: var(--text); text-align: left; }
+.navigation-search-result:hover, .navigation-search-result:focus-visible { border-color: var(--accent); background: var(--panel-2); outline: none; }
+.navigation-search-result strong { overflow: hidden; text-overflow: ellipsis; }
+.navigation-search-result span { color: var(--muted); font-size: 10px; }
 .navigation-popover {
   position: absolute; top: calc(100% + 6px); left: 0; width: min(334px, calc(100vw - 32px)); max-height: min(430px, calc(100vh - 170px));
   overflow: auto; padding: 10px; border: 1px solid var(--border); border-radius: 7px;

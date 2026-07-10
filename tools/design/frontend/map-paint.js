@@ -12,6 +12,7 @@
 import { encodeRasterCells, decodeRasterCells } from "/shared/raster-codec.mjs";
 import { maskToLandPolygons } from "/shared/marching-squares.mjs";
 import * as EL from "./map-elevation.js";
+import { createWorldMapToMapDocTransform } from "./map-coordinate-conversion.js";
 
 export const LAND_SIZE = 512; // cells per side — ~5m cells on a 2.6km map (locked decision)
 const LAND_FILL = "#dccfa6"; // matches the legacy traced-outline land fill
@@ -467,18 +468,20 @@ export function renderBiomesImage(e, mapId, landEntry) {
 // or previously-compiled maps become hand-editable with the same brushes. Pure compute — returns
 // the serialized doc fields for cmdImportLayers; never mutates the map.
 
-export function importWorldMapIntoLayers(worldMap) {
-  const upm = worldMap.unitsPerMeter || 1;
+export function importWorldMapIntoLayers(worldMap, targetUnits = { kind: "m", unitsPerMeter: 1, origin: [0, 0] }) {
+  const transform = createWorldMapToMapDocTransform(worldMap, targetUnits);
+  const toTarget = transform.point, rectToTarget = transform.rect, targetScale = transform.targetUnitsPerMeter;
   // Extent: land ∪ biomes ∪ reliefGrid rect, padded — the world the IR describes.
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   const eat = (x, z) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; };
-  for (const l of worldMap.land || []) for (const p of l.points) eat(p[0], p[1]);
-  for (const b of worldMap.biomes || []) for (const p of b.points) eat(p[0], p[1]);
+  for (const l of worldMap.land || []) for (const p of l.points) { const q=toTarget(p); eat(q[0], q[1]); }
+  for (const b of worldMap.biomes || []) for (const p of b.points) { const q=toTarget(p); eat(q[0], q[1]); }
   const g = worldMap.reliefGrid;
-  if (g) { eat(g.rect.x0, g.rect.z0); eat(g.rect.x0 + g.rect.w, g.rect.z0 + g.rect.h); }
+  const targetGridRect = g ? rectToTarget(g.rect) : undefined;
+  if (targetGridRect) { eat(targetGridRect.x0, targetGridRect.z0); eat(targetGridRect.x0 + targetGridRect.w, targetGridRect.z0 + targetGridRect.h); }
   if (minX === Infinity) throw new Error("worldmap has no spatial content to import");
   const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-  const span = Math.max(200, (maxX - minX) * 1.15, (maxZ - minZ) * 1.15);
+  const span = Math.max(transform.metersToTargetLength(200), (maxX - minX) * 1.15, (maxZ - minZ) * 1.15);
   const rect = { x0: Math.round(cx - span / 2), z0: Math.round(cz - span / 2), w: Math.round(span), h: Math.round(span) };
 
   const rasters = {};
@@ -486,8 +489,8 @@ export function importWorldMapIntoLayers(worldMap) {
   if ((worldMap.land || []).length > 0) {
     const e = { w: LAND_SIZE, h: LAND_SIZE, rect, cells: new Uint8Array(LAND_SIZE * LAND_SIZE) };
     for (const l of worldMap.land) {
-      scanlineFill(e, l.points);
-      for (const hole of l.holes || []) scanlineFillValue(e, hole, 0);
+      scanlineFill(e, l.points.map(toTarget));
+      for (const hole of l.holes || []) scanlineFillValue(e, hole.map(toTarget), 0);
     }
     rasters.landmass = { w: e.w, h: e.h, rect: { ...rect }, ...encodeRasterCells(e.cells) };
   }
@@ -496,7 +499,7 @@ export function importWorldMapIntoLayers(worldMap) {
     const e = { w: BIOME_SIZE, h: BIOME_SIZE, rect, cells: new Uint8Array(BIOME_SIZE * BIOME_SIZE) };
     for (const b of worldMap.biomes) {
       const idx = BIOME_CLASSES.indexOf(b.biome);
-      if (idx >= 0) scanlineFillValue(e, b.points, idx + 1);
+      if (idx >= 0) scanlineFillValue(e, b.points.map(toTarget), idx + 1);
     }
     rasters.biomes = { w: e.w, h: e.h, rect: { ...rect }, ...encodeRasterCells(e.cells) };
   }
@@ -505,7 +508,7 @@ export function importWorldMapIntoLayers(worldMap) {
     const decoded = EL.decodeElevationRaster(g);
     const src = decoded.cells;
     const W = BIOME_SIZE, cells = new Uint16Array(W * W);
-    const gx0 = g.rect.x0, gz0 = g.rect.z0, gw = g.rect.w, gh = g.rect.h;
+    const gx0 = targetGridRect.x0, gz0 = targetGridRect.z0, gw = targetGridRect.w, gh = targetGridRect.h;
     // Outside the source grid is flat y=0. Expand the range when necessary instead of silently
     // clamping 0 to a source endpoint and inventing an elevated plateau or abyss.
     const outMinY = Math.min(g.minY, 0), outMaxY = Math.max(g.maxY, 0);
@@ -531,10 +534,10 @@ export function importWorldMapIntoLayers(worldMap) {
   // Asset anchors -> stamps; waterways/routes -> drawn line features.
   const stamps = (worldMap.anchors || [])
     .filter((a) => a.kind === "asset" && a.assetId)
-    .map((a) => ({ id: a.id, assetId: a.assetId, x: a.position[0], z: a.position[1], ...(a.rot !== undefined ? { rot: a.rot } : {}), ...(a.scale !== undefined ? { scale: a.scale } : {}) }));
+    .map((a) => { const p=toTarget(a.position); return ({ id: a.id, assetId: a.assetId, x: p[0], z: p[1], ...(a.rot !== undefined ? { rot: a.rot } : {}), ...(a.scale !== undefined ? { scale: a.scale } : {}) }); });
   const featuresAppend = [
-    ...(worldMap.waterways || []).map((w2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "river", points: w2.points.map((p) => [Math.round(p[0]), Math.round(p[1])]) })),
-    ...(worldMap.routes || []).map((r2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "road", points: r2.points.map((p) => [Math.round(p[0]), Math.round(p[1])]) })),
+    ...(worldMap.waterways || []).map((w2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "river", points: w2.points.map((p) => toTarget(p).map(Math.round)) })),
+    ...(worldMap.routes || []).map((r2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "road", points: r2.points.map((p) => toTarget(p).map(Math.round)) })),
   ];
   return {
     rasters,
@@ -542,7 +545,7 @@ export function importWorldMapIntoLayers(worldMap) {
     ...(featuresAppend.length ? { featuresAppend } : {}),
     seaLevel: typeof worldMap.seaLevel === "number" ? worldMap.seaLevel : 0,
     rect,
-    _upm: upm,
+    _upm: targetScale,
   };
 }
 

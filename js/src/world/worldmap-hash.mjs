@@ -92,6 +92,10 @@ function route(r) {
   return { points: points(r.points), class: r.class };
 }
 
+function designRef(ref) {
+  return { schema: ref.schema, mapId: ref.mapId, kind: ref.kind, id: ref.id };
+}
+
 function anchor(a) {
   const out = { id: a.id, kind: a.kind, position: point(a.position) };
   if (a.count !== undefined) out.count = a.count;
@@ -100,6 +104,7 @@ function anchor(a) {
   if (a.assetId !== undefined) out.assetId = a.assetId;
   if (a.rot !== undefined) out.rot = a.rot;
   if (a.scale !== undefined) out.scale = a.scale;
+  if (a.designRef !== undefined) out.designRef = designRef(a.designRef);
   out.source = a.source;
   return out;
 }
@@ -107,6 +112,13 @@ function anchor(a) {
 function gazetteerEntry(g) {
   const out = { placeId: g.placeId, name: g.name, kind: g.kind, parentId: g.parentId === undefined ? null : g.parentId, position: point(g.position) };
   if (g.radiusM !== undefined) out.radiusM = g.radiusM;
+  if (g.designRef !== undefined) out.designRef = designRef(g.designRef);
+  return out;
+}
+
+function designIndexEntry(entry) {
+  const out = { designRef: designRef(entry.designRef), position: point(entry.position) };
+  if (entry.radiusM !== undefined) out.radiusM = entry.radiusM;
   return out;
 }
 
@@ -149,6 +161,7 @@ export function stableStringifyWorldMap(map, opts = {}) {
     // Optional additive field: emitted ONLY when present, so every pre-Places map hashes
     // byte-identically (mirrors reliefGrid above).
     ...(map.gazetteer !== undefined ? { gazetteer: map.gazetteer.map(gazetteerEntry) } : {}),
+    ...(map.designIndex !== undefined ? { designIndex: map.designIndex.map(designIndexEntry) } : {}),
     provenance: provenance(map.provenance, omitContentHash),
   };
   return JSON.stringify(canonical);

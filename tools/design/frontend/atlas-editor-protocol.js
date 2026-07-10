@@ -3,6 +3,7 @@ export const ATLAS_EDITOR_BRIDGE_SCHEMA = "limina.atlas-editor-bridge/v1";
 export const ATLAS_FOCUS_REQUEST = "atlas.focus-request";
 export const EDITOR_REVEAL_REQUEST = "editor.reveal-request";
 export const EDITOR_HANDOFF_READY = "editor.handoff-ready";
+export const ATLAS_DESIGN_REF_SCHEMA = "limina.atlas-design-ref/v1";
 export const MAX_BRIDGE_COORDINATE_M = 10_000_000;
 export const MAX_BRIDGE_RADIUS_M = 10_000_000;
 export const MAX_BRIDGE_IDENTIFIER_CHARS = 128;
@@ -103,6 +104,19 @@ function parseSubject(input) {
   });
 }
 
+function parseDesignRef(input) {
+  const fields = dataFields(input, ["schema", "mapId", "kind", "id"], [], "Atlas designRef");
+  if (fields.schema !== ATLAS_DESIGN_REF_SCHEMA || !SUBJECT_KINDS.has(fields.kind) || fields.kind === "coordinate") {
+    throw protocolError("Atlas designRef schema or kind is invalid");
+  }
+  return Object.freeze({
+    schema: ATLAS_DESIGN_REF_SCHEMA,
+    mapId: boundedString(fields.mapId, MAX_BRIDGE_IDENTIFIER_CHARS, "Atlas designRef.mapId"),
+    kind: fields.kind,
+    id: boundedString(fields.id, MAX_BRIDGE_IDENTIFIER_CHARS, "Atlas designRef.id"),
+  });
+}
+
 function parseSource(input) {
   const fields = dataFields(input, ["revision", "headHash"], [], "Atlas focus source");
   if (!Number.isSafeInteger(fields.revision) || fields.revision < 0 || typeof fields.headHash !== "string"
@@ -143,7 +157,7 @@ export function parseEditorRevealRequest(input) {
   const fields = dataFields(
     input,
     ["schema", "type", "requestId", "world", "label"],
-    [],
+    ["designRef"],
     "editor reveal request",
   );
   if (fields.schema !== ATLAS_EDITOR_BRIDGE_SCHEMA || fields.type !== EDITOR_REVEAL_REQUEST) {
@@ -155,6 +169,7 @@ export function parseEditorRevealRequest(input) {
     requestId: requestId(fields.requestId),
     world: denseWorldTuple(fields.world, "editor reveal world"),
     label: boundedString(fields.label, MAX_BRIDGE_LABEL_CHARS, "editor reveal label"),
+    ...(fields.designRef === undefined ? {} : { designRef: parseDesignRef(fields.designRef) }),
   });
 }
 
@@ -167,7 +182,7 @@ export function parseEditorHandoffReady(input) {
 }
 
 export function parseAtlasEditorBridgeMessage(input) {
-  const fields = dataFields(input, ["schema", "type"], ["requestId", "source", "mapId", "subject", "world", "radiusM", "label"], "Atlas editor bridge message");
+  const fields = dataFields(input, ["schema", "type"], ["requestId", "source", "mapId", "subject", "world", "radiusM", "label", "designRef"], "Atlas editor bridge message");
   if (fields.schema !== ATLAS_EDITOR_BRIDGE_SCHEMA) {
     throw protocolError("Atlas editor bridge message schema is invalid");
   }
@@ -203,14 +218,28 @@ export function parseEditorLaunchConfig(input) {
 
 export function atlasLocalToCanonicalWorld(unitsInput, local) {
   const units = dataFields(unitsInput, ["kind", "unitsPerMeter", "origin"], [], "Atlas map units");
-  if (units.kind !== "m" || units.unitsPerMeter !== 1) {
-    throw protocolError("Atlas editor bridge requires canonical meter units");
-  }
+  if (units.kind !== "m") throw protocolError("Atlas map units.kind must be 'm'");
+  const unitsPerMeter = finiteBoundedNumber(units.unitsPerMeter, MAX_BRIDGE_COORDINATE_M, "Atlas map units.unitsPerMeter");
+  if (!(unitsPerMeter > 0)) throw protocolError("Atlas map units.unitsPerMeter must be positive");
   const origin = denseWorldTuple(units.origin, "Atlas map units.origin");
-  if (origin[0] !== 0 || origin[1] !== 0) {
-    throw protocolError("Atlas editor bridge requires origin [0,0]");
-  }
-  return denseWorldTuple(local, "Atlas local coordinate");
+  const point = denseWorldTuple(local, "Atlas local coordinate");
+  return denseWorldTuple([
+    origin[0] + point[0] / unitsPerMeter,
+    origin[1] + point[1] / unitsPerMeter,
+  ], "Atlas canonical world coordinate");
+}
+
+export function canonicalWorldToAtlasLocal(unitsInput, world) {
+  const units = dataFields(unitsInput, ["kind", "unitsPerMeter", "origin"], [], "Atlas map units");
+  if (units.kind !== "m") throw protocolError("Atlas map units.kind must be 'm'");
+  const unitsPerMeter = finiteBoundedNumber(units.unitsPerMeter, MAX_BRIDGE_COORDINATE_M, "Atlas map units.unitsPerMeter");
+  if (!(unitsPerMeter > 0)) throw protocolError("Atlas map units.unitsPerMeter must be positive");
+  const origin = denseWorldTuple(units.origin, "Atlas map units.origin");
+  const point = denseWorldTuple(world, "Atlas canonical world coordinate");
+  return denseWorldTuple([
+    (point[0] - origin[0]) * unitsPerMeter,
+    (point[1] - origin[1]) * unitsPerMeter,
+  ], "Atlas local coordinate");
 }
 
 export function isTrustedAtlasEditorMessageEvent(event, expectedSource, expectedOrigin) {

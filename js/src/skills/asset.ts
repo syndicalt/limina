@@ -25,6 +25,7 @@ import { TileCache } from "../terrain/tilecache.ts";
 import type { RegionState } from "./terrain.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import { AtlasDesignRefSchema } from "../world/worldmap.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -109,6 +110,9 @@ const placeInput = z.object({
    *  the recorder. Present on REPLAY: the resolved bytes are verified against it so
    *  the authored asset identity is pinned (a swapped/updated asset is rejected). */
   hash: z.string().optional(),
+  /** Exact Atlas source identity for placements compiled from a map subject. It is replayed with
+   *  the command and bound to the entity origin; direct/manual placements leave it absent. */
+  designRef: AtlasDesignRefSchema.optional(),
   /** REVIEW METADATA (not load-bearing — never touches the placed entity). When this placement is
    *  PROPOSED under a review profile (builder.review) and HELD in the approval queue, these ride the
    *  proposal so the reviewer approves what they can SEE. `qcRender` is an /assets-relative path to the
@@ -252,6 +256,10 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         rotationEuler: input.rotation,
         scale: input.scale,
       });
+      // loadGltfIntoScene is shared with generic three.loadGLTF and therefore cannot know the
+      // authoring skill. Bind the exact create command here for both mesh and sim-worker paths,
+      // replacing the worker's generic asset.load fallback and making designRef snapshot-durable.
+      ctx.world.entities.bindOrigin(entity, { tool: "asset.place", input: { ...input } });
       // MEASURE → (normalize) → GROUND, then BUILDING COLLIDER. A glTF origin is usually centred, so
       // without grounding the asset's base sinks below position.y.
       //
@@ -334,6 +342,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         rotation: input.rotation ?? null,
         scale: input.scale ?? null,
         grounded: input.ground,
+        ...(input.designRef !== undefined ? { designRef: input.designRef } : {}),
         bounds,
         entity,
       });

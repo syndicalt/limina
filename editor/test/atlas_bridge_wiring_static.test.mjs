@@ -44,6 +44,12 @@ test("Atlas focus is source-fenced, residency-coordinated, and terrain-grounded"
   assert.match(viewport, /resolvePose:\s*\(\{ context \}\)/);
 });
 
+test("Frame World owns and releases the overview presentation lifecycle", () => {
+  assert.match(viewport, /function leaveWorldOverviewPresentation\(\)[\s\S]*setWorldOverviewPresentation\?\.\(false\)/);
+  assert.match(viewport, /if \(result\) runtime\.setWorldOverviewPresentation\?\.\(true\);[\s\S]*else leaveWorldOverviewPresentation\(\);/);
+  assert.match(viewport, /function focusNavigationSelection\(\)[\s\S]*leaveWorldOverviewPresentation\(\);/);
+});
+
 test("reverse reveal uses exact selected world coordinates without POI inference", () => {
   assert.match(viewport, /selected\.mesh\.getWorldPosition\(atlasWorldPosition\)/);
   assert.match(viewport, /\[atlasWorldPosition\.x, atlasWorldPosition\.z\]/);
@@ -52,9 +58,10 @@ test("reverse reveal uses exact selected world coordinates without POI inference
 });
 
 test("Atlas flushes its authoritative CAS save before emitting a canonical focus", () => {
-  const flush = map.indexOf("const [saved,launch]=await Promise.all([flushMapSave()");
+  const flush = map.indexOf("const [saveResult,launch]=await Promise.all([flushMapSave()");
   const post = map.indexOf("window.parent.postMessage(message,window.location.origin)");
   assert.ok(flush >= 0 && post > flush);
+  assert.match(map, /const saved=requireCommittedMapSave\(saveResult,"Open in Editor"\)/);
   assert.match(map, /const map=activeMap\(\);[\s\S]*atlasLocalToCanonicalWorld\(map\.units/);
   assert.match(map, /source:\{revision:head&&head\.revision,headHash:head&&head\.headHash\}/);
   assert.match(net, /export async function flushMapSave\(\)[\s\S]*return doSave\(\);/);
@@ -71,7 +78,7 @@ test("standalone Atlas launches through a non-secret one-shot relay", () => {
   assert.equal((atlasHtml.match(/id="open-editor"/g) ?? []).length, 1);
   assert.match(map, /window\.open\("about:blank","_blank"\)/);
   assert.match(map, /if\(!activeMapId\) activeMapId=S\.state\.activeMapId\|\|primaryMapId\(\)/);
-  assert.match(map, /const \[saved,launch\]=await Promise\.all\(\[flushMapSave\(\),standalone\?getEditorLaunchConfig\(\)/);
+  assert.match(map, /const \[saveResult,launch\]=await Promise\.all\(\[flushMapSave\(\),standalone\?getEditorLaunchConfig\(\)/);
   assert.match(map, /event\.source!==popup\|\|event\.origin!==config\.editorOrigin/);
   assert.match(map, /popup\.postMessage\(message,config\.editorOrigin\)/);
   assert.match(relay, /event\.source !== opener \|\| event\.origin !== atlasOrigin/);

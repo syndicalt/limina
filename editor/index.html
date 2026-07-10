@@ -139,7 +139,9 @@
               <span aria-hidden="true">m/s</span>
             </label>
             <button id="viewport-navigation-focus" class="navigation-command" type="button" title="Frame selection (F)">Focus</button>
+            <button id="viewport-navigation-world" class="navigation-command" type="button" title="Frame world (Home)">World</button>
             <button id="viewport-navigation-goto-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-goto" aria-expanded="false">Go to</button>
+            <button id="viewport-navigation-search-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-search" aria-expanded="false">Search</button>
             <button id="viewport-navigation-views-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-views" aria-expanded="false">Views</button>
             <button id="viewport-atlas-toggle" class="navigation-command" type="button" aria-controls="viewport-atlas" aria-expanded="false">Atlas</button>
           </div>
@@ -160,6 +162,17 @@
               <button id="viewport-navigation-goto-submit" class="btn btn-small" type="submit">Go</button>
             </div>
           </form>
+
+          <section id="viewport-navigation-search" class="navigation-popover navigation-search" role="dialog" aria-labelledby="viewport-navigation-search-title" hidden>
+            <div class="navigation-popover-head">
+              <h4 id="viewport-navigation-search-title">Find a place</h4>
+              <button id="viewport-navigation-search-close" class="navigation-popover-close" type="button" aria-label="Close place search">×</button>
+            </div>
+            <label class="navigation-search-field" for="viewport-navigation-search-input">Name or kind
+              <input id="viewport-navigation-search-input" type="search" autocomplete="off" maxlength="128" />
+            </label>
+            <div id="viewport-navigation-search-results" class="navigation-search-results" role="listbox" aria-live="polite"></div>
+          </section>
 
           <section id="viewport-navigation-views" class="navigation-popover navigation-views" role="dialog" aria-labelledby="viewport-navigation-views-title" hidden>
             <div class="navigation-popover-head">

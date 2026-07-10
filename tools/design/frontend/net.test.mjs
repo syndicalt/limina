@@ -41,7 +41,7 @@ test("map saver handles conflicts once and retries transient authority failures"
     saver.bindSaveError((error) => errors.push(error.message));
 
     const conflictResult = await saver.flushMapSave();
-    assert.deepEqual(conflictResult, undefined);
+    assert.deepEqual(conflictResult, { conflict: true });
     assert.equal(conflicts, 1);
     assert.deepEqual(errors, []);
 

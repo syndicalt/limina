@@ -52,7 +52,7 @@ export const WATER_SAMPLE_LAYOUT = Object.freeze({
 
 const WORLD_MAP_ROOT_KEYS = new Set([
   "version", "id", "unitsPerMeter", "origin", "extent", "seaLevel", "land", "relief",
-  "reliefGrid", "biomes", "waterways", "waterBodies", "hydrology", "routes", "anchors", "gazetteer",
+  "reliefGrid", "biomes", "waterways", "waterBodies", "hydrology", "routes", "anchors", "gazetteer", "designIndex",
   "provenance",
 ]);
 const REQUIRED_ARRAY_KEYS = ["land", "relief", "biomes", "waterways", "routes", "anchors"];

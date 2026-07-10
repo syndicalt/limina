@@ -5,9 +5,11 @@
 // tools/map/compile-designmap.mjs — the CLI — is a thin, untested-logic wrapper: read files,
 // call this, write the file, print a summary.
 //
-// SCALE CONTRACT: every maps.json feature's [x, z] is already world meters (design-space's
-// authoring convention), scaled by the map's own `units` metadata if present (default
-// {units:"m", unitsPerMeter:1} — i.e. raw coordinate == meters). meters = raw / unitsPerMeter.
+// COORDINATE CONTRACT: MapDoc geometry is local to its declared `units` frame. The compiler
+// normalizes every horizontal point/rect exactly once to canonical world metres using
+// world = units.origin + local / units.unitsPerMeter, then emits WorldMap unitsPerMeter=1 and
+// origin=[0,0]. Meter-suffixed physical quantities (widthM, radiusM, depthM, etc.) are already
+// physical and are never scaled. Legacy maps without `units` use the canonical identity frame.
 //
 // AXIS CONVENTION: +x = east, NORTH = -z (right-handed y-up — see worldmap.ts's header). The
 // map tool still draws north as screen-up; only the world-space sign of "north" is -z, not +z.
@@ -26,8 +28,15 @@ import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 import { reliefGridSampler } from "./pipeline/map-raster.mjs";
 import { parseAuthoredWaterBodies, parseAuthoredWaterway, WATER_LIMITS, WaterIrValidationError } from "./water-ir.mjs";
 import { HydrologyIrValidationError, parseAuthoredHydrologyRecipe } from "./hydrology-ir.mjs";
+import { mapLocalRectToWorld, mapLocalToWorld, parseMapCoordinateFrame } from "./map-coordinate-frame.mjs";
+import {
+  ATLAS_DESIGN_REF_SCHEMA,
+  MAX_DESIGN_INDEX_ENTRIES,
+  atlasDesignRefKey,
+  parseAtlasDesignRef,
+} from "./design-ref.mjs";
 
-const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
+const DEFAULT_UNITS = { kind: "m", unitsPerMeter: 1, origin: [0, 0] };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
 // in js/src/world/worldmap.ts (this pure .mjs can't import the .ts — the mapstudio gate asserts
 // the two stay identical) and the frontend palette in tools/design/frontend/map-paint.js.
@@ -43,6 +52,17 @@ const GLYPH_AMPLITUDE = { mountain: 12, peak: 15, hills: 5 };
 const MAX_ATLAS_MAPS = 256;
 const MAX_ATLAS_FEATURES = 100_000;
 const MAX_ATLAS_STAMPS = 100_000;
+const MAX_ATLAS_PLACES = 100_000;
+const MAX_ATLAS_MARKERS = 100_000;
+const ATLAS_CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+const ATLAS_PLACE_FIELDS = new Set([
+  "id", "name", "kind", "parentId", "position", "binding", "radiusM", "regionId", "map",
+  "tags", "note", "assetId", "mapLink",
+]);
+const ATLAS_MARKER_FIELDS = new Set([
+  "id", "name", "kind", "position", "count", "radiusM", "assetId", "map", "mapLink",
+  "region", "regionId", "tags", "note",
+]);
 
 function atlasError(message) {
   throw new Error(`compile-atlas-mapdoc: ${message}`);
@@ -62,6 +82,85 @@ function atlasPoint(value, path) {
 function atlasPoints(value, minimum, path) {
   if (!Array.isArray(value) || value.length < minimum || value.length > 1_000_000) atlasError(`${path} must contain ${minimum}-1000000 points`);
   for (let index = 0; index < value.length; index++) atlasPoint(value[index], `${path}[${index}]`);
+}
+
+function atlasBoundedString(value, path, maximum = 256) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum
+      || value.trim().length < 1 || ATLAS_CONTROL_CHAR.test(value)) {
+    atlasError(`${path} must be a non-empty string of at most ${maximum} characters`);
+  }
+  return value;
+}
+
+function validateAtlasPlaces(places, path, coordinateFrame) {
+  if (!Array.isArray(places) || places.length > MAX_ATLAS_PLACES) atlasError(`${path} must contain at most ${MAX_ATLAS_PLACES} entries`);
+  const ids = new Set();
+  for (let index = 0; index < places.length; index++) {
+    const place = places[index], placePath = `${path}[${index}]`;
+    if (place === null || typeof place !== "object" || Array.isArray(place)
+        || Object.getPrototypeOf(place) !== Object.prototype || Object.getOwnPropertySymbols(place).length !== 0
+        || Object.getOwnPropertyNames(place).some((field) => !ATLAS_PLACE_FIELDS.has(field))) {
+      atlasError(`${placePath} fields are invalid`);
+    }
+    atlasBoundedString(place.id, `${placePath}.id`, 128);
+    atlasBoundedString(place.name, `${placePath}.name`);
+    atlasBoundedString(place.kind, `${placePath}.kind`, 128);
+    if (ids.has(place.id)) atlasError(`${placePath}.id is duplicated`);
+    ids.add(place.id);
+    if (place.parentId !== undefined && place.parentId !== null) atlasBoundedString(place.parentId, `${placePath}.parentId`, 128);
+    if (place.position !== undefined) { atlasPoint(place.position, `${placePath}.position`); toPoint(coordinateFrame, place.position); }
+    if (place.binding !== undefined && place.binding !== "point" && place.binding !== "area") atlasError(`${placePath}.binding is invalid`);
+    if (place.radiusM !== undefined && !(finiteAtlasNumber(place.radiusM, `${placePath}.radiusM`) > 0)) atlasError(`${placePath}.radiusM must be positive`);
+    if (place.binding === "area" && !(typeof place.radiusM === "number" && place.radiusM > 0)) atlasError(`${placePath} area binding requires radiusM`);
+    if (place.radiusM !== undefined && place.binding !== "area") atlasError(`${placePath}.radiusM requires area binding`);
+    for (const field of ["regionId", "map", "note", "assetId", "mapLink"]) {
+      if (place[field] !== undefined) atlasBoundedString(place[field], `${placePath}.${field}`, field === "note" ? 4096 : 256);
+    }
+    if (place.tags !== undefined) {
+      if (!Array.isArray(place.tags) || place.tags.length > 256) atlasError(`${placePath}.tags is invalid`);
+      for (let tagIndex = 0; tagIndex < place.tags.length; tagIndex++) atlasBoundedString(place.tags[tagIndex], `${placePath}.tags[${tagIndex}]`, 128);
+    }
+  }
+  for (let index = 0; index < places.length; index++) {
+    const place = places[index], placePath = `${path}[${index}]`;
+    if (place.parentId !== undefined && place.parentId !== null && !ids.has(place.parentId)) atlasError(`${placePath}.parentId references a missing place`);
+    const seen = new Set([place.id]);
+    let parent = place.parentId ?? null;
+    while (parent !== null) {
+      if (seen.has(parent)) atlasError(`${placePath} participates in a hierarchy cycle`);
+      seen.add(parent);
+      parent = places.find((candidate) => candidate.id === parent)?.parentId ?? null;
+    }
+  }
+}
+
+function validateAtlasMarkers(markers, path, coordinateFrame) {
+  if (!Array.isArray(markers) || markers.length > MAX_ATLAS_MARKERS) atlasError(`${path} must contain at most ${MAX_ATLAS_MARKERS} entries`);
+  const ids = new Set();
+  for (let index = 0; index < markers.length; index++) {
+    const marker = markers[index], markerPath = `${path}[${index}]`;
+    if (marker === null || typeof marker !== "object" || Array.isArray(marker)
+        || Object.getPrototypeOf(marker) !== Object.prototype || Object.getOwnPropertySymbols(marker).length !== 0
+        || Object.getOwnPropertyNames(marker).some((field) => !ATLAS_MARKER_FIELDS.has(field))) {
+      atlasError(`${markerPath} fields are invalid`);
+    }
+    atlasBoundedString(marker.id, `${markerPath}.id`, 128);
+    atlasBoundedString(marker.name, `${markerPath}.name`);
+    atlasBoundedString(marker.kind, `${markerPath}.kind`, 128);
+    if (ids.has(marker.id)) atlasError(`${markerPath}.id is duplicated`);
+    ids.add(marker.id);
+    atlasPoint(marker.position, `${markerPath}.position`);
+    toPoint(coordinateFrame, marker.position);
+    if (marker.count !== undefined && (!Number.isSafeInteger(marker.count) || marker.count < 1)) atlasError(`${markerPath}.count must be a positive safe integer`);
+    if (marker.radiusM !== undefined && !(finiteAtlasNumber(marker.radiusM, `${markerPath}.radiusM`) > 0)) atlasError(`${markerPath}.radiusM must be positive`);
+    for (const field of ["assetId", "map", "mapLink", "region", "regionId", "note"]) {
+      if (marker[field] !== undefined) atlasBoundedString(marker[field], `${markerPath}.${field}`, field === "note" ? 4096 : 256);
+    }
+    if (marker.tags !== undefined) {
+      if (!Array.isArray(marker.tags) || marker.tags.length > 256) atlasError(`${markerPath}.tags is invalid`);
+      for (let tagIndex = 0; tagIndex < marker.tags.length; tagIndex++) atlasBoundedString(marker.tags[tagIndex], `${markerPath}.tags[${tagIndex}]`, 128);
+    }
+  }
 }
 
 function validateAtlasRaster(raster, path, elevation) {
@@ -117,18 +216,21 @@ function validateAtlasMapDoc(doc) {
     ids.add(map.id);
     if (typeof map.name !== "string" || map.name.length < 1 || typeof map.scope !== "string" || map.scope.length < 1) atlasError(`${path} name/scope are invalid`);
     if (map.parent !== null && map.parent !== undefined && typeof map.parent !== "string") atlasError(`${path}.parent is invalid`);
-    if (map.units === null || typeof map.units !== "object" || Array.isArray(map.units)
-      || map.units.kind !== "m" || !(finiteAtlasNumber(map.units.unitsPerMeter, `${path}.units.unitsPerMeter`) > 0)) atlasError(`${path}.units is invalid`);
-    atlasPoint(map.units.origin, `${path}.units.origin`);
+    let coordinateFrame;
+    try { coordinateFrame = parseMapCoordinateFrame(map.units); }
+    catch (error) { atlasError(`${path}.units is invalid: ${error instanceof Error ? error.message : String(error)}`); }
     if (!Array.isArray(map.features) || map.features.length > MAX_ATLAS_FEATURES) atlasError(`${path}.features must contain at most ${MAX_ATLAS_FEATURES} entries`);
     if (map.seaLevel !== undefined) finiteAtlasNumber(map.seaLevel, `${path}.seaLevel`);
-    if (map.waterBodies !== undefined) compileWater(map.waterBodies, parseAuthoredWaterBodies);
+    if (map.waterBodies !== undefined) normalizeWaterBodies(coordinateFrame, compileWater(map.waterBodies, parseAuthoredWaterBodies));
     if (map.hydrology !== undefined) compileHydrology(map.hydrology);
     if (map.rasters !== undefined) {
       if (map.rasters === null || typeof map.rasters !== "object" || Array.isArray(map.rasters)) atlasError(`${path}.rasters must be an object`);
       if (map.rasters.elevation !== undefined) validateAtlasRaster(map.rasters.elevation, `${path}.rasters.elevation`, true);
       if (map.rasters.landmass !== undefined) validateAtlasRaster(map.rasters.landmass, `${path}.rasters.landmass`, false);
       if (map.rasters.biomes !== undefined) validateAtlasRaster(map.rasters.biomes, `${path}.rasters.biomes`, false);
+      if (map.rasters.elevation !== undefined) toRect(coordinateFrame, map.rasters.elevation.rect);
+      if (map.rasters.landmass !== undefined) toRect(coordinateFrame, map.rasters.landmass.rect);
+      if (map.rasters.biomes !== undefined) toRect(coordinateFrame, map.rasters.biomes.rect);
     }
     if (map.stamps !== undefined) {
       if (!Array.isArray(map.stamps) || map.stamps.length > MAX_ATLAS_STAMPS) atlasError(`${path}.stamps must contain at most ${MAX_ATLAS_STAMPS} entries`);
@@ -136,62 +238,113 @@ function validateAtlasMapDoc(doc) {
       for (let index = 0; index < map.stamps.length; index++) {
         const stamp = map.stamps[index], stampPath = `${path}.stamps[${index}]`;
         if (stamp === null || typeof stamp !== "object" || Array.isArray(stamp)
-          || typeof stamp.id !== "string" || stamp.id.length < 1 || typeof stamp.assetId !== "string" || stamp.assetId.length < 1) atlasError(`${stampPath} is invalid`);
+          || typeof stamp.id !== "string" || stamp.id.length < 1 || stamp.id.length > 128
+          || typeof stamp.assetId !== "string" || stamp.assetId.length < 1) atlasError(`${stampPath} is invalid`);
         if (stampIds.has(stamp.id)) atlasError(`${stampPath}.id is duplicated`);
         stampIds.add(stamp.id);
         finiteAtlasNumber(stamp.x, `${stampPath}.x`);
         finiteAtlasNumber(stamp.z, `${stampPath}.z`);
+        toPoint(coordinateFrame, [stamp.x, stamp.z]);
         if (stamp.rot !== undefined) finiteAtlasNumber(stamp.rot, `${stampPath}.rot`);
         if (stamp.scale !== undefined && !(finiteAtlasNumber(stamp.scale, `${stampPath}.scale`) > 0)) atlasError(`${stampPath}.scale must be positive`);
       }
     }
+    if (map.places !== undefined) validateAtlasPlaces(map.places, `${path}.places`, coordinateFrame);
+    if (map.markers !== undefined) validateAtlasMarkers(map.markers, `${path}.markers`, coordinateFrame);
     const featureIds = new Set();
     for (let featureIndex = 0; featureIndex < map.features.length; featureIndex++) {
       const feature = map.features[featureIndex], featurePath = `${path}.features[${featureIndex}]`;
       if (feature === null || typeof feature !== "object" || Array.isArray(feature)) atlasError(`${featurePath} must be an object`);
-      if (typeof feature.id !== "string" || feature.id.length < 1) atlasError(`${featurePath}.id is invalid`);
+      if (typeof feature.id !== "string" || feature.id.length < 1 || feature.id.length > 128) atlasError(`${featurePath}.id is invalid`);
       if (featureIds.has(feature.id)) atlasError(`${featurePath}.id is duplicated`);
       featureIds.add(feature.id);
       if (feature.type === "area" && (feature.kind === "outline" || feature.kind === "biome")) {
         atlasPoints(feature.points, 3, `${featurePath}.points`);
+        toPoints(coordinateFrame, feature.points);
         if (feature.kind === "biome" && !BIOME_CLASSES.includes(feature.biome)) atlasError(`${featurePath}.biome is invalid`);
       } else if (feature.type === "line" && feature.kind === "river") {
-        compileWater(feature, (value) => parseAuthoredWaterway(value, RIVER_MIN_WIDTH_M, featurePath));
+        const waterway = compileWater(feature, (value) => parseAuthoredWaterway(value, RIVER_MIN_WIDTH_M, featurePath));
+        toPoints(coordinateFrame, waterway.points);
       } else if (feature.type === "line" && (feature.kind === "road" || feature.kind === "border")) {
         atlasPoints(feature.points, 2, `${featurePath}.points`);
+        toPoints(coordinateFrame, feature.points);
       } else if (feature.type === "glyph") {
         if (typeof feature.glyph !== "string" || feature.glyph.length < 1) atlasError(`${featurePath}.glyph is invalid`);
         finiteAtlasNumber(feature.x, `${featurePath}.x`);
         finiteAtlasNumber(feature.z, `${featurePath}.z`);
+        toPoint(coordinateFrame, [feature.x, feature.z]);
       }
     }
   }
   if (!ids.has(doc.activeMapId)) atlasError("activeMapId does not identify a map");
+  for (let mapIndex = 0; mapIndex < doc.maps.length; mapIndex++) {
+    for (let placeIndex = 0; placeIndex < (doc.maps[mapIndex].places ?? []).length; placeIndex++) {
+      const place = doc.maps[mapIndex].places[placeIndex];
+      for (const field of ["map", "mapLink"]) {
+        if (place[field] !== undefined && !ids.has(place[field])) atlasError(`maps[${mapIndex}].places[${placeIndex}].${field} does not identify a map`);
+      }
+    }
+    for (let markerIndex = 0; markerIndex < (doc.maps[mapIndex].markers ?? []).length; markerIndex++) {
+      const marker = doc.maps[mapIndex].markers[markerIndex];
+      for (const field of ["map", "mapLink"]) {
+        if (marker[field] !== undefined && !ids.has(marker[field])) atlasError(`maps[${mapIndex}].markers[${markerIndex}].${field} does not identify a map`);
+      }
+    }
+  }
   return doc.maps.find((map) => map.id === doc.activeMapId);
 }
 
-function atlasMapSizeM(map) {
+function atlasMapSizeM(map, coordinateFrame) {
   let span = 1;
-  const includeRect = (rect) => { if (rect !== undefined) span = Math.max(span, rect.w, rect.h); };
+  const includeRect = (rect) => {
+    if (rect === undefined) return;
+    const world = mapLocalRectToWorld(coordinateFrame, rect);
+    span = Math.max(span, world.w, world.h);
+  };
   includeRect(map.rasters?.elevation?.rect);
   includeRect(map.rasters?.landmass?.rect);
   includeRect(map.rasters?.biomes?.rect);
   const pointSets = [];
-  for (const feature of map.features) if (Array.isArray(feature.points)) pointSets.push(feature.points);
-  for (const body of map.waterBodies ?? []) pointSets.push(body.footprint.points, ...(body.footprint.holes ?? []));
+  for (const feature of map.features) if (Array.isArray(feature.points)) pointSets.push(toPoints(coordinateFrame, feature.points));
+  for (const body of map.waterBodies ?? []) {
+    pointSets.push(toPoints(coordinateFrame, body.footprint.points));
+    for (const hole of body.footprint.holes ?? []) pointSets.push(toPoints(coordinateFrame, hole));
+  }
   if (pointSets.length > 0) {
     const bounds = bboxOf(pointSets);
     span = Math.max(span, bounds.w, bounds.h);
   }
-  return span / map.units.unitsPerMeter;
+  return span;
 }
 
-function toPoint(p) {
-  return [Number(p[0]), Number(p[1])];
+function toPoint(coordinateFrame, p) {
+  return [...mapLocalToWorld(coordinateFrame, [p[0], p[1]])];
 }
 
-function toPoints(pts) {
-  return pts.map(toPoint);
+function toPoints(coordinateFrame, pts) {
+  return pts.map((point) => toPoint(coordinateFrame, point));
+}
+
+function toRect(coordinateFrame, rect) {
+  return { ...mapLocalRectToWorld(coordinateFrame, {
+    x0: rect.x0,
+    z0: rect.z0,
+    w: rect.w,
+    h: rect.h,
+  }) };
+}
+
+function normalizeWaterBodies(coordinateFrame, bodies) {
+  if (bodies === undefined) return undefined;
+  return bodies.map((body) => ({
+    ...body,
+    footprint: {
+      points: toPoints(coordinateFrame, body.footprint.points),
+      ...(body.footprint.holes === undefined ? {} : {
+        holes: body.footprint.holes.map((hole) => toPoints(coordinateFrame, hole)),
+      }),
+    },
+  }));
 }
 
 function waterError(message) {
@@ -265,9 +418,17 @@ function readLocations(fm) {
     const kind = (chunk.match(/\n\s*kind:\s*(\S+)/) || [])[1];
     const posMatch = chunk.match(/\n\s*position:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]/);
     const count = Number((chunk.match(/\n\s*count:\s*(\d+)/) || [])[1]) || undefined;
+    const map = (chunk.match(/\n\s*map:\s*(\S+)/) || [])[1];
+    const radiusM = Number((chunk.match(/\n\s*radiusM:\s*(-?\d+(?:\.\d+)?)/) || [])[1]) || undefined;
+    const assetId = yamlScalar((chunk.match(/\n\s*assetId:\s*(.*)/) || [])[1]);
     if (id && kind && posMatch) {
-      locations.push({ id, name, kind, position: [Number(posMatch[1]), Number(posMatch[2])], count });
+      locations.push({ id, name, kind, position: [Number(posMatch[1]), Number(posMatch[2])], count, map, radiusM, assetId });
     }
+  }
+  const ids = new Set();
+  for (const location of locations) {
+    if (ids.has(location.id)) throw new Error(`world-bible: duplicate location id "${location.id}"`);
+    ids.add(location.id);
   }
   return locations;
 }
@@ -308,6 +469,7 @@ function readPlaces(placesText) {
     const bindingM = chunk.match(/\n\s*binding:\s*(.*)/);
     const radM = chunk.match(/\n\s*radiusM:\s*(-?\d+(?:\.\d+)?)/);
     const assetM = chunk.match(/\n\s*assetId:\s*(.*)/);
+    const mapM = chunk.match(/\n\s*map:\s*(.*)/);
     places.push({
       id,
       name,
@@ -317,6 +479,7 @@ function readPlaces(placesText) {
       binding: yamlScalar(bindingM?.[1]),
       radiusM: radM ? Number(radM[1]) : undefined,
       assetId: yamlScalar(assetM?.[1]),
+      map: yamlScalar(mapM?.[1]),
     });
   }
   const ids = new Set();
@@ -342,6 +505,35 @@ function readPlaces(placesText) {
   return places;
 }
 
+function designRef(mapId, kind, id) {
+  return parseAtlasDesignRef({ schema: ATLAS_DESIGN_REF_SCHEMA, mapId, kind, id: String(id) });
+}
+
+function featureIndexPosition(coordinateFrame, feature) {
+  if (feature.type === "glyph") return toPoint(coordinateFrame, [feature.x, feature.z]);
+  if (!Array.isArray(feature.points) || feature.points.length === 0) return undefined;
+  const bounds = bboxOf([toPoints(coordinateFrame, feature.points)]);
+  return [(bounds.minX + bounds.maxX) / 2, (bounds.minZ + bounds.maxZ) / 2];
+}
+
+function sortedDesignIndex(entries) {
+  return entries.sort((left, right) => {
+    const a = atlasDesignRefKey(left.designRef), b = atlasDesignRefKey(right.designRef);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+
+function addDesignIndexEntry(entries, entry) {
+  if (entries.length >= MAX_DESIGN_INDEX_ENTRIES) {
+    throw new Error(`compile-designmap: navigable designIndex exceeds ${MAX_DESIGN_INDEX_ENTRIES} entries`);
+  }
+  entries.push(entry);
+}
+
+function assignedToMap(subject, mapId, primaryMapId) {
+  return subject.map ? subject.map === mapId : mapId === primaryMapId;
+}
+
 /**
  * Compile a design-space map + its world-bible into a plain WorldMap-shaped object (matching
  * worldmap.ts's WorldMapSchema — the caller is expected to zod-parse it; this pure function has
@@ -362,8 +554,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   const map = mapsDoc.maps.find((m) => m.id === targetId);
   if (!map) throw new Error(`compile-designmap: map id "${targetId}" not found in maps.json (have: ${mapsDoc.maps.map((m) => m.id).join(", ")})`);
 
-  const units = map.units || DEFAULT_UNITS;
-  const unitsPerMeter = units.unitsPerMeter || 1;
+  const coordinateFrame = parseMapCoordinateFrame(map.units || DEFAULT_UNITS);
 
   // A painted elevation raster (Map Studio S1, map.rasters.elevation in the MapDoc) compiles to
   // the IR's reliefGrid. PRECEDENCE CONTRACT: when present, vector relief hints are NOT emitted
@@ -380,7 +571,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     elevationGrid = {
       w: elevation.w,
       h: elevation.h,
-      rect: { x0: elevation.rect?.x0, z0: elevation.rect?.z0, w: elevation.rect?.w, h: elevation.rect?.h },
+      rect: toRect(coordinateFrame, elevation.rect),
       minY: elevation.minY,
       maxY: elevation.maxY,
       ...(elevation.encoding !== undefined ? { encoding: elevation.encoding } : {}),
@@ -414,24 +605,39 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   }
 
   const fm = atlasMode ? undefined : frontmatterBlock(worldBibleText);
-  const sizeM = atlasMode ? atlasMapSizeM(map) : readZoneSizeM(fm);
-  const locations = atlasMode ? [] : readLocations(fm);
+  const sizeM = atlasMode ? atlasMapSizeM(map, coordinateFrame) : readZoneSizeM(fm);
+  const primaryMapId = mapsDoc.maps[0]?.id;
+  const locations = (atlasMode ? (map.markers ?? []) : readLocations(fm)).filter((location) => (
+    assignedToMap(location, map.id, primaryMapId)
+  ));
+  const places = atlasMode
+    ? (map.places ?? []).filter((place) => assignedToMap(place, map.id, primaryMapId))
+    : readPlaces(placesText).filter((place) => assignedToMap(place, map.id, primaryMapId));
 
   const land = [];
   const relief = [];
   const biomes = [];
   const waterways = [];
   const routes = [];
+  const designIndex = [];
+  for (const feature of map.features) {
+    if (feature.type !== "glyph") continue;
+    const position = featureIndexPosition(coordinateFrame, feature);
+    if (position !== undefined) addDesignIndexEntry(designIndex, { designRef: designRef(map.id, "feature", feature.id), position });
+  }
   // MapDoc stores per-basin water directly on the map, not as overloaded generic area features.
   // Presence is preserved exactly: absent stays absent; an authored empty array stays present.
-  const waterBodies = map.waterBodies === undefined ? undefined : compileWater(map.waterBodies, parseAuthoredWaterBodies);
+  const waterBodies = map.waterBodies === undefined ? undefined : normalizeWaterBodies(
+    coordinateFrame,
+    compileWater(map.waterBodies, parseAuthoredWaterBodies),
+  );
   const hydrology = map.hydrology === undefined ? undefined : compileHydrology(map.hydrology);
   let waterwayPointCount = 0;
 
   if (landmass) {
     const lw = Number(landmass.w), lh = Number(landmass.h);
     const cells = decodeRasterCells(landmass, lw * lh);
-    const rect = { x0: Number(landmass.rect.x0), z0: Number(landmass.rect.z0), w: Number(landmass.rect.w), h: Number(landmass.rect.h) };
+    const rect = toRect(coordinateFrame, landmass.rect);
     // ELEVATION CARVES WATER: painted elevation below sea level removes land from the mask —
     // digging at the coast extends the sea (the Atlas display applies the identical rule, so
     // the coast the user sees is the coast that builds). Enclosed sub-sea pits become polygon
@@ -443,7 +649,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     if (elevation) {
       const sampler = elevationSampler;
       const seaY = typeof map.seaLevel === "number" ? map.seaLevel : 0;
-      const er = elevation.rect;
+      const er = elevationGrid.rect;
       const sx = rect.w / (lw - 1), sz = rect.h / (lh - 1);
       for (let r = 0; r < lh; r++) {
         const wz = rect.z0 + r * sz;
@@ -465,7 +671,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   if (biomesRaster) {
     const bw = Number(biomesRaster.w), bh = Number(biomesRaster.h);
     const cells = decodeRasterCells(biomesRaster, bw * bh);
-    const rect = { x0: Number(biomesRaster.rect.x0), z0: Number(biomesRaster.rect.z0), w: Number(biomesRaster.rect.w), h: Number(biomesRaster.rect.h) };
+    const rect = toRect(coordinateFrame, biomesRaster.rect);
     for (let k = 0; k < BIOME_CLASSES.length; k++) {
       const bin = new Uint8Array(bw * bh);
       let any = false;
@@ -486,26 +692,27 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     const f = map.features[featureIndex];
     if (f.type === "area" && f.kind === "outline") {
       if (landmass) { warnings.push(`ignored outline feature "${f.id}" (a painted landmass mask is authoritative)`); continue; }
-      land.push({ points: toPoints(f.points) });
+      land.push({ points: toPoints(coordinateFrame, f.points) });
     } else if (f.type === "area" && f.kind === "biome") {
       if (biomesRaster) { warnings.push(`ignored biome feature "${f.id}" (a painted biome raster is authoritative)`); continue; }
-      const points = toPoints(f.points);
+      const points = toPoints(coordinateFrame, f.points);
       biomes.push({ biome: f.biome, points });
       if (f.biome === "mountain" && !elevation) {
         relief.push({ kind: "mountain", shape: { polygon: points }, amplitude: MOUNTAIN_BIOME_AMPLITUDE });
       }
     } else if (f.type === "line" && f.kind === "river") {
       if (waterways.length >= WATER_LIMITS.waterways) waterError(`waterways exceeds ${WATER_LIMITS.waterways} entries`);
-      const waterway = compileWater(f, (feature) => parseAuthoredWaterway(feature, riverWidthM(sizeM), `features[${featureIndex}]`));
+      const parsedWaterway = compileWater(f, (feature) => parseAuthoredWaterway(feature, riverWidthM(sizeM), `features[${featureIndex}]`));
+      const waterway = { ...parsedWaterway, points: toPoints(coordinateFrame, parsedWaterway.points) };
       waterwayPointCount += waterway.points.length;
       if (waterwayPointCount > WATER_LIMITS.totalWaterwayPoints) waterError(`waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points`);
       waterways.push(waterway);
     } else if (f.type === "line" && f.kind === "road") {
-      routes.push({ points: toPoints(f.points), class: "road" });
+      routes.push({ points: toPoints(coordinateFrame, f.points), class: "road" });
     } else if (f.type === "line" && f.kind === "border") {
       warnings.push(`skipped border feature "${f.id}" (political borders are out of scope for v1)`);
     } else if (f.type === "glyph" && (f.glyph === "mountain" || f.glyph === "peak" || f.glyph === "hills")) {
-      if (!elevation) relief.push({ kind: f.glyph, shape: { point: [Number(f.x), Number(f.z)] }, amplitude: GLYPH_AMPLITUDE[f.glyph] });
+      if (!elevation) relief.push({ kind: f.glyph, shape: { point: toPoint(coordinateFrame, [f.x, f.z]) }, amplitude: GLYPH_AMPLITUDE[f.glyph] });
     } else if (f.type === "glyph") {
       warnings.push(`skipped glyph "${f.glyph}" on feature "${f.id}" (no relief mapping for v1)`);
     } else {
@@ -517,8 +724,8 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   // with the world-bible's declared zone size is a design-vault bug, not something to rescale.
   if (land.length > 0) {
     const bbox = bboxOf(land.map((l) => l.points));
-    const wM = bbox.w / unitsPerMeter;
-    const hM = bbox.h / unitsPerMeter;
+    const wM = bbox.w;
+    const hM = bbox.h;
     if (wM > sizeM * 2 || hM > sizeM * 2) {
       throw new Error(
         `compile-designmap: outline bbox ${wM.toFixed(1)}x${hM.toFixed(1)}m exceeds 2x world-bible zone.size_m=${sizeM}m ` +
@@ -535,16 +742,25 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     ...routes.map((r) => r.points),
   ];
   const bbox = bboxOf(allPointArrays.length > 0 ? allPointArrays : [[[0, 0]]]);
-  const extent = { w: Math.max(bbox.w / unitsPerMeter, 1), h: Math.max(bbox.h / unitsPerMeter, 1) };
+  const extent = { w: Math.max(bbox.w, 1), h: Math.max(bbox.h, 1) };
 
   const anchors = locations.map((l) => ({
     id: l.id,
     kind: l.kind,
-    position: l.position,
+    position: toPoint(coordinateFrame, l.position),
     ...(l.count !== undefined ? { count: l.count } : {}),
     ...(l.name !== undefined ? { name: l.name } : {}),
-    source: "world-bible",
+    ...(l.assetId !== undefined ? { assetId: l.assetId } : {}),
+    designRef: designRef(map.id, "marker", l.id),
+    source: atlasMode ? "map" : "world-bible",
   }));
+  for (const location of locations) {
+    addDesignIndexEntry(designIndex, {
+      designRef: designRef(map.id, "marker", location.id),
+      position: toPoint(coordinateFrame, location.position),
+      ...(location.radiusM === undefined ? {} : { radiusM: location.radiusM }),
+    });
+  }
 
   // Map Painter P3 stamps: each placed stamp compiles 1:1 into an "asset" anchor that names its
   // exact catalog asset — the build sites it through the same steering path as planned buildings
@@ -555,15 +771,19 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
       warnings.push(`skipped malformed stamp ${JSON.stringify(s && s.id ? s.id : s)}`);
       continue;
     }
+    const ref = designRef(map.id, "stamp", s.id);
+    const position = toPoint(coordinateFrame, [s.x, s.z]);
     anchors.push({
       id: String(s.id),
       kind: "asset",
-      position: [Number(s.x), Number(s.z)],
+      position,
       assetId: String(s.assetId),
       ...(typeof s.rot === "number" && s.rot !== 0 ? { rot: Number(s.rot) } : {}),
       ...(typeof s.scale === "number" && s.scale !== 1 ? { scale: Number(s.scale) } : {}),
+      designRef: ref,
       source: "map",
     });
+    addDesignIndexEntry(designIndex, { designRef: ref, position });
   }
 
   // PLACES (Stage 4): the gazetteer (the runtime named-place index NPCs navigate by) + place-marker
@@ -575,16 +795,19 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   // gazetteer entry (nothing to navigate to), no anchor. Emitted in source order (deterministic).
   const gazetteer = [];
   const anchorIds = new Set(anchors.map((a) => a.id));
-  for (const p of readPlaces(placesText)) {
+  for (const p of places) {
     if (!p.position) continue;
-    const entry = { placeId: p.id, name: p.name, kind: p.kind, parentId: p.parentId, position: p.position };
+    const position = toPoint(coordinateFrame, p.position);
+    const ref = designRef(map.id, "place", p.id);
+    const entry = { placeId: p.id, name: p.name, kind: p.kind, parentId: p.parentId ?? null, position, designRef: ref };
     if (p.binding === "area" && typeof p.radiusM === "number") entry.radiusM = p.radiusM;
     gazetteer.push(entry);
+    addDesignIndexEntry(designIndex, { designRef: ref, position, ...(entry.radiusM === undefined ? {} : { radiusM: entry.radiusM }) });
     if (p.assetId) {
       if (anchorIds.has(p.id)) {
         warnings.push(`place "${p.id}" shares an id with an existing anchor — its marker-asset anchor was skipped`);
       } else {
-        anchors.push({ id: p.id, kind: "asset", position: p.position, assetId: p.assetId, source: "places" });
+        anchors.push({ id: p.id, kind: "asset", position, assetId: p.assetId, designRef: ref, source: "places" });
         anchorIds.add(p.id);
       }
     }
@@ -597,7 +820,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   const worldMap = {
     version: 1,
     id: map.id,
-    unitsPerMeter,
+    unitsPerMeter: 1,
     origin: [0, 0],
     extent,
     seaLevel: typeof map.seaLevel === "number" ? map.seaLevel : 0.0,
@@ -614,6 +837,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     anchors,
     // Emitted only when the vault has placed places, so pre-Places maps keep their bytes/hash.
     ...(gazetteer.length > 0 ? { gazetteer } : {}),
+    ...(designIndex.length > 0 ? { designIndex: sortedDesignIndex(designIndex) } : {}),
     provenance: {
       tool: "design-space",
       sourceHash,

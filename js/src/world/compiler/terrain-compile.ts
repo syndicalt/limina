@@ -34,6 +34,20 @@ import { createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph } fr
 import { planCompilerInvalidation } from "./planner.mjs";
 import { createDerivedRevisionManifest, derivedArtifactContentHash, derivedGlobalArtifacts, parseDerivedRevisionManifest } from "./manifest.mjs";
 import { encodeTerrainChunkArtifact, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE } from "./terrain-artifact.mjs";
+import {
+  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+  WORLD_OVERVIEW_ARTIFACT_TYPE,
+  WORLD_OVERVIEW_TARGET_DIMENSION,
+  WorldOverviewArtifactCancelledError,
+  encodeWorldOverviewArtifact,
+} from "./world-overview-artifact.mjs";
+import {
+  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+  NAVIGATION_INDEX_ARTIFACT_TYPE,
+  NavigationIndexArtifactValidationError,
+  encodeNavigationIndexArtifact,
+} from "./navigation-index-artifact.mjs";
+import { atlasDesignRefKey } from "../design-ref.mjs";
 
 export const WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA = "limina.world-terrain-compiler-config/v1";
 export const WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION = "1.2.0";
@@ -226,6 +240,45 @@ function normalizeEditedTile(base: any, heightsM: Float32Array, verticalRange: {
   };
 }
 
+function createWorldOverviewGrid(field: any, shouldCancel: () => boolean) {
+  const rows = WORLD_OVERVIEW_TARGET_DIMENSION, cols = WORLD_OVERVIEW_TARGET_DIMENSION;
+  const cells = rows * cols;
+  const heights = new Float32Array(cells);
+  const paintMaterial = new Uint8Array(cells);
+  const paintWeight = new Uint8Array(cells);
+  const sourceMax = field.masterRes - 1;
+  let work = 0;
+  for (let row = 0; row < rows; row++) {
+    const sourceZ = row * sourceMax / (rows - 1);
+    const z0 = Math.floor(sourceZ), z1 = Math.min(sourceMax, z0 + 1), tz = sourceZ - z0;
+    for (let col = 0; col < cols; col++) {
+      checkpoint(shouldCancel, work++);
+      const sourceX = col * sourceMax / (cols - 1);
+      const x0 = Math.floor(sourceX), x1 = Math.min(sourceMax, x0 + 1), tx = sourceX - x0;
+      const top = field.heightsM[z0 * field.masterRes + x0]
+        + (field.heightsM[z0 * field.masterRes + x1] - field.heightsM[z0 * field.masterRes + x0]) * tx;
+      const bottom = field.heightsM[z1 * field.masterRes + x0]
+        + (field.heightsM[z1 * field.masterRes + x1] - field.heightsM[z1 * field.masterRes + x0]) * tx;
+      const target = row * cols + col;
+      heights[target] = Math.fround(top + (bottom - top) * tz);
+      const nearestX = Math.round(sourceX), nearestZ = Math.round(sourceZ);
+      const nearest = nearestZ * field.masterRes + nearestX;
+      paintMaterial[target] = field.paintMat[nearest];
+      paintWeight[target] = Math.round(Math.max(0, Math.min(1, field.paintW[nearest])) * 255);
+    }
+  }
+  checkpoint(shouldCancel);
+  return {
+    rows,
+    cols,
+    origin: [field.bounds.minX, field.bounds.minZ],
+    stepM: (field.bounds.maxX - field.bounds.minX) / (cols - 1),
+    heights,
+    paintMaterial,
+    paintWeight,
+  };
+}
+
 function parseAvailableArtifactHashes(input: unknown, previousManifest: any) {
   const globalArtifacts = derivedGlobalArtifacts(previousManifest);
   const values = denseArray(input, MAX_WORLD_TERRAIN_COMPILE_CHUNKS + globalArtifacts.length, "available terrain artifact hashes");
@@ -247,7 +300,92 @@ function terrainWorldMapSourceHash(map: WorldMap): string {
   const terrainInputs = { ...map } as Record<string, unknown>;
   delete terrainInputs.hydrology;
   delete terrainInputs.provenance;
+  delete terrainInputs.designIndex;
+  delete terrainInputs.gazetteer;
+  terrainInputs.anchors = map.anchors.map((anchor) => ({ position: anchor.position }));
   return compilerContentHash({ schema: "limina.world-terrain-source/v1", worldMap: terrainInputs });
+}
+
+const NAVIGATION_KIND = /^[a-z][a-z0-9._-]{0,63}$/;
+const NAVIGATION_SOURCE_HASH_LIMITS = Object.freeze({
+  maxBytes: 64 * 1024 * 1024,
+  maxDepth: 12,
+  maxNodes: 2_000_000,
+  maxProperties: 32,
+  maxArrayLength: 100_000,
+});
+
+function canonicalNavigationSearchTerm(value: string): string {
+  return value.normalize("NFKC").toLowerCase().trim().replace(/\s+/gu, " ");
+}
+
+function createNavigationIndexSource(map: WorldMap, worldBounds: any, shouldCancel: () => boolean) {
+  const anchorsByRef = new Map<string, any[]>();
+  const gazetteerByRef = new Map<string, any[]>();
+  let work = 0;
+  for (const anchor of map.anchors) {
+    checkpoint(shouldCancel, work++);
+    if (anchor.designRef === undefined) continue;
+    const key = atlasDesignRefKey(anchor.designRef);
+    const matches = anchorsByRef.get(key);
+    if (matches === undefined) anchorsByRef.set(key, [anchor]);
+    else matches.push(anchor);
+  }
+  for (const place of map.gazetteer ?? []) {
+    checkpoint(shouldCancel, work++);
+    if (place.designRef === undefined) continue;
+    const key = atlasDesignRefKey(place.designRef);
+    const matches = gazetteerByRef.get(key);
+    if (matches === undefined) gazetteerByRef.set(key, [place]);
+    else matches.push(place);
+  }
+
+  const entries = (map.designIndex ?? []).map((indexed, index) => {
+    checkpoint(shouldCancel, work++);
+    const refKey = atlasDesignRefKey(indexed.designRef);
+    const anchors = anchorsByRef.get(refKey) ?? [];
+    const places = gazetteerByRef.get(refKey) ?? [];
+    const label = places[0]?.name ?? anchors[0]?.name ?? anchors[0]?.id ?? indexed.designRef.id;
+    const sourceKind = places[0]?.kind ?? anchors[0]?.kind ?? indexed.designRef.kind;
+    const kind = NAVIGATION_KIND.test(sourceKind) ? sourceKind : indexed.designRef.kind;
+    const searchTerms = new Map<string, string>();
+    const addSearchTerm = (value: unknown) => {
+      if (typeof value !== "string") return;
+      const canonical = canonicalNavigationSearchTerm(value);
+      if (canonical.length > 0 && !searchTerms.has(canonical)) searchTerms.set(canonical, canonical);
+    };
+    addSearchTerm(indexed.designRef.id);
+    addSearchTerm(indexed.designRef.kind);
+    addSearchTerm(label);
+    for (const anchor of anchors) {
+      addSearchTerm(anchor.id);
+      addSearchTerm(anchor.name);
+      addSearchTerm(anchor.kind);
+    }
+    for (const place of places) {
+      addSearchTerm(place.placeId);
+      addSearchTerm(place.name);
+      addSearchTerm(place.kind);
+    }
+    const searchKeys = [...searchTerms.values()].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+    if (searchKeys.length > 16) {
+      throw new Error(`navigation subject '${refKey}' exceeds 16 canonical search terms`);
+    }
+    return {
+      designRef: indexed.designRef,
+      position: indexed.position,
+      ...(indexed.radiusM === undefined ? {} : { radiusM: indexed.radiusM }),
+      label,
+      kind,
+      searchKeys,
+    };
+  });
+  entries.sort((left, right) => {
+    const leftKey = atlasDesignRefKey(left.designRef), rightKey = atlasDesignRefKey(right.designRef);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+  checkpoint(shouldCancel, work);
+  return { worldBounds, entries };
 }
 
 function sourceSlicesEqual(left: any[], right: any[]): boolean {
@@ -371,6 +509,12 @@ export function compileWorldTerrain(input: unknown) {
     }
   }
   compiledChunks.sort((a, b) => a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0);
+  const navigationSource = createNavigationIndexSource(map, field.bounds, shouldCancel);
+  const navigationSourceHash = compilerContentHash(
+    { schema: "limina.navigation-index-source/v1", ...navigationSource },
+    NAVIGATION_SOURCE_HASH_LIMITS,
+  );
+  const terrainSourceHash = terrainWorldMapSourceHash(map);
   const graph = hydrologyProfile ? createHydrologyWorldCompilerGraph() : createInitialWorldCompilerGraph();
   const plannerInput = {
     graph,
@@ -382,6 +526,10 @@ export function compileWorldTerrain(input: unknown) {
       "edit-layers": { composition: "ordered-additive-metres/v1" },
       collision: { source: TERRAIN_CHUNK_ARTIFACT_TYPE },
       render: { source: TERRAIN_CHUNK_ARTIFACT_TYPE, verticalRange: config.verticalRange },
+      "navigation-index": {
+        schema: "limina.navigation-index-stage-config/v1",
+        artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+      },
       ...(hydrologyProfile ? {
         "hydrology-field": {
           schema: "limina.hydrology-field-stage-config/v1",
@@ -396,7 +544,8 @@ export function compileWorldTerrain(input: unknown) {
       } : {}),
     },
     globalSourceHashes: hydrologyProfile ? {
-      "worldmap.global": terrainWorldMapSourceHash(map),
+      "worldmap.global": terrainSourceHash,
+      "navigation.index": navigationSourceHash,
       "hydrology.precipitation": compilerContentHash({
         schema: "limina.hydrology-precipitation-source/v1",
         precipitationMmPerYear: map.hydrology!.precipitationMmPerYear,
@@ -408,7 +557,7 @@ export function compileWorldTerrain(input: unknown) {
         basinMinDepthM: map.hydrology!.basinMinDepthM,
         waterfallMinDropM: map.hydrology!.waterfallMinDropM,
       }),
-    } : { "worldmap.global": expectedWorldMapHash },
+    } : { "worldmap.global": terrainSourceHash, "navigation.index": navigationSourceHash },
   };
   const previous = root.previousSnapshot === null ? undefined : root.previousSnapshot;
   const { snapshot, invalidation } = planCompilerInvalidation({ ...plannerInput, previous });
@@ -429,7 +578,7 @@ export function compileWorldTerrain(input: unknown) {
     availableArtifactHashes = parseAvailableArtifactHashes(root.availableArtifactHashes, previousManifest);
   } else {
     if (hasAvailability) {
-      const coldAvailability = denseArray(root.availableArtifactHashes, MAX_WORLD_TERRAIN_COMPILE_CHUNKS + (hydrologyProfile ? 2 : 0), "available terrain artifact hashes");
+      const coldAvailability = denseArray(root.availableArtifactHashes, MAX_WORLD_TERRAIN_COMPILE_CHUNKS + 2 + (hydrologyProfile ? 2 : 0), "available terrain artifact hashes");
       if (coldAvailability.length !== 0) throw new Error("availableArtifactHashes must be empty without a previousManifest");
     }
     if (hasPreviousManifest && root.previousManifest !== null) throw new Error("previousManifest is invalid");
@@ -465,14 +614,8 @@ export function compileWorldTerrain(input: unknown) {
       chunk.artifact = priorArtifact;
       artifactBytes += priorArtifact.byteLength;
       reusedArtifactBytes += priorArtifact.byteLength;
-      reusedArtifacts.push(Object.freeze(hydrologyProfile ? {
+      reusedArtifacts.push(Object.freeze({
         scope: "chunk",
-        chunkId: chunk.chunkId,
-        artifactType: priorArtifact.artifactType,
-        mediaType: priorArtifact.mediaType,
-        contentHash: priorArtifact.contentHash,
-        byteLength: priorArtifact.byteLength,
-      } : {
         chunkId: chunk.chunkId,
         artifactType: priorArtifact.artifactType,
         mediaType: priorArtifact.mediaType,
@@ -495,12 +638,108 @@ export function compileWorldTerrain(input: unknown) {
       chunk.artifact = descriptor;
       artifactBytes += bytes.byteLength;
       emittedArtifactBytes += bytes.byteLength;
-      artifacts.push(Object.freeze(hydrologyProfile
-        ? { scope: "chunk", chunkId: chunk.chunkId, artifactType: TERRAIN_CHUNK_ARTIFACT_TYPE, mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, contentHash, bytes }
-        : { chunkId: chunk.chunkId, artifactType: TERRAIN_CHUNK_ARTIFACT_TYPE, mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, contentHash, bytes }));
+      artifacts.push(Object.freeze({
+        scope: "chunk",
+        chunkId: chunk.chunkId,
+        artifactType: TERRAIN_CHUNK_ARTIFACT_TYPE,
+        mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
+        contentHash,
+        bytes,
+      }));
     }
     if (artifactBytes > config.limits.maxArtifactBytes) throw new Error(`terrain compile artifact bytes exceed cap ${config.limits.maxArtifactBytes}`);
   }
+
+  let overviewArtifact: any;
+  const priorOverviewArtifact = previousManifest === undefined ? undefined : derivedGlobalArtifacts(previousManifest)
+    .find((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE);
+  const reusableOverview = cacheCompilerMatches
+    && previousStageKeys?.stageKeys?.erosion?.["@global"] === nextStageKeys.erosion["@global"]
+    && priorOverviewArtifact?.mediaType === WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE
+    && availableArtifactHashes.has(priorOverviewArtifact?.contentHash);
+  if (reusableOverview) {
+    overviewArtifact = priorOverviewArtifact;
+    artifactBytes += priorOverviewArtifact.byteLength;
+    reusedArtifactBytes += priorOverviewArtifact.byteLength;
+    reusedArtifacts.push(Object.freeze({
+      scope: "global",
+      artifactType: priorOverviewArtifact.artifactType,
+      mediaType: priorOverviewArtifact.mediaType,
+      contentHash: priorOverviewArtifact.contentHash,
+      byteLength: priorOverviewArtifact.byteLength,
+    }));
+  } else {
+    try {
+      const bytes = encodeWorldOverviewArtifact(createWorldOverviewGrid(field, shouldCancel), { shouldCancel });
+      const contentHash = derivedArtifactContentHash(bytes);
+      overviewArtifact = Object.freeze({
+        artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+        contentHash,
+        byteLength: bytes.byteLength,
+        mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+      });
+      artifactBytes += bytes.byteLength;
+      emittedArtifactBytes += bytes.byteLength;
+      artifacts.push(Object.freeze({
+        scope: "global",
+        artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+        mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+        contentHash,
+        bytes,
+      }));
+    } catch (error) {
+      if (error instanceof WorldOverviewArtifactCancelledError) throw new WorldTerrainCompileCancelledError();
+      throw error;
+    }
+  }
+  if (artifactBytes > config.limits.maxArtifactBytes) throw new Error(`terrain compile artifact bytes exceed cap ${config.limits.maxArtifactBytes}`);
+
+  let navigationArtifact: any;
+  const priorNavigationArtifact = previousManifest === undefined ? undefined : derivedGlobalArtifacts(previousManifest)
+    .find((artifact: any) => artifact.artifactType === NAVIGATION_INDEX_ARTIFACT_TYPE);
+  const reusableNavigation = cacheCompilerMatches
+    && previousStageKeys?.stageKeys?.["navigation-index"]?.["@global"] === nextStageKeys["navigation-index"]["@global"]
+    && priorNavigationArtifact?.mediaType === NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE
+    && availableArtifactHashes.has(priorNavigationArtifact?.contentHash);
+  if (reusableNavigation) {
+    navigationArtifact = priorNavigationArtifact;
+    artifactBytes += priorNavigationArtifact.byteLength;
+    reusedArtifactBytes += priorNavigationArtifact.byteLength;
+    reusedArtifacts.push(Object.freeze({
+      scope: "global",
+      artifactType: priorNavigationArtifact.artifactType,
+      mediaType: priorNavigationArtifact.mediaType,
+      contentHash: priorNavigationArtifact.contentHash,
+      byteLength: priorNavigationArtifact.byteLength,
+    }));
+  } else {
+    try {
+      const bytes = encodeNavigationIndexArtifact(navigationSource, { shouldCancel });
+      const contentHash = derivedArtifactContentHash(bytes);
+      navigationArtifact = Object.freeze({
+        artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+        contentHash,
+        byteLength: bytes.byteLength,
+        mediaType: NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+      });
+      artifactBytes += bytes.byteLength;
+      emittedArtifactBytes += bytes.byteLength;
+      artifacts.push(Object.freeze({
+        scope: "global",
+        artifactType: NAVIGATION_INDEX_ARTIFACT_TYPE,
+        mediaType: NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+        contentHash,
+        bytes,
+      }));
+    } catch (error) {
+      if (error instanceof NavigationIndexArtifactValidationError
+          && error.code === "navigation_index_artifact_cancelled") {
+        throw new WorldTerrainCompileCancelledError();
+      }
+      throw error;
+    }
+  }
+  if (artifactBytes > config.limits.maxArtifactBytes) throw new Error(`terrain compile artifact bytes exceed cap ${config.limits.maxArtifactBytes}`);
 
   let hydrologyArtifact: any | undefined;
   let hydrologyWaterArtifact: any | undefined;
@@ -630,14 +869,16 @@ export function compileWorldTerrain(input: unknown) {
 
   const contentRefs = [mapDocumentRef, ...(designSourceRef === undefined ? [] : [designSourceRef, worldMapRef!]), ...layerRefs]
     .sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
+  const globalArtifacts = [navigationArtifact, overviewArtifact, ...(hydrologyProfile ? [hydrologyArtifact, hydrologyWaterArtifact] : [])]
+    .sort((a, b) => a.artifactType < b.artifactType ? -1 : a.artifactType > b.artifactType ? 1 : 0);
   const manifest = createDerivedRevisionManifest({
-    schema: hydrologyProfile ? "limina.derived-revision-manifest/v2" : "limina.derived-revision-manifest/v1",
+    schema: "limina.derived-revision-manifest/v2",
     projectId: request.projectId,
     branchId: request.branchId,
     source: { revision: request.revision, headHash: request.headHash, contentRefs },
     compiler: { version: compilerVersion, configHash: compilerContentHash(config), graphHash: graph.graphHash, snapshotHash: snapshot.snapshotHash },
     grid: field.grid,
-    ...(hydrologyProfile ? { globalArtifacts: [hydrologyArtifact, hydrologyWaterArtifact] } : {}),
+    globalArtifacts,
     chunks: compiledChunks.map((chunk) => ({
       chunkId: chunk.chunkId,
       gridId: chunk.gridId,
@@ -658,7 +899,7 @@ export function compileWorldTerrain(input: unknown) {
       : "Compiled the complete bounded LOD0 terrain domain from one globally eroded master field.",
     details: Object.freeze({
       chunkCount,
-      artifactCount: chunkCount + (hydrologyProfile ? 2 : 0),
+      artifactCount: chunkCount + 2 + (hydrologyProfile ? 2 : 0),
       artifactBytes,
       emittedArtifactCount: artifacts.length,
       emittedArtifactBytes,

@@ -144,6 +144,15 @@ provenance/content-addressing). Established in Slice 0.1.
   and provide the reverse 3D-to-Atlas reveal. Destination changes must prefetch a bounded terrain window,
   expose loading/failure state, swap only after the target window is ready, preserve the prior view on
   failure, and never create authoritative world mutations or contaminate Edit/Play camera ownership.
+
+  **Locked scale architecture (2026-07-10):** the editor never expands fine LOD0 residency to frame a
+  large world. Each source revision publishes one compact 129x129 coarse terrain overview plus a bounded
+  binary navigation index alongside at most 225 resident fine chunks. The coarse mesh is one draw and
+  removes quads owned by resident fine chunks, so there is no coplanar overlap or tearing. Navigation
+  search is binary-prefix indexed and capped at 100,000 subjects / 12 MiB; raw Atlas geometry does not
+  enter the runtime search index. Worker validation, main-realm descriptor verification, rendering,
+  navigation, and POI results all use the same atomic manifest revision. Coordinate frames normalize once
+  at compilation (`world = origin + local / unitsPerMeter`), while bridge/import paths use the exact inverse.
 - **WB-W1 · Water & swim** — minimal deterministic precipitation/drainage inputs, `WaterBody[]`, basin
   fill, `WaterField`, ordered rivers, visible flow/waterfalls/shorelines, editing, and functional swim.
 - **WB-B2 · Biomes & surface** — `BiomeDef`, spatial climate, blends and rules, splat/PBR layers, existing
@@ -547,3 +556,19 @@ near-vertical cliffs before the SDF layer exists.
   ownership, 1000px and mobile compact layouts, exact source-fenced focus, direct standalone launch, proxied
   Atlas rejection, and unchanged authoring authority. **WB-F0-N remains open** for frame-world, POI search,
   durable `designRef` provenance, and noncanonical coordinate normalization.
+- **2026-07-10 — WB-F0-N global navigation architecture shipped and live-UAT passed.** The terrain compiler
+  now publishes a 99,910-byte 129x129 whole-world overview and a source-fenced compact binary POI index.
+  The maximum 100,000-subject index is 11.63 MiB and decoded in 72 ms in the combined stress gate; prefix
+  lookup remains microsecond-scale and materializes at most 100 results. Runtime activation verifies and
+  atomically swaps both globals with the bounded 225-chunk fine window. Frame World uses one ~32k-triangle
+  coarse draw with fine-owned holes, and temporarily scales local haze to world bounds while preserving the
+  exact local density for ordinary editing. MapDoc coordinates, reverse reveal, brush distances, and WorldMap
+  import now share the canonical affine-frame contract. Durable `designRef` identity survives compiler,
+  WorldMap hashing, asset placement origin, runtime POI search, and exact 3D-to-Atlas reveal. Grey Field cold
+  compile measured 8.59 s / 422 MiB peak RSS for 6,400 chunks and 174.87 MiB output; editor-host rehydration
+  measured roughly 50 s and remains explicit startup-performance debt even though the scaffold readiness
+  deadline now permits large projects to start instead of killing them at 15 s. Live Grey Field revision 27
+  (`sha256:1cedf06d8bf97e430a39d0b95679443a446105cd8d824daddb6f24e7b3f99852`) framed the full world and
+  navigated the exact `primary/place/grey-field` design reference with no page errors. Headless SwiftShader
+  frame rate is not accepted as target-hardware performance evidence; hardware frame-time, hitch, and GPU
+  memory gates remain required before the engine can claim the extreme-performance target.

@@ -63,7 +63,9 @@ function localHaloFixture(radius = 2, gridId = "grey-field.surface") {
       },
     });
   }
-  return { ...fixture(0), graph: SYNTHETIC_LOCAL_HALO_GRAPH, chunks, globalSourceHashes: {} };
+  const base = fixture(0);
+  const { "navigation-index": _navigationConfig, ...configs } = base.configs;
+  return { ...base, graph: SYNTHETIC_LOCAL_HALO_GRAPH, chunks, configs, globalSourceHashes: {} };
 }
 
 function fixture(radius = 2) {
@@ -81,8 +83,12 @@ function fixture(radius = 2) {
       "edit-layers": { mode: "ordered" },
       collision: { simplification: 0.25 },
       render: { quality: "editor" },
+      "navigation-index": { schema: "limina.navigation-index-stage-config/v1" },
     },
-    globalSourceHashes: { "worldmap.global": hash("worldmap-global-v1") },
+    globalSourceHashes: {
+      "worldmap.global": hash("worldmap-global-v1"),
+      "navigation.index": hash("navigation-index-v1"),
+    },
   };
 }
 
@@ -102,8 +108,8 @@ function stageDefinition(stageId: string, dependencies: string[] = []) {
 const graph = createInitialWorldCompilerGraph();
 const shuffled = createCompilerGraph([...INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS].reverse());
 assert(graph.graphHash === shuffled.graphHash, "definition input order changed graphHash");
-assert(graph.topologicalOrder.join(",") === "worldmap,base-height,erosion,edit-layers,collision,render", "stable topological order is wrong");
-for (const stageId of ["worldmap", "base-height", "erosion"]) assert(graph.definitions.find((stage) => stage.stageId === stageId)?.scope === "global", `${stageId} must model the canonical global master build`);
+assert(graph.topologicalOrder.join(",") === "navigation-index,worldmap,base-height,erosion,edit-layers,collision,render", "stable topological order is wrong");
+for (const stageId of ["navigation-index", "worldmap", "base-height", "erosion"]) assert(graph.definitions.find((stage) => stage.stageId === stageId)?.scope === "global", `${stageId} must model a canonical global build`);
 assert(graph.definitions.find((stage) => stage.stageId === "erosion")?.footprint.haloChunks === 0, "production erosion must not claim a chunk halo");
 rejects(() => (graph.definitions[0].dependencies as string[]).push("render"), /read only|extensible|frozen|object/i, "nested graph definitions are mutable");
 rejects(() => createCompilerGraph([stageDefinition("a", ["missing"])]), /missing dependency/, "missing dependency accepted");
@@ -154,7 +160,7 @@ const reorderedInput = { ...baseInput, chunks: [...baseInput.chunks].reverse() }
 const repeated = planCompilerInvalidation({ ...reorderedInput, previous: initial.snapshot });
 assert(canonicalCompilerSnapshot(initial.snapshot) === canonicalCompilerSnapshot(repeated.snapshot), "identical plan was not byte-deterministic");
 assert(repeated.invalidation.changedInstances === 0, "identical plan reported changed instances");
-assert(repeated.invalidation.cacheHits === 3 + baseInput.chunks.length * 3, "identical plan missed global/chunk cache hits");
+assert(repeated.invalidation.cacheHits === 4 + baseInput.chunks.length * 3, "identical plan missed global/chunk cache hits");
 
 // Planner halo capability remains explicit through a synthetic local algorithm graph. The
 // production graph above intentionally does not claim canonical erosion is chunk-local.
@@ -182,6 +188,7 @@ seaInput.graph = graph;
 seaInput.configs.worldmap.seaLevelM = 3;
 const seaChange = planCompilerInvalidation({ ...seaInput, previous: initial.snapshot });
 for (const stageId of ["worldmap", "base-height", "erosion"]) assert(seaChange.invalidation.changedByStage[stageId].length === 1, `global sea config did not invalidate global ${stageId}`);
+assert(seaChange.invalidation.changedByStage["navigation-index"].length === 0, "terrain config leaked into navigation invalidation");
 for (const stageId of ["edit-layers", "collision", "render"]) assert(seaChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `global sea config did not invalidate every ${stageId} chunk`);
 const versionDefinitions = clone(INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS);
 versionDefinitions.find((definition: { stageId: string }) => definition.stageId === "erosion")!.stageVersion = "2.0.0";
@@ -189,6 +196,7 @@ const versionGraph = createCompilerGraph(versionDefinitions);
 const versionChange = planCompilerInvalidation({ ...baseInput, graph: versionGraph, previous: initial.snapshot });
 assert(versionChange.invalidation.changedByStage.worldmap.length === 0, "erosion version change invalidated worldmap");
 assert(versionChange.invalidation.changedByStage["base-height"].length === 0, "erosion version change invalidated base-height");
+assert(versionChange.invalidation.changedByStage["navigation-index"].length === 0, "erosion version change invalidated navigation");
 assert(versionChange.invalidation.changedByStage.erosion.length === 1, "erosion version change did not invalidate the global erosion stage");
 for (const stageId of ["edit-layers", "collision", "render"]) assert(versionChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `erosion version change did not invalidate ${stageId}`);
 

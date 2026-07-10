@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compileDesignMap } from "../../js/src/world/design-map-compile.mjs";
+import { parseAtlasDesignRef } from "../../js/src/world/design-ref.mjs";
 import {
   DEFAULT_MAP_EROSION_RECIPE,
   NO_EROSION_RECIPE,
@@ -168,8 +169,9 @@ export function planWorldBuild({
     if (!existsSync(projectAssetPath(projectRoot, anchor.assetId))) throw new Error(`asset anchor ${anchor.id} references missing ${anchor.assetId}`);
     const [x, z] = worldPoint(worldMap, anchor.position);
     const scale = anchor.scale ?? 1;
+    const designRef = anchor.designRef === undefined ? undefined : parseAtlasDesignRef(anchor.designRef);
     commands.push({ tool: "asset.place", input: { assetId: anchor.assetId, position: [x, 0, z], rotation: [0, anchor.rot ?? 0, 0],
-      scale: [scale, scale, scale], ground: true } });
+      scale: [scale, scale, scale], ground: true, ...(designRef === undefined ? {} : { designRef }) } });
     exclusions.push({ x, z, r: Math.max(10, 12 * scale) });
   }
   const vegetation = vegetationInput(projectRoot, worldMap, terrainRef, span, seed, exclusions);

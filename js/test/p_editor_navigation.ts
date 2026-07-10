@@ -243,6 +243,23 @@ near(navigation.orbitControls.target.x, 100, 1e-6, "frameObject did not apply it
 mesh.geometry.dispose();
 (mesh.material as THREE.Material).dispose();
 
+const localFar = camera.far;
+const worldPose = navigation.worldPose({ minX: -2_000, minY: -40, minZ: -1_500, maxX: 2_000, maxY: 260, maxZ: 1_500 });
+assert(new THREE.Vector3(...worldPose.position).distanceTo(new THREE.Vector3(...worldPose.target)) > 2_000,
+  "worldPose remained clamped to the local residency camera envelope");
+assert(navigation.orbitControls.maxDistance > 2_000 && camera.far > localFar,
+  "worldPose did not expand the overview orbit and projection limits");
+navigation.restore(worldPose);
+near(navigation.orbitControls.target.x, 0, 1e-9, "worldPose did not center the world x bounds");
+near(navigation.orbitControls.target.z, 0, 1e-9, "worldPose did not center the world z bounds");
+navigation.destinationPose([0, 0, 0]);
+assert(navigation.orbitControls.maxDistance === 576 && camera.far === localFar,
+  "ordinary destination planning did not restore local depth/orbit limits after world overview");
+let worldBoundsFailure: unknown;
+try { navigation.worldPose({ minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 1, maxZ: 1 }); }
+catch (error) { worldBoundsFailure = error; }
+assert(worldBoundsFailure instanceof RangeError, "worldPose accepted collapsed bounds");
+
 assert(navigation.constrainToResidencyGrid(64, 7, 2) === 256,
   "radius-7/threshold-2 residency did not preserve a one-chunk camera safety ring");
 const releaseFirst = navigation.acquireDisabled();
