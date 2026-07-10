@@ -8,6 +8,13 @@ export const MAX_DERIVED_RUNTIME_ERROR_SUMMARIES = 32;
 const PROJECT_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const BRANCH_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 const HASH = /^sha256:[0-9a-f]{64}$/;
+const MAX_GLOBAL_DEPENDENCY_TYPES = 64;
+const MAX_GLOBAL_DEPENDENCIES_PER_TYPE = 8;
+const EMPTY_GLOBAL_DEPENDENCIES = Object.freeze([]);
+const GLOBAL_DEPENDENCY_REGISTRY = Object.freeze({
+  "hydrology-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
+  "hydrology-water-topology/v1": Object.freeze(["hydrology-field/v1"]),
+});
 
 function assertFunction(value, label) {
   if (typeof value !== "function") throw new TypeError(`${label} must be a function`);
@@ -65,8 +72,96 @@ function chunkRuntimeIdentity(chunk, grid) {
   });
 }
 
-function globalRuntimeIdentity(artifact) {
-  return compilerContentHash(artifact);
+function validateGlobalDependencyRegistry(registry) {
+  const artifactTypes = Object.keys(registry);
+  if (artifactTypes.length > MAX_GLOBAL_DEPENDENCY_TYPES) throw new Error("global dependency registry exceeds its type bound");
+  const registered = new Set(artifactTypes);
+  for (const artifactType of artifactTypes) {
+    const dependencies = registry[artifactType];
+    if (!Array.isArray(dependencies) || dependencies.length > MAX_GLOBAL_DEPENDENCIES_PER_TYPE) {
+      throw new Error(`global dependency registry entry '${artifactType}' is invalid`);
+    }
+    const unique = new Set(dependencies);
+    if (unique.size !== dependencies.length) throw new Error(`global dependency registry entry '${artifactType}' contains duplicates`);
+    for (const dependencyType of dependencies) {
+      if (!registered.has(dependencyType)) {
+        throw new Error(`global dependency registry entry '${artifactType}' references unknown type '${dependencyType}'`);
+      }
+    }
+  }
+
+  const states = new Map();
+  const visit = (artifactType) => {
+    const state = states.get(artifactType);
+    if (state === 2) return;
+    if (state === 1) throw new Error(`global dependency registry contains a cycle at '${artifactType}'`);
+    states.set(artifactType, 1);
+    for (const dependencyType of registry[artifactType]) visit(dependencyType);
+    states.set(artifactType, 2);
+  };
+  for (const artifactType of artifactTypes) visit(artifactType);
+}
+
+validateGlobalDependencyRegistry(GLOBAL_DEPENDENCY_REGISTRY);
+
+function globalDependencies(artifactType) {
+  return GLOBAL_DEPENDENCY_REGISTRY[artifactType] ?? EMPTY_GLOBAL_DEPENDENCIES;
+}
+
+function planGlobalArtifacts(manifestGlobals) {
+  const byType = new Map(manifestGlobals.map((artifact) => [artifact.artifactType, artifact]));
+  for (const artifact of manifestGlobals) {
+    for (const dependencyType of globalDependencies(artifact.artifactType)) {
+      if (!byType.has(dependencyType)) {
+        throw new DerivedRevisionRuntimeError(
+          "GLOBAL_DEPENDENCY_MISSING",
+          `global artifact '${artifact.artifactType}' requires '${dependencyType}'`,
+        );
+      }
+    }
+  }
+
+  const ordered = [];
+  const visited = new Set();
+  const visit = (artifact) => {
+    if (visited.has(artifact.artifactType)) return;
+    for (const dependencyType of globalDependencies(artifact.artifactType)) visit(byType.get(dependencyType));
+    visited.add(artifact.artifactType);
+    ordered.push(artifact);
+  };
+  for (const artifact of manifestGlobals) visit(artifact);
+  return Object.freeze(ordered);
+}
+
+function globalRuntimeIdentity(artifact, dependencyIdentities) {
+  if (dependencyIdentities.length === 0) return compilerContentHash(artifact);
+  return compilerContentHash({ artifact, dependencies: dependencyIdentities });
+}
+
+function frozenReadonlyMap(entries) {
+  const target = new Map(entries);
+  let readonly;
+  const rejectMutation = () => { throw new TypeError("dependency map is read-only"); };
+  readonly = new Proxy(target, {
+    get(map, property) {
+      if (property === "set" || property === "delete" || property === "clear") return rejectMutation;
+      if (property === "valueOf") return () => readonly;
+      if (property === "forEach") {
+        return (callback, thisArg = undefined) => map.forEach((value, key) => callback.call(thisArg, value, key, readonly));
+      }
+      const value = Reflect.get(map, property, map);
+      return typeof value === "function" ? value.bind(map) : value;
+    },
+  });
+  return Object.freeze(readonly);
+}
+
+function stageGlobalDependencies(dependencyTypes, nextGlobals) {
+  return frozenReadonlyMap(dependencyTypes.map((artifactType) => {
+    const entry = nextGlobals.get(artifactType);
+    if (entry === undefined) throw new Error(`global dependency '${artifactType}' was not staged`);
+    return [artifactType, Object.freeze({ artifactType, artifact: entry.artifact, resource: entry.resource })];
+  }));
 }
 
 function publicChunks(liveChunks) {
@@ -138,6 +233,9 @@ export class DerivedRevisionManager {
   #running = false;
   #active = null;
   #pending = null;
+  #closed = false;
+  #closePromise = null;
+  #idleWaiters = new Set();
 
   constructor(input) {
     const options = assertOptions(input, new Set([
@@ -192,11 +290,22 @@ export class DerivedRevisionManager {
     })));
   }
 
+  close() {
+    if (this.#closePromise !== null) return this.#closePromise;
+    this.#closed = true;
+    const reason = cancellationError();
+    this.#active?.cancellation.abort(reason);
+    this.#pending?.cancellation.abort(reason);
+    this.#closePromise = this.#closeWhenIdle();
+    return this.#closePromise;
+  }
+
   submit(manifestInput, submitInput = undefined) {
     let manifest;
     let submitOptions;
     try {
       submitOptions = assertOptions(submitInput, new Set(["force", "signal"]), "derived revision submit options");
+      if (this.#closed) throw new DerivedRevisionRuntimeError("DERIVED_RUNTIME_CLOSED", "derived revision manager is closed");
       if (submitOptions.force !== undefined && typeof submitOptions.force !== "boolean") throw new TypeError("force must be boolean");
       const signal = submitOptions.signal;
       if (signal !== undefined && (signal === null || typeof signal !== "object" || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")) {
@@ -308,6 +417,47 @@ export class DerivedRevisionManager {
     }
     this.#active = null;
     this.#running = false;
+    for (const resolve of this.#idleWaiters) resolve();
+    this.#idleWaiters.clear();
+  }
+
+  async #closeWhenIdle() {
+    if (this.#running) await new Promise((resolve) => this.#idleWaiters.add(resolve));
+    const live = this.#live;
+    this.#live = null;
+    if (live === null) return;
+
+    const failures = [];
+    let failureCount = 0;
+    for (const entry of [...live.chunks.values()].reverse()) {
+      try {
+        await this.#disposeChunk(Object.freeze({
+          chunkId: entry.chunk.chunkId,
+          chunk: entry.chunk,
+          resource: entry.resource,
+          reason: "closed",
+        }));
+      } catch (error) {
+        failureCount++;
+        if (failures.length < MAX_DERIVED_RUNTIME_ERROR_SUMMARIES) failures.push(error);
+      }
+    }
+    for (const entry of [...live.globals.values()].reverse()) {
+      try {
+        await this.#disposeGlobal(Object.freeze({
+          artifactType: entry.artifact.artifactType,
+          artifact: entry.artifact,
+          resource: entry.resource,
+          reason: "closed",
+        }));
+      } catch (error) {
+        failureCount++;
+        if (failures.length < MAX_DERIVED_RUNTIME_ERROR_SUMMARIES) failures.push(error);
+      }
+    }
+    if (failureCount > 0) {
+      throw new AggregateError(failures, `${failureCount} resource disposal operation(s) failed while closing derived revision manager`);
+    }
   }
 
   async #authoritativeSource(manifest) {
@@ -381,6 +531,7 @@ export class DerivedRevisionManager {
       // v1 maps to its canonical frozen empty set without normalizing the manifest shape.
       failurePhase = "validation";
       const manifestGlobals = derivedGlobalArtifacts(request.manifest);
+      const plannedGlobals = planGlobalArtifacts(manifestGlobals);
       if (manifestGlobals.length > 0 && (this.#stageGlobal === undefined || this.#disposeGlobal === undefined)) {
         throw new DerivedRevisionRuntimeError(
           "GLOBAL_LIFECYCLE_UNAVAILABLE",
@@ -403,14 +554,21 @@ export class DerivedRevisionManager {
       const nextGlobals = new Map();
       const changedChunks = [];
       const changedGlobals = [];
-      for (const artifact of manifestGlobals) {
-        const identity = globalRuntimeIdentity(artifact);
+      const globalIdentities = new Map();
+      for (const artifact of plannedGlobals) {
+        const dependencyTypes = globalDependencies(artifact.artifactType);
+        const dependencyIdentities = dependencyTypes.map((artifactType) => Object.freeze({
+          artifactType,
+          identity: globalIdentities.get(artifactType),
+        }));
+        const identity = globalRuntimeIdentity(artifact, dependencyIdentities);
+        globalIdentities.set(artifact.artifactType, identity);
         const prior = priorGlobals.get(artifact.artifactType);
         if (prior?.identity === identity) {
           nextGlobals.set(artifact.artifactType, prior);
           counts.unchangedGlobals++;
         } else {
-          changedGlobals.push({ artifact, identity });
+          changedGlobals.push({ artifact, dependencyTypes, identity });
           counts.changedGlobals++;
         }
       }
@@ -457,6 +615,7 @@ export class DerivedRevisionManager {
           manifest: request.manifest,
           artifact: changed.artifact,
           bytes,
+          dependencies: stageGlobalDependencies(changed.dependencyTypes, nextGlobals),
           signal: request.signal,
         }));
         timingsMs.stage += elapsed(this.#now, phaseAt);
@@ -501,7 +660,7 @@ export class DerivedRevisionManager {
         throwIfCancelled(request.signal);
       }
 
-      const orderedNextGlobals = new Map(manifestGlobals.map((artifact) => [artifact.artifactType, nextGlobals.get(artifact.artifactType)]));
+      const orderedNextGlobals = new Map(plannedGlobals.map((artifact) => [artifact.artifactType, nextGlobals.get(artifact.artifactType)]));
       const orderedNextChunks = new Map(request.manifest.chunks.map((chunk) => [chunk.chunkId, nextChunks.get(chunk.chunkId)]));
       const replacedChunks = changedChunks
         .map((changed) => priorChunks.get(changed.chunk.chunkId))
@@ -511,14 +670,14 @@ export class DerivedRevisionManager {
         entry,
         reason: replacedChunkIds.has(entry.chunk.chunkId) ? "replaced" : "removed",
       }));
-      const replacedGlobals = changedGlobals
-        .map((changed) => priorGlobals.get(changed.artifact.artifactType))
-        .filter((entry) => entry !== undefined);
-      const replacedGlobalTypes = new Set(replacedGlobals.map((entry) => entry.artifact.artifactType));
-      const globalRetirementQueue = [...replacedGlobals, ...removedGlobals].map((entry) => ({
-        entry,
-        reason: replacedGlobalTypes.has(entry.artifact.artifactType) ? "replaced" : "removed",
-      }));
+      const globalRetirementReasons = new Map();
+      for (const changed of changedGlobals) {
+        if (priorGlobals.has(changed.artifact.artifactType)) globalRetirementReasons.set(changed.artifact.artifactType, "replaced");
+      }
+      for (const entry of removedGlobals) globalRetirementReasons.set(entry.artifact.artifactType, "removed");
+      const globalRetirementQueue = [...priorGlobals.values()].reverse()
+        .filter((entry) => globalRetirementReasons.has(entry.artifact.artifactType))
+        .map((entry) => ({ entry, reason: globalRetirementReasons.get(entry.artifact.artifactType) }));
       const nextLive = Object.freeze({ manifest: request.manifest, chunks: orderedNextChunks, globals: orderedNextGlobals });
       failurePhase = "authority";
       phaseAt = this.#now();

@@ -140,6 +140,7 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
   const staged: any[] = [];
   const disposed: any[] = [];
   const stagedGlobals: any[] = [];
+  const globalStageInputs: any[] = [];
   const disposedGlobals: any[] = [];
   const retirementOrder: string[] = [];
   const activations: any[] = [];
@@ -172,6 +173,7 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
     stageGlobal: async (input: any) => {
       if (input.artifact.artifactType === failStageGlobalType) throw new Error(`global stage failed for ${input.artifact.artifactType}`);
       const resource = Object.freeze({ id: ++resourceSequence, artifactType: input.artifact.artifactType });
+      globalStageInputs.push(input);
       stagedGlobals.push(resource);
       return resource;
     },
@@ -189,6 +191,7 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
     artifactSets,
     staged,
     stagedGlobals,
+    globalStageInputs,
     disposed,
     disposedGlobals,
     retirementOrder,
@@ -629,6 +632,202 @@ assert(globalHarness.disposedGlobals.some((entry) => entry.artifactType === "hyd
   assert(harness.manager.current.chunks[0].resource === priorChunk && harness.manager.current.globals.size === 0,
     "cancelled mixed update changed the live set");
   assert(harness.disposedGlobals.some((entry) => entry.reason === "cancelled"), "cancelled mixed update leaked its staged global");
+}
+
+const HYDROLOGY_FIELD = "hydrology-field/v1";
+const HYDROLOGY_WATER = "hydrology-water-topology/v1";
+
+// A dependent global without its prerequisite is rejected before artifact or staging callbacks run.
+{
+  const fixture = makeManifest(103, [{ tx: 0 }], [
+    { artifactType: HYDROLOGY_WATER, bytes: new Uint8Array([1, 0, 3]) },
+  ]);
+  const harness = createHarness(fixture);
+  let loads = 0;
+  harness.setArtifactOverride(() => { loads++; throw new Error("unreachable artifact load"); });
+  await rejects(harness.manager.submit(fixture.manifest), /requires 'hydrology-field\/v1'/, "water artifact without its field was accepted");
+  assert(loads === 0 && harness.staged.length === 0 && harness.stagedGlobals.length === 0 && harness.manager.current === null,
+    "missing global prerequisite caused load, stage, or live-set side effects");
+}
+
+// Global staging is topological, and each callback receives an exact frozen dependency view.
+{
+  const fixture = makeManifest(104, [{ tx: 0 }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: new Uint8Array([1, 0, 4]) },
+    { artifactType: HYDROLOGY_WATER, bytes: new Uint8Array([2, 0, 4]) },
+  ]);
+  const harness = createHarness(fixture);
+  harness.artifactSets.push(fixture.artifacts);
+  await harness.manager.submit(fixture.manifest);
+  assert(harness.globalStageInputs.map((input) => input.artifact.artifactType).join(",") === `${HYDROLOGY_FIELD},${HYDROLOGY_WATER}`,
+    "dependent global staged before its prerequisite");
+  const fieldDependencies = harness.globalStageInputs[0].dependencies;
+  const waterDependencies = harness.globalStageInputs[1].dependencies;
+  assert(fieldDependencies instanceof Map && fieldDependencies.size === 0 && Object.isFrozen(fieldDependencies),
+    "prerequisite did not receive an exact frozen empty dependency Map");
+  assert(waterDependencies instanceof Map && waterDependencies.size === 1 && Object.isFrozen(waterDependencies),
+    "dependent did not receive an exact frozen dependency Map");
+  const fieldDependency = waterDependencies.get(HYDROLOGY_FIELD);
+  assert(Object.isFrozen(fieldDependency) && fieldDependency.artifactType === HYDROLOGY_FIELD
+    && fieldDependency.artifact === harness.globalStageInputs[0].artifact && fieldDependency.resource === harness.stagedGlobals[0],
+  "dependency view did not expose the exact staged prerequisite descriptor/resource");
+  for (const mutate of [
+    () => waterDependencies.set("climate-field/v1", {}),
+    () => waterDependencies.delete(HYDROLOGY_FIELD),
+    () => waterDependencies.clear(),
+    () => Map.prototype.set.call(waterDependencies, "climate-field/v1", {}),
+    () => waterDependencies.valueOf().set("climate-field/v1", {}),
+  ]) {
+    let rejected = false;
+    try { mutate(); } catch (error) { rejected = error instanceof TypeError; }
+    assert(rejected, "dependency Map admitted caller mutation");
+  }
+  let forEachMap: any = null;
+  waterDependencies.forEach((_value: any, _key: string, map: any) => { forEachMap = map; });
+  assert(forEachMap === waterDependencies && waterDependencies.size === 1, "dependency Map forEach leaked a mutable backing Map");
+}
+
+// A prerequisite descriptor change forces dependent restaging; failures preserve the complete prior live set.
+{
+  const stableChunk = new Uint8Array([1, 1, 0]);
+  const stableWater = new Uint8Array([9, 9, 9]);
+  const base = makeManifest(105, [{ tx: 0, bytes: stableChunk }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: new Uint8Array([1, 0, 5]) },
+    { artifactType: HYDROLOGY_WATER, bytes: stableWater },
+  ]);
+  const next = makeManifest(106, [{ tx: 0, bytes: stableChunk }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: new Uint8Array([1, 0, 6]) },
+    { artifactType: HYDROLOGY_WATER, bytes: stableWater },
+  ]);
+  const harness = createHarness(base);
+  harness.artifactSets.push(base.artifacts, next.artifacts);
+  await harness.manager.submit(base.manifest);
+  const priorField = harness.manager.current.globals.get(HYDROLOGY_FIELD).resource;
+  const priorWater = harness.manager.current.globals.get(HYDROLOGY_WATER).resource;
+  harness.setAuthority(next);
+  harness.setGlobalStageFailure(HYDROLOGY_WATER);
+  await rejects(harness.manager.submit(next.manifest), /global stage failed/, "dependent binding/stage failure was swallowed");
+  assert(harness.manager.current.globals.get(HYDROLOGY_FIELD).resource === priorField
+    && harness.manager.current.globals.get(HYDROLOGY_WATER).resource === priorWater,
+  "dependent binding/stage failure changed the prior live set");
+  assert(harness.disposedGlobals.at(-1)?.artifactType === HYDROLOGY_FIELD
+    && harness.disposedGlobals.at(-1)?.reason === "staging-failed", "dependent stage failure leaked its newly staged prerequisite");
+
+  harness.setGlobalStageFailure(null);
+  harness.setActivationFailure(true);
+  await rejects(harness.manager.submit(next.manifest), /activation failed/, "dependency activation failure was swallowed");
+  assert(harness.manager.current.globals.get(HYDROLOGY_FIELD).resource === priorField
+    && harness.manager.current.globals.get(HYDROLOGY_WATER).resource === priorWater,
+  "dependency activation failure changed the prior live set");
+  const activationCleanup = harness.retirementOrder.filter((entry) => entry.endsWith(":activation-failed")).slice(-2);
+  assert(activationCleanup[0] === `global:${HYDROLOGY_WATER}:activation-failed`
+    && activationCleanup[1] === `global:${HYDROLOGY_FIELD}:activation-failed`,
+  `staged dependency cleanup was not strict reverse order (${activationCleanup.join(",")})`);
+
+  harness.setActivationFailure(false);
+  const outcome = await harness.manager.submit(next.manifest);
+  const currentField = harness.manager.current.globals.get(HYDROLOGY_FIELD).resource;
+  const currentWater = harness.manager.current.globals.get(HYDROLOGY_WATER).resource;
+  assert(outcome.changedGlobals === 2 && outcome.unchangedGlobals === 0 && outcome.unchangedChunks === 1,
+    "dependency-forced restage counts are wrong");
+  assert(currentField !== priorField && currentWater !== priorWater, "prerequisite change reused a stale dependent resource");
+  const successfulStages = harness.globalStageInputs.slice(-2);
+  assert(successfulStages[1].dependencies.get(HYDROLOGY_FIELD).resource === currentField,
+    "restaged dependent received the retired prerequisite resource");
+  const replacedOrder = harness.retirementOrder.filter((entry) => entry.endsWith(":replaced")).slice(-2);
+  assert(replacedOrder.join(",") === `global:${HYDROLOGY_WATER}:replaced,global:${HYDROLOGY_FIELD}:replaced`,
+    `replacement retired prerequisite before dependent (${replacedOrder.join(",")})`);
+
+  const withoutGlobals = makeManifest(107, [{ tx: 0, bytes: stableChunk }]);
+  harness.artifactSets.push(withoutGlobals.artifacts);
+  harness.setAuthority(withoutGlobals);
+  const removal = await harness.manager.submit(withoutGlobals.manifest);
+  const removedOrder = harness.retirementOrder.filter((entry) => entry.endsWith(":removed")).slice(-2);
+  assert(removal.removedGlobals === 2 && removedOrder.join(",") === `global:${HYDROLOGY_WATER}:removed,global:${HYDROLOGY_FIELD}:removed`,
+    `removal retired prerequisite before dependent (${removedOrder.join(",")})`);
+}
+
+// Unchanged prerequisite/dependent descriptors reuse both resources without staging.
+{
+  const chunkBytes = new Uint8Array([1, 0, 8]);
+  const fieldBytes = new Uint8Array([2, 0, 8]);
+  const waterBytes = new Uint8Array([3, 0, 8]);
+  const base = makeManifest(108, [{ tx: 0, bytes: chunkBytes }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: fieldBytes }, { artifactType: HYDROLOGY_WATER, bytes: waterBytes },
+  ]);
+  const next = makeManifest(109, [{ tx: 0, bytes: chunkBytes }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: fieldBytes }, { artifactType: HYDROLOGY_WATER, bytes: waterBytes },
+  ]);
+  const harness = createHarness(base);
+  harness.artifactSets.push(base.artifacts, next.artifacts);
+  await harness.manager.submit(base.manifest);
+  const priorField = harness.manager.current.globals.get(HYDROLOGY_FIELD).resource;
+  const priorWater = harness.manager.current.globals.get(HYDROLOGY_WATER).resource;
+  const priorStageCount = harness.stagedGlobals.length;
+  harness.setAuthority(next);
+  const outcome = await harness.manager.submit(next.manifest);
+  assert(outcome.unchangedGlobals === 2 && outcome.changedGlobals === 0 && harness.stagedGlobals.length === priorStageCount,
+    "unchanged dependency identities caused staging");
+  assert(harness.manager.current.globals.get(HYDROLOGY_FIELD).resource === priorField
+    && harness.manager.current.globals.get(HYDROLOGY_WATER).resource === priorWater,
+  "unchanged dependency identities replaced resources");
+}
+
+// Closing is idempotent and tears down chunks before globals, with dependents before prerequisites.
+{
+  const fixture = makeManifest(110, [{ tx: 0 }], [
+    { artifactType: HYDROLOGY_FIELD, bytes: new Uint8Array([1, 1, 0]) },
+    { artifactType: HYDROLOGY_WATER, bytes: new Uint8Array([2, 1, 0]) },
+  ]);
+  const harness = createHarness(fixture);
+  harness.artifactSets.push(fixture.artifacts);
+  await harness.manager.submit(fixture.manifest);
+  const closing = harness.manager.close();
+  assert(harness.manager.close() === closing, "close was not idempotent");
+  await closing;
+  const closeOrder = harness.retirementOrder.filter((entry) => entry.endsWith(":closed")).slice(-3);
+  assert(closeOrder[0]?.startsWith("chunk:")
+    && closeOrder[1] === `global:${HYDROLOGY_WATER}:closed`
+    && closeOrder[2] === `global:${HYDROLOGY_FIELD}:closed`,
+  `close retired prerequisite before dependent (${closeOrder.join(",")})`);
+  assert(harness.manager.current === null, "close retained a live revision");
+  await rejects(harness.manager.submit(fixture.manifest), /manager is closed/, "closed manager accepted another revision");
+}
+
+// Closing signals both active and queued work before waiting for their cleanup.
+{
+  const active = makeManifest(111, [{ tx: 0 }]);
+  const pending = makeManifest(112, [{ tx: 0, topology: "close-pending" }]);
+  const loadStarted = deferred();
+  let abortEvents = 0;
+  const manager = new DerivedRevisionManager({
+    projectId: "grey-field",
+    branchId: "main",
+    getAuthoritativeSource: () => ({
+      projectId: "grey-field",
+      branchId: "main",
+      revision: active.manifest.source.revision,
+      headHash: active.manifest.source.headHash,
+    }),
+    loadArtifact: (input: any) => new Promise((_resolve, reject) => {
+      loadStarted.resolve();
+      input.signal.addEventListener("abort", () => {
+        abortEvents++;
+        reject(input.signal.reason);
+      }, { once: true });
+    }),
+    stageChunk: async () => { throw new Error("closing load reached staging"); },
+    activateRevision: async () => { throw new Error("closing load reached activation"); },
+    disposeChunk: async () => {},
+  });
+  const activeSubmission = manager.submit(active.manifest);
+  await loadStarted.promise;
+  const pendingSubmission = manager.submit(pending.manifest);
+  const closing = manager.close();
+  await rejects(activeSubmission, /cancelled/, "close did not cancel active artifact loading");
+  await rejects(pendingSubmission, /cancelled/, "close did not cancel queued revision work");
+  await closing;
+  assert(abortEvents === 1 && manager.current === null, "close did not signal active work or retained runtime state");
 }
 
 // Activation failure preserves both prior sets; successful replacement retires chunks before globals.
