@@ -20,6 +20,7 @@ import {
 export const TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA = "limina.terrain-edit-base-topology/v1";
 export const TERRAIN_EDIT_LAYER_SCHEMA = "limina.terrain-edit-layer/v1";
 export const PREPARED_TERRAIN_EDIT_LAYERS_SCHEMA = "limina.prepared-terrain-edit-layers/v1";
+export const PREPARED_TERRAIN_EDIT_CHUNK_SLICES_SCHEMA = "limina.prepared-terrain-edit-chunk-slices/v1";
 export const TERRAIN_EDIT_OPERATION_KIND = "add";
 
 export const MAX_TERRAIN_EDIT_OPERATIONS = 1_024;
@@ -386,13 +387,22 @@ export function prepareTerrainEditLayers(input, options = {}) {
   const chunks = new Map();
   let indexedDeltaCount = 0;
   let work = 0;
-  for (const layer of layers) {
-    for (const operation of layer.operations) {
+  for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
+    const layer = layers[layerIndex];
+    for (let operationIndex = 0; operationIndex < layer.operations.length; operationIndex++) {
+      const operation = layer.operations[operationIndex];
       for (const delta of operation.deltas) {
         checkpoint(options.shouldCancel, work++);
         const ownersX = ownedChunkCoordinates(delta.gx, intervals, base.domain.minTx, base.domain.maxTx);
         const ownersZ = ownedChunkCoordinates(delta.gz, intervals, base.domain.minTz, base.domain.maxTz);
-        const entry = Object.freeze({ gx: delta.gx, gz: delta.gz, deltaM: delta.deltaM });
+        const entry = Object.freeze({
+          layerIndex,
+          operationIndex,
+          operationId: operation.operationId,
+          gx: delta.gx,
+          gz: delta.gz,
+          deltaM: delta.deltaM,
+        });
         for (const tz of ownersZ) {
           for (const tx of ownersX) {
             const chunkId = terrainChunkId(base.grid.gridId, 0, tx, tz);
@@ -423,7 +433,7 @@ export function prepareTerrainEditLayers(input, options = {}) {
     indexedChunkCount: chunks.size,
     layerHashes: Object.freeze(layers.map((layer) => layer.contentHash)),
   });
-  PREPARED_DATA.set(prepared, Object.freeze({ base, chunks }));
+  PREPARED_DATA.set(prepared, Object.freeze({ base, chunks, layers: Object.freeze(layers) }));
   return prepared;
 }
 
@@ -486,6 +496,53 @@ export function composePreparedTerrainEditLayers(input, options = {}) {
     inspectedDeltaCount: bucket.length,
     sourceDeltaCount: input.preparedLayers.sourceDeltaCount,
     layerHashes: input.preparedLayers.layerHashes,
+  });
+}
+
+/**
+ * Return canonical sparse source slices for one chunk from the already-built spatial index.
+ * Work is O(active layers + deltas owned by this chunk), never O(all source deltas).
+ * Bucket insertion order is layer -> operation -> canonical delta, so grouping preserves the
+ * exact durable composition order without sorting or scanning absent operations.
+ */
+export function preparedTerrainEditLayerChunkSlices(input, options = {}) {
+  ownDataObject(input, ["baseTopology", "chunkTopology", "preparedLayers"], "prepared terrain edit chunk slices input");
+  const base = parseTerrainEditBaseTopology(input.baseTopology);
+  const chunk = validateComposeTopology(base, input.chunkTopology);
+  if (options.shouldCancel !== undefined && typeof options.shouldCancel !== "function") throw new Error("terrain edit shouldCancel must be a function");
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  const prepared = preparedData(input.preparedLayers);
+  if (input.preparedLayers.baseTopologyHash !== base.topologyHash || prepared.base.topologyHash !== base.topologyHash) {
+    throw new TerrainEditBaseMismatchError(base.topologyHash, input.preparedLayers.baseTopologyHash);
+  }
+
+  const operationsByLayer = Array.from({ length: prepared.layers.length }, () => []);
+  const bucket = prepared.chunks.get(chunk.chunkId) ?? [];
+  let currentLayer = -1, currentOperation = -1, currentDeltas;
+  for (let index = 0; index < bucket.length; index++) {
+    checkpoint(options.shouldCancel, index);
+    const entry = bucket[index];
+    if (entry.layerIndex !== currentLayer || entry.operationIndex !== currentOperation) {
+      currentLayer = entry.layerIndex;
+      currentOperation = entry.operationIndex;
+      currentDeltas = [];
+      operationsByLayer[currentLayer].push({ operationId: entry.operationId, deltas: currentDeltas });
+    }
+    currentDeltas.push(Object.freeze({ gx: entry.gx, gz: entry.gz, deltaM: entry.deltaM }));
+  }
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  const slices = operationsByLayer.map((operations, layerIndex) => Object.freeze({
+    layerId: prepared.layers[layerIndex].layerId,
+    operations: Object.freeze(operations.map((operation) => Object.freeze({
+      operationId: operation.operationId,
+      deltas: Object.freeze(operation.deltas),
+    }))),
+  }));
+  return Object.freeze({
+    schema: PREPARED_TERRAIN_EDIT_CHUNK_SLICES_SCHEMA,
+    chunkId: chunk.chunkId,
+    slices: Object.freeze(slices),
+    inspectedDeltaCount: bucket.length,
   });
 }
 

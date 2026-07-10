@@ -32,6 +32,13 @@
 
 import { bakeMasterErosion, NO_EROSION_RECIPE } from "./erosion.mjs";
 
+export class MapRasterCancelledError extends Error {
+  constructor() {
+    super("map raster cancelled");
+    this.name = "MapRasterCancelledError";
+  }
+}
+
 // ── deterministic value noise + fBm (verbatim technique from terrain-heightfield.mjs, kept
 // local to this module so map-raster.mjs has zero cross-file coupling with the procedural
 // generator — the two sources are independent, swappable pipelines over the same tile shape). ─
@@ -107,6 +114,107 @@ function distToPolyline(x, z, pts) {
   return d;
 }
 
+const RING_Z_BINS = 256;
+const SEGMENT_BVH_LEAF_SIZE = 8;
+
+function pointsBounds(points) {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const point of points) {
+    if (point[0] < minX) minX = point[0];
+    if (point[0] > maxX) maxX = point[0];
+    if (point[1] < minZ) minZ = point[1];
+    if (point[1] > maxZ) maxZ = point[1];
+  }
+  return { minX, minZ, maxX, maxZ };
+}
+
+function containsExpanded(bounds, x, z, margin = 0) {
+  return x >= bounds.minX - margin && x <= bounds.maxX + margin && z >= bounds.minZ - margin && z <= bounds.maxZ + margin;
+}
+
+function segmentOf(a, b, order) {
+  return { ax: a[0], az: a[1], bx: b[0], bz: b[1], order, minX: Math.min(a[0], b[0]), minZ: Math.min(a[1], b[1]), maxX: Math.max(a[0], b[0]), maxZ: Math.max(a[1], b[1]) };
+}
+
+function buildSegmentBvh(segments, indices = segments.map((_segment, index) => index)) {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const index of indices) {
+    const segment = segments[index];
+    if (segment.minX < minX) minX = segment.minX;
+    if (segment.minZ < minZ) minZ = segment.minZ;
+    if (segment.maxX > maxX) maxX = segment.maxX;
+    if (segment.maxZ > maxZ) maxZ = segment.maxZ;
+  }
+  const node = { minX, minZ, maxX, maxZ };
+  if (indices.length <= SEGMENT_BVH_LEAF_SIZE) return { ...node, indices: indices.sort((a, b) => segments[a].order - segments[b].order) };
+  const axisX = maxX - minX >= maxZ - minZ;
+  indices.sort((a, b) => {
+    const ac = axisX ? segments[a].minX + segments[a].maxX : segments[a].minZ + segments[a].maxZ;
+    const bc = axisX ? segments[b].minX + segments[b].maxX : segments[b].minZ + segments[b].maxZ;
+    return ac - bc || segments[a].order - segments[b].order;
+  });
+  const middle = indices.length >> 1;
+  return { ...node, left: buildSegmentBvh(segments, indices.slice(0, middle)), right: buildSegmentBvh(segments, indices.slice(middle)) };
+}
+
+function distanceToBounds(node, x, z) {
+  const dx = x < node.minX ? node.minX - x : x > node.maxX ? x - node.maxX : 0;
+  const dz = z < node.minZ ? node.minZ - z : z > node.maxZ ? z - node.maxZ : 0;
+  return Math.hypot(dx, dz);
+}
+
+function distanceToSegmentBvh(spatial, x, z) {
+  let best = Infinity;
+  const stack = [spatial.bvh];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (distanceToBounds(node, x, z) > best) continue;
+    if (node.indices !== undefined) {
+      for (const index of node.indices) {
+        const segment = spatial.segments[index];
+        const distance = distPointSegment(x, z, segment.ax, segment.az, segment.bx, segment.bz);
+        if (distance < best) best = distance;
+      }
+      continue;
+    }
+    const leftDistance = distanceToBounds(node.left, x, z), rightDistance = distanceToBounds(node.right, x, z);
+    if (leftDistance <= rightDistance) { stack.push(node.right, node.left); }
+    else { stack.push(node.left, node.right); }
+  }
+  return best;
+}
+
+function buildRingSpatial(ring) {
+  const bounds = pointsBounds(ring);
+  const segments = [];
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) segments.push(segmentOf(ring[j], ring[i], i));
+  const bins = Array.from({ length: RING_Z_BINS }, () => []);
+  const span = bounds.maxZ - bounds.minZ;
+  const binOf = (z) => span > 0 ? Math.max(0, Math.min(RING_Z_BINS - 1, Math.floor(((z - bounds.minZ) / span) * RING_Z_BINS))) : 0;
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    for (let bin = binOf(segment.minZ); bin <= binOf(segment.maxZ); bin++) bins[bin].push(index);
+  }
+  return { ring, bounds, segments, bins, binOf, bvh: buildSegmentBvh(segments) };
+}
+
+function pointInRingSpatial(x, z, spatial) {
+  if (!containsExpanded(spatial.bounds, x, z)) return false;
+  let inside = false;
+  for (const index of spatial.bins[spatial.binOf(z)]) {
+    const segment = spatial.segments[index];
+    const denom = (segment.bz - segment.az) || 1e-12;
+    if ((segment.az > z) !== (segment.bz > z) && x < ((segment.bx - segment.ax) * (z - segment.az)) / denom + segment.ax) inside = !inside;
+  }
+  return inside;
+}
+
+function buildPolylineSpatial(points) {
+  const segments = [];
+  for (let index = 1; index < points.length; index++) segments.push(segmentOf(points[index - 1], points[index], index - 1));
+  return { points, bounds: pointsBounds(points), segments, bvh: buildSegmentBvh(segments) };
+}
+
 /** Project an IR [x,y] point into WORLD METERS via the map's origin + unitsPerMeter. */
 function toWorld(origin, unitsPerMeter, p) {
   return [origin[0] + p[0] * unitsPerMeter, origin[1] + p[1] * unitsPerMeter];
@@ -116,17 +224,17 @@ function toWorld(origin, unitsPerMeter, p) {
 function projectLandPolys(worldMap) {
   const { origin, unitsPerMeter } = worldMap;
   return worldMap.land.map((poly) => ({
-    outer: poly.points.map((p) => toWorld(origin, unitsPerMeter, p)),
-    holes: (poly.holes ?? []).map((h) => h.map((p) => toWorld(origin, unitsPerMeter, p))),
+    outer: buildRingSpatial(poly.points.map((p) => toWorld(origin, unitsPerMeter, p))),
+    holes: (poly.holes ?? []).map((h) => buildRingSpatial(h.map((p) => toWorld(origin, unitsPerMeter, p)))),
   }));
 }
 
 /** Whether (x,z) [world meters] is inside ANY land polygon (outer minus holes). */
 function isInsideLandPolys(landPolys, x, z) {
   for (const poly of landPolys) {
-    if (!pointInRing(x, z, poly.outer)) continue;
+    if (!pointInRingSpatial(x, z, poly.outer)) continue;
     let inHole = false;
-    for (const h of poly.holes) { if (pointInRing(x, z, h)) { inHole = true; break; } }
+    for (const h of poly.holes) { if (pointInRingSpatial(x, z, h)) { inHole = true; break; } }
     if (!inHole) return true;
   }
   return false;
@@ -134,14 +242,16 @@ function isInsideLandPolys(landPolys, x, z) {
 
 /** Min distance from (x,z) to the nearest land-polygon boundary (outer ring or hole ring),
  *  across every land polygon. Infinity when the map has no land at all. */
-function distToLandBoundary(landPolys, x, z) {
-  let d = Infinity;
-  for (const poly of landPolys) {
-    const o = distToRing(x, z, poly.outer);
-    if (o < d) d = o;
-    for (const h of poly.holes) { const hd = distToRing(x, z, h); if (hd < d) d = hd; }
+function buildLandBoundaryIndex(landPolys) {
+  const segments = [];
+  for (const polygon of landPolys) for (const ring of [polygon.outer, ...polygon.holes]) {
+    for (const segment of ring.segments) segments.push({ ...segment, order: segments.length });
   }
-  return d;
+  return segments.length === 0 ? undefined : { segments, bvh: buildSegmentBvh(segments) };
+}
+
+function distToLandBoundary(boundaryIndex, x, z) {
+  return boundaryIndex === undefined ? Infinity : distanceToSegmentBvh(boundaryIndex, x, z);
 }
 
 /**
@@ -151,10 +261,11 @@ function distToLandBoundary(landPolys, x, z) {
  */
 export function landClassifier(worldMap) {
   const landPolys = projectLandPolys(worldMap);
+  const boundaryIndex = buildLandBoundaryIndex(landPolys);
   return {
     isLand: (x, z) => isInsideLandPolys(landPolys, x, z),
     distToCoast: (x, z) => {
-      const d = distToLandBoundary(landPolys, x, z);
+      const d = distToLandBoundary(boundaryIndex, x, z);
       return Number.isFinite(d) ? d : 0;
     },
   };
@@ -247,18 +358,16 @@ const RAISING_RELIEF = new Set(["mountain", "hills", "plateau", "peak"]);
 /** Project relief hints into world-meter shapes. */
 function projectRelief(worldMap) {
   const { origin, unitsPerMeter } = worldMap;
-  return worldMap.relief.map((r) => ({
-    kind: r.kind,
-    amplitude: r.amplitude,
-    polygon: r.shape.polygon !== undefined ? r.shape.polygon.map((p) => toWorld(origin, unitsPerMeter, p)) : undefined,
-    point: r.shape.point !== undefined ? toWorld(origin, unitsPerMeter, r.shape.point) : undefined,
-  }));
+  return worldMap.relief.map((r) => {
+    const polygon = r.shape.polygon !== undefined ? buildRingSpatial(r.shape.polygon.map((p) => toWorld(origin, unitsPerMeter, p))) : undefined;
+    return { kind: r.kind, amplitude: r.amplitude, polygon, point: r.shape.point !== undefined ? toWorld(origin, unitsPerMeter, r.shape.point) : undefined };
+  });
 }
 
 /** Project biome regions into world-meter rings. */
 function projectBiomes(worldMap) {
   const { origin, unitsPerMeter } = worldMap;
-  return worldMap.biomes.map((b) => ({ biome: b.biome, ring: b.points.map((p) => toWorld(origin, unitsPerMeter, p)) }));
+  return worldMap.biomes.map((b) => ({ biome: b.biome, ring: buildRingSpatial(b.points.map((p) => toWorld(origin, unitsPerMeter, p))) }));
 }
 
 /** Project waterways into world-meter polylines. */
@@ -266,7 +375,7 @@ function projectWaterways(worldMap) {
   const { origin, unitsPerMeter } = worldMap;
   return worldMap.waterways.map((w) => ({
     widthM: w.widthM ?? 3,
-    points: w.points.map((p) => toWorld(origin, unitsPerMeter, p)),
+    ...buildPolylineSpatial(w.points.map((p) => toWorld(origin, unitsPerMeter, p))),
   }));
 }
 
@@ -315,6 +424,7 @@ export function rasterizeWorldMap(worldMap, opts) {
   const step = size / (n - 1);
 
   const landPolys = projectLandPolys(worldMap);
+  const landBoundaryIndex = buildLandBoundaryIndex(landPolys);
   const reliefs = projectRelief(worldMap);
   const biomes = projectBiomes(worldMap);
   // Blight is a DEPTH gradient, not a flat mask — the caesura is mild at its frontier and grows
@@ -324,9 +434,9 @@ export function rasterizeWorldMap(worldMap, opts) {
   for (const b of biomes) {
     if (b.biome !== "blight") continue;
     let cx = 0, cz = 0;
-    for (const [x, z] of b.ring) { cx += x; cz += z; }
-    cx /= b.ring.length; cz /= b.ring.length;
-    b.coreDepth = Math.max(1, distToRing(cx, cz, b.ring));
+    for (const [x, z] of b.ring.ring) { cx += x; cz += z; }
+    cx /= b.ring.ring.length; cz /= b.ring.ring.length;
+    b.coreDepth = Math.max(1, distanceToSegmentBvh(b.ring, cx, cz));
   }
   const waterways = projectWaterways(worldMap);
   // PRECEDENCE: a painted elevation raster (reliefGrid) REPLACES the base shore-lerp + vector
@@ -357,6 +467,7 @@ export function rasterizeWorldMap(worldMap, opts) {
   for (let row = 0; row < n; row++) {
     const wz = -half + row * step;
     for (let col = 0; col < n; col++) {
+      if (((row * n + col) & 1023) === 0 && opts.shouldCancel?.()) throw new MapRasterCancelledError();
       const wx = -half + col * step;
       const i = row * n + col;
 
@@ -364,7 +475,7 @@ export function rasterizeWorldMap(worldMap, opts) {
       //    shore-lerp base and the vector relief hints, per the reliefGrid precedence contract)
       //    or the classic shore falloff + relief-hint composition. ───────────────────────────
       const inLand = isInsideLandPolys(landPolys, wx, wz);
-      let coastD = distToLandBoundary(landPolys, wx, wz);
+      let coastD = distToLandBoundary(landBoundaryIndex, wx, wz);
       if (!Number.isFinite(coastD)) coastD = shoreBand; // no land at all: treat as "at the shore".
       let h;
       let localAmp = 0;
@@ -397,8 +508,8 @@ export function rasterizeWorldMap(worldMap, opts) {
         for (const r of reliefs) {
           let w = 0;
           if (r.polygon !== undefined) {
-            if (pointInRing(wx, wz, r.polygon)) {
-              const edgeD = distToRing(wx, wz, r.polygon);
+            if (pointInRingSpatial(wx, wz, r.polygon)) {
+              const edgeD = distanceToSegmentBvh(r.polygon, wx, wz);
               w = smoothstep01(edgeD / reliefBand);
             }
           } else if (r.point !== undefined) {
@@ -449,20 +560,20 @@ export function rasterizeWorldMap(worldMap, opts) {
       let matId = 0, matW = 0;
       const edgeBand = Math.max(3, size * 0.03);
       for (const b of biomes) {
-        if (!pointInRing(wx, wz, b.ring)) continue;
+        if (!pointInRingSpatial(wx, wz, b.ring)) continue;
         // Blight is an OVERLAY (not a paint material) and a DEPTH gradient: intensity climbs from ~0 at
         // the caesura's frontier to ~1 toward its core (inward distance / coreDepth), so the render's
         // colour-drain + mist + dead-vegetation all intensify with depth — a mild edge, an oppressive
         // heart. The underlying biome still wins paintMat, so the ground keeps its texture, just
         // corrupted. (An authored per-region Corruption Index ceiling is a future painter hook.)
         if (b.biome === "blight") {
-          const inten = Math.min(1, distToRing(wx, wz, b.ring) / b.coreDepth);
+          const inten = Math.min(1, distanceToSegmentBvh(b.ring, wx, wz) / b.coreDepth);
           if (inten > blight[i]) blight[i] = inten;
           continue;
         }
         const id = biomePaintId(b.biome);
         if (id === undefined) continue;
-        const bd = distToRing(wx, wz, b.ring);
+        const bd = distanceToSegmentBvh(b.ring, wx, wz);
         const w = 0.8 * smoothstep01(bd / edgeBand);
         if (w > matW) { matId = id; matW = w; }
       }
@@ -480,7 +591,8 @@ export function rasterizeWorldMap(worldMap, opts) {
         const halfWidth = w.widthM / 2;
         const bankBand = Math.max(halfWidth, 2);
         const reach = halfWidth + bankBand;
-        const d = distToPolyline(wx, wz, w.points);
+        if (!containsExpanded(w.bounds, wx, wz, reach)) continue;
+        const d = distanceToSegmentBvh(w, wx, wz);
         if (d >= reach) continue;
         const bankW = 0.85 * (1 - smoothstep01(d / reach));
         if (bankW > matW) { matId = 1; matW = bankW; }
@@ -536,7 +648,9 @@ export function rasterizeWorldMap(worldMap, opts) {
         if (w.points.length < 2) continue;
         const halfWidth = w.widthM / 2;
         const bankBand = Math.max(halfWidth, 2);
-        const d = distToPolyline(wx, wz, w.points);
+        const reach = halfWidth + bankBand;
+        if (!containsExpanded(w.bounds, wx, wz, reach)) continue;
+        const d = distanceToSegmentBvh(w, wx, wz);
         let ct;
         if (d <= halfWidth) ct = 1;
         else if (d >= halfWidth + bankBand) ct = 0;
@@ -574,7 +688,7 @@ export function rasterizeWorldMap(worldMap, opts) {
         const i = row * n + col;
         if (heights[i] <= seaLevel || heights[i] > seaLevel + 2.5) continue;
         let inSwamp = false;
-        for (const ring of swampRings) { if (pointInRing(wx, wz, ring)) { inSwamp = true; break; } }
+        for (const ring of swampRings) { if (pointInRingSpatial(wx, wz, ring)) { inSwamp = true; break; } }
         if (!inSwamp) continue;
         const pool = fbm(wx * 0.05, wz * 0.05, seed + 7919, 3, 2.0, 0.5);
         if (pool > 0.12) {

@@ -1,0 +1,317 @@
+import { WorldMapSchema, migrateWorldMap, verifyWorldMap, type WorldMap } from "../worldmap.ts";
+import { createMapTerrainField, sliceMapFieldChunk, MapFieldCancelledError, MAX_MAP_FIELD_MASTER_RES } from "../../terrain/map-field.mjs";
+import {
+  createTerrainEditBaseTopology,
+  parseTerrainEditLayer,
+  prepareTerrainEditLayers,
+  composePreparedTerrainEditLayers,
+  preparedTerrainEditLayerChunkSlices,
+} from "../../terrain/edit-layer.mjs";
+import { terrainChunkRangeForBounds, terrainChunkTopology } from "../../terrain/grid.mjs";
+import { validateErosionRecipe } from "../pipeline/erosion.mjs";
+import { compilerContentHash, validateCompilerContentHash } from "./canonical.mjs";
+import { createInitialWorldCompilerGraph } from "./graph.mjs";
+import { planCompilerInvalidation } from "./planner.mjs";
+import { createDerivedRevisionManifest, derivedArtifactContentHash } from "./manifest.mjs";
+import { encodeTerrainChunkArtifact, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE } from "./terrain-artifact.mjs";
+
+export const WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA = "limina.world-terrain-compiler-config/v1";
+export const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
+export const MAX_WORLD_TERRAIN_COMPILE_CHUNKS = 16_384;
+export const MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES = 256 * 1024 * 1024;
+export const MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES = MAX_MAP_FIELD_MASTER_RES * MAX_MAP_FIELD_MASTER_RES;
+
+const RAW_HASH = /^[0-9a-f]{64}$/;
+const REF_ID = /^[a-z][a-z0-9._-]{0,95}$/;
+const VERSION = /^[0-9][A-Za-z0-9._+-]{0,63}$/;
+const PROJECT_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const BRANCH_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
+
+export class WorldTerrainCompileCancelledError extends Error {
+  readonly code = "world_terrain_compile_cancelled";
+  constructor() {
+    super("world terrain compile cancelled");
+    this.name = "WorldTerrainCompileCancelledError";
+  }
+}
+
+type RecordValue = Record<string, any>;
+
+function exactRecord(value: unknown, keys: readonly string[], label: string): RecordValue {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new Error(`${label} must be a plain object`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new Error(`${label} must not contain symbol fields`);
+  const names = Object.getOwnPropertyNames(value);
+  const actual = [...names].sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    throw new Error(`${label} must contain exactly: ${expected.join(", ")}`);
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor?.get !== undefined || descriptor?.set !== undefined || descriptor?.enumerable !== true) {
+      throw new Error(`${label}.${name} must be an enumerable data field`);
+    }
+  }
+  return value as RecordValue;
+}
+
+function denseArray(value: unknown, maximum: number, label: string): any[] {
+  if (!Array.isArray(value) || value.length > maximum) throw new Error(`${label} must be an array with at most ${maximum} entries`);
+  for (let index = 0; index < value.length; index++) if (!Object.hasOwn(value, index)) throw new Error(`${label} must not be sparse`);
+  return value;
+}
+
+function identifier(value: unknown, pattern: RegExp, label: string): string {
+  if (typeof value !== "string" || !pattern.test(value)) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function finite(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0)) throw new Error(`${label} must be a finite canonical number`);
+  return value;
+}
+
+function checkpoint(shouldCancel: () => boolean, work = 0): void {
+  if ((work & 1023) === 0 && shouldCancel()) throw new WorldTerrainCompileCancelledError();
+}
+
+function parseSourceRequest(input: unknown) {
+  const value = exactRecord(input, ["projectId", "branchId", "revision", "headHash"], "terrain compile source request");
+  if (!Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error("terrain compile revision must be a non-negative safe integer");
+  return Object.freeze({
+    projectId: identifier(value.projectId, PROJECT_ID, "terrain compile projectId"),
+    branchId: identifier(value.branchId, BRANCH_ID, "terrain compile branchId"),
+    revision: value.revision as number,
+    headHash: validateCompilerContentHash(value.headHash, "terrain compile headHash"),
+  });
+}
+
+function parseContentRef(input: unknown, label: string, expectedType: string, expectedScope: "global" | "chunk") {
+  const value = exactRecord(input, ["refId", "refType", "scope", "assetId", "contentHash"], label);
+  if (value.refType !== expectedType) throw new Error(`${label} refType must be '${expectedType}'`);
+  if (value.scope !== expectedScope) throw new Error(`${label} scope must be '${expectedScope}'`);
+  if (typeof value.assetId !== "string" || value.assetId.length < 1 || value.assetId.startsWith("/") || value.assetId.includes("\\") || value.assetId.split("/").some((part: string) => part === "" || part === "." || part === "..")) {
+    throw new Error(`${label} assetId is invalid`);
+  }
+  return Object.freeze({
+    refId: identifier(value.refId, REF_ID, `${label} refId`),
+    refType: expectedType,
+    scope: expectedScope,
+    assetId: value.assetId as string,
+    contentHash: validateCompilerContentHash(value.contentHash, `${label} contentHash`),
+  });
+}
+
+function parseConfig(input: unknown) {
+  const value = exactRecord(input, ["schema", "seed", "baseAmplitude", "erosionRecipe", "gridId", "verticalRange", "limits"], "terrain compiler config");
+  if (value.schema !== WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA) throw new Error(`terrain compiler config schema must be '${WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA}'`);
+  if (!Number.isSafeInteger(value.seed) || value.seed < -2147483648 || value.seed > 2147483647) throw new Error("terrain compiler seed must be signed 32-bit integer");
+  const baseAmplitude = finite(value.baseAmplitude, "terrain compiler baseAmplitude");
+  if (!(baseAmplitude > 0)) throw new Error("terrain compiler baseAmplitude must be positive");
+  const vertical = exactRecord(value.verticalRange, ["minM", "maxM"], "terrain compiler verticalRange");
+  const minM = finite(vertical.minM, "terrain compiler verticalRange.minM");
+  const maxM = finite(vertical.maxM, "terrain compiler verticalRange.maxM");
+  if (!(maxM > minM)) throw new Error("terrain compiler verticalRange must have minM < maxM");
+  const limits = exactRecord(value.limits, ["maxChunks", "maxMasterSamples", "maxArtifactBytes"], "terrain compiler limits");
+  for (const key of ["maxChunks", "maxMasterSamples", "maxArtifactBytes"] as const) {
+    if (!Number.isSafeInteger(limits[key]) || limits[key] < 1) throw new Error(`terrain compiler limits.${key} must be a positive safe integer`);
+  }
+  if (limits.maxChunks > MAX_WORLD_TERRAIN_COMPILE_CHUNKS) throw new Error(`terrain compiler maxChunks exceeds ${MAX_WORLD_TERRAIN_COMPILE_CHUNKS}`);
+  if (limits.maxMasterSamples > MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES) throw new Error(`terrain compiler maxMasterSamples exceeds ${MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES}`);
+  if (limits.maxArtifactBytes > MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES) throw new Error(`terrain compiler maxArtifactBytes exceeds ${MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES}`);
+  if (typeof value.gridId !== "string") throw new Error("terrain compiler gridId must be a string");
+  return Object.freeze({
+    schema: WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
+    seed: value.seed as number,
+    baseAmplitude,
+    erosionRecipe: validateErosionRecipe(value.erosionRecipe),
+    gridId: value.gridId,
+    verticalRange: Object.freeze({ minM, maxM }),
+    limits: Object.freeze({ maxChunks: limits.maxChunks, maxMasterSamples: limits.maxMasterSamples, maxArtifactBytes: limits.maxArtifactBytes }),
+  });
+}
+
+function normalizeEditedTile(base: any, heightsM: Float32Array, verticalRange: { minM: number; maxM: number }, shouldCancel: () => boolean) {
+  const span = verticalRange.maxM - verticalRange.minM;
+  const heights = new Float32Array(heightsM.length);
+  for (let index = 0; index < heights.length; index++) {
+    checkpoint(shouldCancel, index);
+    const height = heightsM[index];
+    if (height < verticalRange.minM || height > verticalRange.maxM) {
+      throw new Error(`terrain compile height ${height}m is outside configured vertical range [${verticalRange.minM}, ${verticalRange.maxM}]`);
+    }
+    heights[index] = Math.fround((height - verticalRange.minM) / span);
+  }
+  return {
+    nrows: base.topology.samples.rows,
+    ncols: base.topology.samples.cols,
+    origin: [base.topology.bounds.minX + 24, verticalRange.minM, base.topology.bounds.minZ + 24],
+    scale: [48, span, 48],
+    heights,
+    paintMat: base.paintMat,
+    paintW: base.paintW,
+    climate: base.climate,
+    climateChannels: 3,
+    blight: base.blight,
+  };
+}
+
+/** Pure compiler boundary: no filesystem, network, clock, or random inputs. */
+export function compileWorldTerrain(input: unknown) {
+  const root = exactRecord(input, ["request", "worldMap", "sourceRefs", "terrainEditLayers", "terrainEditLayerRefs", "compiler", "previousSnapshot", "cancellation"], "world terrain compile input");
+  const request = parseSourceRequest(root.request);
+  const cancellation = exactRecord(root.cancellation, ["shouldCancel"], "terrain compile cancellation");
+  if (typeof cancellation.shouldCancel !== "function") throw new Error("terrain compile cancellation.shouldCancel must be a function");
+  const shouldCancel = cancellation.shouldCancel as () => boolean;
+  checkpoint(shouldCancel);
+
+  const compilerInput = exactRecord(root.compiler, ["version", "config"], "terrain compiler identity");
+  const compilerVersion = identifier(compilerInput.version, VERSION, "terrain compiler version");
+  const config = parseConfig(compilerInput.config);
+  const map = WorldMapSchema.parse(migrateWorldMap(root.worldMap)) as WorldMap;
+  const verification = verifyWorldMap(map);
+  if (!verification.ok) throw new Error(`WorldMap content hash mismatch: expected '${verification.expected}', actual '${verification.actual}'`);
+  const refsInput = exactRecord(root.sourceRefs, ["mapDocument", "designSource", "worldMap"], "terrain compile sourceRefs");
+  const mapDocumentRef = parseContentRef(refsInput.mapDocument, "terrain compile MapDoc ref", "map-document/v1", "global");
+  const designSourceRef = parseContentRef(refsInput.designSource, "terrain compile design source ref", "design-source/v1", "global");
+  const worldMapRef = parseContentRef(refsInput.worldMap, "terrain compile WorldMap ref", "world-map/v1", "global");
+  const expectedWorldMapHash = `sha256:${verification.actual}`;
+  if (worldMapRef.contentHash !== expectedWorldMapHash) throw new Error("terrain compile WorldMap ref is not bound to the verified WorldMap content hash");
+  if (typeof map.provenance.sourceHash !== "string" || !RAW_HASH.test(map.provenance.sourceHash)) throw new Error("terrain compile WorldMap provenance must bind a lowercase aggregate design-source hash");
+  if (designSourceRef.contentHash !== `sha256:${map.provenance.sourceHash}`) throw new Error("terrain compile design source ref is not bound to WorldMap provenance.sourceHash");
+
+  const layerInputs = denseArray(root.terrainEditLayers, 64, "terrain edit layers");
+  const layerRefInputs = denseArray(root.terrainEditLayerRefs, 64, "terrain edit layer refs");
+  if (layerInputs.length !== layerRefInputs.length) throw new Error("terrain edit layers and refs must have identical lengths");
+  const layers = layerInputs.map((layer) => parseTerrainEditLayer(layer));
+  const layerRefs = layerRefInputs.map((ref, index) => {
+    const parsed = parseContentRef(ref, `terrain edit layer ref ${index}`, "terrain-edit-layer/v1", "chunk");
+    if (parsed.contentHash !== layers[index].contentHash) throw new Error(`terrain edit layer ref ${index} is not bound to its parsed layer content hash`);
+    return parsed;
+  });
+  const allRefIds = [mapDocumentRef.refId, designSourceRef.refId, worldMapRef.refId, ...layerRefs.map((ref) => ref.refId)];
+  if (new Set(allRefIds).size !== allRefIds.length) throw new Error("terrain compile source refs must have unique refId values");
+
+  let field;
+  try {
+    field = createMapTerrainField({
+      worldMap: map,
+      seed: config.seed,
+      baseAmplitude: config.baseAmplitude,
+      erosionRecipe: config.erosionRecipe,
+      gridId: config.gridId,
+      shouldCancel,
+    });
+  } catch (error) {
+    if (error instanceof MapFieldCancelledError || (error instanceof Error && error.name === "ErosionCancelledError")) throw new WorldTerrainCompileCancelledError();
+    throw error;
+  }
+  const masterSamples = field.masterRes * field.masterRes;
+  if (masterSamples > config.limits.maxMasterSamples) throw new Error(`terrain compile master field has ${masterSamples} samples, exceeding cap ${config.limits.maxMasterSamples}`);
+  const domain = terrainChunkRangeForBounds(field.grid, field.bounds);
+  const width = domain.maxTx - domain.minTx + 1, height = domain.maxTz - domain.minTz + 1;
+  const chunkCount = width * height;
+  if (!Number.isSafeInteger(chunkCount) || chunkCount > config.limits.maxChunks) throw new Error(`terrain compile domain has ${chunkCount} chunks, exceeding cap ${config.limits.maxChunks}`);
+  const baseTopology = createTerrainEditBaseTopology({ grid: field.grid, domain });
+  for (const layer of layers) if (layer.baseTopology.topologyHash !== baseTopology.topologyHash) throw new Error(`terrain edit layer '${layer.layerId}' base topology does not match compiler domain`);
+  const prepared = prepareTerrainEditLayers({ baseTopology, layers }, { shouldCancel });
+
+  const compiledChunks: any[] = [];
+  const artifacts: any[] = [];
+  let artifactBytes = 0, editSliceDeltaVisits = 0, work = 0;
+  for (let tz = domain.minTz; tz <= domain.maxTz; tz++) {
+    for (let tx = domain.minTx; tx <= domain.maxTx; tx++) {
+      checkpoint(shouldCancel, work++);
+      const topology = terrainChunkTopology(field.grid, { lod: 0, tx, tz, samples: 33 });
+      const base = sliceMapFieldChunk(field, tx, tz, { shouldCancel });
+      const composed = composePreparedTerrainEditLayers({ baseTopology, chunkTopology: topology, baseHeightsM: base.heightsM, preparedLayers: prepared }, { shouldCancel });
+      const tile = normalizeEditedTile(base, composed.heightsM, config.verticalRange, shouldCancel);
+      const bytes = encodeTerrainChunkArtifact(tile);
+      artifactBytes += bytes.byteLength;
+      if (artifactBytes > config.limits.maxArtifactBytes) throw new Error(`terrain compile artifact bytes exceed cap ${config.limits.maxArtifactBytes}`);
+      const contentHash = derivedArtifactContentHash(bytes);
+      const chunkSlices = preparedTerrainEditLayerChunkSlices({ baseTopology, chunkTopology: topology, preparedLayers: prepared }, { shouldCancel });
+      editSliceDeltaVisits += chunkSlices.inspectedDeltaCount;
+      const orderedSlices = layerRefs.map((ref, index) => ({
+        order: index,
+        refId: ref.refId,
+        contentHash: compilerContentHash({
+          schema: "limina.terrain-edit-layer-slice/v1",
+          chunkId: topology.chunkId,
+          operations: chunkSlices.slices[index].operations,
+        }),
+      }));
+      const sourceSlices = orderedSlices.map(({ order: _order, ...slice }) => slice).sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
+      const editSliceHash = compilerContentHash({ schema: "limina.terrain-edit-stack-slice/v1", slices: orderedSlices });
+      compiledChunks.push({
+        chunkId: topology.chunkId,
+        gridId: topology.gridId,
+        lod: 0,
+        tx,
+        tz,
+        chunkTopologyHash: topology.topologyHash,
+        sourceSliceHashes: { "edit-layers.slice": editSliceHash },
+        manifestSourceSlices: sourceSlices,
+        artifact: { artifactType: TERRAIN_CHUNK_ARTIFACT_TYPE, contentHash, byteLength: bytes.byteLength, mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE },
+      });
+      artifacts.push(Object.freeze({ chunkId: topology.chunkId, artifactType: TERRAIN_CHUNK_ARTIFACT_TYPE, mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, contentHash, bytes }));
+    }
+  }
+  compiledChunks.sort((a, b) => a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0);
+  artifacts.sort((a, b) => a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0);
+  const graph = createInitialWorldCompilerGraph();
+  const plannerInput = {
+    graph,
+    chunks: compiledChunks.map(({ manifestSourceSlices: _manifestSourceSlices, artifact: _artifact, ...chunk }) => chunk),
+    configs: {
+      worldmap: { schema: "limina.worldmap-stage-config/v1" },
+      "base-height": { seed: config.seed, baseAmplitude: config.baseAmplitude, masterTopologyHash: field.masterTopologyHash },
+      erosion: config.erosionRecipe,
+      "edit-layers": { composition: "ordered-additive-metres/v1" },
+      collision: { source: TERRAIN_CHUNK_ARTIFACT_TYPE },
+      render: { source: TERRAIN_CHUNK_ARTIFACT_TYPE, verticalRange: config.verticalRange },
+    },
+    globalSourceHashes: { "worldmap.global": worldMapRef.contentHash },
+  };
+  const previous = root.previousSnapshot === null ? undefined : root.previousSnapshot;
+  const { snapshot, invalidation } = planCompilerInvalidation({ ...plannerInput, previous });
+  const contentRefs = [mapDocumentRef, designSourceRef, worldMapRef, ...layerRefs].sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
+  const manifest = createDerivedRevisionManifest({
+    schema: "limina.derived-revision-manifest/v1",
+    projectId: request.projectId,
+    branchId: request.branchId,
+    source: { revision: request.revision, headHash: request.headHash, contentRefs },
+    compiler: { version: compilerVersion, configHash: compilerContentHash(config), graphHash: graph.graphHash, snapshotHash: snapshot.snapshotHash },
+    grid: field.grid,
+    chunks: compiledChunks.map((chunk) => ({
+      chunkId: chunk.chunkId,
+      gridId: chunk.gridId,
+      lod: chunk.lod,
+      tx: chunk.tx,
+      tz: chunk.tz,
+      topologyHash: chunk.chunkTopologyHash,
+      sourceSliceHashes: chunk.manifestSourceSlices,
+      artifacts: [chunk.artifact],
+    })),
+  });
+  checkpoint(shouldCancel);
+  const diagnostics = Object.freeze([Object.freeze({
+    code: "terrain.compile.summary",
+    severity: "info",
+    message: "Compiled the complete bounded LOD0 terrain domain from one globally eroded master field.",
+    details: Object.freeze({
+      chunkCount,
+      artifactCount: artifacts.length,
+      artifactBytes,
+      masterSamples,
+      estimatedMapWorkUnits: field.geometry.estimatedWorkUnits,
+      editSourceDeltaCount: prepared.sourceDeltaCount,
+      editIndexedDeltaCount: prepared.indexedDeltaCount,
+      editSliceDeltaVisits,
+      reusedArtifacts: 0,
+    }),
+  })]);
+  return Object.freeze({ manifest, artifacts: Object.freeze(artifacts), snapshot, invalidation, diagnostics });
+}

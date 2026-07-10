@@ -247,7 +247,7 @@ for (const [mutate, pattern, label] of [
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = Number.NaN; }, /finite/, "NaN height"],
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = -0; }, /negative zero/, "negative-zero height"],
   [(tile: ReturnType<typeof makeTile>) => { tile.heights[0] = 1.01; }, /\[0, 1\]/, "height above one"],
-  [(tile: ReturnType<typeof makeTile>) => { tile.paintMat![0] = 5; }, /paintMat/, "unknown material id"],
+  [(tile: ReturnType<typeof makeTile>) => { tile.paintMat![0] = 7; }, /paintMat/, "unknown material id"],
   [(tile: ReturnType<typeof makeTile>) => { tile.paintW![0] = -0.1; }, /\[0, 1\]/, "negative paint weight"],
   [(tile: ReturnType<typeof makeTile>) => { tile.climate![0] = Number.POSITIVE_INFINITY; }, /finite/, "infinite climate value"],
   [(tile: ReturnType<typeof makeTile>) => { tile.climate![2] = 1.5; }, /biome/, "fractional biome"],

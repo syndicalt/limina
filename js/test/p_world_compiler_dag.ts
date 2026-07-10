@@ -39,11 +39,31 @@ function chunk(gridId: string, tx: number, tz: number) {
     tx,
     tz,
     chunkTopologyHash: hash(`topology:${gridId}:${tx}:${tz}`),
-    sourceSliceHashes: {
-      "edit-layers.slice": hash(`edits:${gridId}:${tx}:${tz}`),
-      "worldmap.slice": hash(`worldmap:${gridId}:${tx}:${tz}`),
-    },
+    sourceSliceHashes: { "edit-layers.slice": hash(`edits:${gridId}:${tx}:${tz}`) },
   };
+}
+
+const SYNTHETIC_LOCAL_HALO_GRAPH = createCompilerGraph([
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "worldmap", stageVersion: "1.0.0", scope: "chunk", dependencies: [], sourceInputs: [{ inputId: "worldmap.slice", scope: "chunk" }], footprint: { haloChunks: 0 } },
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "base-height", stageVersion: "1.0.0", scope: "chunk", dependencies: ["worldmap"], sourceInputs: [], footprint: { haloChunks: 0 } },
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "erosion", stageVersion: "1.0.0", scope: "chunk", dependencies: ["base-height"], sourceInputs: [], footprint: { haloChunks: 1 } },
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "edit-layers", stageVersion: "1.0.0", scope: "chunk", dependencies: ["erosion"], sourceInputs: [{ inputId: "edit-layers.slice", scope: "chunk" }], footprint: { haloChunks: 0 } },
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "collision", stageVersion: "1.0.0", scope: "chunk", dependencies: ["edit-layers"], sourceInputs: [], footprint: { haloChunks: 0 } },
+  { schema: COMPILER_STAGE_SCHEMA, stageId: "render", stageVersion: "1.0.0", scope: "chunk", dependencies: ["edit-layers"], sourceInputs: [], footprint: { haloChunks: 0 } },
+]);
+
+function localHaloFixture(radius = 2, gridId = "grey-field.surface") {
+  const chunks = [];
+  for (let tz = -radius; tz <= radius; tz++) for (let tx = -radius; tx <= radius; tx++) {
+    chunks.push({
+      ...chunk(gridId, tx, tz),
+      sourceSliceHashes: {
+        "edit-layers.slice": hash(`edits:${gridId}:${tx}:${tz}`),
+        "worldmap.slice": hash(`worldmap:${gridId}:${tx}:${tz}`),
+      },
+    });
+  }
+  return { ...fixture(0), graph: SYNTHETIC_LOCAL_HALO_GRAPH, chunks, globalSourceHashes: {} };
 }
 
 function fixture(radius = 2) {
@@ -83,6 +103,8 @@ const graph = createInitialWorldCompilerGraph();
 const shuffled = createCompilerGraph([...INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS].reverse());
 assert(graph.graphHash === shuffled.graphHash, "definition input order changed graphHash");
 assert(graph.topologicalOrder.join(",") === "worldmap,base-height,erosion,edit-layers,collision,render", "stable topological order is wrong");
+for (const stageId of ["worldmap", "base-height", "erosion"]) assert(graph.definitions.find((stage) => stage.stageId === stageId)?.scope === "global", `${stageId} must model the canonical global master build`);
+assert(graph.definitions.find((stage) => stage.stageId === "erosion")?.footprint.haloChunks === 0, "production erosion must not claim a chunk halo");
 rejects(() => (graph.definitions[0].dependencies as string[]).push("render"), /read only|extensible|frozen|object/i, "nested graph definitions are mutable");
 rejects(() => createCompilerGraph([stageDefinition("a", ["missing"])]), /missing dependency/, "missing dependency accepted");
 rejects(() => createCompilerGraph([stageDefinition("a", ["b"]), stageDefinition("b", ["a"])]), /cycle/, "cycle accepted");
@@ -132,16 +154,19 @@ const reorderedInput = { ...baseInput, chunks: [...baseInput.chunks].reverse() }
 const repeated = planCompilerInvalidation({ ...reorderedInput, previous: initial.snapshot });
 assert(canonicalCompilerSnapshot(initial.snapshot) === canonicalCompilerSnapshot(repeated.snapshot), "identical plan was not byte-deterministic");
 assert(repeated.invalidation.changedInstances === 0, "identical plan reported changed instances");
-assert(repeated.invalidation.cacheHits === baseInput.chunks.length * graph.definitions.length, "identical plan missed cache hits");
+assert(repeated.invalidation.cacheHits === 3 + baseInput.chunks.length * 3, "identical plan missed global/chunk cache hits");
 
-// A one-cell source change invalidates itself, then the erosion halo, without trusting hints.
+// Planner halo capability remains explicit through a synthetic local algorithm graph. The
+// production graph above intentionally does not claim canonical erosion is chunk-local.
 const centerId = terrainChunkId("grey-field.surface", 0, 0, 0);
-const localInput = clone(baseInput);
-localInput.graph = graph;
+const localBaseInput = localHaloFixture();
+const localInitial = planCompilerInvalidation(localBaseInput);
+const localInput = clone(localBaseInput);
+localInput.graph = SYNTHETIC_LOCAL_HALO_GRAPH;
 localInput.chunks.find((candidate: { chunkId: string }) => candidate.chunkId === centerId)!.sourceSliceHashes["worldmap.slice"] = hash("worldmap:center:v2");
-const noHint = planCompilerInvalidation({ ...localInput, previous: initial.snapshot });
+const noHint = planCompilerInvalidation({ ...localInput, previous: localInitial.snapshot });
 const lyingHintId = terrainChunkId("grey-field.surface", 0, 2, 2);
-const lyingHint = planCompilerInvalidation({ ...localInput, previous: initial.snapshot, clientDirtyHints: [lyingHintId] });
+const lyingHint = planCompilerInvalidation({ ...localInput, previous: localInitial.snapshot, clientDirtyHints: [lyingHintId] });
 assert(JSON.stringify(noHint.invalidation.changedByStage) === JSON.stringify(lyingHint.invalidation.changedByStage), "client hint narrowed compiler invalidation");
 assert(noHint.invalidation.changedByStage.worldmap.length === 1, "local worldmap slice did not invalidate exactly one worldmap stage");
 assert(noHint.invalidation.changedByStage["base-height"].length === 1, "local worldmap slice did not invalidate exactly one base-height stage");
@@ -156,32 +181,30 @@ const seaInput = clone(baseInput);
 seaInput.graph = graph;
 seaInput.configs.worldmap.seaLevelM = 3;
 const seaChange = planCompilerInvalidation({ ...seaInput, previous: initial.snapshot });
-for (const stageId of graph.topologicalOrder) {
-  assert(seaChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `global sea config did not invalidate every ${stageId} chunk`);
-}
+for (const stageId of ["worldmap", "base-height", "erosion"]) assert(seaChange.invalidation.changedByStage[stageId].length === 1, `global sea config did not invalidate global ${stageId}`);
+for (const stageId of ["edit-layers", "collision", "render"]) assert(seaChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `global sea config did not invalidate every ${stageId} chunk`);
 const versionDefinitions = clone(INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS);
 versionDefinitions.find((definition: { stageId: string }) => definition.stageId === "erosion")!.stageVersion = "2.0.0";
 const versionGraph = createCompilerGraph(versionDefinitions);
 const versionChange = planCompilerInvalidation({ ...baseInput, graph: versionGraph, previous: initial.snapshot });
 assert(versionChange.invalidation.changedByStage.worldmap.length === 0, "erosion version change invalidated worldmap");
 assert(versionChange.invalidation.changedByStage["base-height"].length === 0, "erosion version change invalidated base-height");
-for (const stageId of ["erosion", "edit-layers", "collision", "render"]) {
-  assert(versionChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `erosion version change did not invalidate ${stageId}`);
-}
+assert(versionChange.invalidation.changedByStage.erosion.length === 1, "erosion version change did not invalidate the global erosion stage");
+for (const stageId of ["edit-layers", "collision", "render"]) assert(versionChange.invalidation.changedByStage[stageId].length === baseInput.chunks.length, `erosion version change did not invalidate ${stageId}`);
 
 // Same coordinates in separate grids are legal and cannot contaminate one another's halo.
 const multiGridInput = {
-  ...fixture(0),
-  chunks: [chunk("grid.alpha", 0, 0), chunk("grid.beta", 0, 0)],
+  ...localHaloFixture(0),
+  chunks: [...localHaloFixture(0, "grid.alpha").chunks, ...localHaloFixture(0, "grid.beta").chunks],
 };
 const multiBase = planCompilerInvalidation(multiGridInput);
 const multiChangedInput = clone(multiGridInput);
-multiChangedInput.graph = graph;
+multiChangedInput.graph = SYNTHETIC_LOCAL_HALO_GRAPH;
 multiChangedInput.chunks[0].sourceSliceHashes["worldmap.slice"] = hash("alpha:v2");
 const multiChanged = planCompilerInvalidation({ ...multiChangedInput, previous: multiBase.snapshot });
 const alphaId = terrainChunkId("grid.alpha", 0, 0, 0);
 const betaId = terrainChunkId("grid.beta", 0, 0, 0);
-for (const stageId of graph.topologicalOrder) {
+for (const stageId of SYNTHETIC_LOCAL_HALO_GRAPH.topologicalOrder) {
   assert(JSON.stringify(multiChanged.invalidation.changedByStage[stageId]) === JSON.stringify([alphaId]), `${stageId} crossed grid boundaries: ${JSON.stringify(multiChanged.invalidation.changedByStage[stageId])}`);
   assert(!multiChanged.invalidation.changedByStage[stageId].includes(betaId), `${stageId} invalidated the untouched grid`);
 }
