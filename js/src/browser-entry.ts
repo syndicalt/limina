@@ -46,7 +46,13 @@ import { LiminaTracer } from "./observability/event.ts";
 import { WasmRapierPhysics, type RapierModule } from "./browser/wasm-rapier-physics.ts";
 import { SharedTransformStorage } from "./browser/sab-transforms.ts";
 import { InputRingBuffer } from "./browser/sab-ringbuffer.ts";
-import { createSimStatusView, readSimStatus, type SimStatusSnapshot } from "./browser/sim-status.ts";
+import {
+  createSimStatusView,
+  readSimStatus,
+  readSimStatusInto,
+  type MutableSimStatusSnapshot,
+  type SimStatusSnapshot,
+} from "./browser/sim-status.ts";
 import { FrameInterpolator, type TransformStore } from "./browser/frame-interpolator.ts";
 import type { AuthorCommand } from "./browser/sim-worker.ts";
 import { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browser/authoring-project.ts";
@@ -93,6 +99,8 @@ import {
 } from "./render/browser-host.ts";
 import type { RenderQualityTier } from "./render/quality.ts";
 import type { RenderTelemetrySnapshot } from "./render/telemetry.ts";
+import { UnderwaterEffect } from "./render/underwater.ts";
+export { UnderwaterEffect } from "./render/underwater.ts";
 import { buildPostPipeline, constrainPostPreset, type PostPipeline, type PostPreset } from "./render/post.ts";
 export { createBrowserRenderHost } from "./render/browser-host.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
@@ -767,6 +775,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupEntityStream: EntityResidencyStream | undefined;
   let cleanupInput: LivePlayerInput | undefined;
   let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
+  let cleanupUnderwater: UnderwaterEffect | undefined;
   let teardownPromise: Promise<void> | undefined;
   let runtimeReady = false;
   let aborted = false;
@@ -801,6 +810,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       await step("grass stream", () => cleanupGrassStream?.clear());
       await step("terrain stream", () => cleanupTerrainStream?.clear());
       await step("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
+      await step("underwater effect", () => cleanupUnderwater?.dispose());
       await step("post-processing", () => (cleanupWorld?.post as { dispose?(): void } | undefined)?.dispose?.());
       if (cleanupWorld !== undefined) cleanupWorld.post = undefined;
       await step("world render session", () => cleanupRenderSession?.dispose());
@@ -920,6 +930,15 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const inputRing = new InputRingBuffer({ buffer: ready.inputBuffer });
   const statusShared = typeof SharedArrayBuffer === "function" && ready.status instanceof SharedArrayBuffer;
   const statusView = createSimStatusView(ready.status);
+  const frameStatus: MutableSimStatusSnapshot = {
+    tick: 0,
+    flags: 0,
+    playerEid: -1,
+    generation: 0,
+    inWater: false,
+    swimming: false,
+    submerged: false,
+  };
   const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
   const requestWorkerControl = (type: "pause" | "resume"): Promise<void> => {
     const requestId = ++controlRequestId;
@@ -1033,6 +1052,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     peek: opts.peek === true,
   };
   cleanupWorld = world;
+  const underwaterEffect = new UnderwaterEffect(scene);
+  cleanupUnderwater = underwaterEffect;
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   const core = registerCoreSkills(registry, { assets: liveAssets });
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
@@ -1491,6 +1512,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         );
         camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
       }
+      if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
       // Map Phase 3.3: stream terrain around wherever the ACTIVE camera actually is this frame
       // (player eye, OrbitControls, or auto-orbit — the pose was just set above). Budgeted pure
       // math + synchronous mounts only (no fetch/macrotask — the map IR was resolved at boot),
