@@ -23,6 +23,7 @@
 // - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
 import { createBrowserRenderHost, runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { createGraphicsSettings, readGraphicsQuality } from "./graphics-settings.js";
 import { sceneTransformOperation } from "./authoring-gateway.js";
 import { assetPlacement, openContentBrowser, requestCatalogRefresh } from "./content-browser.js";
 import { isAttachedToScene } from "./scene-graph.js";
@@ -59,7 +60,11 @@ function cuesEnabled() {
 }
 
 const canvas = document.getElementById("editor-viewport");
-const editRenderHost = createBrowserRenderHost({ canvas, forceWebGL: true, initialQuality: "balanced" });
+let graphicsStorage;
+try { graphicsStorage = globalThis.localStorage; }
+catch { graphicsStorage = undefined; }
+const initialGraphicsQuality = readGraphicsQuality(graphicsStorage);
+const editRenderHost = createBrowserRenderHost({ canvas, forceWebGL: true, initialQuality: initialGraphicsQuality });
 const statusEl = document.getElementById("viewport-status");
 const viewportToolsEl = document.querySelector(".viewport-tools");
 const viewportUi = {
@@ -190,6 +195,14 @@ const state = {
   editRuntimeDuringPlay: undefined,
   editRestore: new RetainedEditRestore(),
 };
+const graphicsSettings = createGraphicsSettings({
+  group: document.getElementById("viewport-graphics-quality"),
+  buttons: document.querySelectorAll("[data-quality-tier]"),
+  telemetry: document.getElementById("viewport-render-telemetry"),
+  getRuntimeTargets: () => [state.running, state.editRuntimeDuringPlay],
+  getTelemetryRuntime: () => state.running,
+  storage: graphicsStorage,
+});
 const pollTask = new CoalescedTask();
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
@@ -419,6 +432,7 @@ let viewportConnectionGeneration = 0;
 // back to polling if the server doesn't support it or the subscribe request itself fails.
 async function tryConnect() {
   if (state.client) return;
+  if (document.getElementById("status-text")?.textContent !== "connected") return;
   const url = val("url");
   const authToken = val("auth-token") || undefined;
   if (!url) return; // wait until the user has set the server URL
@@ -1347,6 +1361,7 @@ async function startPlay() {
         orbit: { center: [0, 1, 0], radius: 16, height: 8 },
         orbitControls: true,
         forceWebGL: true,
+        quality: graphicsSettings.tier,
         disposeRendererOnStop: true,
       });
       if (!playLifecycle.is(token, "starting")) {
@@ -1466,7 +1481,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
       commands: kept,
       input: window,
       renderHost: editRenderHost,
-      quality: "balanced",
+      quality: graphicsSettings.tier,
       onStatus: setEditRuntimeStatus,
       orbit: { center: [0, 1, 0], radius: 16, height: 8 },
       orbitControls: true,
@@ -1854,6 +1869,7 @@ window.addEventListener("beforeunload", () => {
   void stopRuntime(state.playRuntime);
   if (state.running !== state.playRuntime) void stopRuntime(state.running);
   void editRenderHost.dispose();
+  graphicsSettings.dispose();
   releasePlayCanvas();
   playLifecycle.finishEdit();
   try { state.client?.close(); } catch { /* ignore */ }

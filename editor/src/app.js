@@ -814,7 +814,8 @@ function setupSettings() {
   const intervalInput = $("interval");
   const storedUrl = lsGet(SETTINGS_URL_KEY);
   const storedInterval = lsGet(SETTINGS_INTERVAL_KEY);
-  if (storedUrl && urlInput) urlInput.value = storedUrl;
+  // An explicit launch URL is session configuration and must win over a stale saved default.
+  if (configuredServer === null && storedUrl && urlInput) urlInput.value = storedUrl;
   if (storedInterval && intervalInput) intervalInput.value = storedInterval;
 
   const settingsUrl = $("settings-default-url");

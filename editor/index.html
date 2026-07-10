@@ -118,6 +118,14 @@
           </span>
         </div>
       </div>
+      <div class="viewport-graphics" aria-label="Viewport graphics">
+        <div id="viewport-graphics-quality" class="graphics-segments" role="radiogroup" aria-label="Graphics quality">
+          <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="performance">Performance</button>
+          <button class="graphics-segment" type="button" role="radio" aria-checked="true" data-quality-tier="balanced">Balanced</button>
+          <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="cinematic">Cinematic</button>
+        </div>
+        <output id="viewport-render-telemetry" class="graphics-telemetry" aria-live="off">waiting for renderer</output>
+      </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
       </div>
