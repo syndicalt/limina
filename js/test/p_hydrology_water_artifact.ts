@@ -10,6 +10,7 @@ import {
   HydrologyWaterArtifactValidationError,
   decodeHydrologyWaterArtifact,
   encodeHydrologyWaterArtifact,
+  inspectHydrologyWaterArtifactBindings,
 } from "../src/world/hydrology-water-artifact.mjs";
 import { sha256 } from "../src/world/sha256.mjs";
 import { WATER_LIMITS } from "../src/world/water-ir.mjs";
@@ -67,12 +68,26 @@ function extract(heightsM: Float32Array | Float64Array, topology: any, recipeOve
 const heights = confluenceHeights();
 const both = extract(heights, field(7, 7, heights));
 const encoded = encodeHydrologyWaterArtifact(both, bindings);
+const inspectedBindings = inspectHydrologyWaterArtifactBindings(encoded);
 const decoded = decodeHydrologyWaterArtifact(encoded, bindings);
 assert(encoded.byteOffset === 0 && encoded.byteLength === encoded.buffer.byteLength, "encoder bytes are not owned");
 assert(encoded.byteLength === 1288, `fixed vector length changed to ${encoded.byteLength}`);
 assert(decoded.artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE && decoded.artifact.mediaType === HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
   "artifact identity changed");
 assert(decoded.bindings.hydrologyFieldContentHash === bindings.hydrologyFieldContentHash, "raw binding hash did not round-trip");
+assert(JSON.stringify(inspectedBindings) === JSON.stringify(bindings), "header-only binding inspection changed values or order");
+assert(Object.isFrozen(inspectedBindings), "header-only binding inspection returned mutable bindings");
+const bindingCarrier = new Uint8Array(encoded.byteLength + 2);
+bindingCarrier.set(encoded, 1);
+rejects(() => inspectHydrologyWaterArtifactBindings(bindingCarrier.subarray(1, 1 + encoded.byteLength)), /own its complete/, "binding inspector accepted a subarray");
+const corruptBindingHeader = encoded.slice();
+new DataView(corruptBindingHeader.buffer).setUint32(16, corruptBindingHeader.byteLength - 8, true);
+rejects(() => inspectHydrologyWaterArtifactBindings(corruptBindingHeader), /byte length/, "binding inspector accepted a non-canonical declared length");
+if (typeof SharedArrayBuffer === "function") {
+  const shared = new Uint8Array(new SharedArrayBuffer(encoded.byteLength));
+  shared.set(encoded);
+  rejects(() => inspectHydrologyWaterArtifactBindings(shared), /non-shared/, "binding inspector accepted shared bytes");
+}
 assert(JSON.stringify(decoded.topology.basins) === JSON.stringify(both.basins), "basins did not round-trip");
 assert(JSON.stringify(decoded.topology.reaches) === JSON.stringify(both.reaches), "reaches/elevation channels did not round-trip");
 assert(Object.isFrozen(decoded) && Object.isFrozen(decoded.topology) && Object.isFrozen(decoded.topology.reaches[0].points[0]),

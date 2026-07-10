@@ -1,0 +1,440 @@
+import { ops } from "../src/engine.ts";
+import { createTerrainGridSpec, terrainChunkId } from "../src/terrain/grid.mjs";
+import {
+  DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+  compilerContentHash,
+  createDerivedRevisionManifest,
+  derivedArtifactContentHash,
+} from "../src/world/compiler/index.mjs";
+import {
+  TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
+  encodeTerrainChunkArtifact,
+} from "../src/world/compiler/terrain-artifact.mjs";
+import {
+  HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
+  HYDROLOGY_FIELD_ARTIFACT_TYPE,
+  encodeHydrologyFieldArtifact,
+} from "../src/world/hydrology-artifact.mjs";
+import { createHydrologyTopology } from "../src/world/hydrology-topology.mjs";
+import {
+  HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+  HYDROLOGY_WATER_ARTIFACT_TYPE,
+  encodeHydrologyWaterArtifact,
+} from "../src/world/hydrology-water-artifact.mjs";
+import { HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA } from "../src/world/hydrology-water-topology.mjs";
+import {
+  DERIVED_RUNTIME_POLL_DELAYS_MS,
+  DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
+  DERIVED_RUNTIME_WORKER_SCHEMA,
+  DerivedRuntimeWorkerController,
+  parseDerivedRuntimeWorkerInput,
+} from "../src/browser/derived-runtime-worker.ts";
+import type { DerivedRuntimeCurrent } from "../src/browser/derived-runtime-transport.ts";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(`p_derived_runtime_worker FAIL: ${message}`);
+}
+
+function rejectsSync(callback: () => unknown, pattern: RegExp, message: string): void {
+  let failure: unknown;
+  try { callback(); } catch (error) { failure = error; }
+  assert(failure instanceof Error && pattern.test(failure.message), `${message}: ${failure instanceof Error ? failure.message : "did not reject"}`);
+}
+
+function hash(label: string): string { return compilerContentHash({ label }); }
+
+class TestTimers {
+  readonly entries: Array<{ callback: () => void; delayMs: number; active: boolean }> = [];
+
+  setTimeout(callback: () => void, delayMs: number): unknown {
+    const entry = { callback, delayMs, active: true };
+    this.entries.push(entry);
+    return entry;
+  }
+
+  clearTimeout(handle: unknown): void {
+    (handle as { active: boolean }).active = false;
+  }
+
+  runNext(delayMs?: number): void {
+    const entry = this.entries.find((candidate) => candidate.active && (delayMs === undefined || candidate.delayMs === delayMs));
+    assert(entry !== undefined, `no active timer${delayMs === undefined ? "" : ` at ${delayMs}ms`}`);
+    entry.active = false;
+    entry.callback();
+  }
+
+  activeCount(): number { return this.entries.filter((entry) => entry.active).length; }
+}
+
+async function eventually(predicate: () => boolean, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 2_000; attempt++) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error(`p_derived_runtime_worker FAIL: timed out waiting for ${label}`);
+}
+
+const grid = createTerrainGridSpec({ gridId: "grey-field.surface", origin: [0, 0], chunkSizeM: 64, defaultSamples: 3 });
+const graphHash = hash("hydrology-graph");
+const terrainBytes = encodeTerrainChunkArtifact({
+  nrows: 2,
+  ncols: 2,
+  origin: [0, 0, 0],
+  scale: [64, 10, 64],
+  heights: new Float32Array([0, 0.25, 0.5, 1]),
+});
+const terrainDescriptor = Object.freeze({
+  artifactType: "terrain-chunk/v1",
+  contentHash: derivedArtifactContentHash(terrainBytes),
+  byteLength: terrainBytes.byteLength,
+  mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
+});
+const hydrology = createHydrologyTopology({
+  rows: 2,
+  cols: 2,
+  heightsM: new Float64Array([1, 2, 3, 4]),
+  cellSizeM: 1,
+  seaLevelM: -1,
+  precipitationMmPerYear: 500,
+});
+const fieldBytes = encodeHydrologyFieldArtifact(hydrology, { originX: 0, originZ: 0 });
+const fieldDescriptor = Object.freeze({
+  artifactType: HYDROLOGY_FIELD_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(fieldBytes),
+  byteLength: fieldBytes.byteLength,
+  mediaType: HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
+});
+const bindings = Object.freeze({
+  hydrologyFieldContentHash: fieldDescriptor.contentHash,
+  recipeHash: hash("recipe"),
+  erosionStageKey: hash("erosion"),
+  compilerGraphHash: graphHash,
+});
+const waterBytes = encodeHydrologyWaterArtifact({
+  schema: HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA,
+  version: 1,
+  placement: { originX: 0, originZ: 0 },
+  rows: 2,
+  cols: 2,
+  cellSizeM: 1,
+  basins: [],
+  reaches: [],
+  diagnostics: {},
+}, bindings);
+const waterDescriptor = Object.freeze({
+  artifactType: HYDROLOGY_WATER_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(waterBytes),
+  byteLength: waterBytes.byteLength,
+  mediaType: HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+});
+
+function manifest(revision: number, options: { globals?: boolean; terrain?: Uint8Array; graphHash?: string } = {}) {
+  const terrain = options.terrain ?? terrainBytes;
+  const descriptor = terrain === terrainBytes ? terrainDescriptor : {
+    ...terrainDescriptor,
+    contentHash: derivedArtifactContentHash(terrain),
+    byteLength: terrain.byteLength,
+  };
+  return createDerivedRevisionManifest({
+    schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+    projectId: "grey-field",
+    branchId: "main",
+    source: {
+      revision,
+      headHash: hash(`head-${revision}`),
+      contentRefs: [{
+        refId: "map-document",
+        refType: "map-document/v1",
+        scope: "global",
+        assetId: "maps/grey-field.worldmap.json",
+        contentHash: hash(`map-${revision}`),
+      }],
+    },
+    compiler: {
+      version: "1.2.0",
+      configHash: hash("config"),
+      graphHash: options.graphHash ?? graphHash,
+      snapshotHash: hash(`snapshot-${revision}`),
+    },
+    grid,
+    globalArtifacts: options.globals ? [fieldDescriptor, waterDescriptor] : [],
+    chunks: [{
+      chunkId: terrainChunkId(grid.gridId, 0, 0, 0),
+      gridId: grid.gridId,
+      lod: 0,
+      tx: 0,
+      tz: 0,
+      topologyHash: hash("stable-topology"),
+      sourceSliceHashes: [],
+      artifacts: [descriptor],
+    }],
+  });
+}
+
+function current(manifestValue: ReturnType<typeof manifest>, generation = 1): DerivedRuntimeCurrent {
+  return Object.freeze({
+    schema: "limina.derived-runtime-current/v1",
+    projectId: manifestValue.projectId,
+    branchId: manifestValue.branchId,
+    generation,
+    source: manifestValue.source,
+    manifest: manifestValue,
+    manifestHash: manifestValue.manifestHash,
+    etag: `"${manifestValue.manifestHash}"`,
+  }) as DerivedRuntimeCurrent;
+}
+
+class FakeTransport {
+  current: DerivedRuntimeCurrent;
+  readonly artifacts = new Map<string, Uint8Array>();
+  readonly artifactOrder: string[] = [];
+  fetchCurrentCount = 0;
+  currentHook: ((previous: DerivedRuntimeCurrent | undefined, signal: AbortSignal | undefined) => Promise<DerivedRuntimeCurrent> | DerivedRuntimeCurrent) | null = null;
+
+  constructor(initial: DerivedRuntimeCurrent) {
+    this.current = initial;
+    this.artifacts.set(terrainDescriptor.contentHash, terrainBytes);
+    this.artifacts.set(fieldDescriptor.contentHash, fieldBytes);
+    this.artifacts.set(waterDescriptor.contentHash, waterBytes);
+  }
+
+  async fetchCurrent(options: { previous?: DerivedRuntimeCurrent; signal?: AbortSignal } = {}) {
+    this.fetchCurrentCount++;
+    const value = this.currentHook === null ? this.current : await this.currentHook(options.previous, options.signal);
+    return Object.freeze({ status: options.previous?.manifestHash === value.manifestHash ? "not-modified" as const : "current" as const, current: value });
+  }
+
+  async fetchArtifact(_publication: DerivedRuntimeCurrent, descriptor: typeof terrainDescriptor, options: { signal?: AbortSignal } = {}) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    this.artifactOrder.push(descriptor.artifactType);
+    const bytes = this.artifacts.get(descriptor.contentHash);
+    if (bytes === undefined) throw new Error(`missing artifact ${descriptor.contentHash}`);
+    return Object.freeze({ status: "artifact" as const, contentHash: descriptor.contentHash, bytes });
+  }
+}
+
+type Posted = { message: Record<string, unknown>; transferCount: number };
+
+function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
+  const timers = new TestTimers();
+  const transport = new FakeTransport(initial);
+  const posted: Posted[] = [];
+  const controller = new DerivedRuntimeWorkerController({
+    createTransport: () => transport,
+    timers,
+    activationAckTimeoutMs: ackTimeoutMs,
+    postMessage: (message, transfers = []) => {
+      const clone = typeof globalThis.structuredClone === "function"
+        ? globalThis.structuredClone(message, { transfer: transfers })
+        : message;
+      posted.push({ message: clone as Record<string, unknown>, transferCount: transfers.length });
+    },
+  });
+  const init = (mode: "watch" | "pinned" = "watch", pinnedSource?: { revision: number; headHash: string }) => controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "init",
+    requestId: "init-1",
+    config: { baseUrl: "http://127.0.0.1:43127", token: "A".repeat(43), projectId: "grey-field", branchId: "main" },
+    mode,
+    ...(pinnedSource === undefined ? {} : { pinnedSource }),
+  });
+  return { timers, transport, posted, controller, init };
+}
+
+function messages(state: ReturnType<typeof harness>, type: string): Record<string, unknown>[] {
+  return state.posted.map((entry) => entry.message).filter((entry) => entry.type === type);
+}
+
+async function acknowledgeLatest(state: ReturnType<typeof harness>, accepted = true): Promise<void> {
+  await eventually(() => messages(state, "activate").length > messages(state, "revision").length || messages(state, "error").length > 0, "activation message");
+  assert(messages(state, "activate").length > messages(state, "revision").length,
+    `activation failed before acknowledgement: ${JSON.stringify(messages(state, "error").at(-1))}`);
+  const activation = messages(state, "activate").at(-1)!;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: activation.activationId,
+    accepted,
+    ...(accepted ? {} : { errorCode: "VIEWPORT_SWAP_FAILED" }),
+  });
+}
+
+// Exact schemas reject ambiguity before any secret-bearing config can escape.
+rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "init", requestId: "x",
+  config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main", extra: true }, mode: "watch" }),
+/unsupported or missing/, "init accepted an extra config field");
+rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "init", requestId: "x",
+  config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main" }, mode: "watch",
+  pinnedSource: { revision: 1, headHash: hash("head-1") } }), /forbids/, "watch accepted a pinned source");
+
+// Watch mode activates current, polls deterministically, reuses worker-owned buffers, and keeps credentials out of output.
+{
+  const firstManifest = manifest(1);
+  const secondManifest = manifest(2);
+  const state = harness(current(firstManifest));
+  await state.init();
+  assert(messages(state, "ready").length === 1 && state.timers.activeCount() === 1, "watch init did not become ready with one poll");
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "first revision outcome");
+  const firstActivation = messages(state, "activate")[0];
+  const firstSnapshot = firstActivation.snapshot as { schema: string; chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> };
+  assert(firstSnapshot.schema === DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA && firstSnapshot.chunks[0].resource.decoded.tile.heights.length === 4,
+    "activation snapshot was incomplete");
+  assert(state.posted.find((entry) => entry.message === firstActivation)!.transferCount > 0, "activation did not transfer copied typed-array buffers");
+  assert(!JSON.stringify(state.posted).includes("A".repeat(43)), "worker output leaked the bearer token");
+  assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]), "watch did not schedule its deterministic base poll");
+
+  state.transport.current = current(secondManifest, 2);
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 2, "second revision outcome");
+  const secondSnapshot = (messages(state, "activate")[1].snapshot as { chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> });
+  assert(secondSnapshot.chunks[0].resource.decoded.tile.heights.length === 4,
+    "first activation detached a worker-owned buffer needed for unchanged-resource reuse");
+  await state.controller.close("close-watch");
+  assert(state.timers.activeCount() === 0, "watch retained a timer after close");
+}
+
+// Pinned mode rejects another source and does not retry a fatal mismatch.
+{
+  const published = current(manifest(3));
+  const state = harness(published);
+  await state.init("pinned", { revision: 2, headHash: hash("head-2") });
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "pinned mismatch error");
+  assert(messages(state, "error")[0].code === "PINNED_SOURCE_MISMATCH" && state.timers.activeCount() === 0,
+    "pinned mismatch was not fatal/stopped");
+  await state.controller.close("close-pinned-mismatch");
+}
+
+// A matching pin activates once and stops polling permanently.
+{
+  const publication = current(manifest(4));
+  const state = harness(publication);
+  await state.init("pinned", { revision: publication.source.revision, headHash: publication.source.headHash });
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "pinned activation");
+  assert(state.timers.activeCount() === 0, "matching pinned mode continued polling after activation");
+  await state.controller.close("close-pinned");
+}
+
+// Changing authority between discovery and manager validation rejects stale work, then retries at the base bound.
+{
+  const stale = current(manifest(5));
+  const fresh = current(manifest(6), 2);
+  const state = harness(stale);
+  let call = 0;
+  state.transport.currentHook = () => (++call === 1 ? stale : fresh);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "stale authority error");
+  assert(messages(state, "error")[0].code === "STALE_SOURCE_HEAD"
+    && state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]),
+  "stale publication did not fail closed and schedule a bounded retry");
+  await state.controller.close("close-stale");
+}
+
+// Duplicate timer delivery is coalesced while one request is in flight; close aborts it and leaves no timer.
+{
+  const state = harness(current(manifest(7)));
+  let release: (() => void) | undefined;
+  state.transport.currentHook = (_previous, signal) => new Promise((resolve, reject) => {
+    release = () => resolve(state.transport.current);
+    signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  await state.init();
+  const timer = state.timers.entries.find((entry) => entry.delayMs === 0)!;
+  timer.active = false;
+  timer.callback();
+  timer.callback();
+  await eventually(() => state.transport.fetchCurrentCount === 1, "one coalesced fetch");
+  assert(state.transport.fetchCurrentCount === 1, "duplicate poll delivery started concurrent fetches");
+  await state.controller.close("close-cancel");
+  release?.();
+  assert(state.timers.activeCount() === 0 && messages(state, "closed").length === 1, "close did not cancel polling cleanly");
+}
+
+// Global staging is dependency ordered and water activation carries the verified generated topology.
+{
+  const state = harness(current(manifest(8, { globals: true })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "global activation");
+  assert(state.transport.artifactOrder.join(",") === `${HYDROLOGY_FIELD_ARTIFACT_TYPE},${HYDROLOGY_WATER_ARTIFACT_TYPE},terrain-chunk/v1`,
+    `global dependency staging order changed (${state.transport.artifactOrder.join(",")})`);
+  const snapshot = messages(state, "activate")[0].snapshot as { globals: Array<{ resource: { kind: string } }> };
+  assert(snapshot.globals.map((entry) => entry.resource.kind).join(",") === "hydrology-field/v1,hydrology-water-topology/v1",
+    "complete global resource snapshot changed dependency order or omitted water");
+  await state.controller.close("close-globals");
+}
+
+// Decoder failure is fail-closed before activation.
+{
+  const corrupt = terrainBytes.slice(0, terrainBytes.byteLength - 1);
+  const corruptManifest = manifest(9, { terrain: corrupt });
+  const state = harness(current(corruptManifest));
+  const corruptHash = corruptManifest.chunks[0].artifacts[0].contentHash;
+  state.transport.artifacts.set(corruptHash, corrupt);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "decode failure");
+  assert(messages(state, "activate").length === 0 && messages(state, "error")[0].classification === "fatal",
+    "decode failure reached activation or was treated as retryable transport noise");
+  await state.controller.close("close-corrupt");
+}
+
+// Missing main-thread acknowledgement times out, rolls staging back, and remains retryable.
+{
+  const state = harness(current(manifest(91)), 100);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 1, "unacknowledged activation");
+  state.timers.runNext(100);
+  await eventually(() => messages(state, "error").some((entry) => entry.code === "ACTIVATION_ACK_TIMEOUT"), "activation acknowledgement timeout");
+  assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]),
+    "activation acknowledgement timeout stopped watch mode instead of retrying");
+  await state.controller.close("close-timeout");
+}
+
+// Main-thread rejection rolls back manager visibility and retries; the next activation still has intact prior resources.
+{
+  const first = current(manifest(10));
+  const changedTerrain = encodeTerrainChunkArtifact({
+    nrows: 2, ncols: 2, origin: [0, 0, 0], scale: [64, 10, 64], heights: new Float32Array([1, 0.5, 0.25, 0]),
+  });
+  const secondManifest = manifest(11, { terrain: changedTerrain });
+  const second = current(secondManifest, 2);
+  const state = harness(first);
+  state.transport.artifacts.set(derivedArtifactContentHash(changedTerrain), changedTerrain);
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "rollback baseline activation");
+  state.transport.current = second;
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await acknowledgeLatest(state, false);
+  await eventually(() => messages(state, "error").some((entry) => entry.code === "ACTIVATION_REJECTED"), "activation rejection");
+  assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]),
+    "activation rejection did not schedule bounded retry");
+  const activationCountBeforeRetry = messages(state, "activate").length;
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await eventually(() => messages(state, "activate").length > activationCountBeforeRetry, "activation retry request");
+  const retryActivation = messages(state, "activate").at(-1)!;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: retryActivation.activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 2, "activation retry");
+  const retried = messages(state, "activate").at(-1)!.snapshot as { chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> };
+  assert(retried.chunks[0].resource.decoded.tile.heights.length === 4, "ack rollback leaked or detached staged resources");
+  await state.controller.close("close-rollback");
+}
+
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned polling, stale-head rejection, cancellation/coalescing, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
+if (ops?.op_log === undefined) console.log(completion);
+else ops.op_log(completion);

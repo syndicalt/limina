@@ -502,7 +502,7 @@ export function encodeHydrologyWaterArtifact(topologyInput, bindingsInput, contr
   return bytes;
 }
 
-function ownedBytes(value) {
+function ownedByteView(value) {
   if (!ArrayBuffer.isView(value) || Object.getPrototypeOf(value) !== Uint8Array.prototype) fail("hydrology water artifact bytes must be a Uint8Array");
   if (!(value.buffer instanceof ArrayBuffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
     fail("hydrology water artifact bytes must own its complete non-shared ArrayBuffer");
@@ -510,19 +510,14 @@ function ownedBytes(value) {
   if (value.byteLength < HYDROLOGY_WATER_ARTIFACT_HEADER_BYTES || value.byteLength > MAX_HYDROLOGY_WATER_ARTIFACT_BYTES) {
     fail("hydrology water artifact byte length is outside supported bounds");
   }
-  return Uint8Array.from(value);
+  return value;
 }
 
 function verifyZero(bytes, start, end, label) {
   for (let index = start; index < end; index++) if (bytes[index] !== 0) fail(`${label} must be zero`);
 }
 
-export function decodeHydrologyWaterArtifact(bytesInput, expectedBindingsInput = undefined, controlInput = undefined) {
-  const bytes = ownedBytes(bytesInput);
-  const expectedBindings = expectedBindingsInput === undefined ? undefined : parseBindings(expectedBindingsInput, "expected hydrology water artifact bindings");
-  const shouldCancel = parseControl(controlInput);
-  const meter = createMeter(shouldCancel, bytes.byteLength + 8192);
-  meter.check();
+function inspectHeader(bytes) {
   const view = new DataView(bytes.buffer);
   for (let index = 0; index < MAGIC.length; index++) if (view.getUint8(index) !== MAGIC[index]) fail("hydrology water artifact magic mismatch");
   if (view.getUint16(8, true) !== HYDROLOGY_WATER_ARTIFACT_VERSION) fail("hydrology water artifact version is unsupported");
@@ -534,14 +529,14 @@ export function decodeHydrologyWaterArtifact(bytesInput, expectedBindingsInput =
   const cols = integer(view.getUint32(24, true), 2, MAX_HYDROLOGY_DIMENSION, "hydrology water artifact cols");
   const cells = rows * cols;
   if (cells > MAX_HYDROLOGY_CELLS) fail("hydrology water artifact grid exceeds supported cells");
-  const counts = {
+  const counts = Object.freeze({
     basins: integer(view.getUint32(28, true), 0, WATER_LIMITS.bodies, "hydrology water artifact basin count"),
     rings: integer(view.getUint32(32, true), 0, MAX_RING_COUNT, "hydrology water artifact ring count"),
     basinPoints: integer(view.getUint32(36, true), 0, WATER_LIMITS.totalBodyPoints, "hydrology water artifact basin point count"),
     reaches: integer(view.getUint32(40, true), 0, WATER_LIMITS.waterways, "hydrology water artifact reach count"),
     reachPoints: integer(view.getUint32(44, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact reach point count"),
     waterfalls: integer(view.getUint32(48, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact waterfall count"),
-  };
+  });
   if ((counts.basins === 0) !== (counts.rings === 0 && counts.basinPoints === 0)) fail("hydrology water artifact basin section counts are inconsistent");
   if ((counts.reaches === 0) !== (counts.reachPoints === 0 && counts.waterfalls === 0)) fail("hydrology water artifact reach section counts are inconsistent");
   if (counts.rings < counts.basins || counts.basinPoints < counts.rings * 3 || counts.reachPoints < counts.reaches * 2) fail("hydrology water artifact section counts are structurally impossible");
@@ -555,15 +550,37 @@ export function decodeHydrologyWaterArtifact(bytesInput, expectedBindingsInput =
   verifyZero(bytes, layout.dataEnd, layout.byteLength, "hydrology water artifact trailing padding");
   const bindings = {};
   for (let binding = 0; binding < BINDING_KEYS.length; binding++) bindings[BINDING_KEYS[binding]] = bytesToHex(bytes, 112 + binding * 32);
-  const frozenBindings = Object.freeze(bindings);
+  return Object.freeze({
+    view,
+    rows,
+    cols,
+    counts,
+    layout,
+    bindings: Object.freeze(bindings),
+    placement: Object.freeze({
+      originX: canonicalNumber(view.getFloat64(56, true), "hydrology water artifact originX", -MAX_ORIGIN_M, MAX_ORIGIN_M),
+      originZ: canonicalNumber(view.getFloat64(64, true), "hydrology water artifact originZ", -MAX_ORIGIN_M, MAX_ORIGIN_M),
+    }),
+    cellSizeM: canonicalNumber(view.getFloat64(72, true), "hydrology water artifact cellSizeM", 0, 1_000_000, true),
+  });
+}
+
+/** Validate the canonical fixed header and return its four content-addressed bindings without copying or scanning payload records. */
+export function inspectHydrologyWaterArtifactBindings(bytesInput) {
+  return inspectHeader(ownedByteView(bytesInput)).bindings;
+}
+
+export function decodeHydrologyWaterArtifact(bytesInput, expectedBindingsInput = undefined, controlInput = undefined) {
+  const bytes = Uint8Array.from(ownedByteView(bytesInput));
+  const expectedBindings = expectedBindingsInput === undefined ? undefined : parseBindings(expectedBindingsInput, "expected hydrology water artifact bindings");
+  const shouldCancel = parseControl(controlInput);
+  const meter = createMeter(shouldCancel, bytes.byteLength + 8192);
+  meter.check();
+  const header = inspectHeader(bytes);
+  const { view, rows, cols, counts, layout, bindings: frozenBindings, placement, cellSizeM } = header;
   if (expectedBindings !== undefined) for (const key of BINDING_KEYS) {
     if (expectedBindings[key] !== frozenBindings[key]) fail(`hydrology water artifact binding '${key}' does not match expected value`);
   }
-  const placement = Object.freeze({
-    originX: canonicalNumber(view.getFloat64(56, true), "hydrology water artifact originX", -MAX_ORIGIN_M, MAX_ORIGIN_M),
-    originZ: canonicalNumber(view.getFloat64(64, true), "hydrology water artifact originZ", -MAX_ORIGIN_M, MAX_ORIGIN_M),
-  });
-  const cellSizeM = canonicalNumber(view.getFloat64(72, true), "hydrology water artifact cellSizeM", 0, 1_000_000, true);
 
   const allBasinPoints = new Array(counts.basinPoints);
   for (let index = 0; index < counts.basinPoints; index++) {
