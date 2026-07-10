@@ -295,3 +295,12 @@ near-vertical cliffs before the SDF layer exists.
   subarrays, and 2x2 through 257x257 limits are gated in both Node and the Limina host against the same
   fixed content-hash vector. The central 257x257 full-channel measurement was 1,651,308 bytes, 31.7 ms
   encode, and 24.0 ms decode in Node; concrete source-to-artifact compilation remains the next slice.
+- **2026-07-09 — Canonical basin water IR shipped (`75957bb`).** Optional, additive `WaterBody[]` now
+  represents bounded standing-water basins with stable ids, typed kinds, explicit levels, simple polygon
+  footprints and holes, and contiguous shore-to-interior depth bands. Waterways retain legacy bytes while
+  optionally carrying Strahler order and exact per-vertex widths. One shared validator governs the
+  TypeScript WorldMap boundary and dependency-free MapDoc compiler, rejects accessors/prototype pollution,
+  and caps all topology work at 2,000,000 metered units; hostile 16x512-ring input stops at cap+1. Every new
+  field participates in the canonical hash while legacy committed map bytes/hashes remain exact. Basin
+  filling, `WaterField`, animated flow/waterfalls/shorelines, authoring tools, and functional swim remain
+  open WB-W1 runtime slices.
