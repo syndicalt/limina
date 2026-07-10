@@ -23,8 +23,10 @@
 import { z } from "../../build/zod.bundle.mjs";
 import { stableStringifyWorldMap as stableStringifyWorldMapImpl, worldMapContentHash as worldMapContentHashImpl } from "./worldmap-hash.mjs";
 import { inspectWaterBodyTopology, isPlainJsonData, isPortableWaterId, WATER_BODY_KINDS, WATER_LIMITS, WATERWAY_CLASSES } from "./water-ir.mjs";
+import { HYDROLOGY_LIMITS, HYDROLOGY_RECIPE_SCHEMA, parseAuthoredHydrologyRecipe } from "./hydrology-ir.mjs";
 
 export { WATER_BODY_KINDS, WATERWAY_CLASSES } from "./water-ir.mjs";
+export { HYDROLOGY_LIMITS, HYDROLOGY_RECIPE_SCHEMA } from "./hydrology-ir.mjs";
 
 export const WORLD_MAP_VERSION = 1 as const;
 
@@ -175,6 +177,18 @@ const WaterBodiesSchema = plainJson(z.array(WaterBodySchema).max(WATER_LIMITS.bo
   if (!topology.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, message: topology.message ?? "invalid water body topology" });
 }));
 
+const HydrologyRecipeSchema = z.preprocess((value) => {
+  try { return parseAuthoredHydrologyRecipe(value); }
+  catch { return INVALID_PLAIN_DATA; }
+}, z.object({
+  schema: z.literal(HYDROLOGY_RECIPE_SCHEMA),
+  precipitationMmPerYear: z.number().finite().min(0).max(HYDROLOGY_LIMITS.precipitationMmPerYear),
+  riverMinCatchmentAreaM2: z.number().finite().positive().max(HYDROLOGY_LIMITS.catchmentAreaM2),
+  basinMinAreaM2: z.number().finite().positive().max(HYDROLOGY_LIMITS.basinAreaM2),
+  basinMinDepthM: z.number().finite().positive().max(HYDROLOGY_LIMITS.basinDepthM),
+  waterfallMinDropM: z.number().finite().positive().max(HYDROLOGY_LIMITS.waterfallDropM),
+}).strict());
+
 const RouteSchema = z.object({
   points: PointsSchema.min(2),
   class: z.enum(ROUTE_CLASSES),
@@ -248,6 +262,8 @@ const WorldMapObjectSchema = z.object({
   }),
   // Optional + additive: absent on every pre-WB-W1 map and never defaulted during migration.
   waterBodies: WaterBodiesSchema.optional(),
+  // Optional authoring inputs only. Derived drainage topology is published as a compiler artifact.
+  hydrology: HydrologyRecipeSchema.optional(),
   routes: z.array(RouteSchema),
   anchors: z.array(AnchorSchema),
   // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
@@ -266,6 +282,7 @@ export type ReliefGrid = z.infer<typeof ReliefGridSchema>;
 export type BiomeRegion = z.infer<typeof BiomeRegionSchema>;
 export type Waterway = z.infer<typeof WaterwaySchema>;
 export type WaterBody = z.infer<typeof WaterBodySchema>;
+export type HydrologyRecipe = z.infer<typeof HydrologyRecipeSchema>;
 export type Route = z.infer<typeof RouteSchema>;
 export type Anchor = z.infer<typeof AnchorSchema>;
 export type GazetteerEntry = z.infer<typeof GazetteerEntrySchema>;

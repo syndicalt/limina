@@ -77,6 +77,17 @@ function waterBody(w) {
   };
 }
 
+function hydrologyRecipe(h) {
+  return {
+    schema: h.schema,
+    precipitationMmPerYear: h.precipitationMmPerYear,
+    riverMinCatchmentAreaM2: h.riverMinCatchmentAreaM2,
+    basinMinAreaM2: h.basinMinAreaM2,
+    basinMinDepthM: h.basinMinDepthM,
+    waterfallMinDropM: h.waterfallMinDropM,
+  };
+}
+
 function route(r) {
   return { points: points(r.points), class: r.class };
 }
@@ -132,6 +143,7 @@ export function stableStringifyWorldMap(map, opts = {}) {
     waterways: map.waterways.map(waterway),
     // Optional additive field: never materialize it for legacy maps.
     ...(map.waterBodies !== undefined ? { waterBodies: map.waterBodies.map(waterBody) } : {}),
+    ...(map.hydrology !== undefined ? { hydrology: hydrologyRecipe(map.hydrology) } : {}),
     routes: map.routes.map(route),
     anchors: map.anchors.map(anchor),
     // Optional additive field: emitted ONLY when present, so every pre-Places map hashes

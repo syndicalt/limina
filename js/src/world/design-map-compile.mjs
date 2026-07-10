@@ -25,6 +25,7 @@ import { decodeRasterCells } from "./pipeline/raster-codec.mjs";
 import { maskToLandPolygons } from "./pipeline/marching-squares.mjs";
 import { reliefGridSampler } from "./pipeline/map-raster.mjs";
 import { parseAuthoredWaterBodies, parseAuthoredWaterway, WATER_LIMITS, WaterIrValidationError } from "./water-ir.mjs";
+import { HydrologyIrValidationError, parseAuthoredHydrologyRecipe } from "./hydrology-ir.mjs";
 
 const DEFAULT_UNITS = { units: "m", unitsPerMeter: 1 };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
@@ -122,6 +123,7 @@ function validateAtlasMapDoc(doc) {
     if (!Array.isArray(map.features) || map.features.length > MAX_ATLAS_FEATURES) atlasError(`${path}.features must contain at most ${MAX_ATLAS_FEATURES} entries`);
     if (map.seaLevel !== undefined) finiteAtlasNumber(map.seaLevel, `${path}.seaLevel`);
     if (map.waterBodies !== undefined) compileWater(map.waterBodies, parseAuthoredWaterBodies);
+    if (map.hydrology !== undefined) compileHydrology(map.hydrology);
     if (map.rasters !== undefined) {
       if (map.rasters === null || typeof map.rasters !== "object" || Array.isArray(map.rasters)) atlasError(`${path}.rasters must be an object`);
       if (map.rasters.elevation !== undefined) validateAtlasRaster(map.rasters.elevation, `${path}.rasters.elevation`, true);
@@ -201,6 +203,15 @@ function compileWater(value, parse) {
     return parse(value);
   } catch (error) {
     if (error instanceof WaterIrValidationError) waterError(error.message);
+    throw error;
+  }
+}
+
+function compileHydrology(value) {
+  try {
+    return parseAuthoredHydrologyRecipe(value);
+  } catch (error) {
+    if (error instanceof HydrologyIrValidationError) waterError(error.message);
     throw error;
   }
 }
@@ -414,6 +425,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
   // MapDoc stores per-basin water directly on the map, not as overloaded generic area features.
   // Presence is preserved exactly: absent stays absent; an authored empty array stays present.
   const waterBodies = map.waterBodies === undefined ? undefined : compileWater(map.waterBodies, parseAuthoredWaterBodies);
+  const hydrology = map.hydrology === undefined ? undefined : compileHydrology(map.hydrology);
   let waterwayPointCount = 0;
 
   if (landmass) {
@@ -597,6 +609,7 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
     biomes,
     waterways,
     ...(waterBodies !== undefined ? { waterBodies } : {}),
+    ...(hydrology !== undefined ? { hydrology } : {}),
     routes,
     anchors,
     // Emitted only when the vault has placed places, so pre-Places maps keep their bytes/hash.
