@@ -2,12 +2,16 @@ import { ops } from "../src/engine.ts";
 import { createTerrainGridSpec, terrainChunkId } from "../src/terrain/grid.mjs";
 import {
   DERIVED_REVISION_MANIFEST_SCHEMA,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V2,
   MAX_DERIVED_ARTIFACT_BYTES,
   MAX_DERIVED_CHUNKS,
+  MAX_GLOBAL_DERIVED_ARTIFACTS,
   MAX_SOURCE_CONTENT_REFS,
   canonicalDerivedRevisionManifest,
   compilerContentHash,
   createDerivedRevisionManifest,
+  derivedGlobalArtifacts,
   derivedArtifactContentHash,
   parseDerivedRevisionManifest,
 } from "../src/world/compiler/index.mjs";
@@ -53,7 +57,7 @@ function manifestInput() {
   });
   const sharedSourceHash = hash("shared-authoritative-document");
   return {
-    schema: DERIVED_REVISION_MANIFEST_SCHEMA,
+    schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1,
     projectId: "grey-field",
     branchId: "main",
     source: {
@@ -84,11 +88,88 @@ function reseal(value: any): any {
 
 const first = createDerivedRevisionManifest(manifestInput());
 const second = createDerivedRevisionManifest(clone(manifestInput()));
+const firstCanonical = canonicalDerivedRevisionManifest(first);
+assert(DERIVED_REVISION_MANIFEST_SCHEMA === DERIVED_REVISION_MANIFEST_SCHEMA_V2, "current derived manifest schema is not v2");
+assert(first.manifestHash === "sha256:2a6db95fe7affc8e4e5e798ff8bb8cad8ee15ca92325032ddf909c35c5eed5fa", "v1 manifestHash compatibility lock changed");
+assert(firstCanonical.length === 2739, "v1 canonical byte length compatibility lock changed");
+assert(compilerContentHash(firstCanonical) === "sha256:503b4997a594bc9ef2b0e74ab3e5fd8cb001e9d25e2d5e9e892a64aa1cb2a0f2", "v1 canonical byte compatibility lock changed");
 assert(first.manifestHash === second.manifestHash, "identical input changed manifestHash");
-assert(canonicalDerivedRevisionManifest(first) === canonicalDerivedRevisionManifest(second), "identical input changed canonical bytes");
+assert(firstCanonical === canonicalDerivedRevisionManifest(second), "identical input changed canonical bytes");
 assert(Object.isFrozen(first) && Object.isFrozen(first.source.contentRefs) && Object.isFrozen(first.chunks[0].artifacts), "manifest is not deeply immutable");
-assert(parseDerivedRevisionManifest(clone(first)).manifestHash === first.manifestHash, "canonical manifest did not round-trip");
+const parsedV1 = parseDerivedRevisionManifest(clone(first));
+assert(parsedV1.manifestHash === first.manifestHash, "canonical manifest did not round-trip");
+assert(!Object.hasOwn(parsedV1, "globalArtifacts"), "v1 manifest was structurally normalized with v2 fields");
+const v1Globals = derivedGlobalArtifacts(first);
+assert(Object.isFrozen(v1Globals) && v1Globals.length === 0, "v1 global artifact helper did not return the frozen empty view");
+rejects(() => derivedGlobalArtifacts(clone(first)), /verified derived revision manifest/, "global artifact helper reparsed an unverified clone");
 assert(first.source.contentRefs[0].contentHash === first.source.contentRefs[1].contentHash, "fixture does not prove distinct logical refs may share content");
+
+function v2Input(globals: any[] = []): any {
+  return { ...manifestInput(), schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2, globalArtifacts: globals };
+}
+
+const hydrologyBytes = new Uint8Array([21, 22, 23, 24]);
+const navigationBytes = new Uint8Array([31, 32, 33]);
+const hydrology = artifact("hydrology-field/v1", hydrologyBytes, "application/vnd.limina.hydrology-field");
+const navigation = artifact("navigation-field/v1", navigationBytes, "application/vnd.limina.navigation-field");
+const emptyV2 = createDerivedRevisionManifest(v2Input());
+assert(emptyV2.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2 && emptyV2.globalArtifacts.length === 0, "empty v2 globalArtifacts did not round-trip");
+assert(Object.isFrozen(emptyV2.globalArtifacts) && derivedGlobalArtifacts(emptyV2).length === 0, "empty v2 globals are not frozen");
+const populatedV2 = createDerivedRevisionManifest(v2Input([hydrology, navigation]));
+const populatedGlobals = derivedGlobalArtifacts(populatedV2);
+assert(populatedGlobals.length === 2 && populatedGlobals[0].artifactType === "hydrology-field/v1", "populated v2 globals did not round-trip");
+assert(Object.isFrozen(populatedGlobals) && Object.isFrozen(populatedGlobals[0]), "populated v2 globals are not deeply frozen");
+assert(parseDerivedRevisionManifest(clone(populatedV2)).manifestHash === populatedV2.manifestHash, "populated v2 manifest did not round-trip");
+
+const changedGlobal = v2Input([{ ...hydrology, contentHash: hash("changed-hydrology") }, navigation]);
+assert(createDerivedRevisionManifest(changedGlobal).manifestHash !== populatedV2.manifestHash, "global artifact field change did not change manifestHash");
+
+for (const [globals, pattern, label] of [
+  [[navigation, hydrology], /global artifacts must be strictly ordered/, "unordered global artifacts"],
+  [[hydrology, hydrology], /global artifacts must be strictly ordered/, "duplicate global artifact types"],
+] as const) rejects(() => createDerivedRevisionManifest(v2Input(globals as any[])), pattern, `${label} were accepted`);
+
+const staleGlobalHash = clone(populatedV2);
+staleGlobalHash.globalArtifacts[0].byteLength++;
+rejects(() => parseDerivedRevisionManifest(staleGlobalHash), /hash mismatch/, "tampered global artifact with stale manifestHash was accepted");
+
+for (const [mutate, pattern, label] of [
+  [(value: any) => { value.globalArtifacts[0].contentHash = "SHA256:not-valid"; }, /lowercase sha256/, "malformed global content hash"],
+  [(value: any) => { value.globalArtifacts[0].mediaType = "not a media type"; }, /mediaType is invalid/, "malformed global media type"],
+  [(value: any) => { value.globalArtifacts[0].byteLength = MAX_DERIVED_ARTIFACT_BYTES + 1; }, /byteLength is out of bounds/, "oversized global artifact"],
+] as const) {
+  const value = v2Input(clone([hydrology, navigation]));
+  mutate(value);
+  rejects(() => createDerivedRevisionManifest(value), pattern, `${label} was accepted`);
+}
+
+const excessiveGlobals = v2Input(Array.from({ length: MAX_GLOBAL_DERIVED_ARTIFACTS + 1 }, (_unused, index) => ({
+  artifactType: `global-${String(index).padStart(3, "0")}/v1`,
+  contentHash: hash(`global:${index}`),
+  byteLength: 0,
+  mediaType: "application/octet-stream",
+})));
+rejects(() => createDerivedRevisionManifest(excessiveGlobals), /at most 64 entries/, "global artifact count bound was not enforced");
+
+const aggregateAcrossScopes = v2Input(Array.from({ length: 4 }, (_unused, index) => ({
+  artifactType: `global-${index}/v1`,
+  contentHash: hash(`large-global:${index}`),
+  byteLength: MAX_DERIVED_ARTIFACT_BYTES,
+  mediaType: "application/octet-stream",
+})));
+rejects(() => createDerivedRevisionManifest(aggregateAcrossScopes), /resources exceed publication bounds/, "aggregate global+chunk byte bound was not enforced");
+
+const accessorGlobal = v2Input([hydrology]);
+Object.defineProperty(accessorGlobal.globalArtifacts[0], "mediaType", { enumerable: true, get: () => "application/octet-stream" });
+rejects(() => createDerivedRevisionManifest(accessorGlobal), /enumerable data field/, "global artifact accessor was accepted");
+const prototypeGlobal = v2Input([Object.assign(Object.create({ inherited: true }), hydrology)]);
+rejects(() => createDerivedRevisionManifest(prototypeGlobal), /plain object/, "global artifact with a custom prototype was accepted");
+const symbolGlobal = v2Input([{ ...hydrology }]);
+Object.defineProperty(symbolGlobal.globalArtifacts[0], Symbol("hidden"), { value: true, enumerable: true });
+rejects(() => createDerivedRevisionManifest(symbolGlobal), /symbol fields/, "global artifact symbol field was accepted");
+const accessorSchema = v2Input();
+Object.defineProperty(accessorSchema, "schema", { enumerable: true, get: () => DERIVED_REVISION_MANIFEST_SCHEMA_V2 });
+rejects(() => createDerivedRevisionManifest(accessorSchema), /enumerable data field/, "manifest schema accessor was accepted");
 
 const staleOuterHash = clone(first);
 staleOuterHash.source.revision++;
@@ -154,5 +235,5 @@ assert(derivedArtifactContentHash(new Uint8Array([1, 2, 3])) === derivedArtifact
 rejects(() => derivedArtifactContentHash("not bytes" as any), /Uint8Array/, "non-byte artifact was accepted");
 
 ops.op_log(
-  "p_derived_revision_manifest OK: immutable canonical manifests bind exact source assets, compiler/grid/chunk dependencies and typed artifacts; tampering, incomplete ordering, path traversal, malformed hashes, and declared resource exhaustion are rejected.",
+  "p_derived_revision_manifest OK: locked v1 canonical compatibility plus strict v2 global artifacts; immutable manifests bind exact source assets, compiler/grid/chunk dependencies and typed artifacts; tampering, unsafe object shapes, malformed hashes, and aggregate resource exhaustion are rejected.",
 );

@@ -7,11 +7,14 @@ import {
   validateCompilerContentHash,
 } from "./canonical.mjs";
 
-export const DERIVED_REVISION_MANIFEST_SCHEMA = "limina.derived-revision-manifest/v1";
+export const DERIVED_REVISION_MANIFEST_SCHEMA_V1 = "limina.derived-revision-manifest/v1";
+export const DERIVED_REVISION_MANIFEST_SCHEMA_V2 = "limina.derived-revision-manifest/v2";
+export const DERIVED_REVISION_MANIFEST_SCHEMA = DERIVED_REVISION_MANIFEST_SCHEMA_V2;
 export const MAX_DERIVED_MANIFEST_BYTES = 32 * 1024 * 1024;
 export const MAX_DERIVED_CHUNKS = 16_384;
 export const MAX_SOURCE_CONTENT_REFS = 64;
 export const MAX_ARTIFACTS_PER_CHUNK = 16;
+export const MAX_GLOBAL_DERIVED_ARTIFACTS = 64;
 export const MAX_DERIVED_ARTIFACTS = 131_072;
 export const MAX_DERIVED_ARTIFACT_BYTES = 256 * 1024 * 1024;
 export const MAX_DERIVED_TOTAL_ARTIFACT_BYTES = 1024 * 1024 * 1024;
@@ -30,6 +33,7 @@ const MANIFEST_LIMITS = Object.freeze({
   maxProperties: 32,
   maxArrayLength: MAX_DERIVED_CHUNKS,
 });
+const VERIFIED_DERIVED_MANIFESTS = new WeakSet();
 
 function codeUnitCompare(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
 
@@ -145,13 +149,41 @@ function parseCompiler(input) {
   };
 }
 
-function parseChunks(input, grid, sourceRefs) {
+function parseArtifactDescriptor(input, label, budget) {
+  const artifact = plainObject(input, label);
+  exactKeys(artifact, new Set(["artifactType", "contentHash", "byteLength", "mediaType"]), label);
+  if (!Number.isSafeInteger(artifact.byteLength) || artifact.byteLength < 0 || artifact.byteLength > MAX_DERIVED_ARTIFACT_BYTES) {
+    throw new Error(`${label} byteLength is out of bounds`);
+  }
+  budget.artifactCount++;
+  budget.totalArtifactBytes += artifact.byteLength;
+  if (budget.artifactCount > MAX_DERIVED_ARTIFACTS || budget.totalArtifactBytes > MAX_DERIVED_TOTAL_ARTIFACT_BYTES) {
+    throw new Error("derived manifest artifact resources exceed publication bounds");
+  }
+  return {
+    artifactType: identifier(artifact.artifactType, TYPED_ID, `${label} type`),
+    contentHash: validateCompilerContentHash(artifact.contentHash, `${label} hash`),
+    byteLength: artifact.byteLength,
+    mediaType: identifier(artifact.mediaType, MEDIA_TYPE, `${label} mediaType`),
+  };
+}
+
+function parseGlobalArtifacts(input, budget) {
+  if (!Array.isArray(input) || input.length > MAX_GLOBAL_DERIVED_ARTIFACTS) {
+    throw new Error(`derived manifest globalArtifacts must contain at most ${MAX_GLOBAL_DERIVED_ARTIFACTS} entries`);
+  }
+  const artifacts = input.map((artifact, index) => (
+    parseArtifactDescriptor(artifact, `derived manifest global artifact ${index}`, budget)
+  ));
+  orderedUnique(artifacts, (artifact) => artifact.artifactType, "derived manifest global artifacts");
+  return artifacts;
+}
+
+function parseChunks(input, grid, sourceRefs, budget) {
   if (!Array.isArray(input) || input.length < 1 || input.length > MAX_DERIVED_CHUNKS) {
     throw new Error(`derived manifest chunks must contain 1-${MAX_DERIVED_CHUNKS} entries`);
   }
   const requiredSlices = sourceRefs.filter((ref) => ref.scope === "chunk").map((ref) => ref.refId);
-  let artifactCount = 0;
-  let totalArtifactBytes = 0;
   const chunks = input.map((entry, index) => {
     const chunk = plainObject(entry, `derived manifest chunk ${index}`);
     exactKeys(chunk, new Set(["chunkId", "gridId", "lod", "tx", "tz", "topologyHash", "sourceSliceHashes", "artifacts"]), `derived manifest chunk ${index}`);
@@ -176,24 +208,9 @@ function parseChunks(input, grid, sourceRefs) {
     if (!Array.isArray(chunk.artifacts) || chunk.artifacts.length < 1 || chunk.artifacts.length > MAX_ARTIFACTS_PER_CHUNK) {
       throw new Error(`derived manifest chunk '${chunk.chunkId}' artifacts must contain 1-${MAX_ARTIFACTS_PER_CHUNK} entries`);
     }
-    const artifacts = chunk.artifacts.map((artifactInput, artifactIndex) => {
-      const artifact = plainObject(artifactInput, `derived manifest chunk '${chunk.chunkId}' artifact ${artifactIndex}`);
-      exactKeys(artifact, new Set(["artifactType", "contentHash", "byteLength", "mediaType"]), `derived manifest chunk '${chunk.chunkId}' artifact ${artifactIndex}`);
-      if (!Number.isSafeInteger(artifact.byteLength) || artifact.byteLength < 0 || artifact.byteLength > MAX_DERIVED_ARTIFACT_BYTES) {
-        throw new Error(`derived manifest chunk '${chunk.chunkId}' artifact ${artifactIndex} byteLength is out of bounds`);
-      }
-      artifactCount++;
-      totalArtifactBytes += artifact.byteLength;
-      if (artifactCount > MAX_DERIVED_ARTIFACTS || totalArtifactBytes > MAX_DERIVED_TOTAL_ARTIFACT_BYTES) {
-        throw new Error("derived manifest artifact resources exceed publication bounds");
-      }
-      return {
-        artifactType: identifier(artifact.artifactType, TYPED_ID, `derived manifest chunk '${chunk.chunkId}' artifact type`),
-        contentHash: validateCompilerContentHash(artifact.contentHash, `derived manifest chunk '${chunk.chunkId}' artifact hash`),
-        byteLength: artifact.byteLength,
-        mediaType: identifier(artifact.mediaType, MEDIA_TYPE, `derived manifest chunk '${chunk.chunkId}' artifact mediaType`),
-      };
-    });
+    const artifacts = chunk.artifacts.map((artifact, artifactIndex) => (
+      parseArtifactDescriptor(artifact, `derived manifest chunk '${chunk.chunkId}' artifact ${artifactIndex}`, budget)
+    ));
     orderedUnique(artifacts, (artifact) => artifact.artifactType, `derived manifest chunk '${chunk.chunkId}' artifacts`);
     return {
       chunkId: chunk.chunkId,
@@ -212,26 +229,41 @@ function parseChunks(input, grid, sourceRefs) {
 
 function parseCore(input, includeHash) {
   const value = plainObject(input, "derived revision manifest");
+  const schemaDescriptor = Object.getOwnPropertyDescriptor(value, "schema");
+  if (schemaDescriptor === undefined || schemaDescriptor.get !== undefined || schemaDescriptor.set !== undefined || schemaDescriptor.enumerable !== true) {
+    throw new Error("derived revision manifest.schema must be an enumerable data field");
+  }
+  const schema = schemaDescriptor.value;
+  if (schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V1 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V2) {
+    throw new Error(
+      `derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA_V1}' or '${DERIVED_REVISION_MANIFEST_SCHEMA_V2}'`,
+    );
+  }
+  const isV2 = schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2;
   const keys = new Set(["schema", "projectId", "branchId", "source", "compiler", "grid", "chunks"]);
+  if (isV2) keys.add("globalArtifacts");
   if (includeHash) keys.add("manifestHash");
   exactKeys(value, keys, "derived revision manifest");
-  if (value.schema !== DERIVED_REVISION_MANIFEST_SCHEMA) {
-    throw new Error(`derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA}'`);
-  }
   const projectId = identifier(value.projectId, PROJECT_ID, "derived manifest projectId");
   const branchId = identifier(value.branchId, BRANCH_ID, "derived manifest branchId");
   const source = parseSource(value.source);
   const compiler = parseCompiler(value.compiler);
   const grid = parseGrid(value.grid);
-  const chunks = parseChunks(value.chunks, grid, source.contentRefs);
-  return { schema: DERIVED_REVISION_MANIFEST_SCHEMA, projectId, branchId, source, compiler, grid, chunks };
+  const budget = { artifactCount: 0, totalArtifactBytes: 0 };
+  const globalArtifacts = isV2 ? parseGlobalArtifacts(value.globalArtifacts, budget) : undefined;
+  const chunks = parseChunks(value.chunks, grid, source.contentRefs, budget);
+  return isV2
+    ? { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2, projectId, branchId, source, compiler, grid, globalArtifacts, chunks }
+    : { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1, projectId, branchId, source, compiler, grid, chunks };
 }
 
 export function createDerivedRevisionManifest(input) {
   const core = parseCore(input, false);
   const manifest = { ...core, manifestHash: compilerContentHash(core, MANIFEST_LIMITS) };
   canonicalCompilerJson(manifest, MANIFEST_LIMITS);
-  return deepFreeze(manifest);
+  const verified = deepFreeze(manifest);
+  VERIFIED_DERIVED_MANIFESTS.add(verified);
+  return verified;
 }
 
 export function parseDerivedRevisionManifest(input) {
@@ -239,11 +271,24 @@ export function parseDerivedRevisionManifest(input) {
   const core = parseCore(cloned, true);
   const manifestHash = validateCompilerContentHash(cloned.manifestHash, "derived manifest manifestHash");
   if (compilerContentHash(core, MANIFEST_LIMITS) !== manifestHash) throw new Error("derived revision manifest hash mismatch");
-  return deepFreeze({ ...core, manifestHash });
+  const verified = deepFreeze({ ...core, manifestHash });
+  VERIFIED_DERIVED_MANIFESTS.add(verified);
+  return verified;
 }
 
 export function canonicalDerivedRevisionManifest(input) {
   return canonicalCompilerJson(parseDerivedRevisionManifest(input), MANIFEST_LIMITS);
+}
+
+const EMPTY_GLOBAL_DERIVED_ARTIFACTS = Object.freeze([]);
+
+export function derivedGlobalArtifacts(manifest) {
+  if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
+    throw new TypeError("derivedGlobalArtifacts requires a verified derived revision manifest");
+  }
+  return manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2
+    ? manifest.globalArtifacts
+    : EMPTY_GLOBAL_DERIVED_ARTIFACTS;
 }
 
 export function derivedArtifactContentHash(bytes) {
