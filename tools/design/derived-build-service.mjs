@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
 import { derivedGlobalArtifacts } from "../../js/src/world/compiler/manifest.mjs";
 import { DerivedBuildCoordinator } from "./derived-build-coordinator.mjs";
+import { DerivedRuntimeServer } from "./derived-runtime-server.mjs";
 import {
   publishDerivedRevision,
   readPublishedDerivedRevision,
@@ -24,6 +25,7 @@ export const DEFAULT_DERIVED_BUILD_POLL_MS = 500;
 export const MIN_DERIVED_BUILD_POLL_MS = 100;
 export const MAX_DERIVED_BUILD_POLL_MS = 60_000;
 export const DEFAULT_DERIVED_BUILD_BRANCH = "main";
+export const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-discovery/v1";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const COMPILER_VERSION = /^[0-9][A-Za-z0-9._+-]{0,63}$/;
@@ -34,6 +36,96 @@ const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const MAX_AUTHORITY_EDIT_LAYERS = 256;
 const MAX_COMPILED_EDIT_LAYERS = 64;
 const MAX_RETAINED_COMPILE_METADATA = 32;
+const DERIVED_RUNTIME_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+export function derivedRuntimeConfigurationFromEnvironment(environment = process.env) {
+  const portText = environment.LIMINA_DERIVED_RUNTIME_PORT;
+  if (typeof portText !== "string" || !/^[1-9][0-9]{0,4}$/.test(portText)) {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_PORT must be a canonical TCP port");
+  }
+  const port = Number(portText);
+  if (port > 65_535 || String(port) !== portText) {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_PORT must be a canonical TCP port");
+  }
+
+  const tokenText = environment.LIMINA_DERIVED_RUNTIME_TOKEN;
+  if (typeof tokenText !== "string" || !DERIVED_RUNTIME_TOKEN.test(tokenText)) {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_TOKEN must encode exactly 32 random bytes");
+  }
+  const token = Buffer.from(tokenText, "base64url");
+  if (token.byteLength !== 32 || token.toString("base64url") !== tokenText) {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_TOKEN must encode exactly 32 random bytes");
+  }
+
+  const originText = environment.LIMINA_DERIVED_RUNTIME_ORIGIN;
+  let origin;
+  try { origin = new URL(originText); }
+  catch (error) {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_ORIGIN must be an exact loopback HTTP origin", { cause: error });
+  }
+  if (originText !== origin.origin || origin.protocol !== "http:"
+      || (origin.hostname !== "localhost" && origin.hostname !== "127.0.0.1")
+      || origin.port === "") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_CONFIG", "LIMINA_DERIVED_RUNTIME_ORIGIN must be an exact loopback HTTP origin");
+  }
+  return Object.freeze({ port, token: new Uint8Array(token), allowedOrigins: Object.freeze([origin.origin]) });
+}
+
+export function derivedRuntimeDiscovery(baseUrl) {
+  let parsed;
+  try { parsed = new URL(baseUrl); }
+  catch (error) { throw new DerivedBuildServiceError("INVALID_RUNTIME_DISCOVERY", "derived runtime returned an invalid base URL", { cause: error }); }
+  if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || parsed.pathname !== "/"
+      || parsed.search !== "" || parsed.hash !== "" || parsed.username !== "" || parsed.password !== ""
+      || parsed.port === "") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_DISCOVERY", "derived runtime returned a non-loopback base URL");
+  }
+  return Object.freeze({ schema: DERIVED_RUNTIME_DISCOVERY_SCHEMA, baseUrl: parsed.origin });
+}
+
+export async function startDerivedRuntimeAfterAuthority(service, createRuntimeServer) {
+  if (typeof service?.reconcileOnce !== "function" || typeof createRuntimeServer !== "function") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_LIFECYCLE", "derived runtime lifecycle inputs are incomplete");
+  }
+  await service.reconcileOnce();
+  const runtimeServer = createRuntimeServer();
+  if (typeof runtimeServer?.start !== "function" || typeof runtimeServer?.stop !== "function") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_LIFECYCLE", "derived runtime server factory returned an invalid owner");
+  }
+  let runtimeOwner;
+  try { runtimeOwner = await runtimeServer.start(); }
+  catch (error) {
+    await runtimeServer.stop().catch(() => {});
+    throw error;
+  }
+  let discovery;
+  try { discovery = derivedRuntimeDiscovery(runtimeOwner?.baseUrl); }
+  catch (error) {
+    await runtimeServer.stop().catch(() => {});
+    throw error;
+  }
+  return Object.freeze({ runtimeServer, discovery });
+}
+
+export async function stopDerivedRuntimeBeforeBuildService(runtimeServer, service, reason) {
+  if (runtimeServer !== undefined && typeof runtimeServer?.stop !== "function") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_LIFECYCLE", "derived runtime server cannot be stopped");
+  }
+  if (typeof service?.stop !== "function") {
+    throw new DerivedBuildServiceError("INVALID_RUNTIME_LIFECYCLE", "derived build service cannot be stopped");
+  }
+  let runtimeFailure;
+  try { await runtimeServer?.stop(); }
+  catch (error) { runtimeFailure = error; }
+  let serviceFailure;
+  try { await service.stop(reason); }
+  catch (error) { serviceFailure = error; }
+  if (runtimeFailure !== undefined && serviceFailure !== undefined) {
+    throw new AggregateError([runtimeFailure, serviceFailure], "derived runtime and build service shutdown failed");
+  }
+  if (runtimeFailure !== undefined) throw runtimeFailure;
+  if (serviceFailure !== undefined) throw serviceFailure;
+}
 
 export class DerivedBuildServiceError extends Error {
   constructor(code, message, options = {}) {
@@ -803,6 +895,7 @@ async function main() {
     );
     return { projectId: projectConfig.projectId, branchId: DEFAULT_DERIVED_BUILD_BRANCH, revision: snapshot.head.revision, headHash: snapshot.head.headHash };
   };
+  const runtimeConfiguration = derivedRuntimeConfigurationFromEnvironment(process.env);
   const service = new DerivedBuildService({
     projectId: projectConfig.projectId,
     projectRoot: projectConfig.projectRoot,
@@ -829,17 +922,42 @@ async function main() {
     pollMs: Number(process.env.LIMINA_DERIVED_BUILD_POLL_MS ?? DEFAULT_DERIVED_BUILD_POLL_MS),
     loadPrevious: () => readPublishedDerivedRevision({ projectRoot: projectConfig.projectRoot, branchId: DEFAULT_DERIVED_BUILD_BRANCH, readHead }),
   });
+  let runtimeServer;
   let stopping;
   const stop = (signal) => {
     if (stopping !== undefined) return;
     console.error(`[derived-build] received ${signal}, shutting down`);
-    stopping = service.stop(`received ${signal}`).then(() => process.exit(0));
+    stopping = stopDerivedRuntimeBeforeBuildService(runtimeServer, service, `received ${signal}`)
+      .then(
+        () => process.exit(0),
+        (error) => {
+          console.error(`[derived-build] shutdown failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+          process.exit(1);
+        },
+      );
   };
   process.once("SIGINT", () => stop("SIGINT"));
   process.once("SIGTERM", () => stop("SIGTERM"));
-  await service.reconcileOnce();
+  const runtime = await startDerivedRuntimeAfterAuthority(service, () => {
+    try {
+      return new DerivedRuntimeServer({
+        projectId: projectConfig.projectId,
+        projectRoot: projectConfig.projectRoot,
+        branchId: DEFAULT_DERIVED_BUILD_BRANCH,
+        readHead,
+        token: runtimeConfiguration.token,
+        port: runtimeConfiguration.port,
+        allowedHosts: ["127.0.0.1"],
+        allowedOrigins: runtimeConfiguration.allowedOrigins,
+      });
+    } finally {
+      runtimeConfiguration.token.fill(0);
+    }
+  });
+  runtimeServer = runtime.runtimeServer;
   service.start();
   console.log(`[derived-build] watching ${projectConfig.projectId}/${DEFAULT_DERIVED_BUILD_BRANCH}`);
+  console.log(`[derived-runtime] ready ${JSON.stringify(runtime.discovery)}`);
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

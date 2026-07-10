@@ -18,6 +18,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = resolve(__dirname, "..");
 const DEFAULT_EDITOR_PORT = 8787;
 const DEFAULT_UI_PORT = 5173;
+const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-discovery/v1";
+const DERIVED_RUNTIME_DISCOVERY_PREFIX = "[derived-runtime] ready ";
+const MAX_DERIVED_RUNTIME_DISCOVERY_BYTES = 1_024;
+const DEFAULT_DERIVED_RUNTIME_BRANCH = "main";
 let cleanupChildren = () => {};
 
 /** Print an actionable error and exit non-zero. */
@@ -90,6 +94,59 @@ function parsePort(value, fallback, name) {
   return port;
 }
 
+export function derivedRuntimeLaunchConfig({ uiPort, environment = process.env, randomBytesFn = randomBytes }) {
+  if (!Number.isInteger(uiPort) || uiPort < 1 || uiPort > 65_535) throw new Error("editor UI port must be a TCP port");
+  const configuredPort = environment.LIMINA_DERIVED_RUNTIME_PORT;
+  let port;
+  if (configuredPort === undefined) {
+    if (uiPort === 65_535) throw new Error("LIMINA_DERIVED_RUNTIME_PORT is required when the editor UI uses port 65535");
+    port = uiPort + 1;
+  } else {
+    if (!/^[1-9][0-9]{0,4}$/.test(configuredPort)) {
+      throw new Error(`LIMINA_DERIVED_RUNTIME_PORT must be a canonical TCP port, got: ${configuredPort}`);
+    }
+    port = Number(configuredPort);
+    if (port > 65_535 || String(port) !== configuredPort) {
+      throw new Error(`LIMINA_DERIVED_RUNTIME_PORT must be a canonical TCP port, got: ${configuredPort}`);
+    }
+  }
+  const bytes = randomBytesFn(32);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== 32) {
+    throw new Error("derived runtime token generator must return exactly 32 bytes");
+  }
+  return Object.freeze({
+    port,
+    token: Buffer.from(bytes).toString("base64url"),
+    origin: `http://localhost:${uiPort}`,
+  });
+}
+
+export function parseDerivedRuntimeDiscoveryLine(line, expectedPort) {
+  if (typeof line !== "string" || Buffer.byteLength(line, "utf8") > MAX_DERIVED_RUNTIME_DISCOVERY_BYTES
+      || !line.startsWith(DERIVED_RUNTIME_DISCOVERY_PREFIX)) {
+    throw new Error("derived runtime discovery line is invalid or too large");
+  }
+  let value;
+  try { value = JSON.parse(line.slice(DERIVED_RUNTIME_DISCOVERY_PREFIX.length)); }
+  catch (error) { throw new Error(`derived runtime discovery is not valid JSON: ${error.message}`); }
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype
+      || Object.keys(value).sort().join() !== "baseUrl,schema"
+      || value.schema !== DERIVED_RUNTIME_DISCOVERY_SCHEMA || typeof value.baseUrl !== "string") {
+    throw new Error("derived runtime discovery has unsupported or missing fields");
+  }
+  let baseUrl;
+  try { baseUrl = new URL(value.baseUrl); }
+  catch (error) { throw new Error(`derived runtime discovery base URL is invalid: ${error.message}`); }
+  if (!Number.isInteger(expectedPort) || expectedPort < 1 || expectedPort > 65_535
+      || baseUrl.protocol !== "http:" || baseUrl.hostname !== "127.0.0.1"
+      || Number(baseUrl.port) !== expectedPort || baseUrl.origin !== value.baseUrl
+      || baseUrl.pathname !== "/" || baseUrl.search !== "" || baseUrl.hash !== ""
+      || baseUrl.username !== "" || baseUrl.password !== "") {
+    throw new Error("derived runtime discovery does not match the requested loopback endpoint");
+  }
+  return Object.freeze({ schema: value.schema, baseUrl: value.baseUrl });
+}
+
 function prefixStream(stream, prefix) {
   let pending = "";
   stream.setEncoding("utf8");
@@ -147,15 +204,16 @@ function bridgeConfig(home, editorUrl, token) {
   };
 }
 
-function printBanner({ home, uiPort, editorPort, token }) {
+function printBanner({ home, uiPort, editorPort, token, runtimeDiscovery }) {
   const editorUrl = `ws://localhost:${editorPort}/`;
   console.log("");
   console.log("limina editor is running");
   console.log("");
   console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
+  console.log(`  Derived API: ${runtimeDiscovery.baseUrl}`);
   console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
-  console.log(`  Token:       ${token}`);
+  console.log(`  Editor key:  ${token}`);
   console.log("");
   console.log("Register this MCP server with your coding agent:");
   console.log(JSON.stringify(bridgeConfig(home, editorUrl, token), null, 2));
@@ -170,10 +228,16 @@ export function editorHostEnvironment({
   editorPort,
   uiPort,
   token,
+  derivedRuntime,
   projectRoot = PROJECT_DIR,
   assetRoot = join(projectRoot, "assets"),
   environment = process.env,
 }) {
+  if (derivedRuntime === null || typeof derivedRuntime !== "object" || Array.isArray(derivedRuntime)
+      || Object.getPrototypeOf(derivedRuntime) !== Object.prototype
+      || Object.keys(derivedRuntime).sort().join() !== "baseUrl,branchId,token") {
+    throw new Error("editor host derived runtime config must contain exactly baseUrl, token, and branchId");
+  }
   return {
     ...environment,
     LIMINA_EDITOR_PORT: String(editorPort),
@@ -185,6 +249,9 @@ export function editorHostEnvironment({
     LIMINA_EDITOR_TRACE: `${projectId}.editor.trace.jsonl`,
     LIMINA_EDITOR_CHAT: `${projectId}.editor.chat.jsonl`,
     LIMINA_EDITOR_KERNEL_LOCK: `${projectId}.editor.kernel.lock.json`,
+    LIMINA_DERIVED_RUNTIME_BASE_URL: derivedRuntime.baseUrl,
+    LIMINA_DERIVED_RUNTIME_TOKEN: derivedRuntime.token,
+    LIMINA_DERIVED_RUNTIME_BRANCH_ID: derivedRuntime.branchId,
   };
 }
 
@@ -272,18 +339,29 @@ export function ensureFreshWorldCompilerBundle(home, dependencies = {}) {
   return { rebuilt: true, bundle };
 }
 
-function waitForOutput(child, stream, marker, label) {
+function waitForDerivedRuntimeDiscovery(child, stream, expectedPort) {
   return new Promise((resolveReady, rejectReady) => {
-    let output = "";
+    let pending = "";
     let settled = false;
-    const timer = setTimeout(() => finish(new Error(`${label} did not report readiness within 15 seconds.`)), 15_000);
+    const timer = setTimeout(() => finish(new Error("derived build service did not report runtime discovery within 15 seconds.")), 15_000);
     const onData = (chunk) => {
-      output = `${output}${String(chunk)}`.slice(-64 * 1024);
-      if (output.includes(marker)) finish();
+      pending += String(chunk);
+      if (Buffer.byteLength(pending, "utf8") > 64 * 1024) {
+        finish(new Error("derived build service emitted an overlong readiness stream."));
+        return;
+      }
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith(DERIVED_RUNTIME_DISCOVERY_PREFIX)) continue;
+        try { finish(undefined, parseDerivedRuntimeDiscoveryLine(line, expectedPort)); }
+        catch (error) { finish(error); }
+        return;
+      }
     };
-    const onExit = (code, signal) => finish(new Error(`${label} exited before readiness (${signal ?? `exit ${code}`}).`));
-    const onError = (error) => finish(new Error(`${label} failed before readiness: ${error.message}`));
-    const finish = (error) => {
+    const onExit = (code, signal) => finish(new Error(`derived build service exited before runtime discovery (${signal ?? `exit ${code}`}).`));
+    const onError = (error) => finish(new Error(`derived build service failed before runtime discovery: ${error.message}`));
+    const finish = (error, discovery) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -291,7 +369,7 @@ function waitForOutput(child, stream, marker, label) {
       child.off("exit", onExit);
       child.off("error", onError);
       if (error) rejectReady(error);
-      else resolveReady();
+      else resolveReady(discovery);
     };
     stream.on("data", onData);
     child.once("exit", onExit);
@@ -316,15 +394,33 @@ async function main() {
 
   const editorPort = parsePort(process.env.LIMINA_EDITOR_PORT, DEFAULT_EDITOR_PORT, "LIMINA_EDITOR_PORT");
   const uiPort = parsePort(process.env.LIMINA_EDITOR_UI_PORT ?? process.env.PORT, DEFAULT_UI_PORT, "LIMINA_EDITOR_UI_PORT");
+  let runtimeLaunch;
+  try { runtimeLaunch = derivedRuntimeLaunchConfig({ uiPort }); }
+  catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+  if (runtimeLaunch.port === editorPort || runtimeLaunch.port === uiPort) {
+    fail("LIMINA_DERIVED_RUNTIME_PORT must differ from the editor host and UI ports");
+  }
   if (await canConnect(editorPort)) fail(`LIMINA_EDITOR_PORT is already in use: ${editorPort}`);
   if (await canConnect(uiPort)) fail(`editor UI port is already in use: ${uiPort}`);
+  if (await canConnect(runtimeLaunch.port)) fail(`derived runtime port is already in use: ${runtimeLaunch.port}`);
 
   const requestedToken = process.env.LIMINA_EDITOR_TOKEN;
   if (requestedToken !== undefined && !/^[A-Za-z0-9_-]{32,128}$/.test(requestedToken)) {
     fail("LIMINA_EDITOR_TOKEN must be 32-128 URL-safe characters");
   }
   const token = requestedToken ?? randomBytes(24).toString("base64url");
-  const hostEnvironment = editorHostEnvironment({ projectId: id, editorPort, uiPort, token, assetRoot });
+  const hostEnvironment = editorHostEnvironment({
+    projectId: id,
+    editorPort,
+    uiPort,
+    token,
+    assetRoot,
+    derivedRuntime: {
+      baseUrl: `http://127.0.0.1:${runtimeLaunch.port}`,
+      token: runtimeLaunch.token,
+      branchId: DEFAULT_DERIVED_RUNTIME_BRANCH,
+    },
+  });
   const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
     cwd: stateDir,
     env: hostEnvironment,
@@ -371,9 +467,17 @@ async function main() {
       ...hostEnvironment,
       LIMINA_EDITOR_URL: `ws://127.0.0.1:${editorPort}/`,
       LIMINA_WORLD_COMPILER_BUNDLE: worldCompiler.bundle,
+      LIMINA_DERIVED_RUNTIME_PORT: String(runtimeLaunch.port),
+      LIMINA_DERIVED_RUNTIME_TOKEN: runtimeLaunch.token,
+      LIMINA_DERIVED_RUNTIME_ORIGIN: runtimeLaunch.origin,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const runtimeDiscoveryPromise = waitForDerivedRuntimeDiscovery(
+    derivedBuildService,
+    derivedBuildService.stdout,
+    runtimeLaunch.port,
+  );
   prefixStream(derivedBuildService.stdout, "[derived_build]");
   prefixStream(derivedBuildService.stderr, "[derived_build]");
   derivedBuildService.once("error", (err) => {
@@ -388,7 +492,7 @@ async function main() {
       fail(`derived build service stopped unexpectedly (${signal ?? `exit ${code}`}).`);
     }
   });
-  await waitForOutput(derivedBuildService, derivedBuildService.stdout, "[derived-build] watching", "derived build service");
+  const runtimeDiscovery = await runtimeDiscoveryPromise;
 
   staticServer = spawn(process.execPath, [join(PROJECT_DIR, "scripts", "serve.mjs"), join(home, "editor"), String(uiPort)], {
     cwd: PROJECT_DIR,
@@ -410,7 +514,13 @@ async function main() {
   });
 
   await waitForPort(uiPort, "editor UI server", staticServer);
-  printBanner({ home, uiPort, editorPort, token });
+  printBanner({
+    home,
+    uiPort,
+    editorPort,
+    token,
+    runtimeDiscovery,
+  });
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";

@@ -19,8 +19,85 @@ import {
   DerivedBuildService,
   DerivedBuildServiceError,
   bootstrapAuthoritativeMapDoc,
+  derivedRuntimeConfigurationFromEnvironment,
+  derivedRuntimeDiscovery,
+  startDerivedRuntimeAfterAuthority,
+  stopDerivedRuntimeBeforeBuildService,
   validateAuthoritySourceSnapshot,
 } from "./derived-build-service.mjs";
+
+test("derived runtime environment and discovery are exact, bounded loopback capabilities", () => {
+  const tokenText = Buffer.alloc(32, 0x41).toString("base64url");
+  const configuration = derivedRuntimeConfigurationFromEnvironment({
+    LIMINA_DERIVED_RUNTIME_PORT: "5174",
+    LIMINA_DERIVED_RUNTIME_TOKEN: tokenText,
+    LIMINA_DERIVED_RUNTIME_ORIGIN: "http://localhost:5173",
+  });
+  assert.equal(configuration.port, 5174);
+  assert.deepEqual(configuration.token, new Uint8Array(32).fill(0x41));
+  assert.deepEqual(configuration.allowedOrigins, ["http://localhost:5173"]);
+  assert.deepEqual(derivedRuntimeDiscovery("http://127.0.0.1:5174"), {
+    schema: "limina.derived-runtime-discovery/v1",
+    baseUrl: "http://127.0.0.1:5174",
+  });
+
+  for (const [field, value] of [
+    ["LIMINA_DERIVED_RUNTIME_PORT", "0"],
+    ["LIMINA_DERIVED_RUNTIME_PORT", "05174"],
+    ["LIMINA_DERIVED_RUNTIME_PORT", "65536"],
+    ["LIMINA_DERIVED_RUNTIME_TOKEN", "short"],
+    ["LIMINA_DERIVED_RUNTIME_ORIGIN", "http://localhost:5173/path"],
+    ["LIMINA_DERIVED_RUNTIME_ORIGIN", "https://localhost:5173"],
+    ["LIMINA_DERIVED_RUNTIME_ORIGIN", "http://evil.invalid:5173"],
+  ]) {
+    assert.throws(() => derivedRuntimeConfigurationFromEnvironment({
+      LIMINA_DERIVED_RUNTIME_PORT: "5174",
+      LIMINA_DERIVED_RUNTIME_TOKEN: tokenText,
+      LIMINA_DERIVED_RUNTIME_ORIGIN: "http://localhost:5173",
+      [field]: value,
+    }), (error) => error instanceof DerivedBuildServiceError && error.code === "INVALID_RUNTIME_CONFIG");
+  }
+  for (const baseUrl of ["http://localhost:5174", "https://127.0.0.1:5174", "http://127.0.0.1:5174/path", "http://127.0.0.1:5174?token=x"]) {
+    assert.throws(() => derivedRuntimeDiscovery(baseUrl), /invalid|non-loopback/);
+  }
+});
+
+test("derived runtime is constructed after authority and stops before the build service", async () => {
+  const events = [];
+  const service = {
+    async reconcileOnce() { events.push("authority"); },
+    async stop(reason) { events.push(`service:${reason}`); },
+  };
+  const started = await startDerivedRuntimeAfterAuthority(service, () => {
+    assert.deepEqual(events, ["authority"]);
+    events.push("construct-runtime");
+    return {
+      async start() { events.push("start-runtime"); return { baseUrl: "http://127.0.0.1:5174" }; },
+      async stop() { events.push("stop-runtime"); },
+    };
+  });
+  assert.equal(started.discovery.baseUrl, "http://127.0.0.1:5174");
+  await stopDerivedRuntimeBeforeBuildService(started.runtimeServer, service, "test");
+  assert.deepEqual(events, ["authority", "construct-runtime", "start-runtime", "stop-runtime", "service:test"]);
+
+  const failedStopEvents = [];
+  await assert.rejects(stopDerivedRuntimeBeforeBuildService(
+    { async stop() { failedStopEvents.push("runtime"); throw new Error("runtime stop failed"); } },
+    { async stop() { failedStopEvents.push("service"); } },
+    "fault",
+  ), /runtime stop failed/);
+  assert.deepEqual(failedStopEvents, ["runtime", "service"], "build service must still stop after a runtime shutdown fault");
+
+  let cleanedFailedStart = false;
+  await assert.rejects(startDerivedRuntimeAfterAuthority(
+    { async reconcileOnce() {} },
+    () => ({
+      async start() { throw new Error("bind failed"); },
+      async stop() { cleanedFailedStart = true; },
+    }),
+  ), /bind failed/);
+  assert.equal(cleanedFailedStart, true);
+});
 
 class BootstrapAuthority {
   constructor(projectId, { revision = 0, mapDoc = null } = {}) {

@@ -9,7 +9,66 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ensureFreshEditorBundles, ensureFreshWorldCompilerBundle } from "./scaffold/scripts/editor.mjs";
+import {
+  derivedRuntimeLaunchConfig,
+  ensureFreshEditorBundles,
+  ensureFreshWorldCompilerBundle,
+  parseDerivedRuntimeDiscoveryLine,
+} from "./scaffold/scripts/editor.mjs";
+
+{
+  const runtime = derivedRuntimeLaunchConfig({
+    uiPort: 5173,
+    environment: {},
+    randomBytesFn: (length) => { assert.equal(length, 32); return new Uint8Array(32).fill(0x42); },
+  });
+  assert.deepEqual(runtime, {
+    port: 5174,
+    token: Buffer.alloc(32, 0x42).toString("base64url"),
+    origin: "http://localhost:5173",
+  });
+  assert.doesNotMatch(`http://localhost:5173/?server=ws%3A%2F%2Flocalhost%3A8787%2F`, new RegExp(runtime.token));
+  assert.equal(derivedRuntimeLaunchConfig({
+    uiPort: 5173,
+    environment: { LIMINA_DERIVED_RUNTIME_PORT: "61000" },
+    randomBytesFn: () => new Uint8Array(32),
+  }).port, 61_000);
+  for (const port of ["0", "05174", "65536", "1.5", "not-a-port"]) {
+    assert.throws(() => derivedRuntimeLaunchConfig({
+      uiPort: 5173,
+      environment: { LIMINA_DERIVED_RUNTIME_PORT: port },
+      randomBytesFn: () => new Uint8Array(32),
+    }), /canonical TCP port/);
+  }
+  assert.throws(() => derivedRuntimeLaunchConfig({
+    uiPort: 65_535,
+    environment: {},
+    randomBytesFn: () => new Uint8Array(32),
+  }), /required/);
+  assert.throws(() => derivedRuntimeLaunchConfig({
+    uiPort: 5173,
+    environment: {},
+    randomBytesFn: () => new Uint8Array(31),
+  }), /exactly 32 bytes/);
+}
+
+{
+  const line = `[derived-runtime] ready ${JSON.stringify({
+    schema: "limina.derived-runtime-discovery/v1",
+    baseUrl: "http://127.0.0.1:5174",
+  })}`;
+  assert.deepEqual(parseDerivedRuntimeDiscoveryLine(line, 5174), {
+    schema: "limina.derived-runtime-discovery/v1",
+    baseUrl: "http://127.0.0.1:5174",
+  });
+  assert.throws(() => parseDerivedRuntimeDiscoveryLine(line, 5175), /does not match/);
+  assert.throws(() => parseDerivedRuntimeDiscoveryLine(`${line}?token=secret`, 5174), /JSON|fields|match/);
+  assert.throws(() => parseDerivedRuntimeDiscoveryLine(`[derived-runtime] ready ${JSON.stringify({
+    schema: "limina.derived-runtime-discovery/v1",
+    baseUrl: "http://127.0.0.1:5174",
+    token: "leak",
+  })}`, 5174), /unsupported/);
+}
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "limina-editor-bundle-"));

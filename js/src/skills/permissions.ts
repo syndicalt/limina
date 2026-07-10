@@ -1,6 +1,8 @@
 // Permission profiles (static allow-lists) resolved to a Set for O(1) checks.
 // Data-only agents in MVP; true capability isolation (QuickJS) is Phase 2.
 
+export const DERIVED_RUNTIME_DISCOVERY_PERMISSION = "runtime.derived.read";
+
 export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "builder.readWrite": [
     "authoring.read", "authoring.write",
@@ -110,7 +112,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
   // Observer profiles (existing)
-  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
+  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
   /** Runtime maintenance identity. Deliberately separate from builder and readonly
    *  profiles because dev.reload replaces code and rebuilds scene state. */
   "system.admin": ["system.admin", "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
@@ -126,7 +128,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "design.read", "design.write",
     "catalog.read",
   ],
-  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read"],
+  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",

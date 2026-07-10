@@ -34,6 +34,7 @@ import { installCottageScenario } from "../../js/src/demos/coordinator_cottage.t
 import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
 import { registerAssetCatalogSkills } from "../../js/src/skills/asset-catalog.ts";
 import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
+import { derivedRuntimeDiscovery, registerDerivedRuntimeDiscoverySkill } from "../../js/src/skills/derived-runtime-discovery.ts";
 import { resolveProfile } from "../../js/src/skills/permissions.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
@@ -46,6 +47,12 @@ const PROJECT_ID = ops.op_read_env("LIMINA_PROJECT_ID");
 if (PROJECT_ID.length > 64 || !/^[a-z0-9][a-z0-9._-]*$/.test(PROJECT_ID)) {
   throw new Error("editor_host: LIMINA_PROJECT_ID must be the canonical 1-64 character project id from limina.project.json");
 }
+const DERIVED_RUNTIME_DISCOVERY = derivedRuntimeDiscovery({
+  baseUrl: ops.op_read_env("LIMINA_DERIVED_RUNTIME_BASE_URL"),
+  token: ops.op_read_env("LIMINA_DERIVED_RUNTIME_TOKEN"),
+  projectId: PROJECT_ID,
+  branchId: ops.op_read_env("LIMINA_DERIVED_RUNTIME_BRANCH_ID"),
+});
 const WORLDLOG_NAME = ops.op_read_env("LIMINA_EDITOR_WORLDLOG") || "editor_host_worldlog.jsonl";
 const TRACE_NAME = ops.op_read_env("LIMINA_EDITOR_TRACE") || "editor_host_trace.jsonl";
 const CHAT_NAME = ops.op_read_env("LIMINA_EDITOR_CHAT") || "editor_host_chat.jsonl";
@@ -218,6 +225,12 @@ registerWorldlogSkills(server.registry, {
 // keeps its own live catalog Map, and a worldlog replay reconstructs it by re-invoking the recorded
 // catalog.publish commands.
 registerAssetCatalogSkills(server.registry);
+
+// The browser receives the short-lived derived-runtime bearer capability only
+// through this authenticated, profile-bound read. Read effects are excluded from
+// the world log, and SkillRegistry traces inputs rather than handler results, so
+// the token is never persisted in authoring or observability payloads.
+registerDerivedRuntimeDiscoverySkill(server.registry, DERIVED_RUNTIME_DISCOVERY);
 
 server.start();
 await server.ready;

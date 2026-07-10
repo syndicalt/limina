@@ -146,10 +146,18 @@ test("editor, export, and Atlas build wrappers return the same canonical identit
     assert.deepEqual([editor.projectRoot, exported.projectRoot, built.projectRoot], [root, root, root]);
     const hostEnvironment = editorHostEnvironment({
       projectId: editor.projectId, editorPort: 8787, uiPort: 5173, token: "x".repeat(32), projectRoot: root, environment: {},
+      derivedRuntime: {
+        baseUrl: "http://127.0.0.1:5174",
+        token: "A".repeat(43),
+        branchId: "main",
+      },
     });
     assert.equal(hostEnvironment.LIMINA_PROJECT_ID, "shared.identity-1");
     assert.equal(hostEnvironment.LIMINA_ASSET_ROOT, join(root, "assets"));
     assert.equal(hostEnvironment.LIMINA_EDITOR_WORLDLOG, "shared.identity-1.editor.worldlog.jsonl");
+    assert.equal(hostEnvironment.LIMINA_DERIVED_RUNTIME_BASE_URL, "http://127.0.0.1:5174");
+    assert.equal(hostEnvironment.LIMINA_DERIVED_RUNTIME_TOKEN, "A".repeat(43));
+    assert.equal(hostEnvironment.LIMINA_DERIVED_RUNTIME_BRANCH_ID, "main");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
