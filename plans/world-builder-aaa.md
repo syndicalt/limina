@@ -7,7 +7,8 @@ underground, and sky.
 - **Integrated implementation plan:** `plan-6c5cbc419f824a8d` (agent-native Plans). This file is the
   authoritative, source-controlled execution copy.
 - **Status:** APPROVED 2026-07-09. The pre-Studio baseline is preserved and fully gated at tag
-  `studio-foundation-m0-baseline-20260709`; WB-F0 implementation is underway. See §Status & outcomes.
+  `studio-foundation-m0-baseline-20260709`; WB-F0 is shipped and WB-W1 implementation is underway.
+  See §Status & outcomes.
 
 ---
 
@@ -442,3 +443,25 @@ near-vertical cliffs before the SDF layer exists.
   vertical rendering; thresholded terrain drops coalesce into bounded waterfall spans. The 1,050,625-cell
   inactive-threshold gate completed in 273 ms with 3.0 MiB typed scratch, and 54,232 randomized reaches
   additionally proved order/edge semantics. Portable artifact publication and visible flow remain open.
+- **2026-07-09 — Portable generated-water artifact shipped (`7ecd94f`).** One verified hydrology/terrain
+  snapshot now feeds both basin and reach extraction, preserving the standalone wrapper outputs while
+  avoiding duplicate validation. A fixed 256-byte little-endian `hydrology-water-topology/v1` artifact
+  stores self-contained basin rings, reach widths and terrain/surface elevations, waterfall spans, and
+  raw field/recipe/erosion/graph binding hashes behind canonical `sha256:` APIs. Alternate record orders,
+  aliasing, corrupt offsets/counts/padding, sub-terrain water, malformed bindings, and sliced/shared bytes
+  fail closed. The locked 1,288-byte vector hashes to
+  `6007f6de6ba44852e5d8488d66573ca27ac0998e3654774922bd85dc0ee2749c`; the derived hard cap is
+  24,860,240 bytes and a 262,144-point vector measured 590 ms encode / 685 ms decode centrally.
+- **2026-07-09 — Dependency-aware global runtime shipped (`588b34f`).** Generated water topology now
+  declares a bounded runtime dependency on the hydrology field. Global staging is topological, dependent
+  identity includes prerequisite descriptor identity, stage callbacks receive a defensive read-only
+  dependency map, and replacement/removal/rollback/close retire water before field. Missing prerequisites
+  fail before I/O, activation failure retains the complete prior live set, and close aborts active plus
+  queued loads before deterministic teardown.
+- **2026-07-09 — Generated-water compiler profile shipped (`bc41580`).** Hydrology profile 1.2 emits
+  ordered field and water globals from one lazy topology computation with complete provenance bindings.
+  Threshold edits rebuild only water; precipitation rebuilds field plus water; terrain/erosion rebuilds
+  chunks and both globals; local edit layers remain chunk-local. Missing/corrupt field or water cache
+  entries repair independently, and 1.1-to-1.2 migration is cold. Legacy 1.0 graph, manifest, artifact,
+  and snapshot goldens remain byte-identical. Production browser activation and generated WaterField
+  composition are still open; publication alone is not treated as runtime completion.
