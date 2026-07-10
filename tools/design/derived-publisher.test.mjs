@@ -17,6 +17,7 @@ import { createTerrainGridSpec, terrainChunkId } from "../../js/src/terrain/grid
 import {
   COMPILER_SNAPSHOT_SCHEMA,
   DERIVED_REVISION_MANIFEST_SCHEMA,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
   compilerContentHash,
   createDerivedRevisionManifest,
   derivedArtifactContentHash,
@@ -53,9 +54,13 @@ function projectFixture(createState = true) {
   return root;
 }
 
-function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }, artifactTag = tag) {
+function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }, artifactTag = tag, options = {}) {
   const bytes = new Uint8Array([...Buffer.from(`artifact:${artifactTag}`, "utf8")]);
   const contentHash = derivedArtifactContentHash(bytes);
+  const globalBytes = options.globalArtifactTag === undefined
+    ? undefined
+    : new Uint8Array([...Buffer.from(`global:${options.globalArtifactTag}`, "utf8")]);
+  const globalContentHash = globalBytes === undefined ? undefined : derivedArtifactContentHash(globalBytes);
   const grid = createTerrainGridSpec({ gridId: "grey-field.surface", origin: [0, 0], chunkSizeM: 64, defaultSamples: 65 });
   const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
   const graphHash = hash("graph:1");
@@ -67,7 +72,7 @@ function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }
   };
   const snapshot = { ...snapshotCore, snapshotHash: compilerContentHash(snapshotCore) };
   const manifest = createDerivedRevisionManifest({
-    schema: DERIVED_REVISION_MANIFEST_SCHEMA,
+    schema: options.schema ?? DERIVED_REVISION_MANIFEST_SCHEMA,
     projectId: "grey-field",
     branchId: "main",
     source: {
@@ -85,6 +90,12 @@ function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }
       snapshotHash: snapshot.snapshotHash,
     },
     grid,
+    ...(options.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V1 ? {} : { globalArtifacts: globalBytes === undefined ? [] : [{
+      artifactType: "hydrology-field/v1",
+      contentHash: globalContentHash,
+      byteLength: globalBytes.byteLength,
+      mediaType: "application/vnd.limina.hydrology-field",
+    }] }),
     chunks: [{
       chunkId,
       gridId: grid.gridId,
@@ -96,7 +107,13 @@ function revisionFixture(tag, source = { revision: 7, headHash: hash("head:7") }
       artifacts: [{ artifactType: "render-mesh/v1", contentHash, byteLength: bytes.byteLength, mediaType: "model/gltf-binary" }],
     }],
   });
-  return { manifest, artifacts: [{ contentHash, bytes }], snapshot };
+  return {
+    manifest,
+    artifacts: [{ contentHash, bytes }, ...(globalBytes === undefined ? [] : [{ contentHash: globalContentHash, bytes: globalBytes }])],
+    snapshot,
+    globalBytes,
+    globalContentHash,
+  };
 }
 
 function authoritative(source = { revision: 7, headHash: hash("head:7") }) {
@@ -122,6 +139,7 @@ function reusedDescriptor(fixture) {
   const chunk = fixture.manifest.chunks[0];
   const artifact = chunk.artifacts[0];
   return {
+    scope: "chunk",
     chunkId: chunk.chunkId,
     artifactType: artifact.artifactType,
     mediaType: artifact.mediaType,
@@ -132,6 +150,20 @@ function reusedDescriptor(fixture) {
 
 function sparseFixture(fixture) {
   return { ...fixture, artifacts: [], reusedArtifacts: [reusedDescriptor(fixture)] };
+}
+
+function legacyReusedDescriptor(fixture) {
+  const { scope: _scope, ...legacy } = reusedDescriptor(fixture);
+  return legacy;
+}
+
+function reusedGlobalDescriptor(fixture) {
+  const artifact = fixture.manifest.globalArtifacts[0];
+  return { scope: "global", ...artifact };
+}
+
+function sparseGlobalFixture(fixture) {
+  return { ...fixture, artifacts: [fixture.artifacts[0]], reusedArtifacts: [reusedGlobalDescriptor(fixture)] };
 }
 
 test("publishes a fully validated current revision and reports source staleness explicitly", async () => {
@@ -173,6 +205,99 @@ test("publishes sparse output only after hash-verifying installed reused artifac
     const read = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
     assert.equal(read.manifest.manifestHash, candidate.manifest.manifestHash);
     assert.equal(read.snapshot.snapshotHash, candidate.snapshot.snapshotHash);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("publishes and sparsely reuses a first-class global artifact", async () => {
+  const root = projectFixture();
+  try {
+    const baseline = revisionFixture("global-baseline", undefined, "global-chunk-base", { globalArtifactTag: "hydrology-stable" });
+    const global = baseline.manifest.globalArtifacts[0];
+    await publish(root, {
+      ...baseline,
+      artifacts: [baseline.artifacts[0], {
+        scope: "global",
+        artifactType: global.artifactType,
+        mediaType: global.mediaType,
+        contentHash: global.contentHash,
+        bytes: baseline.globalBytes,
+      }],
+    }, "job-global-baseline");
+    assert.deepEqual(readFileSync(artifactPath(root, baseline.globalContentHash)), Buffer.from(baseline.globalBytes));
+    const candidate = revisionFixture("global-candidate", undefined, "global-chunk-next", { globalArtifactTag: "hydrology-stable" });
+    assert.deepEqual(verifyPublishedDerivedArtifacts({
+      projectRoot: root,
+      branchId: "main",
+      manifest: candidate.manifest,
+      reusedArtifacts: [reusedGlobalDescriptor(candidate)],
+    }), { verified: true, artifactCount: 1 });
+    const published = await publish(root, sparseGlobalFixture(candidate), "job-global-candidate");
+    assert.equal(published.pointer.generation, 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy v1 unscoped chunk reuse remains accepted", async () => {
+  const root = projectFixture();
+  try {
+    const baseline = revisionFixture("legacy-reuse-base", undefined, "legacy-stable", { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1 });
+    await publish(root, baseline, "job-legacy-reuse-base");
+    const candidate = revisionFixture("legacy-reuse-next", undefined, "legacy-stable", { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1 });
+    const descriptor = legacyReusedDescriptor(candidate);
+    assert.deepEqual(verifyPublishedDerivedArtifacts({ projectRoot: root, branchId: "main", manifest: candidate.manifest, reusedArtifacts: [descriptor] }), { verified: true, artifactCount: 1 });
+    await publish(root, { ...candidate, artifacts: [], reusedArtifacts: [descriptor] }, "job-legacy-reuse-next");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("global publication rejects missing, forged, corrupt, and symlinked reuse without moving the pointer", async (t) => {
+  await t.test("missing and forged descriptors", async () => {
+    const root = projectFixture();
+    try {
+      const baseline = revisionFixture("global-validation-base", undefined, "chunk-base", { globalArtifactTag: "water" });
+      await publish(root, baseline, "job-global-validation-base");
+      const before = readFileSync(pointerPath(root), "utf8");
+      const candidate = revisionFixture("global-validation-next", undefined, "chunk-next", { globalArtifactTag: "water" });
+      await assert.rejects(publish(root, { ...candidate, artifacts: [candidate.artifacts[0]], reusedArtifacts: [] }, "job-global-missing"), /missing artifact/);
+      const descriptor = reusedGlobalDescriptor(candidate);
+      await assert.rejects(publish(root, { ...candidate, artifacts: [candidate.artifacts[0]], reusedArtifacts: [{ ...descriptor, scope: "chunk", chunkId: candidate.manifest.chunks[0].chunkId }] }, "job-global-forged-scope"), /does not match/);
+      await assert.rejects(publish(root, { ...candidate, artifacts: [candidate.artifacts[0]], reusedArtifacts: [{ ...descriptor, byteLength: descriptor.byteLength + 1 }] }, "job-global-forged-length"), /does not match/);
+      assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  for (const mode of ["hash", "symlink"]) await t.test(mode, async () => {
+    const root = projectFixture();
+    const outside = mkdtempSync(join(tmpdir(), "limina-global-reuse-outside-"));
+    try {
+      const baseline = revisionFixture(`global-${mode}-base`, undefined, "chunk-base", { globalArtifactTag: `water-${mode}` });
+      await publish(root, baseline, `job-global-${mode}-base`);
+      const before = readFileSync(pointerPath(root), "utf8");
+      const path = artifactPath(root, baseline.globalContentHash);
+      if (mode === "hash") {
+        const corrupt = new Uint8Array(baseline.globalBytes); corrupt[0] ^= 0xff; writeFileSync(path, corrupt);
+      } else {
+        const target = join(outside, "matching.bin"); writeFileSync(target, baseline.globalBytes); unlinkSync(path); symlinkSync(target, path);
+      }
+      const candidate = revisionFixture(`global-${mode}-next`, undefined, "chunk-next", { globalArtifactTag: `water-${mode}` });
+      await assert.rejects(publish(root, sparseGlobalFixture(candidate), `job-global-${mode}-next`), mode === "hash" ? /hash mismatch/ : /missing or not regular/);
+      assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+    } finally { rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
+  });
+});
+
+test("commit-time global corruption preserves the last-known-good pointer", async () => {
+  const root = projectFixture();
+  try {
+    await publish(root, revisionFixture("global-commit-base", undefined, "chunk-base", { globalArtifactTag: "water-base" }), "job-global-commit-base");
+    const before = readFileSync(pointerPath(root), "utf8");
+    const candidate = revisionFixture("global-commit-next", undefined, "chunk-next", { globalArtifactTag: "water-next" });
+    await assert.rejects(publish(root, candidate, "job-global-commit-next", {
+      fault(point) {
+        if (point === "before-pointer-rename") {
+          const corrupt = new Uint8Array(candidate.globalBytes); corrupt[0] ^= 0xff;
+          writeFileSync(artifactPath(root, candidate.globalContentHash), corrupt);
+        }
+      },
+    }), /hash mismatch/);
+    assert.equal(readFileSync(pointerPath(root), "utf8"), before);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -288,7 +413,7 @@ test("snapshot sidecars are canonical, pointer-bound, and participate in LKG fal
 test("reader migrates legacy manifest-only pointers without discarding the legacy LKG", async () => {
   const root = projectFixture();
   try {
-    const legacy = revisionFixture("legacy-pointer");
+    const legacy = revisionFixture("legacy-pointer", undefined, "legacy-pointer", { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1 });
     await assert.rejects(publishDerivedRevision({
       projectRoot: root,
       jobId: "job-implicit-legacy",

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
+import { derivedGlobalArtifacts } from "../../js/src/world/compiler/manifest.mjs";
 import { DerivedBuildCoordinator } from "./derived-build-coordinator.mjs";
 import {
   publishDerivedRevision,
@@ -190,7 +191,8 @@ function compilerArtifacts(artifacts) {
 
 function availableHashes(manifest) {
   const hashes = new Set();
-  for (const chunk of manifest?.chunks ?? []) for (const artifact of chunk.artifacts ?? []) hashes.add(artifact.contentHash);
+  for (const artifact of derivedGlobalArtifacts(manifest)) hashes.add(artifact.contentHash);
+  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) hashes.add(artifact.contentHash);
   return [...hashes].sort();
 }
 

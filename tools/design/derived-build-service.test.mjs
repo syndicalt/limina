@@ -146,6 +146,44 @@ function fixture() {
   };
 }
 
+function previousManifest(projectId, artifactHash, snapshotHash, globalArtifactHash = undefined) {
+  const grid = createTerrainGridSpec({ gridId: `${projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
+  const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
+  return createDerivedRevisionManifest({
+    schema: DERIVED_REVISION_MANIFEST_SCHEMA,
+    projectId,
+    branchId: "main",
+    source: {
+      revision: 1,
+      headHash: compilerContentHash({ head: 1 }),
+      contentRefs: [{ refId: "map-document", refType: "map-document/v1", scope: "global", assetId: "assets/map.json", contentHash: compilerContentHash({ map: 1 }) }],
+    },
+    compiler: {
+      version: "1.0.0",
+      configHash: compilerContentHash({ config: 1 }),
+      graphHash: compilerContentHash({ graph: 1 }),
+      snapshotHash,
+    },
+    grid,
+    globalArtifacts: globalArtifactHash === undefined ? [] : [{
+      artifactType: "hydrology-field/v1",
+      contentHash: globalArtifactHash,
+      byteLength: 4,
+      mediaType: "application/vnd.limina.hydrology-field",
+    }],
+    chunks: [{
+      chunkId,
+      gridId: grid.gridId,
+      lod: 0,
+      tx: 0,
+      tz: 0,
+      topologyHash: compilerContentHash({ topology: 1 }),
+      sourceSliceHashes: [],
+      artifacts: [{ artifactType: "terrain-chunk/v1", contentHash: artifactHash, byteLength: 3, mediaType: "application/vnd.limina.terrain-chunk" }],
+    }],
+  });
+}
+
 class FakeCoordinator {
   constructor(options) {
     this.options = options;
@@ -541,13 +579,15 @@ test("reads terrain edit layers by validated domain hash rather than an impossib
   } finally { fx.cleanup(); }
 });
 
-test("passes verified previous manifest state into sparse compilation", async () => {
+test("passes verified previous chunk and global artifact availability into sparse compilation", async () => {
   const fx = fixture();
   try {
     const priorHash = compilerContentHash({ prior: "artifact" });
+    const priorGlobalHash = compilerContentHash({ prior: "global-artifact" });
+    const priorSnapshotHash = compilerContentHash({ prior: "snapshot" });
     const previous = {
-      snapshot: { snapshotHash: compilerContentHash({ prior: "snapshot" }) },
-      manifest: { chunks: [{ artifacts: [{ contentHash: priorHash }] }] },
+      snapshot: { snapshotHash: priorSnapshotHash },
+      manifest: previousManifest(fx.projectId, priorHash, priorSnapshotHash, priorGlobalHash),
     };
     let sawPrevious = false;
     const manifestHash = compilerContentHash({ manifest: 2 });
@@ -556,7 +596,7 @@ test("passes verified previous manifest state into sparse compilation", async ()
       compileWorldTerrain(input) {
         sawPrevious = input.previousSnapshot === previous.snapshot
           && input.previousManifest === previous.manifest
-          && input.availableArtifactHashes.join() === priorHash;
+          && input.availableArtifactHashes.join() === [priorGlobalHash, priorHash].sort().join();
         return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
       },
       publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
@@ -588,9 +628,10 @@ test("a failed reuse verification forces the next retry onto a cold rebuild", as
   const fx = fixture();
   try {
     const priorHash = compilerContentHash({ prior: "artifact" });
+    const priorSnapshotHash = compilerContentHash({ prior: "snapshot" });
     const previous = {
-      snapshot: { snapshotHash: compilerContentHash({ prior: "snapshot" }) },
-      manifest: { chunks: [{ artifacts: [{ contentHash: priorHash }] }] },
+      snapshot: { snapshotHash: priorSnapshotHash },
+      manifest: previousManifest(fx.projectId, priorHash, priorSnapshotHash),
     };
     let compiles = 0;
     let verifierCalls = 0;
@@ -674,6 +715,8 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
     const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
     const bytes = Uint8Array.from(Buffer.from("real-service-artifact"));
     const contentHash = derivedArtifactContentHash(bytes);
+    const globalBytes = Uint8Array.from(Buffer.from("real-service-global-hydrology"));
+    const globalContentHash = derivedArtifactContentHash(globalBytes);
     let compileCount = 0;
     const instance = new DerivedBuildService({
       projectId: fx.projectId,
@@ -684,6 +727,9 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
       compileAtlasMapDoc: () => ({ worldMap: { fixture: true }, warnings: [] }),
       compileWorldTerrain(input) {
         compileCount++;
+        if (input.previousSnapshot !== null) {
+          assert.deepEqual(input.availableArtifactHashes, [contentHash, globalContentHash].sort(), "restart/sparse compile lost global artifact availability");
+        }
         const snapshotCore = {
           schema: COMPILER_SNAPSHOT_SCHEMA,
           graphHash: compiler.identity.graphHash,
@@ -708,6 +754,12 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
           },
           compiler: { ...compiler.identity, snapshotHash: snapshot.snapshotHash },
           grid,
+          globalArtifacts: [{
+            artifactType: "hydrology-field/v1",
+            contentHash: globalContentHash,
+            byteLength: globalBytes.byteLength,
+            mediaType: "application/vnd.limina.hydrology-field",
+          }],
           chunks: [{
             chunkId,
             gridId: grid.gridId,
@@ -719,11 +771,16 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
             artifacts: [{ artifactType: "terrain-chunk/v1", mediaType: "application/vnd.limina.terrain-chunk", contentHash, byteLength: bytes.byteLength }],
           }],
         });
-        const descriptor = { chunkId, artifactType: "terrain-chunk/v1", mediaType: "application/vnd.limina.terrain-chunk", contentHash, byteLength: bytes.byteLength };
+        const descriptor = { scope: "chunk", chunkId, artifactType: "terrain-chunk/v1", mediaType: "application/vnd.limina.terrain-chunk", contentHash, byteLength: bytes.byteLength };
+        const globalDescriptor = { scope: "global", artifactType: "hydrology-field/v1", mediaType: "application/vnd.limina.hydrology-field", contentHash: globalContentHash, byteLength: globalBytes.byteLength };
         return {
           manifest,
-          artifacts: input.previousSnapshot === null ? [{ ...descriptor, bytes }] : [],
-          reusedArtifacts: input.previousSnapshot === null ? [] : [descriptor],
+          artifacts: input.previousSnapshot === null ? [{ ...descriptor, bytes }, { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: globalContentHash, bytes: globalBytes }] : [],
+          reusedArtifacts: input.previousSnapshot === null ? [] : [descriptor, globalDescriptor].sort((a, b) => {
+            const ak = a.scope === "global" ? `global\u0000${a.artifactType}` : `chunk\u0000${a.chunkId}\u0000${a.artifactType}`;
+            const bk = b.scope === "global" ? `global\u0000${b.artifactType}` : `chunk\u0000${b.chunkId}\u0000${b.artifactType}`;
+            return ak < bk ? -1 : ak > bk ? 1 : 0;
+          }),
           snapshot,
           invalidation: {},
           diagnostics: [],
@@ -747,6 +804,7 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
     assert.equal(current.pointer.generation, 2);
     assert.equal(current.snapshot.snapshotHash, current.manifest.compiler.snapshotHash);
     assert.equal(current.manifest.chunks[0].artifacts[0].contentHash, contentHash);
+    assert.equal(current.manifest.globalArtifacts[0].contentHash, globalContentHash);
     await instance.stop();
     assert.equal(authority.closed, true);
 

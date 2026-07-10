@@ -1,7 +1,9 @@
 import {
   MAX_DERIVED_ARTIFACTS,
   MAX_DERIVED_TOTAL_ARTIFACT_BYTES,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
   compilerContentHash,
+  derivedGlobalArtifacts,
   derivedArtifactContentHash,
   parseDerivedRevisionManifest,
   validateCompilerContentHash,
@@ -158,24 +160,50 @@ function buildIdFor(request) {
 
 function artifactDescriptors(manifest) {
   const descriptors = new Map();
-  for (const chunk of manifest.chunks) {
-    for (const artifact of chunk.artifacts) {
-      const previous = descriptors.get(artifact.contentHash);
-      if (previous !== undefined && previous.byteLength !== artifact.byteLength) {
-        throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `artifact ${artifact.contentHash} has inconsistent byte lengths`);
-      }
-      descriptors.set(artifact.contentHash, artifact);
+  const add = (artifact) => {
+    const previous = descriptors.get(artifact.contentHash);
+    if (previous !== undefined && previous.byteLength !== artifact.byteLength) {
+      throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `artifact ${artifact.contentHash} has inconsistent byte lengths`);
     }
-  }
+    descriptors.set(artifact.contentHash, artifact);
+  };
+  for (const artifact of derivedGlobalArtifacts(manifest)) add(artifact);
+  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) add(artifact);
   return descriptors;
 }
 
 function artifactReferences(manifest) {
   const references = new Map();
+  for (const artifact of derivedGlobalArtifacts(manifest)) {
+    references.set(`global\u0000${artifact.artifactType}`, { scope: "global", ...artifact });
+  }
   for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) {
-    references.set(`${chunk.chunkId}\u0000${artifact.artifactType}`, { chunkId: chunk.chunkId, ...artifact });
+    references.set(`chunk\u0000${chunk.chunkId}\u0000${artifact.artifactType}`, { scope: "chunk", chunkId: chunk.chunkId, ...artifact });
   }
   return references;
+}
+
+function compileReference(manifest, value, index, label, includeBytes) {
+  const legacyChunk = manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V1 && !Object.hasOwn(value, "scope");
+  const scope = legacyChunk ? "chunk" : value.scope;
+  if (scope !== "global" && scope !== "chunk") {
+    throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `${label} ${index} scope must be global or chunk`);
+  }
+  const suffix = includeBytes ? ["bytes"] : ["byteLength"];
+  exactKeys(
+    value,
+    new Set(scope === "global"
+      ? ["scope", "artifactType", "mediaType", "contentHash", ...suffix]
+      : [...(legacyChunk ? [] : ["scope"]), "chunkId", "artifactType", "mediaType", "contentHash", ...suffix]),
+    `${label} ${index}`,
+  );
+  return {
+    scope,
+    legacyChunk,
+    key: scope === "global"
+      ? `global\u0000${value.artifactType}`
+      : `chunk\u0000${value.chunkId}\u0000${value.artifactType}`,
+  };
 }
 
 function parseCompileOutputUnchecked(input, request) {
@@ -214,12 +242,9 @@ function parseCompileOutputUnchecked(input, request) {
   for (let index = 0; index < output.artifacts.length; index++) {
     const artifact = plainObject(output.artifacts[index], `derived compile artifact ${index}`);
     const artifactKeys = new Set(Object.getOwnPropertyNames(artifact));
-    const rich = artifactKeys.has("chunkId") || artifactKeys.has("artifactType") || artifactKeys.has("mediaType");
-    exactKeys(
-      artifact,
-      new Set(rich ? ["chunkId", "artifactType", "mediaType", "contentHash", "bytes"] : ["contentHash", "bytes"]),
-      `derived compile artifact ${index}`,
-    );
+    const rich = artifactKeys.has("scope") || artifactKeys.has("chunkId") || artifactKeys.has("artifactType") || artifactKeys.has("mediaType");
+    const location = rich ? compileReference(manifest, artifact, index, "derived compile artifact", true) : undefined;
+    if (!rich) exactKeys(artifact, new Set(["contentHash", "bytes"]), `derived compile artifact ${index}`);
     const contentHash = validateCompilerContentHash(artifact.contentHash, `derived compile artifact ${index} contentHash`);
     if (!(artifact.bytes instanceof Uint8Array)) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${index} bytes must be Uint8Array`);
@@ -235,7 +260,7 @@ function parseCompileOutputUnchecked(input, request) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${contentHash} byteLength mismatch`);
     }
     if (rich) {
-      const reference = references.get(`${artifact.chunkId}\u0000${artifact.artifactType}`);
+      const reference = references.get(location.key);
       if (reference === undefined || reference.contentHash !== contentHash || reference.mediaType !== artifact.mediaType) {
         throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", `derived compile artifact ${index} does not match the manifest`);
       }
@@ -260,9 +285,9 @@ function parseCompileOutputUnchecked(input, request) {
   const reusedInputs = sparse ? output.reusedArtifacts : [];
   for (let index = 0; index < reusedInputs.length; index++) {
     const reused = plainObject(reusedInputs[index], `derived compile reused artifact ${index}`);
-    exactKeys(reused, new Set(["chunkId", "artifactType", "mediaType", "contentHash", "byteLength"]), `derived compile reused artifact ${index}`);
+    const location = compileReference(manifest, reused, index, "derived compile reused artifact", false);
     const contentHash = validateCompilerContentHash(reused.contentHash, `derived compile reused artifact ${index} contentHash`);
-    const key = `${reused.chunkId}\u0000${reused.artifactType}`;
+    const key = location.key;
     if (previousReuseKey !== undefined && previousReuseKey >= key) {
       throw new DerivedBuildCoordinatorError("INVALID_COMPILE_OUTPUT", "derived compile reusedArtifacts must be strictly ordered and unique");
     }
@@ -281,7 +306,8 @@ function parseCompileOutputUnchecked(input, request) {
     reusedReferences.add(key);
     reusedHashes.add(contentHash);
     reusedArtifacts.push(Object.freeze({
-      chunkId: reference.chunkId,
+      ...(location.legacyChunk ? {} : { scope: reference.scope }),
+      ...(reference.scope === "chunk" ? { chunkId: reference.chunkId } : {}),
       artifactType: reference.artifactType,
       mediaType: reference.mediaType,
       contentHash,

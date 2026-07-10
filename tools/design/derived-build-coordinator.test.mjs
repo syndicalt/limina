@@ -6,6 +6,7 @@ import test from "node:test";
 import { createTerrainGridSpec, terrainChunkId } from "../../js/src/terrain/grid.mjs";
 import {
   DERIVED_REVISION_MANIFEST_SCHEMA,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
   compilerContentHash,
   createDerivedRevisionManifest,
   derivedArtifactContentHash,
@@ -47,9 +48,13 @@ function authority(identity, branchId = "main") {
   return { projectId: "grey-field", branchId, revision: identity.revision, headHash: identity.headHash };
 }
 
-function compileFixture(identity, tag = `r${identity.revision}`, branchId = "main", compilerIdentity = compiler()) {
+function compileFixture(identity, tag = `r${identity.revision}`, branchId = "main", compilerIdentity = compiler(), options = {}) {
   const bytes = new Uint8Array(Buffer.from(`artifact:${tag}`, "utf8"));
   const contentHash = derivedArtifactContentHash(bytes);
+  const globalBytes = options.sameGlobalBytes === true
+    ? bytes
+    : options.globalTag === undefined ? undefined : new Uint8Array(Buffer.from(`global:${options.globalTag}`, "utf8"));
+  const globalContentHash = globalBytes === undefined ? undefined : derivedArtifactContentHash(globalBytes);
   const grid = createTerrainGridSpec({
     gridId: "grey-field.surface",
     origin: [0, 0],
@@ -57,7 +62,7 @@ function compileFixture(identity, tag = `r${identity.revision}`, branchId = "mai
     defaultSamples: 65,
   });
   const manifest = createDerivedRevisionManifest({
-    schema: DERIVED_REVISION_MANIFEST_SCHEMA,
+    schema: options.schema ?? DERIVED_REVISION_MANIFEST_SCHEMA,
     projectId: "grey-field",
     branchId,
     source: {
@@ -78,6 +83,12 @@ function compileFixture(identity, tag = `r${identity.revision}`, branchId = "mai
       snapshotHash: hash(`snapshot:${tag}`),
     },
     grid,
+    ...(options.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V1 ? {} : { globalArtifacts: globalBytes === undefined ? [] : [{
+      artifactType: "hydrology-field/v1",
+      contentHash: globalContentHash,
+      byteLength: globalBytes.byteLength,
+      mediaType: "application/vnd.limina.hydrology-field",
+    }] }),
     chunks: [{
       chunkId: terrainChunkId(grid.gridId, 0, 0, 0),
       gridId: grid.gridId,
@@ -94,13 +105,14 @@ function compileFixture(identity, tag = `r${identity.revision}`, branchId = "mai
       }],
     }],
   });
-  return { manifest, artifacts: [{ contentHash, bytes }] };
+  return { manifest, artifacts: [{ contentHash, bytes }, ...(globalBytes === undefined || globalContentHash === contentHash ? [] : [{ contentHash: globalContentHash, bytes: globalBytes }])] };
 }
 
 function reusedDescriptor(fixture) {
   const chunk = fixture.manifest.chunks[0];
   const artifact = chunk.artifacts[0];
   return {
+    scope: "chunk",
     chunkId: chunk.chunkId,
     artifactType: artifact.artifactType,
     mediaType: artifact.mediaType,
@@ -111,6 +123,10 @@ function reusedDescriptor(fixture) {
 
 function sparseFixture(fixture) {
   return { manifest: fixture.manifest, artifacts: [], reusedArtifacts: [reusedDescriptor(fixture)] };
+}
+
+function reusedGlobalDescriptor(fixture) {
+  return { scope: "global", ...fixture.manifest.globalArtifacts[0] };
 }
 
 async function confirmingPublish({ manifest, readHead }) {
@@ -257,6 +273,84 @@ test("compile output is strict and artifact sets must be complete, unique, and a
       );
     });
   }
+});
+
+test("global compile artifacts are supplied, reused, and content-deduplicated without chunk masquerading", async (t) => {
+  await t.test("rich supplied global", async () => {
+    const fixture = compileFixture(source(1), "global-rich", "main", compiler(), { globalTag: "water" });
+    const global = fixture.manifest.globalArtifacts[0];
+    const { byteLength: _byteLength, ...globalLocation } = global;
+    let publishedArtifacts;
+    const output = {
+      manifest: fixture.manifest,
+      artifacts: [fixture.artifacts[0], { scope: "global", ...globalLocation, bytes: fixture.artifacts.find((entry) => entry.contentHash === global.contentHash).bytes }],
+      reusedArtifacts: [],
+    };
+    const setup = coordinator({
+      compile: async () => output,
+      publish: async ({ artifacts, readHead, manifest }) => { publishedArtifacts = artifacts; await readHead(); return { published: true, manifestHash: manifest.manifestHash }; },
+    });
+    await setup.coordinator.submit(request(1));
+    assert.equal(publishedArtifacts.length, 2);
+    assert.deepEqual(publishedArtifacts.map((entry) => Object.keys(entry).sort()), [["bytes", "contentHash"], ["bytes", "contentHash"]]);
+  });
+
+  await t.test("sparse reused global", async () => {
+    const fixture = compileFixture(source(1), "global-reuse", "main", compiler(), { globalTag: "water" });
+    const globalReuse = reusedGlobalDescriptor(fixture);
+    let verified;
+    const setup = coordinator({
+      compile: async () => ({ manifest: fixture.manifest, artifacts: [fixture.artifacts[0]], reusedArtifacts: [globalReuse] }),
+      verifyReusableArtifacts: async ({ reusedArtifacts }) => { verified = reusedArtifacts; },
+      publish: async ({ reusedArtifacts, readHead, manifest }) => {
+        assert.deepEqual(reusedArtifacts, [globalReuse]);
+        await readHead();
+        return { published: true, manifestHash: manifest.manifestHash };
+      },
+    });
+    await setup.coordinator.submit(request(1));
+    assert.deepEqual(verified, [globalReuse]);
+  });
+
+  await t.test("same hash global and chunk is supplied once", async () => {
+    const fixture = compileFixture(source(1), "global-dedup", "main", compiler(), { sameGlobalBytes: true });
+    let artifactCount = 0;
+    const setup = coordinator({
+      compile: async () => fixture,
+      publish: async ({ artifacts, readHead, manifest }) => { artifactCount = artifacts.length; await readHead(); return { published: true, manifestHash: manifest.manifestHash }; },
+    });
+    await setup.coordinator.submit(request(1));
+    assert.equal(artifactCount, 1);
+  });
+
+  await t.test("global cannot masquerade as chunk or omit v2 scope", async () => {
+    const fixture = compileFixture(source(1), "global-forged", "main", compiler(), { globalTag: "water" });
+    const global = reusedGlobalDescriptor(fixture);
+    for (const reusedArtifacts of [
+      [{ ...global, scope: "chunk", chunkId: fixture.manifest.chunks[0].chunkId }],
+      [{ artifactType: global.artifactType, mediaType: global.mediaType, contentHash: global.contentHash, byteLength: global.byteLength }],
+    ]) {
+      const setup = coordinator({ compile: async () => ({ manifest: fixture.manifest, artifacts: [fixture.artifacts[0]], reusedArtifacts }), verifyReusableArtifacts: async () => {} });
+      await assert.rejects(setup.coordinator.submit(request(1)), assertCode("INVALID_COMPILE_OUTPUT"));
+    }
+  });
+});
+
+test("legacy v1 unscoped chunk reuse is preserved through verifier and publisher", async () => {
+  const fixture = compileFixture(source(1), "legacy-reuse", "main", compiler(), { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1 });
+  const { scope: _scope, ...legacyDescriptor } = reusedDescriptor(fixture);
+  let verified;
+  const setup = coordinator({
+    compile: async () => ({ manifest: fixture.manifest, artifacts: [], reusedArtifacts: [legacyDescriptor] }),
+    verifyReusableArtifacts: async ({ reusedArtifacts }) => { verified = reusedArtifacts; },
+    publish: async ({ reusedArtifacts, readHead, manifest }) => {
+      assert.deepEqual(reusedArtifacts, [legacyDescriptor]);
+      await readHead();
+      return { published: true, manifestHash: manifest.manifestHash };
+    },
+  });
+  await setup.coordinator.submit(request(1));
+  assert.deepEqual(verified, [legacyDescriptor]);
 });
 
 test("manifest identity mismatch is rejected before publication", async () => {

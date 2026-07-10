@@ -23,7 +23,9 @@ import {
   MAX_DERIVED_ARTIFACT_BYTES,
   MAX_DERIVED_MANIFEST_BYTES,
   MAX_DERIVED_TOTAL_ARTIFACT_BYTES,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V1,
   canonicalDerivedRevisionManifest,
+  derivedGlobalArtifacts,
   parseDerivedRevisionManifest,
 } from "../../js/src/world/compiler/manifest.mjs";
 import {
@@ -361,22 +363,45 @@ function validateHead(head, manifest) {
 
 function artifactDescriptors(manifest) {
   const descriptors = new Map();
-  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) {
+  const add = (artifact) => {
     const existing = descriptors.get(artifact.contentHash);
     if (existing !== undefined && existing.byteLength !== artifact.byteLength) {
       throw new Error(`artifact ${artifact.contentHash} has inconsistent byte lengths`);
     }
     descriptors.set(artifact.contentHash, artifact);
-  }
+  };
+  for (const artifact of derivedGlobalArtifacts(manifest)) add(artifact);
+  for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) add(artifact);
   return descriptors;
 }
 
 function artifactReferences(manifest) {
   const references = new Map();
+  for (const artifact of derivedGlobalArtifacts(manifest)) {
+    references.set(`global\u0000${artifact.artifactType}`, { scope: "global", ...artifact });
+  }
   for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) {
-    references.set(`${chunk.chunkId}\u0000${artifact.artifactType}`, { chunkId: chunk.chunkId, ...artifact });
+    references.set(`chunk\u0000${chunk.chunkId}\u0000${artifact.artifactType}`, { scope: "chunk", chunkId: chunk.chunkId, ...artifact });
   }
   return references;
+}
+
+function parseArtifactReferenceInput(manifest, value, index, label, includeBytes) {
+  const legacyChunk = manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V1 && !Object.hasOwn(value, "scope");
+  const scope = legacyChunk ? "chunk" : value.scope;
+  if (scope !== "global" && scope !== "chunk") throw new Error(`${label} ${index} scope must be global or chunk`);
+  const suffix = includeBytes ? ["bytes"] : ["byteLength"];
+  exactDataObject(
+    value,
+    scope === "global"
+      ? ["scope", "artifactType", "mediaType", "contentHash", ...suffix]
+      : [...(legacyChunk ? [] : ["scope"]), "chunkId", "artifactType", "mediaType", "contentHash", ...suffix],
+    `${label} ${index}`,
+  );
+  const referenceKey = scope === "global"
+    ? `global\u0000${value.artifactType}`
+    : `chunk\u0000${value.chunkId}\u0000${value.artifactType}`;
+  return { scope, referenceKey };
 }
 
 function nodeArtifactContentHash(bytes) {
@@ -392,12 +417,9 @@ function parseReusedArtifactInputs(manifest, reusedInputs, suppliedHashes = new 
   const reused = new Map();
   let previousReferenceKey;
   for (let index = 0; index < reusedInputs.length; index++) {
-    const input = exactDataObject(
-      reusedInputs[index],
-      ["chunkId", "artifactType", "mediaType", "contentHash", "byteLength"],
-      `publication reused artifact ${index}`,
-    );
-    const referenceKey = `${input.chunkId}\u0000${input.artifactType}`;
+    const input = reusedInputs[index];
+    if (input === null || Array.isArray(input) || typeof input !== "object") throw new Error(`publication reused artifact ${index} must be a plain object`);
+    const { referenceKey } = parseArtifactReferenceInput(manifest, input, index, "publication reused artifact", false);
     if (previousReferenceKey !== undefined && previousReferenceKey >= referenceKey) {
       throw new Error("publication reusedArtifacts must be strictly ordered and unique");
     }
@@ -422,16 +444,29 @@ function validateArtifactInputs(manifest, inputs, reusedInputs) {
     throw new Error(`publication artifacts must be an array with at most ${MAX_DERIVED_ARTIFACTS} entries`);
   }
   const required = artifactDescriptors(manifest);
+  const references = artifactReferences(manifest);
   const supplied = new Map();
   let total = 0;
   for (let index = 0; index < inputs.length; index++) {
-    const input = exactDataObject(inputs[index], ["contentHash", "bytes"], `publication artifact ${index}`);
+    const input = inputs[index];
+    if (input === null || Array.isArray(input) || typeof input !== "object") throw new Error(`publication artifact ${index} must be a plain object`);
+    const keys = Object.getOwnPropertyNames(input);
+    const rich = keys.some((key) => key === "scope" || key === "chunkId" || key === "artifactType" || key === "mediaType");
+    let reference;
+    if (rich) {
+      const { referenceKey } = parseArtifactReferenceInput(manifest, input, index, "publication artifact", true);
+      reference = references.get(referenceKey);
+      if (reference === undefined || reference.contentHash !== input.contentHash || reference.mediaType !== input.mediaType) {
+        throw new Error(`publication artifact ${index} does not match the manifest`);
+      }
+    } else exactDataObject(input, ["contentHash", "bytes"], `publication artifact ${index}`);
     const hash = validateCompilerContentHash(input.contentHash, `publication artifact ${index} contentHash`);
     if (!(input.bytes instanceof Uint8Array)) throw new Error(`publication artifact ${index} bytes must be Uint8Array`);
     if (supplied.has(hash)) throw new Error(`publication artifacts contain duplicate ${hash}`);
     const descriptor = required.get(hash);
     if (descriptor === undefined) throw new Error(`publication supplied unreferenced artifact ${hash}`);
     if (input.bytes.byteLength !== descriptor.byteLength) throw new Error(`publication artifact ${hash} byteLength mismatch`);
+    if (reference !== undefined && input.bytes.byteLength !== reference.byteLength) throw new Error(`publication artifact ${hash} byteLength mismatch`);
     if (nodeArtifactContentHash(input.bytes) !== hash) throw new Error(`publication artifact ${hash} content hash mismatch`);
     total += input.bytes.byteLength;
     if (total > MAX_DERIVED_TOTAL_ARTIFACT_BYTES) throw new Error("publication artifact bytes exceed the total resource bound");
