@@ -394,3 +394,32 @@ near-vertical cliffs before the SDF layer exists.
   and sampling failures are isolated; hidden tabs do not poll. Real Chromium gates cover keyboard and
   mobile layout, explicit launch-server precedence, authenticated viewport startup, DPR 1/1.5/2 backing,
   Play propagation, Edit restoration, and non-empty live telemetry without page errors.
+- **2026-07-09 — Deterministic player swimming shipped (`4a612ab`).** The fixed-step character
+  controller now consumes the canonical gameplay water-contact provider with separate enter/exit
+  hysteresis, bounded buoyancy and drag, horizontal and vertical swim acceleration, and sprint-free swim
+  speed. Dry, wading, swimming, and submerged state is observable; snapshot v3 adds an optional default-
+  false swimming field without invalidating older v3 bytes, and a mid-swim snapshot restores exactly.
+  Focused gates cover shoreline chatter, deep-water ascent/descent, caps, skill-tunable validation,
+  deterministic replay, provider isolation, and legacy snapshot loading.
+- **2026-07-09 — Hydrology compiler profile shipped (`43f4666`).** The locked 1.0.0 terrain compiler
+  and manifest v1 output remain byte-identical. Recipe-bearing maps select a 1.1.0 DAG whose global
+  `hydrology-field` stage depends on the eroded master surface and precipitation while terrain chunks
+  retain their existing dependencies. Threshold-only recipe edits reuse both terrain and field bytes;
+  precipitation edits invalidate only the field, local edit layers invalidate only intersecting chunks,
+  and surface/erosion changes invalidate both the field and affected terrain. Live service profile
+  selection remains the final deployment seam for this compiler capability.
+- **2026-07-09 — Coherent worker swim status shipped (`136fc79`).** Simulation workers publish tick,
+  lowest-live-player id, and in-water/swimming/submerged flags through a 16-byte seqlocked shared status
+  block after physics and transform synchronization. The browser reads into reusable scratch storage,
+  so render and editor consumers need neither per-tick messages nor per-frame allocations. Pausing does
+  not fabricate generations or ticks, authoring batches update the chosen player deterministically, and
+  focused worker plus type/bundle gates are green.
+- **2026-07-09 — Deterministic generated basin extraction shipped (`d7b1120`).** Raised cells in the
+  verified hydrology field are labelled as fixed 4-connected equal-spill components, thresholded by
+  exact area/depth policy, and converted through deterministic midpoint marching squares into canonical
+  outer and hole rings with stable `gen-b-*` ids. Generated topology is immutable and does not mutate
+  authored WorldMap water. Water IR body/point/topology limits, cancellation, hostile component and comb
+  cases, ocean exclusion, callback mutation, and a 1,050,625-cell linear-storage gate are covered; the
+  central maximum-grid run completed in 375 ms with 44.1 MiB typed scratch. Complex contours that remain
+  above Water IR limits after exact collinear removal fail closed until a topology-preserving constrained
+  simplifier is implemented.
