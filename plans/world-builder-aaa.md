@@ -350,6 +350,14 @@ near-vertical cliffs before the SDF layer exists.
   activates complete global and chunk sets, reverses all new allocations on failure, preserves resource
   identity for unchanged scopes, and retires chunk dependents before global resources. Same-content
   references deduplicate I/O without weakening per-descriptor validation.
+- **2026-07-09 — Portable hydrology field artifact shipped (`f6de8df`).** Canonical drainage fields
+  now encode to a fixed little-endian `hydrology-field/v1` global artifact carrying placement,
+  receiver/rank topology, filled heights, catchment, Strahler order, and ocean membership; discharge
+  is derived instead of redundantly stored. Decode owns every channel and revalidates outlet policy,
+  rank permutation, accumulation, Strahler order, downstream monotonicity, conservation, offsets, and
+  canonical padding. The locked 3x3 vector hashes to
+  `6d597f8eedf512ee5b5ddbbe05188e6d7ad49e5fb1e694d1af40f63940817101`; the maximum 1,050,625-cell
+  artifact is 27,316,368 bytes and measured 120 ms encode / 121 ms decode in the host gate.
 - **2026-07-09 — Isolated editor Play shipped (`2d76f7d`).** Play captures an immutable, validated
   authoritative project head plus command prefix, locks every editor write surface, pauses and
   render-suspends the retained Edit runtime, and runs simulation on a disposable canvas. New authoritative
