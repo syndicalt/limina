@@ -13,6 +13,7 @@
 import * as THREE from "../build/three.bundle.mjs";
 import {
   applyRenderBaseline,
+  createRenderBaselineBackground,
   DEFAULT_RENDER_BASELINE,
   type RenderBaselineOverride,
 } from "../src/render-baseline.ts";
@@ -252,10 +253,38 @@ function count(scene: unknown, pred: (c: LightFlags) => boolean): number {
   assert(scene.background === foreignBackground && scene.environment === foreignEnvironment && scene.fog === foreignFog, "dispose clobbered newer foreign scene ownership");
 }
 
+// Shared browser-host backgrounds keep one texture identity across world
+// replacement and remain owned by the host, not an individual baseline session.
+{
+  const shared = createRenderBaselineBackground();
+  const texture = shared.texture as THREE.DataTexture;
+  const originalDispose = texture.dispose.bind(texture);
+  let disposals = 0;
+  texture.dispose = (): void => { disposals++; originalDispose(); };
+  const firstScene = new THREE.Scene();
+  const first = applyRenderBaseline({ scene: firstScene }, { sky: { top: 0x102030 } }, shared);
+  assert(firstScene.background === texture, "shared background texture was not installed");
+  const firstRed = (texture.image.data as Uint8Array)[0];
+  first.dispose();
+  assert(disposals === 0, "world session disposed its host-owned background");
+
+  const secondScene = new THREE.Scene();
+  const second = applyRenderBaseline({ scene: secondScene }, { sky: { top: 0xf02010 } }, shared);
+  assert(secondScene.background === texture, "world replacement changed shared background identity");
+  assert((texture.image.data as Uint8Array)[0] !== firstRed, "shared background pixels did not update for the next preset");
+  second.dispose();
+  shared.dispose();
+  shared.dispose();
+  assert(disposals === 1, "host-owned background was not disposed exactly once");
+  let rejected = false;
+  try { shared.update(DEFAULT_RENDER_BASELINE.sky); } catch { rejected = true; }
+  assert(rejected, "disposed shared background accepted an update");
+}
+
 (globalThis as { console?: { log(s: string): void } }).console?.log(
   "p11_render_baseline OK: default baseline installs sun+hemisphere+ambient+ground, " +
   "sky-gradient background + IBL (PMREM live / gradient headless fallback), ACES tonemapping, " +
   "+ default-ON ATMOSPHERE (FogExp2 distance haze auto-matched to sky.horizon; opt-in height-falloff node fog); " +
   "renderer tonemapping/exposure/shadows applied; preset overrides (exposure/sun/ground/env/camera/atmosphere) take effect; " +
-  "quality-driven moving shadows and idempotent owned-resource teardown are verified; enabled:false is a no-op.",
+  "quality-driven moving shadows, shared host-background ownership, and idempotent teardown are verified; enabled:false is a no-op.",
 );

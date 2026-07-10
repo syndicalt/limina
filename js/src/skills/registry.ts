@@ -12,6 +12,7 @@ import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import type { DesignArtifactStore } from "../world/design-artifacts.ts";
+import type { GltfSceneCache } from "./three.ts";
 
 export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "system" | "ui" | "social" | "audio" | "terrain" | "world" | "design" | "player" | "camera" | "animation" | "interaction" | "inventory" | "game" | "trigger" | "event" | "quest" | "stats" | "damage" | "status" | "combat" | "behavior" | "dialogue" | "nav" | "vfx" | "save" | "progression";
 export type SkillEffect = "read" | "write" | "admin";
@@ -50,6 +51,9 @@ export interface WorldContext {
   ops: EngineOps;
   agents?: AgentLookup;
   renderer?: unknown;
+  /** Parsed glTF templates owned by the browser render host. Browser render worlds must use this
+   * cache so a world session never performs an asynchronous loader miss mid-frame. */
+  gltfCache?: GltfSceneCache;
   /** The render-only post-processing pipeline built by `render.enablePost` (a
    *  PostPipeline from render/post.ts). A render loop drives `post.render()` in place of
    *  `renderer.render(...)`. Set by the skill; never sim/log state. */

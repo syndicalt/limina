@@ -1,4 +1,5 @@
 import { DEFAULT_RENDER_QUALITY_PROFILES, isRenderQualityTier, resolveRenderQuality } from "../src/render/quality.ts";
+import { constrainPostPreset, resolvePostPreset } from "../src/render/post.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`p_render_quality FAIL: ${message}`);
@@ -33,6 +34,18 @@ const overridden = resolveRenderQuality("balanced", 3, {
 assert(overridden.pixelRatio === 2 && overridden.shadowMapSize === 512 && overridden.shadowHalfExtent === 200, "valid execution override changed");
 assert(!overridden.post.enabled && overridden.post.aoSamples === 3 && overridden.telemetryIntervalFrames === 60, "valid nested override changed");
 assert(Object.isFrozen(overridden) && Object.isFrozen(overridden.post), "resolved profile is mutable");
+
+const authoredPost = resolvePostPreset({ ao: { samples: 12, resolutionScale: 0.75 }, bloom: { enabled: true } });
+const performancePost = constrainPostPreset(authoredPost, performance.post);
+const balancedPost = constrainPostPreset(authoredPost, balanced.post);
+const cinematicPost = constrainPostPreset(authoredPost, cinematic.post);
+assert(performancePost === undefined, "performance tier did not disable the post graph");
+assert(balancedPost?.ao.samples === 8 && balancedPost.ao.resolutionScale === 0.5 && balancedPost.bloom.enabled,
+  "balanced tier did not cap authored post cost");
+assert(cinematicPost?.ao.samples === 12 && cinematicPost.ao.resolutionScale === 0.75,
+  "cinematic tier increased authored post cost instead of preserving intent");
+assert(authoredPost.ao.samples === 12 && authoredPost.ao.resolutionScale === 0.75,
+  "post quality derivation mutated authored intent");
 
 rejects(() => resolveRenderQuality("ultra" as never, 1), /tier/, "unknown tier was accepted");
 for (const dpr of [0, Number.NaN, Number.POSITIVE_INFINITY, 17]) {

@@ -21,6 +21,7 @@ interface LightLike {
   castShadow?: boolean;
   shadow?: { camera: { near: number; far: number } };
   target?: { position: { x: number; y: number; z: number } };
+  dispose?(): void;
 }
 
 const sceneChildren: unknown[] = [];
@@ -135,18 +136,25 @@ if (authoredStillPresent === undefined) throw new Error("setLighting clobbered a
 
 // Calling setLighting again REPLACES its own pair (pre-existing behavior) without
 // touching the addLight-authored lights.
+let baselineDisposals = 0;
+ambient.dispose = () => { baselineDisposals++; };
+setLightingDirectional.dispose = () => { baselineDisposals++; };
 ok(await registry.invoke("three.setLighting", { ambientIntensity: 0.5 }, base));
 if (sceneChildren.length !== afterSetLighting) throw new Error("setLighting replace changed total light count");
+if (baselineDisposals !== 2) throw new Error(`setLighting replacement disposed ${baselineDisposals}/2 prior lights`);
 const ambient2 = sceneChildren.find((c) => (c as LightLike).isAmbientLight === true) as LightLike | undefined;
 if (ambient2?.intensity !== 0.5) throw new Error("setLighting replace did not apply new ambientIntensity");
 
 // ---- removeLight ------------------------------------------------------------
 const countBeforeRemove = sceneChildren.length;
 const pointLightObj = lightOf(pointId);
+let pointDisposals = 0;
+pointLightObj.dispose = () => { pointDisposals++; };
 const removed = ok(await registry.invoke("three.removeLight", { id: pointId }, base));
 if (field(removed, "ok") !== true) throw new Error("removeLight reported failure");
 if (sceneChildren.length !== countBeforeRemove - 1) throw new Error("removeLight did not remove exactly one light");
 if (sceneChildren.includes(pointLightObj)) throw new Error("removeLight left the point light in the scene");
+if (pointDisposals !== 1) throw new Error(`removeLight disposed the point light ${pointDisposals} times`);
 if (!sceneChildren.includes(lightOf(dirId)) || !sceneChildren.includes(lightOf(spotId))) {
   throw new Error("removeLight disturbed an unrelated light");
 }
@@ -155,4 +163,17 @@ if (!sceneChildren.includes(lightOf(dirId)) || !sceneChildren.includes(lightOf(s
 const removedAgain = await registry.invoke("three.removeLight", { id: pointId }, base);
 if (field(ok(removedAgain), "ok") !== false) throw new Error("removeLight should report ok:false for an unknown id");
 
-ops.op_log(`P59 OK: multi-light — directional/point/spot via three.addLight + three.removeLight; three.setLighting unchanged`);
+// BrowserRenderHost retains the THREE.Scene, but a new WorldContext must still start a
+// deterministic light namespace and must not retain the prior world's light registry.
+sceneChildren.length = 0;
+byId.clear();
+const nextWorld = createHeadlessContext({ scene, session: "ses_p59_next", agentId: "agt_builder" });
+const nextResult = ok(await nextWorld.registry.invoke("three.addLight", { kind: "point" }, nextWorld.base));
+const nextId = field(nextResult, "id");
+if (nextId !== "light_0") throw new Error(`new world light namespace started at ${String(nextId)}, expected light_0`);
+const nextRemoved = ok(await nextWorld.registry.invoke("three.removeLight", { id: "light_0" }, nextWorld.base));
+if (field(nextRemoved, "ok") !== true || sceneChildren.length !== 0) {
+  throw new Error("new world could not remove its own light_0 from the retained scene");
+}
+
+ops.op_log(`P59 OK: multi-light lifecycle, deterministic per-world ids, replacement disposal, and retained-scene isolation`);

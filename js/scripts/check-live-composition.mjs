@@ -25,6 +25,9 @@ function expect(cond, label) {
 }
 
 const entry = read("browser-entry.ts");
+const runLiveStart = entry.indexOf("export async function runLive");
+const runLiveEnd = entry.indexOf("// ---- Auto-bootstrap", runLiveStart);
+const runLiveSource = runLiveStart >= 0 && runLiveEnd > runLiveStart ? entry.slice(runLiveStart, runLiveEnd) : "";
 const live = read("browser/live-runtime.ts");
 const workerEntry = read("browser/sim-worker-entry.ts");
 
@@ -61,13 +64,22 @@ expect(/interp\.push\(\s*ring\.freeze\(/.test(entry), "M4: freezes each consumed
 expect(/startAccumulatorLoop\(/.test(entry), "reuses the host.ts accumulator rAF loop");
 expect(/Atomics\.load\(statusView/.test(entry), "reads the worker's tick via Atomics on the status SAB");
 
-// ── renderSyncSystem-style scene drive + real renderer (Mode-A buildRenderTarget). ──
+// ── renderSyncSystem-style scene drive + persistent renderer-host ownership. ──
 // runLive drives the scene via `renderSyncSystem(ecs, suppressedEids)` — the second arg is the
 // entity-residency streaming set (detach-but-retain), added after this check was first written.
 // Match `ecs` followed by a comma OR close-paren so the check verifies the transform drive is
 // present without being brittle to that argument (the original `ecs\)` regex predated it).
 expect(/renderSyncSystem\(ecs[,)]/.test(entry), "drives the scene transforms (renderSyncSystem)");
-expect(/buildRenderTarget\(/.test(entry), "builds the real WebGPU renderer/scene/camera (buildRenderTarget reuse)");
+expect(/createBrowserRenderHost/.test(runLiveSource), "creates a renderer host only when the caller did not supply one");
+expect(/renderHost\.acquireWorld\(/.test(runLiveSource), "acquires one exclusive world render session");
+expect(/renderSession\.render\(/.test(runLiveSource), "routes live frames through session telemetry and ownership");
+expect(/onTelemetry:\s*opts\.onRenderTelemetry/.test(runLiveSource), "binds telemetry at the world session for external hosts");
+expect(/renderSession\.resize\(/.test(runLiveSource) && /renderSession\.setQuality\(/.test(runLiveSource), "exposes session resize and quality transitions");
+expect(/cleanupEntityStream\?\.clear\(\)/.test(runLiveSource)
+  && /cleanupTerrainStream\?\.clear\(\)/.test(runLiveSource)
+  && /cleanupRenderSession\?\.dispose\(\)/.test(runLiveSource), "unified teardown releases dormant entities, streams, and the world session");
+expect(/if \(ownsRenderHost\).*cleanupRenderHost\?\.dispose\(\)/.test(runLiveSource), "internally-owned renderer hosts are always released");
+expect(!/buildRenderTarget\(/.test(runLiveSource), "runLive does not allocate through the Mode-A one-shot render target");
 
 // ── Graceful degradation (no crash when SAB/WebGPU absent). ──
 expect(/crossOriginIsolatedAvailable\(\)/.test(entry), "gates on cross-origin isolation (SAB precondition)");

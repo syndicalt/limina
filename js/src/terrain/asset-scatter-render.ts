@@ -16,6 +16,12 @@ import type { SceneObject } from "../engine.ts";
 import type { AssetInstance } from "./asset-scatter.ts";
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const disposedScatterResources = new WeakSet<object>();
+
+function isHostLifetime(resource: unknown): boolean {
+  return !!resource && typeof resource === "object"
+    && (resource as { userData?: { liminaLifetime?: unknown } }).userData?.liminaLifetime === "host";
+}
 
 /**
  * Build the InstancedMesh(es) that render `instances` of ONE asset, given its loaded
@@ -184,12 +190,17 @@ export function buildAssetInstancedMeshes(
   return meshes;
 }
 
-/** Dispose an asset InstancedMesh's GPU resources after it's removed from the scene.
- *  asset.scatter parses a fresh glTF root per mount, so the instanced mesh owns the
- *  source geometry/material references for that mount and must release them too. */
+/** Dispose world-owned scatter resources. Cache-owned geometry/textures survive until host disposal. */
 export function disposeAssetInstancedMesh(mesh: THREE.InstancedMesh): void {
   (mesh as unknown as { dispose?: () => void }).dispose?.();
-  mesh.geometry.dispose();
+  if (!isHostLifetime(mesh.geometry) && !disposedScatterResources.has(mesh.geometry)) {
+    disposedScatterResources.add(mesh.geometry);
+    mesh.geometry.dispose();
+  }
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const material of new Set(materials)) material.dispose();
+  for (const material of new Set(materials)) {
+    if (isHostLifetime(material) || disposedScatterResources.has(material)) continue;
+    disposedScatterResources.add(material);
+    material.dispose();
+  }
 }

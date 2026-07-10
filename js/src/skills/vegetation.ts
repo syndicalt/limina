@@ -262,7 +262,7 @@ export function registerVegetationSkills(
           idx++;
           ctx.emit("vegetation.mounting", { archetype: id, index: idx, total: totalArchetypes, instances: list.length });
           try {
-            const root = await parseGltfScene(id, assets.resolve(id).bytes);
+            const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
             // Chunk this archetype's instances into 96 m cells — a forest can span an entire terrain
             // layer/map, and without chunking one whole-scatter bounding sphere would (almost) always
             // intersect the frustum, defeating culling even once the sphere itself is correct (see

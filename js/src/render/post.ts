@@ -26,6 +26,7 @@
 // uses the bundled TSL `saturation`/`luminance` colour-adjustment helpers.
 
 import * as THREE from "../../build/three.bundle.mjs";
+import type { RenderPostQuality } from "./quality.ts";
 
 // The fluent TSL node API is dynamic (every op returns a chainable node); typed
 // loosely, validated by the live WebGPU shader compile (windowed UAT). Same seam
@@ -188,6 +189,26 @@ export function resolvePostPreset(override?: DeepPartial<PostPreset>): PostPrese
     godrays: { ...d.godrays, ...(override?.godrays ?? {}) },
     dof: { ...d.dof, ...(override?.dof ?? {}) },
     outline: { ...d.outline, ...(override?.outline ?? {}) },
+  };
+}
+
+/** Derive execution cost from authored post intent without mutating that intent. */
+export function constrainPostPreset(
+  authored: PostPreset,
+  quality: Readonly<RenderPostQuality>,
+): PostPreset | undefined {
+  if (!quality.enabled) return undefined;
+  return {
+    ao: {
+      ...authored.ao,
+      samples: Math.min(authored.ao.samples, quality.aoSamples),
+      resolutionScale: Math.min(authored.ao.resolutionScale, quality.aoResolutionScale),
+    },
+    bloom: { ...authored.bloom, enabled: authored.bloom.enabled && quality.bloom },
+    grade: { ...authored.grade },
+    godrays: { ...authored.godrays },
+    dof: { ...authored.dof },
+    outline: { ...authored.outline },
   };
 }
 

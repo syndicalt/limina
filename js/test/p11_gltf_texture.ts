@@ -32,6 +32,17 @@ interface MapImage { data?: unknown; width?: unknown; height?: unknown }
 interface TexLike { image?: MapImage; isDataTexture?: unknown }
 interface MatLike { map?: TexLike | null }
 
+function firstMesh(root: SceneObject): Record<string, unknown> {
+  let found: Record<string, unknown> | undefined;
+  const visit = (node: unknown): void => {
+    if (found === undefined && isRecord(node) && node.isMesh === true) found = node;
+  };
+  if (typeof root.traverse === "function") root.traverse(visit);
+  else visit(root);
+  assert(found !== undefined, "fixture has no mesh");
+  return found;
+}
+
 function collectBaseColorMaps(root: SceneObject): TexLike[] {
   const maps: TexLike[] = [];
   const visit = (node: unknown): void => {
@@ -70,6 +81,18 @@ assert(map.isDataTexture === true, "textured fixture was not re-homed to the Dat
 let nonZero = false;
 for (let i = 0; i < data.length; i++) { if (data[i] !== 0) { nonZero = true; break; } }
 assert(nonZero, "textured fixture decoded texture pixels are all zero (decode produced an empty image)");
+
+const palmRoot2 = await parseGltfScene(palmAsset, palm.bytes);
+const mesh1 = firstMesh(palmRoot);
+const mesh2 = firstMesh(palmRoot2);
+assert(mesh1.geometry === mesh2.geometry, "cached GLTF clones stopped sharing immutable geometry");
+assert(mesh1.material !== mesh2.material, "cached GLTF clones share mutable material state");
+const material1 = mesh1.material as { color?: { set(value: number): void; getHex(): number }; map?: unknown };
+const material2 = mesh2.material as { color?: { getHex(): number }; map?: unknown };
+const color2 = material2.color?.getHex();
+material1.color?.set(0xff00ff);
+assert(material2.color?.getHex() === color2, "material mutation on one GLTF placement contaminated another clone");
+assert(material1.map === material2.map, "cached GLTF clones stopped sharing immutable decoded textures");
 
 // --- untextured fixture: factor/vertex-color assets parse clean with 0 maps ----------
 for (const id of ["fixtures/mesh.glb"]) {

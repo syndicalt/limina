@@ -8,7 +8,8 @@ import type { EntityOrigin, LoadedResourceMetadata, MaterialLike, SceneObject, S
 import type { AssetRegistry } from "../asset-registry.ts";
 import { createMaterial, getMaterialParams, isMaterialName } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
-import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import { sha256 } from "../world/sha256.mjs";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
@@ -133,6 +134,7 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
       if (metalness !== undefined) material.metalness = metalness;
     };
 
+    const replacedMaterials = new Set<unknown>();
     const visit = (object: SceneObject): void => {
       if (input.castShadow !== undefined) object.castShadow = input.castShadow;
       if (input.receiveShadow !== undefined) object.receiveShadow = input.receiveShadow;
@@ -142,7 +144,16 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
         if (color !== undefined) next.color.set(color);
         if (roughness !== undefined) next.roughness = roughness;
         if (metalness !== undefined) next.metalness = metalness;
-        (object as unknown as { material: unknown }).material = next;
+        const target = object as unknown as { material: unknown };
+        const previous = target.material;
+        target.material = next;
+        for (const material of Array.isArray(previous) ? previous : [previous]) {
+          if (material === null || typeof material !== "object" || replacedMaterials.has(material)) continue;
+          replacedMaterials.add(material);
+          if ((material as { userData?: { liminaLifetime?: unknown } }).userData?.liminaLifetime !== "host") {
+            (material as { dispose?(): void }).dispose?.();
+          }
+        }
       } else if (hasMaterialChange && object.material !== undefined) {
         const material = object.material;
         if (Array.isArray(material)) {
@@ -166,8 +177,8 @@ function makeSetMaterial(materials?: MaterialRegistry): SkillDefinition<z.infer<
  };
 }
 
-// Limina-managed lights per scene, so repeated setLighting calls replace them.
-const sceneLights = new Map<SceneLike, { ambient: unknown; directional: unknown }>();
+// Limina-managed lights belong to one logical world, not to the reusable browser Scene object.
+const sceneLights = new WeakMap<WorldContext, { ambient: unknown; directional: unknown }>();
 
 const setLightingInput = z.object({
   ambientColor: z.number().int().min(0).max(0xffffff).default(0x404060),
@@ -195,10 +206,12 @@ const setLighting: SkillDefinition<z.infer<typeof setLightingInput>, { ok: boole
   output: z.object({ ok: z.boolean() }),
   handler: (input, ctx) => {
     const scene = ctx.world.scene;
-    const prev = sceneLights.get(scene);
+    const prev = sceneLights.get(ctx.world);
     if (prev !== undefined) {
       scene.remove(prev.ambient);
       scene.remove(prev.directional);
+      (prev.ambient as { dispose?(): void }).dispose?.();
+      (prev.directional as { dispose?(): void }).dispose?.();
     }
     const ambient = new THREE.AmbientLight(input.ambientColor, input.ambientIntensity);
     const directional = new THREE.DirectionalLight(input.directionalColor, input.directionalIntensity);
@@ -219,18 +232,16 @@ const setLighting: SkillDefinition<z.infer<typeof setLightingInput>, { ok: boole
     }
     scene.add(ambient);
     scene.add(directional);
-    sceneLights.set(scene, { ambient, directional });
+    sceneLights.set(ctx.world, { ambient, directional });
     ctx.emit("three.lighting.updated", { castShadow: input.castShadow });
     return { ok: true };
   },
 };
 
-// Lights authored one-at-a-time via three.addLight, keyed by an opaque id so
-// three.removeLight can target exactly one without disturbing the rest (or the
-// single ambient+directional pair setLighting owns above). Per-scene, mirroring
-// sceneLights: a scene torn down/rebuilt starts with a fresh light set.
-const addedLights = new Map<SceneLike, Map<string, unknown>>();
-let lightSeq = 0;
+// Lights authored one-at-a-time via three.addLight. The namespace resets with each
+// logical world even when BrowserRenderHost retains the same Scene across reboots.
+interface AddedLightState { nextId: number; lights: Map<string, unknown> }
+const addedLights = new WeakMap<WorldContext, AddedLightState>();
 
 const LIGHT_KINDS = ["directional", "point", "spot"] as const;
 
@@ -322,13 +333,13 @@ const addLight: SkillDefinition<z.infer<typeof addLightInput>, { ok: boolean; id
       cam.updateProjectionMatrix();
     }
     scene.add(light);
-    const id = `light_${lightSeq++}`;
-    let perScene = addedLights.get(scene);
-    if (perScene === undefined) {
-      perScene = new Map();
-      addedLights.set(scene, perScene);
+    let state = addedLights.get(ctx.world);
+    if (state === undefined) {
+      state = { nextId: 0, lights: new Map() };
+      addedLights.set(ctx.world, state);
     }
-    perScene.set(id, light);
+    const id = `light_${state.nextId++}`;
+    state.lights.set(id, light);
     ctx.emit("three.light.added", { id, kind: input.kind });
     return { ok: true, id };
   },
@@ -345,12 +356,13 @@ const removeLight: SkillDefinition<z.infer<typeof removeLightInput>, { ok: boole
   output: z.object({ ok: z.boolean() }),
   handler: (input, ctx) => {
     const scene = ctx.world.scene;
-    const perScene = addedLights.get(scene);
-    const light = perScene?.get(input.id) as { target?: unknown } | undefined;
+    const state = addedLights.get(ctx.world);
+    const light = state?.lights.get(input.id) as { target?: unknown; dispose?(): void } | undefined;
     if (light === undefined) return { ok: false };
     scene.remove(light);
     if (light.target !== undefined) scene.remove(light.target);
-    perScene!.delete(input.id);
+    light.dispose?.();
+    state!.lights.delete(input.id);
     ctx.emit("three.light.removed", { id: input.id });
     return { ok: true };
   },
@@ -503,48 +515,144 @@ export interface GltfPlacement {
   scale?: [number, number, number];
 }
 
-// A cache of PARSED glTF roots keyed by assetId. parseGltfScene stores the parsed root here as a
-// pristine TEMPLATE (never mounted) and returns a CLONE, so a repeat parse is a synchronous clone
-// instead of an async GLTFLoader.parse. This is load-bearing for the live viewport, NOT just a perf
-// win: GLTFLoader.parse runs createImageBitmap (a macrotask), and on the WebGPURenderer WebGL2 backend
-// a macrotask firing around a render permanently corrupts the render (invisible mesh). Pre-warming
-// this cache before renderer.init() (prewarmGltfScene) means every mid-session mount is a clone —
-// no macrotask — so the mesh renders. Same assetId => same content-addressed bytes => equivalent
-// clone, so determinism/replay are unaffected (a fresh process starts with an empty cache).
-const gltfRootCache = new Map<string, SceneObject>();
+export interface GltfSceneCacheOptions {
+  maxEntries?: number;
+  maxSourceBytes?: number;
+}
+
+export interface GltfSceneCacheStats {
+  entries: number;
+  sourceBytes: number;
+  inFlight: number;
+  parses: number;
+  evictions: number;
+}
+
+interface GltfCacheEntry {
+  readonly key: string;
+  readonly sourceBytes: number;
+  readonly template: SceneObject;
+}
+
+export class GltfSceneParseError extends Error {
+  readonly assetId: string;
+
+  constructor(assetId: string, cause: unknown) {
+    super(`failed to parse glTF '${assetId}': ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "GltfSceneParseError";
+    this.assetId = assetId;
+  }
+}
+
+export class GltfSceneCacheMissError extends Error {
+  readonly assetId: string;
+
+  constructor(assetId: string) {
+    super(`glTF cache miss for '${assetId}' while a world session is active; prewarm it before acquireWorld()`);
+    this.name = "GltfSceneCacheMissError";
+    this.assetId = assetId;
+  }
+}
+
+const DEFAULT_GLTF_CACHE_ENTRIES = 256;
+const DEFAULT_GLTF_CACHE_SOURCE_BYTES = 512 * 1024 * 1024;
+
+function positiveSafeInteger(value: number | undefined, fallback: number, label: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < 1) throw new RangeError(`${label} must be a positive safe integer`);
+  return resolved;
+}
+
+/** The loader's interpretation depends on both the bytes and the relative-resource base. */
+export function gltfSceneContentKey(assetId: string, bytes: Uint8Array): string {
+  if (typeof assetId !== "string" || assetId.length === 0) throw new TypeError("glTF asset id must be a non-empty string");
+  if (!(bytes instanceof Uint8Array)) throw new TypeError("glTF source must be a Uint8Array");
+  const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
+  const format = assetId.toLowerCase().endsWith(".gltf") ? "gltf-json" : "glb";
+  const parseContext = `limina-gltf-loader-v1\u0000rgba-rehome-v1\u0000${format}\u0000${base}`;
+  return `sha256:${sha256(bytes)}:${sha256(parseContext)}`;
+}
+
+function markGltfHostResources(root: SceneObject): void {
+  const mark = (resource: unknown): void => {
+    if (!isRecord(resource)) return;
+    const userData = isRecord(resource.userData) ? resource.userData : undefined;
+    if (userData !== undefined) userData.liminaLifetime = "host";
+  };
+  const visit = (object: unknown): void => {
+    if (!isRecord(object)) return;
+    mark(object.geometry);
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!isRecord(material)) continue;
+      mark(material);
+      for (const value of Object.values(material)) if (isRecord(value) && value.isTexture === true) mark(value);
+    }
+  };
+  const candidate = root as unknown as { traverse?: (visitor: (object: unknown) => void) => void };
+  if (typeof candidate.traverse === "function") candidate.traverse(visit);
+  else visit(root);
+}
+
+function disposeGltfTemplate(root: SceneObject, disposedResources: WeakSet<object>): unknown[] {
+  const geometries = new Set<Record<string, unknown>>();
+  const materials = new Set<Record<string, unknown>>();
+  const textures = new Set<Record<string, unknown>>();
+  const visit = (object: unknown): void => {
+    if (!isRecord(object)) return;
+    if (isRecord(object.geometry)) geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      if (!isRecord(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) {
+        if (isRecord(value) && value.isTexture === true) textures.add(value);
+      }
+    }
+  };
+  const candidate = root as unknown as { traverse?: (visitor: (object: unknown) => void) => void };
+  if (typeof candidate.traverse === "function") candidate.traverse(visit);
+  else visit(root);
+  const errors: unknown[] = [];
+  const dispose = (resource: Record<string, unknown>): void => {
+    if (disposedResources.has(resource)) return;
+    disposedResources.add(resource);
+    if (typeof resource.dispose === "function") {
+      try { resource.dispose(); } catch (error) { errors.push(error); }
+    }
+  };
+  for (const texture of textures) dispose(texture);
+  for (const material of materials) dispose(material);
+  for (const geometry of geometries) dispose(geometry);
+  return errors;
+}
 
 function cloneGltfRoot(root: SceneObject): SceneObject {
   const r = root as unknown as { clone?: (recursive?: boolean) => SceneObject; animations?: unknown[] };
   if (typeof r.clone !== "function") return root;
   const copy = r.clone(true);
-  // clone(true) copies the hierarchy + transforms and SHARES geometry/material (cheap); carry the
-  // retained animation clips across too.
+  // Geometry and decoded textures are immutable cache assets; materials are mutable
+  // placement state and must never be shared across clones or with the template.
+  const cloneMaterial = (material: unknown): unknown => {
+    if (!isRecord(material) || typeof material.clone !== "function") return material;
+    const cloned = material.clone() as Record<string, unknown>;
+    if (isRecord(cloned.userData)) delete cloned.userData.liminaLifetime;
+    return cloned;
+  };
+  const visit = (object: unknown): void => {
+    if (!isRecord(object) || object.material === undefined) return;
+    object.material = Array.isArray(object.material)
+      ? object.material.map(cloneMaterial)
+      : cloneMaterial(object.material);
+  };
+  const candidate = copy as unknown as { traverse?: (visitor: (object: unknown) => void) => void };
+  if (typeof candidate.traverse === "function") candidate.traverse(visit);
+  else visit(copy);
+  // Carry the retained animation clips across too.
   (copy as unknown as { animations?: unknown[] }).animations = r.animations ?? [];
   return copy;
 }
 
-/** Ensure `assetId` is parsed + cached WITHOUT mounting it — call this before renderer.init() so a
- *  later parseGltfScene is a synchronous clone (no macrotask) and the mesh renders on the WebGL2
- *  backend. Idempotent; a parse failure is swallowed (the later mount surfaces it). */
-export async function prewarmGltfScene(assetId: string, bytes: Uint8Array): Promise<void> {
-  if (gltfRootCache.has(assetId)) return;
-  try { await parseGltfScene(assetId, bytes); } catch { /* the real mount will report the failure */ }
-}
-
-/** Whether `assetId`'s root is already parsed + cached (a later parseGltfScene will be a clone). Lets
- *  a caller skip re-fetching bytes it doesn't need — the cache persists across viewport reboots. */
-export function hasGltfScene(assetId: string): boolean {
-  return gltfRootCache.has(assetId);
-}
-
-/** Parse `bytes` as the glTF named `assetId` and return its scene root with textures
- *  re-homed for the WebGPU backend (see rehomeTextureToData). THE ONE place the
- *  GLTFLoader + the texture-rehome live: loadGltfIntoScene spawns an ENTITY from it,
- *  while asset.scatter INSTANCES its meshes — neither duplicates the loader setup.
- *  A cache HIT returns a synchronous clone (see gltfRootCache) — no GLTFLoader.parse. */
-export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
-  const cached = gltfRootCache.get(assetId);
-  if (cached !== undefined) return cloneGltfRoot(cached);
+async function parseGltfTemplate(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
   const manager = new THREE.LoadingManager();
   const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
   manager.setURLModifier((url: string) => {
@@ -552,26 +660,190 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
     return `limina-asset://${base}${url}`;
   });
   const loader = new THREE.GLTFLoader(manager);
-  const payload: string | ArrayBuffer = assetId.endsWith(".gltf")
+  const payload: string | ArrayBuffer = assetId.toLowerCase().endsWith(".gltf")
     ? new TextDecoder().decode(bytes)
     : bytes.slice().buffer as ArrayBuffer;
-  const gltf = await new Promise<{ scene: SceneObject; animations?: unknown[] }>((resolve, reject) => {
-    loader.parse(
-      payload,
-      `limina-asset://${base}`,
-      (g: { scene: SceneObject; animations?: unknown[] }) => resolve(g),
-      (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
-    );
-  });
+  let gltf: { scene: SceneObject; animations?: unknown[] };
+  try {
+    gltf = await new Promise<{ scene: SceneObject; animations?: unknown[] }>((resolve, reject) => {
+      loader.parse(
+        payload,
+        `limina-asset://${base}`,
+        (loaded: { scene: SceneObject; animations?: unknown[] }) => resolve(loaded),
+        (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
+  } catch (error) {
+    throw new GltfSceneParseError(assetId, error);
+  }
   const root = gltf.scene;
   prepareGltfTextures(root);
-  // Retain the parsed animation clips on the root: three's GLTFLoader hangs them off
-  // gltf.animations, NOT gltf.scene, so without this a rigged character's clips
-  // (idle/walk/run) are silently dropped and animation.play can't find them.
   (root as unknown as { animations?: unknown[] }).animations = gltf.animations ?? [];
-  // Cache the pristine template + hand back a clone (the template is never mounted/mutated).
-  gltfRootCache.set(assetId, root);
-  return cloneGltfRoot(root);
+  markGltfHostResources(root);
+  return root;
+}
+
+/**
+ * Owns immutable parsed templates for one renderer host. Entries are content addressed; asset ids
+ * are only aliases to the latest successfully parsed content. Cache fills and eviction are forbidden
+ * while a world is active, making render-session reads deterministic and synchronous.
+ */
+export class GltfSceneCache {
+  readonly #maxEntries: number;
+  readonly #maxSourceBytes: number;
+  readonly #entries = new Map<string, GltfCacheEntry>();
+  readonly #aliases = new Map<string, string>();
+  readonly #aliasRequests = new Map<string, number>();
+  readonly #inFlight = new Map<string, Promise<GltfCacheEntry>>();
+  readonly #disposedResources = new WeakSet<object>();
+  #sourceBytes = 0;
+  #activeWorlds = 0;
+  #requestSequence = 0;
+  #parses = 0;
+  #evictions = 0;
+  #disposed = false;
+
+  constructor(options: GltfSceneCacheOptions = {}) {
+    this.#maxEntries = positiveSafeInteger(options.maxEntries, DEFAULT_GLTF_CACHE_ENTRIES, "glTF cache maxEntries");
+    this.#maxSourceBytes = positiveSafeInteger(options.maxSourceBytes, DEFAULT_GLTF_CACHE_SOURCE_BYTES, "glTF cache maxSourceBytes");
+  }
+
+  beginWorld(): void {
+    if (this.#disposed) throw new Error("glTF scene cache is disposed");
+    if (this.#inFlight.size > 0) throw new Error("cannot begin a world while glTF cache prewarming is in flight");
+    if (this.#activeWorlds !== 0) throw new Error("glTF scene cache already has an active world");
+    this.#activeWorlds = 1;
+  }
+
+  endWorld(): void {
+    if (this.#activeWorlds < 1) throw new Error("glTF scene cache has no active world");
+    this.#activeWorlds -= 1;
+  }
+
+  has(assetId: string, bytes?: Uint8Array): boolean {
+    if (this.#disposed) return false;
+    const aliasedKey = this.#aliases.get(assetId);
+    if (aliasedKey === undefined) return false;
+    return bytes === undefined
+      ? this.#entries.has(aliasedKey)
+      : aliasedKey === gltfSceneContentKey(assetId, bytes) && this.#entries.has(aliasedKey);
+  }
+
+  stats(): Readonly<GltfSceneCacheStats> {
+    return Object.freeze({
+      entries: this.#entries.size,
+      sourceBytes: this.#sourceBytes,
+      inFlight: this.#inFlight.size,
+      parses: this.#parses,
+      evictions: this.#evictions,
+    });
+  }
+
+  async prewarm(assetId: string, bytes: Uint8Array): Promise<void> {
+    await this.#template(assetId, bytes);
+  }
+
+  async parse(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
+    return cloneGltfRoot(await this.#template(assetId, bytes));
+  }
+
+  async dispose(): Promise<void> {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    await Promise.allSettled(this.#inFlight.values());
+    const errors: unknown[] = [];
+    for (const entry of this.#entries.values()) errors.push(...disposeGltfTemplate(entry.template, this.#disposedResources));
+    this.#entries.clear();
+    this.#aliases.clear();
+    this.#aliasRequests.clear();
+    this.#sourceBytes = 0;
+    if (errors.length > 0) throw new AggregateError(errors, `glTF cache disposal failed for ${errors.length} resource(s)`);
+  }
+
+  async #template(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
+    if (this.#disposed) throw new Error("glTF scene cache is disposed");
+    const key = gltfSceneContentKey(assetId, bytes);
+    const cached = this.#entries.get(key);
+    if (cached !== undefined) {
+      if (this.#activeWorlds === 0) {
+        this.#entries.delete(key);
+        this.#entries.set(key, cached);
+        this.#aliases.set(assetId, key);
+      }
+      return cached.template;
+    }
+    const pending = this.#inFlight.get(key);
+    if (pending !== undefined) {
+      const request = ++this.#requestSequence;
+      this.#aliasRequests.set(assetId, request);
+      const entry = await pending;
+      if (this.#aliasRequests.get(assetId) === request) this.#aliases.set(assetId, key);
+      return entry.template;
+    }
+    if (this.#activeWorlds > 0) throw new GltfSceneCacheMissError(assetId);
+    if (bytes.byteLength > this.#maxSourceBytes) {
+      throw new RangeError(`glTF source '${assetId}' is ${bytes.byteLength} bytes, exceeding cache budget ${this.#maxSourceBytes}`);
+    }
+    const request = ++this.#requestSequence;
+    this.#aliasRequests.set(assetId, request);
+    this.#parses += 1;
+    const loading = (async (): Promise<GltfCacheEntry> => {
+      const template = await parseGltfTemplate(assetId, bytes);
+      const entry: GltfCacheEntry = { key, sourceBytes: bytes.byteLength, template };
+      if (this.#disposed) {
+        const errors = disposeGltfTemplate(template, this.#disposedResources);
+        throw new AggregateError(
+          [new Error("glTF scene cache was disposed during parse"), ...errors],
+          "glTF scene cache was disposed during parse",
+        );
+      }
+      const evictionErrors: unknown[] = [];
+      while (this.#entries.size >= this.#maxEntries || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes) {
+        const oldest = this.#entries.entries().next().value as [string, GltfCacheEntry] | undefined;
+        if (oldest === undefined) break;
+        this.#entries.delete(oldest[0]);
+        this.#sourceBytes -= oldest[1].sourceBytes;
+        for (const [alias, aliasKey] of this.#aliases) if (aliasKey === oldest[0]) this.#aliases.delete(alias);
+        evictionErrors.push(...disposeGltfTemplate(oldest[1].template, this.#disposedResources));
+        this.#evictions += 1;
+      }
+      this.#entries.set(key, entry);
+      this.#sourceBytes += entry.sourceBytes;
+      if (this.#aliasRequests.get(assetId) === request) this.#aliases.set(assetId, key);
+      if (evictionErrors.length > 0) {
+        console.warn(new AggregateError(evictionErrors, `glTF cache eviction failed for ${evictionErrors.length} resource(s)`));
+      }
+      return entry;
+    })();
+    this.#inFlight.set(key, loading);
+    try { return (await loading).template; }
+    finally { if (this.#inFlight.get(key) === loading) this.#inFlight.delete(key); }
+  }
+}
+
+/** Standalone/headless compatibility cache. Browser worlds always use their render host's cache. */
+export const defaultGltfSceneCache = new GltfSceneCache();
+
+/** Ensure `assetId` is parsed + cached WITHOUT mounting it — call this before renderer.init() so a
+ *  later parseGltfScene is a synchronous clone (no macrotask) and the mesh renders on the WebGL2
+ *  backend. Idempotent; parse and resource-limit failures are reported to the caller. */
+export async function prewarmGltfScene(assetId: string, bytes: Uint8Array, cache: GltfSceneCache = defaultGltfSceneCache): Promise<void> {
+  await cache.prewarm(assetId, bytes);
+}
+
+/** Whether `assetId`'s root is already parsed + cached (a later parseGltfScene will be a clone). Lets
+ *  a caller skip re-fetching bytes it doesn't need — the cache persists across viewport reboots. */
+export function hasGltfScene(assetId: string, bytes?: Uint8Array, cache: GltfSceneCache = defaultGltfSceneCache): boolean {
+  return cache.has(assetId, bytes);
+}
+
+/** Parse `bytes` as the glTF named `assetId` and return its scene root with textures
+ *  re-homed for the WebGPU backend (see rehomeTextureToData). THE ONE place the
+ *  GLTFLoader + the texture-rehome live: loadGltfIntoScene spawns an ENTITY from it,
+ *  while asset.scatter INSTANCES its meshes — neither duplicates the loader setup.
+ *  A cache HIT returns a synchronous clone (see gltfRootCache) — no GLTFLoader.parse. */
+export async function parseGltfScene(assetId: string, bytes: Uint8Array, cache: GltfSceneCache = defaultGltfSceneCache): Promise<SceneObject> {
+  return cache.parse(assetId, bytes);
 }
 
 /** THE shared asset->entity pipeline. Parses `bytes` as the glTF named `assetId`
@@ -579,7 +851,7 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array): Promis
  *  records the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
  *  asset.place call this — no duplicated loader/rehome code. */
 export async function loadGltfIntoScene(
-  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
+  ctx: { world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
   assetId: string,
   bytes: Uint8Array,
   hash: string,
@@ -595,7 +867,7 @@ export async function loadGltfIntoScene(
   let root: SceneObject | undefined;
   if (!skipMesh) {
     try {
-      root = await parseGltfScene(assetId, bytes);
+      root = await parseGltfScene(assetId, bytes, ctx.world.gltfCache);
       // Placed assets cast + receive shadows. GLTF meshes default castShadow=false, so a
       // placed building/prop would otherwise throw NO shadow (unlike vegetation.scatter,
       // which sets it) — leaving buildings looking ungrounded next to shadow-casting trees.
@@ -604,7 +876,8 @@ export async function loadGltfIntoScene(
         if (m.isMesh === true) { m.castShadow = true; m.receiveShadow = true; }
       });
       ctx.world.scene.add(root);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof GltfSceneParseError)) throw error;
       // A missing/corrupt asset (e.g. empty bytes because the /assets route isn't served) must NOT
       // fail the whole apply loop and take down the viewport. Spawn the entity WITHOUT a mesh — it's
       // invisible until the asset is available, but the scene still loads.
@@ -640,7 +913,7 @@ const INERT_GLTF_TRANSFORM = { position: { set() {} }, quaternion: { set() {} },
  *  the collider, authored from level-0 bytes by asset.placeLod, is what the worker's physics needs).
  *  Returns the LOD object so the caller can register it for the per-frame `lod.update(camera)` pass. */
 export async function loadLodIntoScene(
-  ctx: { world: { simWorker?: boolean; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
+  ctx: { world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
   levels: ReadonlyArray<{ assetId: string; bytes: Uint8Array; hash: string; distance: number }>,
   placement: GltfPlacement,
 ): Promise<{ entity: string; resource: LoadedResourceMetadata; lod?: SceneObject }> {
@@ -653,13 +926,14 @@ export async function loadLodIntoScene(
     const L = new (THREE as any).LOD();
     for (const lvl of levels) {
       try {
-        const mesh = await parseGltfScene(lvl.assetId, lvl.bytes);
+        const mesh = await parseGltfScene(lvl.assetId, lvl.bytes, ctx.world.gltfCache);
         (mesh as unknown as { traverse: (fn: (o: unknown) => void) => void }).traverse((o) => {
           const m = o as { isMesh?: boolean; castShadow?: boolean; receiveShadow?: boolean };
           if (m.isMesh === true) { m.castShadow = true; m.receiveShadow = true; }
         });
         L.addLevel(mesh, lvl.distance);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof GltfSceneParseError)) throw error;
         // A missing/corrupt level is dropped — the LOD still works from its remaining levels (and if
         // ALL levels fail, the entity spawns mesh-less, like loadGltfIntoScene's catch).
       }

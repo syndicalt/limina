@@ -171,9 +171,16 @@ export class ClientTerrainStream {
   clear(): void {
     if (this.cleared) return;
     this.cleared = true;
-    for (const [k, c] of this.mounted) this.unmountCb(k, c);
+    const errors: unknown[] = [];
+    for (const [k, c] of this.mounted) {
+      try { this.unmountCb(k, c); }
+      catch (error) { errors.push(error); }
+    }
     this.mounted.clear();
     this.pending.clear();
     this.external.clear();
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `failed to unmount ${errors.length} client terrain tiles during teardown`);
+    }
   }
 }

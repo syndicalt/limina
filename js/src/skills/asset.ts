@@ -482,7 +482,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         }
         const mountedMeshes: THREE.InstancedMesh[] = [];
         for (const [id, list] of byId) {
-          const root = await parseGltfScene(id, assets.resolve(id).bytes);
+          const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
           for (const mesh of buildAssetInstancedMeshes(root, list)) {
             scene.add(mesh);
             mountedMeshes.push(mesh);

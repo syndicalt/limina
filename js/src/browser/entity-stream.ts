@@ -143,6 +143,19 @@ export class EntityResidencyStream {
     return this.records.size;
   }
 
+  /** Restore every dormant object before world teardown, then release tracking. */
+  clear(): void {
+    const errors: unknown[] = [];
+    for (const [id, record] of this.records) {
+      if (!record.dormant) continue;
+      try { this.opts.rematerialize(id); }
+      catch (error) { errors.push(error); }
+    }
+    this.records.clear();
+    this.dormantN = 0;
+    if (errors.length > 0) throw new AggregateError(errors, `failed to rematerialize ${errors.length} dormant entities during teardown`);
+  }
+
   /** Advance to a new anchor WORLD position (the camera), applying the residency
    *  diff within the per-update budget. Pure math + the injected callbacks. */
   update(anchorX: number, anchorZ: number): EntityStreamUpdate {

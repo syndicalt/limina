@@ -273,6 +273,18 @@ function buildSkyEquirect(sky: SkyGradient): unknown {
   const width = 16;
   const height = 128;
   const data = new Uint8Array(width * height * 4);
+  writeSkyGradient(data, width, height, sky);
+  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function writeSkyGradient(data: Uint8Array, width: number, height: number, sky: SkyGradient): void {
   const top = [(sky.top >> 16) & 0xff, (sky.top >> 8) & 0xff, sky.top & 0xff];
   const hor = [(sky.horizon >> 16) & 0xff, (sky.horizon >> 8) & 0xff, sky.horizon & 0xff];
   const bot = [(sky.bottom >> 16) & 0xff, (sky.bottom >> 8) & 0xff, sky.bottom & 0xff];
@@ -291,14 +303,35 @@ function buildSkyEquirect(sky: SkyGradient): unknown {
       data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
     }
   }
-  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-  tex.mapping = THREE.EquirectangularReflectionMapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  return tex;
+}
+
+export interface RenderBaselineBackground {
+  readonly texture: unknown;
+  update(sky: SkyGradient): void;
+  dispose(): void;
+}
+
+/** One mutable equirectangular background per renderer host avoids unbounded
+ * Three.js conversion targets when Edit worlds are repeatedly replaced. */
+export function createRenderBaselineBackground(): RenderBaselineBackground {
+  const width = 16;
+  const height = 128;
+  const texture = buildSkyEquirect(DEFAULT_RENDER_BASELINE.sky) as THREE.DataTexture;
+  texture.userData.liminaLifetime = "host";
+  let disposed = false;
+  return {
+    texture,
+    update(sky): void {
+      if (disposed) throw new Error("render baseline background is disposed");
+      writeSkyGradient(texture.image.data as Uint8Array, width, height, sky);
+      texture.needsUpdate = true;
+    },
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      texture.dispose();
+    },
+  };
 }
 
 function rendererIsUsable(r: BaselineTarget["renderer"]): boolean {
@@ -314,6 +347,7 @@ function rendererIsUsable(r: BaselineTarget["renderer"]): boolean {
 export function applyRenderBaseline(
   target: BaselineTarget,
   override?: RenderBaselineOverride,
+  sharedBackground?: RenderBaselineBackground,
 ): AppliedRenderBaseline {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
   if (!preset.enabled) return {
@@ -382,8 +416,15 @@ export function applyRenderBaseline(
 
   // 3. Sky gradient → background + IBL environment.
   const skyTex = buildSkyEquirect(preset.sky);
+  let backgroundTex: unknown;
   if (preset.background && "background" in scene) {
-    scene.background = skyTex;
+    if (sharedBackground !== undefined) {
+      sharedBackground.update(preset.sky);
+      backgroundTex = sharedBackground.texture;
+    } else {
+      backgroundTex = skyTex;
+    }
+    scene.background = backgroundTex;
   }
 
   let environmentMode: AppliedRenderBaseline["environmentMode"] = "none";
@@ -548,7 +589,7 @@ export function applyRenderBaseline(
     cleanup("sun", () => sun.dispose());
     cleanup("environment", () => pmremTarget?.dispose?.());
     cleanup("sky", () => (skyTex as { dispose?(): void }).dispose?.());
-    if (scene.background === skyTex) scene.background = previousScene.background;
+    if (scene.background === backgroundTex) scene.background = previousScene.background;
     if (preset.environment && scene.environment === environmentTexture) {
       scene.environment = previousScene.environment;
       if ("environmentIntensity" in scene) scene.environmentIntensity = previousScene.environmentIntensity;

@@ -273,12 +273,21 @@ ok(await registry.invoke("scene.destroyEntity", { entity: doomed2 }, base));
 step(A[0], A[1]);
 assert(!stream.has(doomed2), "an out-of-band-destroyed entity must be dropped from tracking");
 
+// Whole-world teardown must re-attach every retained dormant mesh so the scene
+// resource disposer can traverse it, then release all residency bookkeeping.
+converge(B[0], B[1]);
+assert(stream.dormantCount() > 0, "clear fixture has no dormant entities");
+const trackedBeforeClear = world.entities.ids().filter((id) => stream.has(id));
+stream.clear();
+assert(stream.size() === 0 && stream.dormantCount() === 0, "clear retained residency records");
+for (const id of trackedBeforeClear) assert(inScene(id), `clear left ${id} detached from world teardown traversal`);
+
 ops.op_log(
   "[js] p_entity_stream OK — placed-entity residency:\n" +
   `  tracked:    ${N + 1} props (49-grid + behavior) · body-bound excluded · window r=${RADIUS} m +${HYSTERESIS} hysteresis\n` +
   `  walk:       A(-900,-900) → B(900,900) → A, ${STEPS} steps each way · budget ≤${BUDGET}/update (max seen ${maxOpsSeen})\n` +
-  `  window:     converged residency == distance window at A, B and A-again (resident at A: ${residentAtA}/${stream.size()})\n` +
+  `  window:     converged residency == distance window at A, B and A-again (resident at A: ${residentAtA}/${N + 1})\n` +
   `  stability:  ids/eids/mesh identities + all transform floats byte-identical across the full cycle\n` +
   `  dormant:    setMaterial+moveEntity applied while detached, intact after re-materialization\n` +
-  "  teardown:   unregister re-attaches, destroy removes — identical to the never-streamed path",
+  "  teardown:   unregister and whole-stream clear re-attach dormant meshes before scene disposal",
 );

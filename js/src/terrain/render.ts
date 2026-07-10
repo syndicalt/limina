@@ -83,6 +83,12 @@ export interface TerrainMeshOptions {
    * material to vertexColors, which works on any backend. Omit for the flat matte default.
    */
   elevationColors?: { seaLevel: number; amplitude: number; snowFrac?: number };
+  /**
+   * Optional world-scoped material owner for elevation-coloured tiles. Supplying a pool
+   * shares byte-identical materials between sibling tiles without extending their lifetime
+   * beyond the world. Callers that omit it retain ordinary per-mesh material ownership.
+   */
+  materialPool?: TerrainMaterialPool;
 }
 
 /**
@@ -187,9 +193,9 @@ export interface BakedClimate {
 }
 
 const OWNED_TEXTURES_KEY = "liminaOwnedTextures";
-// Marks a material shared across many tile meshes (the elevation-colors path): disposeTerrainMesh
-// must NOT free it when one tile streams out, or every sibling tile loses its material.
-const SHARED_MATERIAL_KEY = "liminaSharedMaterial";
+// Marks a material owned by a TerrainMaterialPool. Individual tile disposal must not free it;
+// the owning world releases it through TerrainMaterialPool.dispose().
+const POOLED_MATERIAL_KEY = "liminaTerrainMaterialPoolOwned";
 
 /** Track render-only textures captured by node graphs so mesh disposal can release them. */
 export function trackMaterialTexture(material: THREE.Material, texture: THREE.Texture): void {
@@ -511,23 +517,54 @@ export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeomet
   return geom;
 }
 
-// Cache of the SHARED elevation-path terrain material (see buildTerrainMesh). Keyed by the only
-// material-affecting opts — roughness, metalness, doubleSide — because albedo/bands/blight all live
-// in the geometry's vertex colors, so every tile with the same key wants a byte-identical material.
-// One entry per combo ⇒ ONE shader-program compile per combo instead of one per tile (the map-terrain
-// compile storm: ~4,600 tiles → thousands of identical compiles). Marked SHARED so disposeTerrainMesh
-// never frees it out from under sibling tiles still on screen.
-const sharedElevationMaterials = new Map<string, THREE.MeshStandardMaterial>();
-function sharedElevationMaterial(baseRough: number, metalness: number, doubleSide: boolean): THREE.MeshStandardMaterial {
-  const key = `${baseRough}|${metalness}|${doubleSide}`;
-  let m = sharedElevationMaterials.get(key);
-  if (m === undefined) {
-    m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: baseRough, metalness, vertexColors: true });
-    if (doubleSide) m.side = THREE.DoubleSide;
-    (m.userData as Record<string, unknown>)[SHARED_MATERIAL_KEY] = true;
-    sharedElevationMaterials.set(key, m);
+const MAX_TERRAIN_MATERIAL_POOL_ENTRIES = 32;
+
+function pooledUnitValue(value: number, name: string): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${name} must be a finite number in [0, 1]`);
   }
-  return m;
+  return Object.is(value, -0) ? 0 : value;
+}
+
+/**
+ * World-scoped owner for the byte-identical material used by elevation-coloured terrain.
+ * Keys include every material-affecting input and are exact after finite range validation.
+ * The hard entry cap prevents adversarial authored values from turning this optimization into
+ * an unbounded GPU-resource cache.
+ */
+export class TerrainMaterialPool {
+  private readonly materials = new Map<string, THREE.MeshStandardMaterial>();
+  private disposed = false;
+
+  acquire(roughness: number, metalness: number, doubleSide: boolean): THREE.MeshStandardMaterial {
+    if (this.disposed) throw new Error("TerrainMaterialPool is disposed");
+    const normalizedRoughness = pooledUnitValue(roughness, "terrain material roughness");
+    const normalizedMetalness = pooledUnitValue(metalness, "terrain material metalness");
+    const key = `${normalizedRoughness}|${normalizedMetalness}|${doubleSide ? 1 : 0}`;
+    const existing = this.materials.get(key);
+    if (existing !== undefined) return existing;
+    if (this.materials.size >= MAX_TERRAIN_MATERIAL_POOL_ENTRIES) {
+      throw new RangeError(`TerrainMaterialPool is limited to ${MAX_TERRAIN_MATERIAL_POOL_ENTRIES} exact material variants`);
+    }
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: normalizedRoughness,
+      metalness: normalizedMetalness,
+      vertexColors: true,
+    });
+    if (doubleSide) material.side = THREE.DoubleSide;
+    (material.userData as Record<string, unknown>)[POOLED_MATERIAL_KEY] = true;
+    this.materials.set(key, material);
+    return material;
+  }
+
+  /** Release every pooled material exactly once. Safe to call repeatedly. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const material of this.materials.values()) material.dispose();
+    this.materials.clear();
+  }
 }
 
 /**
@@ -541,17 +578,25 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
   const baseColor = opts.color ?? 0x4a6b3a;
   const baseRough = opts.roughness ?? 0.95;
   // The elevation-colors path writes ALL per-tile variation (elevation bands + blight drain) into
-  // the geometry's vertex colors, so its material is byte-identical across tiles → share ONE cached
-  // instance (see sharedElevationMaterial). Other paths bake per-tile data into the material and so
-  // keep their own instance. ALL branches are no-ops when absent → byte-identical to the flat default.
-  const useShared = opts.pbr === undefined && opts.palette === undefined
+  // geometry vertex colours. A caller-supplied world pool may therefore share its material between
+  // sibling tiles. Without a pool the material remains local to the mesh and is disposed normally.
+  const useElevationColors = opts.pbr === undefined && opts.palette === undefined
     && opts.shoreline === undefined && opts.elevationColors !== undefined;
   let material: THREE.MeshStandardMaterial | THREE.MeshStandardNodeMaterial;
-  if (useShared) {
-    // Sand/grass/rock/snow bands (+ blight ash) written to the `color` attribute; the shared
-    // material has vertexColors on and a white base so they show true.
+  if (useElevationColors) {
+    // Sand/grass/rock/snow bands (+ blight ash) are written to the `color` attribute. A white
+    // vertex-colour material shows them true whether it is pooled or owned by this mesh.
     applyElevationColors(geom, tile, opts.elevationColors as ElevationColorRamp);
-    material = sharedElevationMaterial(baseRough, opts.metalness ?? 0.0, opts.doubleSide === true);
+    const metalness = opts.metalness ?? 0.0;
+    const doubleSide = opts.doubleSide === true;
+    material = opts.materialPool?.acquire(baseRough, metalness, doubleSide)
+      ?? new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: baseRough,
+        metalness,
+        vertexColors: true,
+        side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+      });
   } else {
     material = new THREE.MeshStandardNodeMaterial({
       color: baseColor,
@@ -587,9 +632,8 @@ export function disposeTerrainMesh(mesh: THREE.Mesh): void {
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   for (const material of materials) {
     const userData = (material as THREE.Material | undefined)?.userData as Record<string, unknown> | undefined;
-    // Shared across every tile of its kind — freeing it here would blank all the siblings. It lives
-    // for the process.
-    if (userData?.[SHARED_MATERIAL_KEY]) continue;
+    // A world-scoped pool owns this material. Freeing it with one tile would blank its siblings.
+    if (userData?.[POOLED_MATERIAL_KEY]) continue;
     const textures = userData?.[OWNED_TEXTURES_KEY];
     if (Array.isArray(textures)) {
       for (const texture of textures) (texture as { dispose?: () => void }).dispose?.();
@@ -609,7 +653,7 @@ export interface TerrainStreamRendererOptions extends StreamFollowOptions {
   /** Resolve the tile for a coord (cache / snapshot / fake generator). */
   getTile(coord: TileCoord): TerrainTile;
   /** Mesh appearance. */
-  mesh?: TerrainMeshOptions;
+  mesh?: Omit<TerrainMeshOptions, "materialPool">;
   /** Seed for the deterministic prop scatter (Phase 9.1). Required when `props` is on. */
   seed?: number;
   /** Scatter + mount trees/rocks/grass on each tile (recomputed from the tile, render-only). Default off. */
@@ -629,13 +673,15 @@ export class TerrainStreamRenderer {
   private readonly meshes = new Map<TileKey, THREE.Mesh>();
   private readonly propsEnabled: boolean;
   private readonly seed: number;
+  private readonly materialPool = new TerrainMaterialPool();
+  private disposed = false;
   // Per-tile prop InstancedMeshes (one per present kind), mounted/disposed with the tile.
   private readonly propMeshes = new Map<TileKey, THREE.InstancedMesh[]>();
 
   constructor(private readonly scene: SceneAddRemove, opts: TerrainStreamRendererOptions) {
     this.follower = new StreamFollower(opts);
     this.getTile = opts.getTile;
-    this.meshOpts = opts.mesh ?? {};
+    this.meshOpts = { ...(opts.mesh ?? {}), materialPool: this.materialPool };
     this.propsEnabled = opts.props === true;
     this.seed = opts.seed ?? 0;
   }
@@ -647,6 +693,7 @@ export class TerrainStreamRenderer {
 
   /** Advance the anchor to a world position; mounts/unmounts terrain meshes to match. */
   update(anchorX: number, anchorZ: number): { loaded: number; unloaded: number } {
+    if (this.disposed) throw new Error("TerrainStreamRenderer is disposed");
     const diff = this.follower.update(anchorX, anchorZ);
     for (const t of diff.unload) {
       const k = tileKey(t.tx, t.tz);
@@ -683,6 +730,8 @@ export class TerrainStreamRenderer {
 
   /** Remove + dispose every mounted tile (teardown). */
   clear(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     for (const mesh of this.meshes.values()) {
       this.scene.remove(mesh);
       disposeTerrainMesh(mesh);
@@ -692,5 +741,6 @@ export class TerrainStreamRenderer {
       for (const pm of props) { this.scene.remove(pm); disposePropMesh(pm); }
     }
     this.propMeshes.clear();
+    this.materialPool.dispose();
   }
 }

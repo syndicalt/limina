@@ -22,7 +22,7 @@
 // - G: toggle the unobtrusive ground grid helper.
 // - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
 
-import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { createBrowserRenderHost, runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { sceneTransformOperation } from "./authoring-gateway.js";
 import { assetPlacement, openContentBrowser, requestCatalogRefresh } from "./content-browser.js";
 import { isAttachedToScene } from "./scene-graph.js";
@@ -59,6 +59,7 @@ function cuesEnabled() {
 }
 
 const canvas = document.getElementById("editor-viewport");
+const editRenderHost = createBrowserRenderHost({ canvas, forceWebGL: true, initialQuality: "balanced" });
 const statusEl = document.getElementById("viewport-status");
 const viewportToolsEl = document.querySelector(".viewport-tools");
 const viewportUi = {
@@ -1302,6 +1303,7 @@ async function restoreEditWorld() {
     restoreEditState(saved);
     editRuntime.setViewSuspended?.(false);
     await editRuntime.resume();
+    resizeViewport();
     state.dirty = false;
   });
   state.editRuntimeDuringPlay = undefined;
@@ -1330,7 +1332,6 @@ async function startPlay() {
       await state.editRuntimeDuringPlay?.pause?.();
       state.editRuntimeDuringPlay?.setViewSuspended?.(true);
       const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
-      canvas.width = w; canvas.height = h;
       const playCanvas = createPlayCanvas(w, h);
       const runtime = await runLive({
         canvas: playCanvas, width: w, height: h,
@@ -1453,7 +1454,6 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     restoreWireframeMaterials();
     if (state.running) { await stopRuntime(state.running); state.running = undefined; }
     const w = canvas.clientWidth || 640, h = canvas.clientHeight || 360;
-    canvas.width = w; canvas.height = h;
     const past = state.scrubLimit !== undefined;
     // Convert to AuthorCommands, then SKIP any command quarantined on a prior pass (it failed
     // authoring — replaying it would wedge every future reboot). keptIndex maps a kept command's
@@ -1465,6 +1465,8 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
       canvas, width: w, height: h,
       commands: kept,
       input: window,
+      renderHost: editRenderHost,
+      quality: "balanced",
       onStatus: setEditRuntimeStatus,
       orbit: { center: [0, 1, 0], radius: 16, height: 8 },
       orbitControls: true,
@@ -1796,11 +1798,19 @@ function resizeViewport() {
   const activeCanvas = state.playCanvas ?? canvas;
   const w = activeCanvas.clientWidth, h = activeCanvas.clientHeight;
   if (!w || !h) return;
-  activeCanvas.width = w; activeCanvas.height = h;
   const running = state.running;
-  try { running?.renderer?.setSize?.(w, h, false); } catch { /* ignore */ }
-  const cam = running?.camera;
-  if (cam) { cam.aspect = w / h; cam.updateProjectionMatrix?.(); }
+  try {
+    if (typeof running?.resize === "function") running.resize(w, h);
+    else {
+      activeCanvas.width = w;
+      activeCanvas.height = h;
+      running?.renderer?.setSize?.(w, h, false);
+    }
+  } catch { /* ignore */ }
+  if (typeof running?.resize !== "function") {
+    const cam = running?.camera;
+    if (cam) { cam.aspect = w / h; cam.updateProjectionMatrix?.(); }
+  }
 }
 let winResizeRaf = 0;
 window.addEventListener("resize", () => { cancelAnimationFrame(winResizeRaf); winResizeRaf = requestAnimationFrame(resizeViewport); });
@@ -1843,6 +1853,7 @@ window.addEventListener("beforeunload", () => {
   restoreWireframeMaterials();
   void stopRuntime(state.playRuntime);
   if (state.running !== state.playRuntime) void stopRuntime(state.running);
+  void editRenderHost.dispose();
   releasePlayCanvas();
   playLifecycle.finishEdit();
   try { state.client?.close(); } catch { /* ignore */ }

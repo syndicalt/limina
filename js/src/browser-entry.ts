@@ -20,7 +20,7 @@ export { TransformControls } from "../build/three.bundle.mjs";
 // Real asset-mount path (used by vegetation.scatter/asset.place) — exported so a repro harness
 // can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
 export { parseGltfScene } from "./skills/three.ts";
-import { hasGltfScene, prewarmGltfScene } from "./skills/three.ts";
+import { GltfSceneParseError } from "./skills/three.ts";
 import { loadVegetationPack, speciesPaletteIds, type VegetationPack } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
@@ -66,6 +66,7 @@ import {
   applyPaintOverlay,
   buildTerrainMesh,
   disposeTerrainMesh,
+  TerrainMaterialPool,
   TerrainStreamRenderer,
   type TerrainStreamRendererOptions,
 } from "./terrain/render.ts";
@@ -84,6 +85,15 @@ import { SwappableTerrainSource } from "./terrain/swappable.ts";
 import type { StreamTileColliderAdd } from "./browser/sim-worker.ts";
 import { FlyCamera } from "./browser/fly-camera.ts";
 import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import {
+  createBrowserRenderHost,
+  type BrowserRenderHost,
+  type BrowserRenderWorldSession,
+} from "./render/browser-host.ts";
+import type { RenderQualityTier } from "./render/quality.ts";
+import type { RenderTelemetrySnapshot } from "./render/telemetry.ts";
+import { buildPostPipeline, constrainPostPreset, type PostPipeline, type PostPreset } from "./render/post.ts";
+export { createBrowserRenderHost } from "./render/browser-host.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
 export { createCharacterBody, type CharacterBody, type CharacterBodyOptions } from "./world/character-body.ts";
 import {
@@ -501,8 +511,13 @@ export interface RunLiveOptions {
    *  paint-driven grass blades (thousands of sub-pixel instanced chunks that dominated peek time).
    *  The painted ground tint already carries the grassy areas. Absent/false = normal (grass grows). */
   peek?: boolean;
-  /** Release the renderer backend on stop. Use only when the canvas is permanently discarded:
-   *  Three's force-WebGL backend loses the canvas context during dispose. */
+  /** Persistent canvas renderer owner. Editor reboots should reuse one host. */
+  renderHost?: BrowserRenderHost;
+  /** Execution quality; independent of authored look/post strengths. */
+  quality?: RenderQualityTier;
+  /** Bounded periodic renderer/frame metrics. */
+  onRenderTelemetry?: (snapshot: Readonly<RenderTelemetrySnapshot>) => void;
+  /** @deprecated Internally-owned hosts are always released. Supply renderHost to reuse a canvas backend. */
   disposeRendererOnStop?: boolean;
 }
 
@@ -550,6 +565,9 @@ export interface RunningLive {
   isPaused(): boolean;
   /** Suspend/resume render-main frame work without changing deterministic simulation state. */
   setViewSuspended(on: boolean): void;
+  resize(width: number, height: number): void;
+  setRenderQuality(tier: RenderQualityTier): Readonly<import("./render/quality.ts").RenderQualityProfile>;
+  renderTelemetry(): Readonly<RenderTelemetrySnapshot>;
   stop(): Promise<void>;
 }
 
@@ -711,12 +729,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const assetIds = [...new Set([...gltfIds, ...mapIds])];
   if (assetIds.length > 0) {
     status("loading", `loading ${assetIds.length} asset${assetIds.length === 1 ? "" : "s"}`);
-    await Promise.all(assetIds.map(async (id) => {
-      const bytes = await fetchAsset(id);
-      if (bytes !== undefined && gltfIds.has(id)) {
-        try { await prewarmGltfScene(id, bytes); } catch { /* mount reports malformed GLB */ }
-      }
-    }));
+    await Promise.all(assetIds.map(fetchAsset));
   }
 
   status("loading", "spawning sim worker");
@@ -731,6 +744,91 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     status("error", "failed to spawn sim worker: " + (err instanceof Error ? err.message : String(err)));
     return null;
   }
+
+  let liveLoop: AccumulatorLoopHandle | null = null;
+  let controlRequestId = 0;
+  const controlWaiters = new Map<number, {
+    expected: "paused" | "resumed";
+    resolve(): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const ownsRenderHost = opts.renderHost === undefined;
+  let cleanupRenderHost: BrowserRenderHost | undefined;
+  let cleanupRenderSession: BrowserRenderWorldSession | undefined;
+  let cleanupWorld: WorldContext | undefined;
+  let cleanupTerrainStream: ClientTerrainStream | undefined;
+  let cleanupTerrainMaterialPool: TerrainMaterialPool | undefined;
+  let cleanupGrassStream: StreamedGrassManager | undefined;
+  let cleanupEntityStream: EntityResidencyStream | undefined;
+  let cleanupInput: LivePlayerInput | undefined;
+  let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
+  let teardownPromise: Promise<void> | undefined;
+  let runtimeReady = false;
+  let aborted = false;
+  let stopped = false;
+
+  const teardown = (reason: string): Promise<void> => {
+    if (teardownPromise !== undefined) return teardownPromise;
+    stopped = true;
+    teardownPromise = (async () => {
+      const errors: unknown[] = [];
+      const step = async (label: string, operation: () => void | Promise<void>): Promise<void> => {
+        try { await operation(); }
+        catch (error) {
+          errors.push(error);
+          console.warn(`live runtime ${label} cleanup failed`, error);
+        }
+      };
+      liveLoop?.stop();
+      liveLoop = null;
+      for (const waiter of controlWaiters.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(reason));
+      }
+      controlWaiters.clear();
+      await step("worker stop", () => { try { worker.postMessage({ type: "stop" }); } finally { worker.terminate(); } });
+      await step("input", () => {
+        if (opts.input !== undefined) cleanupInput?.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
+        cleanupInput?.detachPointer();
+      });
+      await step("camera controls", () => cleanupCameraControls?.dispose());
+      await step("entity residency", () => cleanupEntityStream?.clear());
+      await step("grass stream", () => cleanupGrassStream?.clear());
+      await step("terrain stream", () => cleanupTerrainStream?.clear());
+      await step("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
+      await step("post-processing", () => (cleanupWorld?.post as { dispose?(): void } | undefined)?.dispose?.());
+      if (cleanupWorld !== undefined) cleanupWorld.post = undefined;
+      await step("world render session", () => cleanupRenderSession?.dispose());
+      if (ownsRenderHost) await step("renderer host", () => cleanupRenderHost?.dispose());
+      if (errors.length > 0) throw new AggregateError(errors, `live runtime teardown failed in ${errors.length} step(s)`);
+    })();
+    return teardownPromise;
+  };
+
+  const reportTeardownFailure = (error: unknown): void => {
+    console.warn("live runtime teardown failed after a fatal error", error);
+  };
+
+  try {
+
+  const legacyScale = Number.isFinite(opts.renderScale) && (opts.renderScale ?? 1) > 1 ? opts.renderScale! : undefined;
+  const renderHost = opts.renderHost ?? createBrowserRenderHost({
+    canvas: opts.canvas,
+    forceWebGL: opts.forceWebGL ?? false,
+    initialQuality: opts.quality ?? "balanced",
+    ...(legacyScale === undefined ? {} : { qualityOverride: { resolutionScale: legacyScale, maxPixelRatio: legacyScale } }),
+  });
+  cleanupRenderHost = renderHost;
+  await Promise.all([...gltfIds].map(async (id) => {
+    const bytes = prefetchedAssets.get(id);
+    if (bytes === undefined) return;
+    try { await renderHost.gltfCache.prewarm(id, bytes); }
+    catch (error) {
+      if (!(error instanceof GltfSceneParseError)) throw error;
+      // Preserve the existing malformed-asset behavior: the mount reports the parse failure.
+    }
+  }));
 
   // The handshake ALWAYS settles: it resolves on `ready` OR on `{type:"error"}` OR on a hard
   // worker.onerror — so `await` can never hang (the old listener resolved only on `ready`, and a
@@ -750,26 +848,15 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     // the viewport. Report the SPECIFIC reason and return null (the "unsupported / cannot host"
     // signal, distinct from a per-command authoring failure, which keeps the viewport up below).
     status("error", handshakeResult.error);
-    worker.terminate();
+    await teardown(handshakeResult.error).catch(reportTeardownFailure);
     return null;
   }
   const ready = handshakeResult.ready;
-  // The loop is created far below; the error handler installed here (which can fire
-  // any time after `ready`) tears it down via this forward reference.
-  let liveLoop: AccumulatorLoopHandle | null = null;
-  let controlRequestId = 0;
-  const controlWaiters = new Map<number, {
-    expected: "paused" | "resumed";
-    resolve(): void;
-    reject(error: Error): void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
   // A worker throw can arrive DURING startup (the worker self-drives at 60Hz the moment
   // it posts `ready`, while this thread is still building WebGPU/scene). `aborted` records
   // that so the startup path below bails instead of overwriting status back to
   // ready/playing over a dead worker — otherwise an early solver throw looks like a
   // frozen sim reporting "playing".
-  let aborted = false;
   const failLive = (message: string): void => {
     aborted = true;
     status("error", message);
@@ -780,6 +867,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     controlWaiters.clear();
     liveLoop?.stop();
     worker.terminate();
+    if (runtimeReady) void teardown(message).catch(reportTeardownFailure);
   };
   // Per-tick acks are ignored — the render thread reads progress from the status SAB
   // via Atomics (cross-thread, allocation-free), not the message channel. But a
@@ -907,9 +995,15 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     ? { ground: { enabled: false }, ...(opts.renderBaseline ?? {}) }
     : (opts.renderBaseline ?? {});
   status("loading", "starting WebGPU");
-  const { renderer, scene, camera } = await buildRenderTarget(
-    opts.canvas, opts.width, opts.height, opts.forceWebGL ?? false, liveBaseline, opts.renderScale ?? 1,
-  );
+  const renderSession: BrowserRenderWorldSession = await renderHost.acquireWorld({
+    width: opts.width,
+    height: opts.height,
+    baseline: liveBaseline,
+    onTelemetry: opts.onRenderTelemetry,
+  });
+  cleanupRenderSession = renderSession;
+  if (opts.quality !== undefined && renderSession.quality().tier !== opts.quality) renderSession.setQuality(opts.quality);
+  const { renderer, scene, camera } = renderSession;
 
   // ── Re-author the SAME command log on the render-main thread against the REAL scene so meshes
   //    exist and eids match the worker (deterministic authoring). ──
@@ -928,11 +1022,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     camera,
     ops,
     renderer,
+    gltfCache: renderHost.gltfCache,
     width: opts.width,
     height: opts.height,
     mode: "windowed",
     peek: opts.peek === true,
   };
+  cleanupWorld = world;
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   const core = registerCoreSkills(registry, { assets: liveAssets });
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
@@ -982,6 +1078,22 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     console.info(`limina toon style: converted ${n} material(s) to cel shading`);
   }
 
+  const authoredPostPreset = (world.post as PostPipeline | undefined)?.preset as PostPreset | undefined;
+  const rebuildPostForQuality = (profile: Readonly<import("./render/quality.ts").RenderQualityProfile>): void => {
+    if (authoredPostPreset === undefined) return;
+    const current = world.post as PostPipeline | undefined;
+    const executionPreset = constrainPostPreset(authoredPostPreset, profile.post);
+    if (executionPreset === undefined) {
+      current?.dispose();
+      world.post = undefined;
+      return;
+    }
+    const replacement = buildPostPipeline(renderer, scene, camera, executionPreset);
+    current?.dispose();
+    world.post = replacement;
+  };
+  rebuildPostForQuality(renderSession.quality());
+
   // ── Map Phase 3.3: CLIENT-SIDE terrain streaming around the ACTIVE CAMERA. ──────────────────
   // Activates ONLY when the recorded log bound a map terrain source (world.setTerrainSource
   // {kind:"map"} — checked on the LIVE holder, so a failed/absent bind streams nothing). This is
@@ -1030,6 +1142,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       };
       const tileMeshes = new Map<string, ReturnType<typeof buildTerrainMesh>>();
       const tileBodies = new Map<string, number>();
+      const terrainMaterialPool = new TerrainMaterialPool();
+      cleanupTerrainMaterialPool = terrainMaterialPool;
       // A tile the RECORDED world already covers: any applied region tile (generateRegion /
       // streamFollow) at the same coord, or a tile fully inside an editable terrain.create
       // slab's footprint. Boundary tiles that only PARTIALLY overlap a slab still stream (no
@@ -1063,6 +1177,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         tileSize: TILE_SIZE,
         source: () => ({ seed: 1337, elevationMin: mapSource.seaLevelM + 0.05, spacing: 0.34 }),
       });
+      cleanupGrassStream = grassStream;
       const grassStreamRef = grassStream;
       terrainStream = new ClientTerrainStream({
         tileSize: TILE_SIZE,
@@ -1072,7 +1187,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         getTile: (c) => mapSource.generateTile({ seed: 0, tx: c.tx, tz: c.tz, lod: 0 }),
         isExternal: tileExternallyOwned,
         mount: (key, c, tile) => {
-          const mesh = buildTerrainMesh(tile, { elevationColors });
+          const mesh = buildTerrainMesh(tile, { elevationColors, materialPool: terrainMaterialPool });
           applyPaintOverlay(mesh.geometry, tile);
           scene.add(mesh);
           tileMeshes.set(key, mesh);
@@ -1101,6 +1216,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           worker.postMessage({ type: "streamTileColliders", add: [], remove: [key] });
         },
       });
+      cleanupTerrainStream = terrainStream;
     }
   }
 
@@ -1134,6 +1250,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         dematerialize: entityWiring.dematerialize,
         rematerialize: entityWiring.rematerialize,
       });
+      cleanupEntityStream = entityStream;
       for (const id of candidates) entityStream.register(id);
     }
   }
@@ -1218,6 +1335,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
   // ── Input pump + camera framing. ──
   const liveInput = new LivePlayerInput();
+  cleanupInput = liveInput;
   if (opts.input !== undefined) liveInput.attach(opts.input as Parameters<LivePlayerInput["attach"]>[0]);
   const inFrame = { move: [0, 0, 0] as [number, number, number], look: [0, 0] as [number, number], buttons: [0, 0] as [number, number], tick: 0 };
 
@@ -1244,6 +1362,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     );
     camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
     cameraControls = new THREE.OrbitControls(camera, renderer.domElement);
+    cleanupCameraControls = cameraControls;
     cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
     cameraControls.enableRotate = true;
     cameraControls.enableZoom = true;
@@ -1293,7 +1412,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
   // If the worker already threw during the WebGPU/scene build above, bail now instead
   // of announcing "ready"/"playing" over a terminated worker (failLive set the status).
-  if (aborted) { worker.terminate(); return null; }
+  if (aborted) {
+    await teardown("sim worker aborted during startup").catch(reportTeardownFailure);
+    return null;
+  }
 
   status("ready", `${eids.length} entities authored — live sim running`);
 
@@ -1382,16 +1504,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // the scene is drawn. Cheap (a distance compare per LOD); render-only.
       const wl = (world as unknown as { lods?: Array<{ update: (c: unknown) => void }> }).lods;
       if (wl !== undefined) for (const l of wl) l.update(camera);
+      const focus = playerEid !== undefined
+        ? [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]] as const
+        : cameraControls !== undefined
+        ? [cameraControls.target.x, cameraControls.target.y, cameraControls.target.z] as const
+        : vantage !== undefined
+        ? [camera.position.x, camera.position.y, camera.position.z] as const
+        : orbitCenter;
+      renderSession.updateShadowFocus(focus);
       // Opt-in RENDER-ONLY post stack: render.enablePost stashes a PostPipeline on world.post;
-      // when present, drive its GTAO/bloom/grade composite in place of the bare present. Absent
-      // (live navigation — the static/cinematic caveat) → the known-good bare renderer path.
+      // when present, drive its GTAO/bloom/grade composite in place of the bare present.
       const wp = (world as unknown as { post?: { render: () => void } }).post;
-      if (wp) wp.render(); else renderer.render(scene, camera);
+      renderSession.render(() => { if (wp) wp.render(); else renderer.render(scene, camera); });
     },
   });
   liveLoop = loop; // let the error handler above stop the loop on a worker throw
+  runtimeReady = true;
 
-  let stopped = false;
   let controlTail = Promise.resolve();
   const setPaused = (next: boolean): Promise<void> => {
     const work = async (): Promise<void> => {
@@ -1408,27 +1537,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const stopLive = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopped = true;
-    for (const waiter of controlWaiters.values()) {
-      clearTimeout(waiter.timer);
-      waiter.reject(new Error("live runtime stopped during worker control request"));
-    }
-    controlWaiters.clear();
-    loop.stop();
-    try { worker.postMessage({ type: "stop" }); } catch { /* worker may already be gone during teardown */ }
-    worker.terminate();
-    if (opts.input !== undefined) liveInput.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
-    liveInput.detachPointer();
-    stopPromise = (async (): Promise<void> => {
-      grassStream?.clear();
-      terrainStream?.clear();
-      cameraControls?.dispose();
-      // Play/Edit repeatedly replaces runLive on the same canvas. WebGPURenderer disposal is async;
-      // await it so the replacement cannot overlap the old backend/context.
-      if (opts.disposeRendererOnStop === true) {
-        const disposableRenderer = renderer as unknown as { dispose?(): void | Promise<void> };
-        try { await disposableRenderer.dispose?.(); } catch (error) { console.warn("live renderer dispose failed during teardown", error); }
-      }
-    })();
+    stopPromise = teardown("live runtime stopped during worker control request");
     return stopPromise;
   };
 
@@ -1468,7 +1577,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           // the "spiral tower" bug). Force a REBOOT: runLive re-pre-warms EVERY asset (incl. this one)
           // before renderer.init, then it mounts from a synchronous clone. Already-warmed assets (the
           // load-time set, tree palette) keep the fast in-place path.
-          const unwarmed = gltfAssetIdsForCommand(cmd, vegPack).filter((id) => !hasGltfScene(id));
+          const unwarmed = gltfAssetIdsForCommand(cmd, vegPack).filter((id) => {
+            try {
+              const bytes = liveAssets.resolve(id).bytes;
+              return !renderHost.gltfCache.has(id, bytes);
+            } catch {
+              return true;
+            }
+          });
           if (unwarmed.length > 0) { unsupportedStructuralTools.push(`${cmd.tool} (unwarmed asset: ${unwarmed.join(", ")})`); continue; }
           structuralAdds++;
         } else unsupportedStructuralTools.push(cmd.tool);
@@ -1587,8 +1703,24 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     resume: (): Promise<void> => setPaused(false),
     isPaused: (): boolean => paused,
     setViewSuspended: (on: boolean): void => { viewSuspended = on; },
+    resize: (width: number, height: number): void => {
+      renderSession.resize(width, height);
+      (world.post as PostPipeline | undefined)?.setSize(width, height);
+    },
+    setRenderQuality: (nextTier): Readonly<import("./render/quality.ts").RenderQualityProfile> => {
+      if (renderSession.quality().tier === nextTier) return renderSession.quality();
+      const profile = renderSession.setQuality(nextTier);
+      rebuildPostForQuality(profile);
+      return profile;
+    },
+    renderTelemetry: (): Readonly<RenderTelemetrySnapshot> => renderSession.telemetry(),
     stop: stopLive,
   };
+  } catch (error) {
+    try { await teardown("live runtime failed during startup"); }
+    catch (cleanupError) { console.warn("live runtime cleanup failed while preserving startup error", cleanupError); }
+    throw error;
+  }
 }
 
 // ---- Auto-bootstrap (browser only) -----------------------------------------

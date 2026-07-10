@@ -607,7 +607,7 @@ export function registerVillageSkills(
           }
           for (const [id, list] of byId) {
             try {
-              const root = await parseGltfScene(id, assets.resolve(id).bytes);
+              const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
               // Normalize each decoration GLB to a sane lawn-plant height — curated library assets have
               // wildly inconsistent authored scales (some are hundreds of metres, some empty); degenerate
               // ones are skipped inside the builder. Keeps set-dressing from swamping the settlement.

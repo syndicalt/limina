@@ -212,6 +212,30 @@ assert(A.entities.ids().length === 0 && A.entities.version === 0, "view streamin
 A.stream.clear();
 assert(A.bodies.size === 0, "clear() must remove every collider");
 
+// Terminal cleanup is exhaustive: one failing unmount cannot strand later tiles or
+// retain internal residency bookkeeping.
+{
+  const attempted: string[] = [];
+  const faulted = new ClientTerrainStream({
+    tileSize: 48,
+    radius: 1,
+    maxLoadsPerUpdate: 20,
+    getTile: (coord) => source.generateTile({ seed: 0, tx: coord.tx, tz: coord.tz, lod: 0 }),
+    mount: () => {},
+    unmount: (key) => {
+      attempted.push(key);
+      if (attempted.length === 1) throw new Error("injected terrain unmount failure");
+    },
+  });
+  faulted.update(0, 0);
+  const resident = faulted.mountedKeys().size;
+  let cleanupError: unknown;
+  try { faulted.clear(); } catch (error) { cleanupError = error; }
+  assert(cleanupError instanceof AggregateError, "faulted clear must report an AggregateError");
+  assert(attempted.length === resident, `faulted clear attempted ${attempted.length}/${resident} tile unmounts`);
+  assert(faulted.mountedKeys().size === 0 && faulted.pendingCount() === 0, "faulted clear retained stream bookkeeping");
+}
+
 ops.op_log(
   `[js] p_stream_client OK: camera walk across the '${MAP_ASSET_ID}' extent streamed ${A.events.filter((e) => e[0] === "+").length} mounts / ` +
   `${A.events.filter((e) => e[0] === "-").length} unmounts at ≤${BUDGET} mounts/update, resident peak ${A.maxResident} ≤ ${KEEP_CAPACITY}; ` +
