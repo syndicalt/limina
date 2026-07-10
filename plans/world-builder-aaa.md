@@ -279,3 +279,11 @@ near-vertical cliffs before the SDF layer exists.
   commit boundary. Strict manifest/artifact verification, last-known-good metadata, bounded O(1)
   diagnostics, stale cancellation, and late-abort-after-commit semantics are covered by 44 combined
   coordinator/publisher tests. Concrete terrain artifact compilation and service wiring remain open.
+- **2026-07-09 — Production Content Browser shipped (`3eac2e1`).** The editor now owns one docked,
+  keyboard-accessible catalog surface with strict payload validation, deterministic search/category/type
+  filtering, fixed-row virtualization, bounded refresh coalescing, recoverable error states, metadata and
+  thumbnail inspection, and one shared placement/yaw authority used by the viewport. A 5,000-asset real
+  Chromium gate renders only 9 desktop and 8 mobile rows, verifies refresh/error recovery and placement
+  handoff, and asserts the terrain HUD and viewport controls never overlap while placement is armed or
+  restored. The server catalog remains intentionally capped at 20,000 entries until its API supports
+  pagination.
