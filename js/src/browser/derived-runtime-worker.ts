@@ -21,9 +21,14 @@ import {
   inspectHydrologyWaterArtifactBindings,
 } from "../world/hydrology-water-artifact.mjs";
 import { prepareGeneratedWaterFieldInput } from "../world/water-field.mjs";
+import {
+  parseDerivedTerrainResidency,
+  selectDerivedTerrainChunks,
+  type DerivedTerrainResidency,
+} from "./derived-terrain-residency.ts";
 
-export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v1";
-export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v1";
+export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v2";
+export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 export const DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 8_000] as const);
 export const DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15_000;
 
@@ -47,6 +52,7 @@ export interface DerivedRuntimeWorkerInitMessage {
   config: DerivedRuntimeTransportConfig;
   mode: DerivedRuntimeWorkerMode;
   pinnedSource?: DerivedRuntimePinnedSource;
+  residency: DerivedTerrainResidency;
 }
 
 export interface DerivedRuntimeWorkerActivationAckMessage {
@@ -171,7 +177,7 @@ function parsePinnedSource(value: unknown): Readonly<DerivedRuntimePinnedSource>
 }
 
 function parseInit(value: Record<string, unknown>): Readonly<DerivedRuntimeWorkerInitMessage> {
-  exactDataKeys(value, ["schema", "type", "requestId", "config", "mode"], ["pinnedSource"], "derived runtime init");
+  exactDataKeys(value, ["schema", "type", "requestId", "config", "mode", "residency"], ["pinnedSource"], "derived runtime init");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "init") throw fatal("INVALID_MESSAGE", "derived runtime init schema/type is invalid");
   const mode = value.mode;
   if (mode !== "watch" && mode !== "pinned") throw fatal("INVALID_MESSAGE", "derived runtime init mode must be watch or pinned");
@@ -179,6 +185,9 @@ function parseInit(value: Record<string, unknown>): Readonly<DerivedRuntimeWorke
   exactDataKeys(configRecord, ["baseUrl", "token", "projectId", "branchId"], [], "derived runtime init config");
   const config = configRecord as unknown as DerivedRuntimeTransportConfig;
   const pinnedSource = value.pinnedSource === undefined ? undefined : parsePinnedSource(value.pinnedSource);
+  let residency: Readonly<DerivedTerrainResidency>;
+  try { residency = parseDerivedTerrainResidency(value.residency); }
+  catch (error) { throw fatal("INVALID_MESSAGE", error instanceof Error ? error.message : "derived runtime residency is invalid"); }
   if ((mode === "pinned") !== (pinnedSource !== undefined)) {
     throw fatal("INVALID_MESSAGE", "pinned mode requires pinnedSource and watch mode forbids it");
   }
@@ -189,6 +198,7 @@ function parseInit(value: Record<string, unknown>): Readonly<DerivedRuntimeWorke
     config,
     mode,
     ...(pinnedSource === undefined ? {} : { pinnedSource }),
+    residency,
   });
 }
 
@@ -320,6 +330,7 @@ export class DerivedRuntimeWorkerController {
   #branchId = "";
   #mode: DerivedRuntimeWorkerMode | null = null;
   #pinnedSource: Readonly<DerivedRuntimePinnedSource> | null = null;
+  #residency!: Readonly<DerivedTerrainResidency>;
   #observed: DerivedRuntimeCurrent | undefined;
   #submissionCurrent: DerivedRuntimeCurrent | null = null;
   #pollTimer: unknown = null;
@@ -378,6 +389,7 @@ export class DerivedRuntimeWorkerController {
     this.#branchId = message.config.branchId;
     this.#mode = message.mode;
     this.#pinnedSource = message.pinnedSource ?? null;
+    this.#residency = message.residency;
     this.#transport = transport;
     this.#manager = new DerivedRevisionManager({
       projectId: this.#projectId,
@@ -386,6 +398,7 @@ export class DerivedRuntimeWorkerController {
       loadArtifact: (input: { manifest: { manifestHash: string }; artifact: DerivedArtifactDescriptor; signal: AbortSignal }) => (
         this.#loadArtifact(input.manifest.manifestHash, input.artifact, input.signal)
       ),
+      selectChunks: (manifest: Parameters<typeof selectDerivedTerrainChunks>[0]) => selectDerivedTerrainChunks(manifest, this.#residency),
       stageChunk: (input: { artifacts: ReadonlyArray<{ artifact: DerivedArtifactDescriptor; bytes: Uint8Array }>; signal: AbortSignal }) => (
         this.#stageChunk(input.artifacts, input.signal)
       ),
@@ -522,6 +535,7 @@ export class DerivedRuntimeWorkerController {
       manifestHash: candidate.manifest.manifestHash,
       source: candidate.manifest.source,
       manifest: candidate.manifest,
+      residency: this.#residency,
       chunks: candidate.chunks,
       globals: candidate.globals,
     };
@@ -579,6 +593,18 @@ export class DerivedRuntimeWorkerController {
           "PINNED_SOURCE_MISMATCH",
           `published source ${current.source.revision}/${current.source.headHash} does not match the pinned source`,
         );
+      }
+      if (result.status === "not-modified" && this.#manager!.current?.manifest.manifestHash === current.manifestHash) {
+        this.#backoffIndex = 0;
+        this.#postMessage(Object.freeze({
+          schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+          type: "revision",
+          status: "unchanged",
+          manifestHash: current.manifestHash,
+          revision: current.source.revision,
+        }));
+        if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+        return;
       }
       this.#submissionCurrent = current;
       const submit = this.#manager!.submit as unknown as (

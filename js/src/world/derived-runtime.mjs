@@ -36,6 +36,45 @@ function assertOptions(value, allowed, label) {
   return value;
 }
 
+function selectedManifestChunks(manifest, selectChunks) {
+  const selected = selectChunks(manifest);
+  if (!Array.isArray(selected) || Object.getPrototypeOf(selected) !== Array.prototype
+      || !Object.isFrozen(selected) || Object.getOwnPropertySymbols(selected).length !== 0
+      || Object.getOwnPropertyNames(selected).length !== selected.length + 1
+      || selected.length > manifest.chunks.length) {
+    throw new DerivedRevisionRuntimeError("INVALID_CHUNK_RESIDENCY", "selectChunks must return a frozen dense bounded array");
+  }
+  const canonicalIndices = new Map(manifest.chunks.map((chunk, index) => [chunk, index]));
+  let previousIndex = -1;
+  for (let index = 0; index < selected.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(selected, String(index));
+    const canonicalIndex = canonicalIndices.get(descriptor?.value);
+    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined
+        || canonicalIndex === undefined || canonicalIndex <= previousIndex) {
+      throw new DerivedRevisionRuntimeError(
+        "INVALID_CHUNK_RESIDENCY",
+        "selectChunks must preserve unique canonical manifest chunk references in manifest order",
+      );
+    }
+    previousIndex = canonicalIndex;
+  }
+  return selected;
+}
+
+function sameSelectedChunkOrder(left, right) {
+  return left.length === right.length
+    && left.every((chunk, index) => chunk.chunkId === right[index].chunkId);
+}
+
+function liveChunksMatchSelection(liveChunks, selected) {
+  if (liveChunks.size !== selected.length) return false;
+  let index = 0;
+  for (const chunkId of liveChunks.keys()) {
+    if (chunkId !== selected[index++].chunkId) return false;
+  }
+  return true;
+}
+
 function freezeArray(entries) {
   return Object.freeze(entries.map((entry) => Object.freeze(entry)));
 }
@@ -221,6 +260,7 @@ export class DerivedRevisionManager {
   #branchId;
   #getAuthoritativeSource;
   #loadArtifact;
+  #selectChunks;
   #stageChunk;
   #stageGlobal;
   #activateRevision;
@@ -240,12 +280,15 @@ export class DerivedRevisionManager {
   constructor(input) {
     const options = assertOptions(input, new Set([
       "projectId", "branchId", "getAuthoritativeSource", "loadArtifact", "stageChunk",
-      "stageGlobal", "activateRevision", "disposeChunk", "disposeGlobal", "diagnosticsLimit", "now",
+      "selectChunks", "stageGlobal", "activateRevision", "disposeChunk", "disposeGlobal", "diagnosticsLimit", "now",
     ]), "derived revision manager options");
     this.#projectId = assertIdentifier(options.projectId, PROJECT_ID, "derived revision manager projectId");
     this.#branchId = assertIdentifier(options.branchId, BRANCH_ID, "derived revision manager branchId");
     this.#getAuthoritativeSource = assertFunction(options.getAuthoritativeSource, "getAuthoritativeSource");
     this.#loadArtifact = assertFunction(options.loadArtifact, "loadArtifact");
+    this.#selectChunks = options.selectChunks === undefined
+      ? (manifest) => manifest.chunks
+      : assertFunction(options.selectChunks, "selectChunks");
     this.#stageChunk = assertFunction(options.stageChunk, "stageChunk");
     this.#stageGlobal = options.stageGlobal === undefined ? undefined : assertFunction(options.stageGlobal, "stageGlobal");
     this.#activateRevision = assertFunction(options.activateRevision, "activateRevision");
@@ -303,6 +346,7 @@ export class DerivedRevisionManager {
   submit(manifestInput, submitInput = undefined) {
     let manifest;
     let submitOptions;
+    let selectedChunks;
     try {
       submitOptions = assertOptions(submitInput, new Set(["force", "signal"]), "derived revision submit options");
       if (this.#closed) throw new DerivedRevisionRuntimeError("DERIVED_RUNTIME_CLOSED", "derived revision manager is closed");
@@ -316,22 +360,24 @@ export class DerivedRevisionManager {
         throw new DerivedRevisionRuntimeError("MANIFEST_SCOPE_MISMATCH", "derived manifest belongs to another project or branch");
       }
       throwIfCancelled(signal);
+      selectedChunks = selectedManifestChunks(manifest, this.#selectChunks);
     } catch (error) {
       return Promise.reject(error);
     }
 
     return new Promise((resolve, reject) => {
       const force = submitOptions.force === true;
-      if (this.#sameJob(this.#active, manifest, force) && !this.#active.cancellation.signal.aborted) {
+      if (this.#sameJob(this.#active, manifest, selectedChunks, force) && !this.#active.cancellation.signal.aborted) {
         this.#addWaiter(this.#active, submitOptions.signal, resolve, reject);
         return;
       }
-      if (this.#sameJob(this.#pending, manifest, force) && !this.#pending.cancellation.signal.aborted) {
+      if (this.#sameJob(this.#pending, manifest, selectedChunks, force) && !this.#pending.cancellation.signal.aborted) {
         this.#addWaiter(this.#pending, submitOptions.signal, resolve, reject);
         return;
       }
       const request = {
         manifest,
+        chunks: selectedChunks,
         force,
         signal: null,
         queuedAt: this.#now(),
@@ -356,8 +402,9 @@ export class DerivedRevisionManager {
     });
   }
 
-  #sameJob(request, manifest, force) {
-    return request !== null && request.manifest.manifestHash === manifest.manifestHash && request.force === force;
+  #sameJob(request, manifest, selectedChunks, force) {
+    return request !== null && request.manifest.manifestHash === manifest.manifestHash
+      && request.force === force && sameSelectedChunkOrder(request.chunks, selectedChunks);
   }
 
   #addWaiter(request, signal, resolve, reject) {
@@ -539,9 +586,10 @@ export class DerivedRevisionManager {
         );
       }
 
-      if (this.#live?.manifest.manifestHash === request.manifest.manifestHash) {
+      if (this.#live?.manifest.manifestHash === request.manifest.manifestHash
+          && liveChunksMatchSelection(this.#live.chunks, request.chunks)) {
         timingsMs.total = elapsed(this.#now, startedAt);
-        counts.unchanged = request.manifest.chunks.length;
+        counts.unchanged = request.chunks.length;
         counts.unchangedGlobals = manifestGlobals.length;
         const outcome = this.#outcome("unchanged", request.manifest, counts);
         this.#recordDiagnostic(request, "unchanged", { timingsMs, counts, errors: [] });
@@ -578,7 +626,7 @@ export class DerivedRevisionManager {
       ));
       counts.removedGlobals = removedGlobals.length;
 
-      for (const chunk of request.manifest.chunks) {
+      for (const chunk of request.chunks) {
         const identity = chunkRuntimeIdentity(chunk, request.manifest.grid);
         const prior = priorChunks.get(chunk.chunkId);
         if (prior?.identity === identity) {
@@ -661,7 +709,7 @@ export class DerivedRevisionManager {
       }
 
       const orderedNextGlobals = new Map(plannedGlobals.map((artifact) => [artifact.artifactType, nextGlobals.get(artifact.artifactType)]));
-      const orderedNextChunks = new Map(request.manifest.chunks.map((chunk) => [chunk.chunkId, nextChunks.get(chunk.chunkId)]));
+      const orderedNextChunks = new Map(request.chunks.map((chunk) => [chunk.chunkId, nextChunks.get(chunk.chunkId)]));
       const replacedChunks = changedChunks
         .map((changed) => priorChunks.get(changed.chunk.chunkId))
         .filter((entry) => entry !== undefined);

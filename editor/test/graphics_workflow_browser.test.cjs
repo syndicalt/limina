@@ -1,6 +1,12 @@
 const assert = require("node:assert/strict");
 const { chromeExecutable, loadChromium, requireChromeBinary } = require("./browser-env.cjs");
 
+function requiredUat(name) {
+  const value = process.env[name];
+  if (!value) { console.log(`SKIP: ${name} is required; launch the editor and pass its banner values`); process.exit(2); }
+  return value;
+}
+
 (async () => {
   const loaded = loadChromium();
   if (!loaded.chromium) { console.log("SKIP: " + loaded.error); process.exit(2); }
@@ -17,8 +23,14 @@ const { chromeExecutable, loadChromium, requireChromeBinary } = require("./brows
   const websocketUrls = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("websocket", (socket) => websocketUrls.push(socket.url()));
-  const host = process.env.PLAY_UAT_HOST || "ws://localhost:8790/";
-  const token = process.env.PLAY_UAT_TOKEN || "play-uat-token";
+  const host = requiredUat("PLAY_UAT_HOST");
+  const token = requiredUat("PLAY_UAT_TOKEN");
+  const editorUrl = requiredUat("PLAY_UAT_EDITOR");
+  if (!/^wss?:\/\/(?:localhost|127\.0\.0\.1):[1-9][0-9]{0,4}\/$/.test(host)
+      || !/^[A-Za-z0-9_-]{32,128}$/.test(token)
+      || !/^http:\/\/localhost:[1-9][0-9]{0,4}\/$/.test(editorUrl)) {
+    throw new Error("PLAY_UAT_* values do not match the generated launcher contract");
+  }
 
   const backingRatio = async (selector) => page.$eval(selector, (canvas) => ({
     x: canvas.width / canvas.clientWidth,
@@ -33,7 +45,9 @@ const { chromeExecutable, loadChromium, requireChromeBinary } = require("./brows
 
   try {
     await page.addInitScript(() => localStorage.setItem("limina.editor.serverUrl", "ws://localhost:8787/"));
-    await page.goto(`http://localhost:5173/?server=${encodeURIComponent(host)}`, { waitUntil: "domcontentloaded" });
+    const launchUrl = new URL(editorUrl);
+    launchUrl.searchParams.set("server", host);
+    await page.goto(launchUrl.href, { waitUntil: "domcontentloaded" });
     assert.equal(await page.inputValue("#url"), host, "explicit launch server must override a stale saved default");
     await page.waitForTimeout(1_100);
     assert.deepEqual(websocketUrls, [], "viewport must not connect before the editor connection is authorized");

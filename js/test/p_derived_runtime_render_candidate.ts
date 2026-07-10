@@ -4,6 +4,7 @@ import {
   parseTransferredDerivedRuntimeSnapshot,
 } from "../src/browser/derived-runtime-render-candidate.ts";
 import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "../src/browser/derived-runtime-worker.ts";
+import { DERIVED_TERRAIN_RESIDENCY_SCHEMA } from "../src/browser/derived-terrain-residency.ts";
 import { createTerrainGridSpec, terrainChunkId } from "../src/terrain/grid.mjs";
 import {
   DERIVED_REVISION_MANIFEST_SCHEMA_V2,
@@ -124,7 +125,7 @@ const manifest = createDerivedRevisionManifest({
   compiler: { version: "1.2.0", configHash: hash("config"), graphHash, snapshotHash: hash("snapshot") },
   grid,
   globalArtifacts: [fieldDescriptor, waterDescriptor],
-  chunks: [terrain0, terrain1].map((entry, tx) => ({
+  chunks: Array.from({ length: 400 }, (_, tx) => ({
     chunkId: terrainChunkId(grid.gridId, 0, tx, 0),
     gridId: grid.gridId,
     lod: 0,
@@ -132,8 +133,8 @@ const manifest = createDerivedRevisionManifest({
     tz: 0,
     topologyHash: hash(`topology-${tx}`),
     sourceSliceHashes: [],
-    artifacts: [entry.descriptor],
-  })),
+    artifacts: [tx === 0 ? terrain0.descriptor : terrain1.descriptor],
+  })).sort((left, right) => left.chunkId < right.chunkId ? -1 : left.chunkId > right.chunkId ? 1 : 0),
 });
 
 function snapshot(): any {
@@ -144,10 +145,11 @@ function snapshot(): any {
     manifestHash: manifest.manifestHash,
     source: manifest.source,
     manifest,
-    chunks: manifest.chunks.map((chunk, index) => ({
+    residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [FAR + 32, FAR + 32], lod: 0, radius: 1 },
+    chunks: manifest.chunks.filter((chunk) => chunk.tx <= 1).map((chunk) => ({
       chunkId: chunk.chunkId,
       chunk,
-      resource: { kind: "terrain-chunk/v1", decoded: decodeTerrainChunkArtifact(index === 0 ? terrain0.bytes : terrain1.bytes) },
+      resource: { kind: "terrain-chunk/v1", decoded: decodeTerrainChunkArtifact(chunk.tx === 0 ? terrain0.bytes : terrain1.bytes) },
     })),
     globals: [
       { artifactType: HYDROLOGY_FIELD_ARTIFACT_TYPE, artifact: fieldDescriptor, resource: { kind: HYDROLOGY_FIELD_ARTIFACT_TYPE, decoded: {} } },
@@ -162,7 +164,8 @@ function snapshot(): any {
 
 const transferred = snapshot();
 const parsed = parseTransferredDerivedRuntimeSnapshot(transferred);
-assert(parsed.manifestHash === manifest.manifestHash && parsed.terrain.size === 2, "complete terrain index identity changed");
+assert(parsed.manifestHash === manifest.manifestHash && parsed.manifest.chunks.length === 400 && parsed.terrain.size === 2,
+  "full manifest identity or exact bounded terrain index changed");
 assert(parsed.generatedWater?.bytes === waterBytes && parsed.generatedWater.artifact.contentHash === waterDescriptor.contentHash,
   "canonical raw water resource was not retained for simulation verification");
 assert(parsed.terrain.sampleHeight(FAR + 32, FAR + 32) === 105, "O(1) centre sample changed");
@@ -171,7 +174,7 @@ assert(parsed.terrain.sampleHeight(FAR - 1, FAR + 32) === null, "out-of-domain s
 rejects(() => parsed.terrain.sampleHeight(Number.NaN, 0), /finite/, "non-finite sampler input was accepted");
 
 const externalScene = new THREE.Scene();
-const candidate = new DetachedDerivedRenderCandidate(transferred, { anchorX: FAR + 32, anchorZ: FAR + 32, radius: 1 });
+const candidate = new DetachedDerivedRenderCandidate(transferred, {});
 assert(externalScene.children.length === 0 && candidate.root.parent === null, "detached candidate mutated or attached to a live scene");
 assert(candidate.terrainMeshCount === 2 && candidate.waterFragmentCount === 1, "bounded terrain/water window did not mount expected resources");
 assert(candidate.terrainRoot.children.length === 2 && candidate.waterRoot.children.length === 1, "revision root does not own its complete staged window");
@@ -197,7 +200,22 @@ wrongSource.source = { ...wrongSource.source, revision: 13 };
 rejects(() => parseTransferredDerivedRuntimeSnapshot(wrongSource), /identity/, "envelope/manifest source mismatch was accepted");
 const duplicate = snapshot();
 duplicate.chunks[1] = duplicate.chunks[0];
-rejects(() => parseTransferredDerivedRuntimeSnapshot(duplicate), /duplicate/, "duplicate chunk/coordinate was accepted");
+rejects(() => parseTransferredDerivedRuntimeSnapshot(duplicate), /manifest order|duplicate/, "duplicate chunk/coordinate was accepted");
+const incomplete = snapshot();
+incomplete.chunks.pop();
+rejects(() => parseTransferredDerivedRuntimeSnapshot(incomplete), /incomplete/, "resident chunk omission was accepted");
+const outOfWindow = snapshot();
+const firstNonresidentChunk = manifest.chunks.find((chunk) => chunk.tx === 2)!;
+outOfWindow.chunks.push({
+  chunkId: firstNonresidentChunk.chunkId,
+  chunk: firstNonresidentChunk,
+  resource: { kind: "terrain-chunk/v1", decoded: decodeTerrainChunkArtifact(terrain1.bytes) },
+});
+rejects(() => parseTransferredDerivedRuntimeSnapshot(outOfWindow), /incomplete|residency|window/,
+  "nonresident manifest resource was accepted into the bounded activation window");
+const reordered = snapshot();
+reordered.chunks.reverse();
+rejects(() => parseTransferredDerivedRuntimeSnapshot(reordered), /manifest order/, "resident chunk reorder was accepted");
 const corruptWater = snapshot();
 corruptWater.globals[1].resource.bytes = waterBytes.slice();
 corruptWater.globals[1].resource.bytes[corruptWater.globals[1].resource.bytes.length - 1] ^= 1;
@@ -211,12 +229,15 @@ const misplacedBytes = encodeTerrainChunkArtifact({
 wrongPlacement.chunks[0].resource.decoded = decodeTerrainChunkArtifact(misplacedBytes);
 rejects(() => parseTransferredDerivedRuntimeSnapshot(wrongPlacement), /placement/, "tile/grid placement mismatch was accepted");
 rejects(() => new DetachedDerivedRenderCandidate(snapshot(), {
-  anchorX: FAR + 32, anchorZ: FAR + 32, radius: 1, maxTerrainMeshes: 1,
+  maxTerrainMeshes: 1,
 }), /exceeding budget/, "terrain mesh window budget was enforced after staging");
+const emptyResidency = snapshot();
+emptyResidency.residency = { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [FAR + 10_000, FAR + 10_000], lod: 0, radius: 1 };
+rejects(() => new DetachedDerivedRenderCandidate(emptyResidency, {}), /no manifest chunks/, "empty terrain activation window reached simulation staging");
 
 candidate.dispose();
 candidate.dispose();
 assert(candidate.disposed && candidate.root.children.length === 0 && candidate.terrainMeshCount === 0 && candidate.waterFragmentCount === 0,
   "candidate disposal leaked revision-scoped resources or was not idempotent");
 
-console.log("[js] p_derived_runtime_render_candidate OK: strict complete snapshot identity, canonical raw water, O(1) LOD0 sampling, bounded feature-local detached terrain/water staging, quality, faults, and disposal proven");
+console.log("[js] p_derived_runtime_render_candidate OK: strict 400-chunk snapshot identity with exact bounded resources, canonical raw water, O(1) LOD0 sampling, feature-local detached terrain/water staging, quality, faults, and disposal proven");

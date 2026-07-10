@@ -30,7 +30,11 @@ const CURRENT_PATH = "/v1/derived/current";
 const ARTIFACT_PATH = /^\/v1\/derived\/manifests\/([0-9a-f]{64})\/artifacts\/([0-9a-f]{64})$/;
 const ALLOWED_PREFLIGHT_HEADERS = new Set(["authorization", "if-none-match"]);
 const BASE_HEADERS = Object.freeze({
-  "Cross-Origin-Resource-Policy": "same-site",
+  // Discovery intentionally pins the API to 127.0.0.1 while the generated launcher opens the UI
+  // at localhost. Those are cross-site origins in browsers, so same-site makes every otherwise
+  // valid CORS response unusable under the editor's COEP policy. CORS still restricts readable
+  // responses to the exact launcher-owned origin and every data request still requires the bearer.
+  "Cross-Origin-Resource-Policy": "cross-origin",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
 });
@@ -110,6 +114,10 @@ function bodyBytes(value) {
   return Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
 }
 
+function currentEtag(view) {
+  return `"g${view.generation}-${view.manifest.manifestHash}"`;
+}
+
 function waitForDrain(response) {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -148,6 +156,7 @@ export class DerivedRuntimeServer {
   #activeArtifacts = new Set();
   #rateTokens = DERIVED_RUNTIME_CURRENT_RATE_CAPACITY;
   #rateAt;
+  #cachedCurrent;
 
   constructor(input) {
     const options = plainOptions(input);
@@ -358,19 +367,22 @@ export class DerivedRuntimeServer {
   }
 
   async #currentView() {
-    return readAuthoritativePublishedDerivedRevision({
+    const view = await readAuthoritativePublishedDerivedRevision({
       projectRoot: this.#projectRoot,
       branchId: this.#branchId,
       readHead: () => this.#readHead(),
       shouldCancel: () => this.#abort.signal.aborted,
+      ...(this.#cachedCurrent === undefined ? {} : { cachedRevision: this.#cachedCurrent }),
     });
+    this.#cachedCurrent = view;
+    return view;
   }
 
   async #serveCurrent(request, response, origin, headOnly) {
     let view;
     try { view = await this.#currentView(); }
     catch (error) { this.#publicationError(response, error, origin, false); return; }
-    const etag = `"${view.manifest.manifestHash}"`;
+    const etag = currentEtag(view);
     const headers = {
       ...this.#corsHeaders(origin),
       ETag: etag,
@@ -430,6 +442,7 @@ export class DerivedRuntimeServer {
           branchId: this.#branchId,
           manifestHash,
           contentHash,
+          cachedRevision: initial,
         });
       } catch (error) {
         this.#publicationError(response, error, origin, true); return;

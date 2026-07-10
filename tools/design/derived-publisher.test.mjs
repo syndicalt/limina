@@ -186,6 +186,29 @@ test("publishes a fully validated current revision and reports source staleness 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("rejects one content hash assigned conflicting media types", async () => {
+  const root = projectFixture();
+  try {
+    const fixture = revisionFixture("media-conflict");
+    const { manifestHash: _manifestHash, ...core } = fixture.manifest;
+    const chunkArtifact = fixture.manifest.chunks[0].artifacts[0];
+    const manifest = createDerivedRevisionManifest({
+      ...core,
+      globalArtifacts: [{
+        ...chunkArtifact,
+        artifactType: "hydrology-field/v1",
+        mediaType: "application/vnd.limina.hydrology-field",
+      }],
+    });
+    await assert.rejects(
+      publish(root, { ...fixture, manifest }, "job-media-conflict"),
+      /inconsistent byte lengths or media types/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("publishes sparse output only after hash-verifying installed reused artifacts", async () => {
   const root = projectFixture();
   try {

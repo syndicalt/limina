@@ -282,6 +282,7 @@ export function ensureFreshEditorBundles(home, dependencies = {}) {
   const bundles = [
     join(home, "editor", "vendor", "limina-runtime.js"),
     join(home, "editor", "vendor", "sim-worker-entry.js"),
+    join(home, "editor", "vendor", "derived-runtime-worker-entry.js"),
   ];
   if (!fsApi.existsSync(sourceRoot) || !fsApi.existsSync(packageJson)) {
     throw new Error(

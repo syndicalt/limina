@@ -76,17 +76,20 @@ function fixture() {
   const packageJson = join(home, "js", "package.json");
   const runtime = join(home, "editor", "vendor", "limina-runtime.js");
   const worker = join(home, "editor", "vendor", "sim-worker-entry.js");
+  const derivedWorker = join(home, "editor", "vendor", "derived-runtime-worker-entry.js");
   mkdirSync(join(home, "js", "src"), { recursive: true });
   mkdirSync(join(home, "editor", "vendor"), { recursive: true });
   writeFileSync(source, "export const source = true;\n");
   writeFileSync(packageJson, '{"scripts":{"bundle:editor":"build"}}\n');
   writeFileSync(runtime, "runtime\n");
   writeFileSync(worker, "worker\n");
+  writeFileSync(derivedWorker, "derived worker\n");
   const setMtime = (path, seconds) => utimesSync(path, seconds, seconds);
   setMtime(source, 10);
   setMtime(runtime, 20);
   setMtime(worker, 20);
-  return { home, source, packageJson, runtime, worker, setMtime, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+  setMtime(derivedWorker, 20);
+  return { home, source, packageJson, runtime, worker, derivedWorker, setMtime, cleanup: () => rmSync(home, { recursive: true, force: true }) };
 }
 
 function compilerFixture() {
@@ -111,12 +114,13 @@ function compilerFixture() {
 {
   const f = fixture();
   try {
-    rmSync(f.worker);
+    rmSync(f.derivedWorker);
     let invocation;
     const result = ensureFreshEditorBundles(f.home, { spawnSync: (command, args) => {
       invocation = { command, args };
       writeFileSync(f.runtime, "rebuilt runtime\n");
       writeFileSync(f.worker, "rebuilt worker\n");
+      writeFileSync(f.derivedWorker, "rebuilt derived worker\n");
       return { status: 0, stdout: "ok", stderr: "" };
     } });
     assert.equal(result.rebuilt, true);

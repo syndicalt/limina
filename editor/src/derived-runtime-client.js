@@ -1,6 +1,7 @@
-export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v1";
-export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v1";
+export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v2";
+export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 export const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-access/v1";
+export const DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROJECT_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -13,6 +14,7 @@ const REF_ID = /^[a-z][a-z0-9._-]{0,95}$/;
 const TYPED_ID = /^[a-z][a-z0-9._-]{0,95}\/v[1-9][0-9]*$/;
 const REVISION_STATUSES = new Set(["activated", "unchanged", "superseded"]);
 const MAX_CHUNKS = 16_384;
+const MAX_RESIDENT_CHUNKS = 225;
 const MAX_GLOBALS = 64;
 const DEFAULT_CLOSE_TIMEOUT_MS = 1_500;
 const DEFAULT_WORKER_URL = new URL("../vendor/derived-runtime-worker-entry.js", import.meta.url);
@@ -121,7 +123,7 @@ function validateManifest(value, snapshot, source) {
 
 function validateSnapshot(value, expected) {
   const snapshot = plainRecord(value, "derived activation snapshot");
-  exactDataKeys(snapshot, ["schema", "projectId", "branchId", "manifestHash", "source", "manifest", "chunks", "globals"], [], "derived activation snapshot");
+  exactDataKeys(snapshot, ["schema", "projectId", "branchId", "manifestHash", "source", "manifest", "residency", "chunks", "globals"], [], "derived activation snapshot");
   if (snapshot.schema !== DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA) throw protocolError("derived activation snapshot schema is unsupported");
   identifier(snapshot.projectId, PROJECT_ID, "derived activation snapshot.projectId");
   identifier(snapshot.branchId, BRANCH_ID, "derived activation snapshot.branchId");
@@ -131,8 +133,16 @@ function validateSnapshot(value, expected) {
   contentHash(snapshot.manifestHash, "derived activation snapshot.manifestHash");
   const source = validateSource(snapshot.source, "derived activation snapshot.source");
   validateManifest(snapshot.manifest, snapshot, source);
-  if (!Array.isArray(snapshot.chunks) || snapshot.chunks.length > MAX_CHUNKS) {
-    throw protocolError("derived activation snapshot.chunks must be a bounded array");
+  const residency = validateResidency(snapshot.residency);
+  if (residency.schema !== expected.residency.schema
+      || residency.lod !== expected.residency.lod
+      || residency.radius !== expected.residency.radius
+      || residency.center[0] !== expected.residency.center[0]
+      || residency.center[1] !== expected.residency.center[1]) {
+    throw protocolError("derived activation snapshot residency does not match its initialization");
+  }
+  if (!Array.isArray(snapshot.chunks) || snapshot.chunks.length < 1 || snapshot.chunks.length > MAX_RESIDENT_CHUNKS) {
+    throw protocolError("derived activation snapshot.chunks must contain 1-225 resident chunks");
   }
   for (let index = 0; index < snapshot.chunks.length; index++) {
     const chunk = plainRecord(snapshot.chunks[index], `derived activation snapshot.chunks[${index}]`);
@@ -178,6 +188,31 @@ function validatePinnedSource(value) {
   return Object.freeze({
     revision: safeInteger(source.revision, "derived pinned source.revision"),
     headHash: contentHash(source.headHash, "derived pinned source.headHash"),
+  });
+}
+
+function validateResidency(value) {
+  const residency = plainRecord(value, "derived terrain residency");
+  exactDataKeys(residency, ["schema", "center", "lod", "radius"], [], "derived terrain residency");
+  const center = residency.center;
+  if (!Array.isArray(center) || Object.getPrototypeOf(center) !== Array.prototype || center.length !== 2
+      || Object.getOwnPropertySymbols(center).length !== 0 || Object.getOwnPropertyNames(center).length !== 3) {
+    throw protocolError("derived terrain residency center is invalid");
+  }
+  for (let index = 0; index < 2; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(center, String(index));
+    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined
+        || !Number.isFinite(descriptor.value)) throw protocolError("derived terrain residency center is invalid");
+  }
+  if (residency.schema !== DERIVED_TERRAIN_RESIDENCY_SCHEMA || residency.lod !== 0
+      || !Number.isSafeInteger(residency.radius) || residency.radius < 0 || residency.radius > 7) {
+    throw protocolError("derived terrain residency is invalid");
+  }
+  return Object.freeze({
+    schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA,
+    center: Object.freeze([Object.is(center[0], -0) ? 0 : center[0], Object.is(center[1], -0) ? 0 : center[1]]),
+    lod: 0,
+    radius: residency.radius,
   });
 }
 
@@ -236,12 +271,13 @@ export class DerivedRuntimeClient {
   get phase() { return this.#phase; }
   get mode() { return this.#mode; }
 
-  start(discoveryInput, { mode = "watch", pinnedSource } = {}) {
+  start(discoveryInput, { mode = "watch", pinnedSource, residency } = {}) {
     if (this.#phase !== "idle") throw new Error("derived runtime client can only be started once");
     if (mode !== "watch" && mode !== "pinned") throw new TypeError("derived runtime mode must be watch or pinned");
     if ((mode === "pinned") !== (pinnedSource !== undefined)) throw new TypeError("pinned mode requires pinnedSource and watch mode forbids it");
     const discovery = validateDiscovery(discoveryInput);
     const pin = pinnedSource === undefined ? undefined : validatePinnedSource(pinnedSource);
+    const resident = validateResidency(residency);
     const worker = this.#workerFactory(this.#workerUrl);
     if (!worker || typeof worker.postMessage !== "function" || typeof worker.terminate !== "function") {
       try { worker?.terminate?.(); } catch { /* best effort for an invalid injected worker */ }
@@ -253,7 +289,7 @@ export class DerivedRuntimeClient {
     this.#mode = mode;
     this.#pinnedRevision = pin?.revision;
     this.#pinnedHeadHash = pin?.headHash;
-    this.#expected = Object.freeze({ projectId: discovery.projectId, branchId: discovery.branchId });
+    this.#expected = Object.freeze({ projectId: discovery.projectId, branchId: discovery.branchId, residency: resident });
     this.#initRequestId = nextRequestId("derived-init");
     worker.onmessage = (event) => { void this.#handleMessage(event?.data, generation); };
     worker.onerror = () => { this.#failProtocol("WORKER_ERROR", generation); };
@@ -270,6 +306,7 @@ export class DerivedRuntimeClient {
         },
         mode,
         ...(pin === undefined ? {} : { pinnedSource: pin }),
+        residency: resident,
       });
     } catch (error) {
       this.#terminate();

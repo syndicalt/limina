@@ -84,7 +84,7 @@ export type DerivedRuntimeArtifactResult =
   | Readonly<{ status: "not-modified"; contentHash: string }>;
 
 interface BoundCurrent {
-  readonly descriptors: ReadonlySet<DerivedArtifactDescriptor>;
+  readonly descriptorKeys: ReadonlySet<string>;
 }
 
 function fatal(code: DerivedRuntimeTransportErrorCode, message: string): DerivedRuntimeTransportError {
@@ -198,6 +198,11 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw transient("ABORTED", "derived runtime request was aborted");
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (response.body === null || response.body.locked) return;
+  try { await response.body.cancel(); } catch { /* preserve the protocol error */ }
+}
+
 async function readBounded(response: Response, expectedLength: number, maximum: number, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   if (expectedLength > maximum) throw fatal("PROTOCOL_ERROR", "derived runtime response exceeds its resource bound");
   if (response.body === null) {
@@ -250,14 +255,22 @@ async function sha256(cryptoImpl: Pick<Crypto, "subtle">, bytes: Uint8Array<Arra
   return `sha256:${hex}`;
 }
 
-function descriptorSet(manifest: ReturnType<typeof parseDerivedRevisionManifest>): ReadonlySet<DerivedArtifactDescriptor> {
-  const descriptors = new Set<DerivedArtifactDescriptor>();
-  for (const descriptor of derivedGlobalArtifacts(manifest)) descriptors.add(descriptor);
-  for (const chunk of manifest.chunks) for (const descriptor of chunk.artifacts) descriptors.add(descriptor);
+function descriptorKey(descriptor: DerivedArtifactDescriptor): string {
+  return `${descriptor.artifactType}\0${descriptor.contentHash}\0${descriptor.byteLength}\0${descriptor.mediaType}`;
+}
+
+function descriptorSet(manifest: ReturnType<typeof parseDerivedRevisionManifest>): ReadonlySet<string> {
+  const descriptors = new Set<string>();
+  for (const descriptor of derivedGlobalArtifacts(manifest)) descriptors.add(descriptorKey(descriptor));
+  for (const chunk of manifest.chunks) for (const descriptor of chunk.artifacts) descriptors.add(descriptorKey(descriptor));
   return descriptors;
 }
 
-function currentEtag(manifestHash: string): string { return `"${manifestHash}"`; }
+function contentEtag(contentHash: string): string { return `"${contentHash}"`; }
+
+function currentPublicationEtag(generation: number, manifestHash: string): string {
+  return `"g${generation}-${manifestHash}"`;
+}
 
 function requireHash(value: unknown, label: string): string {
   if (typeof value !== "string" || !HASH.test(value)) throw fatal("PROTOCOL_ERROR", `${label} is invalid`);
@@ -287,16 +300,27 @@ export class DerivedRuntimeTransport {
       headers: previous === undefined ? undefined : { "If-None-Match": previous.etag },
     });
     if (response.status === 304) {
-      if (previous === undefined) throw fatal("PROTOCOL_ERROR", "derived current returned 304 without a bound previous publication");
-      this.#validateCurrentIdentityHeaders(response, previous);
-      if (parseLength(response.headers, 0, "derived current 304") !== 0) throw fatal("PROTOCOL_ERROR", "derived current 304 carried a body");
+      try {
+        if (previous === undefined) throw fatal("PROTOCOL_ERROR", "derived current returned 304 without a bound previous publication");
+        this.#validateCurrentIdentityHeaders(response, previous);
+        if (parseLength(response.headers, 0, "derived current 304") !== 0) throw fatal("PROTOCOL_ERROR", "derived current 304 carried a body");
+      } catch (error) {
+        await cancelResponseBody(response);
+        throw error;
+      }
       return Object.freeze({ status: "not-modified", current: previous });
     }
     if (response.status !== 200) await this.#throwResponseError(response, options.signal);
-    if (response.headers.get("content-type") !== "application/json; charset=utf-8") {
-      throw fatal("PROTOCOL_ERROR", "derived current Content-Type is invalid");
+    let length: number;
+    try {
+      if (response.headers.get("content-type") !== "application/json; charset=utf-8") {
+        throw fatal("PROTOCOL_ERROR", "derived current Content-Type is invalid");
+      }
+      length = parseLength(response.headers, MAX_DERIVED_RUNTIME_CURRENT_BYTES, "derived current");
+    } catch (error) {
+      await cancelResponseBody(response);
+      throw error;
     }
-    const length = parseLength(response.headers, MAX_DERIVED_RUNTIME_CURRENT_BYTES, "derived current");
     const bytes = await readBounded(response, length, MAX_DERIVED_RUNTIME_CURRENT_BYTES, options.signal);
     const body = plainObject(decodeJson(bytes, "derived current response"), "derived current response");
     exactKeys(body, ["schema", "projectId", "branchId", "generation", "source", "manifest"], "derived current response");
@@ -324,10 +348,10 @@ export class DerivedRuntimeTransport {
       source: Object.freeze({ revision: source.revision as number, headHash }),
       manifest,
       manifestHash: manifest.manifestHash,
-      etag: currentEtag(manifest.manifestHash),
+      etag: currentPublicationEtag(body.generation as number, manifest.manifestHash),
     });
     this.#validateCurrentIdentityHeaders(response, current);
-    this.#bindings.set(current, Object.freeze({ descriptors: descriptorSet(manifest) }));
+    this.#bindings.set(current, Object.freeze({ descriptorKeys: descriptorSet(manifest) }));
     return Object.freeze({ status: "current", current });
   }
 
@@ -337,7 +361,7 @@ export class DerivedRuntimeTransport {
     options: Readonly<{ signal?: AbortSignal; allowNotModified?: boolean }> = {},
   ): Promise<DerivedRuntimeArtifactResult> {
     const binding = this.#bindings.get(current);
-    if (binding === undefined || !binding.descriptors.has(descriptor)) {
+    if (binding === undefined || !binding.descriptorKeys.has(descriptorKey(descriptor))) {
       throw fatal("PROTOCOL_ERROR", "derived artifact descriptor is not bound to this transport publication");
     }
     if (descriptor.byteLength > MAX_DERIVED_ARTIFACT_BYTES) throw fatal("PROTOCOL_ERROR", "derived artifact descriptor exceeds the server cap");
@@ -347,16 +371,25 @@ export class DerivedRuntimeTransport {
       `${this.#config.baseUrl}/v1/derived/manifests/${manifestHex}/artifacts/${contentHex}`,
       {
         signal: options.signal,
-        headers: options.allowNotModified ? { "If-None-Match": currentEtag(descriptor.contentHash) } : undefined,
+        headers: options.allowNotModified ? { "If-None-Match": contentEtag(descriptor.contentHash) } : undefined,
       },
     );
     if (response.status === 304) {
-      if (!options.allowNotModified) throw fatal("PROTOCOL_ERROR", "derived artifact returned an unsolicited 304");
-      this.#validateArtifactHeaders(response, current, descriptor, true);
+      try {
+        if (!options.allowNotModified) throw fatal("PROTOCOL_ERROR", "derived artifact returned an unsolicited 304");
+        this.#validateArtifactHeaders(response, current, descriptor, true);
+      } catch (error) {
+        await cancelResponseBody(response);
+        throw error;
+      }
       return Object.freeze({ status: "not-modified", contentHash: descriptor.contentHash });
     }
     if (response.status !== 200) await this.#throwResponseError(response, options.signal);
-    this.#validateArtifactHeaders(response, current, descriptor, false);
+    try { this.#validateArtifactHeaders(response, current, descriptor, false); }
+    catch (error) {
+      await cancelResponseBody(response);
+      throw error;
+    }
     const bytes = await readBounded(response, descriptor.byteLength, MAX_DERIVED_ARTIFACT_BYTES, options.signal);
     throwIfAborted(options.signal);
     const actualHash = await sha256(this.#crypto, bytes);
@@ -369,7 +402,11 @@ export class DerivedRuntimeTransport {
     throwIfAborted(options.signal);
     const headers = { Authorization: `Bearer ${this.#config.token}`, ...options.headers };
     try {
-      return await this.#fetch(url, {
+      // Calling a function-valued class field as `this.#fetch()` supplies the transport object as
+      // its receiver. Chromium's worker fetch rejects that WebIDL receiver before any request is
+      // issued, so detach the callable first.
+      const fetchImpl = this.#fetch;
+      return await fetchImpl(url, {
         method: "GET",
         headers,
         signal: options.signal,
@@ -393,7 +430,7 @@ export class DerivedRuntimeTransport {
   }
 
   #validateArtifactHeaders(response: Response, current: DerivedRuntimeCurrent, descriptor: DerivedArtifactDescriptor, notModified: boolean): void {
-    exactHeader(response.headers, "etag", currentEtag(descriptor.contentHash), "derived artifact");
+    exactHeader(response.headers, "etag", contentEtag(descriptor.contentHash), "derived artifact");
     exactHeader(response.headers, "x-limina-content-hash", descriptor.contentHash, "derived artifact");
     exactHeader(response.headers, "x-limina-manifest-hash", current.manifestHash, "derived artifact");
     exactHeader(response.headers, "content-type", descriptor.mediaType, "derived artifact");
@@ -404,8 +441,16 @@ export class DerivedRuntimeTransport {
 
   async #throwResponseError(response: Response, signal?: AbortSignal): Promise<never> {
     const contentType = response.headers.get("content-type");
-    if (contentType !== "application/json; charset=utf-8") throw fatal("PROTOCOL_ERROR", `derived runtime returned unexpected HTTP ${response.status}`);
-    const length = parseLength(response.headers, MAX_ERROR_BYTES, "derived runtime error");
+    if (contentType !== "application/json; charset=utf-8") {
+      await cancelResponseBody(response);
+      throw fatal("PROTOCOL_ERROR", `derived runtime returned unexpected HTTP ${response.status}`);
+    }
+    let length: number;
+    try { length = parseLength(response.headers, MAX_ERROR_BYTES, "derived runtime error"); }
+    catch (error) {
+      await cancelResponseBody(response);
+      throw error;
+    }
     const body = plainObject(decodeJson(await readBounded(response, length, MAX_ERROR_BYTES, signal), "derived runtime error"), "derived runtime error");
     exactKeys(body, ["schema", "code", "message"], "derived runtime error");
     if (body.schema !== DERIVED_RUNTIME_ERROR_SCHEMA || typeof body.code !== "string" || typeof body.message !== "string"

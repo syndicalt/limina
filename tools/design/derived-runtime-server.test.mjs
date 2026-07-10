@@ -100,6 +100,14 @@ function artifactPath(root, contentHash) {
   return join(root, ".limina", "derived", "main", "artifacts", `${contentHash.slice(7)}.bin`);
 }
 
+function manifestPath(root, manifestHash) {
+  return join(root, ".limina", "derived", "main", "manifests", `${manifestHash.slice(7)}.json`);
+}
+
+function snapshotPath(root, snapshotHash) {
+  return join(root, ".limina", "derived", "main", "snapshots", `${snapshotHash.slice(7)}.json`);
+}
+
 async function startServer(root, readHead, options = {}) {
   const server = new DerivedRuntimeServer({
     projectId: "grey-field",
@@ -193,7 +201,7 @@ test("current endpoint is capability-scoped, CORS-bounded, bodyless, current-onl
     const current = await http(running.owner, "/v1/derived/current");
     assert.equal(current.status, 200);
     assert.equal(current.headers["cache-control"], "no-store");
-    assert.equal(current.headers["cross-origin-resource-policy"], "same-site");
+    assert.equal(current.headers["cross-origin-resource-policy"], "cross-origin");
     assert.equal(
       current.headers["access-control-expose-headers"],
       "ETag, X-Limina-Content-Hash, X-Limina-Generation, X-Limina-Head-Hash, X-Limina-Manifest-Hash, X-Limina-Revision",
@@ -213,6 +221,63 @@ test("current endpoint is capability-scoped, CORS-bounded, bodyless, current-onl
     const unchanged = await http(running.owner, "/v1/derived/current", { headers: { "If-None-Match": current.headers.etag } });
     assert.equal(unchanged.status, 304);
     assert.equal(unchanged.body.byteLength, 0);
+    await publish(fx.root, fixture, "job-current-identical", authority);
+    const republished = await http(running.owner, "/v1/derived/current", { headers: { "If-None-Match": current.headers.etag } });
+    assert.equal(republished.status, 200, "a new pointer generation must not reuse the prior current ETag");
+    assert.equal(JSON.parse(republished.body.toString("utf8")).generation, 2);
+    assert.notEqual(republished.headers.etag, current.headers.etag);
+  } finally {
+    await running?.server.stop();
+    fx.cleanup();
+  }
+});
+
+for (const target of ["manifest", "snapshot"]) {
+  test(`runtime cache invalidates when the installed current ${target} changes`, async () => {
+    const fx = projectFixture();
+    const source = { revision: 17, headHash: hash(`head:cache-${target}`) };
+    const fixture = revisionFixture(`cache-${target}`, source);
+    const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+    let running;
+    try {
+      await publish(fx.root, fixture, `job-cache-${target}`, authority);
+      running = await startServer(fx.root, authority);
+      assert.equal((await http(running.owner, "/v1/derived/current")).status, 200);
+      const path = target === "manifest"
+        ? manifestPath(fx.root, fixture.manifest.manifestHash)
+        : snapshotPath(fx.root, fixture.snapshot.snapshotHash);
+      writeFileSync(path, "{\"corrupt\":true}\n");
+      const response = await http(running.owner, "/v1/derived/current");
+      assert.equal(response.status, 503);
+      assert.equal(errorCode(response), "PUBLICATION_UNAVAILABLE");
+    } finally {
+      await running?.server.stop();
+      fx.cleanup();
+    }
+  });
+}
+
+test("runtime cache rejects a manifest changed while authoritative head validation is in flight", async () => {
+  const fx = projectFixture();
+  const source = { revision: 17, headHash: hash("head:cache-authority-race") };
+  const fixture = revisionFixture("cache-authority-race", source);
+  let mutateDuringHead = false;
+  const authority = () => {
+    if (mutateDuringHead) {
+      mutateDuringHead = false;
+      writeFileSync(manifestPath(fx.root, fixture.manifest.manifestHash), "{\"corrupt\":true}\n");
+    }
+    return { projectId: "grey-field", branchId: "main", ...source };
+  };
+  let running;
+  try {
+    await publish(fx.root, fixture, "job-cache-authority-race", authority);
+    running = await startServer(fx.root, authority);
+    assert.equal((await http(running.owner, "/v1/derived/current")).status, 200);
+    mutateDuringHead = true;
+    const response = await http(running.owner, "/v1/derived/current");
+    assert.equal(response.status, 409);
+    assert.equal(errorCode(response), "CURRENT_CHANGED");
   } finally {
     await running?.server.stop();
     fx.cleanup();

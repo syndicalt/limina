@@ -29,6 +29,7 @@ import {
   DerivedRuntimeWorkerController,
   parseDerivedRuntimeWorkerInput,
 } from "../src/browser/derived-runtime-worker.ts";
+import { DERIVED_TERRAIN_RESIDENCY_SCHEMA } from "../src/browser/derived-terrain-residency.ts";
 import type { DerivedRuntimeCurrent } from "../src/browser/derived-runtime-transport.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -171,6 +172,68 @@ function manifest(revision: number, options: { globals?: boolean; terrain?: Uint
   });
 }
 
+function largeManifest(revision: number) {
+  const artifacts = new Map<string, Uint8Array>();
+  const chunks = [];
+  for (let tz = -10; tz < 10; tz++) {
+    for (let tx = -10; tx < 10; tx++) {
+      const bytes = encodeTerrainChunkArtifact({
+        nrows: 2,
+        ncols: 2,
+        origin: [tx * grid.chunkSizeM, 0, tz * grid.chunkSizeM],
+        scale: [grid.chunkSizeM, 10, grid.chunkSizeM],
+        heights: new Float32Array([0, 0.25, 0.5, 1]),
+      });
+      const descriptor = Object.freeze({
+        artifactType: "terrain-chunk/v1",
+        contentHash: derivedArtifactContentHash(bytes),
+        byteLength: bytes.byteLength,
+        mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
+      });
+      artifacts.set(descriptor.contentHash, bytes);
+      chunks.push({
+        chunkId: terrainChunkId(grid.gridId, 0, tx, tz),
+        gridId: grid.gridId,
+        lod: 0,
+        tx,
+        tz,
+        topologyHash: hash(`large-topology-${tx}-${tz}`),
+        sourceSliceHashes: [],
+        artifacts: [descriptor],
+      });
+    }
+  }
+  chunks.sort((left, right) => left.chunkId < right.chunkId ? -1 : left.chunkId > right.chunkId ? 1 : 0);
+  return {
+    artifacts,
+    manifest: createDerivedRevisionManifest({
+      schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+      projectId: "grey-field",
+      branchId: "main",
+      source: {
+        revision,
+        headHash: hash(`head-${revision}`),
+        contentRefs: [{
+          refId: "map-document",
+          refType: "map-document/v1",
+          scope: "global",
+          assetId: "maps/grey-field.worldmap.json",
+          contentHash: hash(`map-${revision}`),
+        }],
+      },
+      compiler: {
+        version: "1.2.0",
+        configHash: hash("config"),
+        graphHash,
+        snapshotHash: hash(`snapshot-${revision}`),
+      },
+      grid,
+      globalArtifacts: [fieldDescriptor, waterDescriptor],
+      chunks,
+    }),
+  };
+}
+
 function current(manifestValue: ReturnType<typeof manifest>, generation = 1): DerivedRuntimeCurrent {
   return Object.freeze({
     schema: "limina.derived-runtime-current/v1",
@@ -236,6 +299,7 @@ function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
     requestId: "init-1",
     config: { baseUrl: "http://127.0.0.1:43127", token: "A".repeat(43), projectId: "grey-field", branchId: "main" },
     mode,
+    residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 7 },
     ...(pinnedSource === undefined ? {} : { pinnedSource }),
   });
   return { timers, transport, posted, controller, init };
@@ -261,10 +325,12 @@ async function acknowledgeLatest(state: ReturnType<typeof harness>, accepted = t
 
 // Exact schemas reject ambiguity before any secret-bearing config can escape.
 rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "init", requestId: "x",
-  config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main", extra: true }, mode: "watch" }),
+  config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main", extra: true }, mode: "watch",
+  residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 7 } }),
 /unsupported or missing/, "init accepted an extra config field");
 rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "init", requestId: "x",
   config: { baseUrl: "http://127.0.0.1:1", token: "A".repeat(43), projectId: "grey-field", branchId: "main" }, mode: "watch",
+  residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 7 },
   pinnedSource: { revision: 1, headHash: hash("head-1") } }), /forbids/, "watch accepted a pinned source");
 
 // Watch mode activates current, polls deterministically, reuses worker-owned buffers, and keeps credentials out of output.
@@ -285,10 +351,22 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   assert(!JSON.stringify(state.posted).includes("A".repeat(43)), "worker output leaked the bearer token");
   assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]), "watch did not schedule its deterministic base poll");
 
+  const fetchesBeforeUnchanged = state.transport.fetchCurrentCount;
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await eventually(() => messages(state, "revision").length === 2, "unchanged revision outcome");
+  assert(messages(state, "activate").length === 1 && state.transport.fetchCurrentCount === fetchesBeforeUnchanged + 1,
+    "unchanged watch poll re-entered activation or duplicated authority I/O");
+
   state.transport.current = current(secondManifest, 2);
   state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
-  await acknowledgeLatest(state);
-  await eventually(() => messages(state, "revision").length === 2, "second revision outcome");
+  await eventually(() => messages(state, "activate").length === 2, "second activation message");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 3, "second revision outcome");
   const secondSnapshot = (messages(state, "activate")[1].snapshot as { chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> });
   assert(secondSnapshot.chunks[0].resource.decoded.tile.heights.length === 4,
     "first activation detached a worker-owned buffer needed for unchanged-resource reuse");
@@ -377,6 +455,32 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   await state.controller.close("close-globals");
 }
 
+// A large publication retains full manifest identity while fetching and transferring only the
+// exact radius-7 terrain window plus complete global artifacts.
+{
+  const large = largeManifest(81);
+  const state = harness(current(large.manifest));
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "large bounded activation");
+  const activation = messages(state, "activate")[0];
+  const snapshot = activation.snapshot as {
+    manifest: { chunks: unknown[] };
+    chunks: unknown[];
+    globals: unknown[];
+  };
+  assert(snapshot.manifest.chunks.length === 400, "worker truncated full manifest revision identity");
+  assert(snapshot.chunks.length === 225, `worker transferred ${snapshot.chunks.length} chunks instead of the exact 225 window`);
+  assert(snapshot.globals.length === 2, "worker omitted complete global hydrology resources");
+  assert(state.transport.artifactOrder.length === 227,
+    `worker fetched ${state.transport.artifactOrder.length} artifacts instead of 225 resident chunks plus 2 globals`);
+  assert(state.posted.find((entry) => entry.message === activation)!.transferCount >= 227,
+    "worker did not transfer the bounded chunk and global resource buffers");
+  await state.controller.close("close-large-bounded");
+}
+
 // Decoder failure is fail-closed before activation.
 {
   const corrupt = terrainBytes.slice(0, terrainBytes.byteLength - 1);
@@ -441,6 +545,6 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({ schema: DERIVED_RUNTIME_WORKE
   await state.controller.close("close-rollback");
 }
 
-const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned polling, stale-head rejection, cancellation/coalescing, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned polling, 400-chunk identity with exact 225-chunk residency, stale-head rejection, cancellation/coalescing, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
 if (ops?.op_log === undefined) console.log(completion);
 else ops.op_log(completion);

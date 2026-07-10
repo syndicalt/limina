@@ -83,7 +83,7 @@ function currentHeaders(length: number): Record<string, string> {
   return {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": String(length),
-    ETag: `"${manifest.manifestHash}"`,
+    ETag: `"g3-${manifest.manifestHash}"`,
     "X-Limina-Manifest-Hash": manifest.manifestHash,
     "X-Limina-Revision": String(manifest.source.revision),
     "X-Limina-Head-Hash": manifest.source.headHash,
@@ -120,9 +120,10 @@ function errorResponse(status: number, code: string): Response {
 }
 
 type RequestRecord = { url: string; init: RequestInit };
-function harness(responses: Array<Response | Error>) {
+function harness(responses: Array<Response | Error>, requireUnboundReceiver = false) {
   const requests: RequestRecord[] = [];
-  const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+  const fetchImpl = (async function (this: unknown, url: string | URL | Request, init?: RequestInit) {
+    if (requireUnboundReceiver) assert(this === undefined, "transport invoked fetch with a branded receiver");
     requests.push({ url: String(url), init: init ?? {} });
     const response = responses.shift();
     if (response instanceof Error) throw response;
@@ -174,14 +175,40 @@ assert(initialHeaders.get("if-none-match") === null, "initial request sent If-No
 assert(initial.requests[0].init.credentials === "omit" && initial.requests[0].init.redirect === "error"
   && initial.requests[0].init.referrerPolicy === "no-referrer", "safe fetch policy changed");
 
+const receiverSafe = harness([currentResponse()], true);
+await receiverSafe.transport.fetchCurrent();
+
 const unchanged = bytesResponse(304, null, { ...currentHeaders(0), "Content-Length": "0" });
 const conditional = harness([currentResponse(), unchanged]);
 const bound = (await conditional.transport.fetchCurrent()).current;
 const notModified = await conditional.transport.fetchCurrent({ previous: bound });
 assert(notModified.status === "not-modified" && notModified.current === bound, "304 did not preserve bound current identity");
-assert(new Headers(conditional.requests[1].init.headers).get("if-none-match") === `"${manifest.manifestHash}"`, "current conditional ETag changed");
+assert(new Headers(conditional.requests[1].init.headers).get("if-none-match") === `"g3-${manifest.manifestHash}"`, "current conditional ETag changed");
 
-const artifactHarness = harness([currentResponse(), bytesResponse(200, artifactBytes, artifactHeaders(artifactBytes.byteLength))]);
+const republishedHeaders = { ...currentHeaders(0), ETag: `"g4-${manifest.manifestHash}"`, "X-Limina-Generation": "4" };
+const republishedPayload = encoder.encode(`${JSON.stringify({
+  schema: "limina.derived-runtime-current/v1",
+  projectId: baseConfig.projectId,
+  branchId: baseConfig.branchId,
+  generation: 4,
+  source: { revision: manifest.source.revision, headHash: manifest.source.headHash },
+  manifest,
+})}\n`);
+const republished = harness([
+  currentResponse(),
+  bytesResponse(200, republishedPayload, { ...republishedHeaders, "Content-Length": String(republishedPayload.byteLength) }),
+]);
+const beforeRepublish = (await republished.transport.fetchCurrent()).current;
+const afterRepublish = await republished.transport.fetchCurrent({ previous: beforeRepublish });
+assert(afterRepublish.status === "current" && afterRepublish.current.generation === 4
+    && afterRepublish.current.manifestHash === beforeRepublish.manifestHash,
+"identical manifest republish did not advance generation as a new current publication");
+
+const artifactHarness = harness([
+  currentResponse(),
+  bytesResponse(200, artifactBytes, artifactHeaders(artifactBytes.byteLength)),
+  bytesResponse(304, null, { ...artifactHeaders(0), "Content-Length": "0" }),
+]);
 const artifactCurrent = (await artifactHarness.transport.fetchCurrent()).current;
 const artifactResult = await artifactHarness.transport.fetchArtifact(artifactCurrent, artifactCurrent.manifest.chunks[0].artifacts[0]);
 assert(artifactResult.status === "artifact" && artifactResult.bytes.every((byte, index) => byte === artifactBytes[index]), "artifact bytes changed");
@@ -189,9 +216,16 @@ assert(artifactHarness.digests() === 1, "artifact did not use injected WebCrypto
 assert(artifactHarness.requests[1].url === `${baseConfig.baseUrl}/v1/derived/manifests/${manifest.manifestHash.slice(7)}/artifacts/${contentHash.slice(7)}`,
   "artifact URL was not bound to manifest and descriptor hashes");
 
+const reparsedDescriptor = { ...artifactCurrent.manifest.chunks[0].artifacts[0] };
+const reparsedResult = await artifactHarness.transport.fetchArtifact(
+  artifactCurrent,
+  reparsedDescriptor,
+  { allowNotModified: true },
+);
+assert(reparsedResult.status === "not-modified", "canonically identical reparsed descriptor lost publication binding");
 await rejected(
-  artifactHarness.transport.fetchArtifact(artifactCurrent, { ...artifactCurrent.manifest.chunks[0].artifacts[0] }),
-  "PROTOCOL_ERROR", "fatal", "structurally cloned descriptor escaped identity binding",
+  artifactHarness.transport.fetchArtifact(artifactCurrent, { ...reparsedDescriptor, contentHash: hash("unbound") }),
+  "PROTOCOL_ERROR", "fatal", "unbound descriptor escaped canonical publication binding",
 );
 await rejected(
   initial.transport.fetchCurrent({ previous: artifactCurrent }),
@@ -240,6 +274,15 @@ const wrongProject = harness([currentResponse({ projectId: "another-project" })]
 await rejected(wrongProject.transport.fetchCurrent(), "PROTOCOL_ERROR", "fatal", "wrong project accepted");
 const wrongHeader = harness([currentResponse({}, { "X-Limina-Manifest-Hash": hash("other") })]);
 await rejected(wrongHeader.transport.fetchCurrent(), "PROTOCOL_ERROR", "fatal", "wrong manifest header accepted");
+let cancelledProtocolBody = 0;
+const invalidContentTypeResponse = {
+  status: 200,
+  headers: new Headers({ "Content-Type": "text/plain", "Content-Length": "3" }),
+  body: { locked: false, cancel: async () => { cancelledProtocolBody++; } },
+} as unknown as Response;
+const invalidContentType = harness([invalidContentTypeResponse]);
+await rejected(invalidContentType.transport.fetchCurrent(), "PROTOCOL_ERROR", "fatal", "invalid current content type accepted");
+assert(cancelledProtocolBody === 1, "pre-read protocol rejection did not cancel its response body");
 const wrongLength = harness([currentResponse({}, { "Content-Length": "1" })]);
 await rejected(wrongLength.transport.fetchCurrent(), "PROTOCOL_ERROR", "fatal", "truncated declared length accepted");
 const wrongErrorStatus = harness([errorResponse(409, "NO_PUBLICATION")]);

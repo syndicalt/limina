@@ -129,7 +129,7 @@ function runtimeResources(current: any): Map<string, any> {
   return new Map(current.chunks.map((entry: any) => [entry.chunkId, entry.resource]));
 }
 
-function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
+function createHarness(initialAuthority: any, diagnosticsLimit = 64, selectChunks?: (manifest: any) => readonly any[]) {
   let authorityManifest = initialAuthority;
   let resourceSequence = 0;
   let failStageChunkId: string | null = null;
@@ -150,6 +150,7 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
     projectId: "grey-field",
     branchId: "main",
     diagnosticsLimit,
+    ...(selectChunks === undefined ? {} : { selectChunks }),
     getAuthoritativeSource: () => ({
       projectId: "grey-field",
       branchId: "main",
@@ -204,6 +205,97 @@ function createHarness(initialAuthority: any, diagnosticsLimit = 64) {
     setActivationFailure: (value: boolean) => { failActivation = value; },
     setArtifactOverride: (value: typeof artifactOverride) => { artifactOverride = value; },
   };
+}
+
+// A browser residency selector keeps full-manifest identity while lifecycle-loading only its
+// exact canonical window. Malformed selectors fail before artifact I/O.
+{
+  const specs = [];
+  for (let tz = -10; tz < 10; tz++) for (let tx = -10; tx < 10; tx++) specs.push({ tx, tz });
+  const large = makeManifest(90, specs);
+  const selector = (manifest: any) => Object.freeze(manifest.chunks.filter((chunk: any) => Math.abs(chunk.tx) <= 7 && Math.abs(chunk.tz) <= 7));
+  const bounded = createHarness(large, 64, selector);
+  bounded.artifactSets.push(large.artifacts);
+  await bounded.manager.submit(large.manifest, Object.freeze({}));
+  assert(bounded.staged.length === 225 && bounded.manager.current.chunks.length === 225,
+    "resident manager did not cap chunk staging at 225");
+  assert(bounded.activations[0].manifest.chunks.length === 400
+      && bounded.activations[0].manifest.manifestHash === large.manifest.manifestHash,
+  "resident manager weakened full-manifest identity");
+
+  let selectedTx = -10;
+  const driftingSelector = (manifest: any) => Object.freeze(manifest.chunks.filter((chunk: any) => (
+    chunk.tx === selectedTx && chunk.tz === -10
+  )));
+  const drifting = createHarness(large, 64, driftingSelector);
+  drifting.artifactSets.push(large.artifacts);
+  await drifting.manager.submit(large.manifest);
+  const firstResident = drifting.manager.current.chunks[0].resource;
+  selectedTx = -9;
+  const driftOutcome = await drifting.manager.submit(large.manifest);
+  assert(driftOutcome.status === "activated" && drifting.activations.length === 2,
+    "same-manifest selector drift was returned as unchanged");
+  assert(drifting.manager.current.chunks[0].chunk.tx === -9
+      && drifting.manager.current.chunks[0].resource !== firstResident,
+  "same-manifest selector drift did not replace the resident set");
+
+  selectedTx = -8;
+  const overlapping = createHarness(large, 64, driftingSelector);
+  overlapping.artifactSets.push(large.artifacts);
+  const firstLoadStarted = deferred();
+  const releaseFirstLoad = deferred();
+  let blockFirstLoad = true;
+  overlapping.setArtifactOverride(async (input: any) => {
+    if (blockFirstLoad) {
+      blockFirstLoad = false;
+      firstLoadStarted.resolve();
+      await releaseFirstLoad.promise;
+    }
+    return large.artifacts.get(input.artifact.contentHash)!;
+  });
+  const firstWindow = overlapping.manager.submit(large.manifest);
+  await firstLoadStarted.promise;
+  selectedTx = -7;
+  const secondWindow = overlapping.manager.submit(large.manifest);
+  releaseFirstLoad.resolve();
+  const [firstWindowOutcome, secondWindowOutcome] = await Promise.all([firstWindow, secondWindow]);
+  assert(firstWindowOutcome.status === "activated" && secondWindowOutcome.status === "activated"
+      && overlapping.activations.length === 2 && overlapping.manager.current.chunks[0].chunk.tx === -7,
+  "overlapping same-manifest residency windows were incorrectly coalesced");
+
+  const stableResidentBytes = new Uint8Array([9, 0, 1]);
+  const outsideBase = makeManifest(91, [
+    { tx: 0, bytes: stableResidentBytes },
+    { tx: 1, bytes: new Uint8Array([9, 1, 1]) },
+  ]);
+  const outsideNext = makeManifest(92, [
+    { tx: 0, bytes: stableResidentBytes },
+    { tx: 1, bytes: new Uint8Array([9, 1, 2]) },
+  ]);
+  const residentOnly = createHarness(outsideBase, 64, (manifest: any) => Object.freeze(
+    manifest.chunks.filter((chunk: any) => chunk.tx === 0),
+  ));
+  residentOnly.artifactSets.push(outsideBase.artifacts, outsideNext.artifacts);
+  await residentOnly.manager.submit(outsideBase.manifest);
+  const stableResidentResource = residentOnly.manager.current.chunks[0].resource;
+  const residentStageCount = residentOnly.staged.length;
+  residentOnly.setAuthority(outsideNext);
+  const outsideOutcome = await residentOnly.manager.submit(outsideNext.manifest);
+  assert(outsideOutcome.status === "activated" && outsideOutcome.changedChunks === 0
+      && outsideOutcome.unchangedChunks === 1 && residentOnly.activations.length === 2,
+  "nonresident-only revision change did not advance full-manifest activation");
+  assert(residentOnly.manager.current.manifest.manifestHash === outsideNext.manifest.manifestHash
+      && residentOnly.manager.current.manifest.source.revision === 92,
+  "nonresident-only revision change did not advance manifest/source identity");
+  assert(residentOnly.staged.length === residentStageCount
+      && residentOnly.manager.current.chunks[0].resource === stableResidentResource,
+  "nonresident-only revision change reloaded or replaced the stable resident resource");
+
+  let loads = 0;
+  const malformed = createHarness(large, 64, (manifest: any) => Object.freeze([{ ...manifest.chunks[0] }]));
+  malformed.setArtifactOverride(() => { loads++; return new Uint8Array(); });
+  await rejects(malformed.manager.submit(large.manifest), /canonical manifest chunk references/, "cloned selector output was accepted");
+  assert(loads === 0, "malformed residency selector performed artifact I/O");
 }
 
 // Changed-only activation preserves stable runtime identity, handles signed chunk IDs, and retires replacements/removals.

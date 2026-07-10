@@ -101,6 +101,18 @@ import type { RenderQualityTier } from "./render/quality.ts";
 import type { RenderTelemetrySnapshot } from "./render/telemetry.ts";
 import { UnderwaterEffect } from "./render/underwater.ts";
 export { UnderwaterEffect } from "./render/underwater.ts";
+import {
+  DERIVED_SIM_STAGE_SCHEMA,
+  type DerivedSimStageSnapshot,
+} from "./browser/sim-worker.ts";
+import {
+  DetachedDerivedRenderCandidate,
+} from "./browser/derived-runtime-render-candidate.ts";
+import {
+  DERIVED_TERRAIN_RESIDENCY_SCHEMA,
+  derivedTerrainResidencyKey,
+  type DerivedTerrainResidency,
+} from "./browser/derived-terrain-residency.ts";
 import { buildPostPipeline, constrainPostPreset, type PostPipeline, type PostPreset } from "./render/post.ts";
 export { createBrowserRenderHost } from "./render/browser-host.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
@@ -448,7 +460,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
 // ════════════════════════════════════════════════════════════════════════════
 
 interface WorkerLike {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   terminate(): void;
   onmessage: ((ev: { data: unknown }) => void) | null;
   onerror: ((ev: { message?: string }) => void) | null;
@@ -526,6 +538,8 @@ export interface RunLiveOptions {
   quality?: RenderQualityTier;
   /** Bounded periodic renderer/frame metrics. */
   onRenderTelemetry?: (snapshot: Readonly<RenderTelemetrySnapshot>) => void;
+  /** Exact derived revision to activate before this runtime is returned to its caller. */
+  initialDerivedRevision?: unknown;
   /** @deprecated Internally-owned hosts are always released. Supply renderHost to reuse a canvas backend. */
   disposeRendererOnStop?: boolean;
 }
@@ -580,6 +594,16 @@ export interface RunningLive {
   /** Coherent completed-tick player water state read directly from the status SAB.
    *  Returns null only when the bounded seqlock reader cannot obtain a stable generation. */
   playerWaterState(): Readonly<SimStatusSnapshot> | null;
+  /** Atomically replace the bounded derived terrain/water render and simulation revision. */
+  activateDerivedRevision(snapshot: unknown, options?: Readonly<{ signal?: AbortSignal }>): Promise<Readonly<{
+    manifestHash: string;
+    revision: number;
+    headHash: string;
+  }>>;
+  /** Exact derived revision currently committed in both render and simulation. */
+  derivedRevision(): Readonly<{ manifestHash: string; revision: number; headHash: string }> | null;
+  /** Immutable LOD0 camera residency used by the next derived worker and active revision. */
+  derivedTerrainResidency(): Readonly<DerivedTerrainResidency>;
   stop(): Promise<void>;
 }
 
@@ -762,9 +786,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
   let liveLoop: AccumulatorLoopHandle | null = null;
   let controlRequestId = 0;
+  let derivedControlRequestId = 0;
   const controlWaiters = new Map<number, {
     expected: "paused" | "resumed";
     resolve(): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  const derivedControlWaiters = new Map<string, {
+    expected: "derivedRevisionStaged" | "derivedRevisionCommitted" | "derivedRevisionDiscarded";
+    manifestHash: string;
+    resolve(message: Record<string, unknown>): void;
     reject(error: Error): void;
     timer: ReturnType<typeof setTimeout>;
   }>();
@@ -780,10 +812,54 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
   let cleanupUnderwater: UnderwaterEffect | undefined;
   let cleanupWater: { dispose(): void } | undefined;
+  let cleanupDerivedRevision: (() => void) | undefined;
+  const failedDerivedDisposals: DetachedDerivedRenderCandidate[] = [];
+  const MAX_FAILED_DERIVED_DISPOSALS = 8;
   let teardownPromise: Promise<void> | undefined;
   let runtimeReady = false;
   let aborted = false;
   let stopped = false;
+
+  const disposeDerivedCandidate = (candidate: DetachedDerivedRenderCandidate, label: string): void => {
+    try {
+      candidate.dispose();
+      const retained = failedDerivedDisposals.indexOf(candidate);
+      if (retained >= 0) failedDerivedDisposals.splice(retained, 1);
+    } catch (error) {
+      if (!failedDerivedDisposals.includes(candidate)) {
+        if (failedDerivedDisposals.length >= MAX_FAILED_DERIVED_DISPOSALS) {
+          throw new AggregateError([error], `${label}; derived disposal retry queue is full`);
+        }
+        failedDerivedDisposals.push(candidate);
+      }
+      console.warn(label, error);
+    }
+  };
+
+  const retryFailedDerivedDisposals = (): void => {
+    const failures: unknown[] = [];
+    for (const candidate of [...failedDerivedDisposals]) {
+      try {
+        candidate.dispose();
+        const retained = failedDerivedDisposals.indexOf(candidate);
+        if (retained >= 0) failedDerivedDisposals.splice(retained, 1);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `${failures.length} derived candidate disposal retry operation(s) failed`);
+    }
+  };
+
+  const requireDerivedDisposalCapacity = (): void => {
+    // Reserve one slot for retirement and one for the active candidate's eventual teardown.
+    if (failedDerivedDisposals.length < MAX_FAILED_DERIVED_DISPOSALS - 2) return;
+    try { retryFailedDerivedDisposals(); } catch { /* the retained count below is authoritative */ }
+    if (failedDerivedDisposals.length >= MAX_FAILED_DERIVED_DISPOSALS - 2) {
+      throw new Error("derived activation is blocked by persistent GPU disposal failures");
+    }
+  };
 
   const teardown = (reason: string): Promise<void> => {
     if (teardownPromise !== undefined) return teardownPromise;
@@ -804,6 +880,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         waiter.reject(new Error(reason));
       }
       controlWaiters.clear();
+      for (const waiter of derivedControlWaiters.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(reason));
+      }
+      derivedControlWaiters.clear();
       await step("worker stop", () => { try { worker.postMessage({ type: "stop" }); } finally { worker.terminate(); } });
       await step("input", () => {
         if (opts.input !== undefined) cleanupInput?.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
@@ -816,6 +897,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       await step("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
       await step("underwater effect", () => cleanupUnderwater?.dispose());
       await step("visible water", () => cleanupWater?.dispose());
+      await step("derived revision", () => cleanupDerivedRevision?.());
+      await step("derived disposal retries", retryFailedDerivedDisposals);
       await step("post-processing", () => (cleanupWorld?.post as { dispose?(): void } | undefined)?.dispose?.());
       if (cleanupWorld !== undefined) cleanupWorld.post = undefined;
       await step("world render session", () => cleanupRenderSession?.dispose());
@@ -884,6 +967,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       waiter.reject(new Error(message));
     }
     controlWaiters.clear();
+    for (const waiter of derivedControlWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(message));
+    }
+    derivedControlWaiters.clear();
     liveLoop?.stop();
     worker.terminate();
     if (runtimeReady) void teardown(message).catch(reportTeardownFailure);
@@ -894,21 +982,46 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // keep handling messages after `ready` (instead of nulling onmessage) so that throw
   // is surfaced and the now-broken sim is torn down rather than dying silently.
   worker.onmessage = (ev: { data: unknown }): void => {
-    const msg = ev.data as { type?: string; phase?: string; message?: string; failures?: AuthorCommandFailure[]; requestId?: number; reason?: string };
-    if (msg.type === "controlRejected" && Number.isSafeInteger(msg.requestId)) {
-      const waiter = controlWaiters.get(msg.requestId!);
+    const msg = ev.data as {
+      type?: string;
+      phase?: string;
+      message?: string;
+      failures?: AuthorCommandFailure[];
+      requestId?: number | string;
+      reason?: string;
+      manifestHash?: string;
+      code?: string;
+    };
+    if (typeof msg.requestId === "string" && (msg.type === "derivedRevisionStaged"
+        || msg.type === "derivedRevisionCommitted" || msg.type === "derivedRevisionDiscarded"
+        || msg.type === "derivedRevisionRejected")) {
+      const waiter = derivedControlWaiters.get(msg.requestId);
+      if (waiter === undefined) return;
+      clearTimeout(waiter.timer);
+      derivedControlWaiters.delete(msg.requestId);
+      if (msg.type === "derivedRevisionRejected") {
+        waiter.reject(new Error(`sim worker rejected derived revision (${msg.code ?? "UNKNOWN"})`));
+      } else if (msg.type !== waiter.expected || msg.manifestHash !== waiter.manifestHash) {
+        waiter.reject(new Error("sim worker derived revision acknowledgement did not match its request"));
+      } else {
+        waiter.resolve(msg as unknown as Record<string, unknown>);
+      }
+      return;
+    }
+    if (msg.type === "controlRejected" && typeof msg.requestId === "number" && Number.isSafeInteger(msg.requestId)) {
+      const waiter = controlWaiters.get(msg.requestId);
       if (waiter) {
         clearTimeout(waiter.timer);
-        controlWaiters.delete(msg.requestId!);
+        controlWaiters.delete(msg.requestId);
         waiter.reject(new Error(msg.reason || "sim worker rejected control request"));
       }
       return;
     }
-    if ((msg.type === "paused" || msg.type === "resumed") && Number.isSafeInteger(msg.requestId)) {
-      const waiter = controlWaiters.get(msg.requestId!);
+    if ((msg.type === "paused" || msg.type === "resumed") && typeof msg.requestId === "number" && Number.isSafeInteger(msg.requestId)) {
+      const waiter = controlWaiters.get(msg.requestId);
       if (waiter && waiter.expected === msg.type) {
         clearTimeout(waiter.timer);
-        controlWaiters.delete(msg.requestId!);
+        controlWaiters.delete(msg.requestId);
         waiter.resolve();
       }
       return;
@@ -958,6 +1071,32 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       catch (error) {
         clearTimeout(timer);
         controlWaiters.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+  const requestDerivedWorker = (
+    type: "stageDerivedRevision" | "commitDerivedRevision" | "discardDerivedRevision",
+    manifestHash: string,
+    payload: Record<string, unknown>,
+    transfer: Transferable[] = [],
+  ): Promise<Record<string, unknown>> => {
+    const requestId = `derived-sim-${++derivedControlRequestId}`;
+    const expected = type === "stageDerivedRevision"
+      ? "derivedRevisionStaged"
+      : type === "commitDerivedRevision"
+      ? "derivedRevisionCommitted"
+      : "derivedRevisionDiscarded";
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        derivedControlWaiters.delete(requestId);
+        reject(new Error(`sim worker ${type} acknowledgement timed out`));
+      }, 10_000);
+      derivedControlWaiters.set(requestId, { expected, manifestHash, resolve, reject, timer });
+      try { worker.postMessage({ type, requestId, manifestHash, ...payload }, transfer); }
+      catch (error) {
+        clearTimeout(timer);
+        derivedControlWaiters.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -1252,6 +1391,43 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     }
   }
 
+  type ActiveDerivedRevision = {
+    candidate: DetachedDerivedRenderCandidate;
+    bodyIds: number[];
+    identity: Readonly<{ manifestHash: string; revision: number; headHash: string }>;
+    residencyKey: string;
+  };
+  let activeDerivedRevision: ActiveDerivedRevision | null = null;
+  let stagingDerivedCandidate: DetachedDerivedRenderCandidate | null = null;
+  let derivedActivationInProgress = false;
+  const suppressedAuthoredTerrainBodies = new Set<number>();
+
+  const suppressAuthoredTerrainPresentation = (): void => {
+    const currentBodies = new Set<number>();
+    for (const layer of core.terrain.layers.values()) {
+      currentBodies.add(layer.bodyId);
+      if (!suppressedAuthoredTerrainBodies.has(layer.bodyId)) {
+        ops.op_physics_remove_body(layer.bodyId);
+      }
+      if (layer.mesh !== undefined) (layer.mesh as unknown as { visible: boolean }).visible = false;
+      if (layer.grass !== undefined) (layer.grass as unknown as { visible?: boolean }).visible = false;
+      if (layer.blightMist !== undefined) (layer.blightMist as unknown as { visible: boolean }).visible = false;
+    }
+    for (const region of core.terrain.regions.values()) for (const tile of region.tiles.values()) {
+      currentBodies.add(tile.bodyId);
+      if (!suppressedAuthoredTerrainBodies.has(tile.bodyId)) {
+        ops.op_physics_remove_body(tile.bodyId);
+      }
+      if (tile.mesh !== undefined) (tile.mesh as { visible: boolean }).visible = false;
+    }
+    suppressedAuthoredTerrainBodies.clear();
+    for (const bodyId of currentBodies) suppressedAuthoredTerrainBodies.add(bodyId);
+    terrainStream?.clear();
+    terrainStream = undefined;
+    grassStream?.clear();
+    grassStream = undefined;
+  };
+
   // ── Task #78: PLACED-ENTITY residency streaming around the ACTIVE CAMERA. ─────────────────
   // View state, exactly like the tile/grass streams above: far placed props' RETAINED meshes
   // are DETACHED from the scene graph and re-attached on approach — the EntityTable slot, eid,
@@ -1487,7 +1663,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     frame: (alpha: number): void => {
       // A hidden retained Edit runtime can suspend render work while its deterministic worker is
       // paused. Visible Play remains composited while paused so its last state and editor UI render.
-      if (!shouldRenderLiveFrame(viewSuspended)) return;
+      if (!shouldRenderLiveFrame(viewSuspended) || derivedActivationInProgress) return;
       // Publish this frame's input into the M3 ring (consumed by the worker next tick).
       inputRing.writeInput(liveInput.frame(lastConsumed < 0 ? 0 : lastConsumed, inFrame));
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
@@ -1555,15 +1731,43 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   runtimeReady = true;
 
   let controlTail = Promise.resolve();
-  const setPaused = (next: boolean): Promise<void> => {
+  let publicPauseIntent = false;
+  let activationPauseLeases = 0;
+  const reconcilePaused = (): Promise<void> => {
     const work = async (): Promise<void> => {
       if (stopped) throw new Error("live runtime is stopped");
-      if (paused === next) return;
-      await requestWorkerControl(next ? "pause" : "resume");
-      paused = next;
+      const target = publicPauseIntent || activationPauseLeases > 0;
+      if (paused === target) return;
+      await requestWorkerControl(target ? "pause" : "resume");
+      paused = target;
     };
     const result = controlTail.then(work, work);
     controlTail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const setPaused = (next: boolean): Promise<void> => {
+    publicPauseIntent = next;
+    return reconcilePaused();
+  };
+  const acquireActivationPause = async (): Promise<() => Promise<void>> => {
+    activationPauseLeases++;
+    let released = false;
+    try { await reconcilePaused(); }
+    catch (error) {
+      activationPauseLeases--;
+      throw error;
+    }
+    return async (): Promise<void> => {
+      if (released) return;
+      released = true;
+      activationPauseLeases--;
+      if (!stopped) await reconcilePaused();
+    };
+  };
+  let runtimeMutationTail = Promise.resolve();
+  const serializeRuntimeMutation = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = runtimeMutationTail.then(work, work);
+    runtimeMutationTail = result.then(() => undefined, () => undefined);
     return result;
   };
   let stopPromise: Promise<void> | undefined;
@@ -1574,7 +1778,190 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     return stopPromise;
   };
 
-  return {
+  const derivedIdentity = (candidate: DetachedDerivedRenderCandidate): Readonly<{
+    manifestHash: string;
+    revision: number;
+    headHash: string;
+  }> => Object.freeze({
+    manifestHash: candidate.snapshot.manifestHash,
+    revision: candidate.snapshot.source.revision,
+    headHash: candidate.snapshot.source.headHash,
+  });
+
+  const removeDerivedBodies = (bodyIds: readonly number[]): void => {
+    const errors: unknown[] = [];
+    for (const bodyId of bodyIds) {
+      try { ops.op_physics_remove_body(bodyId); }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, `${errors.length} derived collider removal operation(s) failed`);
+  };
+
+  const activateDerivedRevision = (
+    snapshot: unknown,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<Readonly<{ manifestHash: string; revision: number; headHash: string }>> => {
+    const work = async (): Promise<Readonly<{ manifestHash: string; revision: number; headHash: string }>> => {
+      if (stopped) throw new Error("live runtime is stopped");
+      const signal = options.signal;
+      const cancelled = (): void => {
+        if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("derived revision activation was cancelled");
+      };
+      cancelled();
+      requireDerivedDisposalCapacity();
+      const candidate = new DetachedDerivedRenderCandidate(snapshot, {
+        quality: renderSession.quality().tier,
+      });
+      const identity = derivedIdentity(candidate);
+      const residencyKey = derivedTerrainResidencyKey(candidate.snapshot.residency);
+      if (activeDerivedRevision?.identity.manifestHash === identity.manifestHash
+          && activeDerivedRevision.residencyKey === residencyKey) {
+        disposeDerivedCandidate(candidate, "duplicate derived candidate disposal failed");
+        return activeDerivedRevision.identity;
+      }
+      stagingDerivedCandidate = candidate;
+      const transfer: Transferable[] = [];
+      const terrainWindow = candidate.terrainWindow().map((entry) => {
+        const heights = entry.tile.heights.slice();
+        transfer.push(heights.buffer);
+        return {
+          key: entry.key,
+          tx: entry.tx,
+          tz: entry.tz,
+          tile: {
+            nrows: entry.tile.nrows,
+            ncols: entry.tile.ncols,
+            origin: [entry.tile.origin[0], entry.tile.origin[1], entry.tile.origin[2]] as [number, number, number],
+            scale: [entry.tile.scale[0], entry.tile.scale[1], entry.tile.scale[2]] as [number, number, number],
+            heights,
+          },
+        };
+      });
+      const generated = candidate.snapshot.generatedWater;
+      const generatedBytes = generated?.bytes.slice();
+      if (generatedBytes !== undefined) transfer.push(generatedBytes.buffer);
+      const stageSnapshot: DerivedSimStageSnapshot = {
+        schema: DERIVED_SIM_STAGE_SCHEMA,
+        projectId: candidate.snapshot.projectId,
+        branchId: candidate.snapshot.branchId,
+        source: candidate.snapshot.source,
+        manifestHash: identity.manifestHash,
+        grid: candidate.snapshot.manifest.grid,
+        terrainWindow,
+        ...(generated === null ? {} : {
+          generatedWater: {
+            artifact: generated.artifact,
+            bytes: generatedBytes!,
+            bindings: generated.bindings,
+          },
+        }),
+      };
+      let stagedRequestId: string | undefined;
+      let candidateBodies: number[] = [];
+      let candidateAttached = false;
+      let simCommitted = false;
+      let commitDispatched = false;
+      let failClosed = false;
+      let releaseActivationPause: (() => Promise<void>) | undefined;
+      derivedActivationInProgress = true;
+      try {
+        releaseActivationPause = await acquireActivationPause();
+        cancelled();
+        const staged = await requestDerivedWorker("stageDerivedRevision", identity.manifestHash, { snapshot: stageSnapshot }, transfer);
+        stagedRequestId = String(staged.requestId);
+        cancelled();
+        for (const entry of candidate.terrainWindow()) {
+          const tile = entry.tile;
+          candidateBodies.push(ops.op_physics_add_heightfield(
+            tile.origin[0], tile.origin[1], tile.origin[2], tile.nrows, tile.ncols,
+            tile.scale[0], tile.scale[1], tile.scale[2], tile.heights,
+          ));
+        }
+        candidate.setQuality(renderSession.quality().tier);
+        scene.add(candidate.root);
+        candidateAttached = true;
+        cancelled();
+        commitDispatched = true;
+        const commitAck = requestDerivedWorker("commitDerivedRevision", identity.manifestHash, { stagedRequestId });
+        if (signal === undefined) await commitAck;
+        else {
+          let onAbort: (() => void) | undefined;
+          try {
+            await Promise.race([
+              commitAck,
+              new Promise<never>((_resolve, reject) => {
+                onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("derived revision activation was cancelled"));
+                signal.addEventListener("abort", onAbort, { once: true });
+              }),
+            ]);
+          } finally {
+            if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+          }
+        }
+        simCommitted = true;
+        cancelled();
+
+        // No frame or fixed step can observe the transition: render is gated and simulation remains
+        // paused until the new group, local colliders, and sim contact/colliders all agree.
+        suppressAuthoredTerrainPresentation();
+        const prior = activeDerivedRevision;
+        activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
+        cleanupDerivedRevision = () => {
+          const active = activeDerivedRevision;
+          if (active === null) return;
+          activeDerivedRevision = null;
+          const errors: unknown[] = [];
+          try { scene.remove(active.candidate.root); } catch (error) { errors.push(error); }
+          try { removeDerivedBodies(active.bodyIds); } catch (error) { errors.push(error); }
+          try { disposeDerivedCandidate(active.candidate, "active derived revision disposal failed"); }
+          catch (error) { errors.push(error); }
+          if (errors.length > 0) throw new AggregateError(errors, "active derived revision cleanup failed");
+        };
+        candidateBodies = [];
+        candidateAttached = false;
+        if (prior !== null) {
+          const errors: unknown[] = [];
+          try { scene.remove(prior.candidate.root); } catch (error) { errors.push(error); }
+          try { removeDerivedBodies(prior.bodyIds); } catch (error) { errors.push(error); }
+          try { disposeDerivedCandidate(prior.candidate, "derived revision retirement failed"); }
+          catch (error) { errors.push(error); }
+          if (errors.length > 0) throw new AggregateError(errors, "derived revision retirement failed");
+        }
+        return identity;
+      } catch (error) {
+        if (commitDispatched) {
+          failClosed = true;
+          failLive(
+            `derived revision commit outcome is indeterminate for ${identity.manifestHash}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        try { if (candidateAttached) scene.remove(candidate.root); }
+        catch (cleanupError) { console.warn("derived candidate detach failed", cleanupError); }
+        try { removeDerivedBodies(candidateBodies); }
+        catch (cleanupError) { console.warn("derived candidate body cleanup failed", cleanupError); }
+        try { disposeDerivedCandidate(candidate, "derived candidate cleanup failed"); }
+        catch (cleanupError) { console.warn("derived candidate cleanup could not be retained", cleanupError); }
+        if (!commitDispatched && stagedRequestId !== undefined && !simCommitted && !stopped) {
+          try { await requestDerivedWorker("discardDerivedRevision", identity.manifestHash, { stagedRequestId }); }
+          catch (discardError) { console.warn("derived simulation discard failed", discardError); }
+        }
+        throw error;
+      } finally {
+        if (stagingDerivedCandidate === candidate) stagingDerivedCandidate = null;
+        if (!failClosed && releaseActivationPause !== undefined) {
+          try { await releaseActivationPause(); }
+          catch (error) {
+            failLive(`sim worker resume after derived activation failed: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+          }
+        }
+        derivedActivationInProgress = false;
+      }
+    };
+    return serializeRuntimeMutation(work);
+  };
+
+  const runningLive: RunningLive = {
     worker,
     loop,
     scene,
@@ -1589,7 +1976,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
      *  (a 12-shot "revolution" stopped at ~270 deg). Render-side camera state only. */
     setOrbitAzimuth: (a: number): void => { angle = a; },
     authoringFailures: authoringFailures.length > 0 ? authoringFailures : undefined,
-    applyAuthorCommands: async (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => {
+    applyAuthorCommands: (cmds: AuthorCommand[]): Promise<{ applied: number; needsReboot: boolean; structural: number }> => serializeRuntimeMutation(async () => {
+      if (stopped) throw new Error("live runtime is stopped");
       authoringBinding.ensure(cmds);
       const unsupportedStructuralTools: string[] = [];
       let structuralAdds = 0;
@@ -1700,8 +2088,9 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (workerCmds.length > 0) {
         worker.postMessage({ type: "applyCommands", commands: workerCmds });
       }
+      if (activeDerivedRevision !== null) suppressAuthoredTerrainPresentation();
       return { applied, needsReboot: false, structural: structuralAdds };
-    },
+    }),
     terrainStream: ((stream) => stream === undefined ? undefined : {
       mounted: (): string[] => [...stream.mountedKeys()],
       pending: (): number => stream.pendingCount(),
@@ -1744,13 +2133,25 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (renderSession.quality().tier === nextTier) return renderSession.quality();
       const profile = renderSession.setQuality(nextTier);
       core.water.setQuality(profile.water);
+      activeDerivedRevision?.candidate.setQuality(nextTier);
+      stagingDerivedCandidate?.setQuality(nextTier);
       rebuildPostForQuality(profile);
       return profile;
     },
     renderTelemetry: (): Readonly<RenderTelemetrySnapshot> => renderSession.telemetry(),
     playerWaterState: (): Readonly<SimStatusSnapshot> | null => readSimStatus(statusView),
+    activateDerivedRevision,
+    derivedRevision: () => activeDerivedRevision?.identity ?? null,
+    derivedTerrainResidency: () => activeDerivedRevision?.candidate.snapshot.residency ?? Object.freeze({
+      schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA,
+      center: Object.freeze([camera.position.x, camera.position.z] as [number, number]),
+      lod: 0,
+      radius: 7,
+    }),
     stop: stopLive,
   };
+  if (opts.initialDerivedRevision !== undefined) await runningLive.activateDerivedRevision(opts.initialDerivedRevision);
+  return runningLive;
   } catch (error) {
     try { await teardown("live runtime failed during startup"); }
     catch (cleanupError) { console.warn("live runtime cleanup failed while preserving startup error", cleanupError); }

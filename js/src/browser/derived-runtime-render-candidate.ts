@@ -16,9 +16,15 @@ import {
   buildTerrainMesh,
   disposeTerrainMesh,
 } from "../terrain/render.ts";
-import { desiredTiles, tileKey } from "../terrain/stream.ts";
+import { tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
-import { terrainWorldToChunk } from "../terrain/grid.mjs";
+import {
+  MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS,
+  MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS,
+  parseDerivedTerrainResidency,
+  selectDerivedTerrainChunks,
+  type DerivedTerrainResidency,
+} from "./derived-terrain-residency.ts";
 import {
   DerivedLod0TerrainIndex,
   assertDerivedTerrainTilePlacement,
@@ -31,7 +37,6 @@ export { DerivedLod0TerrainIndex } from "./derived-terrain-index.ts";
 import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "./derived-runtime-worker.ts";
 import { compilerContentHash } from "../world/compiler/canonical.mjs";
 import {
-  MAX_DERIVED_CHUNKS,
   derivedArtifactContentHash,
   derivedGlobalArtifacts,
   parseDerivedRevisionManifest,
@@ -49,8 +54,8 @@ import {
   inspectHydrologyWaterArtifactBindings,
 } from "../world/hydrology-water-artifact.mjs";
 
-export const MAX_DETACHED_DERIVED_TERRAIN_RADIUS = 7;
-export const MAX_DETACHED_DERIVED_TERRAIN_MESHES = 225;
+export const MAX_DETACHED_DERIVED_TERRAIN_RADIUS = MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS;
+export const MAX_DETACHED_DERIVED_TERRAIN_MESHES = MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS;
 export const MAX_DETACHED_DERIVED_TERRAIN_CPU_BYTES = 256 * 1024 * 1024;
 const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 const HASH = /^sha256:[0-9a-f]{64}$/;
@@ -90,14 +95,12 @@ export interface ParsedTransferredDerivedSnapshot {
   readonly manifestHash: string;
   readonly source: Readonly<{ revision: number; headHash: string }>;
   readonly manifest: ParsedManifest;
+  readonly residency: Readonly<DerivedTerrainResidency>;
   readonly terrain: DerivedLod0TerrainIndex;
   readonly generatedWater: ParsedGeneratedWaterResource | null;
 }
 
 export interface DetachedDerivedRenderCandidateOptions {
-  readonly anchorX: number;
-  readonly anchorZ: number;
-  readonly radius?: number;
   readonly quality?: RenderQualityTier;
   readonly maxTerrainMeshes?: number;
 }
@@ -201,7 +204,7 @@ function generatedRenderTopology(value: unknown): VerifiedGeneratedWaterRenderRe
 
 export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTransferredDerivedSnapshot {
   const snapshot = plain(input, "derived runtime resource snapshot");
-  exact(snapshot, ["schema", "projectId", "branchId", "manifestHash", "source", "manifest", "chunks", "globals"], "derived runtime resource snapshot");
+  exact(snapshot, ["schema", "projectId", "branchId", "manifestHash", "source", "manifest", "residency", "chunks", "globals"], "derived runtime resource snapshot");
   if (snapshot.schema !== DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA) throw new Error("derived runtime resource snapshot schema is unsupported");
   const manifest = parseDerivedRevisionManifest(snapshot.manifest) as ParsedManifest;
   if (snapshot.projectId !== manifest.projectId || snapshot.branchId !== manifest.branchId
@@ -209,8 +212,12 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
     throw new Error("derived runtime resource snapshot identity disagrees with its manifest");
   }
 
-  const entries = dense(snapshot.chunks, MAX_DERIVED_CHUNKS, "derived runtime terrain chunks");
-  if (entries.length !== manifest.chunks.length) throw new Error("derived runtime terrain chunk set is incomplete");
+  const residency = parseDerivedTerrainResidency(snapshot.residency);
+  const expectedChunks = selectDerivedTerrainChunks(manifest, residency);
+  const entries = dense(snapshot.chunks, MAX_DETACHED_DERIVED_TERRAIN_MESHES, "derived runtime terrain chunks");
+  if (entries.length < 1 || entries.length !== expectedChunks.length) {
+    throw new Error("derived runtime terrain residency set is incomplete or exceeds its requested window");
+  }
   const manifestChunks = new Map(manifest.chunks.map((chunk) => [chunk.chunkId, chunk]));
   const seenIds = new Set<string>(), seenCoords = new Set<string>();
   const indexed: IndexedTerrainChunk[] = [];
@@ -219,6 +226,7 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
     const entry = plain(entries[index], `derived runtime terrain chunk ${index}`);
     exact(entry, ["chunkId", "chunk", "resource"], `derived runtime terrain chunk ${index}`);
     if (typeof entry.chunkId !== "string" || seenIds.has(entry.chunkId)) throw new Error("derived runtime terrain chunks contain duplicate or invalid ids");
+    if (entry.chunkId !== expectedChunks[index]?.chunkId) throw new Error("derived runtime terrain chunks do not match requested manifest order");
     const canonical = manifestChunks.get(entry.chunkId);
     if (canonical === undefined || compilerContentHash(entry.chunk) !== compilerContentHash(canonical)) {
       throw new Error(`derived runtime terrain chunk '${entry.chunkId}' identity does not match its manifest`);
@@ -312,6 +320,7 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
     manifestHash: manifest.manifestHash,
     source: Object.freeze({ revision: manifest.source.revision, headHash: manifest.source.headHash }),
     manifest,
+    residency,
     terrain: new DerivedLod0TerrainIndex(indexed, manifest.grid),
     generatedWater,
   });
@@ -349,9 +358,8 @@ export class DetachedDerivedRenderCandidate {
   constructor(snapshotInput: unknown, options: DetachedDerivedRenderCandidateOptions) {
     const optionRecord = plain(options, "detached derived render candidate options");
     const optionKeys = Object.getOwnPropertyNames(optionRecord);
-    const supportedOptions = new Set(["anchorX", "anchorZ", "radius", "quality", "maxTerrainMeshes"]);
-    if (!optionKeys.includes("anchorX") || !optionKeys.includes("anchorZ")
-        || optionKeys.some((key) => !supportedOptions.has(key))) {
+    const supportedOptions = new Set(["quality", "maxTerrainMeshes"]);
+    if (optionKeys.some((key) => !supportedOptions.has(key))) {
       throw new TypeError("detached derived render candidate options are invalid");
     }
     for (const key of optionKeys) {
@@ -360,15 +368,10 @@ export class DetachedDerivedRenderCandidate {
         throw new TypeError(`detached derived render candidate options.${key} must be an enumerable data field`);
       }
     }
-    const radius = options.radius ?? 3;
     const maxMeshes = options.maxTerrainMeshes ?? MAX_DETACHED_DERIVED_TERRAIN_MESHES;
-    if (!Number.isSafeInteger(radius) || radius < 0 || radius > MAX_DETACHED_DERIVED_TERRAIN_RADIUS) {
-      throw new RangeError(`derived terrain radius must be an integer in [0, ${MAX_DETACHED_DERIVED_TERRAIN_RADIUS}]`);
-    }
     if (!Number.isSafeInteger(maxMeshes) || maxMeshes < 1 || maxMeshes > MAX_DETACHED_DERIVED_TERRAIN_MESHES) {
       throw new RangeError(`derived terrain maxTerrainMeshes must be in [1, ${MAX_DETACHED_DERIVED_TERRAIN_MESHES}]`);
     }
-    if (!Number.isFinite(options.anchorX) || !Number.isFinite(options.anchorZ)) throw new TypeError("derived terrain anchor must be finite");
     const tier = options.quality ?? "balanced";
     const quality = DEFAULT_RENDER_QUALITY_PROFILES[tier];
     if (quality === undefined) throw new TypeError("derived render quality tier is invalid");
@@ -382,16 +385,14 @@ export class DetachedDerivedRenderCandidate {
     let waterMount: GeneratedWaterRenderMount | null = null;
     const terrainWindow: DetachedDerivedTerrainWindowEntry[] = [];
     try {
-      const anchor = terrainWorldToChunk(this.snapshot.manifest.grid, options.anchorX, options.anchorZ);
-      const desired = desiredTiles({ tx: anchor.tx, tz: anchor.tz }, radius, "square");
-      const available = desired.filter((coord) => this.snapshot.terrain.has(coord.tx, coord.tz));
+      const available = selectDerivedTerrainChunks(this.snapshot.manifest, this.snapshot.residency);
       if (available.length > maxMeshes) throw new RangeError(`derived terrain window requires ${available.length} meshes, exceeding budget ${maxMeshes}`);
-      for (const coord of available) {
-        const tile = this.snapshot.terrain.tile(coord.tx, coord.tz)!;
+      for (const chunk of available) {
+        const tile = this.snapshot.terrain.tile(chunk.tx, chunk.tz)!;
         const mesh = featureLocalTerrainMesh(tile, this.#terrainMaterials);
-        const key = tileKey(coord.tx, coord.tz);
+        const key = tileKey(chunk.tx, chunk.tz);
         this.#terrainMeshes.set(key, mesh);
-        terrainWindow.push(Object.freeze({ key, tx: coord.tx, tz: coord.tz, tile }));
+        terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile }));
         this.terrainRoot.add(mesh);
       }
       if (this.snapshot.generatedWater !== null) {

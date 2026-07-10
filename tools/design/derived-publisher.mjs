@@ -62,6 +62,9 @@ export const PUBLICATION_LOCK_STALE_MS = 5 * 60 * 1000;
 const BRANCH_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 const JOB_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 const POINTER_MAX_BYTES = 16 * 1024;
+const runtimeRevisionViews = new WeakSet();
+const runtimeDescriptorIndexes = new WeakMap();
+const runtimeInstalledSignatures = new WeakMap();
 
 export const nodePublicationFs = Object.freeze({
   closeSync,
@@ -373,14 +376,59 @@ function artifactDescriptors(manifest) {
   const descriptors = new Map();
   const add = (artifact) => {
     const existing = descriptors.get(artifact.contentHash);
-    if (existing !== undefined && existing.byteLength !== artifact.byteLength) {
-      throw new Error(`artifact ${artifact.contentHash} has inconsistent byte lengths`);
+    if (existing !== undefined && (existing.byteLength !== artifact.byteLength || existing.mediaType !== artifact.mediaType)) {
+      throw new Error(`artifact ${artifact.contentHash} has inconsistent byte lengths or media types`);
     }
     descriptors.set(artifact.contentHash, artifact);
   };
   for (const artifact of derivedGlobalArtifacts(manifest)) add(artifact);
   for (const chunk of manifest.chunks) for (const artifact of chunk.artifacts) add(artifact);
   return descriptors;
+}
+
+function installedFileSignature(fs, path, label) {
+  const stat = fs.lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${label} is not a regular file`);
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  });
+}
+
+function installedRevisionSignatures(fs, paths, ref) {
+  return Object.freeze({
+    manifest: installedFileSignature(fs, manifestPath(paths, ref.manifestHash), "derived manifest"),
+    snapshot: ref.snapshotHash === undefined
+      ? null
+      : installedFileSignature(fs, snapshotPath(paths, ref.snapshotHash), "compiler snapshot"),
+  });
+}
+
+function sameInstalledFileSignature(left, right) {
+  return left !== undefined && right !== undefined
+    && left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+function sameInstalledRevisionSignatures(left, right) {
+  return sameInstalledFileSignature(left.manifest, right.manifest)
+    && (left.snapshot === null
+      ? right.snapshot === null
+      : right.snapshot !== null && sameInstalledFileSignature(left.snapshot, right.snapshot));
+}
+
+function installedRevisionSignaturesMatch(fs, paths, ref, cached) {
+  const expected = runtimeInstalledSignatures.get(cached);
+  if (expected === undefined) return false;
+  try {
+    const current = installedRevisionSignatures(fs, paths, ref);
+    return sameInstalledRevisionSignatures(current, expected);
+  } catch {
+    return false;
+  }
 }
 
 function artifactReferences(manifest) {
@@ -829,8 +877,26 @@ export async function readAuthoritativePublishedDerivedRevision(options) {
     throw new PublicationRuntimeAccessError("NO_PUBLICATION", "no derived revision has been published");
   }
   let revision;
+  let installedSignatures;
+  const cached = options?.cachedRevision;
+  const cacheMatches = cached !== null && typeof cached === "object" && runtimeRevisionViews.has(cached)
+    && cached.generation === baseline.pointer.generation
+    && cached.manifest?.manifestHash === baseline.pointer.current.manifestHash
+    && (baseline.pointer.current.snapshotHash === undefined
+      || cached.snapshot?.snapshotHash === baseline.pointer.current.snapshotHash)
+    && installedRevisionSignaturesMatch(fs, paths, baseline.pointer.current, cached);
   try {
-    revision = validateInstalledRevision(fs, paths, baseline.pointer.current, options?.shouldCancel, new Set());
+    if (cacheMatches) {
+      revision = { manifest: cached.manifest, snapshot: cached.snapshot };
+      installedSignatures = runtimeInstalledSignatures.get(cached);
+    } else {
+      const before = installedRevisionSignatures(fs, paths, baseline.pointer.current);
+      revision = validateInstalledRevision(fs, paths, baseline.pointer.current, options?.shouldCancel, new Set());
+      installedSignatures = installedRevisionSignatures(fs, paths, baseline.pointer.current);
+      if (!sameInstalledRevisionSignatures(before, installedSignatures)) {
+        throw new Error("current derived manifest or snapshot changed during validation");
+      }
+    }
   } catch (error) {
     throw new PublicationRuntimeAccessError(
       "CURRENT_UNUSABLE",
@@ -844,17 +910,35 @@ export async function readAuthoritativePublishedDerivedRevision(options) {
   if (confirmed.raw !== baseline.raw) {
     throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "current derived publication changed during read");
   }
+  let confirmedSignatures;
+  try {
+    confirmedSignatures = installedRevisionSignatures(fs, paths, baseline.pointer.current);
+  } catch (error) {
+    throw new PublicationRuntimeAccessError(
+      "CURRENT_UNUSABLE",
+      `current derived revision changed during authority validation: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!sameInstalledRevisionSignatures(confirmedSignatures, installedSignatures)) {
+    throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "current derived manifest or snapshot changed during authority validation");
+  }
   const { manifest, snapshot } = revision;
   if (head.projectId !== manifest.projectId || head.branchId !== manifest.branchId
       || head.revision !== manifest.source.revision || head.headHash !== manifest.source.headHash) {
     throw new PublicationRuntimeAccessError("NOT_CURRENT", "published derived revision does not match the authoritative source");
   }
-  return Object.freeze({
+  const view = Object.freeze({
     generation: baseline.pointer.generation,
     manifest,
     snapshot,
     source: Object.freeze({ revision: head.revision, headHash: head.headHash }),
   });
+  runtimeRevisionViews.add(view);
+  runtimeDescriptorIndexes.set(view, cacheMatches
+    ? runtimeDescriptorIndexes.get(cached)
+    : artifactDescriptors(manifest));
+  runtimeInstalledSignatures.set(view, installedSignatures);
+  return view;
 }
 
 /** Resolve one descriptor and filesystem path from the pointer's exact current manifest.
@@ -871,25 +955,26 @@ export function resolveCurrentPublishedDerivedArtifact(options) {
     throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "requested derived manifest is no longer current");
   }
   let revision;
+  const cached = options?.cachedRevision;
+  const cacheMatches = cached !== null && typeof cached === "object" && runtimeRevisionViews.has(cached)
+    && cached.generation === pointer.generation
+    && cached.manifest?.manifestHash === pointer.current.manifestHash
+    && (pointer.current.snapshotHash === undefined || cached.snapshot?.snapshotHash === pointer.current.snapshotHash)
+    && installedRevisionSignaturesMatch(fs, paths, pointer.current, cached);
   try {
-    revision = validateInstalledRevision(fs, paths, pointer.current, undefined, new Set());
+    revision = cacheMatches
+      ? { manifest: cached.manifest, snapshot: cached.snapshot }
+      : validateInstalledRevision(fs, paths, pointer.current, undefined, new Set());
   } catch (error) {
     throw new PublicationRuntimeAccessError(
       "CURRENT_UNUSABLE",
       `current derived revision is unusable: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const matching = [];
-  for (const artifact of derivedGlobalArtifacts(revision.manifest)) if (artifact.contentHash === contentHash) matching.push(artifact);
-  for (const chunk of revision.manifest.chunks) {
-    for (const artifact of chunk.artifacts) if (artifact.contentHash === contentHash) matching.push(artifact);
-  }
-  if (matching.length === 0) {
+  const descriptorIndex = cacheMatches ? runtimeDescriptorIndexes.get(cached) : artifactDescriptors(revision.manifest);
+  const descriptor = descriptorIndex?.get(contentHash);
+  if (descriptor === undefined) {
     throw new PublicationRuntimeAccessError("UNREFERENCED_ARTIFACT", "requested artifact is not referenced by the current manifest");
-  }
-  const descriptor = matching[0];
-  if (matching.some((entry) => entry.byteLength !== descriptor.byteLength || entry.mediaType !== descriptor.mediaType)) {
-    throw new PublicationRuntimeAccessError("AMBIGUOUS_ARTIFACT", "current manifest assigns conflicting descriptors to one artifact hash");
   }
   return Object.freeze({
     generation: pointer.generation,

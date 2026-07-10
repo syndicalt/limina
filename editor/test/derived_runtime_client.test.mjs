@@ -5,11 +5,13 @@ import {
   DERIVED_RUNTIME_DISCOVERY_SCHEMA,
   DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
   DERIVED_RUNTIME_WORKER_SCHEMA,
+  DERIVED_TERRAIN_RESIDENCY_SCHEMA,
   createDerivedRuntimeClient,
 } from "../src/derived-runtime-client.js";
 
 const hash = (character) => `sha256:${character.repeat(64)}`;
 const token = "A".repeat(43);
+const residency = (center = [0, 0], radius = 7) => ({ schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center, lod: 0, radius });
 
 function discovery() {
   return {
@@ -28,6 +30,7 @@ function snapshot(revision = 7) {
     contentRefs: [{ refId: "map-document", refType: "map-document/v1", scope: "global", assetId: "maps/grey-field.json", contentHash: hash("b") }],
   };
   const manifestHash = hash("c");
+  const chunk = { chunkId: "surface:grey-field.surface:l0:x0:z0", lod: 0, tx: 0, tz: 0 };
   const manifest = {
     schema: "limina.derived-revision-manifest/v2",
     projectId: "grey-field",
@@ -36,7 +39,7 @@ function snapshot(revision = 7) {
     compiler: {},
     grid: {},
     globalArtifacts: [],
-    chunks: [],
+    chunks: [chunk],
     manifestHash,
   };
   return {
@@ -46,7 +49,8 @@ function snapshot(revision = 7) {
     manifestHash,
     source,
     manifest,
-    chunks: [],
+    residency: residency(),
+    chunks: [{ chunkId: chunk.chunkId, chunk, resource: {} }],
     globals: [],
   };
 }
@@ -91,11 +95,12 @@ async function tick() {
 
 test("watch initialization sends the capability only to one worker and exposes bounded metadata", () => {
   const state = harness();
-  state.client.start(discovery(), { mode: "watch" });
+  state.client.start(discovery(), { mode: "watch", residency: residency([12, -8], 3) });
   assert.equal(state.worker.sent.length, 1);
   assert.equal(state.worker.sent[0].type, "init");
   assert.equal(state.worker.sent[0].config.token, token);
   assert.equal(state.worker.sent[0].mode, "watch");
+  assert.deepEqual(state.worker.sent[0].residency, residency([12, -8], 3));
   assert.equal("pinnedSource" in state.worker.sent[0], false);
   ready(state, "watch");
   assert.equal(state.client.phase, "ready");
@@ -109,19 +114,21 @@ test("watch initialization sends the capability only to one worker and exposes b
 test("pinned initialization requires and forwards the exact source", () => {
   const state = harness();
   const pinnedSource = { revision: 7, headHash: hash("a") };
-  state.client.start(discovery(), { mode: "pinned", pinnedSource });
+  state.client.start(discovery(), { mode: "pinned", pinnedSource, residency: residency() });
   assert.deepEqual(state.worker.sent[0].pinnedSource, pinnedSource);
   ready(state, "pinned");
   assert.equal(state.client.mode, "pinned");
-  assert.throws(() => harness().client.start(discovery(), { mode: "pinned" }), /requires pinnedSource/);
-  assert.throws(() => harness().client.start(discovery(), { mode: "watch", pinnedSource }), /forbids/);
+  assert.throws(() => harness().client.start(discovery(), { mode: "pinned", residency: residency() }), /requires pinnedSource/);
+  assert.throws(() => harness().client.start(discovery(), { mode: "watch", pinnedSource, residency: residency() }), /forbids/);
+  assert.throws(() => harness().client.start(discovery(), { mode: "watch", residency: residency([0, 0], 8) }), /terrain residency/);
+  assert.throws(() => harness().client.start(discovery(), { mode: "watch" }), /terrain residency/);
 });
 
 test("successful activation awaits the adapter before accepting", async () => {
   let release;
   const applied = [];
   const state = harness({ activate: (value) => new Promise((resolve) => { applied.push(value); release = resolve; }) });
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   const value = snapshot();
   activation(state, value);
@@ -140,7 +147,7 @@ test("successful activation awaits the adapter before accepting", async () => {
 
 test("activation failure returns one stable secret-free rejection", async () => {
   const state = harness({ activate: async () => { throw new Error(`adapter leaked ${token}`); } });
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   activation(state);
   await tick();
@@ -162,7 +169,7 @@ test("close aborts an in-flight activation and no late acknowledgement escapes",
     signal = options.signal;
     return new Promise((resolve) => { release = resolve; });
   } });
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   activation(state);
   await tick();
@@ -180,7 +187,7 @@ test("close aborts an in-flight activation and no late acknowledgement escapes",
 test("malformed output fails closed and late output cannot reactivate", async () => {
   let activations = 0;
   const state = harness({ activate: async () => { activations++; } });
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", status: "activated", manifestHash: hash("d"), revision: 1, extra: true });
   await tick();
@@ -201,9 +208,10 @@ test("snapshot source, manifest envelope, and pin mismatches are rejected", asyn
     (value) => { value.source = { ...value.source, extra: true }; value.manifest.source = value.source; },
     (value) => { value.manifest = { ...value.manifest, manifestHash: hash("e") }; },
     (value) => { value.projectId = "another"; },
+    (value) => { value.residency = residency([99, 99], 0); },
   ]) {
     const state = harness();
-    state.client.start(discovery());
+    state.client.start(discovery(), { residency: residency() });
     ready(state, "watch");
     const value = snapshot();
     mutate(value);
@@ -214,7 +222,7 @@ test("snapshot source, manifest envelope, and pin mismatches are rejected", asyn
   }
 
   const pinned = harness();
-  pinned.client.start(discovery(), { mode: "pinned", pinnedSource: { revision: 8, headHash: hash("a") } });
+  pinned.client.start(discovery(), { mode: "pinned", pinnedSource: { revision: 8, headHash: hash("a") }, residency: residency() });
   ready(pinned, "pinned");
   activation(pinned, snapshot(7));
   await tick();
@@ -223,7 +231,7 @@ test("snapshot source, manifest envelope, and pin mismatches are rejected", asyn
 
 test("fatal worker errors expose codes only and trigger bounded close", async () => {
   const state = harness();
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   state.worker.emit({
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
@@ -240,7 +248,7 @@ test("fatal worker errors expose codes only and trigger bounded close", async ()
 
 test("native worker errors cannot leak event text", async () => {
   const state = harness();
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   state.worker.fail(`native worker included ${token}`);
   await tick();
@@ -251,7 +259,7 @@ test("native worker errors cannot leak event text", async () => {
 
 test("matching close handshake terminates once and ignores later messages", async () => {
   const state = harness();
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   const closing = state.client.close();
   assert.equal(state.client.close(), closing);
@@ -266,7 +274,7 @@ test("matching close handshake terminates once and ignores later messages", asyn
 
 test("close timeout forcibly terminates an unresponsive worker", async () => {
   const state = harness({ closeTimeoutMs: 10 });
-  state.client.start(discovery());
+  state.client.start(discovery(), { residency: residency() });
   ready(state, "watch");
   await state.client.close();
   assert.equal(state.client.phase, "closed");
