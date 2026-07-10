@@ -425,3 +425,11 @@ near-vertical cliffs before the SDF layer exists.
   central maximum-grid run completed in 375 ms with 44.1 MiB typed scratch. Complex contours that remain
   above Water IR limits after exact collinear removal fail closed until a topology-preserving constrained
   simplifier is implemented.
+- **2026-07-09 — Underwater atmosphere shipped (`2b28578`).** `runLive` reads the coherent worker swim
+  status into reusable frame scratch and swaps preallocated teal background/exponential-fog resources
+  only on submerged transitions. Surfacing, normal stop, startup failure, worker fatal, and sibling
+  teardown faults restore the exact caller-owned background, fog, and fog-node references without
+  disposing them or rebuilding renderer/post resources. Real Chromium proves significant nonblank
+  underwater pixels plus deterministic dry-pixel restoration twice on Performance, Balanced, and
+  Cinematic WebGL2 sessions; the headless WebGPU attempt initialized but selected WebGL under SwiftShader,
+  so native WebGPU pixel validation remains hardware-dependent.
