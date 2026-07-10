@@ -513,3 +513,16 @@ near-vertical cliffs before the SDF layer exists.
   controls, speed scaling, focus/jump/search, bookmarks/history, overview navigation, and bidirectional
   Atlas-to-3D focus backed by transactional destination prefetch. Camera retuning alone does not satisfy
   this milestone.
+- **2026-07-10 — WB-F0-N navigation runtime and exact destination foundation shipped (`4c5f735`).** Edit
+  now has explicit Orbit/Fly modes, RMB-held WASD/QE flight, tunable speed with boost/precision, strict
+  frame-selection planning, coordinate jumps, project/branch-scoped bookmarks, and bounded recent views.
+  One mode-aware camera anchor drives derived terrain, legacy terrain/grass/entity residency, and shadow
+  focus without contaminating isolated Play or player input. Discontinuous travel uses worker protocol v4:
+  the editor holds a disable lease, requests one exactly correlated target residency, moves the camera only
+  after main-thread activation, reconciles the prior residency before rollback, and locks local navigation
+  controls for the transaction. Grey Field Chromium UAT flew 1,103.7 m, activated the requested 1,200 m /
+  1,200 m target with exactly 225 bounded artifacts, restored an exact named Orbit bookmark, survived
+  Play/Stop, rendered nonblank frames, and left authoritative head r1 unchanged. Desktop/mobile Play and
+  the 99-test editor/static sweep remain green. **WB-F0-N is still open:** frame-world, POI search, the
+  always-available overview, Atlas-to-3D focus, reverse 3D-to-Atlas reveal, and the full Atlas/selection
+  navigation UAT route have not shipped.
