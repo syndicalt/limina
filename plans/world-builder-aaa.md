@@ -330,6 +330,26 @@ near-vertical cliffs before the SDF layer exists.
   canonical hash, malformed inactive Atlas maps fail closed, and all legacy WorldMap bytes and hashes
   remain exact. Hostile accessor, prototype, symbol, non-canonical number, missing/unknown-field, and
   resource-bound cases are gated; valid recipe-bearing maps remain accepted by `WaterField`.
+- **2026-07-09 — Deterministic drainage topology shipped (`a47dda1`).** A bounded typed-array
+  priority flood proves perimeter-connected ocean, fills depressions, and assigns every non-outlet an
+  earlier-rank receiver under a fixed `(filledHeight, cellIndex)` ordering. Reverse-rank accumulation
+  produces conservative catchment/discharge and Strahler order without the former million-element JS
+  sort. The 1,025x1,025 gate completed 1,050,625 cells in 439 ms with a 19,190-entry peak in its fixed
+  1,050,625-slot heap, while pit/flat/saddle, ocean isolation, cancellation, hostile inputs, exact
+  determinism, receiver acyclicity, and outlet conservation remained green.
+- **2026-07-09 — Canonical gameplay water contact shipped (`41c2e95`).** Each replay world now owns one
+  verified, hash-keyed `WaterField` contact runtime bound at the streamed or editable map-terrain seam.
+  Queries support translated finite domains, exact terrain sampling, live deformation, basin overlap,
+  outer-wet/hole-dry boundaries, and proven ocean depth without rebuilding map indices in the tick path.
+  Competing bindings fail explicitly and fresh worlds remain isolated; player swimming consumes this
+  provider in the next slice rather than treating cosmetic water meshes as gameplay authority.
+- **2026-07-09 — First-class global derived artifacts shipped (`cb7ba29`, `477e81a`, `a1c1503`).** A
+  strict manifest v2 adds ordered global artifacts while locking v1 canonical bytes and hashes exactly.
+  Publisher, coordinator, and build service validate and sparsely reuse scoped global/chunk references
+  through the existing content-addressed fsync/CAS/LKG path. Runtime staging verifies bytes, atomically
+  activates complete global and chunk sets, reverses all new allocations on failure, preserves resource
+  identity for unchanged scopes, and retires chunk dependents before global resources. Same-content
+  references deduplicate I/O without weakening per-descriptor validation.
 - **2026-07-09 — Isolated editor Play shipped (`2d76f7d`).** Play captures an immutable, validated
   authoritative project head plus command prefix, locks every editor write surface, pauses and
   render-suspends the retained Edit runtime, and runs simulation on a disposable canvas. New authoritative
