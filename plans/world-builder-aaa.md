@@ -537,3 +537,13 @@ near-vertical cliffs before the SDF layer exists.
   mobile bounds, and unchanged authoring head; the fresh `create-limina-app` scaffold gate also passed.
   **WB-F0-N remains open:** frame-world, POI search, durable Atlas `designRef` provenance for exact entity/POI
   identity, and defined normalization for maps whose units or origin are not canonical meters at `[0,0]`.
+- **2026-07-10 — Atlas promoted to an editor workspace with standalone handoff (`7e60873`).** The dock is
+  now persisted, pointer/keyboard resizable, maximizable without reloading its iframe, and responsive to the
+  actual work area rather than the browser width. Edit and isolated Play retain correct canvas order, aspect,
+  and renderer resizing while Atlas is open. Standalone Atlas now exposes `Open in 3D` through a transient
+  editor-origin relay: only the exact direct Atlas origin is trusted, the editor token never crosses the relay,
+  the intent is session-scoped and consumed once, and every editor response except the exact relay document
+  remains cross-origin isolated. Grey Field Chromium UAT passed dock resize/maximize/persistence, Edit/Play
+  ownership, 1000px and mobile compact layouts, exact source-fenced focus, direct standalone launch, proxied
+  Atlas rejection, and unchanged authoring authority. **WB-F0-N remains open** for frame-world, POI search,
+  durable `designRef` provenance, and noncanonical coordinate normalization.
