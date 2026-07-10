@@ -465,3 +465,17 @@ near-vertical cliffs before the SDF layer exists.
   entries repair independently, and 1.1-to-1.2 migration is cold. Legacy 1.0 graph, manifest, artifact,
   and snapshot goldens remain byte-identical. Production browser activation and generated WaterField
   composition are still open; publication alone is not treated as runtime completion.
+- **2026-07-10 — Bounded exact derived Edit/Play activation shipped (`5160a27`).** The generated-app
+  launcher now boots the editor, authenticated current-only derived API, build service, and required
+  worker bundles as one lifecycle. Edit watches the authoritative current publication; isolated Play
+  pins the captured revision/head and cannot report Playing before render and simulation commit the
+  same manifest. A strict LOD0 residency transfers at most 225 terrain chunks while retaining the full
+  manifest and complete global artifacts. Activation uses a two-phase simulation transaction,
+  fail-closed indeterminate-commit handling, public-pause leases, authoring serialization, bounded GPU
+  disposal retries, exact cache-generation ETags, and manifest/snapshot tamper detection. Native tests
+  cover a 400-chunk publication with exactly 225 resident chunks, selection changes, nonresident-only
+  revision advances, rollback, malformed capabilities, and cache races. The canonical scaffold gate,
+  desktop and 390x844 mobile Edit/Play/pause/external-edit/Stop/repeat workflows, composited-pixel
+  checks, DPR 1/1.5/2 graphics propagation, and final authoritative two-entity cleanup are green.
+  Camera-driven residency replacement and a Grey Field hydrology recipe remain open; this slice does
+  not claim unbounded streaming or visible generated water.
