@@ -433,3 +433,12 @@ near-vertical cliffs before the SDF layer exists.
   underwater pixels plus deterministic dry-pixel restoration twice on Performance, Balanced, and
   Cinematic WebGL2 sessions; the headless WebGPU attempt initialized but selected WebGL under SwiftShader,
   so native WebGPU pixel validation remains hardware-dependent.
+- **2026-07-09 — Deterministic river and waterfall extraction shipped (`e582997`).** Threshold-inclusive
+  non-ocean drainage cells now form a confluence-exact directed reach graph: every active receiver edge
+  is owned once, degree-one chains remain contiguous, endpoints and `gen-r-*` ids are canonical, and
+  widths derive from catchment area under fixed cell-relative clamps. Strahler class is computed from
+  the outgoing edges actually owned by each reach, so a terminal confluence cannot relabel incoming
+  tributaries. Aligned terrain and filled-surface elevation channels make the result self-sufficient for
+  vertical rendering; thresholded terrain drops coalesce into bounded waterfall spans. The 1,050,625-cell
+  inactive-threshold gate completed in 273 ms with 3.0 MiB typed scratch, and 54,232 randomized reaches
+  additionally proved order/edge semantics. Portable artifact publication and visible flow remain open.
