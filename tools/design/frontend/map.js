@@ -10,12 +10,15 @@
 
 import { esc, toast } from "./util.js";
 import { S } from "./store.js";
-import { postJSON, bindMapSaver, bindSaveConflict, bindSaveError, scheduleMapSave, flushMapSave } from "./net.js";
+import { postJSON, bindMapSaver, bindSaveConflict, bindSaveError, scheduleMapSave, flushMapSave, getEditorLaunchConfig } from "./net.js";
 import {
   ATLAS_EDITOR_BRIDGE_SCHEMA,
   ATLAS_FOCUS_REQUEST,
   EDITOR_REVEAL_REQUEST,
+  EDITOR_HANDOFF_READY,
   atlasLocalToCanonicalWorld,
+  parseAtlasFocusRequest,
+  parseEditorHandoffReady,
   parseTrustedAtlasEditorMessageEvent,
 } from "./atlas-editor-protocol.js";
 import * as H from "./map-commands.js";
@@ -160,14 +163,38 @@ function bridgeLabel(value,fallback){
   const label=String(value||fallback).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,256);
   return label||fallback;
 }
+function openStandaloneEditorHandoff(popup,config,message){
+  return new Promise((resolve,reject)=>{
+    let settled=false;
+    const finish=(error)=>{ if(settled)return; settled=true; clearTimeout(timer); window.removeEventListener("message",onMessage); if(error)reject(error); else resolve(); };
+    const onMessage=(event)=>{
+      if(event.source!==popup||event.origin!==config.editorOrigin) return;
+      try{ const ready=parseEditorHandoffReady(event.data); if(ready.type!==EDITOR_HANDOFF_READY)return; }
+      catch{ return; }
+      popup.postMessage(message,config.editorOrigin);
+      finish();
+    };
+    const timer=setTimeout(()=>finish(new Error("editor handoff timed out")),30000);
+    window.addEventListener("message",onMessage);
+    try{ popup.location.replace(config.handoffUrl); }
+    catch(error){ finish(error); }
+  });
+}
+
 async function focusEditorFromAtlas(kind,id,label,local,radiusM){
-  if(window.parent===window) return;
+  const standalone=window.parent===window;
+  const popup=standalone?window.open("about:blank","_blank"):null;
+  if(standalone&&!popup){ toast("Open in Editor was blocked by the browser",5000); return; }
   try{
+    if(!activeMapId) activeMapId=S.state.activeMapId||primaryMapId();
     const map=activeMap();
     const world=atlasLocalToCanonicalWorld(map.units,[local[0],local[1]]);
-    const saved=await flushMapSave();
+    const [saved,launch]=await Promise.all([flushMapSave(),standalone?getEditorLaunchConfig():Promise.resolve(undefined)]);
+    if(standalone&&launch.atlasOrigin!==window.location.origin){
+      throw new Error("Open in Editor is available from the Atlas solo URL shown by the editor launcher");
+    }
     const head=saved&&saved.authoring&&saved.authoring.head;
-    const message={
+    const message=parseAtlasFocusRequest({
       schema:ATLAS_EDITOR_BRIDGE_SCHEMA,
       type:ATLAS_FOCUS_REQUEST,
       requestId:nextBridgeRequestId(),
@@ -176,9 +203,20 @@ async function focusEditorFromAtlas(kind,id,label,local,radiusM){
       subject:{kind,id:String(id),label:bridgeLabel(label,"Atlas destination")},
       world,
       ...(Number.isFinite(radiusM)&&radiusM>0?{radiusM}:{}),
-    };
-    window.parent.postMessage(message,window.location.origin);
-  }catch(error){ toast("3D focus unavailable: "+(error&&error.message?error.message:String(error)),5000); }
+    });
+    if(standalone) await openStandaloneEditorHandoff(popup,launch,message);
+    else window.parent.postMessage(message,window.location.origin);
+  }catch(error){ try{popup&&popup.close();}catch{} toast("3D focus unavailable: "+(error&&error.message?error.message:String(error)),5000); }
+}
+
+export function openCurrentMapInEditor(){
+  const map=activeMap();
+  const points=activeMapBoundsPoints();
+  const center=points.length
+    ? [(Math.min(...points.map(point=>point[0]))+Math.max(...points.map(point=>point[0])))/2,
+      (Math.min(...points.map(point=>point[1]))+Math.max(...points.map(point=>point[1])))/2]
+    : [mapPan.x,mapPan.z];
+  void focusEditorFromAtlas("coordinate",`${map.id}:overview`.slice(0,128),map.name||map.id,center,64);
 }
 
 function revealEditorCoordinate(message){

@@ -23,7 +23,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { createServer, request as httpRequest } from "node:http";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -89,6 +89,33 @@ export function atlasProxyPath(requestUrl) {
   return undefined;
 }
 
+export function parseEditorHandoffServerConfig({ atlasOrigin, editorUrl, editorServerUrl } = {}) {
+  if (editorUrl === undefined && editorServerUrl === undefined) return undefined;
+  const atlas = parseAtlasOrigin(atlasOrigin instanceof URL ? atlasOrigin.origin : atlasOrigin);
+  if (!atlas || typeof editorUrl !== "string" || typeof editorServerUrl !== "string") {
+    throw new Error("Atlas origin, editor URL, and editor server URL are all required for handoff");
+  }
+  let editor;
+  let server;
+  try { editor = new URL(editorUrl); server = new URL(editorServerUrl); }
+  catch (error) { throw new Error(`editor handoff URL is invalid: ${error.message}`); }
+  if (editor.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(editor.hostname)
+      || editor.port === "" || editor.pathname !== "/" || editor.search !== "" || editor.hash !== ""
+      || editor.username !== "" || editor.password !== "" || editor.href !== editorUrl) {
+    throw new Error("LIMINA_EDITOR_PUBLIC_URL must be an exact loopback http origin URL");
+  }
+  if (!['ws:', 'wss:'].includes(server.protocol) || !["localhost", "127.0.0.1"].includes(server.hostname)
+      || server.port === "" || server.pathname !== "/" || server.search !== "" || server.hash !== ""
+      || server.username !== "" || server.password !== "" || server.href !== editorServerUrl) {
+    throw new Error("LIMINA_EDITOR_SERVER_URL must be an exact loopback WebSocket URL");
+  }
+  return Object.freeze({
+    atlasOrigin: atlas.origin,
+    editorUrl: editor.href,
+    editorServerUrl: server.href,
+  });
+}
+
 function withoutHopByHopHeaders(input) {
   const headers = { ...input };
   const connectionTokens = String(headers.connection ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
@@ -124,12 +151,43 @@ function proxyAtlasRequest(req, res, atlasOrigin, targetPath) {
   req.pipe(upstream);
 }
 
-export function createEditorStaticServer({ root, assetRoot, atlasOrigin } = {}) {
+export function createEditorStaticServer({ root, assetRoot, atlasOrigin, editorUrl, editorServerUrl } = {}) {
   const ROOT = resolve(root ?? "dist");
   const ASSETS_ROOT = resolve(assetRoot ?? resolve(ROOT, "..", "assets"));
   const ATLAS_ORIGIN = parseAtlasOrigin(atlasOrigin instanceof URL ? atlasOrigin.origin : atlasOrigin);
+  const HANDOFF_CONFIG = parseEditorHandoffServerConfig({ atlasOrigin: ATLAS_ORIGIN, editorUrl, editorServerUrl });
   return createServer((req, res) => {
     try {
+      const requestPath = (req.url ?? "/").split("?")[0];
+      const isRelayDocument = HANDOFF_CONFIG && req.method === "GET" && req.url === "/atlas-handoff.html";
+      const isRelayConfig = HANDOFF_CONFIG && req.method === "GET" && req.url === "/atlas-handoff-config";
+      if (isRelayDocument || isRelayConfig) {
+        const handoffHeaders = {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        };
+        if (isRelayConfig) {
+          res.writeHead(200, { ...handoffHeaders, ...COOP_COEP, "content-type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify(HANDOFF_CONFIG));
+        } else {
+          // This single transient document must retain its cross-origin Atlas opener. Every other
+          // editor-origin response remains cross-origin isolated.
+          res.writeHead(200, { ...handoffHeaders, "content-type": "text/html; charset=utf-8" });
+          res.end(readFileSync(join(ROOT, "atlas-handoff.html")));
+        }
+        return;
+      }
+      if (requestPath.startsWith("/atlas-handoff")) {
+        res.writeHead(404, {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+          ...COOP_COEP,
+        }).end("404 Not Found");
+        return;
+      }
       const proxyPath = ATLAS_ORIGIN === undefined ? undefined : atlasProxyPath(req.url ?? "/");
       if (proxyPath !== undefined) {
         proxyAtlasRequest(req, res, ATLAS_ORIGIN, proxyPath);
@@ -190,7 +248,24 @@ function main() {
   // The repo asset root (repo/assets), served at /assets/** so the LIVE editor's op_read_asset
   // can fetch GLB/texture bytes (asset.place, vegetation.scatter) from the same origin.
   const assetRoot = resolve(process.env.LIMINA_ASSETS_ROOT || resolve(root, "..", "assets"));
-  const server = createEditorStaticServer({ root, assetRoot, atlasOrigin });
+  let handoffConfig;
+  try {
+    handoffConfig = parseEditorHandoffServerConfig({
+      atlasOrigin,
+      editorUrl: process.env.LIMINA_EDITOR_PUBLIC_URL,
+      editorServerUrl: process.env.LIMINA_EDITOR_SERVER_URL,
+    });
+  } catch (error) {
+    console.error(`\n  serve: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  const server = createEditorStaticServer({
+    root,
+    assetRoot,
+    atlasOrigin,
+    editorUrl: handoffConfig?.editorUrl,
+    editorServerUrl: handoffConfig?.editorServerUrl,
+  });
 
   server.listen(port, "127.0.0.1", () => {
     console.log(`\n  limina: serving ${argDir}/ at http://localhost:${port}/\n  (Ctrl-C to stop)\n`);

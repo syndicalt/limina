@@ -60,7 +60,7 @@ input, select {
 
 /* stage: the viewport IS the app — it fills the whole area; the tools float over it */
 .stage { flex: 1; position: relative; min-height: 0; background: var(--bg); display: flex; align-items: stretch; }
-.viewport { position: relative; flex: 1 1 0; min-width: 0; background: var(--panel); }
+.viewport { --atlas-dock-width: 560px; position: relative; flex: 1 1 0; min-width: 0; background: var(--panel); }
 .viewport > .panel-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 2; border-bottom: none;
   background: linear-gradient(to bottom, rgba(14, 17, 22, .82), rgba(14, 17, 22, 0));
@@ -86,11 +86,20 @@ input, select {
 #editor-viewport, .editor-play-canvas { width: 100%; height: 100%; min-width: 0; flex: 1 1 auto; display: block; background: #0b0f14; }
 #editor-viewport[hidden] { display: none; }
 .atlas-overview {
-  width: clamp(440px, 48%, 720px); min-width: 440px; min-height: 0; margin-top: 44px;
+  width: var(--atlas-dock-width); min-width: 360px; min-height: 0; margin-top: 44px;
   display: flex; flex: none; flex-direction: column; position: relative; z-index: 4;
   border-left: 1px solid var(--border); background: var(--panel); box-shadow: -10px 0 28px rgba(0, 0, 0, .32);
 }
 .atlas-overview[hidden] { display: none; }
+.atlas-overview-splitter {
+  position: absolute; inset: 0 auto 0 -5px; width: 10px; z-index: 2; cursor: col-resize;
+  touch-action: none; background: transparent;
+}
+.atlas-overview-splitter::after {
+  content: ""; position: absolute; inset: 0 auto 0 4px; width: 1px; background: var(--border);
+}
+.atlas-overview-splitter:hover::after, .atlas-overview-splitter:focus-visible::after { width: 2px; background: var(--accent); }
+.atlas-overview-splitter:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .atlas-overview-head {
   height: 34px; min-height: 34px; display: flex; align-items: center; gap: 7px; padding: 4px 6px 4px 10px;
   border-bottom: 1px solid var(--border); background: var(--panel-2);
@@ -106,9 +115,23 @@ input, select {
 }
 .atlas-overview-head button:hover, .atlas-overview-head button:focus-visible { color: var(--text); border-color: var(--accent); outline: none; }
 .atlas-overview iframe { width: 100%; min-height: 0; flex: 1; border: 0; background: #e9edf1; }
-body.atlas-overview-open .viewport-overlay-stack { right: calc(clamp(440px, 48%, 720px) + 74px); }
-body.atlas-overview-open .viewport-compass { right: calc(clamp(440px, 48%, 720px) + 10px); }
+body.atlas-overview-open:not(.atlas-workspace-maximized):not(.atlas-workspace-compact) .viewport-overlay-stack { right: calc(var(--atlas-dock-width) + 74px); }
+body.atlas-overview-open:not(.atlas-workspace-maximized):not(.atlas-workspace-compact) .viewport-compass { right: calc(var(--atlas-dock-width) + 10px); }
 body.atlas-overview-open #inspector { display: none !important; }
+body.atlas-workspace-resizing, body.atlas-workspace-resizing * { cursor: col-resize !important; user-select: none !important; }
+body.atlas-workspace-resizing .atlas-overview iframe { pointer-events: none; }
+body.atlas-workspace-maximized .atlas-overview {
+  position: absolute; inset: 44px 0 0; width: auto; min-width: 0; margin: 0; border-left: 0; z-index: 31;
+}
+body.atlas-workspace-compact .atlas-overview {
+  position: fixed;
+  inset: var(--atlas-compact-top, 0) var(--atlas-compact-right, 0)
+    var(--atlas-compact-bottom, 0) var(--atlas-compact-left, 0);
+  width: auto; min-width: 0; margin: 0; border-left: 0; z-index: 31;
+}
+body.atlas-workspace-maximized .atlas-overview-splitter, body.atlas-workspace-compact .atlas-overview-splitter { display: none; }
+body.atlas-workspace-maximized .viewport-overlay-stack, body.atlas-workspace-compact .viewport-overlay-stack,
+body.atlas-workspace-maximized .viewport-compass, body.atlas-workspace-compact .viewport-compass { display: none; }
 .viewport-compass { position: absolute; top: 56px; right: 10px; z-index: 29; }
 .viewport-overlay-stack {
   position: absolute; top: 52px; left: 10px; right: 74px; z-index: 3;
@@ -706,6 +729,7 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
   .navigation-speed { flex: 1 1 126px; }
   .navigation-command { flex: 1 1 auto; }
   .atlas-overview { position: absolute; inset: 44px 0 0; width: auto; min-width: 0; margin: 0; border-left: 0; }
+  .atlas-overview-splitter { display: none; }
   body.atlas-overview-open .viewport-overlay-stack { display: none; }
   body.atlas-overview-open .viewport-compass { display: none; }
   .navigation-popover { top: calc(100% + 5px); left: 0; right: auto; width: min(334px, calc(100vw - 16px)); max-height: min(300px, calc(100vh - 240px)); }

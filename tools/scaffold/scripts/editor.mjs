@@ -250,14 +250,15 @@ function bridgeConfig(home, editorUrl, token) {
   };
 }
 
-function printBanner({ home, uiPort, editorPort, token, runtimeDiscovery }) {
+function printBanner({ home, uiPort, editorPort, atlasPort, token, runtimeDiscovery }) {
   const editorUrl = `ws://localhost:${editorPort}/`;
   console.log("");
   console.log("limina editor is running");
   console.log("");
   console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
-  console.log(`  Atlas:       http://localhost:${uiPort}/atlas/`);
+  console.log(`  Atlas dock:  http://localhost:${uiPort}/atlas/`);
+  console.log(`  Atlas solo:  http://127.0.0.1:${atlasPort}/`);
   console.log(`  Derived API: ${runtimeDiscovery.baseUrl}`);
   console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
   console.log(`  Editor key:  ${token}`);
@@ -565,6 +566,8 @@ async function main() {
       ...process.env,
       LIMINA_EDITOR_URL: `ws://127.0.0.1:${editorPort}/`,
       LIMINA_EDITOR_TOKEN: token,
+      LIMINA_EDITOR_HANDOFF_URL: `http://localhost:${uiPort}/atlas-handoff.html`,
+      LIMINA_ATLAS_PUBLIC_ORIGIN: atlasLaunch.origin,
       LIMINA_ASSETS_ROOT: assetRoot,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -587,7 +590,13 @@ async function main() {
 
   staticServer = spawn(process.execPath, [join(PROJECT_DIR, "scripts", "serve.mjs"), join(home, "editor"), String(uiPort)], {
     cwd: PROJECT_DIR,
-    env: { ...process.env, LIMINA_ASSETS_ROOT: assetRoot, LIMINA_ATLAS_ORIGIN: atlasLaunch.origin },
+    env: {
+      ...process.env,
+      LIMINA_ASSETS_ROOT: assetRoot,
+      LIMINA_ATLAS_ORIGIN: atlasLaunch.origin,
+      LIMINA_EDITOR_PUBLIC_URL: `http://localhost:${uiPort}/`,
+      LIMINA_EDITOR_SERVER_URL: `ws://localhost:${editorPort}/`,
+    },
     stdio: ["ignore", "ignore", "pipe"],
   });
   prefixStream(staticServer.stderr, "[editor_ui]");
@@ -609,6 +618,7 @@ async function main() {
     home,
     uiPort,
     editorPort,
+    atlasPort: atlasLaunch.port,
     token,
     runtimeDiscovery,
   });

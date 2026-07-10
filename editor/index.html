@@ -185,10 +185,14 @@
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
         <section id="viewport-atlas" class="atlas-overview" aria-labelledby="viewport-atlas-title" hidden>
+          <div id="viewport-atlas-splitter" class="atlas-overview-splitter" role="separator" tabindex="0"
+            aria-label="Resize Atlas workspace" aria-orientation="vertical"
+            aria-controls="editor-viewport viewport-atlas" aria-valuemin="360" aria-valuenow="560"></div>
           <div class="atlas-overview-head">
             <h4 id="viewport-atlas-title">Atlas</h4>
             <output id="viewport-atlas-status" aria-live="polite">connecting</output>
             <button id="viewport-atlas-reveal" type="button" title="Reveal the selected entity position" aria-label="Reveal the selected entity position">◎</button>
+            <button id="viewport-atlas-maximize" type="button" title="Maximize Atlas" aria-label="Maximize Atlas" aria-pressed="false">□</button>
             <button id="viewport-atlas-close" type="button" title="Close Atlas" aria-label="Close Atlas">×</button>
           </div>
           <iframe id="viewport-atlas-frame" title="Atlas world builder" loading="lazy"></iframe>

@@ -26,6 +26,15 @@ import { createBrowserRenderHost, runLive, partitionQuarantined, TransformContro
 import { createGraphicsSettings, readGraphicsQuality } from "./graphics-settings.js";
 import { createDerivedRuntimeClient } from "./derived-runtime-client.js";
 import { createNavigationDestinationCoordinator } from "./navigation-destination.js";
+import { atlasEditorHandoff } from "./atlas-handoff-bootstrap.js";
+import {
+  ATLAS_WORKSPACE_COMPACT_WIDTH_PX,
+  ATLAS_WORKSPACE_DEFAULT_WIDTH_PX,
+  atlasWorkspaceWidthBounds,
+  clampAtlasWorkspaceWidth,
+  readAtlasWorkspaceState,
+  writeAtlasWorkspaceState,
+} from "./atlas-workspace-state.js";
 import {
   ATLAS_EDITOR_BRIDGE_SCHEMA,
   ATLAS_FOCUS_REQUEST,
@@ -123,7 +132,9 @@ const viewportUi = {
   atlasFrame: document.getElementById("viewport-atlas-frame"),
   atlasStatus: document.getElementById("viewport-atlas-status"),
   atlasReveal: document.getElementById("viewport-atlas-reveal"),
+  atlasMaximize: document.getElementById("viewport-atlas-maximize"),
   atlasClose: document.getElementById("viewport-atlas-close"),
+  atlasSplitter: document.getElementById("viewport-atlas-splitter"),
 };
 function setStatus(phase, detail) {
   const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
@@ -305,6 +316,62 @@ const ATLAS_SOURCE_WAIT_MS = 30_000;
 const atlasWorldPosition = new THREE.Vector3();
 let atlasRevealRequestId = 0;
 let atlasFocusGeneration = 0;
+let atlasFocusRequiresOpen = false;
+let pendingAtlasHandoffFocus = atlasEditorHandoff?.focus;
+let atlasHandoffApplying = false;
+let atlasWorkspaceState = readAtlasWorkspaceState(graphicsStorage);
+let atlasWorkspaceCompact = false;
+let atlasResizePointer;
+
+function atlasWorkspaceContainerWidth() {
+  return viewportUi.atlasPanel?.parentElement?.clientWidth ?? 0;
+}
+
+function persistAtlasWorkspaceState() {
+  writeAtlasWorkspaceState(graphicsStorage, atlasWorkspaceState);
+}
+
+function applyAtlasWorkspaceLayout() {
+  const containerWidth = atlasWorkspaceContainerWidth();
+  const width = clampAtlasWorkspaceWidth(atlasWorkspaceState.widthPx, containerWidth);
+  document.getElementById("viewport")?.style.setProperty("--atlas-dock-width", `${width}px`);
+  if (atlasWorkspaceCompact && viewportUi.atlasPanel) {
+    const stage = document.querySelector(".stage")?.getBoundingClientRect();
+    if (stage) {
+      viewportUi.atlasPanel.style.setProperty("--atlas-compact-left", `${Math.max(0, stage.left)}px`);
+      viewportUi.atlasPanel.style.setProperty("--atlas-compact-top", `${Math.max(0, stage.top)}px`);
+      viewportUi.atlasPanel.style.setProperty("--atlas-compact-right", `${Math.max(0, innerWidth - stage.right)}px`);
+      viewportUi.atlasPanel.style.setProperty("--atlas-compact-bottom", `${Math.max(0, innerHeight - stage.bottom)}px`);
+    }
+  }
+  document.body.classList.toggle("atlas-workspace-maximized", atlasOpen() && atlasWorkspaceState.maximized && !atlasWorkspaceCompact);
+  document.body.classList.toggle("atlas-workspace-compact", atlasOpen() && atlasWorkspaceCompact);
+  if (viewportUi.atlasPanel) {
+    viewportUi.atlasPanel.dataset.workspaceMode = atlasWorkspaceCompact
+      ? "compact" : atlasWorkspaceState.maximized ? "maximized" : "docked";
+  }
+  if (viewportUi.atlasMaximize) {
+    const maximized = atlasWorkspaceState.maximized && !atlasWorkspaceCompact;
+    viewportUi.atlasMaximize.setAttribute("aria-pressed", String(maximized));
+    viewportUi.atlasMaximize.setAttribute("aria-label", maximized ? "Restore Atlas dock" : "Maximize Atlas");
+    viewportUi.atlasMaximize.title = maximized ? "Restore Atlas dock" : "Maximize Atlas";
+    viewportUi.atlasMaximize.textContent = maximized ? "▣" : "□";
+    viewportUi.atlasMaximize.disabled = atlasWorkspaceCompact;
+  }
+  if (viewportUi.atlasSplitter) {
+    const bounds = atlasWorkspaceWidthBounds(containerWidth);
+    viewportUi.atlasSplitter.setAttribute("aria-valuemin", String(bounds.minimum));
+    viewportUi.atlasSplitter.setAttribute("aria-valuemax", String(bounds.maximum));
+    viewportUi.atlasSplitter.setAttribute("aria-valuenow", String(width));
+  }
+}
+
+function updateAtlasWorkspaceCompact() {
+  const compact = atlasWorkspaceContainerWidth() < ATLAS_WORKSPACE_COMPACT_WIDTH_PX;
+  if (compact === atlasWorkspaceCompact) return;
+  atlasWorkspaceCompact = compact;
+  applyAtlasWorkspaceLayout();
+}
 
 function setAtlasStatus(message) {
   if (viewportUi.atlasStatus) viewportUi.atlasStatus.textContent = String(message ?? "").slice(0, 120);
@@ -314,18 +381,72 @@ function atlasOpen() {
   return viewportUi.atlasPanel?.hidden === false;
 }
 
-function setAtlasOpen(open) {
+function setAtlasOpen(open, { persist = true, returnFocus = false } = {}) {
   if (!viewportUi.atlasPanel || !viewportUi.atlasFrame) return;
   viewportUi.atlasPanel.hidden = !open;
   viewportUi.atlasToggle?.setAttribute("aria-expanded", String(open));
   viewportUi.atlasToggle?.classList.toggle("active", open);
   document.body.classList.toggle("atlas-overview-open", open);
-  if (!open && state.atlasFocusPending) atlasFocusGeneration++;
+  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, open });
+  applyAtlasWorkspaceLayout();
+  if (persist) persistAtlasWorkspaceState();
+  if (!open && state.atlasFocusPending && atlasFocusRequiresOpen) atlasFocusGeneration++;
   if (open && viewportUi.atlasFrame.getAttribute("src") === null) {
     setAtlasStatus("loading");
     viewportUi.atlasFrame.src = "/atlas/?embed=editor";
   }
-  requestAnimationFrame(resizeViewport);
+  scheduleResizeViewport();
+  if (!open && returnFocus) viewportUi.atlasToggle?.focus();
+}
+
+function setAtlasMaximized(maximized) {
+  if (!atlasOpen() || atlasWorkspaceCompact) return;
+  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, maximized: maximized === true });
+  applyAtlasWorkspaceLayout();
+  persistAtlasWorkspaceState();
+  scheduleResizeViewport();
+}
+
+function setAtlasWorkspaceWidth(widthPx, { persist = false } = {}) {
+  const width = clampAtlasWorkspaceWidth(widthPx, atlasWorkspaceContainerWidth());
+  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, widthPx: width });
+  applyAtlasWorkspaceLayout();
+  if (persist) persistAtlasWorkspaceState();
+  scheduleResizeViewport();
+}
+
+function beginAtlasResize(event) {
+  if (event.button !== 0 || atlasWorkspaceCompact || atlasWorkspaceState.maximized || !atlasOpen()) return;
+  event.preventDefault();
+  atlasResizePointer = event.pointerId;
+  viewportUi.atlasSplitter?.setPointerCapture?.(event.pointerId);
+  document.body.classList.add("atlas-workspace-resizing");
+}
+
+function updateAtlasResize(event) {
+  if (atlasResizePointer !== event.pointerId) return;
+  const rect = viewportUi.atlasPanel?.parentElement?.getBoundingClientRect();
+  if (rect) setAtlasWorkspaceWidth(rect.right - event.clientX);
+}
+
+function finishAtlasResize(event) {
+  if (atlasResizePointer !== event.pointerId) return;
+  atlasResizePointer = undefined;
+  document.body.classList.remove("atlas-workspace-resizing");
+  try { viewportUi.atlasSplitter?.releasePointerCapture?.(event.pointerId); } catch { /* already released */ }
+  setAtlasWorkspaceWidth(atlasWorkspaceState.widthPx, { persist: true });
+}
+
+function resizeAtlasWithKeyboard(event) {
+  if (atlasWorkspaceCompact || atlasWorkspaceState.maximized || !atlasOpen()) return;
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const bounds = atlasWorkspaceWidthBounds(atlasWorkspaceContainerWidth());
+  const step = event.shiftKey ? 64 : 16;
+  const next = event.key === "Home" ? bounds.minimum : event.key === "End" ? bounds.maximum
+    : atlasWorkspaceState.widthPx + (event.key === "ArrowRight" ? step : -step);
+  setAtlasWorkspaceWidth(next, { persist: true });
 }
 
 function postAtlasReveal(world, label) {
@@ -363,11 +484,11 @@ function revealSelectionInAtlas() {
   );
 }
 
-async function waitForAtlasDerivedSource(source, generation) {
+async function waitForAtlasDerivedSource(source, generation, requireAtlasOpen) {
   const deadline = performance.now() + ATLAS_SOURCE_WAIT_MS;
   while (performance.now() < deadline) {
     if (generation !== atlasFocusGeneration) throw Object.assign(new Error("Atlas focus was superseded"), { code: "ATLAS_FOCUS_SUPERSEDED" });
-    if (!atlasOpen()) throw Object.assign(new Error("Atlas focus was cancelled"), { code: "ATLAS_FOCUS_SUPERSEDED" });
+    if (requireAtlasOpen && !atlasOpen()) throw Object.assign(new Error("Atlas focus was cancelled"), { code: "ATLAS_FOCUS_SUPERSEDED" });
     if (playLifecycle.isAuthoringLocked() || state.scrubLimit !== undefined || state.rebooting) {
       throw Object.assign(new Error("Atlas focus is unavailable outside live Edit"), { code: "ATLAS_FOCUS_UNAVAILABLE" });
     }
@@ -382,16 +503,17 @@ async function waitForAtlasDerivedSource(source, generation) {
   throw Object.assign(new Error("Atlas revision did not become ready in time"), { code: "ATLAS_SOURCE_TIMEOUT" });
 }
 
-async function focusAtlasRequest(message) {
+async function focusAtlasRequest(message, { requireAtlasOpen = true } = {}) {
   if (!navigationDiscreteReady() || state.atlasFocusPending) {
     setAtlasStatus("3D focus unavailable");
     return;
   }
   const generation = ++atlasFocusGeneration;
   state.atlasFocusPending = true;
+  atlasFocusRequiresOpen = requireAtlasOpen;
   syncNavigationUi();
   try {
-    await waitForAtlasDerivedSource(message.source, generation);
+    await waitForAtlasDerivedSource(message.source, generation, requireAtlasOpen);
     const navigation = state.running?.editorNavigation;
     if (!navigation) throw Object.assign(new Error("editor navigation is unavailable"), { code: "NAVIGATION_UNAVAILABLE" });
     const current = navigation.snapshot();
@@ -403,7 +525,7 @@ async function focusAtlasRequest(message) {
     }, {
       resolvePose: ({ context }) => {
         const active = context.runtime.derivedRevision();
-        if (generation !== atlasFocusGeneration || !atlasOpen()
+        if (generation !== atlasFocusGeneration || (requireAtlasOpen && !atlasOpen())
             || active?.revision !== message.source.revision || active?.headHash !== message.source.headHash) {
           throw Object.assign(new Error("Atlas source changed before camera commit"), { code: "ATLAS_SOURCE_CHANGED" });
         }
@@ -422,8 +544,19 @@ async function focusAtlasRequest(message) {
     setStatus("navigation", code);
   } finally {
     state.atlasFocusPending = false;
+    atlasFocusRequiresOpen = false;
     syncNavigationUi();
   }
+}
+
+function schedulePendingAtlasHandoff() {
+  if (!pendingAtlasHandoffFocus || atlasHandoffApplying || !navigationDiscreteReady()) return;
+  const focus = pendingAtlasHandoffFocus;
+  pendingAtlasHandoffFocus = undefined;
+  atlasHandoffApplying = true;
+  queueMicrotask(() => {
+    void focusAtlasRequest(focus, { requireAtlasOpen: false }).finally(() => { atlasHandoffApplying = false; });
+  });
 }
 
 function onAtlasMessage(event) {
@@ -621,6 +754,7 @@ function syncNavigationUi() {
   for (const button of document.querySelectorAll("[data-navigation-entry]")) button.disabled = !discreteReady;
   document.body.classList.toggle("editor-navigation-fly", mode === "fly" && localReady);
   if (locked) closeNavigationPanels();
+  schedulePendingAtlasHandoff();
 }
 
 function setNavigationMode(modeInput, { persist = true } = {}) {
@@ -836,7 +970,16 @@ function bindViewportUi() {
     setAtlasOpen(!atlasOpen());
     if (atlasOpen()) requestAnimationFrame(revealSelectionInAtlas);
   });
-  viewportUi.atlasClose?.addEventListener("click", () => setAtlasOpen(false));
+  viewportUi.atlasClose?.addEventListener("click", () => setAtlasOpen(false, { returnFocus: true }));
+  viewportUi.atlasMaximize?.addEventListener("click", () => setAtlasMaximized(!atlasWorkspaceState.maximized));
+  viewportUi.atlasSplitter?.addEventListener("pointerdown", beginAtlasResize);
+  viewportUi.atlasSplitter?.addEventListener("pointermove", updateAtlasResize);
+  viewportUi.atlasSplitter?.addEventListener("pointerup", finishAtlasResize);
+  viewportUi.atlasSplitter?.addEventListener("pointercancel", finishAtlasResize);
+  viewportUi.atlasSplitter?.addEventListener("keydown", resizeAtlasWithKeyboard);
+  viewportUi.atlasSplitter?.addEventListener("dblclick", () => {
+    setAtlasWorkspaceWidth(ATLAS_WORKSPACE_DEFAULT_WIDTH_PX, { persist: true });
+  });
   viewportUi.atlasReveal?.addEventListener("click", revealSelectionInAtlas);
   viewportUi.atlasFrame?.addEventListener("load", () => {
     setAtlasStatus("ready");
@@ -2209,12 +2352,14 @@ function createPlayCanvas(width, height) {
   playCanvas.height = height;
   playCanvas.setAttribute("aria-label", "Isolated Play viewport");
   canvas.hidden = true;
-  canvas.parentElement?.appendChild(playCanvas);
+  canvas.parentElement?.insertBefore(playCanvas, viewportUi.atlasPanel ?? null);
   state.playCanvas = playCanvas;
+  viewportResizeObserver?.observe(playCanvas);
   return playCanvas;
 }
 
 function releasePlayCanvas() {
+  if (state.playCanvas) viewportResizeObserver?.unobserve(state.playCanvas);
   state.playCanvas?.remove();
   state.playCanvas = undefined;
   canvas.hidden = false;
@@ -2876,12 +3021,41 @@ function resizeViewport() {
     if (cam) { cam.aspect = w / h; cam.updateProjectionMatrix?.(); }
   }
 }
-let winResizeRaf = 0;
-window.addEventListener("resize", () => { cancelAnimationFrame(winResizeRaf); winResizeRaf = requestAnimationFrame(resizeViewport); });
+let viewportResizeRaf = 0;
+let viewportResizeObserver;
+function scheduleResizeViewport() {
+  cancelAnimationFrame(viewportResizeRaf);
+  viewportResizeRaf = requestAnimationFrame(() => {
+    viewportResizeRaf = 0;
+    resizeViewport();
+  });
+}
+if (typeof ResizeObserver === "function") {
+  viewportResizeObserver = new ResizeObserver(() => {
+    updateAtlasWorkspaceCompact();
+    scheduleResizeViewport();
+  });
+  viewportResizeObserver.observe(canvas);
+  if (viewportUi.atlasPanel?.parentElement) viewportResizeObserver.observe(viewportUi.atlasPanel.parentElement);
+}
+window.addEventListener("resize", () => {
+  updateAtlasWorkspaceCompact();
+  scheduleResizeViewport();
+});
+window.addEventListener("scroll", () => {
+  if (atlasWorkspaceCompact) applyAtlasWorkspaceLayout();
+}, { passive: true });
 // Sidebar collapse animates over ~160ms (CSS); re-fit once the transition has settled.
-window.addEventListener("limina:layout-changed", () => { setTimeout(resizeViewport, 200); });
+window.addEventListener("limina:layout-changed", () => {
+  setTimeout(() => {
+    updateAtlasWorkspaceCompact();
+    scheduleResizeViewport();
+  }, 200);
+});
 
 bindViewportUi();
+updateAtlasWorkspaceCompact();
+setAtlasOpen(atlasWorkspaceState.open, { persist: false });
 // Reconnecting with a different URL/token must not leave the independent readonly follower (or its
 // derived capability) attached to the old host. The panel owns these buttons; additive listeners
 // preserve its connect/disconnect handlers while resetting the viewport-side connection.

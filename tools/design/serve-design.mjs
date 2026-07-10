@@ -27,6 +27,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
 import { summarizePeekFailure } from "./peek-failure.mjs";
+import { editorLaunchConfigFromEnvironment } from "./editor-launch.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
@@ -104,6 +105,7 @@ const ASSETS_DIR = resolveProjectPath(
 const port = Number(process.argv[3]) || 4321;
 const HOST = "127.0.0.1";
 const DESIGN_SESSION_TOKEN = randomBytes(32).toString("hex");
+const EDITOR_LAUNCH_CONFIG = editorLaunchConfigFromEnvironment(process.env);
 const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_PEEK_JOBS = 256;
 const MAX_CONCURRENT_PEEKS = 2;
@@ -759,7 +761,7 @@ createServer((req, res) => {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(JSON.stringify({ token: DESIGN_SESSION_TOKEN }));
+    res.end(JSON.stringify({ token: DESIGN_SESSION_TOKEN, editor: EDITOR_LAUNCH_CONFIG }));
     return;
   }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/packs") {

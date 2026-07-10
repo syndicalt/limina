@@ -2,6 +2,7 @@
 export const ATLAS_EDITOR_BRIDGE_SCHEMA = "limina.atlas-editor-bridge/v1";
 export const ATLAS_FOCUS_REQUEST = "atlas.focus-request";
 export const EDITOR_REVEAL_REQUEST = "editor.reveal-request";
+export const EDITOR_HANDOFF_READY = "editor.handoff-ready";
 export const MAX_BRIDGE_COORDINATE_M = 10_000_000;
 export const MAX_BRIDGE_RADIUS_M = 10_000_000;
 export const MAX_BRIDGE_IDENTIFIER_CHARS = 128;
@@ -157,6 +158,14 @@ export function parseEditorRevealRequest(input) {
   });
 }
 
+export function parseEditorHandoffReady(input) {
+  const fields = dataFields(input, ["schema", "type"], [], "editor handoff ready");
+  if (fields.schema !== ATLAS_EDITOR_BRIDGE_SCHEMA || fields.type !== EDITOR_HANDOFF_READY) {
+    throw protocolError("editor handoff ready schema or type is invalid");
+  }
+  return Object.freeze({ schema: ATLAS_EDITOR_BRIDGE_SCHEMA, type: EDITOR_HANDOFF_READY });
+}
+
 export function parseAtlasEditorBridgeMessage(input) {
   const fields = dataFields(input, ["schema", "type"], ["requestId", "source", "mapId", "subject", "world", "radiusM", "label"], "Atlas editor bridge message");
   if (fields.schema !== ATLAS_EDITOR_BRIDGE_SCHEMA) {
@@ -164,7 +173,32 @@ export function parseAtlasEditorBridgeMessage(input) {
   }
   if (fields.type === ATLAS_FOCUS_REQUEST) return parseAtlasFocusRequest(input);
   if (fields.type === EDITOR_REVEAL_REQUEST) return parseEditorRevealRequest(input);
+  if (fields.type === EDITOR_HANDOFF_READY) return parseEditorHandoffReady(input);
   throw protocolError("Atlas editor bridge message type is invalid");
+}
+
+export function parseEditorLaunchConfig(input) {
+  const fields = dataFields(input, ["handoffUrl", "editorOrigin", "atlasOrigin"], [], "editor launch config");
+  if (typeof fields.handoffUrl !== "string" || typeof fields.editorOrigin !== "string"
+      || typeof fields.atlasOrigin !== "string") {
+    throw protocolError("editor launch config URLs must be strings");
+  }
+  let handoff;
+  let atlas;
+  try { handoff = new URL(fields.handoffUrl); atlas = new URL(fields.atlasOrigin); }
+  catch { throw protocolError("editor launch handoffUrl is invalid"); }
+  if (handoff.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(handoff.hostname)
+      || handoff.port === "" || handoff.pathname !== "/atlas-handoff.html" || handoff.search !== ""
+      || handoff.hash !== "" || handoff.username !== "" || handoff.password !== ""
+      || handoff.origin !== fields.editorOrigin) {
+    throw protocolError("editor launch config must target an exact loopback handoff URL");
+  }
+  if (atlas.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(atlas.hostname)
+      || atlas.port === "" || atlas.origin !== fields.atlasOrigin
+      || atlas.username !== "" || atlas.password !== "") {
+    throw protocolError("editor launch config must name an exact loopback Atlas origin");
+  }
+  return Object.freeze({ handoffUrl: handoff.href, editorOrigin: handoff.origin, atlasOrigin: atlas.origin });
 }
 
 export function atlasLocalToCanonicalWorld(unitsInput, local) {

@@ -4,12 +4,14 @@
 // map switch/create) await flushMapSave() instead. A beforeunload beacon flushes a pending save
 // so closing the tab mid-debounce can't drop the last edit.
 
-let sessionTokenPromise;
+import { parseEditorLaunchConfig } from "./atlas-editor-protocol.js";
+
+let sessionPromise;
 let cachedSessionToken;
 
-async function sessionToken() {
-  if (!sessionTokenPromise) {
-    sessionTokenPromise = fetch("/api/session", { cache: "no-store" })
+async function designSession() {
+  if (!sessionPromise) {
+    sessionPromise = fetch("/api/session", { cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`design session failed: ${response.status}`);
         return response.json();
@@ -17,10 +19,20 @@ async function sessionToken() {
       .then((body) => {
         if (typeof body.token !== "string" || body.token.length < 32) throw new Error("design session returned an invalid token");
         cachedSessionToken = body.token;
-        return cachedSessionToken;
+        return body;
       });
   }
-  return sessionTokenPromise;
+  return sessionPromise;
+}
+
+async function sessionToken() {
+  return (await designSession()).token;
+}
+
+export async function getEditorLaunchConfig() {
+  const body = await designSession();
+  if (body.editor === undefined) throw new Error("Open in Editor is unavailable outside the unified editor launcher");
+  return parseEditorLaunchConfig(body.editor);
 }
 
 export async function postJSON(url, body) {

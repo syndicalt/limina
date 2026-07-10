@@ -17,6 +17,7 @@ import { cueColorFor } from "./viewport.js";
 import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
 import { ingestTraceEvents } from "./trace-retention.js";
 import { assertEditorAuthoringAllowed, playLifecycle } from "./play-lifecycle.js";
+import { atlasEditorHandoff } from "./atlas-handoff-bootstrap.js";
 export { MAX_TRACE_EVENTS, ingestTraceEvents } from "./trace-retention.js";
 
 const $ = (id) => document.getElementById(id);
@@ -26,8 +27,11 @@ const $ = (id) => document.getElementById(id);
 const proposeButton = $("propose");
 const proposeMoveButton = $("propose-move");
 
-const configuredServer = new URLSearchParams(location.search).get("server");
-if (configuredServer !== null && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServer)) {
+const configuredServerInput = new URLSearchParams(location.search).get("server");
+const configuredServer = configuredServerInput !== null
+  && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServerInput)
+  ? configuredServerInput : atlasEditorHandoff?.serverUrl ?? null;
+if (configuredServer !== null) {
   $("url").value = configuredServer;
 }
 const el = (tag, cls, text) => {

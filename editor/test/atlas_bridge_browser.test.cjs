@@ -24,7 +24,8 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
   }));
   const before = await authority.callTool("authoring.sourceSnapshot", {});
   const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
-  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+  const page = await context.newPage();
   const pageErrors = [];
   const failedRequests = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -72,6 +73,98 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
       fail(`Atlas isolation/embed contract failed: ${JSON.stringify({ isolation, embedded })}`);
     }
 
+    const atlasPanel = page.locator("#viewport-atlas");
+    const splitter = page.locator("#viewport-atlas-splitter");
+    const initialLayout = await page.evaluate(() => {
+      const panel = document.getElementById("viewport-atlas").getBoundingClientRect();
+      const canvas = document.getElementById("editor-viewport").getBoundingClientRect();
+      return { panelWidth: panel.width, canvasWidth: canvas.width, frameSrc: document.getElementById("viewport-atlas-frame").src };
+    });
+    const splitterBox = await splitter.boundingBox();
+    if (!splitterBox) fail("Atlas splitter is not visible in docked mode");
+    await page.mouse.move(splitterBox.x + splitterBox.width / 2, splitterBox.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(splitterBox.x + 96, splitterBox.y + 100, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    const resizedLayout = await page.evaluate(() => {
+      const panel = document.getElementById("viewport-atlas").getBoundingClientRect();
+      const canvas = document.getElementById("editor-viewport");
+      const rect = canvas.getBoundingClientRect();
+      return {
+        panelWidth: panel.width,
+        canvasWidth: rect.width,
+        cssAspect: rect.width / rect.height,
+        bufferAspect: canvas.width / canvas.height,
+        ariaValue: Number(document.getElementById("viewport-atlas-splitter").getAttribute("aria-valuenow")),
+      };
+    });
+    if (resizedLayout.panelWidth > initialLayout.panelWidth - 70
+        || resizedLayout.canvasWidth < initialLayout.canvasWidth + 70
+        || Math.abs(resizedLayout.cssAspect - resizedLayout.bufferAspect) > 0.02
+        || Math.abs(resizedLayout.ariaValue - resizedLayout.panelWidth) > 2) {
+      fail(`Atlas pointer resize did not preserve renderer layout: ${JSON.stringify({ initialLayout, resizedLayout })}`);
+    }
+    await splitter.focus();
+    await splitter.press("ArrowRight");
+    const keyboardWidth = (await atlasPanel.boundingBox())?.width;
+    if (!keyboardWidth || keyboardWidth < resizedLayout.panelWidth + 10) fail("Atlas keyboard resize did not grow the dock");
+
+    let dockWidth = keyboardWidth;
+    await page.locator("#viewport-atlas-maximize").click();
+    const maximized = await page.evaluate(() => {
+      const panel = document.getElementById("viewport-atlas").getBoundingClientRect();
+      const body = document.getElementById("viewport-body").getBoundingClientRect();
+      return { mode: document.getElementById("viewport-atlas").dataset.workspaceMode, panel, body,
+        pressed: document.getElementById("viewport-atlas-maximize").getAttribute("aria-pressed"),
+        frameSrc: document.getElementById("viewport-atlas-frame").src };
+    });
+    if (maximized.mode !== "maximized" || maximized.pressed !== "true"
+        || Math.abs(maximized.panel.left - maximized.body.left) > 2
+        || Math.abs(maximized.panel.right - maximized.body.right) > 2
+        || Math.abs(maximized.panel.bottom - maximized.body.bottom) > 2
+        || maximized.frameSrc !== initialLayout.frameSrc) {
+      fail(`Atlas maximize contract failed: ${JSON.stringify(maximized)}`);
+    }
+    await page.locator("#viewport-atlas-maximize").click();
+    const restoredWidth = (await atlasPanel.boundingBox())?.width;
+    if (!restoredWidth || Math.abs(restoredWidth - dockWidth) > 2) fail(`Atlas restore lost dock width: ${restoredWidth} vs ${dockWidth}`);
+
+    await page.locator("#viewport-play").click();
+    await page.locator("#viewport-play-state").filter({ hasText: "Playing" }).waitFor({ timeout: 30_000 });
+    const playLayout = await page.evaluate(() => {
+      const play = document.querySelector(".editor-play-canvas");
+      const atlas = document.getElementById("viewport-atlas");
+      const playRect = play.getBoundingClientRect();
+      const atlasRect = atlas.getBoundingClientRect();
+      return {
+        playRight: playRect.right,
+        atlasLeft: atlasRect.left,
+        cssAspect: playRect.width / playRect.height,
+        bufferAspect: play.width / play.height,
+        children: [...document.getElementById("viewport-body").children].map((node) => node.id || node.className),
+      };
+    });
+    if (playLayout.playRight > playLayout.atlasLeft + 2
+        || Math.abs(playLayout.cssAspect - playLayout.bufferAspect) > 0.02
+        || playLayout.children.indexOf("editor-play-canvas") > playLayout.children.indexOf("viewport-atlas")) {
+      fail(`Play canvas did not remain left of the Atlas dock: ${JSON.stringify(playLayout)}`);
+    }
+    await splitter.focus();
+    await splitter.press("ArrowRight");
+    await page.waitForTimeout(200);
+    dockWidth = (await atlasPanel.boundingBox())?.width ?? dockWidth;
+    const resizedPlayAspect = await page.evaluate(() => {
+      const play = document.querySelector(".editor-play-canvas");
+      const rect = play.getBoundingClientRect();
+      return { css: rect.width / rect.height, buffer: play.width / play.height };
+    });
+    if (Math.abs(resizedPlayAspect.css - resizedPlayAspect.buffer) > 0.02) {
+      fail(`Play renderer did not follow Atlas resize: ${JSON.stringify(resizedPlayAspect)}`);
+    }
+    await page.locator("#viewport-stop").click();
+    await page.locator("#viewport-play-state").filter({ hasText: "Edit" }).waitFor({ timeout: 30_000 });
+
     const entityRows = page.locator(".outliner-row[data-entity-id]");
     await entityRows.first().waitFor({ state: "visible", timeout: 20_000 });
     let revealed = false;
@@ -96,28 +189,55 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     }
 
     await page.screenshot({ path: artifactPath("atlas_bridge_desktop.png"), fullPage: true });
+
+    const persistedPage = await context.newPage();
+    try {
+      await persistedPage.goto(url, { waitUntil: "domcontentloaded", timeout: 10_000 });
+      await persistedPage.locator("#viewport-atlas").waitFor({ state: "visible", timeout: 10_000 });
+      const persisted = await persistedPage.evaluate(() => ({
+        width: document.getElementById("viewport-atlas").getBoundingClientRect().width,
+        mode: document.getElementById("viewport-atlas").dataset.workspaceMode,
+      }));
+      if (persisted.mode !== "docked" || Math.abs(persisted.width - dockWidth) > 2) {
+        fail(`Atlas workspace layout did not persist: ${JSON.stringify({ persisted, dockWidth })}`);
+      }
+    } finally { await persistedPage.close(); }
+
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await page.waitForFunction(() => document.getElementById("viewport-atlas")?.dataset.workspaceMode === "compact");
+    const intermediate = await page.evaluate(() => {
+      const panel = document.getElementById("viewport-atlas").getBoundingClientRect();
+      const stage = document.querySelector(".stage").getBoundingClientRect();
+      return { panel, stage, width: innerWidth };
+    });
+    if (intermediate.panel.width < 700 || intermediate.panel.left < intermediate.stage.left - 2
+        || intermediate.panel.right > intermediate.stage.right + 2) {
+      fail(`intermediate-width compact Atlas is unusable: ${JSON.stringify(intermediate)}`);
+    }
+
     await page.setViewportSize({ width: 390, height: 844 });
     const mobile = await page.evaluate(() => {
       const panel = document.getElementById("viewport-atlas").getBoundingClientRect();
-      const viewport = document.getElementById("viewport").getBoundingClientRect();
       return {
         panel: { left: panel.left, right: panel.right, top: panel.top, bottom: panel.bottom },
-        viewport: { left: viewport.left, right: viewport.right, top: viewport.top, bottom: viewport.bottom },
-        width: innerWidth,
+        width: innerWidth, height: innerHeight,
         scrollWidth: document.documentElement.scrollWidth,
+        mode: document.getElementById("viewport-atlas").dataset.workspaceMode,
+        splitterDisplay: getComputedStyle(document.getElementById("viewport-atlas-splitter")).display,
       };
     });
-    if (mobile.panel.left < mobile.viewport.left || mobile.panel.right > mobile.viewport.right
-        || mobile.panel.top < mobile.viewport.top || mobile.panel.bottom > mobile.viewport.bottom
-        || mobile.scrollWidth > mobile.width) {
+    if (mobile.panel.left < 0 || mobile.panel.right > mobile.width
+        || mobile.panel.top < 0 || mobile.panel.bottom > mobile.height || mobile.panel.right - mobile.panel.left < 360
+        || mobile.scrollWidth > mobile.width || mobile.mode !== "compact" || mobile.splitterDisplay !== "none") {
       fail(`mobile Atlas escaped the viewport: ${JSON.stringify(mobile)}`);
     }
     await page.screenshot({ path: artifactPath("atlas_bridge_mobile.png"), fullPage: true });
     if (pageErrors.length > 0) fail("browser errors: " + pageErrors.join(" | "));
     if (failedRequests.length > 0) fail("failed requests: " + failedRequests.join(" | "));
-    console.log("atlas_bridge_browser.test OK: isolated dock, reverse coordinate reveal, exact terrain focus, recents, mobile bounds, authority unchanged");
+    console.log("atlas_bridge_browser.test OK: isolated dock, Edit/Play resize, maximize/restore, persistence, reverse reveal, exact focus, compact layouts, authority unchanged");
   } finally {
     authority.close();
+    await context.close();
     await browser.close();
   }
 })().catch((error) => fail(error?.stack ?? error?.message ?? String(error)));

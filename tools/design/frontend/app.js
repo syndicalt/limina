@@ -6,7 +6,7 @@
 import { esc, titleCaseName, toast } from "./util.js";
 import { S } from "./store.js";
 import { postJSON, setMapsRev } from "./net.js";
-import { renderMap, openPlaceInspector } from "./map.js";
+import { renderMap, openPlaceInspector, openCurrentMapInEditor } from "./map.js";
 
 const EMBEDDED_ATLAS = new URLSearchParams(window.location.search).get("embed") === "editor";
 if (EMBEDDED_ATLAS) {
@@ -435,6 +435,7 @@ function showView(){
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{ S.activeView=t.dataset.view; setTabs(); showView(); });
 document.getElementById("refresh").onclick=()=>load();
 document.getElementById("new-doc").onclick=newDocDialog;
+document.getElementById("open-editor").onclick=openCurrentMapInEditor;
 
 const themeBtn=document.getElementById("theme");
 function applyTheme(t){ document.body.classList.toggle("dark",t==="dark"); themeBtn.textContent=t==="dark"?"☀":"🌙"; }
