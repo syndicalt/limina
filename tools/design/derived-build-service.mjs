@@ -26,6 +26,7 @@ export const MAX_DERIVED_BUILD_POLL_MS = 60_000;
 export const DEFAULT_DERIVED_BUILD_BRANCH = "main";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
+const COMPILER_VERSION = /^[0-9][A-Za-z0-9._+-]{0,63}$/;
 const BRANCH_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 const ASSET_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const TERRAIN_LAYER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -82,11 +83,79 @@ function isProjectAssetId(value) {
 }
 
 function immutable(value) {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+  if (value !== null && typeof value === "object") {
     for (const child of Object.values(value)) immutable(child);
-    Object.freeze(value);
+    if (!Object.isFrozen(value)) Object.freeze(value);
   }
   return value;
+}
+
+function validateCompilerBundle(input, label) {
+  if (input === null || Array.isArray(input) || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype
+      || Object.getOwnPropertySymbols(input).length !== 0) {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label} must be a plain object`);
+  }
+  const names = Object.getOwnPropertyNames(input);
+  const allowed = new Set(["schema", "version", "config", "identity"]);
+  if (!names.includes("version") || !names.includes("config") || !names.includes("identity")
+      || names.some((name) => !allowed.has(name))) {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label} has unsupported or missing fields`);
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, name);
+    if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+      throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.${name} must be an enumerable data field`);
+    }
+  }
+  if (typeof input.version !== "string" || !COMPILER_VERSION.test(input.version)
+      || input.config === null || Array.isArray(input.config) || typeof input.config !== "object"
+      || Object.getPrototypeOf(input.config) !== Object.prototype) {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label} version or config is invalid`);
+  }
+  const identity = input.identity;
+  if (identity === null || Array.isArray(identity) || typeof identity !== "object" || Object.getPrototypeOf(identity) !== Object.prototype
+      || Object.getOwnPropertySymbols(identity).length !== 0) {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.identity must be a plain object`);
+  }
+  const identityNames = Object.getOwnPropertyNames(identity).sort();
+  if (identityNames.join() !== "configHash,graphHash,version") {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.identity has unsupported or missing fields`);
+  }
+  for (const name of identityNames) {
+    const descriptor = Object.getOwnPropertyDescriptor(identity, name);
+    if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+      throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.identity.${name} must be an enumerable data field`);
+    }
+  }
+  let actualConfigHash;
+  try { actualConfigHash = compilerContentHash(input.config); }
+  catch (error) { throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.config is not canonical compiler data`, { cause: error }); }
+  if (identity.version !== input.version || identity.configHash !== actualConfigHash || !HASH.test(identity.graphHash)) {
+    throw new DerivedBuildServiceError("INVALID_COMPILER", `${label}.identity is invalid or inconsistent`);
+  }
+  immutable(input.config);
+  return Object.freeze({
+    ...(Object.hasOwn(input, "schema") ? { schema: input.schema } : {}),
+    version: input.version,
+    config: input.config,
+    identity: Object.freeze({
+      version: identity.version,
+      configHash: identity.configHash,
+      graphHash: identity.graphHash,
+    }),
+  });
+}
+
+function sameCompilerIdentity(left, right) {
+  return left?.version === right?.version
+    && left?.configHash === right?.configHash
+    && left?.graphHash === right?.graphHash;
+}
+
+function installedFor(snapshot, installed, compilerIdentity) {
+  return installed?.source?.revision === snapshot.head.revision
+    && installed.source.headHash === snapshot.head.headHash
+    && sameCompilerIdentity(installed.compiler, compilerIdentity);
 }
 
 function denseAuthorityArray(input, maximum, label) {
@@ -346,6 +415,7 @@ export class DerivedBuildService {
   #compileAtlasMapDoc;
   #compileWorldTerrain;
   #compiler;
+  #compilerForWorldMap;
   #coordinator;
   #pollMs;
   #logger;
@@ -381,7 +451,11 @@ export class DerivedBuildService {
     this.#assetStore = options.assetStore;
     this.#compileAtlasMapDoc = options.compileAtlasMapDoc;
     this.#compileWorldTerrain = options.compileWorldTerrain;
-    this.#compiler = options.compiler;
+    this.#compiler = validateCompilerBundle(options.compiler, "derived build service compiler");
+    if (options.compilerForWorldMap !== undefined && typeof options.compilerForWorldMap !== "function") {
+      throw new DerivedBuildServiceError("INVALID_OPTIONS", "derived build service compilerForWorldMap must be a function");
+    }
+    this.#compilerForWorldMap = options.compilerForWorldMap;
     this.#pollMs = boundedPollMs(options.pollMs);
     this.#logger = options.logger ?? console;
     this.#setTimer = options.setTimer ?? setTimeout;
@@ -435,6 +509,15 @@ export class DerivedBuildService {
       projectId: this.#projectId,
       projectRoot: this.#projectRoot,
       compiler: this.#compiler.identity,
+      ...(this.#compilerForWorldMap === undefined ? {} : {
+        compilerForRequest: (request) => {
+          const prepared = this.#sourceByHead.get(request.headHash);
+          if (prepared === undefined || prepared.authority.head.revision !== request.revision) {
+            throw new DerivedBuildServiceError("SOURCE_SNAPSHOT_MISSING", "exact prepared source is no longer retained for compiler selection");
+          }
+          return prepared.compiler.identity;
+        },
+      }),
       readHead: () => this.#readHead(),
       compile: (request) => this.#compile(request),
       publish,
@@ -462,23 +545,32 @@ export class DerivedBuildService {
     if (snapshot.snapshotHash === this.#submittedSnapshotHash) return { status: "unchanged", snapshotHash: snapshot.snapshotHash };
     await this.#ensurePrevious();
     const installed = this.#previous?.manifest;
-    if (this.#previous?.snapshot && installed?.source?.revision === snapshot.head.revision
-        && installed.source.headHash === snapshot.head.headHash
-        && installed.compiler?.version === this.#compiler.identity.version
-        && installed.compiler?.configHash === this.#compiler.identity.configHash
-        && installed.compiler?.graphHash === this.#compiler.identity.graphHash) {
+    if (this.#compilerForWorldMap === undefined && this.#previous?.snapshot
+        && installedFor(snapshot, installed, this.#compiler.identity)) {
+      this.#submittedSnapshotHash = snapshot.snapshotHash;
+      return { status: "already-published", snapshotHash: snapshot.snapshotHash, manifestHash: installed.manifestHash };
+    }
+    const prepared = this.#prepareSource(snapshot);
+    if (this.#previous?.snapshot && installedFor(snapshot, installed, prepared.compiler.identity)) {
       this.#submittedSnapshotHash = snapshot.snapshotHash;
       return { status: "already-published", snapshotHash: snapshot.snapshotHash, manifestHash: installed.manifestHash };
     }
     this.#submittedSnapshotHash = snapshot.snapshotHash;
-    this.#sourceByHead.set(snapshot.head.headHash, snapshot);
-    const promise = this.#coordinator.submit({
-      schema: "limina.derived-build-request/v1",
-      projectId: this.#projectId,
-      branchId: this.#branchId,
-      revision: snapshot.head.revision,
-      headHash: snapshot.head.headHash,
-    });
+    this.#sourceByHead.set(snapshot.head.headHash, prepared);
+    let promise;
+    try {
+      promise = this.#coordinator.submit({
+        schema: "limina.derived-build-request/v1",
+        projectId: this.#projectId,
+        branchId: this.#branchId,
+        revision: snapshot.head.revision,
+        headHash: snapshot.head.headHash,
+      });
+    } catch (error) {
+      this.#sourceByHead.delete(snapshot.head.headHash);
+      if (this.#submittedSnapshotHash === snapshot.snapshotHash) this.#submittedSnapshotHash = undefined;
+      throw error;
+    }
     this.#inFlight.add(promise);
     const settled = promise.then(
       (result) => {
@@ -558,12 +650,7 @@ export class DerivedBuildService {
     });
   }
 
-  async #compile(request) {
-    const authority = this.#sourceByHead.get(request.headHash);
-    if (authority === undefined || authority.head.revision !== request.revision) {
-      throw new DerivedBuildServiceError("SOURCE_SNAPSHOT_MISSING", "exact authoritative source snapshot is no longer retained");
-    }
-    await this.#ensurePrevious();
+  #prepareSource(authority) {
     const mapRef = authority.projectState.refs.mapDoc;
     if (mapRef === null) throw new DerivedBuildServiceError("SOURCE_SNAPSHOT_MISSING", "authoritative source snapshot has no MapDoc");
     if (authority.projectState.refs.terrainEditLayers.length > MAX_COMPILED_EDIT_LAYERS) {
@@ -576,8 +663,46 @@ export class DerivedBuildService {
     let mapsJsonText;
     try { mapsJsonText = new TextDecoder("utf-8", { fatal: true }).decode(mapBytes); }
     catch (error) { throw new DerivedBuildServiceError("INVALID_MAPDOC", "authoritative MapDoc is not valid UTF-8", { cause: error }); }
-    const compiledMap = this.#compileAtlasMapDoc({ mapsJsonText });
+    let compiledMap;
+    try { compiledMap = this.#compileAtlasMapDoc({ mapsJsonText }); }
+    catch (error) { throw new DerivedBuildServiceError("INVALID_MAPDOC", `authoritative MapDoc compilation failed: ${error?.message ?? error}`, { cause: error }); }
+    if (compiledMap === null || typeof compiledMap !== "object" || compiledMap.worldMap === null || typeof compiledMap.worldMap !== "object") {
+      throw new DerivedBuildServiceError("INVALID_MAPDOC", "authoritative MapDoc compiler returned no WorldMap");
+    }
+    immutable(compiledMap);
+    let compiler = this.#compiler;
+    if (this.#compilerForWorldMap !== undefined) {
+      let selected;
+      try { selected = this.#compilerForWorldMap(compiledMap.worldMap); }
+      catch (error) {
+        throw new DerivedBuildServiceError("COMPILER_SELECTION_FAILED", `world compiler profile selection failed: ${error?.message ?? error}`, { cause: error });
+      }
+      try { compiler = validateCompilerBundle(selected, "selected world compiler"); }
+      catch (error) {
+        throw new DerivedBuildServiceError("COMPILER_SELECTION_FAILED", `world compiler profile selection returned an invalid bundle: ${error?.message ?? error}`, { cause: error });
+      }
+    }
+    return Object.freeze({ authority, compiledMap, compiler });
+  }
 
+  async #compile(request) {
+    const prepared = this.#sourceByHead.get(request.headHash);
+    if (prepared === undefined || prepared.authority.head.revision !== request.revision) {
+      throw new DerivedBuildServiceError("SOURCE_SNAPSHOT_MISSING", "exact authoritative source snapshot is no longer retained");
+    }
+    if (!sameCompilerIdentity(prepared.compiler.identity, request.compiler)) {
+      throw new DerivedBuildServiceError("COMPILER_IDENTITY_DRIFT", "prepared compiler identity does not match the submitted build identity");
+    }
+    const authority = prepared.authority;
+    await this.#ensurePrevious();
+    const mapRef = authority.projectState.refs.mapDoc;
+    if (mapRef === null) throw new DerivedBuildServiceError("SOURCE_SNAPSHOT_MISSING", "authoritative source snapshot has no MapDoc");
+    if (authority.projectState.refs.terrainEditLayers.length > MAX_COMPILED_EDIT_LAYERS) {
+      throw new DerivedBuildServiceError(
+        "SOURCE_LIMIT_EXCEEDED",
+        `terrain compilation supports at most ${MAX_COMPILED_EDIT_LAYERS} edit layers per revision`,
+      );
+    }
     const terrainEditLayers = [];
     const terrainEditLayerRefs = [];
     for (let index = 0; index < authority.projectState.refs.terrainEditLayers.length; index++) {
@@ -595,7 +720,10 @@ export class DerivedBuildService {
       });
     }
 
-    const prior = this.#previous?.snapshot && this.#previous?.manifest ? this.#previous : undefined;
+    const previous = this.#previous?.snapshot && this.#previous?.manifest ? this.#previous : undefined;
+    const prior = previous !== undefined && sameCompilerIdentity(previous.manifest.compiler, prepared.compiler.identity)
+      ? previous
+      : undefined;
     const output = await this.#compileWorldTerrain({
       request: {
         projectId: request.projectId,
@@ -603,7 +731,7 @@ export class DerivedBuildService {
         revision: request.revision,
         headHash: request.headHash,
       },
-      worldMap: compiledMap.worldMap,
+      worldMap: prepared.compiledMap.worldMap,
       sourceRefs: {
         mapDocument: {
           refId: "map-document",
@@ -615,7 +743,7 @@ export class DerivedBuildService {
       },
       terrainEditLayers,
       terrainEditLayerRefs,
-      compiler: { version: this.#compiler.version, config: this.#compiler.config },
+      compiler: { version: prepared.compiler.version, config: prepared.compiler.config },
       previousSnapshot: prior?.snapshot ?? null,
       ...(prior === undefined ? {} : {
         previousManifest: prior.manifest,
@@ -659,6 +787,10 @@ async function main() {
   if (!compilerBundlePath) throw new Error("LIMINA_WORLD_COMPILER_BUNDLE is required");
   const compilerModule = await import(pathToFileURL(resolve(compilerBundlePath)).href);
   const compiler = compilerModule.createDefaultWorldTerrainCompiler(projectConfig.projectId);
+  if (typeof compilerModule.createHydrologyWorldTerrainCompiler !== "function") {
+    throw new Error("world compiler bundle does not export createHydrologyWorldTerrainCompiler");
+  }
+  const hydrologyCompiler = compilerModule.createHydrologyWorldTerrainCompiler(projectConfig.projectId);
   const authoringClient = new EditorBridgeClient(editorClientConfigFromEnvironment(process.env, {
     agentId: "limina-derived-build-service",
     sessionId: `derived-build-${process.pid}`,
@@ -683,6 +815,7 @@ async function main() {
       signal,
     }),
     compiler,
+    compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
     bootstrapMapDoc: existsSync(join(projectConfig.projectRoot, "design", "maps.json"))
       ? () => bootstrapAuthoritativeMapDoc({
         projectId: projectConfig.projectId,

@@ -472,6 +472,57 @@ test("trusted constructor compiler identity participates in build identity and m
   );
 });
 
+test("trusted request resolver selects and freezes compiler identity at submission", async () => {
+  const selected = compiler("2");
+  let resolvedRequest;
+  let compiledIdentity;
+  const setup = coordinator({
+    compilerForRequest(sourceRequest) {
+      resolvedRequest = sourceRequest;
+      assert.equal(Object.isFrozen(sourceRequest), true);
+      assert.deepEqual(Object.keys(sourceRequest).sort(), ["branchId", "headHash", "projectId", "revision", "schema"]);
+      return selected;
+    },
+    compile: async ({ revision, branchId, compiler: compilerIdentity }) => {
+      compiledIdentity = compilerIdentity;
+      return compileFixture(source(revision), "resolved-compiler", branchId, compilerIdentity);
+    },
+  });
+  const result = await setup.coordinator.submit(request(1));
+  assert.equal(resolvedRequest.revision, 1);
+  assert.deepEqual(compiledIdentity, selected);
+  assert.deepEqual(result.compiler, selected);
+});
+
+test("compiler resolver throws, malformed output, and equal-source nondeterminism fail closed", async (t) => {
+  await t.test("throw", () => {
+    const setup = coordinator({ compilerForRequest() { throw new Error("selector unavailable"); } });
+    assert.throws(() => setup.coordinator.submit(request(1)), assertCode("COMPILER_RESOLUTION_FAILED"));
+  });
+  await t.test("malformed", () => {
+    const setup = coordinator({ compilerForRequest() { return { version: "2.0.0" }; } });
+    assert.throws(() => setup.coordinator.submit(request(1)), assertCode("COMPILER_RESOLUTION_FAILED"));
+  });
+  await t.test("nondeterministic equal source", async () => {
+    let resolverCalls = 0;
+    let release;
+    const blocked = new Promise((resolve) => { release = resolve; });
+    const setup = coordinator({
+      compilerForRequest() { return compiler(String(++resolverCalls)); },
+      compile: async ({ revision, branchId, compiler: compilerIdentity }) => {
+        await blocked;
+        return compileFixture(source(revision), "stable-first-selection", branchId, compilerIdentity);
+      },
+    });
+    const first = setup.coordinator.submit(request(1));
+    await assert.rejects(setup.coordinator.submit(request(1)), assertCode("COMPILER_IDENTITY_DRIFT"));
+    release();
+    const result = await first;
+    assert.deepEqual(result.compiler, compiler("1"));
+    assert.equal(setup.coordinator.diagnostics().counts.rejected, 1);
+  });
+});
+
 test("publisher failure does not poison an identical retry", async () => {
   let attempts = 0;
   const setup = coordinator({

@@ -77,7 +77,7 @@ function boundedInteger(value, fallback, minimum, maximum, label) {
   return result;
 }
 
-function parseRequest(input, expectedProjectId, compilerIdentity) {
+function parseSourceRequest(input, expectedProjectId) {
   const request = plainObject(input, "derived build request");
   exactKeys(request, new Set(["schema", "projectId", "branchId", "revision", "headHash"]), "derived build request");
   if (request.schema !== DERIVED_BUILD_REQUEST_SCHEMA) {
@@ -94,7 +94,6 @@ function parseRequest(input, expectedProjectId, compilerIdentity) {
     branchId: identifier(request.branchId, BRANCH_ID, "derived build branchId"),
     revision: request.revision,
     headHash: validateCompilerContentHash(request.headHash, "derived build headHash"),
-    compiler: compilerIdentity,
   });
 }
 
@@ -106,6 +105,27 @@ function parseCompilerIdentity(input) {
     configHash: validateCompilerContentHash(compiler.configHash, "derived build compiler configHash"),
     graphHash: validateCompilerContentHash(compiler.graphHash, "derived build compiler graphHash"),
   });
+}
+
+function resolveCompilerIdentity(sourceRequest, fixedIdentity, compilerForRequest) {
+  if (compilerForRequest === undefined) return fixedIdentity;
+  let selected;
+  try {
+    selected = compilerForRequest(sourceRequest);
+  } catch (error) {
+    throw new DerivedBuildCoordinatorError(
+      "COMPILER_RESOLUTION_FAILED",
+      `derived build compiler resolution failed: ${error?.message ?? error}`,
+    );
+  }
+  try {
+    return parseCompilerIdentity(selected);
+  } catch (error) {
+    throw new DerivedBuildCoordinatorError(
+      "COMPILER_RESOLUTION_FAILED",
+      `derived build compiler resolution returned an invalid identity: ${error?.message ?? error}`,
+    );
+  }
 }
 
 function parseHead(input, expected) {
@@ -407,6 +427,7 @@ export class DerivedBuildCoordinator {
   #projectId;
   #projectRoot;
   #compilerIdentity;
+  #compilerForRequest;
   #readHead;
   #compile;
   #publish;
@@ -439,7 +460,7 @@ export class DerivedBuildCoordinator {
     const options = plainObject(input, "derived build coordinator options");
     const allowed = new Set([
       "projectId", "projectRoot", "compiler", "readHead", "compile", "publish", "now", "maxTrackedBranches", "maxDiagnostics",
-      "maxConcurrentBuilds", "verifyReusableArtifacts",
+      "maxConcurrentBuilds", "verifyReusableArtifacts", "compilerForRequest",
     ]);
     const required = new Set(["projectId", "projectRoot", "compiler", "readHead", "compile"]);
     const names = Object.getOwnPropertyNames(options);
@@ -469,8 +490,12 @@ export class DerivedBuildCoordinator {
     if (options.now !== undefined && typeof options.now !== "function") {
       throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator now must be a function");
     }
+    if (options.compilerForRequest !== undefined && typeof options.compilerForRequest !== "function") {
+      throw new DerivedBuildCoordinatorError("INVALID_INPUT", "derived build coordinator compilerForRequest must be a function");
+    }
     this.#projectRoot = options.projectRoot;
     this.#compilerIdentity = parseCompilerIdentity(options.compiler);
+    this.#compilerForRequest = options.compilerForRequest;
     this.#readHead = options.readHead;
     this.#compile = options.compile;
     this.#publish = options.publish ?? defaultPublish;
@@ -482,11 +507,15 @@ export class DerivedBuildCoordinator {
   }
 
   submit(input) {
-    const request = parseRequest(input, this.#projectId, this.#compilerIdentity);
+    const sourceRequest = parseSourceRequest(input, this.#projectId);
     if (this.#closed) {
       this.#counts.rejected++;
       throw new DerivedBuildCoordinatorError("COORDINATOR_CLOSED", "derived build coordinator is closed");
     }
+    const request = Object.freeze({
+      ...sourceRequest,
+      compiler: resolveCompilerIdentity(sourceRequest, this.#compilerIdentity, this.#compilerForRequest),
+    });
     this.#counts.submitted++;
     let state = this.#branches.get(request.branchId);
     if (state === undefined) {
@@ -502,6 +531,26 @@ export class DerivedBuildCoordinator {
       if (request.revision < state.latest.revision) return this.#rejectStale(request, state.latest);
       if (request.revision === state.latest.revision && request.headHash !== state.latest.headHash) {
         return this.#rejectStale(request, state.latest, "same revision has a different authoritative hash");
+      }
+      if (sameSource(request, state.latest) && !sameIntent(request, state.latest)) {
+        this.#counts.rejected++;
+        const error = new DerivedBuildCoordinatorError(
+          "COMPILER_IDENTITY_DRIFT",
+          `compiler resolution changed for ${request.revision}/${request.headHash}`,
+        );
+        this.#record({
+          status: "rejected",
+          buildId: buildIdFor(request),
+          branchId: request.branchId,
+          revision: request.revision,
+          headHash: request.headHash,
+          compiler: request.compiler,
+          phase: "queue",
+          durationMs: 0,
+          errorCode: error.code,
+          errorMessage: error.message,
+        });
+        return Promise.reject(error);
       }
       if (sameIntent(request, state.latest)) {
         const shared = [state.active, state.pending].find((job) => job !== undefined && sameIntent(job.request, request));

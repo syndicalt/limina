@@ -146,7 +146,7 @@ function fixture() {
   };
 }
 
-function previousManifest(projectId, artifactHash, snapshotHash, globalArtifactHash = undefined) {
+function previousManifest(projectId, artifactHash, snapshotHash, globalArtifactHash = undefined, options = {}) {
   const grid = createTerrainGridSpec({ gridId: `${projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
   const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
   return createDerivedRevisionManifest({
@@ -154,14 +154,14 @@ function previousManifest(projectId, artifactHash, snapshotHash, globalArtifactH
     projectId,
     branchId: "main",
     source: {
-      revision: 1,
-      headHash: compilerContentHash({ head: 1 }),
+      revision: options.revision ?? 1,
+      headHash: compilerContentHash({ head: options.revision ?? 1 }),
       contentRefs: [{ refId: "map-document", refType: "map-document/v1", scope: "global", assetId: "assets/map.json", contentHash: compilerContentHash({ map: 1 }) }],
     },
     compiler: {
-      version: "1.0.0",
-      configHash: compilerContentHash({ config: 1 }),
-      graphHash: compilerContentHash({ graph: 1 }),
+      version: options.compiler?.version ?? "1.0.0",
+      configHash: options.compiler?.configHash ?? compilerContentHash({ fixture: true }),
+      graphHash: options.compiler?.graphHash ?? compilerContentHash({ graph: true }),
       snapshotHash,
     },
     grid,
@@ -184,6 +184,19 @@ function previousManifest(projectId, artifactHash, snapshotHash, globalArtifactH
   });
 }
 
+function compilerProfile(version, tag) {
+  const config = { profile: tag };
+  return {
+    version,
+    config,
+    identity: {
+      version,
+      configHash: compilerContentHash(config),
+      graphHash: compilerContentHash({ profileGraph: tag }),
+    },
+  };
+}
+
 class FakeCoordinator {
   constructor(options) {
     this.options = options;
@@ -194,10 +207,12 @@ class FakeCoordinator {
   async submit(request) {
     this.submissions.push(request);
     const controller = new AbortController();
+    const sourceRequest = Object.freeze({ ...request });
+    const compiler = this.options.compilerForRequest?.(sourceRequest) ?? this.options.compiler;
     const full = {
       buildId: "derived-test-build",
       ...request,
-      compiler: this.options.compiler,
+      compiler,
       signal: controller.signal,
     };
     const output = await this.options.compile(full);
@@ -226,7 +241,7 @@ class FakeCoordinator {
       branchId: request.branchId,
       revision: request.revision,
       headHash: request.headHash,
-      compiler: this.options.compiler,
+      compiler,
       manifestHash: published.manifestHash,
       durationMs: 1,
     };
@@ -243,12 +258,12 @@ function service(fx, overrides = {}) {
     async callTool(name) { assert.equal(name, "authoring.sourceSnapshot"); return fx.snapshot; },
     close() { this.closed = true; },
   };
-  const compiler = {
+  const compiler = overrides.compiler ?? {
     version: "1.0.0",
     config: { fixture: true },
     identity: {
       version: "1.0.0",
-      configHash: compilerContentHash({ config: true }),
+      configHash: compilerContentHash({ fixture: true }),
       graphHash: compilerContentHash({ graph: true }),
     },
   };
@@ -256,8 +271,9 @@ function service(fx, overrides = {}) {
     projectId: fx.projectId,
     projectRoot: fx.projectRoot,
     authoringClient: authority,
-    assetStore: fx.assetStore,
+    assetStore: overrides.assetStore ?? fx.assetStore,
     compiler,
+    compilerForWorldMap: overrides.compilerForWorldMap,
     compileAtlasMapDoc: overrides.compileAtlasMapDoc ?? (({ mapsJsonText }) => {
       assert.equal(mapsJsonText, fx.bytes.toString("utf8"));
       return { worldMap: { fixture: "world-map" }, warnings: [] };
@@ -546,6 +562,142 @@ test("compiles the exact hash-verified MapDoc and normalizes coordinator artifac
   } finally { fx.cleanup(); }
 });
 
+test("prepares the exact MapDoc once and submits the selected compiler profile", async () => {
+  const fx = fixture();
+  try {
+    const legacy = compilerProfile("1.0.0", "legacy");
+    const hydrology = compilerProfile("1.1.0", "hydrology");
+    let assetReads = 0;
+    let atlasCompiles = 0;
+    let selectorCalls = 0;
+    let terrainCompiles = 0;
+    const manifestHash = compilerContentHash({ manifest: "selected-hydrology" });
+    const assetStore = {
+      read(...args) { assetReads++; return fx.assetStore.read(...args); },
+      readCanonicalJson(...args) { return fx.assetStore.readCanonicalJson(...args); },
+    };
+    const created = service(fx, {
+      compiler: legacy,
+      assetStore,
+      compileAtlasMapDoc({ mapsJsonText }) {
+        atlasCompiles++;
+        assert.equal(mapsJsonText, fx.bytes.toString("utf8"));
+        return { worldMap: { hydrology: { schema: "limina.hydrology-recipe/v1" } }, warnings: [] };
+      },
+      compilerForWorldMap(worldMap) {
+        selectorCalls++;
+        assert.equal(Object.isFrozen(worldMap), true);
+        return worldMap.hydrology === undefined ? legacy : hydrology;
+      },
+      compileWorldTerrain(input) {
+        terrainCompiles++;
+        assert.equal(input.compiler.version, "1.1.0");
+        assert.strictEqual(input.compiler.config, hydrology.config);
+        return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
+      },
+      publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
+    });
+    const result = await created.instance.reconcileOnce({ waitForBuild: true });
+    assert.deepEqual(result.compiler, hydrology.identity);
+    assert.equal(assetReads, 1);
+    assert.equal(atlasCompiles, 1);
+    assert.equal(selectorCalls, 1);
+    assert.equal(terrainCompiles, 1);
+    assert.equal((await created.instance.reconcileOnce({ waitForBuild: true })).status, "unchanged");
+    assert.equal(assetReads, 1, "unchanged source was prepared twice");
+    await created.instance.stop();
+  } finally { fx.cleanup(); }
+});
+
+test("selected profile controls already-published and warm-versus-cold cache decisions", async (t) => {
+  const legacy = compilerProfile("1.0.0", "legacy");
+  const hydrology = compilerProfile("1.1.0", "hydrology");
+  await t.test("already published selected profile", async () => {
+    const fx = fixture();
+    try {
+      const artifactHash = compilerContentHash({ prior: "selected-artifact" });
+      const snapshotHash = compilerContentHash({ prior: "selected-snapshot" });
+      const manifest = previousManifest(fx.projectId, artifactHash, snapshotHash, undefined, { compiler: hydrology.identity });
+      let atlasCompiles = 0;
+      const created = service(fx, {
+        compiler: legacy,
+        compilerForWorldMap: () => hydrology,
+        compileAtlasMapDoc() { atlasCompiles++; return { worldMap: { hydrology: {} }, warnings: [] }; },
+        compileWorldTerrain() { throw new Error("already-published selected profile must not compile terrain"); },
+        loadPrevious: async () => ({ manifest, snapshot: { snapshotHash } }),
+        publish: async () => { throw new Error("already-published selected profile must not publish"); },
+      });
+      const result = await created.instance.reconcileOnce({ waitForBuild: true });
+      assert.equal(result.status, "already-published");
+      assert.equal(atlasCompiles, 1, "selector did not inspect the exact MapDoc");
+      assert.equal(created.coordinator.submissions.length, 0);
+      await created.instance.stop();
+    } finally { fx.cleanup(); }
+  });
+
+  for (const [name, priorCompiler, expectWarm] of [
+    ["matching profile remains sparse", hydrology.identity, true],
+    ["different profile transitions cold", legacy.identity, false],
+  ]) await t.test(name, async () => {
+    const fx = fixture();
+    try {
+      fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 2);
+      const artifactHash = compilerContentHash({ prior: name });
+      const snapshotHash = compilerContentHash({ snapshot: name });
+      const manifest = previousManifest(fx.projectId, artifactHash, snapshotHash, undefined, { compiler: priorCompiler });
+      let sawWarm;
+      const manifestHash = compilerContentHash({ next: name });
+      const created = service(fx, {
+        compiler: legacy,
+        compilerForWorldMap: () => hydrology,
+        compileAtlasMapDoc: () => ({ worldMap: { hydrology: {} }, warnings: [] }),
+        loadPrevious: async () => ({ manifest, snapshot: { snapshotHash } }),
+        compileWorldTerrain(input) {
+          sawWarm = input.previousSnapshot !== null;
+          assert.equal(Object.hasOwn(input, "previousManifest"), expectWarm);
+          assert.equal(input.compiler.version, "1.1.0");
+          return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
+        },
+        publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
+      });
+      await created.instance.reconcileOnce({ waitForBuild: true });
+      assert.equal(sawWarm, expectWarm);
+      await created.instance.stop();
+    } finally { fx.cleanup(); }
+  });
+});
+
+test("malformed compiler bundles and profile selectors fail before queueing without retained work", async (t) => {
+  const fx = fixture();
+  try {
+    assert.throws(() => service(fx, {
+      compiler: { version: "1.0.0", config: {}, identity: { version: "2.0.0", configHash: compilerContentHash({}), graphHash: compilerContentHash({ graph: true }) } },
+      compileWorldTerrain() {},
+    }), (error) => error instanceof DerivedBuildServiceError && error.code === "INVALID_COMPILER");
+  } finally { fx.cleanup(); }
+
+  for (const [name, selector] of [
+    ["throwing selector", () => { throw new Error("selection unavailable"); }],
+    ["malformed selector bundle", () => ({ version: "1.1.0", config: {} })],
+    ["forged selector config hash", () => ({ ...compilerProfile("1.1.0", "forged"), config: { profile: "tampered" } })],
+  ]) await t.test(name, async () => {
+    const local = fixture();
+    try {
+      const created = service(local, {
+        compilerForWorldMap: selector,
+        compileWorldTerrain() { throw new Error("selector failure reached terrain compiler"); },
+        publish: async () => { throw new Error("selector failure reached publisher"); },
+      });
+      await assert.rejects(created.instance.reconcileOnce({ waitForBuild: true }), (error) => (
+        error instanceof DerivedBuildServiceError && error.code === "COMPILER_SELECTION_FAILED"
+      ));
+      assert.equal(created.coordinator.submissions.length, 0);
+      assert.equal(created.instance.diagnostics().inFlight, 0);
+      await created.instance.stop();
+    } finally { local.cleanup(); }
+  });
+});
+
 test("reads terrain edit layers by validated domain hash rather than an impossible raw self-hash", async () => {
   const fx = fixture();
   try {
@@ -582,6 +734,7 @@ test("reads terrain edit layers by validated domain hash rather than an impossib
 test("passes verified previous chunk and global artifact availability into sparse compilation", async () => {
   const fx = fixture();
   try {
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 2);
     const priorHash = compilerContentHash({ prior: "artifact" });
     const priorGlobalHash = compilerContentHash({ prior: "global-artifact" });
     const priorSnapshotHash = compilerContentHash({ prior: "snapshot" });
@@ -619,7 +772,7 @@ test("tampered assets fail before compiler execution and remain retryable", asyn
     await assert.rejects(created.instance.reconcileOnce({ waitForBuild: true }), /hash mismatch/);
     assert.equal(compiled, false);
     await assert.rejects(created.instance.reconcileOnce({ waitForBuild: true }), /hash mismatch/);
-    assert.equal(created.coordinator.submissions.length, 2, "failed immutable-source read was incorrectly cached as success");
+    assert.equal(created.coordinator.submissions.length, 0, "invalid immutable source reached the build queue");
     await created.instance.stop();
   } finally { fx.cleanup(); }
 });
@@ -627,6 +780,7 @@ test("tampered assets fail before compiler execution and remain retryable", asyn
 test("a failed reuse verification forces the next retry onto a cold rebuild", async () => {
   const fx = fixture();
   try {
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 2);
     const priorHash = compilerContentHash({ prior: "artifact" });
     const priorSnapshotHash = compilerContentHash({ prior: "snapshot" });
     const previous = {
@@ -687,7 +841,7 @@ test("start is idempotent and stop cancels the owned timer and coordinator", asy
   } finally { fx.cleanup(); }
 });
 
-test("real coordinator and publisher preserve snapshot-bound artifacts across cold then sparse builds", async () => {
+test("real coordinator and publisher preserve selected hydrology artifacts across cold, threshold, and precipitation builds", async () => {
   const fx = fixture();
   try {
     mkdirSync(join(fx.projectRoot, ".limina"));
@@ -707,16 +861,19 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
       config: { fixture: true },
       identity: {
         version: "1.0.0",
-        configHash: compilerContentHash({ config: "real-integration" }),
+        configHash: compilerContentHash({ fixture: true }),
         graphHash: compilerContentHash({ graph: "real-integration" }),
       },
     };
+    const hydrologyCompiler = compilerProfile("1.1.0", "real-hydrology");
     const grid = createTerrainGridSpec({ gridId: `${fx.projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
     const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
     const bytes = Uint8Array.from(Buffer.from("real-service-artifact"));
     const contentHash = derivedArtifactContentHash(bytes);
     const globalBytes = Uint8Array.from(Buffer.from("real-service-global-hydrology"));
     const globalContentHash = derivedArtifactContentHash(globalBytes);
+    const wetterGlobalBytes = Uint8Array.from(Buffer.from("real-service-global-hydrology-wetter"));
+    const wetterGlobalContentHash = derivedArtifactContentHash(wetterGlobalBytes);
     let compileCount = 0;
     const instance = new DerivedBuildService({
       projectId: fx.projectId,
@@ -724,17 +881,25 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
       authoringClient: authority,
       assetStore: fx.assetStore,
       compiler,
-      compileAtlasMapDoc: () => ({ worldMap: { fixture: true }, warnings: [] }),
+      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
+      compileAtlasMapDoc: () => ({ worldMap: { fixture: true, hydrology: {} }, warnings: [] }),
       compileWorldTerrain(input) {
         compileCount++;
+        assert.equal(input.compiler.version, "1.1.0", "recipe build did not select the hydrology compiler profile");
         if (input.previousSnapshot !== null) {
           assert.deepEqual(input.availableArtifactHashes, [contentHash, globalContentHash].sort(), "restart/sparse compile lost global artifact availability");
         }
+        const precipitationChanged = input.request.revision >= 3;
+        const selectedGlobalBytes = precipitationChanged ? wetterGlobalBytes : globalBytes;
+        const selectedGlobalContentHash = precipitationChanged ? wetterGlobalContentHash : globalContentHash;
         const snapshotCore = {
           schema: COMPILER_SNAPSHOT_SCHEMA,
-          graphHash: compiler.identity.graphHash,
+          graphHash: hydrologyCompiler.identity.graphHash,
           chunks: [{ chunkId, gridId: grid.gridId, lod: 0, tx: 0, tz: 0, chunkTopologyHash: compilerContentHash({ topology: 1 }) }],
-          stageKeys: { render: { [chunkId]: compilerContentHash({ render: 1 }) } },
+          stageKeys: {
+            render: { [chunkId]: compilerContentHash({ render: 1 }) },
+            "hydrology-field": { "@global": compilerContentHash({ precipitation: precipitationChanged ? 2 : 1 }) },
+          },
         };
         const snapshot = { ...snapshotCore, snapshotHash: compilerContentHash(snapshotCore) };
         const manifest = createDerivedRevisionManifest({
@@ -752,12 +917,12 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
               contentHash: fx.mapRef.hash,
             }],
           },
-          compiler: { ...compiler.identity, snapshotHash: snapshot.snapshotHash },
+          compiler: { ...hydrologyCompiler.identity, snapshotHash: snapshot.snapshotHash },
           grid,
           globalArtifacts: [{
             artifactType: "hydrology-field/v1",
-            contentHash: globalContentHash,
-            byteLength: globalBytes.byteLength,
+            contentHash: selectedGlobalContentHash,
+            byteLength: selectedGlobalBytes.byteLength,
             mediaType: "application/vnd.limina.hydrology-field",
           }],
           chunks: [{
@@ -772,11 +937,16 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
           }],
         });
         const descriptor = { scope: "chunk", chunkId, artifactType: "terrain-chunk/v1", mediaType: "application/vnd.limina.terrain-chunk", contentHash, byteLength: bytes.byteLength };
-        const globalDescriptor = { scope: "global", artifactType: "hydrology-field/v1", mediaType: "application/vnd.limina.hydrology-field", contentHash: globalContentHash, byteLength: globalBytes.byteLength };
+        const globalDescriptor = { scope: "global", artifactType: "hydrology-field/v1", mediaType: "application/vnd.limina.hydrology-field", contentHash: selectedGlobalContentHash, byteLength: selectedGlobalBytes.byteLength };
+        const cold = input.previousSnapshot === null;
         return {
           manifest,
-          artifacts: input.previousSnapshot === null ? [{ ...descriptor, bytes }, { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: globalContentHash, bytes: globalBytes }] : [],
-          reusedArtifacts: input.previousSnapshot === null ? [] : [descriptor, globalDescriptor].sort((a, b) => {
+          artifacts: cold
+            ? [{ ...descriptor, bytes }, { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes }]
+            : precipitationChanged
+              ? [{ scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes }]
+              : [],
+          reusedArtifacts: cold ? [] : [descriptor, ...(precipitationChanged ? [] : [globalDescriptor])].sort((a, b) => {
             const ak = a.scope === "global" ? `global\u0000${a.artifactType}` : `chunk\u0000${a.chunkId}\u0000${a.artifactType}`;
             const bk = b.scope === "global" ? `global\u0000${b.artifactType}` : `chunk\u0000${b.chunkId}\u0000${b.artifactType}`;
             return ak < bk ? -1 : ak > bk ? 1 : 0;
@@ -794,17 +964,20 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
     fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 2);
     const second = await instance.reconcileOnce({ waitForBuild: true });
     assert.equal(second.revision, 2);
-    assert.equal(compileCount, 2);
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 3);
+    const third = await instance.reconcileOnce({ waitForBuild: true });
+    assert.equal(third.revision, 3);
+    assert.equal(compileCount, 3);
     const current = await readPublishedDerivedRevision({
       projectRoot: fx.projectRoot,
       branchId: "main",
-      readHead: async () => ({ projectId: fx.projectId, branchId: "main", revision: 2, headHash: fx.snapshot.head.headHash }),
+      readHead: async () => ({ projectId: fx.projectId, branchId: "main", revision: 3, headHash: fx.snapshot.head.headHash }),
     });
     assert.equal(current.status, "current");
-    assert.equal(current.pointer.generation, 2);
+    assert.equal(current.pointer.generation, 3);
     assert.equal(current.snapshot.snapshotHash, current.manifest.compiler.snapshotHash);
     assert.equal(current.manifest.chunks[0].artifacts[0].contentHash, contentHash);
-    assert.equal(current.manifest.globalArtifacts[0].contentHash, globalContentHash);
+    assert.equal(current.manifest.globalArtifacts[0].contentHash, wetterGlobalContentHash);
     await instance.stop();
     assert.equal(authority.closed, true);
 
@@ -818,12 +991,13 @@ test("real coordinator and publisher preserve snapshot-bound artifacts across co
       authoringClient: restartedAuthority,
       assetStore: fx.assetStore,
       compiler,
-      compileAtlasMapDoc() { throw new Error("already-published source must not compile"); },
+      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
+      compileAtlasMapDoc: () => ({ worldMap: { fixture: true, hydrology: {} }, warnings: [] }),
       compileWorldTerrain() { throw new Error("already-published source must not compile"); },
       loadPrevious: () => readPublishedDerivedRevision({
         projectRoot: fx.projectRoot,
         branchId: "main",
-        readHead: async () => ({ projectId: fx.projectId, branchId: "main", revision: 2, headHash: fx.snapshot.head.headHash }),
+        readHead: async () => ({ projectId: fx.projectId, branchId: "main", revision: 3, headHash: fx.snapshot.head.headHash }),
       }),
       logger: { info() {}, error() {} },
     });
