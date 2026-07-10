@@ -24,14 +24,19 @@ function inRing(x, z, ring) {
 /**
  * Build the peek scene for a compiled WorldMap.
  * @param {object} worldMap  compiled WorldMap IR (land/biomes/waterways/anchors/seaLevel/...)
- * @param {object} opts      { project, mapFile, vantage? } — vault project slug + the worldmap asset
- *                           filename (already written under assets/maps/ by the caller). `vantage`,
+ * @param {object} opts      { project, mapAssetId, vantage? } — vault project slug + the worldmap
+ *                           asset id (already written under assets/ by the caller). `vantage`,
  *                           when present ({ pos:[x,z], yaw, eyeHeight? }), replaces the overview
  *                           orbit with a positioned camera looking FROM a point on the map (Places
  *                           Stage 2). Default (no vantage) = the overview turntable.
  * @returns {{ scene: object, sceneName: string, span: number }}
  */
-export function buildPeekScene(worldMap, { project = "project", mapFile, vantage } = {}) {
+export function buildPeekScene(worldMap, { project = "project", mapAssetId, vantage } = {}) {
+  const assetParts = typeof mapAssetId === "string" ? mapAssetId.split("/") : [];
+  if (assetParts[0] !== "maps" || assetParts.some((part) => part === "" || part === "." || part === "..")
+      || mapAssetId.includes("\\") || mapAssetId.includes("\0") || !mapAssetId.endsWith(".worldmap.json")) {
+    throw new TypeError("peek worldmap asset id must be a canonical maps/...worldmap.json path");
+  }
   // Frame the camera on the compiled land.
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (const l of worldMap.land) for (const [x, z] of l.points) {
@@ -89,7 +94,7 @@ export function buildPeekScene(worldMap, { project = "project", mapFile, vantage
         // Amplitude scales with the painted span: a fixed 12 m reads as relief on a ~600 m hamlet
         // but crushes a multi-km island (mountains flattened to a sliver) into a flat sheet at sea
         // level. Span-proportional relief keeps big painted worlds legibly above the water.
-        generate: { source: "map", mapAssetId: "maps/" + mapFile, seed: 11, amplitude: Math.max(12, Math.round(span * 0.03)) },
+        generate: { source: "map", mapAssetId, seed: 11, amplitude: Math.max(12, Math.round(span * 0.03)) },
       } },
       ...(forestDiscs.length > 0 ? [{ kind: "skill", tool: "vegetation.scatter", input: {
         // ~8m candidate spacing regardless of tile size — painted woods read as CANOPY

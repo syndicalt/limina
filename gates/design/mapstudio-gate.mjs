@@ -888,6 +888,7 @@ console.log("data safety:");
 console.log("peek scene (painter P5):");
 {
   const { buildPeekScene } = await import(join(ROOT, "tools/design/peek-scene.mjs"));
+  const { summarizePeekFailure } = await import(join(ROOT, "tools/design/peek-failure.mjs"));
   const WB_800 = WB_TEXT.replace("size_m: 200", "size_m: 800");
   const doc = (opts = {}) => JSON.stringify({
     version: 2, activeMapId: "m",
@@ -904,10 +905,13 @@ console.log("peek scene (painter P5):");
     }],
   });
   const { worldMap: pm } = compileDesignMap({ mapsJsonText: doc(), worldBibleText: WB_800 });
-  const { scene, sceneName } = buildPeekScene(pm, { project: "gate", mapFile: "gate-m.worldmap.json" });
+  const nestedMapAssetId = "maps/m/0123456789abcdef.worldmap.json";
+  const { scene, sceneName } = buildPeekScene(pm, { project: "gate", mapAssetId: nestedMapAssetId });
   const tools = scene.commands.map((c) => c.tool || c.op);
   const terrainIx = tools.indexOf("terrain.create");
-  check("peek: terrain.create drives the painted map source", terrainIx >= 0 && scene.commands[terrainIx].input.generate.source === "map" && scene.commands[terrainIx].input.generate.mapAssetId === "maps/gate-m.worldmap.json");
+  check("peek: terrain.create preserves the complete nested project asset id without duplicating maps/", terrainIx >= 0
+    && scene.commands[terrainIx].input.generate.source === "map"
+    && scene.commands[terrainIx].input.generate.mapAssetId === nestedMapAssetId);
   const scatters = scene.commands.filter((c) => c.tool === "vegetation.scatter");
   check("peek: painted forest AND swamp each get a confined scatter", scatters.length === 2 && scatters.every((s) => (s.input.inclusions || []).length > 0));
   check("peek: the sea plane is present", tools.includes("world.addWater"));
@@ -923,20 +927,27 @@ console.log("peek scene (painter P5):");
     postIx === scene.commands.length - 1 && scene.commands[postIx].input.ao.enabled === true && scene.commands[postIx].input.bloom.enabled === true && scene.commands[postIx].input.outline.enabled === true);
   check("peek: sceneName is stable per project+map", sceneName === "peek-gate-m");
   // Determinism: the builder is pure — same IR in, byte-identical scene out.
-  check("peek: scene assembly is deterministic", eq(buildPeekScene(pm, { project: "gate", mapFile: "gate-m.worldmap.json" }).scene, scene));
+  check("peek: scene assembly is deterministic", eq(buildPeekScene(pm, { project: "gate", mapAssetId: nestedMapAssetId }).scene, scene));
+  check("peek: malformed asset ids fail before a GPU render is launched", [undefined, "x.worldmap.json", "maps/maps/../x.worldmap.json", "maps\\x.worldmap.json"]
+    .every((mapAssetId) => { try { buildPeekScene(pm, { mapAssetId }); return false; } catch { return true; } }));
+  const rawFailure = "FATAL: peek invalid — structural command(s) failed: terrain.create: terrain.create: map asset 'maps/x.worldmap.json' is not valid JSON: Unexpected end of JSON input\n  frames were written for debugging";
+  const summarizedFailure = summarizePeekFailure({ code: 1, output: rawFailure });
+  check("peek: renderer diagnostics become one concise stable UI error", summarizedFailure === "3D preview could not build the scene: terrain.create: map asset 'maps/x.worldmap.json' is not valid JSON: Unexpected end of JSON input");
+  check("peek: unknown renderer failures do not expose raw process output", summarizePeekFailure({ code: 9, output: "/secret/path token=abc" }) === "3D preview renderer failed (exit 9)");
+  check("peek: a zero exit without frames has an accurate failure", summarizePeekFailure({ code: 0 }) === "3D preview renderer produced no frames");
   // Falsifiability: un-stamping removes the placement; un-painting the forest removes its scatter.
   const { worldMap: pm0 } = compileDesignMap({ mapsJsonText: doc({ noStamps: true }), worldBibleText: WB_800 });
-  check("(falsifiability) no stamps -> no asset.place commands", buildPeekScene(pm0, { project: "gate", mapFile: "x" }).scene.commands.every((c) => c.tool !== "asset.place"));
+  check("(falsifiability) no stamps -> no asset.place commands", buildPeekScene(pm0, { project: "gate", mapAssetId: nestedMapAssetId }).scene.commands.every((c) => c.tool !== "asset.place"));
   const { worldMap: pmNf } = compileDesignMap({ mapsJsonText: doc({ noForest: true }), worldBibleText: WB_800 });
-  check("(falsifiability) un-painting the forest removes its scatter (swamp's remains)", buildPeekScene(pmNf, { project: "gate", mapFile: "x" }).scene.commands.filter((c) => c.tool === "vegetation.scatter").length === 1);
+  check("(falsifiability) un-painting the forest removes its scatter (swamp's remains)", buildPeekScene(pmNf, { project: "gate", mapAssetId: nestedMapAssetId }).scene.commands.filter((c) => c.tool === "vegetation.scatter").length === 1);
 
   // Tile-cap: a huge painted world must still render (clamped, coarse) — never emit a
   // terrain.create size past the 8192 cap that would zod-reject and blank the whole peek.
   const bigLand = { ...pm, land: [{ points: [[-4000, -4000], [4000, -4000], [4000, 4000], [-4000, 4000]] }] };
-  const big = buildPeekScene(bigLand, { project: "gate", mapFile: "x" });
+  const big = buildPeekScene(bigLand, { project: "gate", mapAssetId: nestedMapAssetId });
   const bigTerrain = big.scene.commands.find((c) => c.tool === "terrain.create");
   check("peek: an oversized world clamps terrain size to the 8192 cap (still renders)", bigTerrain.input.size <= 8192 && big.clampedToTileCap === true);
-  check("peek: a normal-sized world is NOT flagged clamped", buildPeekScene(pm, { project: "gate", mapFile: "x" }).clampedToTileCap === false);
+  check("peek: a normal-sized world is NOT flagged clamped", buildPeekScene(pm, { project: "gate", mapAssetId: nestedMapAssetId }).clampedToTileCap === false);
 }
 
 if (failures) { console.error(`\nmapstudio-gate: ${failures} FAILURE(S)`); process.exit(1); }

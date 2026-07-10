@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
+import { summarizePeekFailure } from "./peek-failure.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
@@ -609,14 +610,14 @@ createServer((req, res) => {
           // author sees placed places in the render (and NPC nav has its index). Absent doc = undefined.
           const placesTextPeek = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
           const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextPeek });
-          const mapFile = writeWorldMap(worldMap);
+          const mapAssetId = writeWorldMap(worldMap);
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
           // author painted, including stamped asset-anchors, must appear in the peek.
           // An optional `camera` of shape { mode:'vantage', pos:[x,z], yaw, eyeHeight } swaps the
           // overview turntable for a positioned camera looking FROM a point on the map (Places
           // Stage 2). Default (no camera / non-vantage mode) = the overview turntable.
           const vantage = (p.camera && p.camera.mode === "vantage") ? p.camera : undefined;
-          const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapFile, vantage });
+          const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapAssetId, vantage });
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
           writeFileSync(join(outDir, sceneName + ".json"), JSON.stringify(scene, null, 2));
@@ -629,23 +630,27 @@ createServer((req, res) => {
             stdio: ["ignore", "pipe", "pipe"],
             env: { ...process.env, LIMINA_PREVIEW_ASSETS_DIR: ASSETS_DIR },
           });
-          let errTail = "";
+          let diagnosticTail = "";
           let timedOut = false;
           const killTimer = setTimeout(() => {
             timedOut = true;
             child.kill("SIGKILL");
           }, PEEK_TIMEOUT_MS);
           killTimer.unref();
-          child.stderr.on("data", (c) => { errTail = (errTail + c).slice(-800); });
-          child.stdout.on("data", (c) => { errTail = (errTail + c).slice(-800); });
+          const captureDiagnostic = (chunk) => { diagnosticTail = (diagnosticTail + chunk).slice(-8 * 1024); };
+          child.stderr.on("data", captureDiagnostic);
+          child.stdout.on("data", captureDiagnostic);
           child.on("exit", (code) => {
             clearTimeout(killTimer);
             const frames = [];
             for (let i = 1; i <= FRAMES; i++) if (existsSync(join(outDir, `${sceneName}-${i}.png`))) frames.push(`${sceneName}-${i}.png`);
             const createdAt = Date.now();
+            if (timedOut || code !== 0 || frames.length === 0) {
+              console.error(`[peek:${jobId}] renderer failed${timedOut ? " (timeout)" : ` (exit ${code})`}:\n${diagnosticTail}`);
+            }
             peekJobs.set(jobId, !timedOut && code === 0 && frames.length > 0
               ? { status: "done", png: frames[0], frames, createdAt }
-              : { status: "error", error: timedOut ? "render timed out" : "render exited " + code + ": " + errTail.slice(-300), createdAt });
+              : { status: "error", error: summarizePeekFailure({ timedOut, code, output: diagnosticTail }), createdAt });
           });
           peekJobs.set(jobId, { status: "running", createdAt: Date.now() });
           const editorHostUp = await new Promise((resolveUp) => {
