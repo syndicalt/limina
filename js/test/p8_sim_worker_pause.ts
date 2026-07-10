@@ -37,16 +37,18 @@ scope.onmessage?.({ data: {
 } });
 await waitFor(() => messages.some((message) => message.type === "ready"), "ready");
 const ready = messages.find((message) => message.type === "ready")!;
-const status = new Int32Array(ready.status as SharedArrayBuffer | ArrayBuffer, 0, 1);
+const status = new Int32Array(ready.status as SharedArrayBuffer | ArrayBuffer, 0, 4);
 await waitFor(() => Atomics.load(status, 0) >= 3, "initial ticks");
 
 scope.onmessage?.({ data: { type: "pause", requestId: 11 } });
 await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 11), "pause acknowledgement");
 const pausedAt = Atomics.load(status, 0);
+const pausedGeneration = Atomics.load(status, 3);
 scope.onmessage?.({ data: { type: "step" } });
 scope.onmessage?.({ data: { type: "step" } });
 await new Promise((resolve) => setTimeout(resolve, 40));
 assert(Atomics.load(status, 0) === pausedAt, "acknowledged pause must halt timer and injected deterministic ticks");
+assert(Atomics.load(status, 3) === pausedGeneration, "paused worker fabricated a status generation without a completed tick");
 
 scope.onmessage?.({ data: { type: "pause", requestId: 12 } });
 await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 12), "repeated pause acknowledgement");
@@ -69,5 +71,6 @@ assert(Atomics.load(status, 0) === stoppedAt, "stop must prevent every later tic
 scope.onmessage?.({ data: { type: "resume", requestId: 16 } });
 await waitFor(() => messages.some((message) => message.type === "controlRejected" && message.requestId === 16), "post-stop rejection");
 assert(!messages.some((message) => message.type === "resumed" && message.requestId === 16), "post-stop resume must not claim success");
+assert(!messages.some((message) => message.type === "tick"), "worker flooded the message channel with redundant tick acknowledgements");
 
 console.log(`p8_sim_worker_pause OK: worker held tick ${pausedAt} across timer/manual-step pause, resumed, and stopped at ${stoppedAt}`);

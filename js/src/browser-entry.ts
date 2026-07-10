@@ -46,6 +46,7 @@ import { LiminaTracer } from "./observability/event.ts";
 import { WasmRapierPhysics, type RapierModule } from "./browser/wasm-rapier-physics.ts";
 import { SharedTransformStorage } from "./browser/sab-transforms.ts";
 import { InputRingBuffer } from "./browser/sab-ringbuffer.ts";
+import { createSimStatusView, readSimStatus, type SimStatusSnapshot } from "./browser/sim-status.ts";
 import { FrameInterpolator, type TransformStore } from "./browser/frame-interpolator.ts";
 import type { AuthorCommand } from "./browser/sim-worker.ts";
 import { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browser/authoring-project.ts";
@@ -568,6 +569,9 @@ export interface RunningLive {
   resize(width: number, height: number): void;
   setRenderQuality(tier: RenderQualityTier): Readonly<import("./render/quality.ts").RenderQualityProfile>;
   renderTelemetry(): Readonly<RenderTelemetrySnapshot>;
+  /** Coherent completed-tick player water state read directly from the status SAB.
+   *  Returns null only when the bounded seqlock reader cannot obtain a stable generation. */
+  playerWaterState(): Readonly<SimStatusSnapshot> | null;
   stop(): Promise<void>;
 }
 
@@ -915,7 +919,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const joined = new SharedTransformStorage({ buffer: ready.buffer });
   const inputRing = new InputRingBuffer({ buffer: ready.inputBuffer });
   const statusShared = typeof SharedArrayBuffer === "function" && ready.status instanceof SharedArrayBuffer;
-  const statusView = new Int32Array(ready.status, 0, 1);
+  const statusView = createSimStatusView(ready.status);
   const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
   const requestWorkerControl = (type: "pause" | "resume"): Promise<void> => {
     const requestId = ++controlRequestId;
@@ -1714,6 +1718,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       return profile;
     },
     renderTelemetry: (): Readonly<RenderTelemetrySnapshot> => renderSession.telemetry(),
+    playerWaterState: (): Readonly<SimStatusSnapshot> | null => readSimStatus(statusView),
     stop: stopLive,
   };
   } catch (error) {

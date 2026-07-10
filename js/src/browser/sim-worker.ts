@@ -15,7 +15,7 @@
 //
 // tick() is ONE fixed step: read the latest input, drive the player controller,
 // `op_physics_step`, then SYNC every live body transform into the transform SAB
-// (so the render thread sees the new pose), and bump an Atomics tick counter.
+// (so the render thread sees the new pose), and publish a coherent Atomics status.
 //
 // DETERMINISM: real wasm Rapier is deterministic; the controller writes body
 // transforms straight into its OWN transform SAB (never the shared world.ts SoA
@@ -39,9 +39,21 @@ import { AuthoringProjectBinding } from "./authoring-project.ts";
 import { registerBrowserAuthoringRuntime } from "./authoring-runtime.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
+import type { CharacterController } from "../world/character.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
 import { SharedTransformStorage } from "./sab-transforms.ts";
 import { InputRingBuffer, type InputFrame } from "./sab-ringbuffer.ts";
+import {
+  SIM_STATUS_BYTES,
+  SIM_STATUS_FLAG_IN_WATER,
+  SIM_STATUS_FLAG_SUBMERGED,
+  SIM_STATUS_FLAG_SWIMMING,
+  SIM_STATUS_TICK_INDEX,
+  createSimStatusView,
+  initializeSimStatus,
+  type SimStatusWrite,
+  writeSimStatus,
+} from "./sim-status.ts";
 
 /** The fixed simulation step (seconds) — the native 1/60 cadence (host.ts FIXED_DT). */
 const FIXED_DT = 1 / 60;
@@ -90,7 +102,7 @@ export interface SimWorkerBuffers {
   sab: SharedArrayBuffer | ArrayBuffer;
   /** The input SAB (M3) — render-main JOINs it to publish input frames. */
   input: SharedArrayBuffer | ArrayBuffer;
-  /** The status SAB — render-main JOINs it to read the Atomics tick counter. */
+  /** The v1 16-byte status SAB. Slot 0 remains the legacy Atomics tick counter. */
   status: SharedArrayBuffer | ArrayBuffer;
 }
 
@@ -112,9 +124,6 @@ export interface SimWorkerCreateOptions {
   width?: number;
   height?: number;
 }
-
-const STATUS_INTS = 4; // slot 0 = tick counter; rest reserved.
-const TICK_INDEX = 0;
 
 /** A headless no-op scene stub — the worker has no renderer, but skills that touch
  *  `world.scene` (e.g. scene.createEntity's `scene.add(mesh)`) must not crash. */
@@ -236,6 +245,9 @@ export class SimWorkerController {
 
   private tickCount = 0;
   private disposed = false;
+  private activePlayerDirty = true;
+  private activePlayerCache: { eid: number; controller: CharacterController } | undefined;
+  private readonly statusWrite: SimStatusWrite = { tick: 0, flags: 0, playerEid: -1 };
   private readonly scratch7 = new Float32Array(7);
   private readonly inFrame: InputFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
   private lastInputFrame: InputFrame | null = null;
@@ -257,7 +269,7 @@ export class SimWorkerController {
     this.transformStorage = args.transforms;
     this.inputRing = args.inputRing;
     this.statusBuffer = args.statusBuffer;
-    this.status = new Int32Array(args.statusBuffer, 0, STATUS_INTS);
+    this.status = createSimStatusView(args.statusBuffer);
     this.statusShared = args.statusShared;
     this.world = args.world;
     this.core = args.core;
@@ -278,8 +290,9 @@ export class SimWorkerController {
 
     const statusShared = typeof SharedArrayBuffer === "function" && typeof Atomics !== "undefined";
     const statusBuffer: SharedArrayBuffer | ArrayBuffer = statusShared
-      ? new SharedArrayBuffer(STATUS_INTS * Int32Array.BYTES_PER_ELEMENT)
-      : new ArrayBuffer(STATUS_INTS * Int32Array.BYTES_PER_ELEMENT);
+      ? new SharedArrayBuffer(SIM_STATUS_BYTES)
+      : new ArrayBuffer(SIM_STATUS_BYTES);
+    initializeSimStatus(createSimStatusView(statusBuffer));
 
     const ecs = createEcsWorld();
     const entities = new EntityTable();
@@ -341,6 +354,9 @@ export class SimWorkerController {
       defaultPerms: this.grants,
       tick: this.tickCount,
     });
+    // Player spawn/despawn is authored only between fixed steps. Any authoring batch may
+    // change entity/controller membership, so reselect once on the next tick, not every tick.
+    this.activePlayerDirty = true;
     const results: unknown[] = Array(commands.length).fill(undefined);
     for (let i = 0; i < viewportBatch.commands.length; i++) {
       const originalIndex = viewportBatch.originalIndices[i];
@@ -398,43 +414,66 @@ export class SimWorkerController {
    *    2. drive the player character controller (if one is spawned) with it,
    *    3. `op_physics_step` (integrate dynamics + commit queued kinematic moves),
    *    4. sync every live body transform into the transform SAB (render sees it),
-   *    5. bump the Atomics tick counter.
+   *    5. seqlock-publish the completed tick and canonical player water state.
    *  Returns the new tick number. */
   tick(): number {
     if (this.disposed) return this.tickCount; // torn down — never step a released world
     const frame = this.inputRing.readLatest(this.inFrame);
     this.lastInputFrame = frame;
 
-    // Drive the first registered player controller, if any. A null frame -> a zero
+    // Lowest live eid is the canonical controlled player. Registration order is not
+    // an identity contract, and stale controller entries may remain after entity teardown.
+    const activePlayer = this.activePlayer();
+    // A null frame -> a zero
     // command, so gravity still integrates and the character stays grounded
     // deterministically each tick.
-    const playerIds = this.core.player.controllers.ids();
-    if (playerIds.length > 0) {
-      const entry = this.core.player.controllers.get(playerIds[0]);
-      if (entry !== undefined) {
-        entry.controller.step(
-          frame !== null
-            ? {
-              // move = [strafe, vertical, forward]; look[0] = heading yaw.
-              forward: frame.move[2],
-              strafe: frame.move[0],
-              yaw: frame.look[0],
-              run: frame.buttons[1] > 0.5,
-              jump: frame.buttons[0] > 0.5,
-            }
-            : { forward: 0, strafe: 0, yaw: 0, run: false, jump: false },
-          FIXED_DT,
-        );
-      }
+    if (activePlayer !== undefined) {
+      activePlayer.controller.step(
+        frame !== null
+          ? {
+            // move = [strafe, vertical, forward]; look[0] = heading yaw.
+            forward: frame.move[2],
+            strafe: frame.move[0],
+            yaw: frame.look[0],
+            run: frame.buttons[1] > 0.5,
+            jump: frame.buttons[0] > 0.5,
+          }
+          : { forward: 0, strafe: 0, yaw: 0, run: false, jump: false },
+        FIXED_DT,
+      );
     }
 
     this.world.ops.op_physics_step();
     this.syncTransforms();
 
     this.tickCount++;
-    if (this.statusShared) Atomics.store(this.status, TICK_INDEX, this.tickCount);
-    else this.status[TICK_INDEX] = this.tickCount;
+    let flags = 0;
+    if (activePlayer !== undefined) {
+      if (activePlayer.controller.waterMode !== "dry") flags |= SIM_STATUS_FLAG_IN_WATER;
+      if (activePlayer.controller.isSwimming) flags |= SIM_STATUS_FLAG_SWIMMING;
+      if (activePlayer.controller.isSubmerged) flags |= SIM_STATUS_FLAG_SUBMERGED;
+    }
+    this.statusWrite.tick = this.tickCount;
+    this.statusWrite.flags = flags;
+    this.statusWrite.playerEid = activePlayer?.eid ?? -1;
+    writeSimStatus(this.status, this.statusWrite);
     return this.tickCount;
+  }
+
+  private activePlayer(): { eid: number; controller: CharacterController } | undefined {
+    if (!this.activePlayerDirty) return this.activePlayerCache;
+    let selected: { eid: number; controller: CharacterController } | undefined;
+    for (const entity of this.core.player.controllers.ids()) {
+      const tableEntry = this.entityTable.resolve(entity);
+      const controllerEntry = this.core.player.controllers.get(entity);
+      if (tableEntry === undefined || controllerEntry === undefined || tableEntry.bodyId !== controllerEntry.controller.bodyId) continue;
+      if (selected === undefined || tableEntry.eid < selected.eid) {
+        selected = { eid: tableEntry.eid, controller: controllerEntry.controller };
+      }
+    }
+    this.activePlayerCache = selected;
+    this.activePlayerDirty = false;
+    return this.activePlayerCache;
   }
 
   /** Tear the controller down (shell `stop`): mark it disposed so no later `tick()`
@@ -444,6 +483,7 @@ export class SimWorkerController {
     if (this.disposed) return;
     this.disposed = true;
     this.lastInputFrame = null;
+    this.activePlayerCache = undefined;
     this.physics.dispose();
   }
 
@@ -500,7 +540,7 @@ export class SimWorkerController {
    *  Named `ticks` because `tick()` is the step method (a class cannot expose both
    *  a `tick()` method and a `tick` getter); `tick()` ALSO returns the new count. */
   get ticks(): number {
-    return this.statusShared ? Atomics.load(this.status, TICK_INDEX) : this.status[TICK_INDEX];
+    return this.statusShared ? Atomics.load(this.status, SIM_STATUS_TICK_INDEX) : this.status[SIM_STATUS_TICK_INDEX];
   }
 
   /** The M2 transform storage (the render thread reads its `.Position`/`.Rotation`). */
@@ -560,7 +600,8 @@ type ShellMessage = InitMessage | StepMessage | StopMessage | PauseMessage | Res
  *  controller (importing rapier-compat — resolved by the browser bundle, never the
  *  native loader, since this runs only inside a real Worker), authors any supplied
  *  world, replies `ready` with the handshake buffers, then self-drives a fixed-step
- *  interval (or steps on demand). `postMessage` acks each tick. */
+ *  interval (or steps on demand). Completed-tick state is published through the
+ *  status SAB; no per-tick messages are posted. */
 export function installSimWorker(scope: WorkerScopeLike): void {
   let controller: SimWorkerController | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -605,7 +646,7 @@ export function installSimWorker(scope: WorkerScopeLike): void {
     timer = setInterval((): void => {
       if (controller === null) return;
       try {
-        scope.postMessage({ type: "tick", tick: controller.tick() });
+        controller.tick();
       } catch (err) {
         // A solver throw inside the timer would otherwise silently kill stepping.
         teardown();
@@ -638,7 +679,7 @@ export function installSimWorker(scope: WorkerScopeLike): void {
         paused = false;
         startDrive();
       } else if (msg.type === "step") {
-        if (controller !== null && !paused) scope.postMessage({ type: "tick", tick: controller.tick() });
+        if (controller !== null && !paused) controller.tick();
       } else if (msg.type === "pause") {
         if (controller === null) { rejectControl("pause", msg.requestId, "sim worker is not initialized"); return; }
         // Worker messages and interval callbacks run as serialized tasks. Clearing here and only
