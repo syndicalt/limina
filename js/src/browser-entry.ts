@@ -117,6 +117,12 @@ import {
   DerivedTerrainResidencyTracker,
   type DerivedTerrainResidencyListener,
 } from "./browser/camera-framing.ts";
+import {
+  EditorNavigationController,
+  type EditorNavigationMode,
+  type RunningEditorNavigation,
+} from "./browser/editor-navigation.ts";
+export type { EditorCameraPose, EditorNavigationMode, RunningEditorNavigation } from "./browser/editor-navigation.ts";
 import { buildPostPipeline, constrainPostPreset, type PostPipeline, type PostPreset } from "./render/post.ts";
 export { createBrowserRenderHost } from "./render/browser-host.ts";
 import { applyToonStyle, type ToonStyleOptions } from "./render/toon.ts";
@@ -501,6 +507,14 @@ export interface RunLiveOptions {
   orbit?: { center?: [number, number, number]; radius?: number; height?: number; autoSpin?: number; far?: number };
   /** Opt-in browser camera controls for editor-style viewports. Falsy preserves the legacy auto-spin. */
   orbitControls?: boolean;
+  /** Runtime-owned project-scale editor navigation. This is view state only: it never authors commands.
+   *  `true` uses orbit mode at 32 m/s; an object selects the initial mode and fly speed modifiers. */
+  editorNavigation?: boolean | Readonly<{
+    mode?: EditorNavigationMode;
+    speedMps?: number;
+    boostMultiplier?: number;
+    precisionMultiplier?: number;
+  }>;
   /** Positioned "vantage" camera (Places Stage 2): sit the camera AT `pos` (world space) and
    *  look along `yaw` (radians; yaw=0 → forward is -Z, matching the first-person move basis),
    *  with an optional downward `pitch` (radians). Static — no orbit, no auto-spin — for a
@@ -562,6 +576,8 @@ export interface RunningLive {
   entities: EntityTable;
   pickEntityId(object: { parent?: unknown }): string | undefined;
   cameraControls?: unknown;
+  /** Editor-only camera navigation handle. Absent for gameplay/legacy orbit runtimes. */
+  editorNavigation?: RunningEditorNavigation;
   /** Per-command authoring failures encountered while bringing the viewport up (Layer-2 isolation):
    *  the viewport still came up with every command that DID apply — a bad/out-of-band command no
    *  longer wedges it. Absent/empty when the whole command log authored cleanly. The editor uses
@@ -817,6 +833,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupDerivedTerrainResidency: (() => void) | undefined;
   let cleanupInput: LivePlayerInput | undefined;
   let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
+  let cleanupEditorNavigation: EditorNavigationController | undefined;
   let cleanupUnderwater: UnderwaterEffect | undefined;
   let cleanupWater: { dispose(): void } | undefined;
   let cleanupDerivedRevision: (() => void) | undefined;
@@ -897,6 +914,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         if (opts.input !== undefined) cleanupInput?.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
         cleanupInput?.detachPointer();
       });
+      await step("editor navigation", () => cleanupEditorNavigation?.dispose());
       await step("camera controls", () => cleanupCameraControls?.dispose());
       await step("entity residency", () => cleanupEntityStream?.clear());
       await step("derived terrain residency", () => cleanupDerivedTerrainResidency?.());
@@ -1546,7 +1564,6 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // ── Input pump + camera framing. ──
   const liveInput = new LivePlayerInput();
   cleanupInput = liveInput;
-  if (opts.input !== undefined) liveInput.attach(opts.input as Parameters<LivePlayerInput["attach"]>[0]);
   const inFrame = { move: [0, 0, 0] as [number, number, number], look: [0, 0] as [number, number], buttons: [0, 0] as [number, number], tick: 0 };
 
   const orbitCenter = opts.orbit?.center ?? [
@@ -1564,29 +1581,58 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     cam.far = opts.orbit.far;
     cam.updateProjectionMatrix();
   }
+  const editorNavigationConfig = opts.editorNavigation === true
+    ? {}
+    : opts.editorNavigation !== null && typeof opts.editorNavigation === "object"
+    ? opts.editorNavigation
+    : undefined;
+  const editorNavigationEnabled = opts.editorNavigation === true || editorNavigationConfig !== undefined;
+  if (editorNavigationEnabled && opts.vantage !== undefined) {
+    throw new TypeError("editorNavigation cannot be combined with a positioned vantage camera");
+  }
   let cameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
-  if (opts.orbitControls === true) {
+  let editorNavigation: EditorNavigationController | undefined;
+  if (opts.orbitControls === true || editorNavigationEnabled) {
     camera.position.set(
       orbitCenter[0] + Math.cos(angle) * radius,
       orbitCenter[1] + camHeight,
       orbitCenter[2] + Math.sin(angle) * radius,
     );
     camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
-    cameraControls = new THREE.OrbitControls(camera, renderer.domElement);
-    cleanupCameraControls = cameraControls;
-    cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
-    cameraControls.enableRotate = true;
-    cameraControls.enableZoom = true;
-    cameraControls.enablePan = true;
-    cameraControls.enableDamping = true;
-    cameraControls.minDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
-    cameraControls.maxDistance = Math.max(
-      cameraControls.minDistance + 1,
+    const controlsMinDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
+    const controlsMaxDistance = Math.max(
+      controlsMinDistance + 1,
       opts.orbit?.radius === undefined ? commandCameraFrame.controls.maxDistanceM : Math.min(576, Math.max(128, radius * 3)),
     );
-    cameraControls.minPolarAngle = 0.04;
-    cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
-    cameraControls.update();
+    if (editorNavigationEnabled) {
+      editorNavigation = new EditorNavigationController({
+        camera,
+        element: renderer.domElement,
+        ...(opts.input === undefined ? {} : { keyTarget: opts.input as EventTarget }),
+        navigation: {
+          target: orbitCenter,
+          minDistanceM: controlsMinDistance,
+          maxDistanceM: controlsMaxDistance,
+          maxPolarAngleRad: commandCameraFrame.controls.maxPolarAngleRad,
+          ...editorNavigationConfig,
+        },
+      });
+      cleanupEditorNavigation = editorNavigation;
+      cameraControls = editorNavigation.orbitControls;
+    } else {
+      cameraControls = new THREE.OrbitControls(camera, renderer.domElement);
+      cleanupCameraControls = cameraControls;
+      cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+      cameraControls.enableRotate = true;
+      cameraControls.enableZoom = true;
+      cameraControls.enablePan = true;
+      cameraControls.enableDamping = true;
+      cameraControls.minDistance = controlsMinDistance;
+      cameraControls.maxDistance = controlsMaxDistance;
+      cameraControls.minPolarAngle = 0.04;
+      cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
+      cameraControls.update();
+    }
   }
 
   // ── POSITIONED VANTAGE CAMERA (Places Stage 2). Sit AT a point on the map and look a fixed
@@ -1617,25 +1663,34 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     const playerId = core.player.controllers.ids()[0];
     if (playerId !== undefined) {
       playerEid = entities.resolve(playerId)?.eid;
-      if (playerEid !== undefined) {
+      if (playerEid !== undefined && editorNavigation === undefined) {
         // Mouse-look ONLY on a walkable (player) scene: click the canvas to capture the pointer, then
         // mouse X yaws the view + mouse Y pitches it. Gated on a player so it never hijacks the
         // editor's click-to-select on a non-player scene.
+        if (opts.input !== undefined) liveInput.attach(opts.input as Parameters<LivePlayerInput["attach"]>[0]);
         liveInput.attachPointer(renderer.domElement as Parameters<LivePlayerInput["attachPointer"]>[0]);
       }
     }
   }
+  const playerCameraActive = playerEid !== undefined && editorNavigation === undefined;
   // Eye height above the capsule CENTER (center rests at ~0.9 m for the 1.8 m capsule → eye ~1.6 m).
   const EYE_OFFSET = 0.7;
-  const residencyStartX = cameraControls !== undefined
+  const navigationAnchor = { x: 0, y: 0, z: 0 };
+  const navigationFocus: [number, number, number] = [0, 0, 0];
+  if (editorNavigation !== undefined) editorNavigation.writeAnchor(navigationAnchor);
+  const residencyStartX = editorNavigation !== undefined
+    ? navigationAnchor.x
+    : playerCameraActive
+    ? Position.x[playerEid!]
+    : cameraControls !== undefined
     ? cameraControls.target.x
-    : playerEid !== undefined
-    ? Position.x[playerEid]
     : camera.position.x;
-  const residencyStartZ = cameraControls !== undefined
+  const residencyStartZ = editorNavigation !== undefined
+    ? navigationAnchor.z
+    : playerCameraActive
+    ? Position.z[playerEid!]
+    : cameraControls !== undefined
     ? cameraControls.target.z
-    : playerEid !== undefined
-    ? Position.z[playerEid]
     : camera.position.z;
   const derivedTerrainResidencyTracker = new DerivedTerrainResidencyTracker({
     center: [residencyStartX, residencyStartZ],
@@ -1646,10 +1701,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   cleanupDerivedTerrainResidency = () => derivedTerrainResidencyTracker.dispose();
 
   const updateDerivedTerrainResidency = (): void => {
-    if (cameraControls !== undefined) {
+    if (editorNavigation !== undefined) {
+      editorNavigation.writeAnchor(navigationAnchor);
+      derivedTerrainResidencyTracker.update(navigationAnchor.x, navigationAnchor.z);
+    } else if (playerCameraActive) {
+      derivedTerrainResidencyTracker.update(Position.x[playerEid!], Position.z[playerEid!]);
+    } else if (cameraControls !== undefined) {
       derivedTerrainResidencyTracker.update(cameraControls.target.x, cameraControls.target.z);
-    } else if (playerEid !== undefined) {
-      derivedTerrainResidencyTracker.update(Position.x[playerEid], Position.z[playerEid]);
     } else {
       derivedTerrainResidencyTracker.update(camera.position.x, camera.position.z);
     }
@@ -1706,18 +1764,20 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // Tween prev→curr by alpha into the render store, then drive the scene + render.
       interp.interpolate(alpha, ring.presentSet);
       renderSyncSystem(ecs, suppressedEids);
-      if (playerEid !== undefined) {
+      if (playerCameraActive) {
         // FIRST-PERSON: sit at the player capsule's eye (interpolated Position + EYE_OFFSET) and look
         // along the mouse heading (yaw) + pitch. yaw=0 → forward is -Z, matching the controller's move
         // basis (character.ts), so W walks where you look.
         const yaw = inFrame.look[0];
         const pitch = inFrame.look[1];
         const cp = Math.cos(pitch);
-        const ex = Position.x[playerEid];
-        const ey = Position.y[playerEid] + EYE_OFFSET;
-        const ez = Position.z[playerEid];
+        const ex = Position.x[playerEid!];
+        const ey = Position.y[playerEid!] + EYE_OFFSET;
+        const ez = Position.z[playerEid!];
         camera.position.set(ex, ey, ez);
         camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
+      } else if (editorNavigation !== undefined) {
+        editorNavigation.update();
       } else if (cameraControls !== undefined) {
         cameraControls.update();
       } else if (vantage !== undefined) {
@@ -1734,25 +1794,34 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       }
       updateDerivedTerrainResidency();
       if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
-      // Map Phase 3.3: stream terrain around wherever the ACTIVE camera actually is this frame
-      // (player eye, OrbitControls, or auto-orbit — the pose was just set above). Budgeted pure
+      // Map Phase 3.3: editor navigation streams every view subsystem from its mode-aware anchor
+      // (orbit target or fly camera); gameplay and legacy views retain the active camera position. Budgeted pure
       // math + synchronous mounts only (no fetch/macrotask — the map IR was resolved at boot),
       // so the forceWebGL init-collapse window stays untouched.
       if (terrainStream !== undefined || entityStream !== undefined) {
         const camPos = (camera as unknown as { position: { x: number; z: number } }).position;
-        terrainStream?.update(camPos.x, camPos.z);
+        const streamX = editorNavigation === undefined ? camPos.x : navigationAnchor.x;
+        const streamZ = editorNavigation === undefined ? camPos.z : navigationAnchor.z;
+        terrainStream?.update(streamX, streamZ);
         // Grass follows the same camera anchor, one budgeted tile-grass build per frame.
-        grassStream?.update(camPos.x, camPos.z);
+        grassStream?.update(streamX, streamZ);
         // Task #78: placed-entity residency follows the same anchor — ≤4 detach/attach ops of
         // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
-        entityStream?.update(camPos.x, camPos.z);
+        entityStream?.update(streamX, streamZ);
       }
       // Screen-distance LOD (asset.placeLod): pick each LOD's level for THIS frame's camera before
       // the scene is drawn. Cheap (a distance compare per LOD); render-only.
       const wl = (world as unknown as { lods?: Array<{ update: (c: unknown) => void }> }).lods;
       if (wl !== undefined) for (const l of wl) l.update(camera);
-      const focus = playerEid !== undefined
-        ? [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]] as const
+      if (editorNavigation !== undefined) {
+        navigationFocus[0] = navigationAnchor.x;
+        navigationFocus[1] = navigationAnchor.y;
+        navigationFocus[2] = navigationAnchor.z;
+      }
+      const focus = playerCameraActive
+        ? [Position.x[playerEid!], Position.y[playerEid!], Position.z[playerEid!]] as const
+        : editorNavigation !== undefined
+        ? navigationFocus
         : cameraControls !== undefined
         ? [cameraControls.target.x, cameraControls.target.y, cameraControls.target.z] as const
         : vantage !== undefined
@@ -1942,6 +2011,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // No frame or fixed step can observe the transition: render is gated and simulation remains
         // paused until the new group, local colliders, and sim contact/colliders all agree.
         suppressAuthoredTerrainPresentation();
+        editorNavigation?.constrainToResidencyGrid(candidate.snapshot.manifest.grid.chunkSizeM, 7, 2);
         derivedTerrainResidencyTracker.setGrid(candidate.snapshot.manifest.grid);
         const prior = activeDerivedRevision;
         activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
@@ -2009,6 +2079,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     entities,
     pickEntityId,
     cameraControls,
+    editorNavigation,
     /** Set the orbit camera's azimuth (radians) directly. Lets a shot harness place yaw
      *  frames at EXACT angles (i/N x 2pi) instead of timing screenshots against the
      *  frame-rate-dependent autoSpin — wall-clock spacing under-rotates on heavy scenes
@@ -2154,7 +2225,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       },
     })(entityStream),
     setCameraControlsEnabled: (on: boolean): void => {
-      if (cameraControls !== undefined) cameraControls.enabled = on;
+      if (editorNavigation !== undefined) editorNavigation.setEnabled(on);
+      else if (cameraControls !== undefined) cameraControls.enabled = on;
     },
     setSyncSuppressed: (eid: number, on: boolean): void => {
       if (on) suppressedEids.add(eid);

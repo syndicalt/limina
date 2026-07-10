@@ -1,4 +1,4 @@
-export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v3";
+export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
 export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 export const DERIVED_RUNTIME_DISCOVERY_SCHEMA = "limina.derived-runtime-access/v1";
 export const DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
@@ -241,6 +241,16 @@ function residencyDeferred(residency) {
   return { residency, promise, resolve, reject };
 }
 
+function reconciliationDeferred(residency) {
+  return { ...residencyDeferred(residency), sequence: ++requestSequence };
+}
+
+function reconciliationError(code) {
+  const error = new Error(`derived residency reconciliation failed (${code})`);
+  error.code = code;
+  return error;
+}
+
 export class DerivedRuntimeClient {
   #activate;
   #onStatus;
@@ -266,6 +276,8 @@ export class DerivedRuntimeClient {
   #acceptedResidency;
   #sentResidency;
   #pendingResidency;
+  #sentReconciliation;
+  #pendingReconciliation;
 
   constructor({
     activate,
@@ -349,6 +361,7 @@ export class DerivedRuntimeClient {
       return Promise.reject(new Error("derived runtime client is closed"));
     }
     const resident = validateResidency(residencyInput);
+    const reconciliationBusy = this.#sentReconciliation !== undefined || this.#pendingReconciliation !== undefined;
     if (sameResidency(resident, this.#sentResidency?.residency)) {
       if (this.#pendingResidency === undefined) return this.#sentResidency.promise;
       // Preserve last-write-wins semantics when the camera returns to the in-flight window.
@@ -357,16 +370,43 @@ export class DerivedRuntimeClient {
     }
     if (sameResidency(resident, this.#pendingResidency?.residency)) return this.#pendingResidency.promise;
     if (this.#sentResidency === undefined && this.#pendingResidency === undefined
-        && sameResidency(resident, this.#acceptedResidency)) return Promise.resolve();
+        && !reconciliationBusy && sameResidency(resident, this.#acceptedResidency)) return Promise.resolve();
 
-    if (this.#sentResidency !== undefined || this.#pendingResidency !== undefined || this.#phase === "starting") {
-      if (this.#pendingResidency === undefined) this.#pendingResidency = residencyDeferred(resident);
-      else this.#pendingResidency.residency = resident;
+    if (this.#sentResidency !== undefined || this.#pendingResidency !== undefined || reconciliationBusy || this.#phase === "starting") {
+      if (this.#pendingResidency === undefined) this.#pendingResidency = { ...residencyDeferred(resident), sequence: ++requestSequence };
+      else {
+        this.#pendingResidency.residency = resident;
+        this.#pendingResidency.sequence = ++requestSequence;
+      }
       return this.#pendingResidency.promise;
     }
 
-    const pending = residencyDeferred(resident);
+    const pending = { ...residencyDeferred(resident), sequence: ++requestSequence };
     this.#sendResidency(pending);
+    return pending.promise;
+  }
+
+  /** Resolve only after this exact residency is active in the main-thread runtime, or unchanged. */
+  reconcileResidency(residencyInput) {
+    if (this.#phase === "idle") throw new Error("derived runtime client must be started before reconciling residency");
+    if (this.#phase === "closing" || this.#phase === "closed") {
+      return Promise.reject(new Error("derived runtime client is closed"));
+    }
+    const resident = validateResidency(residencyInput);
+    if (sameResidency(resident, this.#sentReconciliation?.residency)) {
+      if (this.#pendingReconciliation !== undefined) {
+        this.#pendingReconciliation.reject(reconciliationError("DERIVED_RESIDENCY_SUPERSEDED"));
+        this.#pendingReconciliation = undefined;
+      }
+      return this.#sentReconciliation.promise;
+    }
+    if (sameResidency(resident, this.#pendingReconciliation?.residency)) return this.#pendingReconciliation.promise;
+    if (this.#pendingReconciliation !== undefined) {
+      this.#pendingReconciliation.reject(reconciliationError("DERIVED_RESIDENCY_SUPERSEDED"));
+    }
+    const pending = reconciliationDeferred(resident);
+    this.#pendingReconciliation = pending;
+    this.#flushResidencyUpdates();
     return pending.promise;
   }
 
@@ -387,12 +427,51 @@ export class DerivedRuntimeClient {
     }
   }
 
+  #sendReconciliation(pending) {
+    const requestId = nextRequestId("derived-reconcile");
+    this.#sentReconciliation = { ...pending, requestId };
+    try {
+      this.#worker.postMessage({
+        schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+        type: "reconcile-residency",
+        requestId,
+        residency: pending.residency,
+      });
+    } catch (error) {
+      this.#sentReconciliation = undefined;
+      pending.reject(error);
+      this.#failProtocol("WORKER_ERROR", this.#generation);
+    }
+  }
+
+  #resolveActivatedReconciliation(reconciliation, snapshot) {
+    const result = Object.freeze({ status: "activated", manifestHash: snapshot.manifestHash, revision: snapshot.source.revision });
+    reconciliation.readyResult = result;
+    this.#acceptedResidency = reconciliation.residency;
+    this.#expected = Object.freeze({ ...this.#expected, residency: reconciliation.residency });
+    reconciliation.resolve(result);
+  }
+
   #flushPendingResidency() {
-    if (this.#phase !== "ready" || this.#sentResidency !== undefined || this.#pendingResidency === undefined) return;
+    this.#flushResidencyUpdates();
+  }
+
+  #flushResidencyUpdates() {
+    if (this.#phase !== "ready" || this.#sentResidency !== undefined || this.#sentReconciliation !== undefined) return;
+    const reconciliationFirst = this.#pendingReconciliation !== undefined
+      && (this.#pendingResidency === undefined || this.#pendingReconciliation.sequence < this.#pendingResidency.sequence);
+    if (reconciliationFirst) {
+      const pending = this.#pendingReconciliation;
+      this.#pendingReconciliation = undefined;
+      this.#sendReconciliation(pending);
+      return;
+    }
+    if (this.#pendingResidency === undefined) return;
     const pending = this.#pendingResidency;
     this.#pendingResidency = undefined;
     if (sameResidency(pending.residency, this.#acceptedResidency)) {
       pending.resolve();
+      this.#flushResidencyUpdates();
       return;
     }
     this.#sendResidency(pending);
@@ -432,11 +511,21 @@ export class DerivedRuntimeClient {
         return;
       }
       if (message.type === "activate") {
-        exactDataKeys(message, ["schema", "type", "activationId", "snapshot"], [], "derived runtime activation");
+        exactDataKeys(message, ["schema", "type", "activationId", "snapshot"], ["requestId"], "derived runtime activation");
         if (typeof message.activationId !== "string" || !ACTIVATION_ID.test(message.activationId) || this.#activationId !== undefined || this.#phase === "starting") {
           throw protocolError("derived runtime activation identity or ordering is invalid");
         }
-        const snapshot = validateSnapshot(message.snapshot, this.#expected);
+        const reconciliation = this.#sentReconciliation;
+        if (message.requestId !== undefined
+            && (!REQUEST_ID.test(message.requestId) || message.requestId !== reconciliation?.requestId)) {
+          throw protocolError("derived runtime activation reconciliation identity is invalid");
+        }
+        const snapshot = validateSnapshot(message.snapshot, message.requestId === undefined
+          ? this.#expected
+          : Object.freeze({ ...this.#expected, residency: reconciliation.residency }));
+        if (message.requestId !== undefined && !sameResidency(snapshot.residency, reconciliation.residency)) {
+          throw protocolError("derived runtime activation reconciliation residency is invalid");
+        }
         if (this.#mode === "pinned" && (snapshot.source.revision !== this.#pinnedRevision
             || snapshot.source.headHash !== this.#pinnedHeadHash
             || (this.#pinnedManifestHash !== undefined && snapshot.manifestHash !== this.#pinnedManifestHash))) {
@@ -449,7 +538,9 @@ export class DerivedRuntimeClient {
         try {
           await this.#activate(snapshot, Object.freeze({ signal: activationAbort.signal }));
           if (generation !== this.#generation || this.#phase === "closing" || this.#phase === "closed" || this.#activationId !== message.activationId) return;
-          this.#worker.postMessage({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "activation-ack", activationId: message.activationId, accepted: true });
+          this.#worker.postMessage({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "activation-ack", activationId: message.activationId,
+            ...(message.requestId === undefined ? {} : { requestId: message.requestId }), accepted: true });
+          if (message.requestId !== undefined) this.#resolveActivatedReconciliation(reconciliation, snapshot);
           this.#emit({ phase: "activated", mode: this.#mode, revision: snapshot.source.revision, manifestHash: snapshot.manifestHash });
         } catch {
           if (generation !== this.#generation || this.#phase === "closing" || this.#phase === "closed" || this.#activationId !== message.activationId) return;
@@ -457,6 +548,7 @@ export class DerivedRuntimeClient {
             schema: DERIVED_RUNTIME_WORKER_SCHEMA,
             type: "activation-ack",
             activationId: message.activationId,
+            ...(message.requestId === undefined ? {} : { requestId: message.requestId }),
             accepted: false,
             errorCode: "VIEWPORT_ACTIVATION_FAILED",
           });
@@ -468,21 +560,51 @@ export class DerivedRuntimeClient {
         return;
       }
       if (message.type === "revision") {
-        exactDataKeys(message, ["schema", "type", "status", "manifestHash", "revision"], [], "derived runtime revision");
+        exactDataKeys(message, ["schema", "type", "status", "manifestHash", "revision"], ["requestId"], "derived runtime revision");
         if (this.#phase !== "ready" || this.#activationId !== undefined || !REVISION_STATUSES.has(message.status)) {
           throw protocolError("derived runtime revision status or ordering is invalid");
         }
         contentHash(message.manifestHash, "derived runtime revision.manifestHash");
         safeInteger(message.revision, "derived runtime revision.revision");
+        if (message.requestId !== undefined) {
+          const reconciliation = this.#sentReconciliation;
+          if (!REQUEST_ID.test(message.requestId) || reconciliation === undefined || message.requestId !== reconciliation.requestId) {
+            throw protocolError("derived runtime revision reconciliation identity is invalid");
+          }
+          this.#sentReconciliation = undefined;
+          if (reconciliation.readyResult !== undefined) {
+            if (message.status !== "activated" || message.manifestHash !== reconciliation.readyResult.manifestHash
+                || message.revision !== reconciliation.readyResult.revision) {
+              throw protocolError("derived runtime revision contradicted its ready reconciliation");
+            }
+          } else if (message.status === "superseded") reconciliation.reject(reconciliationError("DERIVED_RESIDENCY_SUPERSEDED"));
+          else {
+            this.#acceptedResidency = reconciliation.residency;
+            this.#expected = Object.freeze({ ...this.#expected, residency: reconciliation.residency });
+            reconciliation.resolve(Object.freeze({ status: message.status, manifestHash: message.manifestHash, revision: message.revision }));
+          }
+          this.#flushResidencyUpdates();
+        }
         this.#emit({ phase: "revision", mode: this.#mode, status: message.status, revision: message.revision, manifestHash: message.manifestHash });
         return;
       }
       if (message.type === "error") {
-        exactDataKeys(message, ["schema", "type", "code", "classification", "message"], [], "derived runtime error");
+        exactDataKeys(message, ["schema", "type", "code", "classification", "message"], ["requestId"], "derived runtime error");
         if (typeof message.code !== "string" || !ERROR_CODE.test(message.code)
             || (message.classification !== "transient" && message.classification !== "fatal")
             || typeof message.message !== "string" || message.message.length > 512) {
           throw protocolError("derived runtime error payload is invalid");
+        }
+        if (message.requestId !== undefined) {
+          const reconciliation = this.#sentReconciliation;
+          if (!REQUEST_ID.test(message.requestId) || reconciliation === undefined || message.requestId !== reconciliation.requestId) {
+            throw protocolError("derived runtime error reconciliation identity is invalid");
+          }
+          if (message.classification === "fatal" || message.code === "RESIDENCY_OUTSIDE_DOMAIN") {
+            this.#sentReconciliation = undefined;
+            reconciliation.reject(reconciliationError(message.code));
+            if (message.classification !== "fatal") this.#flushResidencyUpdates();
+          }
         }
         this.#emit({ phase: "error", mode: this.#mode, code: message.code, classification: message.classification });
         if (message.classification === "fatal") void this.close();
@@ -513,11 +635,15 @@ export class DerivedRuntimeClient {
     if (this.#closePromise !== undefined) return this.#closePromise;
     if (this.#phase === "closed") return Promise.resolve();
     this.#phase = "closing";
-    const closedError = new Error("derived runtime client closed before residency acknowledgement");
+    const closedError = new Error("derived runtime client closed before residency work completed");
     this.#sentResidency?.reject(closedError);
     this.#pendingResidency?.reject(closedError);
+    this.#sentReconciliation?.reject(closedError);
+    this.#pendingReconciliation?.reject(closedError);
     this.#sentResidency = undefined;
     this.#pendingResidency = undefined;
+    this.#sentReconciliation = undefined;
+    this.#pendingReconciliation = undefined;
     this.#activationAbort?.abort(new Error("derived runtime client closed during activation"));
     this.#activationAbort = undefined;
     const generation = ++this.#generation;

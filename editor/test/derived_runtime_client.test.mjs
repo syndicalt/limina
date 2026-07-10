@@ -84,8 +84,9 @@ function ready(state, mode) {
   state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "ready", requestId: init.requestId, mode });
 }
 
-function activation(state, value = snapshot(), id = "derived-activation-1") {
-  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "activate", activationId: id, snapshot: value });
+function activation(state, value = snapshot(), id = "derived-activation-1", requestId) {
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "activate", activationId: id,
+    ...(requestId === undefined ? {} : { requestId }), snapshot: value });
 }
 
 async function tick() {
@@ -236,8 +237,8 @@ test("close rejects sent and pending residency work and emits no late update", a
   ready(state, "watch");
   const sent = state.client.setResidency(residency([64, 0]));
   const pending = state.client.setResidency(residency([128, 0]));
-  const sentRejected = assert.rejects(sent, /closed before residency acknowledgement/);
-  const pendingRejected = assert.rejects(pending, /closed before residency acknowledgement/);
+  const sentRejected = assert.rejects(sent, /closed before residency/);
+  const pendingRejected = assert.rejects(pending, /closed before residency/);
   const closing = state.client.close();
   await Promise.all([sentRejected, pendingRejected]);
   const closeRequest = state.worker.sent.at(-1);
@@ -266,6 +267,201 @@ test("successful activation awaits the adapter before accepting", async () => {
     activationId: "derived-activation-1",
     accepted: true,
   });
+});
+
+test("explicit reconciliation resolves in the activation microtask and later revision validates it", async () => {
+  let release;
+  const state = harness({ activate: () => new Promise((resolve) => { release = resolve; }) });
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const requested = residency([256, -128]);
+  const result = state.client.reconcileResidency(requested);
+  const request = state.worker.sent.at(-1);
+  assert.equal(request.type, "reconcile-residency");
+  assert.deepEqual(request.residency, requested);
+
+  activation(state, snapshot(7, requested), "derived-activation-10", request.requestId);
+  let settled = false;
+  result.finally(() => { settled = true; });
+  await tick();
+  assert.equal(settled, false, "reconciliation settled before the activation callback completed");
+  release();
+  await tick();
+  assert.deepEqual(state.worker.sent.at(-1), {
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: "derived-activation-10",
+    requestId: request.requestId,
+    accepted: true,
+  });
+  assert.equal(settled, true, "reconciliation did not settle immediately after exact main-thread activation");
+  assert.deepEqual(await result, { status: "activated", manifestHash: hash("c"), revision: 7 });
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "activated", manifestHash: hash("c"), revision: 7 });
+  await tick();
+  assert.equal(state.client.phase, "ready");
+});
+
+test("explicit unchanged reconciliation resolves without activation and exact correlation is mandatory", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const result = state.client.reconcileResidency(residency());
+  const request = state.worker.sent.at(-1);
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  assert.deepEqual(await result, { status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  assert.equal(state.worker.sent.some(({ type }) => type === "activation-ack"), false);
+
+  const malformed = harness();
+  malformed.client.start(discovery(), { residency: residency() });
+  ready(malformed, "watch");
+  const pending = malformed.client.reconcileResidency(residency([64, 0]));
+  pending.catch(() => {});
+  malformed.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: "derived-reconcile-wrong",
+    status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  await tick();
+  assert.equal(malformed.client.phase, "closing");
+  assert.equal(malformed.statuses.some(({ code }) => code === "PROTOCOL_ERROR"), true);
+});
+
+test("a worker revision cannot contradict an already activated reconciliation", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const requested = residency([64, 0]);
+  const result = state.client.reconcileResidency(requested);
+  const request = state.worker.sent.at(-1);
+  activation(state, snapshot(7, requested), "derived-activation-12", request.requestId);
+  assert.deepEqual(await result, { status: "activated", manifestHash: hash("c"), revision: 7 });
+
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  await tick();
+  assert.equal(state.client.phase, "closing");
+  assert.equal(state.statuses.some(({ code }) => code === "PROTOCOL_ERROR"), true);
+});
+
+test("an exact superseded reconciliation rejects with a stable public error", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const result = state.client.reconcileResidency(residency([64, 0]));
+  const request = state.worker.sent.at(-1);
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "superseded", manifestHash: hash("c"), revision: 7 });
+  await assert.rejects(result, (error) => error.code === "DERIVED_RESIDENCY_SUPERSEDED");
+  assert.equal(state.client.phase, "ready");
+});
+
+test("an older generic activation cannot satisfy a queued explicit reconciliation", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const requested = residency([64, 0]);
+  const result = state.client.reconcileResidency(requested);
+  const request = state.worker.sent.at(-1);
+  let settled = false;
+  result.finally(() => { settled = true; });
+  activation(state, snapshot(), "derived-activation-20");
+  await tick();
+  assert.equal(state.worker.sent.at(-1).activationId, "derived-activation-20");
+  assert.equal("requestId" in state.worker.sent.at(-1), false);
+  assert.equal(settled, false, "an uncorrelated older activation satisfied the reconciliation");
+  activation(state, snapshot(7, requested), "derived-activation-21", request.requestId);
+  await tick();
+  assert.deepEqual(await result, { status: "activated", manifestHash: hash("c"), revision: 7 });
+});
+
+test("reconciliation retains transient retries but rejects outside-domain and fatal outcomes", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const requested = residency([64, 0]);
+  const result = state.client.reconcileResidency(requested);
+  const request = state.worker.sent.at(-1);
+  let settled = false;
+  result.finally(() => { settled = true; });
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "error", requestId: request.requestId,
+    code: "STALE_SOURCE_HEAD", classification: "transient", message: `redacted by client ${token}` });
+  await tick();
+  assert.equal(settled, false, "transient correlated failure discarded the reconciliation");
+  assert.equal(JSON.stringify(state.statuses).includes(token), false);
+  activation(state, snapshot(7, requested), "derived-activation-11", request.requestId);
+  await tick();
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "activated", manifestHash: hash("c"), revision: 7 });
+  await result;
+
+  const outside = state.client.reconcileResidency(residency([100_000, 100_000]));
+  const outsideRequest = state.worker.sent.at(-1);
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "error", requestId: outsideRequest.requestId,
+    code: "RESIDENCY_OUTSIDE_DOMAIN", classification: "transient", message: "outside" });
+  await assert.rejects(outside, (error) => error.code === "RESIDENCY_OUTSIDE_DOMAIN");
+  assert.equal(state.client.phase, "ready", "outside-domain reconciliation closed the healthy prior runtime");
+
+  const fatalState = harness();
+  fatalState.client.start(discovery(), { residency: residency() });
+  ready(fatalState, "watch");
+  const fatalResult = fatalState.client.reconcileResidency(residency([64, 0]));
+  const fatalRequest = fatalState.worker.sent.at(-1);
+  fatalState.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "error", requestId: fatalRequest.requestId,
+    code: "BROKEN_ARTIFACT", classification: "fatal", message: `private ${token}` });
+  await assert.rejects(fatalResult, (error) => error.code === "BROKEN_ARTIFACT" && !error.message.includes(token));
+  assert.equal(fatalState.client.phase, "closing");
+});
+
+test("rapid reconciliation coalescing preserves exact A to B to A last-write-wins behavior", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const a = residency([64, 0]);
+  const firstA = state.client.reconcileResidency(a);
+  const requestA = state.worker.sent.at(-1);
+  const b = state.client.reconcileResidency(residency([128, 0]));
+  const finalA = state.client.reconcileResidency(a);
+  assert.equal(finalA, firstA);
+  await assert.rejects(b, (error) => error.code === "DERIVED_RESIDENCY_SUPERSEDED");
+  assert.equal(state.worker.sent.filter(({ type }) => type === "reconcile-residency").length, 1);
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: requestA.requestId,
+    status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  await Promise.all([firstA, finalA]);
+});
+
+test("continuous residency forwarding serializes behind explicit reconciliation", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const jump = residency([64, 0]);
+  const reconciliation = state.client.reconcileResidency(jump);
+  const request = state.worker.sent.at(-1);
+  const forwarding = state.client.setResidency(residency([128, 0]));
+  assert.equal(state.worker.sent.filter(({ type }) => type === "set-residency").length, 0,
+    "continuous forwarding overtook an explicit reconciliation");
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "revision", requestId: request.requestId,
+    status: "unchanged", manifestHash: hash("c"), revision: 7 });
+  await reconciliation;
+  const forwarded = state.worker.sent.at(-1);
+  assert.equal(forwarded.type, "set-residency");
+  assert.deepEqual(forwarded.residency, residency([128, 0]));
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "residency-ack", requestId: forwarded.requestId, residency: forwarded.residency });
+  await forwarding;
+});
+
+test("close rejects sent and pending explicit reconciliations", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const sent = state.client.reconcileResidency(residency([64, 0]));
+  const pending = state.client.reconcileResidency(residency([128, 0]));
+  const closing = state.client.close();
+  await Promise.all([
+    assert.rejects(sent, /closed before residency work completed/),
+    assert.rejects(pending, /closed before residency work completed/),
+  ]);
+  const closeRequest = state.worker.sent.at(-1);
+  state.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "closed", requestId: closeRequest.requestId });
+  await closing;
 });
 
 test("activation failure returns one stable secret-free rejection", async () => {

@@ -142259,6 +142259,459 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     }
   };
 
+  // src/browser/editor-navigation.ts
+  var MIN_SPEED_MPS = 0.1;
+  var MAX_SPEED_MPS = 5e3;
+  var MAX_FRAME_SECONDS = 0.1;
+  var LOOK_RADIANS_PER_PIXEL = 25e-4;
+  var MIN_FLY_PITCH = -Math.PI / 2 + 0.02;
+  var MAX_FLY_PITCH = Math.PI / 2 - 0.02;
+  var MIN_FRAME_RADIUS_M = 0.05;
+  var DEFAULT_FRAME_PADDING = 1.25;
+  function finiteTuple(value, size, label4) {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== size || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== size + 1) {
+      throw new TypeError(`${label4} must be a finite ${size}-tuple`);
+    }
+    const tuple2 = [];
+    for (let index = 0; index < size; index += 1) {
+      const descriptor2 = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor2?.enumerable !== true || !("value" in descriptor2) || typeof descriptor2.value !== "number" || !Number.isFinite(descriptor2.value)) {
+        throw new TypeError(`${label4} must be a finite ${size}-tuple`);
+      }
+      tuple2.push(Object.is(descriptor2.value, -0) ? 0 : descriptor2.value);
+    }
+    return tuple2;
+  }
+  function finitePositive2(value, label4) {
+    if (typeof value !== "number" || !Number.isFinite(value) || !(value > 0)) {
+      throw new TypeError(`${label4} must be a finite positive number`);
+    }
+    return value;
+  }
+  function navigationMode(value) {
+    if (value !== "orbit" && value !== "fly") throw new TypeError("editor navigation mode must be orbit or fly");
+    return value;
+  }
+  function boundedSpeed(value) {
+    return Math.min(MAX_SPEED_MPS, Math.max(MIN_SPEED_MPS, finitePositive2(value, "editor navigation speed")));
+  }
+  function frozenPose(position, quaternion, up, target, mode, speedMps) {
+    return Object.freeze({
+      position: Object.freeze([...position]),
+      quaternion: Object.freeze([...quaternion]),
+      up: Object.freeze([...up]),
+      target: Object.freeze([...target]),
+      mode,
+      speedMps
+    });
+  }
+  function parsedPose(input) {
+    if (input === null || Array.isArray(input) || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype) {
+      throw new TypeError("editor camera pose must be a plain object");
+    }
+    const pose = input;
+    const required2 = ["position", "quaternion", "up", "target", "mode", "speedMps"];
+    const names = Object.getOwnPropertyNames(pose);
+    if (Object.getOwnPropertySymbols(pose).length !== 0 || names.length !== required2.length || required2.some((name) => !names.includes(name))) {
+      throw new TypeError("editor camera pose has unsupported or missing fields");
+    }
+    for (const name of names) {
+      const descriptor2 = Object.getOwnPropertyDescriptor(pose, name);
+      if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
+        throw new TypeError(`editor camera pose.${name} must be an enumerable data field`);
+      }
+    }
+    const position = finiteTuple(pose.position, 3, "editor camera pose.position");
+    const quaternion = finiteTuple(pose.quaternion, 4, "editor camera pose.quaternion");
+    const up = finiteTuple(pose.up, 3, "editor camera pose.up");
+    if (Math.hypot(...quaternion) < 1e-8) throw new RangeError("editor camera pose quaternion must be non-zero");
+    if (Math.hypot(...up) < 1e-8) throw new RangeError("editor camera pose up vector must be non-zero");
+    return {
+      position,
+      quaternion,
+      up,
+      target: finiteTuple(pose.target, 3, "editor camera pose.target"),
+      mode: navigationMode(pose.mode),
+      speedMps: boundedSpeed(pose.speedMps)
+    };
+  }
+  function editableTarget(target) {
+    const element3 = target;
+    if (element3?.isContentEditable) return true;
+    return element3?.tagName === "INPUT" || element3?.tagName === "TEXTAREA" || element3?.tagName === "SELECT";
+  }
+  var EditorNavigationController = class {
+    orbitControls;
+    #camera;
+    #element;
+    #keyTarget;
+    #documentTarget;
+    #now;
+    #boostMultiplier;
+    #precisionMultiplier;
+    #pressed = /* @__PURE__ */ new Set();
+    #forward = new Vector3();
+    #right = new Vector3();
+    #movement = new Vector3();
+    #worldUp = new Vector3(0, 1, 0);
+    #flyEuler = new Euler(0, 0, 0, "YXZ");
+    #frameBox = new Box3();
+    #frameSphere = new Sphere();
+    #frameTarget = new Vector3();
+    #frameOffset = new Vector3();
+    #frameCamera = new PerspectiveCamera();
+    #mode;
+    #speedMps;
+    #enabled = true;
+    #disableLeases = /* @__PURE__ */ new Set();
+    #disposed = false;
+    #rightPointerId = null;
+    #focusDistanceM;
+    #lastUpdateMs;
+    #configuredMaxDistanceM;
+    constructor(options) {
+      this.#camera = options.camera;
+      this.#element = options.element;
+      this.#keyTarget = options.keyTarget;
+      this.#documentTarget = options.documentTarget ?? options.element.ownerDocument;
+      this.#now = options.now ?? (() => performance.now());
+      this.#mode = navigationMode(options.navigation.mode ?? "orbit");
+      this.#speedMps = boundedSpeed(options.navigation.speedMps ?? 32);
+      this.#boostMultiplier = finitePositive2(options.navigation.boostMultiplier ?? 4, "editor navigation boost multiplier");
+      this.#precisionMultiplier = finitePositive2(options.navigation.precisionMultiplier ?? 0.2, "editor navigation precision multiplier");
+      if (this.#boostMultiplier < 1 || this.#boostMultiplier > 100) {
+        throw new RangeError("editor navigation boost multiplier must be within [1,100]");
+      }
+      if (this.#precisionMultiplier > 1) {
+        throw new RangeError("editor navigation precision multiplier must be within (0,1]");
+      }
+      const target = finiteTuple(options.navigation.target, 3, "editor navigation target");
+      const minDistance = finitePositive2(options.navigation.minDistanceM, "editor navigation minimum distance");
+      const maxDistance = finitePositive2(options.navigation.maxDistanceM, "editor navigation maximum distance");
+      if (maxDistance <= minDistance) throw new RangeError("editor navigation maximum distance must exceed its minimum distance");
+      const maxPolar = finitePositive2(options.navigation.maxPolarAngleRad, "editor navigation maximum polar angle");
+      this.#configuredMaxDistanceM = maxDistance;
+      this.orbitControls = new OrbitControls(this.#camera, this.#element);
+      this.orbitControls.target.set(target[0], target[1], target[2]);
+      this.orbitControls.enableRotate = true;
+      this.orbitControls.enableZoom = true;
+      this.orbitControls.enablePan = true;
+      this.orbitControls.enableDamping = true;
+      this.orbitControls.minDistance = minDistance;
+      this.orbitControls.maxDistance = maxDistance;
+      this.orbitControls.minPolarAngle = 0.04;
+      this.orbitControls.maxPolarAngle = Math.min(Math.PI - 0.04, maxPolar);
+      this.#focusDistanceM = Math.max(minDistance, this.#camera.position.distanceTo(this.orbitControls.target));
+      this.#applyEnabledState();
+      if (this.#mode === "orbit") this.orbitControls.update();
+      else this.#syncFlyTarget();
+      this.#element.addEventListener("pointerdown", this.#onPointerDown);
+      this.#element.addEventListener("pointermove", this.#onPointerMove);
+      this.#element.addEventListener("pointerup", this.#onPointerUp);
+      this.#element.addEventListener("pointercancel", this.#onPointerCancel);
+      this.#element.addEventListener("contextmenu", this.#onContextMenu);
+      this.#keyTarget?.addEventListener("keydown", this.#onKeyDown);
+      this.#keyTarget?.addEventListener("keyup", this.#onKeyUp);
+      this.#keyTarget?.addEventListener("blur", this.#onBlur);
+      this.#documentTarget?.addEventListener("visibilitychange", this.#onVisibilityChange);
+    }
+    mode() {
+      return this.#mode;
+    }
+    setMode(mode) {
+      this.#requireLive();
+      const next = navigationMode(mode);
+      if (next === this.#mode) return;
+      this.#releaseInput();
+      if (next === "fly") {
+        this.#focusDistanceM = Math.max(this.orbitControls.minDistance, this.#camera.position.distanceTo(this.orbitControls.target));
+        this.#flyEuler.setFromQuaternion(this.#camera.quaternion, "YXZ");
+        this.#flyEuler.z = 0;
+      }
+      this.#mode = next;
+      this.#applyEnabledState();
+      if (next === "orbit") this.orbitControls.update();
+      else this.#syncFlyTarget();
+    }
+    speed() {
+      return this.#speedMps;
+    }
+    setSpeed(speedMps) {
+      this.#requireLive();
+      this.#speedMps = boundedSpeed(speedMps);
+      return this.#speedMps;
+    }
+    setEnabled(enabled) {
+      this.#requireLive();
+      this.#enabled = enabled === true;
+      if (!this.#enabled) this.#releaseInput();
+      this.#applyEnabledState();
+    }
+    acquireDisabled() {
+      this.#requireLive();
+      const lease = /* @__PURE__ */ Symbol("editor-navigation-disabled");
+      this.#disableLeases.add(lease);
+      this.#releaseInput();
+      this.#applyEnabledState();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (this.#disposed || !this.#disableLeases.delete(lease)) return;
+        this.#applyEnabledState();
+      };
+    }
+    isCapturingInput() {
+      return !this.#disposed && this.#effectivelyEnabled() && this.#mode === "fly" && this.#rightPointerId !== null;
+    }
+    update(nowMs = this.#now()) {
+      if (this.#disposed) return;
+      if (!Number.isFinite(nowMs)) return;
+      const prior = this.#lastUpdateMs;
+      this.#lastUpdateMs = nowMs;
+      if (this.#mode === "orbit") {
+        if (this.#effectivelyEnabled()) this.orbitControls.update();
+        return;
+      }
+      if (!this.#effectivelyEnabled() || prior === void 0 || !this.isCapturingInput()) {
+        this.#syncFlyTarget();
+        return;
+      }
+      const elapsed2 = Math.min(MAX_FRAME_SECONDS, Math.max(0, (nowMs - prior) / 1e3));
+      if (elapsed2 === 0) return;
+      let forward = (this.#pressed.has("KeyW") ? 1 : 0) - (this.#pressed.has("KeyS") ? 1 : 0);
+      let right = (this.#pressed.has("KeyD") ? 1 : 0) - (this.#pressed.has("KeyA") ? 1 : 0);
+      let vertical = (this.#pressed.has("KeyE") ? 1 : 0) - (this.#pressed.has("KeyQ") ? 1 : 0);
+      if (forward === 0 && right === 0 && vertical === 0) return;
+      const magnitude = Math.hypot(forward, right, vertical);
+      forward /= magnitude;
+      right /= magnitude;
+      vertical /= magnitude;
+      this.#camera.getWorldDirection(this.#forward);
+      this.#right.set(1, 0, 0).applyQuaternion(this.#camera.quaternion).normalize();
+      this.#movement.copy(this.#forward).multiplyScalar(forward).addScaledVector(this.#right, right).addScaledVector(this.#worldUp, vertical);
+      if (this.#movement.lengthSq() > 0) this.#movement.normalize();
+      let speed = this.#speedMps;
+      if (this.#pressed.has("ShiftLeft") || this.#pressed.has("ShiftRight")) speed *= this.#boostMultiplier;
+      if (this.#pressed.has("AltLeft") || this.#pressed.has("AltRight")) speed *= this.#precisionMultiplier;
+      this.#camera.position.addScaledVector(this.#movement, speed * elapsed2);
+      this.#syncFlyTarget();
+    }
+    writeAnchor(out) {
+      if (this.#mode === "orbit") {
+        out.x = this.orbitControls.target.x;
+        out.y = this.orbitControls.target.y;
+        out.z = this.orbitControls.target.z;
+      } else {
+        out.x = this.#camera.position.x;
+        out.y = this.#camera.position.y;
+        out.z = this.#camera.position.z;
+      }
+      return out;
+    }
+    residencyCenter(input) {
+      const pose = parsedPose(input);
+      const source = pose.mode === "orbit" ? pose.target : pose.position;
+      return Object.freeze([source[0], source[2]]);
+    }
+    snapshot() {
+      this.#requireLive();
+      return frozenPose(
+        [this.#camera.position.x, this.#camera.position.y, this.#camera.position.z],
+        [this.#camera.quaternion.x, this.#camera.quaternion.y, this.#camera.quaternion.z, this.#camera.quaternion.w],
+        [this.#camera.up.x, this.#camera.up.y, this.#camera.up.z],
+        [this.orbitControls.target.x, this.orbitControls.target.y, this.orbitControls.target.z],
+        this.#mode,
+        this.#speedMps
+      );
+    }
+    restore(input) {
+      this.#requireLive();
+      const pose = parsedPose(input);
+      const { position, quaternion, up, target, mode } = pose;
+      const speed = pose.speedMps;
+      const quaternionLength = Math.hypot(quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
+      if (quaternionLength < 1e-8) throw new RangeError("editor camera pose quaternion must be non-zero");
+      if (Math.hypot(up[0], up[1], up[2]) < 1e-8) throw new RangeError("editor camera pose up vector must be non-zero");
+      this.#releaseInput();
+      this.#camera.position.set(position[0], position[1], position[2]);
+      this.#camera.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3]).normalize();
+      this.#camera.up.set(up[0], up[1], up[2]).normalize();
+      this.orbitControls.target.set(target[0], target[1], target[2]);
+      this.#mode = mode;
+      this.#speedMps = speed;
+      this.#focusDistanceM = Math.max(this.orbitControls.minDistance, this.#camera.position.distanceTo(this.orbitControls.target));
+      this.#flyEuler.setFromQuaternion(this.#camera.quaternion, "YXZ");
+      this.#flyEuler.z = 0;
+      this.#applyEnabledState();
+      if (mode === "orbit") this.orbitControls.update();
+      else this.#syncFlyTarget();
+    }
+    destinationPose(targetInput, radiusM) {
+      this.#requireLive();
+      const target = finiteTuple(targetInput, 3, "editor navigation destination");
+      this.#frameTarget.set(target[0], target[1], target[2]);
+      this.#frameOffset.copy(this.#camera.position).sub(this.orbitControls.target);
+      if (this.#frameOffset.lengthSq() < 1e-8) {
+        this.#camera.getWorldDirection(this.#frameOffset).multiplyScalar(-1);
+      } else this.#frameOffset.normalize();
+      let desiredDistance = this.#mode === "orbit" ? this.#camera.position.distanceTo(this.orbitControls.target) : this.#focusDistanceM;
+      if (radiusM !== void 0) {
+        const radius = Math.max(MIN_FRAME_RADIUS_M, finitePositive2(radiusM, "editor navigation frame radius"));
+        const fovRadians = MathUtils.degToRad(this.#camera.fov);
+        desiredDistance = radius * DEFAULT_FRAME_PADDING / Math.tan(Math.max(0.01, fovRadians * 0.5));
+      }
+      const distance4 = Math.min(this.orbitControls.maxDistance, Math.max(this.orbitControls.minDistance, desiredDistance));
+      this.#frameCamera.position.copy(this.#frameTarget).addScaledVector(this.#frameOffset, distance4);
+      this.#frameCamera.up.copy(this.#camera.up);
+      this.#frameCamera.lookAt(this.#frameTarget);
+      return frozenPose(
+        [this.#frameCamera.position.x, this.#frameCamera.position.y, this.#frameCamera.position.z],
+        [this.#frameCamera.quaternion.x, this.#frameCamera.quaternion.y, this.#frameCamera.quaternion.z, this.#frameCamera.quaternion.w],
+        [this.#frameCamera.up.x, this.#frameCamera.up.y, this.#frameCamera.up.z],
+        [this.#frameTarget.x, this.#frameTarget.y, this.#frameTarget.z],
+        "orbit",
+        this.#speedMps
+      );
+    }
+    framePoint(target, radiusM) {
+      const pose = this.destinationPose(target, radiusM);
+      this.restore(pose);
+      return pose;
+    }
+    objectPose(object2, padding = DEFAULT_FRAME_PADDING) {
+      this.#requireLive();
+      if (!(object2 instanceof Object3D)) throw new TypeError("editor navigation frame object must be a THREE.Object3D");
+      const framePadding = finitePositive2(padding, "editor navigation frame padding");
+      this.#frameBox.setFromObject(object2, true);
+      if (this.#frameBox.isEmpty()) throw new Error("editor navigation cannot frame an object with empty bounds");
+      this.#frameBox.getBoundingSphere(this.#frameSphere);
+      return this.destinationPose(
+        [this.#frameSphere.center.x, this.#frameSphere.center.y, this.#frameSphere.center.z],
+        Math.max(MIN_FRAME_RADIUS_M, this.#frameSphere.radius * framePadding / DEFAULT_FRAME_PADDING)
+      );
+    }
+    frameObject(object2, padding = DEFAULT_FRAME_PADDING) {
+      const pose = this.objectPose(object2, padding);
+      this.restore(pose);
+      return pose;
+    }
+    constrainToResidencyGrid(chunkSizeM, radius = 7, thresholdChunks = 2) {
+      this.#requireLive();
+      const chunkSize = finitePositive2(chunkSizeM, "editor navigation residency chunk size");
+      if (!Number.isSafeInteger(radius) || radius < 1 || radius > 7) throw new RangeError("editor navigation residency radius is invalid");
+      if (!Number.isSafeInteger(thresholdChunks) || thresholdChunks < 0 || thresholdChunks >= radius) {
+        throw new RangeError("editor navigation residency threshold is invalid");
+      }
+      const safeChunks = Math.max(1, radius - thresholdChunks - 1);
+      const residencyMax = safeChunks * chunkSize;
+      this.orbitControls.maxDistance = Math.max(
+        this.orbitControls.minDistance + 1,
+        Math.min(this.#configuredMaxDistanceM, residencyMax)
+      );
+      if (this.#mode === "orbit") this.orbitControls.update();
+      return this.orbitControls.maxDistance;
+    }
+    dispose() {
+      if (this.#disposed) return;
+      this.#disposed = true;
+      this.#disableLeases.clear();
+      this.#releaseInput();
+      this.#element.removeEventListener("pointerdown", this.#onPointerDown);
+      this.#element.removeEventListener("pointermove", this.#onPointerMove);
+      this.#element.removeEventListener("pointerup", this.#onPointerUp);
+      this.#element.removeEventListener("pointercancel", this.#onPointerCancel);
+      this.#element.removeEventListener("contextmenu", this.#onContextMenu);
+      this.#keyTarget?.removeEventListener("keydown", this.#onKeyDown);
+      this.#keyTarget?.removeEventListener("keyup", this.#onKeyUp);
+      this.#keyTarget?.removeEventListener("blur", this.#onBlur);
+      this.#documentTarget?.removeEventListener("visibilitychange", this.#onVisibilityChange);
+      this.orbitControls.dispose();
+    }
+    #onPointerDown = (event) => {
+      if (!this.#effectivelyEnabled() || this.#mode !== "fly" || event.button !== 2 || this.#rightPointerId !== null) return;
+      this.#rightPointerId = event.pointerId;
+      this.#lastUpdateMs = this.#now();
+      this.#flyEuler.setFromQuaternion(this.#camera.quaternion, "YXZ");
+      this.#flyEuler.z = 0;
+      try {
+        this.#element.setPointerCapture?.(event.pointerId);
+      } catch {
+      }
+      event.preventDefault();
+    };
+    #onPointerMove = (event) => {
+      if (event.pointerId !== this.#rightPointerId || !this.isCapturingInput()) return;
+      this.#flyEuler.y -= event.movementX * LOOK_RADIANS_PER_PIXEL;
+      this.#flyEuler.x = Math.max(MIN_FLY_PITCH, Math.min(
+        MAX_FLY_PITCH,
+        this.#flyEuler.x - event.movementY * LOOK_RADIANS_PER_PIXEL
+      ));
+      this.#flyEuler.z = 0;
+      this.#camera.quaternion.setFromEuler(this.#flyEuler);
+      this.#syncFlyTarget();
+      event.preventDefault();
+    };
+    #onPointerUp = (event) => {
+      if (event.pointerId !== this.#rightPointerId) return;
+      this.#releaseInput();
+      event.preventDefault();
+    };
+    #onPointerCancel = (event) => {
+      if (event.pointerId === this.#rightPointerId) this.#releaseInput();
+    };
+    #onContextMenu = (event) => {
+      if (this.#effectivelyEnabled() && this.#mode === "fly") event.preventDefault();
+    };
+    #onKeyDown = (event) => {
+      const key = event;
+      if (!this.isCapturingInput() || editableTarget(key.target) || key.repeat) return;
+      if (!this.#isMovementCode(key.code)) return;
+      this.#pressed.add(key.code);
+      key.preventDefault();
+    };
+    #onKeyUp = (event) => {
+      const key = event;
+      if (!this.#isMovementCode(key.code)) return;
+      const removed = this.#pressed.delete(key.code);
+      if (removed && this.isCapturingInput()) key.preventDefault();
+    };
+    #onBlur = () => {
+      this.#releaseInput();
+    };
+    #onVisibilityChange = () => {
+      if (this.#documentTarget?.hidden === true) this.#releaseInput();
+    };
+    #isMovementCode(code3) {
+      return code3 === "KeyW" || code3 === "KeyA" || code3 === "KeyS" || code3 === "KeyD" || code3 === "KeyQ" || code3 === "KeyE" || code3 === "ShiftLeft" || code3 === "ShiftRight" || code3 === "AltLeft" || code3 === "AltRight";
+    }
+    #releaseInput() {
+      const pointerId = this.#rightPointerId;
+      this.#rightPointerId = null;
+      this.#pressed.clear();
+      this.#lastUpdateMs = void 0;
+      if (pointerId !== null) {
+        try {
+          this.#element.releasePointerCapture?.(pointerId);
+        } catch {
+        }
+      }
+    }
+    #syncFlyTarget() {
+      this.#camera.getWorldDirection(this.#forward);
+      this.orbitControls.target.copy(this.#camera.position).addScaledVector(this.#forward, this.#focusDistanceM);
+    }
+    #applyEnabledState() {
+      this.orbitControls.enabled = this.#effectivelyEnabled() && this.#mode === "orbit";
+    }
+    #effectivelyEnabled() {
+      return this.#enabled && this.#disableLeases.size === 0;
+    }
+    #requireLive() {
+      if (this.#disposed) throw new Error("editor navigation controller is disposed");
+    }
+  };
+
   // src/render/toon.ts
   function toonRamp(bands) {
     const n2 = Math.max(2, bands);
@@ -142908,6 +143361,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
     let cleanupDerivedTerrainResidency;
     let cleanupInput;
     let cleanupCameraControls;
+    let cleanupEditorNavigation;
     let cleanupUnderwater;
     let cleanupWater;
     let cleanupDerivedRevision;
@@ -142993,6 +143447,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (opts.input !== void 0) cleanupInput?.detach(opts.input);
           cleanupInput?.detachPointer();
         });
+        await step3("editor navigation", () => cleanupEditorNavigation?.dispose());
         await step3("camera controls", () => cleanupCameraControls?.dispose());
         await step3("entity residency", () => cleanupEntityStream?.clear());
         await step3("derived terrain residency", () => cleanupDerivedTerrainResidency?.());
@@ -143462,7 +143917,6 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       const suppressedEids = /* @__PURE__ */ new Set();
       const liveInput = new LivePlayerInput();
       cleanupInput = liveInput;
-      if (opts.input !== void 0) liveInput.attach(opts.input);
       const inFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
       const orbitCenter = opts.orbit?.center ?? [
         commandCameraFrame.target[0],
@@ -143478,29 +143932,54 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         cam.far = opts.orbit.far;
         cam.updateProjectionMatrix();
       }
+      const editorNavigationConfig = opts.editorNavigation === true ? {} : opts.editorNavigation !== null && typeof opts.editorNavigation === "object" ? opts.editorNavigation : void 0;
+      const editorNavigationEnabled = opts.editorNavigation === true || editorNavigationConfig !== void 0;
+      if (editorNavigationEnabled && opts.vantage !== void 0) {
+        throw new TypeError("editorNavigation cannot be combined with a positioned vantage camera");
+      }
       let cameraControls;
-      if (opts.orbitControls === true) {
+      let editorNavigation;
+      if (opts.orbitControls === true || editorNavigationEnabled) {
         camera.position.set(
           orbitCenter[0] + Math.cos(angle) * radius,
           orbitCenter[1] + camHeight,
           orbitCenter[2] + Math.sin(angle) * radius
         );
         camera.lookAt(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
-        cameraControls = new OrbitControls(camera, renderer.domElement);
-        cleanupCameraControls = cameraControls;
-        cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
-        cameraControls.enableRotate = true;
-        cameraControls.enableZoom = true;
-        cameraControls.enablePan = true;
-        cameraControls.enableDamping = true;
-        cameraControls.minDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
-        cameraControls.maxDistance = Math.max(
-          cameraControls.minDistance + 1,
+        const controlsMinDistance = Math.min(commandCameraFrame.controls.minDistanceM, Math.max(2, radius * 0.5));
+        const controlsMaxDistance = Math.max(
+          controlsMinDistance + 1,
           opts.orbit?.radius === void 0 ? commandCameraFrame.controls.maxDistanceM : Math.min(576, Math.max(128, radius * 3))
         );
-        cameraControls.minPolarAngle = 0.04;
-        cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
-        cameraControls.update();
+        if (editorNavigationEnabled) {
+          editorNavigation = new EditorNavigationController({
+            camera,
+            element: renderer.domElement,
+            ...opts.input === void 0 ? {} : { keyTarget: opts.input },
+            navigation: {
+              target: orbitCenter,
+              minDistanceM: controlsMinDistance,
+              maxDistanceM: controlsMaxDistance,
+              maxPolarAngleRad: commandCameraFrame.controls.maxPolarAngleRad,
+              ...editorNavigationConfig
+            }
+          });
+          cleanupEditorNavigation = editorNavigation;
+          cameraControls = editorNavigation.orbitControls;
+        } else {
+          cameraControls = new OrbitControls(camera, renderer.domElement);
+          cleanupCameraControls = cameraControls;
+          cameraControls.target.set(orbitCenter[0], orbitCenter[1], orbitCenter[2]);
+          cameraControls.enableRotate = true;
+          cameraControls.enableZoom = true;
+          cameraControls.enablePan = true;
+          cameraControls.enableDamping = true;
+          cameraControls.minDistance = controlsMinDistance;
+          cameraControls.maxDistance = controlsMaxDistance;
+          cameraControls.minPolarAngle = 0.04;
+          cameraControls.maxPolarAngle = commandCameraFrame.controls.maxPolarAngleRad;
+          cameraControls.update();
+        }
       }
       const vantage = opts.vantage;
       if (vantage !== void 0) {
@@ -143520,14 +143999,19 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         const playerId = core.player.controllers.ids()[0];
         if (playerId !== void 0) {
           playerEid = entities.resolve(playerId)?.eid;
-          if (playerEid !== void 0) {
+          if (playerEid !== void 0 && editorNavigation === void 0) {
+            if (opts.input !== void 0) liveInput.attach(opts.input);
             liveInput.attachPointer(renderer.domElement);
           }
         }
       }
+      const playerCameraActive = playerEid !== void 0 && editorNavigation === void 0;
       const EYE_OFFSET = 0.7;
-      const residencyStartX = cameraControls !== void 0 ? cameraControls.target.x : playerEid !== void 0 ? Position.x[playerEid] : camera.position.x;
-      const residencyStartZ = cameraControls !== void 0 ? cameraControls.target.z : playerEid !== void 0 ? Position.z[playerEid] : camera.position.z;
+      const navigationAnchor = { x: 0, y: 0, z: 0 };
+      const navigationFocus = [0, 0, 0];
+      if (editorNavigation !== void 0) editorNavigation.writeAnchor(navigationAnchor);
+      const residencyStartX = editorNavigation !== void 0 ? navigationAnchor.x : playerCameraActive ? Position.x[playerEid] : cameraControls !== void 0 ? cameraControls.target.x : camera.position.x;
+      const residencyStartZ = editorNavigation !== void 0 ? navigationAnchor.z : playerCameraActive ? Position.z[playerEid] : cameraControls !== void 0 ? cameraControls.target.z : camera.position.z;
       const derivedTerrainResidencyTracker = new DerivedTerrainResidencyTracker({
         center: [residencyStartX, residencyStartZ],
         radius: 7,
@@ -143536,10 +144020,13 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
       });
       cleanupDerivedTerrainResidency = () => derivedTerrainResidencyTracker.dispose();
       const updateDerivedTerrainResidency = () => {
-        if (cameraControls !== void 0) {
-          derivedTerrainResidencyTracker.update(cameraControls.target.x, cameraControls.target.z);
-        } else if (playerEid !== void 0) {
+        if (editorNavigation !== void 0) {
+          editorNavigation.writeAnchor(navigationAnchor);
+          derivedTerrainResidencyTracker.update(navigationAnchor.x, navigationAnchor.z);
+        } else if (playerCameraActive) {
           derivedTerrainResidencyTracker.update(Position.x[playerEid], Position.z[playerEid]);
+        } else if (cameraControls !== void 0) {
+          derivedTerrainResidencyTracker.update(cameraControls.target.x, cameraControls.target.z);
         } else {
           derivedTerrainResidencyTracker.update(camera.position.x, camera.position.z);
         }
@@ -143583,7 +144070,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           inputRing.writeInput(liveInput.frame(lastConsumed < 0 ? 0 : lastConsumed, inFrame));
           interp.interpolate(alpha, ring2.presentSet);
           renderSyncSystem(ecs, suppressedEids);
-          if (playerEid !== void 0) {
+          if (playerCameraActive) {
             const yaw = inFrame.look[0];
             const pitch = inFrame.look[1];
             const cp = Math.cos(pitch);
@@ -143592,6 +144079,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             const ez = Position.z[playerEid];
             camera.position.set(ex, ey, ez);
             camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
+          } else if (editorNavigation !== void 0) {
+            editorNavigation.update();
           } else if (cameraControls !== void 0) {
             cameraControls.update();
           } else if (vantage !== void 0) {
@@ -143608,13 +144097,20 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
           if (terrainStream !== void 0 || entityStream !== void 0) {
             const camPos = camera.position;
-            terrainStream?.update(camPos.x, camPos.z);
-            grassStream?.update(camPos.x, camPos.z);
-            entityStream?.update(camPos.x, camPos.z);
+            const streamX = editorNavigation === void 0 ? camPos.x : navigationAnchor.x;
+            const streamZ = editorNavigation === void 0 ? camPos.z : navigationAnchor.z;
+            terrainStream?.update(streamX, streamZ);
+            grassStream?.update(streamX, streamZ);
+            entityStream?.update(streamX, streamZ);
           }
           const wl = world.lods;
           if (wl !== void 0) for (const l2 of wl) l2.update(camera);
-          const focus = playerEid !== void 0 ? [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]] : cameraControls !== void 0 ? [cameraControls.target.x, cameraControls.target.y, cameraControls.target.z] : vantage !== void 0 ? [camera.position.x, camera.position.y, camera.position.z] : orbitCenter;
+          if (editorNavigation !== void 0) {
+            navigationFocus[0] = navigationAnchor.x;
+            navigationFocus[1] = navigationAnchor.y;
+            navigationFocus[2] = navigationAnchor.z;
+          }
+          const focus = playerCameraActive ? [Position.x[playerEid], Position.y[playerEid], Position.z[playerEid]] : editorNavigation !== void 0 ? navigationFocus : cameraControls !== void 0 ? [cameraControls.target.x, cameraControls.target.y, cameraControls.target.z] : vantage !== void 0 ? [camera.position.x, camera.position.y, camera.position.z] : orbitCenter;
           renderSession.updateShadowFocus(focus);
           const wp = world.post;
           renderSession.render(() => {
@@ -143796,6 +144292,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
             simCommitted = true;
             cancelled();
             suppressAuthoredTerrainPresentation();
+            editorNavigation?.constrainToResidencyGrid(candidate.snapshot.manifest.grid.chunkSizeM, 7, 2);
             derivedTerrainResidencyTracker.setGrid(candidate.snapshot.manifest.grid);
             const prior = activeDerivedRevision;
             activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
@@ -143897,6 +144394,7 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         entities,
         pickEntityId,
         cameraControls,
+        editorNavigation,
         /** Set the orbit camera's azimuth (radians) directly. Lets a shot harness place yaw
          *  frames at EXACT angles (i/N x 2pi) instead of timing screenshots against the
          *  frame-rate-dependent autoSpin — wall-clock spacing under-rotates on heavy scenes
@@ -144020,7 +144518,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
           }
         })(entityStream),
         setCameraControlsEnabled: (on) => {
-          if (cameraControls !== void 0) cameraControls.enabled = on;
+          if (editorNavigation !== void 0) editorNavigation.setEnabled(on);
+          else if (cameraControls !== void 0) cameraControls.enabled = on;
         },
         setSyncSuppressed: (eid, on) => {
           if (on) suppressedEids.add(eid);

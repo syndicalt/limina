@@ -3346,7 +3346,7 @@ function selectDerivedTerrainChunks(manifest, residencyInput) {
 }
 
 // src/browser/derived-runtime-worker.ts
-var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v3";
+var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
 var DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 var DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1e3, 2e3, 4e3, 8e3]);
 var DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15e3;
@@ -3435,7 +3435,7 @@ function parseInit(value) {
   });
 }
 function parseAck(value) {
-  exactDataKeys(value, ["schema", "type", "activationId", "accepted"], ["errorCode"], "derived runtime activation ack");
+  exactDataKeys(value, ["schema", "type", "activationId", "accepted"], ["requestId", "errorCode"], "derived runtime activation ack");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "activation-ack" || typeof value.activationId !== "string" || !ACTIVATION_ID.test(value.activationId) || typeof value.accepted !== "boolean") {
     throw fatal2("INVALID_MESSAGE", "derived runtime activation ack is invalid");
   }
@@ -3446,6 +3446,7 @@ function parseAck(value) {
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
     type: "activation-ack",
     activationId: value.activationId,
+    ...value.requestId === void 0 ? {} : { requestId: requestId(value.requestId, "derived runtime activation ack requestId") },
     accepted: value.accepted,
     ...value.errorCode === void 0 ? {} : { errorCode: value.errorCode }
   });
@@ -3468,6 +3469,24 @@ function parseSetResidency(value) {
     residency
   });
 }
+function parseReconcileResidency(value) {
+  exactDataKeys(value, ["schema", "type", "requestId", "residency"], [], "derived runtime reconcile-residency");
+  if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "reconcile-residency") {
+    throw fatal2("INVALID_MESSAGE", "derived runtime reconcile-residency schema/type is invalid");
+  }
+  let residency;
+  try {
+    residency = parseDerivedTerrainResidency(value.residency);
+  } catch (error) {
+    throw fatal2("INVALID_MESSAGE", error instanceof Error ? error.message : "derived runtime residency is invalid");
+  }
+  return Object.freeze({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "reconcile-residency",
+    requestId: requestId(value.requestId, "derived runtime reconcile-residency requestId"),
+    residency
+  });
+}
 function parseClose(value) {
   exactDataKeys(value, ["schema", "type", "requestId"], [], "derived runtime close");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "close") throw fatal2("INVALID_MESSAGE", "derived runtime close schema/type is invalid");
@@ -3482,6 +3501,7 @@ function parseDerivedRuntimeWorkerInput(value) {
   const type = Object.getOwnPropertyDescriptor(record, "type")?.value;
   if (type === "init") return parseInit(record);
   if (type === "set-residency") return parseSetResidency(record);
+  if (type === "reconcile-residency") return parseReconcileResidency(record);
   if (type === "activation-ack") return parseAck(record);
   if (type === "close") return parseClose(record);
   throw fatal2("INVALID_MESSAGE", "derived runtime worker message type is unsupported");
@@ -3577,6 +3597,8 @@ var DerivedRuntimeWorkerController = class {
   #submissionResidency = null;
   #appliedResidencyKey = null;
   #pendingResidency = null;
+  #activeReconcileRequestId = null;
+  #submissionReconcileRequestId = null;
   #observed;
   #submissionCurrent = null;
   #pollTimer = null;
@@ -3622,7 +3644,11 @@ var DerivedRuntimeWorkerController = class {
         return;
       }
       if (message.type === "set-residency") {
-        this.#setResidency(message);
+        this.#setResidency(message, "set");
+        return;
+      }
+      if (message.type === "reconcile-residency") {
+        this.#setResidency(message, "reconcile");
         return;
       }
       if (message.type === "activation-ack") {
@@ -3673,17 +3699,21 @@ var DerivedRuntimeWorkerController = class {
     }));
     this.#schedulePoll(0, true);
   }
-  #setResidency(message) {
+  #setResidency(message, kind) {
     if (this.#closed) throw fatal2("DERIVED_RUNTIME_CLOSED", "derived runtime worker is closed");
     if (!this.#initialized) throw fatal2("NOT_INITIALIZED", "derived runtime worker is not initialized");
     if (this.#pendingResidency !== null) {
       throw fatal2("RESIDENCY_UPDATE_OVERLAP", "derived runtime already has a residency update awaiting acknowledgement");
     }
     if (derivedTerrainResidencyKey(message.residency) === derivedTerrainResidencyKey(this.#desiredResidency)) {
-      this.#postResidencyAck(message.requestId, message.residency);
+      if (kind === "set") this.#postResidencyAck(message.requestId, message.residency);
+      else {
+        this.#pendingResidency = Object.freeze({ kind, requestId: message.requestId, residency: message.residency });
+        if (!this.#polling) this.#acceptPendingResidency();
+      }
       return;
     }
-    this.#pendingResidency = Object.freeze({ requestId: message.requestId, residency: message.residency });
+    this.#pendingResidency = Object.freeze({ kind, requestId: message.requestId, residency: message.residency });
     if (!this.#polling) this.#acceptPendingResidency();
   }
   #postResidencyAck(requestId2, residency) {
@@ -3699,13 +3729,14 @@ var DerivedRuntimeWorkerController = class {
     if (pending === null || this.#closed) return false;
     this.#pendingResidency = null;
     this.#desiredResidency = pending.residency;
+    if (pending.kind === "reconcile") this.#activeReconcileRequestId = pending.requestId;
     this.#backoffIndex = 0;
     if (this.#pollTimer !== null) {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;
       this.#pollTimerExplicit = false;
     }
-    this.#postResidencyAck(pending.requestId, pending.residency);
+    if (pending.kind === "set") this.#postResidencyAck(pending.requestId, pending.residency);
     this.#schedulePoll(0, true);
     return true;
   }
@@ -3798,6 +3829,7 @@ var DerivedRuntimeWorkerController = class {
     const activationId = `derived-activation-${++this.#activationSequence}`;
     const residency = this.#submissionResidency;
     if (residency === null) throw fatal2("NO_SUBMISSION_RESIDENCY", "derived runtime activation has no bound residency");
+    const requestId2 = this.#submissionReconcileRequestId;
     const snapshot = {
       schema: DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
       projectId: this.#projectId,
@@ -3815,12 +3847,13 @@ var DerivedRuntimeWorkerController = class {
         this.#pendingActivation = null;
         reject(transient2("ACTIVATION_ACK_TIMEOUT", "derived runtime activation acknowledgement timed out"));
       }, this.#ackTimeoutMs);
-      this.#pendingActivation = { activationId, resolve, reject, timeout };
+      this.#pendingActivation = { activationId, ...requestId2 === null ? {} : { requestId: requestId2 }, resolve, reject, timeout };
       try {
         this.#postMessage(Object.freeze({
           schema: DERIVED_RUNTIME_WORKER_SCHEMA,
           type: "activate",
           activationId,
+          ...requestId2 === null ? {} : { requestId: requestId2 },
           snapshot
         }), transfers);
       } catch (error) {
@@ -3835,6 +3868,9 @@ var DerivedRuntimeWorkerController = class {
     const pending = this.#pendingActivation;
     if (pending === null || pending.activationId !== message.activationId) {
       throw fatal2("UNKNOWN_ACTIVATION", "derived runtime activation acknowledgement is not pending");
+    }
+    if (pending.requestId !== message.requestId) {
+      throw fatal2("UNKNOWN_ACTIVATION", "derived runtime activation acknowledgement reconciliation does not match");
     }
     this.#timers.clearTimeout(pending.timeout);
     this.#pendingActivation = null;
@@ -3861,6 +3897,7 @@ var DerivedRuntimeWorkerController = class {
     this.#polling = true;
     const submissionResidency = this.#desiredResidency;
     const submissionResidencyKey = derivedTerrainResidencyKey(submissionResidency);
+    const submissionReconcileRequestId = this.#activeReconcileRequestId;
     let canContinue = true;
     try {
       const result = await this.#requireTransport().fetchCurrent({ previous: this.#observed, signal: this.#lifecycle.signal });
@@ -3883,36 +3920,44 @@ var DerivedRuntimeWorkerController = class {
         this.#postMessage(Object.freeze({
           schema: DERIVED_RUNTIME_WORKER_SCHEMA,
           type: "revision",
+          ...submissionReconcileRequestId === null ? {} : { requestId: submissionReconcileRequestId },
           status: "unchanged",
           manifestHash: current.manifestHash,
           revision: current.source.revision
         }));
+        if (this.#activeReconcileRequestId === submissionReconcileRequestId) this.#activeReconcileRequestId = null;
         if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
         return;
       }
       this.#submissionCurrent = current;
       this.#submissionResidency = submissionResidency;
+      this.#submissionReconcileRequestId = submissionReconcileRequestId;
       const submit = this.#manager.submit;
       const outcome = await submit.call(this.#manager, current.manifest, { signal: this.#lifecycle.signal });
       this.#appliedResidencyKey = submissionResidencyKey;
       this.#submissionCurrent = null;
       this.#submissionResidency = null;
+      this.#submissionReconcileRequestId = null;
       this.#backoffIndex = 0;
       this.#postMessage(Object.freeze({
         schema: DERIVED_RUNTIME_WORKER_SCHEMA,
         type: "revision",
+        ...submissionReconcileRequestId === null ? {} : { requestId: submissionReconcileRequestId },
         status: outcome.status,
         manifestHash: outcome.manifestHash,
         revision: outcome.revision
       }));
+      if (this.#activeReconcileRequestId === submissionReconcileRequestId) this.#activeReconcileRequestId = null;
       if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
     } catch (error) {
       this.#submissionCurrent = null;
       this.#submissionResidency = null;
+      this.#submissionReconcileRequestId = null;
       if (this.#closed) return;
       const summary = shortError(error);
-      this.#emitError(error);
+      this.#emitError(error, submissionReconcileRequestId);
       canContinue = summary.classification !== "fatal";
+      if ((summary.classification === "fatal" || summary.code === "RESIDENCY_OUTSIDE_DOMAIN") && this.#activeReconcileRequestId === submissionReconcileRequestId) this.#activeReconcileRequestId = null;
       if (summary.classification === "transient" && summary.code !== "RESIDENCY_OUTSIDE_DOMAIN") {
         const delay = DERIVED_RUNTIME_POLL_DELAYS_MS[Math.min(this.#backoffIndex, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1)];
         this.#backoffIndex = Math.min(this.#backoffIndex + 1, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1);
@@ -3927,11 +3972,12 @@ var DerivedRuntimeWorkerController = class {
     if (this.#transport === null) throw fatal2("NOT_INITIALIZED", "derived runtime worker is not initialized");
     return this.#transport;
   }
-  #emitError(error) {
+  #emitError(error, requestId2) {
     const summary = shortError(error);
     this.#postMessage(Object.freeze({
       schema: DERIVED_RUNTIME_WORKER_SCHEMA,
       type: "error",
+      ...requestId2 === void 0 || requestId2 === null ? {} : { requestId: requestId2 },
       code: summary.code,
       classification: summary.classification,
       message: summary.message
@@ -3947,6 +3993,8 @@ var DerivedRuntimeWorkerController = class {
     }
     this.#pollTimerExplicit = false;
     this.#pendingResidency = null;
+    this.#activeReconcileRequestId = null;
+    this.#submissionReconcileRequestId = null;
     const pending = this.#pendingActivation;
     if (pending !== null) {
       this.#timers.clearTimeout(pending.timeout);

@@ -317,6 +317,15 @@ function setResidency(state: ReturnType<typeof harness>, requestId: string, cent
   });
 }
 
+function reconcileResidency(state: ReturnType<typeof harness>, requestId: string, center: readonly [number, number], radius = 7): Promise<void> {
+  return state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "reconcile-residency",
+    requestId,
+    residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center, lod: 0, radius },
+  });
+}
+
 function messages(state: ReturnType<typeof harness>, type: string): Record<string, unknown>[] {
   return state.posted.map((entry) => entry.message).filter((entry) => entry.type === type);
 }
@@ -330,6 +339,7 @@ async function acknowledgeLatest(state: ReturnType<typeof harness>, accepted = t
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
     type: "activation-ack",
     activationId: activation.activationId,
+    ...(activation.requestId === undefined ? {} : { requestId: activation.requestId }),
     accepted,
     ...(accepted ? {} : { errorCode: "VIEWPORT_SWAP_FAILED" }),
   });
@@ -350,6 +360,20 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   requestId: "residency-1",
   residency: { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 8 },
 }), /residency is invalid/, "set-residency accepted an out-of-bounds radius");
+{
+  let invoked = false;
+  const hostile = {
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "reconcile-residency",
+    requestId: "reconcile-accessor",
+  } as Record<string, unknown>;
+  Object.defineProperty(hostile, "residency", {
+    enumerable: true,
+    get() { invoked = true; return { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [0, 0], lod: 0, radius: 7 }; },
+  });
+  rejectsSync(() => parseDerivedRuntimeWorkerInput(hostile), /enumerable data field/, "reconcile-residency accepted an accessor");
+  assert(!invoked, "reconcile-residency parser invoked an untrusted accessor");
+}
 
 // Watch mode activates current, polls deterministically, reuses worker-owned buffers, and keeps credentials out of output.
 {
@@ -555,6 +579,83 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-outside-domain");
 }
 
+// Explicit reconciliation carries one request id through activation and revision, resolves unchanged
+// without activation, retains correlation across transient activation retry, and terminates outside-domain.
+{
+  const large = largeManifest(44);
+  const state = harness(current(large.manifest));
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "reconciliation baseline");
+
+  await reconcileResidency(state, "reconcile-changed", [192, 0]);
+  assert(messages(state, "residency-ack").length === 0, "explicit reconciliation emitted a set-residency acknowledgement");
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").length === 2, "correlated reconciliation activation");
+  const changedActivation = messages(state, "activate").at(-1)!;
+  assert(changedActivation.requestId === "reconcile-changed", "activation lost its reconciliation request id");
+  assert(!messages(state, "revision").some((message) => message.requestId === "reconcile-changed"),
+    "reconciliation completed before main-thread activation acknowledgement");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: changedActivation.activationId,
+    requestId: changedActivation.requestId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").some((message) => message.requestId === "reconcile-changed"), "correlated reconciliation revision");
+  const changedRevision = messages(state, "revision").find((message) => message.requestId === "reconcile-changed")!;
+  assert(changedRevision.status === "activated" && changedRevision.manifestHash === large.manifest.manifestHash,
+    "correlated reconciliation returned the wrong activated revision");
+
+  const activationCount = messages(state, "activate").length;
+  await reconcileResidency(state, "reconcile-unchanged", [192, 0]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "revision").some((message) => message.requestId === "reconcile-unchanged"), "correlated unchanged reconciliation");
+  const unchanged = messages(state, "revision").find((message) => message.requestId === "reconcile-unchanged")!;
+  assert(unchanged.status === "unchanged" && messages(state, "activate").length === activationCount,
+    "unchanged reconciliation activated resources or returned the wrong status");
+
+  await reconcileResidency(state, "reconcile-retry", [-192, 0]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").some((message) => message.requestId === "reconcile-retry"), "retry reconciliation activation");
+  const rejected = messages(state, "activate").find((message) => message.requestId === "reconcile-retry")!;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: rejected.activationId,
+    requestId: rejected.requestId,
+    accepted: false,
+    errorCode: "VIEWPORT_SWAP_FAILED",
+  });
+  await eventually(() => messages(state, "error").some((message) => message.requestId === "reconcile-retry"), "correlated transient reconciliation error");
+  const retryError = messages(state, "error").find((message) => message.requestId === "reconcile-retry")!;
+  assert(retryError.code === "ACTIVATION_REJECTED" && retryError.classification === "transient",
+    "activation rejection lost transient reconciliation semantics");
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await eventually(() => messages(state, "activate").filter((message) => message.requestId === "reconcile-retry").length === 2,
+    "correlated reconciliation retry activation");
+  const retried = messages(state, "activate").filter((message) => message.requestId === "reconcile-retry").at(-1)!;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: retried.activationId,
+    requestId: retried.requestId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").some((message) => message.requestId === "reconcile-retry"), "correlated reconciliation retry revision");
+
+  await reconcileResidency(state, "reconcile-outside", [100_000, 100_000]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").some((message) => message.requestId === "reconcile-outside"), "correlated outside-domain reconciliation");
+  const outside = messages(state, "error").find((message) => message.requestId === "reconcile-outside")!;
+  assert(outside.code === "RESIDENCY_OUTSIDE_DOMAIN" && state.timers.activeCount() === 0,
+    "outside-domain reconciliation lost correlation or entered a retry loop");
+  await state.controller.close("close-reconciliation");
+}
+
 // Changing authority between discovery and manager validation rejects stale work, then retries at the base bound.
 {
   const stale = current(manifest(5));
@@ -589,6 +690,25 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-cancel");
   release?.();
   assert(state.timers.activeCount() === 0 && messages(state, "closed").length === 1, "close did not cancel polling cleanly");
+}
+
+// Closing during a correlated activation cancels the exact reconciliation without a false ready revision.
+{
+  const large = largeManifest(71);
+  const state = harness(current(large.manifest));
+  for (const [contentHash, bytes] of large.artifacts) state.transport.artifacts.set(contentHash, bytes);
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "correlated close baseline");
+  await reconcileResidency(state, "reconcile-close", [192, 0]);
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "activate").some((message) => message.requestId === "reconcile-close"), "correlated activation before close");
+  await state.controller.close("close-correlated-activation");
+  assert(!messages(state, "revision").some((message) => message.requestId === "reconcile-close"),
+    "close published a false correlated ready revision");
+  assert(messages(state, "closed").at(-1)?.requestId === "close-correlated-activation" && state.timers.activeCount() === 0,
+    "close did not cancel correlated activation cleanly");
 }
 
 // Global staging is dependency ordered and water activation carries the verified generated topology.
@@ -702,6 +822,6 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-rollback");
 }
 
-const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned reconciliation, serialized dynamic residency acknowledgements, exact pinned manifests, bounded 225-chunk windows, no-spin outside-domain recovery, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic watch/pinned reconciliation, exact correlated jump readiness, serialized dynamic residency acknowledgements, exact pinned manifests, bounded 225-chunk windows, no-spin outside-domain recovery, dependency-ordered off-main decode, acknowledged rollback, and reusable transfer ownership proven.";
 if (ops?.op_log === undefined) console.log(completion);
 else ops.op_log(completion);

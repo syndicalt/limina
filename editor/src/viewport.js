@@ -20,11 +20,20 @@
 // - S: toggle TransformControls snapping; UI inputs set translate / rotate / scale increments.
 // - X: toggle gizmo space between global (world) and local.
 // - G: toggle the unobtrusive ground grid helper.
-// - F: toggle scene mesh wireframe view; original material wireframe flags are restored on disable.
+// - F: frame selection; Shift+F toggles scene wireframe view.
 
 import { createBrowserRenderHost, runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { createGraphicsSettings, readGraphicsQuality } from "./graphics-settings.js";
 import { createDerivedRuntimeClient } from "./derived-runtime-client.js";
+import { createNavigationDestinationCoordinator } from "./navigation-destination.js";
+import {
+  DEFAULT_NAVIGATION_SPEED_MPS,
+  createNavigationStateController,
+  parseNavigationCoordinate,
+  parseNavigationMode,
+  parseNavigationPose,
+  parseNavigationSpeed,
+} from "./navigation-state.js";
 import { sceneTransformOperation } from "./authoring-gateway.js";
 import { assetPlacement, openContentBrowser, requestCatalogRefresh } from "./content-browser.js";
 import { isAttachedToScene } from "./scene-graph.js";
@@ -81,6 +90,27 @@ const viewportUi = {
   stop: document.getElementById("viewport-stop"),
   playState: document.getElementById("viewport-play-state"),
   playSource: document.getElementById("viewport-play-source"),
+  navigationMode: document.getElementById("viewport-navigation-mode"),
+  navigationOrbit: document.getElementById("viewport-navigation-orbit"),
+  navigationFly: document.getElementById("viewport-navigation-fly"),
+  navigationSpeed: document.getElementById("viewport-navigation-speed"),
+  navigationFocus: document.getElementById("viewport-navigation-focus"),
+  navigationGotoToggle: document.getElementById("viewport-navigation-goto-toggle"),
+  navigationGoto: document.getElementById("viewport-navigation-goto"),
+  navigationGotoClose: document.getElementById("viewport-navigation-goto-close"),
+  navigationGotoCancel: document.getElementById("viewport-navigation-goto-cancel"),
+  navigationX: document.getElementById("viewport-navigation-x"),
+  navigationY: document.getElementById("viewport-navigation-y"),
+  navigationZ: document.getElementById("viewport-navigation-z"),
+  navigationGotoStatus: document.getElementById("viewport-navigation-goto-status"),
+  navigationViewsToggle: document.getElementById("viewport-navigation-views-toggle"),
+  navigationViews: document.getElementById("viewport-navigation-views"),
+  navigationViewsClose: document.getElementById("viewport-navigation-views-close"),
+  navigationBookmarkForm: document.getElementById("viewport-navigation-bookmark-form"),
+  navigationBookmarkName: document.getElementById("viewport-navigation-bookmark-name"),
+  navigationBookmarkSave: document.getElementById("viewport-navigation-bookmark-save"),
+  navigationBookmarks: document.getElementById("viewport-navigation-bookmarks"),
+  navigationRecents: document.getElementById("viewport-navigation-recents"),
 };
 function setStatus(phase, detail) {
   const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
@@ -206,10 +236,15 @@ const state = {
   editRuntimeEpoch: 0,
   historyTransition: undefined,
   connectionReset: undefined,
+  navigationBusy: false,
 };
 // The discovery response contains the runtime capability. Keep it in this module closure only: it
 // must never enter DOM state, browser storage, console output, trace payloads, or status strings.
 let derivedRuntimeDiscovery;
+let navigationStateController;
+let navigationStateUnsubscribe;
+let navigationIdentity;
+let navigationPreferences = Object.freeze({ mode: "orbit", speedMps: DEFAULT_NAVIGATION_SPEED_MPS });
 const graphicsSettings = createGraphicsSettings({
   group: document.getElementById("viewport-graphics-quality"),
   buttons: document.querySelectorAll("[data-quality-tier]"),
@@ -217,6 +252,40 @@ const graphicsSettings = createGraphicsSettings({
   getRuntimeTargets: () => [state.running, state.editRuntimeDuringPlay],
   getTelemetryRuntime: () => state.running,
   storage: graphicsStorage,
+});
+const navigationDestination = createNavigationDestinationCoordinator({
+  getContext: () => {
+    const runtime = state.running;
+    const client = state.derivedEditClient;
+    return {
+      runtime,
+      client,
+      isCurrent: () => state.running === runtime && state.derivedEditClient === client
+        && runtime !== state.playRuntime && !state.rebooting && state.scrubLimit === undefined
+        && !playLifecycle.isAuthoringLocked(),
+    };
+  },
+  onState: ({ busy, label, code }) => {
+    state.navigationBusy = busy;
+    if (viewportUi.navigationGotoStatus) {
+      viewportUi.navigationGotoStatus.textContent = busy ? `Loading ${label}` : code || "";
+    }
+    setStatus("navigation", busy ? `loading ${label}` : code || label);
+    syncNavigationUi();
+  },
+  onCommit: ({ pose, metadata }) => {
+    if (!navigationStateController || !metadata?.kind || !metadata?.label) return;
+    navigationStateController.addRecent({
+      kind: metadata.kind,
+      label: metadata.label,
+      pose: storedNavigationPose(pose),
+    });
+  },
+  resetContext: async (context) => {
+    if (state.derivedEditClient === context.client) await closeEditDerivedClient();
+    if (state.running === context.runtime && !state.rebooting && state.scrubLimit === undefined
+        && !playLifecycle.isAuthoringLocked()) requestEditDerivedClient();
+  },
 });
 const pollTask = new CoalescedTask();
 const raycaster = new THREE.Raycaster();
@@ -258,6 +327,228 @@ function syncViewportUi() {
   updateToggleButton(viewportUi.spaceToggle, viewportOptions.transformSpace === "local", "Local", "Global");
   updateToggleButton(viewportUi.gridToggle, viewportOptions.gridVisible, "Grid on", "Grid off");
   updateToggleButton(viewportUi.wireframeToggle, viewportOptions.wireframeVisible, "Wire on", "Wire off");
+}
+
+function storedNavigationPose(pose) {
+  return parseNavigationPose({
+    position: [...pose.position],
+    quaternion: [...pose.quaternion],
+    target: [...pose.target],
+    mode: pose.mode,
+  });
+}
+
+function runtimeNavigationPose(pose) {
+  const parsed = parseNavigationPose(pose);
+  return Object.freeze({
+    position: parsed.position,
+    quaternion: parsed.quaternion,
+    up: Object.freeze([0, 1, 0]),
+    target: parsed.target,
+    mode: parsed.mode,
+    speedMps: navigationPreferences.speedMps,
+  });
+}
+
+function applyNavigationPreferencesToRuntime() {
+  const navigation = state.running?.editorNavigation;
+  if (!navigation) return;
+  try {
+    navigation.setSpeed(navigationPreferences.speedMps);
+    navigation.setMode(state.editMode ? "orbit" : navigationPreferences.mode);
+  } catch (error) {
+    surfaceViewportWarning("navigation preferences failed", error);
+  }
+}
+
+function releaseNavigationState() {
+  navigationStateUnsubscribe?.();
+  navigationStateUnsubscribe = undefined;
+  navigationStateController = undefined;
+  navigationIdentity = undefined;
+  navigationPreferences = Object.freeze({ mode: "orbit", speedMps: DEFAULT_NAVIGATION_SPEED_MPS });
+  renderNavigationViews();
+  syncNavigationUi();
+}
+
+function bindNavigationIdentity(snapshot) {
+  const identity = { projectId: snapshot?.projectId, branchId: snapshot?.branchId };
+  if (navigationIdentity?.projectId === identity.projectId && navigationIdentity?.branchId === identity.branchId) return;
+  navigationStateUnsubscribe?.();
+  try {
+    navigationStateController = createNavigationStateController({ storage: graphicsStorage, identity });
+    navigationIdentity = Object.freeze(identity);
+    navigationStateUnsubscribe = navigationStateController.subscribe(({ state: navigationState }) => {
+      const preferencesChanged = navigationPreferences.mode !== navigationState.preferences.mode
+        || navigationPreferences.speedMps !== navigationState.preferences.speedMps;
+      navigationPreferences = navigationState.preferences;
+      if (preferencesChanged) applyNavigationPreferencesToRuntime();
+      renderNavigationViews();
+      syncNavigationUi();
+    }, { emitCurrent: true });
+  } catch (error) {
+    navigationStateController = undefined;
+    navigationIdentity = undefined;
+    surfaceViewportWarning("navigation state unavailable", error);
+  }
+}
+
+function navigationListItem(entry, kind) {
+  const item = document.createElement("li");
+  const activate = document.createElement("button");
+  activate.type = "button";
+  activate.className = "navigation-view-activate";
+  activate.dataset.navigationEntry = entry.id;
+  activate.dataset.navigationKind = kind;
+  activate.textContent = kind === "bookmark" ? entry.name : entry.label;
+  item.appendChild(activate);
+  if (kind === "bookmark") {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "navigation-view-remove";
+    remove.dataset.navigationRemove = entry.id;
+    remove.setAttribute("aria-label", `Remove ${entry.name}`);
+    remove.title = "Remove bookmark";
+    remove.textContent = "×";
+    item.appendChild(remove);
+  }
+  return item;
+}
+
+function renderNavigationList(container, entries, kind) {
+  if (!container) return;
+  container.replaceChildren();
+  if (entries.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = kind === "bookmark" ? "No bookmarks" : "No recent locations";
+    container.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) container.appendChild(navigationListItem(entry, kind));
+}
+
+function renderNavigationViews() {
+  const navigationState = navigationStateController?.snapshot();
+  renderNavigationList(viewportUi.navigationBookmarks, navigationState?.bookmarks ?? [], "bookmark");
+  renderNavigationList(viewportUi.navigationRecents, navigationState?.recents ?? [], "recent");
+}
+
+function closeNavigationPanel(panel, toggle) {
+  if (panel) panel.hidden = true;
+  toggle?.setAttribute("aria-expanded", "false");
+}
+
+function closeNavigationPanels() {
+  closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
+  closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
+}
+
+function navigationDiscreteReady() {
+  return Boolean(state.running?.editorNavigation && state.derivedEditClient && state.scrubLimit === undefined
+    && !state.rebooting && !state.navigationBusy && !playLifecycle.isAuthoringLocked());
+}
+
+function syncNavigationUi() {
+  const navigation = state.running?.editorNavigation;
+  const locked = playLifecycle.isAuthoringLocked();
+  const localReady = Boolean(navigation) && !locked && !state.rebooting && !state.navigationBusy;
+  const mode = navigation?.mode?.() ?? navigationPreferences.mode;
+  for (const [button, value] of [[viewportUi.navigationOrbit, "orbit"], [viewportUi.navigationFly, "fly"]]) {
+    if (!button) continue;
+    const selected = mode === value;
+    button.setAttribute("aria-checked", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    button.disabled = !localReady || (state.editMode && value === "fly");
+  }
+  if (viewportUi.navigationSpeed && document.activeElement !== viewportUi.navigationSpeed) {
+    viewportUi.navigationSpeed.value = String(navigation?.speed?.() ?? navigationPreferences.speedMps);
+  }
+  if (viewportUi.navigationSpeed) viewportUi.navigationSpeed.disabled = !localReady;
+  const discreteReady = navigationDiscreteReady();
+  if (viewportUi.navigationFocus) viewportUi.navigationFocus.disabled = !discreteReady || !state.selected;
+  if (viewportUi.navigationGotoToggle) viewportUi.navigationGotoToggle.disabled = !discreteReady;
+  if (viewportUi.navigationViewsToggle) viewportUi.navigationViewsToggle.disabled = !localReady || !navigationStateController || state.navigationBusy;
+  if (viewportUi.navigationBookmarkSave) viewportUi.navigationBookmarkSave.disabled = !localReady || !navigationStateController || state.navigationBusy;
+  for (const button of document.querySelectorAll("[data-navigation-entry]")) button.disabled = !discreteReady;
+  document.body.classList.toggle("editor-navigation-fly", mode === "fly" && localReady);
+  if (locked) closeNavigationPanels();
+}
+
+function setNavigationMode(modeInput, { persist = true } = {}) {
+  const mode = parseNavigationMode(modeInput);
+  if (state.editMode && mode === "fly") {
+    setStatus("navigation", "Fly is unavailable while terrain editing");
+    return false;
+  }
+  const navigation = state.running?.editorNavigation;
+  if (!navigation || playLifecycle.isAuthoringLocked()) return false;
+  navigation.setMode(mode);
+  if (persist && navigationStateController) navigationStateController.setMode(mode);
+  else navigationPreferences = Object.freeze({ ...navigationPreferences, mode });
+  syncNavigationUi();
+  return true;
+}
+
+function setNavigationSpeed(value, { persist = true } = {}) {
+  const speedMps = parseNavigationSpeed(Number(value));
+  const navigation = state.running?.editorNavigation;
+  if (!navigation || playLifecycle.isAuthoringLocked()) return false;
+  navigation.setSpeed(speedMps);
+  if (persist && navigationStateController) navigationStateController.setSpeed(speedMps);
+  else navigationPreferences = Object.freeze({ ...navigationPreferences, speedMps });
+  syncNavigationUi();
+  return true;
+}
+
+function openNavigationGoto() {
+  const pose = state.running?.editorNavigation?.snapshot?.();
+  if (!pose || !navigationDiscreteReady()) return;
+  closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
+  if (viewportUi.navigationX) viewportUi.navigationX.value = String(pose.target[0]);
+  if (viewportUi.navigationY) viewportUi.navigationY.value = String(pose.target[1]);
+  if (viewportUi.navigationZ) viewportUi.navigationZ.value = String(pose.target[2]);
+  if (viewportUi.navigationGotoStatus) viewportUi.navigationGotoStatus.textContent = "";
+  if (viewportUi.navigationGoto) viewportUi.navigationGoto.hidden = false;
+  viewportUi.navigationGotoToggle?.setAttribute("aria-expanded", "true");
+  viewportUi.navigationX?.focus();
+  viewportUi.navigationX?.select?.();
+}
+
+function openNavigationViews() {
+  if (!state.running?.editorNavigation || !navigationStateController || playLifecycle.isAuthoringLocked()) return;
+  closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
+  renderNavigationViews();
+  if (viewportUi.navigationViews) viewportUi.navigationViews.hidden = false;
+  viewportUi.navigationViewsToggle?.setAttribute("aria-expanded", "true");
+  viewportUi.navigationBookmarkName?.focus();
+}
+
+async function navigateToPose(pose, metadata) {
+  try {
+    const result = await navigationDestination.navigate(pose, { label: metadata.label, metadata });
+    closeNavigationPanels();
+    return result;
+  } catch (error) {
+    const code = typeof error?.code === "string" ? error.code : "NAVIGATION_FAILED";
+    if (viewportUi.navigationGotoStatus) viewportUi.navigationGotoStatus.textContent = code;
+    setStatus("navigation", code);
+    return undefined;
+  }
+}
+
+function focusNavigationSelection() {
+  const navigation = state.running?.editorNavigation;
+  const selected = state.selected;
+  if (!navigation || !selected?.mesh || !navigationDiscreteReady()) {
+    setStatus("navigation", selected ? "destination unavailable" : "select an entity first");
+    return;
+  }
+  let pose;
+  try { pose = navigation.objectPose(selected.mesh); }
+  catch (error) { surfaceViewportWarning("selection focus failed", error); return; }
+  const label = `Selection ${selected.id}`.slice(0, 64);
+  void navigateToPose(pose, { kind: "selection", label });
 }
 
 function applySnapSettings() {
@@ -377,6 +668,82 @@ function bindViewportUi() {
   });
   viewportUi.gridToggle?.addEventListener("click", () => toggleGrid());
   viewportUi.wireframeToggle?.addEventListener("click", () => toggleWireframe());
+  viewportUi.navigationOrbit?.addEventListener("click", () => setNavigationMode("orbit"));
+  viewportUi.navigationFly?.addEventListener("click", () => setNavigationMode("fly"));
+  viewportUi.navigationMode?.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const mode = event.key === "ArrowLeft" ? "orbit" : "fly";
+    if (setNavigationMode(mode)) (mode === "orbit" ? viewportUi.navigationOrbit : viewportUi.navigationFly)?.focus();
+  });
+  viewportUi.navigationSpeed?.addEventListener("change", () => {
+    try { setNavigationSpeed(viewportUi.navigationSpeed.value); }
+    catch (error) {
+      viewportUi.navigationSpeed.value = String(state.running?.editorNavigation?.speed?.() ?? navigationPreferences.speedMps);
+      setStatus("navigation", error instanceof Error ? error.message : "invalid speed");
+    }
+  });
+  viewportUi.navigationFocus?.addEventListener("click", focusNavigationSelection);
+  viewportUi.navigationGotoToggle?.addEventListener("click", () => {
+    if (viewportUi.navigationGoto?.hidden === false) closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
+    else openNavigationGoto();
+  });
+  viewportUi.navigationGotoClose?.addEventListener("click", () => closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle));
+  viewportUi.navigationGotoCancel?.addEventListener("click", () => closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle));
+  viewportUi.navigationGoto?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const navigation = state.running?.editorNavigation;
+    if (!navigation || !navigationDiscreteReady()) return;
+    try {
+      const values = [viewportUi.navigationX?.value, viewportUi.navigationY?.value, viewportUi.navigationZ?.value];
+      if (values.some((value) => typeof value !== "string" || value.trim() === "")) throw new TypeError("X, Y, and Z are required");
+      const target = [
+        parseNavigationCoordinate(Number(values[0]), "X"),
+        parseNavigationCoordinate(Number(values[1]), "Y"),
+        parseNavigationCoordinate(Number(values[2]), "Z"),
+      ];
+      const pose = navigation.destinationPose(target);
+      const label = `X ${target[0]} Z ${target[2]}`.slice(0, 64);
+      void navigateToPose(pose, { kind: "coordinate", label });
+    } catch (error) {
+      if (viewportUi.navigationGotoStatus) viewportUi.navigationGotoStatus.textContent = error instanceof Error ? error.message : "Invalid coordinates";
+    }
+  });
+  viewportUi.navigationViewsToggle?.addEventListener("click", () => {
+    if (viewportUi.navigationViews?.hidden === false) closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle);
+    else openNavigationViews();
+  });
+  viewportUi.navigationViewsClose?.addEventListener("click", () => closeNavigationPanel(viewportUi.navigationViews, viewportUi.navigationViewsToggle));
+  viewportUi.navigationBookmarkForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const pose = state.running?.editorNavigation?.snapshot?.();
+    if (!pose || !navigationStateController || state.navigationBusy) return;
+    try {
+      navigationStateController.addBookmark(viewportUi.navigationBookmarkName?.value ?? "", storedNavigationPose(pose));
+      if (viewportUi.navigationBookmarkName) viewportUi.navigationBookmarkName.value = "";
+      renderNavigationViews();
+    } catch (error) {
+      setStatus("navigation", error instanceof Error ? error.message : "bookmark failed");
+    }
+  });
+  viewportUi.navigationViews?.addEventListener("click", (event) => {
+    const remove = event.target.closest?.("[data-navigation-remove]");
+    if (remove) {
+      navigationStateController?.removeBookmark(remove.dataset.navigationRemove);
+      renderNavigationViews();
+      return;
+    }
+    const activate = event.target.closest?.("[data-navigation-entry]");
+    if (!activate || !navigationStateController || !navigationDiscreteReady()) return;
+    const navigationState = navigationStateController.snapshot();
+    const kind = activate.dataset.navigationKind;
+    const entry = kind === "bookmark"
+      ? navigationState.bookmarks.find((candidate) => candidate.id === activate.dataset.navigationEntry)
+      : navigationState.recents.find((candidate) => candidate.id === activate.dataset.navigationEntry);
+    if (!entry) return;
+    const label = kind === "bookmark" ? entry.name : entry.label;
+    void navigateToPose(runtimeNavigationPose(entry.pose), { kind: kind === "bookmark" ? "bookmark" : entry.kind, label });
+  });
 
   viewportUi.snapTranslate?.addEventListener("change", () => {
     viewportOptions.translateSnap = normalizePositiveNumber(viewportUi.snapTranslate.value, SNAP_DEFAULTS.translate);
@@ -394,6 +761,8 @@ function bindViewportUi() {
     syncViewportUi();
   });
   syncViewportUi();
+  renderNavigationViews();
+  syncNavigationUi();
 }
 
 function syncPlayUi(view = playLifecycle.view()) {
@@ -432,6 +801,7 @@ function syncPlayUi(view = playLifecycle.view()) {
   } else {
     updateEditModeIndicator();
   }
+  syncNavigationUi();
   window.dispatchEvent(new CustomEvent("limina:authoring-mode", { detail: { locked, phase: view.phase } }));
 }
 
@@ -539,6 +909,7 @@ async function closeEditDerivedClient() {
   const activation = state.derivedEditActivation;
   releaseEditDerivedResidency();
   state.derivedEditClient = undefined;
+  syncNavigationUi();
   state.editRuntimeEpoch++;
   const settled = Promise.all([
     client?.close() ?? Promise.resolve(),
@@ -621,6 +992,7 @@ function activateEditDerivedRevision(snapshot, { signal } = {}) {
       throw new Error("Edit runtime changed during derived activation");
     }
     state.latestEditDerivedRevision = snapshot;
+    bindNavigationIdentity(snapshot);
   })().finally(() => {
     if (state.derivedEditActivation === activation) {
       state.derivedEditActivation = undefined;
@@ -650,6 +1022,7 @@ async function ensureEditDerivedClient() {
       } else if (status.phase === "closed") {
         releaseEditDerivedResidency();
         state.derivedEditClient = undefined;
+        syncNavigationUi();
         state.derivedEditRestartTimer = setTimeout(() => {
           state.derivedEditRestartTimer = undefined;
           requestEditDerivedClient();
@@ -658,6 +1031,7 @@ async function ensureEditDerivedClient() {
     },
   });
   state.derivedEditClient = client;
+  syncNavigationUi();
   try {
     client.start(discovery, { mode: "watch", residency: state.running.derivedTerrainResidency() });
     const runtime = state.running;
@@ -671,6 +1045,7 @@ async function ensureEditDerivedClient() {
   } catch (error) {
     releaseEditDerivedResidency();
     if (state.derivedEditClient === client) state.derivedEditClient = undefined;
+    syncNavigationUi();
     await client.close();
     throw error;
   }
@@ -793,6 +1168,7 @@ function resetViewportConnection() {
     state.dirty = false;
     state.scrubLimit = undefined;
     state.editRestore = new RetainedEditRestore();
+    releaseNavigationState();
     editorSelection.clear("connection-reset");
     window.dispatchEvent(new CustomEvent("limina:history-return-live"));
     playLifecycle.finishEdit();
@@ -1143,6 +1519,7 @@ function selectEntity(id, running) {
   state.transformControls?.attach(entry.mesh);
   startSelectionGuardLoop();
   setStatus("selected", id);
+  syncNavigationUi();
   return true;
 }
 
@@ -1154,6 +1531,7 @@ function deselectEntity() {
   state.selected = undefined;
   state.ctrlRotateActive = false;
   setStatus("following", "no selection");
+  syncNavigationUi();
 }
 
 function pickEntity(event) {
@@ -1378,7 +1756,7 @@ function buildTerrainHud() {
   const exit = document.createElement("button");
   exit.textContent = "F4 exit";
   exit.style.cssText = "padding:3px 8px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#bbb;font:11px system-ui;cursor:pointer";
-  exit.onclick = () => { state.editMode = false; updateEditModeIndicator(); };
+  exit.onclick = () => { state.editMode = false; reconcileNavigationEditMode(); updateEditModeIndicator(); };
   head.appendChild(exit);
   hud.appendChild(head);
   const tools = document.createElement("div");
@@ -1494,6 +1872,15 @@ function updateEditModeIndicator() {
     hideBrushRing();
     hidePlaceGhost();
   }
+  syncNavigationUi();
+}
+
+function reconcileNavigationEditMode() {
+  const navigation = state.running?.editorNavigation;
+  if (!navigation) return;
+  try { navigation.setMode(state.editMode ? "orbit" : navigationPreferences.mode); }
+  catch (error) { surfaceViewportWarning("navigation mode transition failed", error); }
+  syncNavigationUi();
 }
 
 export function viewportIsReadOnly() {
@@ -1605,6 +1992,7 @@ function captureEditState() {
       up: running.camera.up?.toArray?.(),
       target: running.cameraControls?.target?.toArray?.(),
     } : undefined,
+    navigation: running?.editorNavigation?.snapshot?.(),
     editMode: state.editMode,
     brushTool: state.brushTool,
     brush: { ...state.brush },
@@ -1633,7 +2021,10 @@ function restoreEditState(saved) {
   else editorSelection.select(saved.selection, "play-restore");
   const running = state.running;
   const camera = running?.camera;
-  if (camera && saved.camera) {
+  if (running?.editorNavigation && saved.navigation) {
+    try { running.editorNavigation.restore(saved.navigation); }
+    catch (error) { surfaceViewportWarning("navigation restore failed", error); }
+  } else if (camera && saved.camera) {
     if (saved.camera.position) camera.position.fromArray?.(saved.camera.position);
     if (saved.camera.quaternion) camera.quaternion.fromArray?.(saved.camera.quaternion);
     if (saved.camera.up) camera.up.fromArray?.(saved.camera.up);
@@ -1644,6 +2035,7 @@ function restoreEditState(saved) {
   applyTransformSpace();
   syncViewportUi();
   updateEditModeIndicator();
+  syncNavigationUi();
 }
 
 async function stopRuntime(runtime) {
@@ -1922,12 +2314,17 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
         ),
         ...(initialDerivedRevision === undefined ? {} : { initialDerivedRevision }),
         orbitControls: true,
+        editorNavigation: {
+          mode: state.editMode ? "orbit" : navigationPreferences.mode,
+          speedMps: navigationPreferences.speedMps,
+        },
         // WebGL2 backend: some drivers lose the WebGPU device mid-render (black canvas); the live
         // /examples site + the old viewport force WebGL2 for the same reason.
         forceWebGL: true,
       });
       if (state.running && initialDerivedRevision !== undefined) {
         assertRuntimeDerivedRevision(state.running, initialDerivedRevision);
+        bindNavigationIdentity(initialDerivedRevision);
       }
     } catch (error) {
       if (initialDerivedRevision !== undefined) {
@@ -1978,7 +2375,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
 }
 
 canvas.addEventListener("pointerdown", (event) => {
-  if (!event.isPrimary) return;
+  if (!event.isPrimary || event.button !== 0) return;
   pointerClick.id = event.pointerId;
   pointerClick.x = event.clientX;
   pointerClick.y = event.clientY;
@@ -2059,6 +2456,7 @@ assetPlacement.subscribe(({ entry }) => {
   lastArmedAssetId = entry.id;
   state.editMode = true;
   state.brushTool = "catalog";
+  reconcileNavigationEditMode();
   updateEditModeIndicator();
   setStatus(`place: ${entry.title}`, "click ground to place · R rotates · Esc deselects");
 });
@@ -2098,6 +2496,17 @@ window.addEventListener("limina:scrub-to", (event) => {
   queueHistoryPresentation(next);
 });
 window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const gotoOpen = viewportUi.navigationGoto?.hidden === false;
+  const viewsOpen = viewportUi.navigationViews?.hidden === false;
+  if (gotoOpen || viewsOpen) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeNavigationPanels();
+    (gotoOpen ? viewportUi.navigationGotoToggle : viewportUi.navigationViewsToggle)?.focus();
+  }
+});
+window.addEventListener("keydown", (event) => {
   const controls = state.transformControls;
   if (isTextInputTarget(event.target)) return;
   if (event.key === "F6") {
@@ -2114,6 +2523,10 @@ window.addEventListener("keydown", (event) => {
   // Player WASD/mouse input is handled by runLive. The editor listener must stay inert while Play
   // owns the canvas so those same familiar keys never trigger gizmo/terrain authoring shortcuts.
   if (playLifecycle.isAuthoringLocked()) return;
+  if (state.running?.editorNavigation?.isCapturingInput?.()) {
+    event.preventDefault();
+    return;
+  }
   // Scene undo is an authoritative compensation transaction; redo is a new reapply transaction.
   if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
     event.preventDefault();
@@ -2144,6 +2557,7 @@ window.addEventListener("keydown", (event) => {
   if (key === "f4") {
     event.preventDefault();
     state.editMode = !state.editMode;
+    reconcileNavigationEditMode();
     updateEditModeIndicator();
     setStatus(state.editMode ? "terrain edit: ON" : "terrain edit: off",
       state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1-6 tool` : "");
@@ -2190,7 +2604,8 @@ window.addEventListener("keydown", (event) => {
   }
   if (key === "f") {
     event.preventDefault();
-    toggleWireframe();
+    if (event.shiftKey) toggleWireframe();
+    else focusNavigationSelection();
     return;
   }
   if (!controls) return;
@@ -2204,6 +2619,10 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Delete" && event.key !== "Backspace") return;
   if (isTextInputTarget(event.target)) return;
+  if (state.running?.editorNavigation?.isCapturingInput?.()) {
+    event.preventDefault();
+    return;
+  }
   if (viewportIsReadOnly()) return;
   const selected = state.selected;
   if (!selected) return;
@@ -2336,6 +2755,7 @@ void viewportTick();
 window.addEventListener("beforeunload", () => {
   viewportLoopStopped = true;
   state.scrubLimit = undefined;
+  releaseNavigationState();
   window.dispatchEvent(new CustomEvent("limina:history-return-live"));
   clearAgentHighlight();
   clearGizmo();

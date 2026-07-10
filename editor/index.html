@@ -118,13 +118,68 @@
           </span>
         </div>
       </div>
-      <div class="viewport-graphics" aria-label="Viewport graphics">
-        <div id="viewport-graphics-quality" class="graphics-segments" role="radiogroup" aria-label="Graphics quality">
-          <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="performance">Performance</button>
-          <button class="graphics-segment" type="button" role="radio" aria-checked="true" data-quality-tier="balanced">Balanced</button>
-          <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="cinematic">Cinematic</button>
+      <div class="viewport-overlay-stack">
+        <div class="viewport-graphics" aria-label="Viewport graphics">
+          <div id="viewport-graphics-quality" class="graphics-segments" role="radiogroup" aria-label="Graphics quality">
+            <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="performance">Performance</button>
+            <button class="graphics-segment" type="button" role="radio" aria-checked="true" data-quality-tier="balanced">Balanced</button>
+            <button class="graphics-segment" type="button" role="radio" aria-checked="false" data-quality-tier="cinematic">Cinematic</button>
+          </div>
+          <output id="viewport-render-telemetry" class="graphics-telemetry" aria-live="off">waiting for renderer</output>
         </div>
-        <output id="viewport-render-telemetry" class="graphics-telemetry" aria-live="off">waiting for renderer</output>
+        <div class="viewport-navigation">
+          <div class="navigation-toolbar" role="toolbar" aria-label="Viewport navigation">
+            <div id="viewport-navigation-mode" class="navigation-segments" role="radiogroup" aria-label="Navigation mode">
+              <button id="viewport-navigation-orbit" class="navigation-segment" type="button" role="radio" aria-checked="true" tabindex="0" data-navigation-mode="orbit">Orbit</button>
+              <button id="viewport-navigation-fly" class="navigation-segment" type="button" role="radio" aria-checked="false" tabindex="-1" data-navigation-mode="fly">Fly</button>
+            </div>
+            <label class="navigation-speed" for="viewport-navigation-speed">
+              Speed
+              <input id="viewport-navigation-speed" type="number" value="64" min="0.25" max="2048" step="0.25" inputmode="decimal" />
+              <span aria-hidden="true">m/s</span>
+            </label>
+            <button id="viewport-navigation-focus" class="navigation-command" type="button" title="Frame selection (F)">Focus</button>
+            <button id="viewport-navigation-goto-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-goto" aria-expanded="false">Go to</button>
+            <button id="viewport-navigation-views-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-views" aria-expanded="false">Views</button>
+          </div>
+
+          <form id="viewport-navigation-goto" class="navigation-popover navigation-goto" role="dialog" aria-labelledby="viewport-navigation-goto-title" hidden>
+            <div class="navigation-popover-head">
+              <h4 id="viewport-navigation-goto-title">Go to coordinates</h4>
+              <button id="viewport-navigation-goto-close" class="navigation-popover-close" type="button" aria-label="Close coordinate entry">×</button>
+            </div>
+            <div class="navigation-coordinate-grid">
+              <label for="viewport-navigation-x">X<input id="viewport-navigation-x" type="number" step="any" inputmode="decimal" required /></label>
+              <label for="viewport-navigation-y">Y<input id="viewport-navigation-y" type="number" step="any" inputmode="decimal" required /></label>
+              <label for="viewport-navigation-z">Z<input id="viewport-navigation-z" type="number" step="any" inputmode="decimal" required /></label>
+            </div>
+            <output id="viewport-navigation-goto-status" class="navigation-status" aria-live="polite"></output>
+            <div class="navigation-popover-actions">
+              <button id="viewport-navigation-goto-cancel" class="btn btn-small btn-ghost" type="button">Cancel</button>
+              <button id="viewport-navigation-goto-submit" class="btn btn-small" type="submit">Go</button>
+            </div>
+          </form>
+
+          <section id="viewport-navigation-views" class="navigation-popover navigation-views" role="dialog" aria-labelledby="viewport-navigation-views-title" hidden>
+            <div class="navigation-popover-head">
+              <h4 id="viewport-navigation-views-title">Views</h4>
+              <button id="viewport-navigation-views-close" class="navigation-popover-close" type="button" aria-label="Close views">×</button>
+            </div>
+            <form id="viewport-navigation-bookmark-form" class="navigation-bookmark-form">
+              <label for="viewport-navigation-bookmark-name">Name</label>
+              <input id="viewport-navigation-bookmark-name" type="text" maxlength="64" autocomplete="off" required />
+              <button id="viewport-navigation-bookmark-save" class="btn btn-small" type="submit">Save</button>
+            </form>
+            <section class="navigation-view-section" aria-labelledby="viewport-navigation-bookmarks-title">
+              <h5 id="viewport-navigation-bookmarks-title">Bookmarks</h5>
+              <ul id="viewport-navigation-bookmarks" class="navigation-view-list"><li class="muted">No bookmarks</li></ul>
+            </section>
+            <section class="navigation-view-section" aria-labelledby="viewport-navigation-recents-title">
+              <h5 id="viewport-navigation-recents-title">Recent</h5>
+              <ul id="viewport-navigation-recents" class="navigation-view-list"><li class="muted">No recent locations</li></ul>
+            </section>
+          </section>
+        </div>
       </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
@@ -142,7 +197,7 @@
         </label>
         <button id="viewport-space-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle local/global gizmo space (X)">Global</button>
         <button id="viewport-grid-toggle" class="viewport-tool" type="button" aria-pressed="true" title="Toggle ground grid (G)">Grid on</button>
-        <button id="viewport-wireframe-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle wireframe view (F)">Wire off</button>
+        <button id="viewport-wireframe-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle wireframe view (Shift+F)">Wire off</button>
         <button id="content-browser-toggle" class="viewport-tool" type="button" aria-controls="content-browser" title="Open Content Browser">Content</button>
       </div>
     </section>
