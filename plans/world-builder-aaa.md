@@ -304,3 +304,12 @@ near-vertical cliffs before the SDF layer exists.
   field participates in the canonical hash while legacy committed map bytes/hashes remain exact. Basin
   filling, `WaterField`, animated flow/waterfalls/shorelines, authoring tools, and functional swim remain
   open WB-W1 runtime slices.
+- **2026-07-09 — Indexed basin/ocean WaterField shipped (`8af0498`).** The runtime now verifies the
+  complete WorldMap identity before building immutable, capped body and shoreline BVHs. Queries expose
+  dry, ocean-candidate, and basin results with explicit outer-wet/hole-dry boundaries, half-open depth
+  bands, final-band clamping, actual terrain submersion depth, and deterministic overlap rules. A proven
+  submerged ocean competes by surface level without turning an unknown ocean into a false wet claim.
+  Bounded 257x257 sampling emits fixed 48-byte little-endian records with cooperative cancellation. The
+  central hostile gates cover 4,096 bodies/16,384 edges (100,000 queries in 89 ms) and a legal near-budget
+  1,952-edge basin at 1,967,086 topology units (257x257 sample in 288 ms). Rendering, collision, hydrology,
+  authoring tools, and functional swim remain open WB-W1 slices.
