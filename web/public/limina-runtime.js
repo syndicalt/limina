@@ -142236,6 +142236,7 @@ var MIN_FLY_PITCH = -Math.PI / 2 + 0.02;
 var MAX_FLY_PITCH = Math.PI / 2 - 0.02;
 var MIN_FRAME_RADIUS_M = 0.05;
 var DEFAULT_FRAME_PADDING = 1.25;
+var DEFAULT_FLY_SURFACE_CLEARANCE_M = 2;
 function finiteTuple(value, size, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== size || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== size + 1) {
     throw new TypeError(`${label4} must be a finite ${size}-tuple`);
@@ -142382,6 +142383,8 @@ var EditorNavigationController = class {
     this.#keyTarget?.addEventListener("keyup", this.#onKeyUp);
     this.#keyTarget?.addEventListener("blur", this.#onBlur);
     this.#documentTarget?.addEventListener("visibilitychange", this.#onVisibilityChange);
+    this.#documentTarget?.addEventListener("pointerlockchange", this.#onPointerLockChange);
+    this.#documentTarget?.addEventListener("contextmenu", this.#onDocumentContextMenu);
   }
   mode() {
     return this.#mode;
@@ -142456,7 +142459,14 @@ var EditorNavigationController = class {
     right /= magnitude;
     vertical /= magnitude;
     this.#camera.getWorldDirection(this.#forward);
-    this.#right.set(1, 0, 0).applyQuaternion(this.#camera.quaternion).normalize();
+    this.#forward.y = 0;
+    if (this.#forward.lengthSq() < 1e-8) {
+      this.#forward.set(-Math.sin(this.#flyEuler.y), 0, -Math.cos(this.#flyEuler.y));
+    } else this.#forward.normalize();
+    this.#right.set(1, 0, 0).applyQuaternion(this.#camera.quaternion);
+    this.#right.y = 0;
+    if (this.#right.lengthSq() < 1e-8) this.#right.crossVectors(this.#forward, this.#worldUp);
+    else this.#right.normalize();
     this.#movement.copy(this.#forward).multiplyScalar(forward).addScaledVector(this.#right, right).addScaledVector(this.#worldUp, vertical);
     if (this.#movement.lengthSq() > 0) this.#movement.normalize();
     let speed = this.#speedMps;
@@ -142564,6 +142574,17 @@ var EditorNavigationController = class {
     this.restore(pose);
     return pose;
   }
+  constrainAboveSurface(surfaceHeightM, clearanceM = DEFAULT_FLY_SURFACE_CLEARANCE_M) {
+    this.#requireLive();
+    if (!Number.isFinite(surfaceHeightM)) throw new TypeError("editor navigation surface height must be finite");
+    const clearance = finitePositive2(clearanceM, "editor navigation surface clearance");
+    const minimumY = surfaceHeightM + clearance;
+    if (!Number.isFinite(minimumY)) throw new RangeError("editor navigation minimum surface height is out of range");
+    if (this.#mode !== "fly" || this.#camera.position.y >= minimumY) return false;
+    this.#camera.position.y = minimumY;
+    this.#syncFlyTarget();
+    return true;
+  }
   constrainToResidencyGrid(chunkSizeM, radius = 7, thresholdChunks = 2) {
     this.#requireLive();
     const chunkSize = finitePositive2(chunkSizeM, "editor navigation residency chunk size");
@@ -142594,6 +142615,8 @@ var EditorNavigationController = class {
     this.#keyTarget?.removeEventListener("keyup", this.#onKeyUp);
     this.#keyTarget?.removeEventListener("blur", this.#onBlur);
     this.#documentTarget?.removeEventListener("visibilitychange", this.#onVisibilityChange);
+    this.#documentTarget?.removeEventListener("pointerlockchange", this.#onPointerLockChange);
+    this.#documentTarget?.removeEventListener("contextmenu", this.#onDocumentContextMenu);
     this.orbitControls.dispose();
   }
   #onPointerDown = (event) => {
@@ -142602,11 +142625,31 @@ var EditorNavigationController = class {
     this.#lastUpdateMs = this.#now();
     this.#flyEuler.setFromQuaternion(this.#camera.quaternion, "YXZ");
     this.#flyEuler.z = 0;
+    let lockRequested = false;
     try {
-      this.#element.setPointerCapture?.(event.pointerId);
+      if (this.#element.requestPointerLock !== void 0) {
+        const request = this.#element.requestPointerLock();
+        lockRequested = true;
+        if (request && typeof request.catch === "function") {
+          void request.catch(() => {
+            if (this.#rightPointerId !== event.pointerId) return;
+            try {
+              this.#element.setPointerCapture?.(event.pointerId);
+            } catch {
+            }
+          });
+        }
+      }
     } catch {
     }
+    if (!lockRequested) {
+      try {
+        this.#element.setPointerCapture?.(event.pointerId);
+      } catch {
+      }
+    }
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
   #onPointerMove = (event) => {
     if (event.pointerId !== this.#rightPointerId || !this.isCapturingInput()) return;
@@ -142619,17 +142662,31 @@ var EditorNavigationController = class {
     this.#camera.quaternion.setFromEuler(this.#flyEuler);
     this.#syncFlyTarget();
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
   #onPointerUp = (event) => {
     if (event.pointerId !== this.#rightPointerId) return;
     this.#releaseInput();
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
   #onPointerCancel = (event) => {
-    if (event.pointerId === this.#rightPointerId) this.#releaseInput();
+    if (event.pointerId === this.#rightPointerId) {
+      this.#releaseInput();
+      event.stopImmediatePropagation();
+    }
   };
   #onContextMenu = (event) => {
-    if (this.#effectivelyEnabled() && this.#mode === "fly") event.preventDefault();
+    if (this.#effectivelyEnabled() && this.#mode === "fly") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+  #onDocumentContextMenu = (event) => {
+    if (this.isCapturingInput()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   };
   #onKeyDown = (event) => {
     const key = event;
@@ -142650,6 +142707,11 @@ var EditorNavigationController = class {
   #onVisibilityChange = () => {
     if (this.#documentTarget?.hidden === true) this.#releaseInput();
   };
+  #onPointerLockChange = () => {
+    if (this.#rightPointerId !== null && this.#documentTarget?.pointerLockElement !== this.#element) {
+      this.#releaseInput();
+    }
+  };
   #isMovementCode(code3) {
     return code3 === "KeyW" || code3 === "KeyA" || code3 === "KeyS" || code3 === "KeyD" || code3 === "KeyQ" || code3 === "KeyE" || code3 === "ShiftLeft" || code3 === "ShiftRight" || code3 === "AltLeft" || code3 === "AltRight";
   }
@@ -142661,6 +142723,12 @@ var EditorNavigationController = class {
     if (pointerId !== null) {
       try {
         this.#element.releasePointerCapture?.(pointerId);
+      } catch {
+      }
+    }
+    if (this.#documentTarget?.pointerLockElement === this.#element) {
+      try {
+        this.#documentTarget.exitPointerLock();
       } catch {
       }
     }
@@ -144049,6 +144117,13 @@ async function runLive(opts) {
           camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
         } else if (editorNavigation !== void 0) {
           editorNavigation.update();
+          const surfaceHeight = activeDerivedRevision?.candidate.snapshot.terrain.sampleHeight(
+            camera.position.x,
+            camera.position.z
+          );
+          if (surfaceHeight !== void 0 && surfaceHeight !== null) {
+            editorNavigation.constrainAboveSurface(surfaceHeight);
+          }
         } else if (cameraControls !== void 0) {
           cameraControls.update();
         } else if (vantage !== void 0) {

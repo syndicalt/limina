@@ -24,6 +24,7 @@ test("navigation controls expose one unique stable DOM contract", () => {
   assert.match(html, /id="viewport-navigation-mode"[^>]*role="radiogroup"[^>]*aria-label="Navigation mode"/);
   assert.match(html, /id="viewport-navigation-orbit"[^>]*role="radio"[^>]*aria-checked="true"[^>]*tabindex="0"/);
   assert.match(html, /id="viewport-navigation-fly"[^>]*role="radio"[^>]*aria-checked="false"[^>]*tabindex="-1"/);
+  assert.match(html, /id="viewport-navigation-fly"[^>]*title="Hold right mouse to look; WASD moves;/);
   assert.match(html, /id="viewport-navigation-speed"[^>]*type="number"[^>]*min="0\.25"[^>]*max="2048"/);
 });
 

@@ -46,6 +46,7 @@ export interface RunningEditorNavigation {
   framePoint(target: readonly [number, number, number], radiusM?: number): Readonly<EditorCameraPose>;
   objectPose(object: InstanceType<typeof THREE.Object3D>, padding?: number): Readonly<EditorCameraPose>;
   frameObject(object: InstanceType<typeof THREE.Object3D>, padding?: number): Readonly<EditorCameraPose>;
+  constrainAboveSurface(surfaceHeightM: number, clearanceM?: number): boolean;
   constrainToResidencyGrid(chunkSizeM: number, radius?: number, thresholdChunks?: number): number;
   dispose(): void;
 }
@@ -55,6 +56,7 @@ type PointerElement = HTMLElement & {
   ownerDocument: Document;
   setPointerCapture?(pointerId: number): void;
   releasePointerCapture?(pointerId: number): void;
+  requestPointerLock?(): Promise<void> | void;
 };
 
 const MIN_SPEED_MPS = 0.1;
@@ -65,6 +67,7 @@ const MIN_FLY_PITCH = -Math.PI / 2 + 0.02;
 const MAX_FLY_PITCH = Math.PI / 2 - 0.02;
 const MIN_FRAME_RADIUS_M = 0.05;
 const DEFAULT_FRAME_PADDING = 1.25;
+const DEFAULT_FLY_SURFACE_CLEARANCE_M = 2;
 
 function finiteTuple(value: unknown, size: 3 | 4, label: string): number[] {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
@@ -248,6 +251,8 @@ export class EditorNavigationController implements RunningEditorNavigation {
     this.#keyTarget?.addEventListener("keyup", this.#onKeyUp);
     this.#keyTarget?.addEventListener("blur", this.#onBlur);
     this.#documentTarget?.addEventListener("visibilitychange", this.#onVisibilityChange);
+    this.#documentTarget?.addEventListener("pointerlockchange", this.#onPointerLockChange);
+    this.#documentTarget?.addEventListener("contextmenu", this.#onDocumentContextMenu);
   }
 
   mode(): EditorNavigationMode { return this.#mode; }
@@ -327,7 +332,14 @@ export class EditorNavigationController implements RunningEditorNavigation {
     vertical /= magnitude;
 
     this.#camera.getWorldDirection(this.#forward);
-    this.#right.set(1, 0, 0).applyQuaternion(this.#camera.quaternion).normalize();
+    this.#forward.y = 0;
+    if (this.#forward.lengthSq() < 1e-8) {
+      this.#forward.set(-Math.sin(this.#flyEuler.y), 0, -Math.cos(this.#flyEuler.y));
+    } else this.#forward.normalize();
+    this.#right.set(1, 0, 0).applyQuaternion(this.#camera.quaternion);
+    this.#right.y = 0;
+    if (this.#right.lengthSq() < 1e-8) this.#right.crossVectors(this.#forward, this.#worldUp);
+    else this.#right.normalize();
     this.#movement.copy(this.#forward).multiplyScalar(forward)
       .addScaledVector(this.#right, right)
       .addScaledVector(this.#worldUp, vertical);
@@ -449,6 +461,18 @@ export class EditorNavigationController implements RunningEditorNavigation {
     return pose;
   }
 
+  constrainAboveSurface(surfaceHeightM: number, clearanceM = DEFAULT_FLY_SURFACE_CLEARANCE_M): boolean {
+    this.#requireLive();
+    if (!Number.isFinite(surfaceHeightM)) throw new TypeError("editor navigation surface height must be finite");
+    const clearance = finitePositive(clearanceM, "editor navigation surface clearance");
+    const minimumY = surfaceHeightM + clearance;
+    if (!Number.isFinite(minimumY)) throw new RangeError("editor navigation minimum surface height is out of range");
+    if (this.#mode !== "fly" || this.#camera.position.y >= minimumY) return false;
+    this.#camera.position.y = minimumY;
+    this.#syncFlyTarget();
+    return true;
+  }
+
   constrainToResidencyGrid(chunkSizeM: number, radius = 7, thresholdChunks = 2): number {
     this.#requireLive();
     const chunkSize = finitePositive(chunkSizeM, "editor navigation residency chunk size");
@@ -480,6 +504,8 @@ export class EditorNavigationController implements RunningEditorNavigation {
     this.#keyTarget?.removeEventListener("keyup", this.#onKeyUp);
     this.#keyTarget?.removeEventListener("blur", this.#onBlur);
     this.#documentTarget?.removeEventListener("visibilitychange", this.#onVisibilityChange);
+    this.#documentTarget?.removeEventListener("pointerlockchange", this.#onPointerLockChange);
+    this.#documentTarget?.removeEventListener("contextmenu", this.#onDocumentContextMenu);
     this.orbitControls.dispose();
   }
 
@@ -489,8 +515,24 @@ export class EditorNavigationController implements RunningEditorNavigation {
     this.#lastUpdateMs = this.#now();
     this.#flyEuler.setFromQuaternion(this.#camera.quaternion, "YXZ");
     this.#flyEuler.z = 0;
-    try { this.#element.setPointerCapture?.(event.pointerId); } catch { /* capture is best effort */ }
+    let lockRequested = false;
+    try {
+      if (this.#element.requestPointerLock !== undefined) {
+        const request = this.#element.requestPointerLock();
+        lockRequested = true;
+        if (request && typeof request.catch === "function") {
+          void request.catch(() => {
+            if (this.#rightPointerId !== event.pointerId) return;
+            try { this.#element.setPointerCapture?.(event.pointerId); } catch { /* fallback is best effort */ }
+          });
+        }
+      }
+    } catch { /* pointer capture below remains the fallback */ }
+    if (!lockRequested) {
+      try { this.#element.setPointerCapture?.(event.pointerId); } catch { /* capture is best effort */ }
+    }
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
 
   readonly #onPointerMove = (event: PointerEvent): void => {
@@ -502,20 +544,35 @@ export class EditorNavigationController implements RunningEditorNavigation {
     this.#camera.quaternion.setFromEuler(this.#flyEuler);
     this.#syncFlyTarget();
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
 
   readonly #onPointerUp = (event: PointerEvent): void => {
     if (event.pointerId !== this.#rightPointerId) return;
     this.#releaseInput();
     event.preventDefault();
+    event.stopImmediatePropagation();
   };
 
   readonly #onPointerCancel = (event: PointerEvent): void => {
-    if (event.pointerId === this.#rightPointerId) this.#releaseInput();
+    if (event.pointerId === this.#rightPointerId) {
+      this.#releaseInput();
+      event.stopImmediatePropagation();
+    }
   };
 
   readonly #onContextMenu = (event: Event): void => {
-    if (this.#effectivelyEnabled() && this.#mode === "fly") event.preventDefault();
+    if (this.#effectivelyEnabled() && this.#mode === "fly") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+
+  readonly #onDocumentContextMenu = (event: Event): void => {
+    if (this.isCapturingInput()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   };
 
   readonly #onKeyDown = (event: Event): void => {
@@ -539,6 +596,12 @@ export class EditorNavigationController implements RunningEditorNavigation {
     if (this.#documentTarget?.hidden === true) this.#releaseInput();
   };
 
+  readonly #onPointerLockChange = (): void => {
+    if (this.#rightPointerId !== null && this.#documentTarget?.pointerLockElement !== this.#element) {
+      this.#releaseInput();
+    }
+  };
+
   #isMovementCode(code: string): boolean {
     return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD"
       || code === "KeyQ" || code === "KeyE" || code === "ShiftLeft" || code === "ShiftRight"
@@ -552,6 +615,9 @@ export class EditorNavigationController implements RunningEditorNavigation {
     this.#lastUpdateMs = undefined;
     if (pointerId !== null) {
       try { this.#element.releasePointerCapture?.(pointerId); } catch { /* release is best effort */ }
+    }
+    if (this.#documentTarget?.pointerLockElement === this.#element) {
+      try { this.#documentTarget.exitPointerLock(); } catch { /* lock may already be leaving */ }
     }
   }
 

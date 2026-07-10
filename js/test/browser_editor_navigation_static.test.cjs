@@ -43,6 +43,11 @@ test("one mode-aware anchor drives every editor streaming and shadow system", ()
   assert.match(source, /navigationFocus\[0\] = navigationAnchor\.x/);
 });
 
+test("Fly camera uses the active derived terrain sampler for surface clearance", () => {
+  assert.match(source, /activeDerivedRevision\?\.candidate\.snapshot\.terrain\.sampleHeight/);
+  assert.match(source, /editorNavigation\.constrainAboveSurface\(surfaceHeight\)/);
+});
+
 test("manifest grid constrains orbit coverage before tracker activation", () => {
   ordered(
     "editorNavigation?.constrainToResidencyGrid(candidate.snapshot.manifest.grid.chunkSizeM, 7, 2);",

@@ -129,21 +129,34 @@ function canvasSignal(bytes) {
     await page.fill("#viewport-navigation-speed", "512");
     await page.press("#viewport-navigation-speed", "Tab");
     const canvas = page.locator("#editor-viewport");
+    assert.notEqual(await canvas.evaluate((element) => getComputedStyle(element).cursor), "none",
+      "Fly hid the cursor before RMB acquired pointer lock");
     const box = await canvas.boundingBox();
     assert.ok(box && box.width >= 600 && box.height >= 400, "editor canvas is not interactable");
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down({ button: "right" });
+    await page.waitForFunction(() => document.pointerLockElement?.id === "editor-viewport");
+    assert.equal(await page.evaluate(() => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      document.body.dispatchEvent(event);
+      return event.defaultPrevented;
+    }), true, "Fly pointer ownership allowed the page context menu");
     await page.keyboard.down("Shift");
     await page.keyboard.down("w");
     await page.waitForTimeout(900);
     await page.keyboard.up("w");
     await page.keyboard.up("Shift");
     await page.mouse.up({ button: "right" });
+    await page.waitForFunction(() => document.pointerLockElement === null);
+    assert.notEqual(await canvas.evaluate((element) => getComputedStyle(element).cursor), "none",
+      "Fly did not restore the cursor after RMB released pointer lock");
     await page.waitForTimeout(500);
 
     const flownTarget = await readTarget();
     assert.ok(distance(initialTarget, flownTarget) >= 50,
       `Fly did not move the camera materially: ${JSON.stringify({ initialTarget, flownTarget })}`);
+    assert.ok(Math.abs(initialTarget.y - flownTarget.y) < 1e-6,
+      `WASD changed altitude instead of leaving vertical movement to Q/E: ${JSON.stringify({ initialTarget, flownTarget })}`);
     await closeGoto();
     const flownBytes = await canvas.screenshot({ path: screenshots.flown });
     const flownSignal = canvasSignal(flownBytes);

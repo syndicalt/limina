@@ -31,10 +31,15 @@ class FakeTarget {
     const emitted = {
       target: this,
       defaultPrevented: false,
+      immediatePropagationStopped: false,
       preventDefault() { emitted.defaultPrevented = true; },
+      stopImmediatePropagation() { emitted.immediatePropagationStopped = true; },
       ...event,
     };
-    for (const listener of [...(this.listeners.get(type) ?? [])]) listener(emitted);
+    for (const listener of [...(this.listeners.get(type) ?? [])]) {
+      listener(emitted);
+      if (emitted.immediatePropagationStopped) break;
+    }
     return emitted;
   }
 
@@ -47,6 +52,12 @@ class FakeTarget {
 
 class FakeDocument extends FakeTarget {
   hidden = false;
+  pointerLockElement: FakeElement | null = null;
+
+  exitPointerLock(): void {
+    this.pointerLockElement = null;
+    this.emit("pointerlockchange");
+  }
 }
 
 class FakeElement extends FakeTarget {
@@ -64,6 +75,11 @@ class FakeElement extends FakeTarget {
   getRootNode(): FakeDocument { return this.ownerDocument; }
   setPointerCapture(pointerId: number): void { this.captured.add(pointerId); }
   releasePointerCapture(pointerId: number): void { this.captured.delete(pointerId); }
+  requestPointerLock(): Promise<void> {
+    this.ownerDocument.pointerLockElement = this;
+    this.ownerDocument.emit("pointerlockchange");
+    return Promise.resolve();
+  }
 }
 
 let clock = 0;
@@ -125,8 +141,12 @@ assert(strictFailure instanceof TypeError, "residencyCenter invoked or accepted 
 navigation.setMode("fly");
 assert(navigation.mode() === "fly" && !navigation.orbitControls.enabled, "fly mode left OrbitControls active");
 const down = element.emit("pointerdown", { pointerId: 7, button: 2, movementX: 0, movementY: 0 });
-assert(navigation.isCapturingInput() && element.captured.has(7) && down.defaultPrevented === true,
-  "right-button capture did not engage fly navigation");
+assert(navigation.isCapturingInput() && down.defaultPrevented === true,
+  "right-button ownership did not engage fly navigation");
+assert(down.immediatePropagationStopped === true, "Fly capture leaked pointerdown to viewport tools");
+assert(documentTarget.pointerLockElement === element, "right-button capture did not lock the pointer to the viewport");
+assert(documentTarget.emit("contextmenu").defaultPrevented === true,
+  "Fly pointer ownership allowed a document context menu");
 for (const code of ["KeyW", "KeyD", "KeyE"]) keyTarget.emit("keydown", { code, repeat: false });
 const beforeMove = camera.position.clone();
 navigation.update(0);
@@ -146,8 +166,16 @@ near(camera.position.distanceTo(beforePrecision), 0.8, 1e-6, "precision modifier
 const quaternionBeforeLook = camera.quaternion.clone();
 element.emit("pointermove", { pointerId: 7, button: 2, movementX: 40, movementY: -20 });
 assert(!camera.quaternion.equals(quaternionBeforeLook), "RMB mouse movement did not rotate the fly camera");
+camera.position.y = -20;
+assert(navigation.constrainAboveSurface(8, 2) && camera.position.y === 10,
+  "fly surface clearance did not lift a below-terrain camera");
+assert(!navigation.constrainAboveSurface(8, 2), "fly surface clearance moved an already-safe camera");
+let surfaceFailure: unknown;
+try { navigation.constrainAboveSurface(Number.NaN); } catch (error) { surfaceFailure = error; }
+assert(surfaceFailure instanceof TypeError, "fly surface clearance accepted a non-finite height");
 keyTarget.emit("blur");
 assert(!navigation.isCapturingInput() && !element.captured.has(7), "blur left fly input or pointer capture stuck");
+assert(documentTarget.pointerLockElement === null, "blur left the pointer locked to the viewport");
 const afterBlur = camera.position.clone();
 navigation.update(1_300);
 assert(camera.position.equals(afterBlur), "camera moved after blur cleared fly input");
@@ -157,6 +185,15 @@ documentTarget.hidden = true;
 documentTarget.emit("visibilitychange");
 assert(!navigation.isCapturingInput() && !element.captured.has(8), "hidden document left fly input stuck");
 documentTarget.hidden = false;
+
+navigation.restore({ ...initial, mode: "fly" });
+element.emit("pointerdown", { pointerId: 9, button: 2 });
+keyTarget.emit("keydown", { code: "KeyW", repeat: false });
+const planarMoveY = camera.position.y;
+navigation.update(1_400);
+navigation.update(1_500);
+near(camera.position.y, planarMoveY, 1e-9, "WASD followed camera pitch instead of staying on the yaw plane");
+element.emit("pointerup", { pointerId: 9, button: 2 });
 
 assert(navigation.setSpeed(1e9) === 5_000, "speed did not clamp to its production maximum");
 let speedFailure: unknown;
@@ -233,4 +270,4 @@ let disposedFailure: unknown;
 try { navigation.setMode("fly"); } catch (error) { disposedFailure = error; }
 assert(disposedFailure instanceof Error, "disposed controller accepted a mode mutation");
 
-console.log("[js] p_editor_navigation OK: strict immutable poses, pure destination/object plans, mode-aware residency, leased orbit/fly ownership, normalized dt-capped movement, boost/precision, input-loss recovery, speed/grid bounds, restore, and teardown proven");
+console.log("[js] p_editor_navigation OK: strict immutable poses, pure destination/object plans, mode-aware residency, leased orbit/fly ownership, normalized dt-capped movement, boost/precision, terrain clearance, input-loss recovery, speed/grid bounds, restore, and teardown proven");

@@ -1778,6 +1778,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         camera.lookAt(ex + Math.sin(yaw) * cp, ey + Math.sin(pitch), ez - Math.cos(yaw) * cp);
       } else if (editorNavigation !== undefined) {
         editorNavigation.update();
+        const surfaceHeight = activeDerivedRevision?.candidate.snapshot.terrain.sampleHeight(
+          camera.position.x,
+          camera.position.z,
+        );
+        if (surfaceHeight !== undefined && surfaceHeight !== null) {
+          editorNavigation.constrainAboveSurface(surfaceHeight);
+        }
       } else if (cameraControls !== undefined) {
         cameraControls.update();
       } else if (vantage !== undefined) {
