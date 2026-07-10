@@ -94,6 +94,14 @@ export class PublicationCancelledError extends Error {
   constructor() { super("derived revision publication cancelled"); this.name = "PublicationCancelledError"; }
 }
 
+export class PublicationRuntimeAccessError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "PublicationRuntimeAccessError";
+    this.code = code;
+  }
+}
+
 function codeUnitCompare(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
 
 function pathWithin(root, candidate) {
@@ -806,6 +814,90 @@ export async function readPublishedDerivedRevision(options) {
       authoritativeSource: { revision: head.revision, headHash: head.headHash },
     },
   };
+}
+
+/** Read only the pointer's current revision and require an exact authoritative source match.
+ * Unlike the recovery-oriented reader above, this boundary never falls back to `previous` and
+ * deliberately defers artifact-byte verification to the individual content-addressed read. */
+export async function readAuthoritativePublishedDerivedRevision(options) {
+  const fs = options?.fs ?? nodePublicationFs;
+  const branchId = assertId(options?.branchId, BRANCH_ID, "derived branchId");
+  if (typeof options?.readHead !== "function") throw new Error("derived runtime reader requires readHead");
+  const paths = publicationPaths(options?.projectRoot, branchId, fs);
+  const baseline = readPointer(fs, paths);
+  if (baseline.pointer === undefined) {
+    throw new PublicationRuntimeAccessError("NO_PUBLICATION", "no derived revision has been published");
+  }
+  let revision;
+  try {
+    revision = validateInstalledRevision(fs, paths, baseline.pointer.current, options?.shouldCancel, new Set());
+  } catch (error) {
+    throw new PublicationRuntimeAccessError(
+      "CURRENT_UNUSABLE",
+      `current derived revision is unusable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  maybeCancel(options?.shouldCancel);
+  const head = validateHeadShape(await options.readHead());
+  maybeCancel(options?.shouldCancel);
+  const confirmed = readPointer(fs, paths);
+  if (confirmed.raw !== baseline.raw) {
+    throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "current derived publication changed during read");
+  }
+  const { manifest, snapshot } = revision;
+  if (head.projectId !== manifest.projectId || head.branchId !== manifest.branchId
+      || head.revision !== manifest.source.revision || head.headHash !== manifest.source.headHash) {
+    throw new PublicationRuntimeAccessError("NOT_CURRENT", "published derived revision does not match the authoritative source");
+  }
+  return Object.freeze({
+    generation: baseline.pointer.generation,
+    manifest,
+    snapshot,
+    source: Object.freeze({ revision: head.revision, headHash: head.headHash }),
+  });
+}
+
+/** Resolve one descriptor and filesystem path from the pointer's exact current manifest.
+ * The caller must still safe-open and hash the returned regular file before serving bytes. */
+export function resolveCurrentPublishedDerivedArtifact(options) {
+  const fs = options?.fs ?? nodePublicationFs;
+  const branchId = assertId(options?.branchId, BRANCH_ID, "derived branchId");
+  const manifestHash = validateCompilerContentHash(options?.manifestHash, "derived runtime manifestHash");
+  const contentHash = validateCompilerContentHash(options?.contentHash, "derived runtime contentHash");
+  const paths = publicationPaths(options?.projectRoot, branchId, fs);
+  const { pointer } = readPointer(fs, paths);
+  if (pointer === undefined) throw new PublicationRuntimeAccessError("NO_PUBLICATION", "no derived revision has been published");
+  if (pointer.current.manifestHash !== manifestHash) {
+    throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "requested derived manifest is no longer current");
+  }
+  let revision;
+  try {
+    revision = validateInstalledRevision(fs, paths, pointer.current, undefined, new Set());
+  } catch (error) {
+    throw new PublicationRuntimeAccessError(
+      "CURRENT_UNUSABLE",
+      `current derived revision is unusable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const matching = [];
+  for (const artifact of derivedGlobalArtifacts(revision.manifest)) if (artifact.contentHash === contentHash) matching.push(artifact);
+  for (const chunk of revision.manifest.chunks) {
+    for (const artifact of chunk.artifacts) if (artifact.contentHash === contentHash) matching.push(artifact);
+  }
+  if (matching.length === 0) {
+    throw new PublicationRuntimeAccessError("UNREFERENCED_ARTIFACT", "requested artifact is not referenced by the current manifest");
+  }
+  const descriptor = matching[0];
+  if (matching.some((entry) => entry.byteLength !== descriptor.byteLength || entry.mediaType !== descriptor.mediaType)) {
+    throw new PublicationRuntimeAccessError("AMBIGUOUS_ARTIFACT", "current manifest assigns conflicting descriptors to one artifact hash");
+  }
+  return Object.freeze({
+    generation: pointer.generation,
+    manifest: revision.manifest,
+    descriptor,
+    artifactRoot: paths.artifacts,
+    path: artifactPath(paths, contentHash),
+  });
 }
 
 function validateHeadShape(head) {
