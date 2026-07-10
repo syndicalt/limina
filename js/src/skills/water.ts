@@ -27,7 +27,17 @@
 // traced (emits `world.water.added` with the level so the request is on the trace).
 
 import { z } from "../../build/zod.bundle.mjs";
-import { buildRiverRibbon, buildWaterSurface, DEFAULT_WATER_COLOR, DEFAULT_WATER_SIZE, type WaterDepthOptions } from "../water.ts";
+import * as THREE from "../../build/three.bundle.mjs";
+import {
+  buildRiverRibbon,
+  buildWaterBodySurface,
+  buildWaterSurface,
+  DEFAULT_WATER_COLOR,
+  DEFAULT_WATER_SIZE,
+  type WaterDepthOptions,
+} from "../water.ts";
+import { DEFAULT_RENDER_QUALITY_PROFILES, type WaterRenderQuality } from "../render/quality.ts";
+import { VisibleWaterManager } from "../render/water/visible-water-manager.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { isTerrainType, terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { TerrainSource } from "../terrain/types.ts";
@@ -35,7 +45,9 @@ import type { RegionState } from "./terrain.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
-import { migrateWorldMap, verifyWorldMap, WorldMapSchema } from "../world/worldmap.ts";
+import { migrateWorldMap, verifyWorldMap, WorldMapSchema, type WorldMap } from "../world/worldmap.ts";
+import { createWaterField, WATER_SAMPLE_RECORD_BYTES } from "../world/water-field.mjs";
+import { WATER_LIMITS } from "../world/water-ir.mjs";
 
 /** One water surface currently in the scene (for inspection / idempotent rebuild on
  *  replay). Held in the registry closure, so a fresh replay registry starts empty and
@@ -46,6 +58,17 @@ export interface WaterSurfaceState {
   color: number;
   /** The cosmetic mesh added to the scene (never an ECS entity / physics body). */
   mesh: unknown;
+  key?: string;
+  kind?: "ocean" | "basin";
+  bodyId?: string;
+}
+
+export interface WaterSkillState {
+  surfaces: WaterSurfaceState[];
+  rivers: unknown[];
+  manager(): VisibleWaterManager | undefined;
+  setQuality(quality: Readonly<WaterRenderQuality>): void;
+  dispose(): void;
 }
 
 /** Optional region descriptor enabling TRUE water-column-depth shading. All pure,
@@ -201,6 +224,88 @@ function pickLayer(layers: Map<string, EditableTerrain> | undefined, id?: string
   return last;
 }
 
+function sampleLayerHeight(layer: EditableTerrain, x: number, z: number): number {
+  const tile = layer.tile;
+  const fc = ((x - (tile.origin[0] - tile.scale[0] / 2)) / tile.scale[0]) * (tile.ncols - 1);
+  const fr = ((z - (tile.origin[2] - tile.scale[2] / 2)) / tile.scale[2]) * (tile.nrows - 1);
+  const col0 = Math.max(0, Math.min(tile.ncols - 2, Math.floor(fc)));
+  const row0 = Math.max(0, Math.min(tile.nrows - 2, Math.floor(fr)));
+  const tx = Math.max(0, Math.min(1, fc - col0));
+  const tz = Math.max(0, Math.min(1, fr - row0));
+  const h00 = tile.heights[row0 * tile.ncols + col0], h01 = tile.heights[row0 * tile.ncols + col0 + 1];
+  const h10 = tile.heights[(row0 + 1) * tile.ncols + col0], h11 = tile.heights[(row0 + 1) * tile.ncols + col0 + 1];
+  return tile.origin[1] + (h00 * (1 - tx) + h01 * tx) * (1 - tz) + (h10 * (1 - tx) + h11 * tx) * tz;
+}
+
+function resolveVerifiedMap(assets: AssetRegistry | undefined, mapAssetId: string, committedHash: string | undefined, skill: string): WorldMap {
+  if (assets === undefined) throw new Error(`${skill} requires an AssetRegistry`);
+  const resolved = assets.resolve(mapAssetId);
+  let parsed: unknown;
+  try { parsed = JSON.parse(new TextDecoder().decode(resolved.bytes)); }
+  catch (error) { throw new Error(`${skill}: '${mapAssetId}' is not valid JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  const worldMap = WorldMapSchema.parse(migrateWorldMap(parsed));
+  if (!verifyWorldMap(worldMap).ok) throw new Error(`${skill}: '${mapAssetId}' content hash mismatch`);
+  if (committedHash !== undefined && committedHash !== worldMap.provenance.contentHash) {
+    throw new Error(`${skill}: map identity mismatch (committed ${committedHash}, resolved ${worldMap.provenance.contentHash})`);
+  }
+  return worldMap;
+}
+
+function mapPoint(worldMap: WorldMap, point: readonly [number, number]): [number, number] {
+  return [
+    worldMap.origin[0] + point[0] * worldMap.unitsPerMeter,
+    worldMap.origin[1] + point[1] * worldMap.unitsPerMeter,
+  ];
+}
+
+function footprintBounds(contours: readonly (readonly (readonly [number, number])[])[]): Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }> {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const contour of contours) for (const [x, z] of contour) {
+    minX = Math.min(minX, x); minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
+  }
+  return Object.freeze({ minX, minZ, maxX, maxZ });
+}
+
+function bodyDepthTexture(
+  field: ReturnType<typeof createWaterField>,
+  bodyId: string,
+  bounds: Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }>,
+  maximumDepthM: number,
+  resolution: number,
+): THREE.DataTexture {
+  const sampled = field.sampleGrid({
+    rect: { x0: bounds.minX, z0: bounds.minZ, w: bounds.maxX - bounds.minX, h: bounds.maxZ - bounds.minZ },
+    rows: resolution,
+    cols: resolution,
+  });
+  const bodyIndex = sampled.bodyIds.indexOf(bodyId);
+  if (bodyIndex < 0) throw new Error(`water body '${bodyId}' is absent from its verified WaterField`);
+  const source = new DataView(sampled.bytes.buffer, sampled.bytes.byteOffset, sampled.bytes.byteLength);
+  const data = new Uint8Array(resolution * resolution * 2);
+  for (let index = 0; index < resolution * resolution; index++) {
+    const record = index * WATER_SAMPLE_RECORD_BYTES;
+    if (source.getInt32(record + 4, true) !== bodyIndex) continue;
+    const depthM = source.getFloat64(record + 16, true);
+    data[index * 2] = Math.round(Math.min(1, Math.max(0, depthM / maximumDepthM)) * 255);
+    data[index * 2 + 1] = 255;
+  }
+  const texture = new THREE.DataTexture(data, resolution, resolution, THREE.RGFormat, THREE.UnsignedByteType);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function bodyDepthResolution(quality: Readonly<WaterRenderQuality>, bodyCount: number): number {
+  if (bodyCount <= 0) return quality.depthRasterSize;
+  const perBodyPixels = Math.max(64, Math.floor(quality.depthTextureBudgetPixels / bodyCount));
+  const dimension = Math.min(quality.depthRasterSize, Math.floor(Math.sqrt(perBodyPixels)));
+  return Math.max(8, 2 ** Math.floor(Math.log2(dimension)));
+}
+
 /** Register the `world.addWater` skill bound to a closure list of placed surfaces
  *  (returned for host/test inspection — the SAME shape terrain skills return). The
  *  `terrainSource` (the SAME deterministic source the terrain.* skills are bound to) is
@@ -218,10 +323,24 @@ export function registerWaterSkills(
    *  heightfield. Read-only — never mutated. */
   terrainLayers?: Map<string, EditableTerrain>,
   assets?: AssetRegistry,
-): { surfaces: WaterSurfaceState[]; rivers: unknown[] } {
+): WaterSkillState {
   const surfaces: WaterSurfaceState[] = [];
   /** River ribbon meshes currently in the scene (render-only, like `surfaces`). */
   const rivers: unknown[] = [];
+  let visibleWater: VisibleWaterManager | undefined;
+  let visibleWaterScene: unknown;
+  let quality: Readonly<WaterRenderQuality> = DEFAULT_RENDER_QUALITY_PROFILES.balanced.water;
+  let legacySequence = 0;
+  const semanticIdentity = (...parts: unknown[]): string => JSON.stringify(parts);
+  const managerFor = (scene: unknown): VisibleWaterManager => {
+    if (visibleWater === undefined) {
+      visibleWaterScene = scene;
+      visibleWater = new VisibleWaterManager(scene as never, quality);
+    } else if (scene !== visibleWaterScene) {
+      throw new Error("water skill registry cannot own more than one world scene");
+    }
+    return visibleWater;
+  };
 
   const addWater: SkillDefinition<z.infer<typeof addWaterInput>, z.infer<typeof addWaterOutput>> = {
     name: "world.addWater",
@@ -273,11 +392,11 @@ export function registerWaterSkills(
           depth = deriveDepthFromLayer(layer);
         }
       }
-      const mesh = buildWaterSurface({ level, size: input.size, color: input.color, depth, peek: ctx.world.peek === true });
-      // Render-only: add to the scene graph ONLY. No spawnRenderable (ECS), no
-      // ctx.world.entities.create, no op_physics_* — so sim state is untouched.
-      ctx.world.scene.add(mesh);
-      const surface: WaterSurfaceState = { level, size: input.size, color: input.color, mesh };
+      const key = `legacy:surface:${legacySequence++}`;
+      const mounted = managerFor(ctx.world.scene).mount(key, "ocean", () => (
+        buildWaterSurface({ level, size: input.size, color: input.color, depth, peek: ctx.world.peek === true }) as THREE.Mesh
+      ), { source: "legacy-skill" });
+      const surface: WaterSurfaceState = { level, size: input.size, color: input.color, mesh: mounted.entry.mesh, key, kind: "ocean" };
       surfaces.push(surface);
       ctx.emit("world.water.added", { level, size: input.size, color: input.color });
       return { level, size: input.size, color: input.color };
@@ -289,35 +408,62 @@ export function registerWaterSkills(
   // the ground. Same contract as addWater: cosmetic, no sim state, recomputed on replay.
   const addRiverInput = z.object({
     /** Channel centerline in world meters (>= 2 points). Typically a WorldMap waterway. */
-    points: z.array(z.tuple([z.number(), z.number()])).min(2),
+    points: z.array(z.tuple([
+      z.number().finite().min(-WATER_LIMITS.absCoordinateM).max(WATER_LIMITS.absCoordinateM),
+      z.number().finite().min(-WATER_LIMITS.absCoordinateM).max(WATER_LIMITS.absCoordinateM),
+    ])).min(2).max(WATER_LIMITS.waterwayPoints),
     /** Water surface width (meters) — match the map waterway's widthM. */
-    widthM: z.number().positive().default(6),
+    widthM: z.number().finite().positive().max(WATER_LIMITS.widthM).default(6),
+    widths: z.array(z.number().finite().positive().max(WATER_LIMITS.widthM)).min(2).max(WATER_LIMITS.waterwayPoints).optional(),
+    class: z.enum(["river", "stream"]).default("river"),
+    order: z.number().int().min(1).max(WATER_LIMITS.streamOrder).optional(),
     /** Tint (sRGB hex). Default: the sea surface color. */
     color: z.number().int().optional(),
     /** Sea plane Y (the ribbon meets it flush at the mouth). Default: the layer's waterline. */
     level: z.number().optional(),
     /** Terrain layer to drape on (explicit, else most-recent). */
     terrainEntity: z.string().optional(),
+  }).superRefine((value, ctx) => {
+    if (value.widths !== undefined && value.widths.length !== value.points.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["widths"], message: "widths must have exactly one value per point" });
+    }
   });
   const addRiverOutput = z.object({ points: z.number().int(), widthM: z.number(), level: z.number() });
-  const mountRiver = (input: z.infer<typeof addRiverInput>, ctx: Parameters<typeof addRiver.handler>[1]) => {
+  type MountRiverInput = z.infer<typeof addRiverInput> & {
+    key?: string;
+    mapDerived?: boolean;
+    identity?: string;
+    onMounted?: (key: string) => void;
+  };
+  const mountRiver = (input: MountRiverInput, ctx: Parameters<typeof addRiver.handler>[1]) => {
     const layer = pickLayer(terrainLayers, input.terrainEntity);
     const level = input.level ?? layer?.elevationColors?.seaLevel ?? 0;
-    const sampleHeight = layer === undefined ? () => level - 1.2 : (x: number, z: number): number => {
-      const t = layer.tile;
-      const fc = ((x - (t.origin[0] - t.scale[0] / 2)) / t.scale[0]) * (t.ncols - 1);
-      const fr = ((z - (t.origin[2] - t.scale[2] / 2)) / t.scale[2]) * (t.nrows - 1);
-      const c0 = Math.max(0, Math.min(t.ncols - 2, Math.floor(fc)));
-      const r0 = Math.max(0, Math.min(t.nrows - 2, Math.floor(fr)));
-      const tc = Math.max(0, Math.min(1, fc - c0));
-      const tr = Math.max(0, Math.min(1, fr - r0));
-      const h00 = t.heights[r0 * t.ncols + c0], h01 = t.heights[r0 * t.ncols + c0 + 1];
-      const h10 = t.heights[(r0 + 1) * t.ncols + c0], h11 = t.heights[(r0 + 1) * t.ncols + c0 + 1];
-      return t.origin[1] + (h00 * (1 - tc) + h01 * tc) * (1 - tr) + (h10 * (1 - tc) + h11 * tc) * tr;
-    };
-    const mesh = buildRiverRibbon({ points: input.points as [number, number][], widthM: input.widthM, color: input.color, sampleHeight, seaLevel: level });
-    ctx.world.scene.add(mesh);
-    rivers.push(mesh);
+    const hasCanonicalTerrain = layer !== undefined || (input.mapDerived === true && terrainSource !== undefined);
+    const sampleHeight = layer !== undefined
+      ? (x: number, z: number) => sampleLayerHeight(layer, x, z)
+      : input.mapDerived === true && terrainSource !== undefined
+      ? (x: number, z: number) => terrainSource.sampleHeight(1, x, z, 0)
+      : () => level - 1.2;
+    const surfaceElevationsM = hasCanonicalTerrain
+      ? input.points.map(([x, z]) => Math.max(level + 0.03, sampleHeight(x, z) + 0.03))
+      : undefined;
+    const key = input.key ?? `legacy:river:${legacySequence++}`;
+    const mounted = managerFor(ctx.world.scene).mount(key, "river", (waterQuality) => buildRiverRibbon({
+      points: input.points as [number, number][],
+      widthM: input.widthM,
+      widthsM: input.widths,
+      color: input.color,
+      sampleHeight,
+      surfaceElevationsM,
+      seaLevel: level,
+      waveCount: input.mapDerived === true ? waterQuality.waveCount : undefined,
+      class: input.class,
+      order: input.order,
+    }) as THREE.Mesh, { class: input.class, ...(input.order === undefined ? {} : { order: input.order }) }, input.identity ?? key);
+    if (mounted.mounted) {
+      rivers.push(mounted.entry.mesh);
+      input.onMounted?.(key);
+    }
     ctx.emit("world.river.added", { points: input.points.length, widthM: input.widthM, level });
     return { points: input.points.length, widthM: input.widthM, level };
   };
@@ -351,32 +497,217 @@ export function registerWaterSkills(
     input: addMapRiversInput,
     output: z.object({ rivers: z.number().int(), points: z.number().int(), mapHash: z.string() }),
     handler: (input, ctx) => {
-      if (assets === undefined) throw new Error("world.addMapRivers requires an AssetRegistry");
-      const resolved = assets.resolve(input.mapAssetId);
-      let parsed: unknown;
-      try { parsed = JSON.parse(new TextDecoder().decode(resolved.bytes)); }
-      catch (error) { throw new Error(`world.addMapRivers: '${input.mapAssetId}' is not valid JSON: ${error instanceof Error ? error.message : String(error)}`); }
-      const worldMap = WorldMapSchema.parse(migrateWorldMap(parsed));
-      const verified = verifyWorldMap(worldMap);
-      if (!verified.ok) throw new Error(`world.addMapRivers: '${input.mapAssetId}' content hash mismatch`);
-      if (input.mapHash !== undefined && input.mapHash !== worldMap.provenance.contentHash) {
-        throw new Error(`world.addMapRivers: map identity mismatch (committed ${input.mapHash}, resolved ${worldMap.provenance.contentHash})`);
+      const worldMap = resolveVerifiedMap(assets, input.mapAssetId, input.mapHash, "world.addMapRivers");
+      const manager = managerFor(ctx.world.scene);
+      const newFragmentCount = worldMap.waterways.reduce((count, _waterway, index) => (
+        count + (manager.has(`authored:${worldMap.provenance.contentHash}:waterway:${index}`) ? 0 : 1)
+      ), 0);
+      if (newFragmentCount > manager.quality.maxResidentFragments - manager.size) {
+        throw new RangeError(`map rivers require ${newFragmentCount} new fragments but only ${manager.quality.maxResidentFragments - manager.size} are available`);
       }
+      const mountedKeys: string[] = [];
+      const riverCountBefore = rivers.length;
       let pointCount = 0;
-      for (const waterway of worldMap.waterways) {
-        const points = waterway.points.map(([x, z]) => [
-          worldMap.origin[0] + x * worldMap.unitsPerMeter,
-          worldMap.origin[1] + z * worldMap.unitsPerMeter,
-        ] as [number, number]);
-        mountRiver({ points, widthM: (waterway.widthM ?? 6) * input.widthScale, color: input.color, level: input.level, terrainEntity: input.terrainEntity }, ctx);
+      try {
+        for (let index = 0; index < worldMap.waterways.length; index++) {
+          const waterway = worldMap.waterways[index];
+          const points = waterway.points.map((entry) => mapPoint(worldMap, entry));
+          const level = input.level ?? worldMap.seaLevel;
+          mountRiver({
+            points,
+            widthM: (waterway.widthM ?? 6) * input.widthScale,
+            widths: waterway.widths?.map((width) => width * input.widthScale),
+            class: waterway.class,
+            order: waterway.order,
+            color: input.color,
+            level,
+            terrainEntity: input.terrainEntity,
+            mapDerived: true,
+            key: `authored:${worldMap.provenance.contentHash}:waterway:${index}`,
+            identity: semanticIdentity("authored-waterway", worldMap.provenance.contentHash, index, input.widthScale, input.color ?? null, level, input.terrainEntity ?? null),
+            onMounted: (key) => mountedKeys.push(key),
+          }, ctx);
+          pointCount += points.length;
+        }
+        return { rivers: worldMap.waterways.length, points: pointCount, mapHash: worldMap.provenance.contentHash };
+      } catch (error) {
+        rivers.length = riverCountBefore;
+        const cleanupErrors: unknown[] = [];
+        for (const key of mountedKeys.reverse()) try { manager.remove(key); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+        if (cleanupErrors.length > 0) throw new AggregateError([error, ...cleanupErrors], "map river mount and rollback failed");
+        throw error;
+      }
+    },
+  };
+
+  const addMapWaterInput = z.object({
+    mapAssetId: z.string().min(1),
+    mapHash: z.string().optional(),
+    widthScale: z.number().positive().max(10).default(1),
+    color: z.number().int().min(0).max(0xffffff).optional(),
+    level: z.number().optional(),
+    terrainEntity: z.string().optional(),
+  });
+  const addMapWaterOutput = z.object({
+    ocean: z.number().int(),
+    bodies: z.number().int(),
+    rivers: z.number().int(),
+    points: z.number().int(),
+    mapHash: z.string(),
+  });
+  const addMapWater: SkillDefinition<z.infer<typeof addMapWaterInput>, z.infer<typeof addMapWaterOutput>> = {
+    name: "world.addMapWater",
+    version: "1.0.0",
+    description: "Mount the verified WorldMap ocean, standing WaterBodies, and waterways as one idempotent render-only water set.",
+    category: "world",
+    permissions: ["scene.write"],
+    commitFields: ["mapHash"],
+    input: addMapWaterInput,
+    output: addMapWaterOutput,
+    handler: (input, ctx) => {
+      const worldMap = resolveVerifiedMap(assets, input.mapAssetId, input.mapHash, "world.addMapWater");
+      const hash = worldMap.provenance.contentHash;
+      const manager = managerFor(ctx.world.scene);
+      const requestedKeys = [
+        `authored:${hash}:ocean`,
+        ...(worldMap.waterBodies ?? []).map((body) => `authored:${hash}:body:${body.id}`),
+        ...worldMap.waterways.map((_waterway, index) => `authored:${hash}:waterway:${index}`),
+      ];
+      const newFragmentCount = requestedKeys.reduce((count, key) => count + (manager.has(key) ? 0 : 1), 0);
+      if (newFragmentCount > manager.quality.maxResidentFragments - manager.size) {
+        throw new RangeError(`map water requires ${newFragmentCount} new fragments but only ${manager.quality.maxResidentFragments - manager.size} are available`);
+      }
+      const mountedKeys: string[] = [];
+      const surfaceCountBefore = surfaces.length;
+      const riverCountBefore = rivers.length;
+      const minX = worldMap.origin[0], minZ = worldMap.origin[1];
+      const maxX = minX + worldMap.extent.w * worldMap.unitsPerMeter;
+      const maxZ = minZ + worldMap.extent.h * worldMap.unitsPerMeter;
+      const oceanLevel = input.level ?? worldMap.seaLevel;
+      const oceanKey = `authored:${hash}:ocean`;
+      try {
+      const ocean = manager.mount(oceanKey, "ocean", (waterQuality) => buildWaterSurface({
+        level: oceanLevel,
+        size: Math.max(maxX - minX, maxZ - minZ) + TILE_SIZE * 2,
+        center: [(minX + maxX) / 2, (minZ + maxZ) / 2],
+        color: input.color,
+        segments: waterQuality.oceanSegments,
+        waveCount: waterQuality.waveCount,
+        depth: terrainSource === undefined ? undefined : {
+          bounds: { minX, minZ, maxX, maxZ },
+          resolution: waterQuality.depthRasterSize,
+          sampleHeight: (x, z) => terrainSource.sampleHeight(1, x, z, 0),
+        },
+        peek: ctx.world.peek === true,
+      }) as THREE.Mesh, { mapHash: hash }, semanticIdentity("authored-ocean", hash, oceanLevel, input.color ?? null));
+      if (ocean.mounted) {
+        mountedKeys.push(oceanKey);
+        surfaces.push({
+        level: oceanLevel,
+        size: Math.max(maxX - minX, maxZ - minZ) + TILE_SIZE * 2,
+        color: input.color ?? DEFAULT_WATER_COLOR,
+        mesh: ocean.entry.mesh,
+        key: oceanKey,
+        kind: "ocean",
+        });
+      }
+
+      let field: ReturnType<typeof createWaterField> | undefined;
+      for (const body of worldMap.waterBodies ?? []) {
+        const key = `authored:${hash}:body:${body.id}`;
+        const points = body.footprint.points.map((entry) => mapPoint(worldMap, entry));
+        const holes = body.footprint.holes?.map((hole) => hole.map((entry) => mapPoint(worldMap, entry)));
+        const bounds = footprintBounds([points, ...(holes ?? [])]);
+        const mounted = manager.mount(key, "basin", (waterQuality) => {
+          field ??= createWaterField(worldMap);
+          const maximumDepthM = body.depthZones[body.depthZones.length - 1].depthM;
+          const texture = bodyDepthTexture(
+            field,
+            body.id,
+            bounds,
+            maximumDepthM,
+            bodyDepthResolution(waterQuality, worldMap.waterBodies?.length ?? 0),
+          );
+          return buildWaterBodySurface({
+            id: body.id,
+            kind: body.kind,
+            level: body.level,
+            footprint: { points, ...(holes === undefined ? {} : { holes }) },
+            color: input.color,
+            waveCount: waterQuality.waveCount,
+            depth: { texture, bounds, coverageChannel: true },
+          });
+        }, { mapHash: hash, bodyId: body.id, bodyKind: body.kind }, semanticIdentity("authored-body", hash, body.id, input.color ?? null));
+        if (mounted.mounted) {
+          mountedKeys.push(key);
+          surfaces.push({
+          level: body.level,
+          size: Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ),
+          color: input.color ?? DEFAULT_WATER_COLOR,
+          mesh: mounted.entry.mesh,
+          key,
+          kind: "basin",
+          bodyId: body.id,
+          });
+        }
+      }
+
+      let pointCount = 0;
+      for (let index = 0; index < worldMap.waterways.length; index++) {
+        const waterway = worldMap.waterways[index];
+        const points = waterway.points.map((entry) => mapPoint(worldMap, entry));
+        mountRiver({
+          points,
+          widthM: (waterway.widthM ?? 6) * input.widthScale,
+          widths: waterway.widths?.map((width) => width * input.widthScale),
+          class: waterway.class,
+          order: waterway.order,
+          color: input.color,
+          level: oceanLevel,
+          terrainEntity: input.terrainEntity,
+          mapDerived: true,
+          key: `authored:${hash}:waterway:${index}`,
+          identity: semanticIdentity("authored-waterway", hash, index, input.widthScale, input.color ?? null, oceanLevel, input.terrainEntity ?? null),
+          onMounted: (key) => mountedKeys.push(key),
+        }, ctx);
         pointCount += points.length;
       }
-      return { rivers: worldMap.waterways.length, points: pointCount, mapHash: worldMap.provenance.contentHash };
+      return {
+        ocean: 1,
+        bodies: worldMap.waterBodies?.length ?? 0,
+        rivers: worldMap.waterways.length,
+        points: pointCount,
+        mapHash: hash,
+      };
+      } catch (error) {
+        surfaces.length = surfaceCountBefore;
+        rivers.length = riverCountBefore;
+        const cleanupErrors: unknown[] = [];
+        for (const key of mountedKeys.reverse()) try { manager.remove(key); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+        if (cleanupErrors.length > 0) throw new AggregateError([error, ...cleanupErrors], "map water mount and rollback failed");
+        throw error;
+      }
     },
   };
 
   registry.register(addWater);
   registry.register(addRiver);
   registry.register(addMapRivers);
-  return { surfaces, rivers };
+  registry.register(addMapWater);
+  return {
+    surfaces,
+    rivers,
+    manager: () => visibleWater,
+    setQuality(next): void {
+      quality = next;
+      visibleWater?.setQuality(next);
+    },
+    dispose(): void {
+      visibleWater?.dispose();
+      visibleWater = undefined;
+      visibleWaterScene = undefined;
+      surfaces.length = 0;
+      rivers.length = 0;
+    },
+  };
 }

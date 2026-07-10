@@ -664,6 +664,9 @@ function mapAssetIdsForCommand(cmd: AuthorCommand): string[] {
   if (cmd.tool === "world.setTerrainSource") {
     return input.kind === "map" && typeof input.mapAssetId === "string" ? [input.mapAssetId] : [];
   }
+  if (cmd.tool === "world.addMapWater" || cmd.tool === "world.addMapRivers") {
+    return typeof input.mapAssetId === "string" ? [input.mapAssetId] : [];
+  }
   if (cmd.tool === "terrain.create") {
     const g = (input.generate ?? {}) as { source?: unknown; mapAssetId?: unknown };
     return g.source === "map" && typeof g.mapAssetId === "string" ? [g.mapAssetId] : [];
@@ -776,6 +779,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupInput: LivePlayerInput | undefined;
   let cleanupCameraControls: InstanceType<typeof THREE.OrbitControls> | undefined;
   let cleanupUnderwater: UnderwaterEffect | undefined;
+  let cleanupWater: { dispose(): void } | undefined;
   let teardownPromise: Promise<void> | undefined;
   let runtimeReady = false;
   let aborted = false;
@@ -811,6 +815,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       await step("terrain stream", () => cleanupTerrainStream?.clear());
       await step("terrain material pool", () => cleanupTerrainMaterialPool?.dispose());
       await step("underwater effect", () => cleanupUnderwater?.dispose());
+      await step("visible water", () => cleanupWater?.dispose());
       await step("post-processing", () => (cleanupWorld?.post as { dispose?(): void } | undefined)?.dispose?.());
       if (cleanupWorld !== undefined) cleanupWorld.post = undefined;
       await step("world render session", () => cleanupRenderSession?.dispose());
@@ -1056,6 +1061,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   cleanupUnderwater = underwaterEffect;
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
   const core = registerCoreSkills(registry, { assets: liveAssets });
+  core.water.setQuality(renderSession.quality().water);
+  cleanupWater = core.water;
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
     registerBrowserAuthoringRuntime(registry, world, projectId);
   }, initialAuthoringProjectId);
@@ -1736,6 +1743,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     setRenderQuality: (nextTier): Readonly<import("./render/quality.ts").RenderQualityProfile> => {
       if (renderSession.quality().tier === nextTier) return renderSession.quality();
       const profile = renderSession.setQuality(nextTier);
+      core.water.setQuality(profile.water);
       rebuildPostForQuality(profile);
       return profile;
     },

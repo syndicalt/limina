@@ -244,16 +244,27 @@ const map = {
   version: 1, id: "river-test", unitsPerMeter: 2, origin: [10, -20], extent: { w: 100, h: 100 },
   seaLevel: 0, land: [], relief: [], biomes: [], routes: [], anchors: [],
   waterways: [
-    { points: [[0, 0], [5, 2]], widthM: 4, class: "river" },
-    { points: [[2, 3], [4, 5], [8, 9]], widthM: 6, class: "river" },
+    { points: [[0, 0], [5, 2]], widthM: 4, widths: [2, 6], class: "river", order: 3 },
+    { points: [[2, 3], [4, 5], [8, 9]], widthM: 6, class: "stream", order: 2 },
   ],
+  waterBodies: [{
+    id: "mill-pond", kind: "pond", level: 2,
+    footprint: {
+      points: [[10, 10], [30, 10], [30, 30], [10, 30]],
+      holes: [[[16, 16], [16, 24], [24, 24], [24, 16]]],
+    },
+    depthZones: [
+      { minShoreDistanceM: 0, maxShoreDistanceM: 3, depthM: 1 },
+      { minShoreDistanceM: 3, maxShoreDistanceM: 100, depthM: 4 },
+    ],
+  }],
   provenance: { tool: "design-space", contentHash: "pending" },
 } as WorldMap;
 map.provenance.contentHash = worldMapContentHash(map);
 const mapAssets = new AssetRegistry(ops);
 mapAssets.seed(mapAssetId, new TextEncoder().encode(JSON.stringify(map)));
 const mapRegistry = new SkillRegistry(new LiminaTracer("ses_p11_map_rivers"));
-registerCoreSkills(mapRegistry, { assets: mapAssets });
+const mapCore = registerCoreSkills(mapRegistry, { assets: mapAssets });
 const mapWorld = makeHeadlessWorld(ops);
 const mapAuthor = { ...author, sessionId: "ses_p11_map_rivers", world: mapWorld };
 const mapRivers = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, widthScale: 1.5 }, mapAuthor);
@@ -262,8 +273,51 @@ const mapRiverOut = mapRivers.result as { rivers: number; points: number; mapHas
 assert(mapRiverOut.rivers === 2 && mapRiverOut.points === 5, `map river counts wrong: ${JSON.stringify(mapRiverOut)}`);
 assert(mapRiverOut.mapHash === map.provenance.contentHash, "world.addMapRivers did not return the verified map identity");
 assert(riverMeshes(mapWorld.scene).length === 2, "world.addMapRivers must mount every mapped waterway");
+const firstMapRiver = riverMeshes(mapWorld.scene)[0] as unknown as THREE.Mesh;
+assert(firstMapRiver.userData.waterwayClass === "river" && firstMapRiver.userData.waterwayOrder === 3,
+  "world.addMapRivers dropped authored class/order");
+const firstRiverPosition = firstMapRiver.geometry.getAttribute("position") as THREE.BufferAttribute;
+assert(Math.abs(Math.hypot(firstRiverPosition.getX(0) - firstRiverPosition.getX(1), firstRiverPosition.getZ(0) - firstRiverPosition.getZ(1)) - 3) < 1e-5,
+  "world.addMapRivers dropped/scaled the first authored per-point width incorrectly");
+const duplicateMapRivers = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, widthScale: 1.5 }, mapAuthor);
+assert(duplicateMapRivers.success && riverMeshes(mapWorld.scene).length === 2 && mapCore.water.rivers.length === 2,
+  "replayed world.addMapRivers duplicated authored waterway geometry");
+const conflictingMapRivers = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, widthScale: 2 }, mapAuthor);
+assert(!conflictingMapRivers.success && riverMeshes(mapWorld.scene).length === 2 && mapCore.water.rivers.length === 2,
+  "conflicting map river parameters were silently deduplicated or changed the mounted set");
 const wrongIdentity = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, mapHash: "wrong" }, mapAuthor);
 assert(!wrongIdentity.success, "world.addMapRivers must reject a mismatched committed map hash");
 assert(riverMeshes(mapWorld.scene).length === 2, "identity rejection must occur before mounting any river");
 
-ops.op_log("p11_water addMapRivers OK: validated and pinned one map asset, transformed and mounted all 2 waterways, and rejected an identity mismatch before side effects.");
+const mapWater = await mapRegistry.invoke("world.addMapWater", { mapAssetId, widthScale: 1.5 }, mapAuthor);
+assert(mapWater.success, `world.addMapWater failed: ${JSON.stringify(mapWater.error)}`);
+const mapWaterOut = mapWater.result as { ocean: number; bodies: number; rivers: number; mapHash: string };
+assert(mapWaterOut.ocean === 1 && mapWaterOut.bodies === 1 && mapWaterOut.rivers === 2 && mapWaterOut.mapHash === map.provenance.contentHash,
+  `world.addMapWater counts/identity changed: ${JSON.stringify(mapWaterOut)}`);
+assert(mapWorld.scene.children.filter((child) => child.name === "limina:water").length === 1, "world.addMapWater did not mount exactly one ocean");
+assert(mapWorld.scene.children.filter((child) => child.name === "limina:water-body").length === 1, "world.addMapWater did not mount the authored pond");
+assert(riverMeshes(mapWorld.scene).length === 2, "world.addMapWater duplicated waterways already owned by world.addMapRivers");
+const duplicateMapWater = await mapRegistry.invoke("world.addMapWater", { mapAssetId, widthScale: 1.5 }, mapAuthor);
+assert(duplicateMapWater.success && mapWorld.scene.children.length === 4 && mapCore.water.surfaces.length === 2,
+  "replayed world.addMapWater duplicated ocean/body/river geometry");
+
+const rollbackMap = JSON.parse(JSON.stringify(map)) as WorldMap;
+rollbackMap.id = "river-rollback-test";
+rollbackMap.waterways = [
+  { points: [[0, 0], [5, 2]], widthM: 4, class: "river" },
+  { points: [[2, 3], [4, 5]], widthM: 100_000, class: "stream" },
+];
+rollbackMap.provenance.contentHash = worldMapContentHash(rollbackMap);
+const rollbackAssetId = "test/map-rivers-rollback.worldmap.json";
+const rollbackAssets = new AssetRegistry(ops);
+rollbackAssets.seed(rollbackAssetId, new TextEncoder().encode(JSON.stringify(rollbackMap)));
+const rollbackRegistry = new SkillRegistry(new LiminaTracer("ses_p11_map_water_rollback"));
+const rollbackCore = registerCoreSkills(rollbackRegistry, { assets: rollbackAssets });
+const rollbackWorld = makeHeadlessWorld(ops);
+const rollbackAuthor = { ...author, sessionId: "ses_p11_map_water_rollback", world: rollbackWorld };
+const failedMapWater = await rollbackRegistry.invoke("world.addMapWater", { mapAssetId: rollbackAssetId, widthScale: 2 }, rollbackAuthor);
+assert(!failedMapWater.success && rollbackWorld.scene.children.length === 0
+  && rollbackCore.water.surfaces.length === 0 && rollbackCore.water.rivers.length === 0,
+"late valid-input geometry failure left a partially mounted map water set");
+
+ops.op_log("p11_water addMapRivers OK: validated and pinned one map asset, transformed and mounted all 2 waterways, rejected identity/semantic conflicts, and rolled late failures back atomically.");

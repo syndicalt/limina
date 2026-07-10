@@ -7,6 +7,18 @@ export interface RenderPostQuality {
   bloom: boolean;
 }
 
+export type WaterfallRenderExtras = "none" | "foam" | "foam-mist";
+
+export interface WaterRenderQuality {
+  oceanSegments: number;
+  waveCount: number;
+  depthRasterSize: number;
+  depthTextureBudgetPixels: number;
+  mountsPerFrame: number;
+  maxResidentFragments: number;
+  waterfallExtras: WaterfallRenderExtras;
+}
+
 export interface RenderQualityProfile {
   tier: RenderQualityTier;
   resolutionScale: number;
@@ -15,6 +27,7 @@ export interface RenderQualityProfile {
   shadowMapSize: number;
   shadowHalfExtent: number;
   post: Readonly<RenderPostQuality>;
+  water: Readonly<WaterRenderQuality>;
   telemetryIntervalFrames: number;
 }
 
@@ -24,14 +37,16 @@ export interface RenderQualityOverride {
   shadowMapSize?: number;
   shadowHalfExtent?: number;
   post?: Partial<RenderPostQuality>;
+  water?: Partial<WaterRenderQuality>;
   telemetryIntervalFrames?: number;
 }
 
 interface TierDefaults extends Omit<RenderQualityProfile, "tier" | "pixelRatio"> {}
 
 const QUALITY_TIERS = new Set<RenderQualityTier>(["performance", "balanced", "cinematic"]);
-const OVERRIDE_KEYS = new Set(["resolutionScale", "maxPixelRatio", "shadowMapSize", "shadowHalfExtent", "post", "telemetryIntervalFrames"]);
+const OVERRIDE_KEYS = new Set(["resolutionScale", "maxPixelRatio", "shadowMapSize", "shadowHalfExtent", "post", "water", "telemetryIntervalFrames"]);
 const POST_KEYS = new Set(["enabled", "aoSamples", "aoResolutionScale", "bloom"]);
+const WATER_KEYS = new Set(["oceanSegments", "waveCount", "depthRasterSize", "depthTextureBudgetPixels", "mountsPerFrame", "maxResidentFragments", "waterfallExtras"]);
 
 const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Object.freeze({
   performance: Object.freeze({
@@ -40,6 +55,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 1024,
     shadowHalfExtent: 128,
     post: Object.freeze({ enabled: false, aoSamples: 4, aoResolutionScale: 0.5, bloom: false }),
+    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1_048_576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none" }),
     telemetryIntervalFrames: 30,
   }),
   balanced: Object.freeze({
@@ -48,6 +64,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 2048,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 8, aoResolutionScale: 0.5, bloom: true }),
+    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4_194_304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam" }),
     telemetryIntervalFrames: 30,
   }),
   cinematic: Object.freeze({
@@ -56,6 +73,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 4096,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 16, aoResolutionScale: 1, bloom: true }),
+    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16_777_216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist" }),
     telemetryIntervalFrames: 30,
   }),
 });
@@ -93,6 +111,13 @@ function integerRange(value: unknown, minimum: number, maximum: number, label: s
 
 function boolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new TypeError(`${label} must be boolean`);
+  return value;
+}
+
+function waterfallExtras(value: unknown): WaterfallRenderExtras {
+  if (value !== "none" && value !== "foam" && value !== "foam-mist") {
+    throw new TypeError("render quality water.waterfallExtras is unsupported");
+  }
   return value;
 }
 
@@ -151,6 +176,34 @@ export function resolveRenderQuality(
       : finiteRange(postSource.aoResolutionScale, 0.25, 1, "render quality post.aoResolutionScale"),
     bloom: postSource.bloom === undefined ? defaults.post.bloom : boolean(postSource.bloom, "render quality post.bloom"),
   });
+  let waterSource: Record<string, unknown> = {};
+  if (source.water !== undefined) {
+    waterSource = plainObject(source.water, "render quality water override");
+    exactOptionalKeys(waterSource, WATER_KEYS, "render quality water override");
+  }
+  const water = Object.freeze({
+    oceanSegments: waterSource.oceanSegments === undefined
+      ? defaults.water.oceanSegments
+      : integerRange(waterSource.oceanSegments, 8, 256, "render quality water.oceanSegments"),
+    waveCount: waterSource.waveCount === undefined
+      ? defaults.water.waveCount
+      : integerRange(waterSource.waveCount, 0, 4, "render quality water.waveCount"),
+    depthRasterSize: waterSource.depthRasterSize === undefined
+      ? defaults.water.depthRasterSize
+      : powerOfTwo(waterSource.depthRasterSize, 32, 256, "render quality water.depthRasterSize"),
+    depthTextureBudgetPixels: waterSource.depthTextureBudgetPixels === undefined
+      ? defaults.water.depthTextureBudgetPixels
+      : powerOfTwo(waterSource.depthTextureBudgetPixels, 65_536, 67_108_864, "render quality water.depthTextureBudgetPixels"),
+    mountsPerFrame: waterSource.mountsPerFrame === undefined
+      ? defaults.water.mountsPerFrame
+      : integerRange(waterSource.mountsPerFrame, 1, 32, "render quality water.mountsPerFrame"),
+    maxResidentFragments: waterSource.maxResidentFragments === undefined
+      ? defaults.water.maxResidentFragments
+      : integerRange(waterSource.maxResidentFragments, 16, 4096, "render quality water.maxResidentFragments"),
+    waterfallExtras: waterSource.waterfallExtras === undefined
+      ? defaults.water.waterfallExtras
+      : waterfallExtras(waterSource.waterfallExtras),
+  });
   return Object.freeze({
     tier,
     resolutionScale,
@@ -159,6 +212,7 @@ export function resolveRenderQuality(
     shadowMapSize,
     shadowHalfExtent,
     post,
+    water,
     telemetryIntervalFrames,
   });
 }

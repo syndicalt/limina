@@ -29,7 +29,7 @@ import { registerVillageSkills } from "./village.ts";
 import { registerVegetationSkills } from "./vegetation.ts";
 import { registerGrassSkill } from "./grass.ts";
 import { registerRenderSkills } from "./render.ts";
-import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
+import { registerWaterSkills, type WaterSkillState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
 import { SwappableTerrainSource } from "../terrain/swappable.ts";
 import { TileCache } from "../terrain/tilecache.ts";
@@ -78,7 +78,7 @@ export interface CoreSkills {
   terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
   assets: AssetRegistry;
   materials: MaterialRegistry;
-  water: { surfaces: WaterSurfaceState[]; rivers: unknown[]; contact: WaterContactRuntime };
+  water: WaterSkillState & { contact: WaterContactRuntime };
   /** Phase 12: player input and movement surface. */
   player: { input: InputRegistry; controllers: CharacterControllerRegistry };
   /** Phase 12: camera rigs and control. */
