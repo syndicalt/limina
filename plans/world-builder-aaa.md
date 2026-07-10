@@ -477,5 +477,21 @@ near-vertical cliffs before the SDF layer exists.
   revision advances, rollback, malformed capabilities, and cache races. The canonical scaffold gate,
   desktop and 390x844 mobile Edit/Play/pause/external-edit/Stop/repeat workflows, composited-pixel
   checks, DPR 1/1.5/2 graphics propagation, and final authoritative two-entity cleanup are green.
-  Camera-driven residency replacement and a Grey Field hydrology recipe remain open; this slice does
-  not claim unbounded streaming or visible generated water.
+  A Grey Field hydrology recipe remains open; this slice does not claim unbounded streaming or visible
+  generated water.
+- **2026-07-10 — Project-scale editor framing and camera-driven residency shipped (`29c8fde`).** The
+  live runtime now classifies map-generated editable terrain as a large world, opens OrbitControls on
+  the authored off-origin terrain center, and derives a bounded local camera, far plane of at least
+  1,500 m, scaled atmosphere, and production zoom/polar constraints. Edit and isolated Play no longer
+  overwrite that frame with the legacy origin-centered 16 m orbit, and ordinary reboots preserve the
+  complete camera pose and controls target. A manifest-grid tracker follows the controls target (or
+  player/camera fallback) without per-frame allocation and emits only after a Chebyshev movement of
+  more than two chunks. Worker protocol v3 serializes those updates behind any older activation,
+  coalesces rapid movement with exact last-write-wins semantics, reloads changed selections even on a
+  same-manifest 304 response, keeps pinned Play on the exact manifest, and retains the prior live window
+  without retry spinning outside the map domain. Native and client tests cover in-flight activation,
+  rollback, pinned updates, outside-domain recovery, and `A -> B -> A` pan races. Production Chromium
+  UAT at 1440x900 framed 86 quantized canvas colors and loaded 23 bounded incremental artifacts after
+  one right-drag, with visible terrain, horizon, trees, and river before/after the pan; desktop and
+  390x844 Edit/Play/pause/Stop/repeat workflows also passed against rebuilt bundles. Whole-world Atlas
+  handoff remains a separate overview workflow rather than an editor camera default.
