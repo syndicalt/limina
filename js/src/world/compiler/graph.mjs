@@ -238,6 +238,15 @@ export const HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
     sourceInputs: [{ inputId: "hydrology.precipitation", scope: "global" }],
     footprint: { haloChunks: 0 },
   },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "hydrology-water-topology",
+    stageVersion: "1.0.0",
+    scope: "global",
+    dependencies: ["hydrology-field"],
+    sourceInputs: [{ inputId: "hydrology.thresholds", scope: "global" }],
+    footprint: { haloChunks: 0 },
+  },
 ]);
 
 export function createHydrologyWorldCompilerGraph() {

@@ -7,6 +7,10 @@ import { sha256 } from "../src/world/sha256.mjs";
 import { worldMapContentHash, type WorldMap } from "../src/world/worldmap.ts";
 import { decodeHydrologyFieldArtifact, HYDROLOGY_FIELD_ARTIFACT_TYPE } from "../src/world/hydrology-artifact.mjs";
 import {
+  decodeHydrologyWaterArtifact,
+  HYDROLOGY_WATER_ARTIFACT_TYPE,
+} from "../src/world/hydrology-water-artifact.mjs";
+import {
   canonicalCompilerSnapshot,
   canonicalDerivedRevisionManifest,
   compilerContentHash,
@@ -300,7 +304,12 @@ const hydrologyGraph = createHydrologyWorldCompilerGraph();
 assert(initialGraph.graphHash === base.manifest.compiler.graphHash, "legacy graph hash changed when hydrology graph was added");
 assert(hydrologyGraph.graphHash !== initialGraph.graphHash, "hydrology profile did not receive a distinct graph identity");
 assert(hydrologyGraph.definitions.find((stage: any) => stage.stageId === "hydrology-field")?.dependencies.join(",") === "erosion", "hydrology stage is not terminal over erosion");
-assert(hydrologyGraph.reverseDependencies["hydrology-field"].length === 0, "hydrology stage incorrectly invalidates terrain chunks");
+assert(hydrologyGraph.reverseDependencies["hydrology-field"].join(",") === "hydrology-water-topology",
+  "hydrology field does not invalidate only generated water topology");
+assert(hydrologyGraph.definitions.find((stage: any) => stage.stageId === "hydrology-water-topology")?.dependencies.join(",") === "hydrology-field",
+  "generated water topology is not terminal over the hydrology field");
+assert(hydrologyGraph.reverseDependencies["hydrology-water-topology"].length === 0,
+  "generated water topology incorrectly invalidates terrain chunks");
 assert(createDefaultWorldTerrainCompiler("terrain-compile").identity.graphHash === initialGraph.graphHash, "default compiler profile no longer uses the exact legacy graph");
 assert(createHydrologyWorldTerrainCompiler("terrain-compile").identity.graphHash === hydrologyGraph.graphHash, "hydrology compiler profile identity does not match its graph");
 
@@ -310,15 +319,28 @@ rejects(() => compileWorldTerrain({ ...hydrologyInput(hydrologyMap), compiler: {
 
 const hydrologyCold = compileWorldTerrain(hydrologyInput(hydrologyMap));
 assert(hydrologyCold.manifest.schema === "limina.derived-revision-manifest/v2", "recipe compile did not emit manifest v2");
-assert(derivedGlobalArtifacts(hydrologyCold.manifest).length === 1, "recipe compile did not emit exactly one global artifact descriptor");
-const hydrologyColdGlobal = hydrologyCold.artifacts.find((artifact: any) => artifact.scope === "global");
-assert(hydrologyColdGlobal?.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE, "recipe compile omitted hydrology field bytes");
-assert(hydrologyCold.artifacts.slice(0, -1).every((artifact: any) => artifact.scope === "chunk") && hydrologyCold.artifacts.at(-1) === hydrologyColdGlobal, "v2 supplied artifacts are not explicitly scoped in reference order");
+assert(derivedGlobalArtifacts(hydrologyCold.manifest).length === 2, "recipe compile did not emit exactly two global artifact descriptors");
+const hydrologyColdGlobals = hydrologyCold.artifacts.filter((artifact: any) => artifact.scope === "global");
+const hydrologyColdGlobal = hydrologyColdGlobals.find((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE);
+const hydrologyWaterGlobal = hydrologyColdGlobals.find((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE);
+assert(hydrologyColdGlobal !== undefined, "recipe compile omitted hydrology field bytes");
+assert(hydrologyWaterGlobal !== undefined, "recipe compile omitted generated water topology bytes");
+assert(hydrologyCold.artifacts.slice(0, -2).every((artifact: any) => artifact.scope === "chunk")
+  && hydrologyCold.artifacts.at(-2) === hydrologyColdGlobal && hydrologyCold.artifacts.at(-1) === hydrologyWaterGlobal,
+"v2 supplied artifacts are not explicitly scoped in dependency order");
 const decodedHydrology = decodeHydrologyFieldArtifact(hydrologyColdGlobal.bytes);
+const decodedWater = decodeHydrologyWaterArtifact(hydrologyWaterGlobal.bytes, {
+  hydrologyFieldContentHash: hydrologyColdGlobal.contentHash,
+  recipeHash: compilerContentHash(hydrologyMap.hydrology),
+  erosionStageKey: hydrologyCold.snapshot.stageKeys.erosion["@global"],
+  compilerGraphHash: hydrologyGraph.graphHash,
+});
 const hydrologyField = createMapTerrainField({ worldMap: hydrologyMap, seed: 7, baseAmplitude: 12, erosionRecipe: NO_EROSION_RECIPE, gridId: GRID_ID });
 assert(decodedHydrology.topology.rows === hydrologyField.masterRes && decodedHydrology.topology.cols === hydrologyField.masterRes, "hydrology artifact dimensions do not match the eroded master field");
 assert(decodedHydrology.placement.originX === hydrologyField.bounds.minX && decodedHydrology.placement.originZ === hydrologyField.bounds.minZ, "hydrology artifact placement does not match the master field origin");
 assert(decodedHydrology.topology.cellSizeM === hydrologyField.masterStep, "hydrology artifact cell size does not match the master field");
+assert(decodedWater.topology.rows === hydrologyField.masterRes && decodedWater.topology.cols === hydrologyField.masterRes,
+  "generated water topology dimensions do not match the master field");
 
 const hydrologyAvailable = availableManifestHashes(hydrologyCold);
 const hydrologyWarm = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
@@ -327,18 +349,35 @@ const hydrologyWarm = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
   availableArtifactHashes: hydrologyAvailable,
 }));
 assert(hydrologyWarm.artifacts.length === 0, "warm hydrology compile materialized bytes");
-assert(hydrologyWarm.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 1, "warm hydrology compile did not reuse every global and chunk artifact");
-assert(hydrologyWarm.reusedArtifacts.slice(0, -1).every((artifact: any) => artifact.scope === "chunk")
-  && hydrologyWarm.reusedArtifacts.at(-1)?.scope === "global", "v2 reused artifacts are not explicitly scoped in reference order");
+assert(hydrologyWarm.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 2, "warm hydrology compile did not reuse every global and chunk artifact");
+assert(hydrologyWarm.reusedArtifacts.slice(0, -2).every((artifact: any) => artifact.scope === "chunk")
+  && hydrologyWarm.reusedArtifacts.at(-2)?.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE
+  && hydrologyWarm.reusedArtifacts.at(-1)?.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
+"v2 reused artifacts are not explicitly scoped in dependency order");
 
-const hydrologyGlobalHash = derivedGlobalArtifacts(hydrologyCold.manifest)[0].contentHash;
+const hydrologyGlobalHash = derivedGlobalArtifacts(hydrologyCold.manifest)
+  .find((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE).contentHash;
 const missingHydrologyGlobal = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
   previousSnapshot: hydrologyCold.snapshot,
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable.filter((hash) => hash !== hydrologyGlobalHash),
 }));
 assert(missingHydrologyGlobal.artifacts.length === 1 && missingHydrologyGlobal.artifacts[0].scope === "global", "missing global availability recompiled chunk artifacts");
-assert(missingHydrologyGlobal.reusedArtifacts.length === hydrologyCold.manifest.chunks.length, "missing global availability failed to reuse all chunks");
+assert(missingHydrologyGlobal.artifacts[0].artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE,
+  "missing field availability rebuilt the wrong global artifact");
+assert(missingHydrologyGlobal.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 1,
+  "missing field availability failed to reuse chunks and bound water topology");
+const hydrologyWaterHash = derivedGlobalArtifacts(hydrologyCold.manifest)
+  .find((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE).contentHash;
+const missingWaterGlobal = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
+  previousSnapshot: hydrologyCold.snapshot,
+  previousManifest: hydrologyCold.manifest,
+  availableArtifactHashes: hydrologyAvailable.filter((hash) => hash !== hydrologyWaterHash),
+}));
+assert(missingWaterGlobal.artifacts.length === 1 && missingWaterGlobal.artifacts[0].artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
+  "missing water topology availability rebuilt more than generated water");
+assert(missingWaterGlobal.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 1,
+  "missing water topology availability failed to reuse chunks and field");
 const wrongMediaManifest = clone(hydrologyCold.manifest);
 delete wrongMediaManifest.manifestHash;
 wrongMediaManifest.globalArtifacts[0].mediaType = "application/octet-stream";
@@ -348,7 +387,19 @@ const wrongMediaHydrology = compileWorldTerrain(hydrologyInput(hydrologyMap, [],
   previousManifest: resealedWrongMediaManifest,
   availableArtifactHashes: availableManifestHashes({ manifest: resealedWrongMediaManifest }),
 }));
-assert(wrongMediaHydrology.artifacts.length === 1 && wrongMediaHydrology.artifacts[0].scope === "global", "wrong global media type did not recompile only hydrology");
+assert(wrongMediaHydrology.artifacts.length === 1 && wrongMediaHydrology.artifacts[0].artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE,
+  "wrong field media type did not recompile only the field");
+const wrongWaterMediaManifest = clone(hydrologyCold.manifest);
+delete wrongWaterMediaManifest.manifestHash;
+wrongWaterMediaManifest.globalArtifacts[1].mediaType = "application/octet-stream";
+const resealedWrongWaterMediaManifest = createDerivedRevisionManifest(wrongWaterMediaManifest);
+const wrongMediaWater = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
+  previousSnapshot: hydrologyCold.snapshot,
+  previousManifest: resealedWrongWaterMediaManifest,
+  availableArtifactHashes: availableManifestHashes({ manifest: resealedWrongWaterMediaManifest }),
+}));
+assert(wrongMediaWater.artifacts.length === 1 && wrongMediaWater.artifacts[0].artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
+  "wrong water media type did not rebuild only generated water topology");
 rejects(() => compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
   previousSnapshot: hydrologyCold.snapshot,
   previousManifest: hydrologyCold.manifest,
@@ -361,7 +412,8 @@ const wetter = compileWorldTerrain(hydrologyInput(wetterMap, [], [], {
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(wetter.artifacts.length === 1 && wetter.artifacts[0].scope === "global", "precipitation edit recompiled terrain chunks");
+assert(wetter.artifacts.length === 2 && wetter.artifacts.every((artifact: any) => artifact.scope === "global"),
+  "precipitation edit did not emit exactly both hydrology globals");
 assert(wetter.reusedArtifacts.length === hydrologyCold.manifest.chunks.length, "precipitation edit did not reuse all terrain chunks");
 assert(wetter.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId] === hydrologyCold.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId], "precipitation leaked into terrain source identity");
 
@@ -371,8 +423,13 @@ const thresholds = compileWorldTerrain(hydrologyInput(thresholdMap, [], [], {
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(thresholds.artifacts.length === 0 && thresholds.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 1, "raw-field-irrelevant threshold edit recompiled artifacts");
-assert(thresholds.snapshot.snapshotHash === hydrologyCold.snapshot.snapshotHash, "raw-field-irrelevant thresholds changed the compiler snapshot");
+assert(thresholds.artifacts.length === 1 && thresholds.artifacts[0].artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
+  "threshold edit did not rebuild only generated water topology");
+assert(thresholds.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 1,
+  "threshold edit failed to reuse all chunks and the raw hydrology field");
+assert(thresholds.snapshot.stageKeys["hydrology-field"]["@global"] === hydrologyCold.snapshot.stageKeys["hydrology-field"]["@global"],
+  "raw-field-irrelevant thresholds changed the hydrology field stage key");
+assert(thresholds.snapshot.snapshotHash !== hydrologyCold.snapshot.snapshotHash, "threshold edit did not change generated-water compiler identity");
 assert(thresholds.manifest.manifestHash !== hydrologyCold.manifest.manifestHash, "threshold edit was not bound by manifest source identity");
 
 const raisedSeaMap = fixtureHydrologyMap({}, { seaLevel: 1 });
@@ -381,7 +438,8 @@ const raisedSea = compileWorldTerrain(hydrologyInput(raisedSeaMap, [], [], {
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(raisedSea.artifacts.length === hydrologyCold.manifest.chunks.length + 1 && raisedSea.reusedArtifacts.length === 0, "terrain source edit did not invalidate global hydrology and every chunk");
+assert(raisedSea.artifacts.length === hydrologyCold.manifest.chunks.length + 2 && raisedSea.reusedArtifacts.length === 0,
+  "terrain source edit did not invalidate both hydrology globals and every chunk");
 
 const hydrologyEroded = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
   compiler: { version: WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION, config: erosionConfig },
@@ -389,7 +447,8 @@ const hydrologyEroded = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [],
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(hydrologyEroded.artifacts.length === hydrologyCold.manifest.chunks.length + 1 && hydrologyEroded.reusedArtifacts.length === 0, "erosion edit did not invalidate global hydrology and every chunk");
+assert(hydrologyEroded.artifacts.length === hydrologyCold.manifest.chunks.length + 2 && hydrologyEroded.reusedArtifacts.length === 0,
+  "erosion edit did not invalidate both hydrology globals and every chunk");
 
 const localHydrologyFirst = compileWorldTerrain(hydrologyInput(hydrologyMap, [localV1], [layerRef(localV1)]));
 const localHydrologyAvailable = availableManifestHashes(localHydrologyFirst);
@@ -399,14 +458,27 @@ const localHydrologySecond = compileWorldTerrain(hydrologyInput(hydrologyMap, [l
   availableArtifactHashes: localHydrologyAvailable,
 }));
 assert(localHydrologySecond.artifacts.length === 1 && localHydrologySecond.artifacts[0].scope === "chunk", "local edit did not emit exactly its affected terrain chunk");
-assert(localHydrologySecond.reusedArtifacts.filter((artifact: any) => artifact.scope === "global").length === 1, "local edit incorrectly invalidated global hydrology");
+assert(localHydrologySecond.reusedArtifacts.filter((artifact: any) => artifact.scope === "global").length === 2,
+  "local edit incorrectly invalidated global hydrology artifacts");
 
 const legacyToHydrology = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
   previousSnapshot: base.snapshot,
   previousManifest: base.manifest,
   availableArtifactHashes: available,
 }));
-assert(legacyToHydrology.artifacts.length === base.manifest.chunks.length + 1 && legacyToHydrology.reusedArtifacts.length === 0, "legacy-to-hydrology graph transition was not cold");
+assert(legacyToHydrology.artifacts.length === base.manifest.chunks.length + 2 && legacyToHydrology.reusedArtifacts.length === 0,
+  "legacy-to-hydrology graph transition was not cold");
+const priorProfileManifest = clone(hydrologyCold.manifest);
+delete priorProfileManifest.manifestHash;
+priorProfileManifest.compiler.version = "1.1.0";
+const resealedPriorProfileManifest = createDerivedRevisionManifest(priorProfileManifest);
+const priorProfileToCurrent = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
+  previousSnapshot: hydrologyCold.snapshot,
+  previousManifest: resealedPriorProfileManifest,
+  availableArtifactHashes: availableManifestHashes({ manifest: resealedPriorProfileManifest }),
+}));
+assert(priorProfileToCurrent.artifacts.length === hydrologyCold.manifest.chunks.length + 2
+  && priorProfileToCurrent.reusedArtifacts.length === 0, "hydrology 1.1-to-1.2 profile migration was not cold");
 const hydrologyToLegacy = compileWorldTerrain({
   ...input(),
   previousSnapshot: hydrologyCold.snapshot,
@@ -451,4 +523,4 @@ rejects(() => compileWorldTerrain({
   sourceRefs: { mapDocument: mapDocumentRef, designSource: designSourceRef, worldMap: { ...worldMapRef, contentHash: `sha256:${expensiveMap.provenance.contentHash}` } },
 }), /estimated work .* exceeds/, "adversarial cell-by-vector work was not rejected before rasterization");
 
-ops.op_log(`p_world_terrain_compile OK: ${base.artifacts.length} canonical chunks; exact legacy goldens, deterministic scoped hydrology v2, global-only precipitation invalidation, threshold reuse, profile transitions, ordered local edits, exact seams, strict cache/cancellation/resource rejection, and bounded vector work.`);
+ops.op_log(`p_world_terrain_compile OK: ${base.artifacts.length} canonical chunks; exact legacy goldens, deterministic field+water globals, precipitation/threshold isolation, cold profile transitions, ordered local edits, exact seams, strict cache/cancellation/resource rejection, and bounded vector work.`);

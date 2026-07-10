@@ -17,6 +17,18 @@ import {
   HydrologyArtifactCancelledError,
   encodeHydrologyFieldArtifact,
 } from "../hydrology-artifact.mjs";
+import {
+  HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION,
+  HydrologyWaterTopologyCancelledError,
+  extractHydrologyWaterTopology,
+} from "../hydrology-water-topology.mjs";
+import {
+  HYDROLOGY_WATER_ARTIFACT_VERSION,
+  HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+  HYDROLOGY_WATER_ARTIFACT_TYPE,
+  HydrologyWaterArtifactCancelledError,
+  encodeHydrologyWaterArtifact,
+} from "../hydrology-water-artifact.mjs";
 import { compilerContentHash, validateCompilerContentHash } from "./canonical.mjs";
 import { createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph } from "./graph.mjs";
 import { planCompilerInvalidation } from "./planner.mjs";
@@ -24,7 +36,7 @@ import { createDerivedRevisionManifest, derivedArtifactContentHash, derivedGloba
 import { encodeTerrainChunkArtifact, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE } from "./terrain-artifact.mjs";
 
 export const WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA = "limina.world-terrain-compiler-config/v1";
-export const WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION = "1.1.0";
+export const WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION = "1.2.0";
 export const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 export const MAX_WORLD_TERRAIN_COMPILE_CHUNKS = 16_384;
 export const MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -50,8 +62,16 @@ type HydrologyArtifactEncoder = (
   placement: { originX: number; originZ: number },
   control: { shouldCancel: () => boolean },
 ) => Uint8Array;
+type HydrologyWaterExtractor = (input: Record<string, unknown>, control: { shouldCancel: () => boolean }) => any;
+type HydrologyWaterEncoder = (
+  topology: any,
+  bindings: Record<string, string>,
+  control: { shouldCancel: () => boolean },
+) => Uint8Array;
 
 const encodeHydrologyArtifact = encodeHydrologyFieldArtifact as unknown as HydrologyArtifactEncoder;
+const extractHydrologyWater = extractHydrologyWaterTopology as unknown as HydrologyWaterExtractor;
+const encodeHydrologyWater = encodeHydrologyWaterArtifact as unknown as HydrologyWaterEncoder;
 
 function exactRecord(value: unknown, keys: readonly string[], label: string): RecordValue {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
@@ -368,6 +388,11 @@ export function compileWorldTerrain(input: unknown) {
           topologyVersion: HYDROLOGY_TOPOLOGY_VERSION,
           artifactVersion: HYDROLOGY_FIELD_ARTIFACT_VERSION,
         },
+        "hydrology-water-topology": {
+          schema: "limina.hydrology-water-topology-stage-config/v1",
+          extractionVersion: HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION,
+          artifactVersion: HYDROLOGY_WATER_ARTIFACT_VERSION,
+        },
       } : {}),
     },
     globalSourceHashes: hydrologyProfile ? {
@@ -375,6 +400,13 @@ export function compileWorldTerrain(input: unknown) {
       "hydrology.precipitation": compilerContentHash({
         schema: "limina.hydrology-precipitation-source/v1",
         precipitationMmPerYear: map.hydrology!.precipitationMmPerYear,
+      }),
+      "hydrology.thresholds": compilerContentHash({
+        schema: "limina.hydrology-threshold-source/v1",
+        riverMinCatchmentAreaM2: map.hydrology!.riverMinCatchmentAreaM2,
+        basinMinAreaM2: map.hydrology!.basinMinAreaM2,
+        basinMinDepthM: map.hydrology!.basinMinDepthM,
+        waterfallMinDropM: map.hydrology!.waterfallMinDropM,
       }),
     } : { "worldmap.global": expectedWorldMapHash },
   };
@@ -397,7 +429,7 @@ export function compileWorldTerrain(input: unknown) {
     availableArtifactHashes = parseAvailableArtifactHashes(root.availableArtifactHashes, previousManifest);
   } else {
     if (hasAvailability) {
-      const coldAvailability = denseArray(root.availableArtifactHashes, MAX_WORLD_TERRAIN_COMPILE_CHUNKS + (hydrologyProfile ? 1 : 0), "available terrain artifact hashes");
+      const coldAvailability = denseArray(root.availableArtifactHashes, MAX_WORLD_TERRAIN_COMPILE_CHUNKS + (hydrologyProfile ? 2 : 0), "available terrain artifact hashes");
       if (coldAvailability.length !== 0) throw new Error("availableArtifactHashes must be empty without a previousManifest");
     }
     if (hasPreviousManifest && root.previousManifest !== null) throw new Error("previousManifest is invalid");
@@ -471,7 +503,29 @@ export function compileWorldTerrain(input: unknown) {
   }
 
   let hydrologyArtifact: any | undefined;
+  let hydrologyWaterArtifact: any | undefined;
   if (hydrologyProfile) {
+    const hydrologyPlacement = Object.freeze({ originX: field.bounds.minX, originZ: field.bounds.minZ });
+    let compiledHydrologyTopology: ReturnType<typeof createHydrologyTopology> | undefined;
+    const hydrologyTopology = () => {
+      if (compiledHydrologyTopology === undefined) {
+        try {
+          compiledHydrologyTopology = createHydrologyTopology({
+            rows: field.masterRes,
+            cols: field.masterRes,
+            heightsM: field.heightsM,
+            cellSizeM: field.masterStep,
+            seaLevelM: field.seaLevelM,
+            precipitationMmPerYear: map.hydrology!.precipitationMmPerYear,
+            shouldCancel,
+          });
+        } catch (error) {
+          if (error instanceof HydrologyTopologyCancelledError) throw new WorldTerrainCompileCancelledError();
+          throw error;
+        }
+      }
+      return compiledHydrologyTopology;
+    };
     const priorArtifact = previousManifest === undefined ? undefined : derivedGlobalArtifacts(previousManifest)
       .find((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE);
     const reusable = cacheCompilerMatches
@@ -491,19 +545,7 @@ export function compileWorldTerrain(input: unknown) {
       }));
     } else {
       try {
-        const topology = createHydrologyTopology({
-          rows: field.masterRes,
-          cols: field.masterRes,
-          heightsM: field.heightsM,
-          cellSizeM: field.masterStep,
-          seaLevelM: field.seaLevelM,
-          precipitationMmPerYear: map.hydrology!.precipitationMmPerYear,
-          shouldCancel,
-        });
-        const bytes = encodeHydrologyArtifact(topology, {
-          originX: field.bounds.minX,
-          originZ: field.bounds.minZ,
-        }, { shouldCancel });
+        const bytes = encodeHydrologyArtifact(hydrologyTopology(), hydrologyPlacement, { shouldCancel });
         const contentHash = derivedArtifactContentHash(bytes);
         hydrologyArtifact = Object.freeze({
           artifactType: HYDROLOGY_FIELD_ARTIFACT_TYPE,
@@ -521,7 +563,63 @@ export function compileWorldTerrain(input: unknown) {
           bytes,
         }));
       } catch (error) {
-        if (error instanceof HydrologyTopologyCancelledError || error instanceof HydrologyArtifactCancelledError) {
+        if (error instanceof HydrologyArtifactCancelledError) {
+          throw new WorldTerrainCompileCancelledError();
+        }
+        throw error;
+      }
+    }
+    if (artifactBytes > config.limits.maxArtifactBytes) throw new Error(`terrain compile artifact bytes exceed cap ${config.limits.maxArtifactBytes}`);
+
+    const priorWaterArtifact = previousManifest === undefined ? undefined : derivedGlobalArtifacts(previousManifest)
+      .find((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE);
+    const reusableWater = cacheCompilerMatches
+      && previousStageKeys?.stageKeys?.["hydrology-water-topology"]?.["@global"] === nextStageKeys["hydrology-water-topology"]["@global"]
+      && priorWaterArtifact?.mediaType === HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE
+      && availableArtifactHashes.has(priorWaterArtifact?.contentHash);
+    if (reusableWater) {
+      hydrologyWaterArtifact = priorWaterArtifact;
+      artifactBytes += priorWaterArtifact.byteLength;
+      reusedArtifactBytes += priorWaterArtifact.byteLength;
+      reusedArtifacts.push(Object.freeze({
+        scope: "global",
+        artifactType: priorWaterArtifact.artifactType,
+        mediaType: priorWaterArtifact.mediaType,
+        contentHash: priorWaterArtifact.contentHash,
+        byteLength: priorWaterArtifact.byteLength,
+      }));
+    } else {
+      try {
+        const topology = extractHydrologyWater({
+          heightsM: field.heightsM,
+          topology: hydrologyTopology(),
+          placement: hydrologyPlacement,
+          recipe: map.hydrology!,
+        }, { shouldCancel });
+        const bytes = encodeHydrologyWater(topology, {
+          hydrologyFieldContentHash: hydrologyArtifact.contentHash,
+          recipeHash: compilerContentHash(map.hydrology!),
+          erosionStageKey: nextStageKeys.erosion["@global"],
+          compilerGraphHash: graph.graphHash,
+        }, { shouldCancel });
+        const contentHash = derivedArtifactContentHash(bytes);
+        hydrologyWaterArtifact = Object.freeze({
+          artifactType: HYDROLOGY_WATER_ARTIFACT_TYPE,
+          contentHash,
+          byteLength: bytes.byteLength,
+          mediaType: HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+        });
+        artifactBytes += bytes.byteLength;
+        emittedArtifactBytes += bytes.byteLength;
+        artifacts.push(Object.freeze({
+          scope: "global",
+          artifactType: HYDROLOGY_WATER_ARTIFACT_TYPE,
+          mediaType: HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
+          contentHash,
+          bytes,
+        }));
+      } catch (error) {
+        if (error instanceof HydrologyWaterTopologyCancelledError || error instanceof HydrologyWaterArtifactCancelledError) {
           throw new WorldTerrainCompileCancelledError();
         }
         throw error;
@@ -539,7 +637,7 @@ export function compileWorldTerrain(input: unknown) {
     source: { revision: request.revision, headHash: request.headHash, contentRefs },
     compiler: { version: compilerVersion, configHash: compilerContentHash(config), graphHash: graph.graphHash, snapshotHash: snapshot.snapshotHash },
     grid: field.grid,
-    ...(hydrologyProfile ? { globalArtifacts: [hydrologyArtifact] } : {}),
+    ...(hydrologyProfile ? { globalArtifacts: [hydrologyArtifact, hydrologyWaterArtifact] } : {}),
     chunks: compiledChunks.map((chunk) => ({
       chunkId: chunk.chunkId,
       gridId: chunk.gridId,
@@ -556,11 +654,11 @@ export function compileWorldTerrain(input: unknown) {
     code: "terrain.compile.summary",
     severity: "info",
     message: hydrologyProfile
-      ? "Compiled the complete bounded LOD0 terrain domain and global hydrology field from one globally eroded master field."
+      ? "Compiled the complete bounded LOD0 terrain domain, hydrology field, and generated water topology from one globally eroded master field."
       : "Compiled the complete bounded LOD0 terrain domain from one globally eroded master field.",
     details: Object.freeze({
       chunkCount,
-      artifactCount: chunkCount + (hydrologyProfile ? 1 : 0),
+      artifactCount: chunkCount + (hydrologyProfile ? 2 : 0),
       artifactBytes,
       emittedArtifactCount: artifacts.length,
       emittedArtifactBytes,

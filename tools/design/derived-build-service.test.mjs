@@ -566,7 +566,7 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
   const fx = fixture();
   try {
     const legacy = compilerProfile("1.0.0", "legacy");
-    const hydrology = compilerProfile("1.1.0", "hydrology");
+    const hydrology = compilerProfile("1.2.0", "hydrology");
     let assetReads = 0;
     let atlasCompiles = 0;
     let selectorCalls = 0;
@@ -591,7 +591,7 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
       },
       compileWorldTerrain(input) {
         terrainCompiles++;
-        assert.equal(input.compiler.version, "1.1.0");
+        assert.equal(input.compiler.version, "1.2.0");
         assert.strictEqual(input.compiler.config, hydrology.config);
         return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
       },
@@ -611,7 +611,7 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
 
 test("selected profile controls already-published and warm-versus-cold cache decisions", async (t) => {
   const legacy = compilerProfile("1.0.0", "legacy");
-  const hydrology = compilerProfile("1.1.0", "hydrology");
+  const hydrology = compilerProfile("1.2.0", "hydrology");
   await t.test("already published selected profile", async () => {
     const fx = fixture();
     try {
@@ -655,7 +655,7 @@ test("selected profile controls already-published and warm-versus-cold cache dec
         compileWorldTerrain(input) {
           sawWarm = input.previousSnapshot !== null;
           assert.equal(Object.hasOwn(input, "previousManifest"), expectWarm);
-          assert.equal(input.compiler.version, "1.1.0");
+          assert.equal(input.compiler.version, "1.2.0");
           return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
         },
         publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
@@ -678,8 +678,8 @@ test("malformed compiler bundles and profile selectors fail before queueing with
 
   for (const [name, selector] of [
     ["throwing selector", () => { throw new Error("selection unavailable"); }],
-    ["malformed selector bundle", () => ({ version: "1.1.0", config: {} })],
-    ["forged selector config hash", () => ({ ...compilerProfile("1.1.0", "forged"), config: { profile: "tampered" } })],
+    ["malformed selector bundle", () => ({ version: "1.2.0", config: {} })],
+    ["forged selector config hash", () => ({ ...compilerProfile("1.2.0", "forged"), config: { profile: "tampered" } })],
   ]) await t.test(name, async () => {
     const local = fixture();
     try {
@@ -865,7 +865,7 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
         graphHash: compilerContentHash({ graph: "real-integration" }),
       },
     };
-    const hydrologyCompiler = compilerProfile("1.1.0", "real-hydrology");
+    const hydrologyCompiler = compilerProfile("1.2.0", "real-hydrology");
     const grid = createTerrainGridSpec({ gridId: `${fx.projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
     const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
     const bytes = Uint8Array.from(Buffer.from("real-service-artifact"));
@@ -885,7 +885,7 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
       compileAtlasMapDoc: () => ({ worldMap: { fixture: true, hydrology: {} }, warnings: [] }),
       compileWorldTerrain(input) {
         compileCount++;
-        assert.equal(input.compiler.version, "1.1.0", "recipe build did not select the hydrology compiler profile");
+        assert.equal(input.compiler.version, "1.2.0", "recipe build did not select the hydrology compiler profile");
         if (input.previousSnapshot !== null) {
           assert.deepEqual(input.availableArtifactHashes, [contentHash, globalContentHash].sort(), "restart/sparse compile lost global artifact availability");
         }
