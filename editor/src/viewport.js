@@ -24,6 +24,7 @@
 
 import { runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
 import { sceneTransformOperation } from "./authoring-gateway.js";
+import { assetPlacement, openContentBrowser, requestCatalogRefresh } from "./content-browser.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { editorSelection } from "./selection-store.js";
 import { McpClient } from "./mcp-client.js";
@@ -31,11 +32,9 @@ import {
   commitSceneOperations,
   destroyEntity,
   deformTerrain,
-  fetchCatalog,
   paintTerrain,
   placeAsset,
   redoSceneAuthoring,
-  requestAsset,
   resetWriter,
   undoSceneAuthoring,
 } from "./write-client.js";
@@ -59,6 +58,7 @@ function cuesEnabled() {
 
 const canvas = document.getElementById("editor-viewport");
 const statusEl = document.getElementById("viewport-status");
+const viewportToolsEl = document.querySelector(".viewport-tools");
 const viewportUi = {
   snapToggle: document.getElementById("viewport-snap-toggle"),
   snapTranslate: document.getElementById("viewport-snap-translate"),
@@ -168,11 +168,6 @@ const state = {
   flattenTarget: 0, // world height the flatten tool drives toward (captured at stroke start)
   spaceNav: false,  // hold Space in edit mode → a drag navigates the camera instead of sculpting
   paintMaterial: "grass", // active material for the paint tool (sand|grass|rock|dirt)
-  // Asset catalog place tool (Slice 4). placeAsset = the selected CatalogEntry ({id,title,category,
-  // boundsM,qcRender,...}) or null; the ghost footprint + click-to-place only arm while set.
-  placeAsset: null,
-  placeYaw: 0,      // ghost yaw in radians; R rotates by 15°
-  catalog: [],      // cached asset.catalog entries (refreshed when the Catalog tool opens)
   placing: false,   // a placement round-trip is in flight — ignore further clicks until it lands
 };
 const raycaster = new THREE.Raycaster();
@@ -353,6 +348,7 @@ function bindViewportUi() {
 // js/src/net/protocol.ts WORLDLOG_METHODS.append — duplicated here because this file is plain JS
 // outside the bundle (same reason PHYSICS_OP_FN above is duplicated from log.ts).
 const WORLDLOG_APPEND_METHOD = "worldlog/append";
+let viewportConnectionGeneration = 0;
 
 // Connect once the panels' inputs are populated (the user entered the URL + auth token and connected
 // the panels). Retries on a slow cadence until it succeeds. Prefers worldlog/subscribe (K4: the
@@ -379,6 +375,7 @@ async function tryConnect() {
     await client.connect();
     await client.initialize("viewport_follower", "ses_viewport_" + Math.random().toString(36).slice(2, 8), "system.readonly", authToken);
     state.client = client;
+    void requestCatalogRefresh(`reconnect:${++viewportConnectionGeneration}`);
     // Register the push handler BEFORE subscribing so the server's immediate join-batch push
     // (sent before the subscribe request's own ack) is never missed.
     client.onNotification(WORLDLOG_APPEND_METHOD, (params) => { void applyWorldlogBatch(params); });
@@ -444,7 +441,7 @@ async function applyWorldlogBatchInner(res) {
     showActiveAgentTargets(authorCmds);
     // A granted catalog.publish just landed in the log → the palette is stale; re-fetch so a
     // freshly approved asset appears without reopening the panel.
-    if (hud && newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void refreshCatalog();
+    if (newCmds.some((c) => c.kind === "skill" && c.tool === "catalog.publish")) void requestCatalogRefresh(`catalog.publish:${res.next ?? state.cursor}`);
   }
   if (typeof res.next === "number") state.cursor = res.next;
   if (state.dirty && !state.rebooting) await reboot();
@@ -795,8 +792,10 @@ function hideBrushRing() { if (brushRing) brushRing.visible = false; }
 let placeGhost = null, placeGhostFor = "";
 function ensurePlaceGhost() {
   const running = state.running;
-  if (!running?.scene || !state.placeAsset) return null;
-  if (placeGhost && placeGhostFor !== state.placeAsset.id) {
+  const placement = assetPlacement.get();
+  if (!running?.scene || !placement.entry) return null;
+  const ghostKey = `${placement.entry.id}:${placement.entry.boundsM.join(",")}`;
+  if (placeGhost && placeGhostFor !== ghostKey) {
     try { placeGhost.parent?.remove(placeGhost); placeGhost.geometry.dispose(); placeGhost.material.dispose(); } catch { /* ignore */ }
     placeGhost = null;
   }
@@ -805,7 +804,7 @@ function ensurePlaceGhost() {
     running.scene.add(placeGhost);
   }
   if (!placeGhost) {
-    const b = Array.isArray(state.placeAsset.boundsM) ? state.placeAsset.boundsM : [4, 4, 4];
+    const b = placement.entry.boundsM;
     const geo = new THREE.BoxGeometry(b[0], b[1], b[2]);
     geo.translate(0, b[1] / 2, 0); // pivot at the base so the footprint sits ON the ground
     const mat = new THREE.MeshBasicMaterial({ color: 0xe0552b, transparent: true, opacity: 0.28, depthTest: false });
@@ -815,7 +814,7 @@ function ensurePlaceGhost() {
     // walking toward the camera in a "growing" feedback loop.
     placeGhost.renderOrder = 998;
     placeGhost.visible = false;
-    placeGhostFor = state.placeAsset.id;
+    placeGhostFor = ghostKey;
     running.scene.add(placeGhost);
   }
   return placeGhost;
@@ -829,7 +828,7 @@ function updatePlaceGhost(event) {
     if (!p) { ghost.visible = false; return; }
     ghost.position.set(p.x, p.y + 0.03, p.z);
   }
-  ghost.rotation.y = state.placeYaw;
+  ghost.rotation.y = assetPlacement.get().yaw;
   ghost.visible = true;
 }
 function hidePlaceGhost() { if (placeGhost) placeGhost.visible = false; }
@@ -837,13 +836,14 @@ function hidePlaceGhost() { if (placeGhost) placeGhost.visible = false; }
 // Asset placement remains a legacy command and is deliberately excluded from transactional undo.
 async function placeCatalogAsset(event) {
   if (state.placing) return;
-  const entry = state.placeAsset;
+  const placement = assetPlacement.get();
+  const entry = placement.entry;
   const p = raycastGround(event);
   if (!entry || !p) return;
   state.placing = true;
   try {
     setStatus("placing", entry.title);
-    await placeAsset(entry.id, [p.x, 0, p.z], { rotation: [0, state.placeYaw, 0] });
+    await placeAsset(entry.id, [p.x, 0, p.z], { rotation: [0, placement.yaw, 0] });
     await poll(); // pull the recorded placement straight back so it renders (or reboots to warm the GLB)
     setStatus("placed", entry.title);
   } catch (e) {
@@ -852,157 +852,6 @@ async function placeCatalogAsset(event) {
   } finally {
     state.placing = false;
   }
-}
-
-// Catalog fetch + palette rendering. Thumbnails are the QC renders (served from /assets/qc/...) —
-// the same image the human approved in the queue, so the palette shows what was actually reviewed.
-let catalogFilter = "all";
-let catalogFetching = false;
-async function refreshCatalog() {
-  if (catalogFetching) return;
-  catalogFetching = true;
-  try {
-    const res = await fetchCatalog();
-    state.catalog = Array.isArray(res?.entries) ? res.entries : [];
-    renderCatalogChips();
-    renderCatalogGrid();
-  } catch (e) {
-    surfaceViewportWarning("asset catalog fetch failed", e);
-  } finally {
-    catalogFetching = false;
-  }
-}
-function renderCatalogChips() {
-  const row = hud?._catChips;
-  if (!row) return;
-  row.textContent = "";
-  const cats = ["all", ...new Set(state.catalog.map((e) => e.category).filter(Boolean))];
-  for (const c of cats) {
-    const chip = document.createElement("button");
-    chip.textContent = c;
-    const active = catalogFilter === c;
-    chip.style.cssText = "padding:2px 8px;border-radius:999px;font:11px system-ui;cursor:pointer;color:#fff;" +
-      "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
-    chip.onclick = () => { catalogFilter = c; renderCatalogChips(); renderCatalogGrid(); };
-    row.appendChild(chip);
-  }
-}
-function renderCatalogGrid() {
-  const grid = hud?._catGrid;
-  if (!grid) return;
-  const q = (hud._catSearch?.value || "").trim().toLowerCase();
-  grid.textContent = "";
-  for (const entry of state.catalog) {
-    if (catalogFilter !== "all" && entry.category !== catalogFilter) continue;
-    if (q && !(`${entry.title} ${entry.id} ${(entry.tags || []).join(" ")}`.toLowerCase().includes(q))) continue;
-    const active = state.placeAsset?.id === entry.id;
-    const card = document.createElement("div");
-    card.style.cssText = "cursor:pointer;border-radius:6px;overflow:hidden;background:#2a2a32;" +
-      "border:2px solid " + (active ? "#e0552b" : "#454550");
-    const img = document.createElement("img");
-    img.src = "/assets/" + String(entry.qcRender || "").replace(/^\/+/, "");
-    img.alt = entry.title;
-    img.style.cssText = "width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:#1c1c22";
-    img.onerror = () => { img.style.visibility = "hidden"; }; // missing QC render → neutral tile
-    const lab = document.createElement("div");
-    lab.textContent = entry.title;
-    lab.style.cssText = "padding:4px 6px;font:11px system-ui;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
-    card.appendChild(img);
-    card.appendChild(lab);
-    card.onclick = () => {
-      state.placeAsset = active ? null : entry;
-      state.placeYaw = 0;
-      renderCatalogGrid();
-      if (state.placeAsset) setStatus("place: " + entry.title, "click ground to place · R rotates · Esc deselects");
-      else { hidePlaceGhost(); setStatus("place: off", ""); }
-    };
-    grid.appendChild(card);
-  }
-  if (!grid.children.length) {
-    const empty = document.createElement("div");
-    empty.textContent = "no approved assets";
-    empty.style.cssText = "grid-column:1/-1;color:#888;font:12px system-ui;padding:8px;text-align:center";
-    grid.appendChild(empty);
-  }
-}
-
-// --- ＋New asset dialog (Slice 5) -------------------------------------------------------------------
-// Describe an asset that doesn't exist yet → asset.request records it for the architect (a build
-// agent + Blender, outside the engine). Non-blocking: the editor stays fully usable; the finished
-// asset arrives later via QC → approval queue → catalog.publish → the palette-refresh hook in poll().
-let newAssetDialog = null;
-const sessionRequests = []; // {requestId, description} submitted from THIS editor session
-function renderRequestChips() {
-  const box = hud?._catReqs;
-  if (!box) return;
-  box.textContent = "";
-  for (const r of sessionRequests) {
-    const chip = document.createElement("div");
-    chip.textContent = "⏳ " + r.description;
-    chip.title = r.requestId + " — requested; the architect builds it, then it arrives via the approval queue";
-    chip.style.cssText = "padding:4px 8px;border-radius:5px;border:1px dashed #6a6a75;color:#bbb;" +
-      "font:11px system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
-    box.appendChild(chip);
-  }
-}
-function openNewAssetDialog() {
-  if (newAssetDialog) { newAssetDialog.style.display = "block"; return; }
-  const d = document.createElement("div");
-  d.style.cssText = "position:absolute;top:10px;left:696px;z-index:31;width:250px;padding:12px;border-radius:8px;" +
-    "background:rgba(22,22,27,.97);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5)";
-  const head = document.createElement("div");
-  head.style.cssText = "display:flex;align-items:center;margin-bottom:8px;cursor:move";
-  head.innerHTML = '<strong style="flex:1">New asset</strong>';
-  const close = document.createElement("button");
-  close.textContent = "✕";
-  close.style.cssText = "border:none;background:none;color:#bbb;font:14px system-ui;cursor:pointer";
-  close.onclick = () => { d.style.display = "none"; };
-  head.appendChild(close);
-  d.appendChild(head);
-  const desc = document.createElement("textarea");
-  desc.rows = 3;
-  desc.placeholder = "Describe it — e.g. a stone village well with a timber winch and shingle roof";
-  desc.style.cssText = "width:100%;box-sizing:border-box;background:#2a2a32;color:#eee;border:1px solid #454550;" +
-    "border-radius:5px;padding:6px 8px;font:12px system-ui;resize:vertical;margin-bottom:8px";
-  d.appendChild(desc);
-  const catSel = document.createElement("select");
-  catSel.style.cssText = "width:100%;background:#2a2a32;color:#eee;border:1px solid #454550;border-radius:5px;padding:5px;margin-bottom:10px";
-  for (const c of ["prop", "dwelling", "civic", "military", "religious"]) {
-    const o = document.createElement("option");
-    o.value = c;
-    o.textContent = c;
-    catSel.appendChild(o);
-  }
-  d.appendChild(catSel);
-  const send = document.createElement("button");
-  send.textContent = "Send to architect";
-  send.style.cssText = "width:100%;padding:7px;border-radius:5px;border:1px solid #e0552b;background:#e0552b;color:#fff;font:12px system-ui;cursor:pointer";
-  send.onclick = async () => {
-    const text = desc.value.trim();
-    if (text.length < 3) { setStatus("new asset", "describe it first"); return; }
-    send.disabled = true;
-    send.textContent = "Sending…";
-    try {
-      const res = await requestAsset(text, catSel.value);
-      sessionRequests.push({ requestId: res?.requestId || "req", description: text });
-      renderRequestChips();
-      desc.value = "";
-      d.style.display = "none";
-      setStatus("asset requested", "the architect will build it — watch the approval queue");
-    } catch (e) {
-      resetWriter();
-      surfaceViewportWarning("asset request failed", e);
-    } finally {
-      send.disabled = false;
-      send.textContent = "Send to architect";
-    }
-  };
-  d.appendChild(send);
-  const par = canvas.parentElement || document.body;
-  if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
-  par.appendChild(d);
-  makeDraggable(d, head);
-  newAssetDialog = d;
 }
 
 // The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
@@ -1046,6 +895,7 @@ function makeDraggable(el, handle) {
 function buildTerrainHud() {
   if (hud) return;
   hud = document.createElement("div");
+  hud.className = "terrain-edit-hud";
   hud.style.cssText = "position:absolute;top:10px;left:10px;z-index:30;width:216px;padding:12px;border-radius:8px;" +
     "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
   const head = document.createElement("div");
@@ -1083,50 +933,6 @@ function buildTerrainHud() {
   }
   hud._matRow = matRow;
   hud.appendChild(matRow);
-  // Asset catalog — a SEPARATE, larger draggable modal (it was crushed inside the 216px HUD).
-  // Shown while the Catalog tool is active; drag it by its header, ✕ returns to the Raise tool.
-  const catModal = document.createElement("div");
-  catModal.style.cssText = "position:absolute;top:10px;left:240px;z-index:30;width:440px;padding:12px;border-radius:8px;" +
-    "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
-  const catHead = document.createElement("div");
-  catHead.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:move";
-  catHead.innerHTML = '<span style="width:9px;height:9px;border-radius:999px;background:#e0552b"></span>' +
-    '<strong style="letter-spacing:.03em;flex:1">ASSET CATALOG</strong>';
-  const catClose = document.createElement("button");
-  catClose.textContent = "✕";
-  catClose.style.cssText = "border:none;background:none;color:#bbb;font:14px system-ui;cursor:pointer";
-  catClose.onclick = () => { state.brushTool = "raise"; updateEditModeIndicator(); };
-  catHead.appendChild(catClose);
-  catModal.appendChild(catHead);
-  const catSearch = document.createElement("input");
-  catSearch.type = "search";
-  catSearch.placeholder = "Search assets";
-  catSearch.style.cssText = "width:100%;box-sizing:border-box;background:#2a2a32;color:#eee;border:1px solid #454550;" +
-    "border-radius:5px;padding:6px 9px;font:12px system-ui;margin-bottom:8px";
-  catSearch.oninput = () => renderCatalogGrid();
-  catModal.appendChild(catSearch);
-  const catChips = document.createElement("div");
-  catChips.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px";
-  catModal.appendChild(catChips);
-  const catGrid = document.createElement("div");
-  catGrid.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:440px;overflow:auto";
-  catModal.appendChild(catGrid);
-  // Session-submitted ＋New requests (chips) + the ＋New button. A chip is a local "sent" record;
-  // the asset itself arrives later through the approve → catalog.publish → palette-refresh path.
-  const catReqs = document.createElement("div");
-  catReqs.style.cssText = "display:flex;flex-direction:column;gap:4px;margin-top:8px";
-  catModal.appendChild(catReqs);
-  const newBtn = document.createElement("button");
-  newBtn.textContent = "＋ New asset";
-  newBtn.style.cssText = "width:100%;margin-top:8px;padding:7px;border-radius:5px;border:1px solid #e0552b;" +
-    "background:#e0552b;color:#fff;font:12px system-ui;cursor:pointer";
-  newBtn.onclick = () => openNewAssetDialog();
-  catModal.appendChild(newBtn);
-  hud._catModal = catModal;
-  hud._catSearch = catSearch;
-  hud._catChips = catChips;
-  hud._catGrid = catGrid;
-  hud._catReqs = catReqs;
   const mkSlider = (label, min, max, step, get, set, fmt) => {
     const wrap = document.createElement("div");
     wrap.style.margin = "0 0 8px";
@@ -1174,9 +980,7 @@ function buildTerrainHud() {
   const par = canvas.parentElement || document.body;
   if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
   par.appendChild(hud);
-  par.appendChild(catModal);
   makeDraggable(hud, head);
-  makeDraggable(catModal, catHead);
 }
 function styleMatBtn(b, active) {
   const hex = b.dataset.hex || "#888";
@@ -1195,29 +999,27 @@ function refreshHudTools() {
     hud._matRow.style.display = paint ? "grid" : "none";
     if (paint) refreshHudMats();
   }
-  if (hud._catModal) {
-    const cat = state.brushTool === "catalog";
-    hud._catModal.style.display = cat && state.editMode ? "block" : "none";
-    if (cat) { hideBrushRing(); void refreshCatalog(); }
-    else hidePlaceGhost();
-  }
+  if (state.brushTool === "catalog") {
+    hideBrushRing();
+    if (state.editMode && !window.liminaWindows?.isOpen?.("content-browser")) void openContentBrowser();
+  } else hidePlaceGhost();
 }
 function updateEditModeIndicator() {
   buildTerrainHud();
+  viewportToolsEl?.classList.toggle("terrain-edit-active", state.editMode);
   if (state.editMode) {
     refreshHudTools();
-    hud.style.display = "block";
+    const catalogPlacement = state.brushTool === "catalog" && !!assetPlacement.get().entry;
+    hud.style.display = catalogPlacement ? "none" : "block";
     canvas.style.outline = "2px solid #e0552b";
     canvas.style.outlineOffset = "-2px";
     canvas.style.cursor = "crosshair";
   } else {
     hud.style.display = "none";
-    if (hud._catModal) hud._catModal.style.display = "none";
     canvas.style.outline = "";
     canvas.style.cursor = "";
     hideBrushRing();
     hidePlaceGhost();
-    if (newAssetDialog) newAssetDialog.style.display = "none";
   }
 }
 
@@ -1394,7 +1196,7 @@ canvas.addEventListener("pointerup", (event) => {
   if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) {
     // Catalog place tool: a click on the ground places the armed asset (a drag still orbits the
     // camera — "catalog" is not in SCULPT_TOOLS, so no stroke ever starts).
-    if (state.editMode && !state.spaceNav && state.brushTool === "catalog" && state.placeAsset) {
+    if (state.editMode && !state.spaceNav && state.brushTool === "catalog" && assetPlacement.get().entry) {
       void placeCatalogAsset(event);
       return;
     }
@@ -1412,6 +1214,25 @@ editorSelection.subscribe(({ selectedId }) => {
   if (selectedId === undefined) deselectEntity();
   else selectEntity(selectedId, state.running);
 }, { emitCurrent: true });
+let lastArmedAssetId;
+assetPlacement.subscribe(({ entry }) => {
+  if (!entry) {
+    lastArmedAssetId = undefined;
+    hidePlaceGhost();
+    if (state.editMode && state.brushTool === "catalog") {
+      state.brushTool = "raise";
+      updateEditModeIndicator();
+      setStatus("terrain edit", "tool: raise");
+    }
+    return;
+  }
+  if (entry.id === lastArmedAssetId) return;
+  lastArmedAssetId = entry.id;
+  state.editMode = true;
+  state.brushTool = "catalog";
+  updateEditModeIndicator();
+  setStatus(`place: ${entry.title}`, "click ground to place · R rotates · Esc deselects");
+});
 // History time-travel: the History panel scrubs over the authoring-command timeline and emits
 // the target here — replay the world to that prefix (limit=null → back to live/following).
 window.addEventListener("limina:scrub-to", (event) => {
@@ -1469,19 +1290,17 @@ window.addEventListener("keydown", (event) => {
   }
   // Catalog place tool: R rotates the armed ghost 15°, Esc disarms it. Checked BEFORE the gizmo
   // w/e/r modes below so R never falls through to "scale" while placing.
-  if (state.editMode && state.brushTool === "catalog" && state.placeAsset) {
+  if (state.editMode && state.brushTool === "catalog" && assetPlacement.get().entry) {
     if (key === "r") {
       event.preventDefault();
-      state.placeYaw = (state.placeYaw + Math.PI / 12) % (Math.PI * 2);
+      assetPlacement.rotate(Math.PI / 12);
       updatePlaceGhost();
       return;
     }
     if (key === "escape") {
       event.preventDefault();
-      state.placeAsset = null;
+      assetPlacement.disarm();
       hidePlaceGhost();
-      renderCatalogGrid();
-      setStatus("place: off", "");
       return;
     }
   }

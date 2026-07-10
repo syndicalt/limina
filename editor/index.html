@@ -64,6 +64,12 @@
             <div id="world-meta"></div>
           </div>
         </section>
+        <section class="acc acc-content" id="content-browser">
+          <button class="acc-head" type="button" data-acc-toggle="content-browser" aria-expanded="false">
+            <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">Content Browser</span><span class="panel-spin" id="content-browser-spin" hidden></span>
+          </button>
+          <div class="acc-body content-browser-panel" id="content-browser-root"><div class="muted">open to load assets</div></div>
+        </section>
         <section class="acc" id="history">
           <button class="acc-head" type="button" data-acc-toggle="history" aria-expanded="false">
             <span class="acc-chevron" aria-hidden="true">▸</span><span class="acc-title">History</span>
@@ -118,6 +124,7 @@
         <button id="viewport-space-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle local/global gizmo space (X)">Global</button>
         <button id="viewport-grid-toggle" class="viewport-tool" type="button" aria-pressed="true" title="Toggle ground grid (G)">Grid on</button>
         <button id="viewport-wireframe-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle wireframe view (F)">Wire off</button>
+        <button id="content-browser-toggle" class="viewport-tool" type="button" aria-controls="content-browser" title="Open Content Browser">Content</button>
       </div>
     </section>
 
@@ -165,6 +172,7 @@
   <script type="module" src="src/windows.js"></script>
   <script type="module" src="src/take-control.js"></script>
   <script type="module" src="src/app.js"></script>
+  <script type="module" src="src/content-browser.js"></script>
   <script type="module" src="src/viewport.js"></script>
   <script type="module" src="src/chat.js"></script>
   <script type="module" src="src/console.js"></script>

@@ -13,7 +13,7 @@ const rightSidebar = $("sidebar-right");
 const stage = document.querySelector(".stage");
 
 // Left accordion section ids (the World panel is the primary one, open by default in the markup).
-const LEFT_SECTIONS = new Set(["world", "history", "reasoning", "roster", "approval"]);
+const LEFT_SECTIONS = new Set(["world", "content-browser", "history", "reasoning", "roster", "approval"]);
 
 const isCollapsed = (side) => !!side && side.classList.contains("collapsed");
 const sectionOf = (id) => $(id);
