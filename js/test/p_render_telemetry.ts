@@ -12,7 +12,7 @@ assert(empty.samples === 0 && empty.frameMs.mean === 0 && empty.fps.mean === 0, 
 for (let index = 0; index < RENDER_TELEMETRY_CAPACITY + 10; index++) {
   const frameMs = index < 10 ? 1000 : 10 + (index % 20);
   ring.record(frameMs, frameMs / 4, {
-    render: { calls: index, triangles: index * 1000 },
+    render: { drawCalls: index, triangles: index * 1000 },
     memory: { textures: 3, geometries: 4, renderTargets: 5, total: 6 },
     programs: { length: 7 },
   }, 1280 + index, 720, 1.5, "balanced");
@@ -28,10 +28,14 @@ assert(snapshot.backingWidth === 1280 + RENDER_TELEMETRY_CAPACITY + 9 && snapsho
 assert(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.frameMs) && Object.isFrozen(snapshot.memory), "telemetry snapshot is mutable");
 
 ring.clear();
-ring.record(Number.NaN, -1, { render: { calls: Number.POSITIVE_INFINITY, triangles: -5 }, memory: { textures: -1 } }, -4, Number.NaN, Number.POSITIVE_INFINITY, "cinematic");
+ring.record(Number.NaN, -1, { render: { drawCalls: Number.POSITIVE_INFINITY, triangles: -5 }, memory: { textures: -1 } }, -4, Number.NaN, Number.POSITIVE_INFINITY, "cinematic");
 const sanitized = ring.snapshot();
 assert(sanitized.samples === 1 && sanitized.frameMs.mean === 0 && sanitized.submitMs.mean === 0, "invalid timing did not sanitize without breaking render");
 assert(sanitized.render.drawCalls === 0 && sanitized.render.triangles === 0 && sanitized.backingWidth === 0, "invalid counters did not sanitize");
 assert(sanitized.tier === "cinematic", "tier identity was not retained");
+
+ring.clear();
+ring.record(16, 4, { render: { drawCalls: 12, triangles: 34, ...({ calls: 9_999 } as object) } }, 1, 1, 1, "performance");
+assert(ring.snapshot().render.drawCalls === 12, "telemetry read Three's cumulative render.calls instead of per-frame drawCalls");
 
 console.log("p_render_telemetry OK: fixed 240-frame storage, overwrite order, percentile snapshots, and non-throwing sanitization");

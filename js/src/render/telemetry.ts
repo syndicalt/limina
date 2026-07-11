@@ -3,7 +3,7 @@ import type { RenderQualityTier } from "./quality.ts";
 export const RENDER_TELEMETRY_CAPACITY = 240;
 
 export interface RendererInfoLike {
-  render?: { calls?: number; triangles?: number };
+  render?: { drawCalls?: number; triangles?: number };
   memory?: { textures?: number; geometries?: number; programs?: number; renderTargets?: number; total?: number };
   programs?: { length?: number } | null;
 }
@@ -90,7 +90,7 @@ export class RenderTelemetryRing {
     const memory = rendererInfo?.memory;
     this.#frameMs[index] = bounded(frameDeltaMs, MAX_DURATION_MS);
     this.#submitMs[index] = bounded(submitDurationMs, MAX_DURATION_MS);
-    this.#drawCalls[index] = bounded(rendererInfo?.render?.calls, MAX_COUNT);
+    this.#drawCalls[index] = bounded(rendererInfo?.render?.drawCalls, MAX_COUNT);
     this.#triangles[index] = bounded(rendererInfo?.render?.triangles, MAX_TRIANGLES);
     this.#textures[index] = bounded(memory?.textures, MAX_COUNT);
     this.#geometries[index] = bounded(memory?.geometries, MAX_COUNT);

@@ -3,12 +3,14 @@
 //! Single thread owns the V8 isolate, the winit event pump, and surface present.
 //! Per frame the host: pumps winit (non-blocking) -> updates input -> runs the
 //! JS fixed-step callback N times at a fixed dt (accumulator) -> runs the JS
-//! frame (render) callback once -> drains the JS event loop (JS presents via
-//! `op_surface_present`). Physics/logic advance on wall-clock time, decoupled
-//! from render rate. `CloseRequested`/Escape exits and drains cleanly.
+//! frame (render) callback once -> advances one bounded JS event-loop turn ->
+//! yields to Tokio (JS presents via `op_surface_present`). Physics/logic advance
+//! on wall-clock time, decoupled from render rate. Setup and shutdown drain to
+//! quiescence; live frames never wait for unrelated host operations.
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use deno_core::{resolve_path, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions};
@@ -270,10 +272,20 @@ pub fn run_windowed(
             let alpha = (accumulator / FIXED_DT) as f32;
             invoke_callback(&mut js_runtime, Callback::Frame(alpha))?;
 
+            // Advance host ops/promises without waiting for every pending operation to finish.
+            // Fully draining here serializes the real-time loop against GPU readbacks, streaming,
+            // and network I/O. The loop polls continuously, while setup and shutdown still drain.
             std::future::poll_fn(|cx| {
-                js_runtime.poll_event_loop(cx, PollEventLoopOptions::default())
+                Poll::Ready(match js_runtime.poll_event_loop(cx, PollEventLoopOptions::default()) {
+                    Poll::Ready(result) => result,
+                    Poll::Pending => Ok(()),
+                })
             })
             .await?;
+            // `run_windowed` owns a current-thread Tokio runtime. The bounded Deno poll above is
+            // deliberately always ready, so yield explicitly to let Tokio drive GPU mappings,
+            // timers, sockets, and other host futures before the next frame starts.
+            tokio::task::yield_now().await;
 
             frames += 1;
             if max_frames.is_some_and(|max| frames >= max) {

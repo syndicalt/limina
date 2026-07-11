@@ -352,6 +352,9 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
             const started = now();
             const frameDelta = lastFrameAt === undefined ? 0 : Math.max(0, started - lastFrameAt);
             lastFrameAt = started;
+            // WebGPURenderer keeps render counters cumulative unless reset explicitly. Reset at the
+            // frame boundary so telemetry reports per-frame work instead of a growing session total.
+            acquiredRenderer.info.reset();
             draw();
             const submitted = now() - started;
             const surface = acquiredRenderer.domElement;

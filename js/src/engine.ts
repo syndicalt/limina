@@ -474,6 +474,8 @@ export class EntityTable {
 
 export interface Engine {
   device: unknown;
+  /** Adapter metadata exposed by WebGPU. Empty strings mean the backend did not expose a field. */
+  gpuAdapter: Readonly<{ vendor: string; architecture: string; device: string; description: string }>;
   context: unknown;
   renderer: RendererLike;
   scene: SceneLike;
@@ -507,9 +509,27 @@ export async function createEngine(opts: {
    *  (a bare scene — the pre-Phase-11 void). */
   renderBaseline?: RenderBaselineOverride | false;
 }): Promise<Engine> {
-  const adapter = await (navigator as unknown as { gpu: { requestAdapter(): Promise<{ requestDevice(): Promise<unknown> } | null> } }).gpu.requestAdapter();
+  type GpuPowerPreference = "low-power" | "high-performance";
+  interface GpuAdapterLike {
+    info?: Partial<{ vendor: string; architecture: string; device: string; description: string }>;
+    requestDevice(): Promise<unknown>;
+  }
+  const configuredPreference = ops.op_read_env("LIMINA_GPU_POWER_PREFERENCE");
+  if (configuredPreference !== "" && configuredPreference !== "low-power" && configuredPreference !== "high-performance") {
+    throw new Error("engine: LIMINA_GPU_POWER_PREFERENCE must be 'low-power' or 'high-performance'");
+  }
+  const powerPreference = configuredPreference === "" ? undefined : configuredPreference as GpuPowerPreference;
+  const adapter = await (navigator as unknown as {
+    gpu: { requestAdapter(options?: { powerPreference?: GpuPowerPreference }): Promise<GpuAdapterLike | null> };
+  }).gpu.requestAdapter({ powerPreference });
   if (!adapter) throw new Error("engine: no WebGPU adapter");
   const device = await adapter.requestDevice();
+  const gpuAdapter = Object.freeze({
+    vendor: adapter.info?.vendor ?? "",
+    architecture: adapter.info?.architecture ?? "",
+    device: adapter.info?.device ?? "",
+    description: adapter.info?.description ?? "",
+  });
   const context = ops.op_create_window_context();
 
   const canvas = { width: opts.width, height: opts.height, style: {} };
@@ -538,7 +558,7 @@ export async function createEngine(opts: {
   const spatial = new UniformGridSpatialIndex();
 
   const engine: Engine = {
-    device, context, renderer, scene, camera, world,
+    device, gpuAdapter, context, renderer, scene, camera, world,
     transforms, spatial,
     entities: new EntityTable(), tags: new Map(), ops, width: opts.width, height: opts.height, mode: "windowed",
   };
