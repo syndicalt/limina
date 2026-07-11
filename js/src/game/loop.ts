@@ -8,9 +8,10 @@
 //   in flight is SKIPPED, never overlapped (sim steps are async because skill invokes are).
 // FRAME (render), in strict order:
 //   1. beforeSync(alpha)      — game-side posing: pose models + update the camera from sim state
-//   2. renderSyncSystem(ecs)  — copy ECS transforms onto the three.js objects (the ONE bridge)
-//   3. synced[*].syncSkinning — refresh rig bone matrices AFTER the sync, BEFORE the draw
-//   4. present()              — renderer.render + surface present
+//   2. lods[*].update(camera) — classify render-only distance/residency after camera posing
+//   3. renderSyncSystem(ecs)  — copy ECS transforms onto the three.js objects (the ONE bridge)
+//   4. synced[*].syncSkinning — refresh rig bone matrices AFTER the sync, BEFORE the draw
+//   5. present()              — renderer.render + surface present
 //
 // `frame()` and `fixedStep()` are public + side-effect-isolated (present/step are injected) so
 // the order invariant and the re-entrancy guard are unit-testable headlessly, without a GPU.
@@ -83,6 +84,8 @@ export class GameLoop<TInput = unknown> {
   /** ONE render frame, in the load-bearing order. */
   frameTick(alpha: number): void {
     this.opts.beforeSync?.(alpha);
+    const lods = this.ctx.world.lods;
+    if (lods !== undefined) for (const lod of lods) lod.update(this.ctx.world.camera);
     renderSyncSystem(this.ctx.world.ecs as never);
     if (this.opts.synced) {
       for (const s of this.opts.synced) s.syncSkinning();

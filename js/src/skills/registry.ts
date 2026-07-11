@@ -48,6 +48,8 @@ export interface WorldContext {
   design?: DesignArtifactStore;
   scene: SceneLike;
   camera: CameraLike;
+  /** Render-only distance/residency controllers updated once before each draw. */
+  lods?: { update(camera: CameraLike): void }[];
   ops: EngineOps;
   agents?: AgentLookup;
   renderer?: unknown;

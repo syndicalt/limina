@@ -92,6 +92,7 @@ assert(jsonl.split("\n").length > 1, "recorded world-log is empty");
 {
   const ctx = createHeadlessContext({ session: "ses_p20_loop" });
   const order: string[] = [];
+  ctx.world.lods?.push({ update: () => order.push("lod") });
   const loop = new GameLoop<Record<string, never>>(ctx, {
     sampleInput: () => ({}),
     step: () => { order.push("step"); },
@@ -100,8 +101,8 @@ assert(jsonl.split("\n").length > 1, "recorded world-log is empty");
     present: () => order.push("present"),
   });
   loop.frameTick(0);
-  assert(order.join(",") === "pose,skin,present",
-    `frame order invariant broken (got "${order.join(",")}") — skinning must run after the ECS sync and before present`);
+  assert(order.join(",") === "pose,lod,skin,present",
+    `frame order invariant broken (got "${order.join(",")}") — LOD must follow camera posing and skinning must precede present`);
 }
 {
   const ctx = createHeadlessContext({ session: "ses_p20_reentry" });
@@ -127,6 +128,6 @@ ops.op_log(
   "p20_direct_path OK: direct-path substrate split proven — createGameContext assembles the " +
   "WorldContext + CoreSkills + base once; a CharacterController walks forward driven straight off " +
   "ctx.ops with ZERO registry.invoke (spy=0); the OPT-IN recorder captures the direct-path physics " +
-  "and reproduces a byte-identical trajectory; and GameLoop enforces the pose→sync→skin→present " +
+  "and reproduces a byte-identical trajectory; and GameLoop enforces the pose→LOD→sync→skin→present " +
   "order plus the async-step re-entrancy guard.",
 );

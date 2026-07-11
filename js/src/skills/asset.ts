@@ -20,6 +20,7 @@ import { gltfResourceSchema, loadGltfIntoScene, loadLodIntoScene, parseGltfScene
 import { gltfLocalAabb, type LocalAabb } from "../assets/gltf-bounds.ts";
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
+import { buildPopulationLodBatches, validatePopulationLodLevels } from "../terrain/population-render.ts";
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { RegionState } from "./terrain.ts";
@@ -152,7 +153,17 @@ const PLACE_PERMS = ["scene.write"] as const;
 const scatterConfigSchema = z.object({
   seed: z.number().int(),
   density: z.number().int().min(1).max(64).optional(),
-  assets: z.array(z.object({ id: z.string(), weight: z.number().positive().optional() })).min(1),
+  assets: z.array(z.object({
+    id: z.string(),
+    weight: z.number().positive().optional(),
+    embedRadius: z.number().nonnegative().optional(),
+    lods: z.array(z.object({
+      id: z.string(),
+      distance: z.number().positive(),
+      hysteresis: z.number().min(0).max(1).optional(),
+    })).min(1).optional(),
+  })).min(1),
+  cellSize: z.number().positive().optional(),
   elevationMin: z.number().optional(),
   elevationMax: z.number().optional(),
   slopeMax: z.number().nonnegative().optional(),
@@ -160,11 +171,14 @@ const scatterConfigSchema = z.object({
   coverage: z.number().min(0).max(1).optional(),
   cluster: z.number().min(0).max(1).optional(),
   clusterFreq: z.number().positive().optional(),
+  embedRadius: z.number().nonnegative().optional(),
   biomes: z.array(z.number().int()).optional(),
   tempMin: z.number().optional(),
   tempMax: z.number().optional(),
   /** Footprint-exclusion discs (world XZ) — a candidate inside any is skipped (settlement clearings). */
   exclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
+  /** Footprint-inclusion discs (world XZ) — a candidate outside all is skipped. */
+  inclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
 });
 
 const scatterInput = z.object({
@@ -431,7 +445,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
   const scatter: SkillDefinition<z.infer<typeof scatterInput>, z.infer<typeof scatterOutput>> = {
     name: "asset.scatter",
     version: "1.0.0",
-    description: "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.",
+    description: "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Optional LOD levels use cell-classified, draw-bounded aggregate instance batches. Returns the placement count + pinned hashes.",
     category: "three",
     permissions: [...PLACE_PERMS],
     // The recorder copies the resolved per-asset content hashes back into the recorded
@@ -444,6 +458,24 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       const source = terrain.source;
       const cache = terrain.cache ?? new TileCache();
       const config = input.config as ScatterConfig;
+      const paletteById = new Map<string, ScatterConfig["assets"][number]>();
+      for (const asset of config.assets) {
+        if (asset.lods !== undefined) {
+          validatePopulationLodLevels([
+            { assetId: asset.id, distance: 0 },
+            ...asset.lods.map((level) => ({
+              assetId: level.id,
+              distance: level.distance,
+              ...(level.hysteresis !== undefined ? { hysteresis: level.hysteresis } : {}),
+            })),
+          ]);
+        }
+        const previous = paletteById.get(asset.id);
+        if (previous !== undefined && (previous.lods !== undefined || asset.lods !== undefined)) {
+          throw new RangeError(`asset.scatter: LOD-enabled palette asset '${asset.id}' must be unique`);
+        }
+        paletteById.set(asset.id, previous ?? asset);
+      }
 
       // BIND to the generated region: its seed/lod + the tiles it actually applied.
       // A scatter can never float onto a different surface from a stray seed — an
@@ -456,7 +488,12 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       // Resolve + PIN every palette asset (content-addressed). A committed hash must
       // match the resolved bytes, else a swapped asset is rejected (mirrors asset.place).
       const assetHashes: Record<string, string> = {};
-      for (const id of new Set(config.assets.map((a) => a.id))) {
+      const referencedAssetIds = new Set<string>();
+      for (const asset of config.assets) {
+        referencedAssetIds.add(asset.id);
+        for (const lod of asset.lods ?? []) referencedAssetIds.add(lod.id);
+      }
+      for (const id of referencedAssetIds) {
         const resolved = assets.resolve(id);
         const committed = input.assetHashes?.[id];
         if (committed !== undefined && committed !== resolved.hash) {
@@ -490,16 +527,43 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
           list.push(inst);
         }
         const mountedMeshes: THREE.InstancedMesh[] = [];
+        const mountedPopulations: ReturnType<typeof buildPopulationLodBatches>[] = [];
+        const worldLods = (ctx.world.lods ??= []);
         for (const [id, list] of byId) {
-          const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
-          for (const mesh of buildAssetInstancedMeshes(root, list)) {
-            scene.add(mesh);
-            mountedMeshes.push(mesh);
-            mounted++;
+          const paletteAsset = paletteById.get(id);
+          if (paletteAsset === undefined) throw new Error(`asset.scatter: placement references unknown palette asset '${id}'`);
+          if (paletteAsset.lods !== undefined) {
+            const levels = [
+              { assetId: id, distance: 0, root: await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache) },
+              ...await Promise.all(paletteAsset.lods.map(async (level) => ({
+                assetId: level.id,
+                distance: level.distance,
+                ...(level.hysteresis !== undefined ? { hysteresis: level.hysteresis } : {}),
+                root: await parseGltfScene(level.id, assets.resolve(level.id).bytes, ctx.world.gltfCache),
+              }))),
+            ];
+            const population = buildPopulationLodBatches(levels, list, config.cellSize ?? 24);
+            for (const mesh of population.meshes) scene.add(mesh);
+            worldLods.push(population);
+            population.update(ctx.world.camera);
+            mountedPopulations.push(population);
+            mounted += population.meshes.length;
+          } else {
+            const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
+            for (const mesh of buildAssetInstancedMeshes(root, list, config.cellSize === undefined ? undefined : { chunkSize: config.cellSize })) {
+              scene.add(mesh);
+              mountedMeshes.push(mesh);
+              mounted++;
+            }
           }
         }
-        if (mountedMeshes.length > 0) {
+        if (mountedMeshes.length > 0 || mountedPopulations.length > 0) {
           (region.renderDisposables ??= []).push(() => {
+            for (const population of mountedPopulations) {
+              const index = worldLods.indexOf(population);
+              if (index >= 0) worldLods.splice(index, 1);
+              population.dispose(scene);
+            }
             for (const mesh of mountedMeshes) {
               if (typeof scene.remove === "function") scene.remove(mesh);
               disposeAssetInstancedMesh(mesh);

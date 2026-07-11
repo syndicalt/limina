@@ -161,6 +161,7 @@ function assemble(p: AssembleParams): GameContext {
     design: createDesignArtifactStore(),
     scene: p.scene,
     camera: p.camera,
+    lods: [],
     renderer: p.renderer,
     ops: activeOps,
     agents: p.agents,
@@ -168,6 +169,7 @@ function assemble(p: AssembleParams): GameContext {
     height: p.height,
     mode: p.mode,
   };
+  if (p.engine !== undefined) p.engine.lods = world.lods;
   const base: InvokeBase = {
     agentId: p.agentId,
     sessionId: p.session,

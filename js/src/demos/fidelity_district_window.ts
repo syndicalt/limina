@@ -83,6 +83,25 @@ const biome = await registry.invoke("world.populateBiome", {
   type: "forest",
   waterLevel,
   waterMargin: 1.5,
+  cellSize: 24,
+  biomePack: {
+    conifer: {
+      id: "trees/pine-1.glb",
+      embedRadius: 0.6,
+      lods: [
+        { id: "trees/pine-1-lod1.glb", distance: 28, hysteresis: 0.15 },
+        { id: "trees/pine-1-lod2.glb", distance: 90, hysteresis: 0.15 },
+      ],
+    },
+    broadleaf: {
+      id: "trees/oak-1.glb",
+      lods: [
+        { id: "trees/oak-1-lod1.glb", distance: 28, hysteresis: 0.15 },
+        { id: "trees/oak-1-lod2.glb", distance: 90, hysteresis: 0.15 },
+      ],
+    },
+    boulder: { id: "rock.glb" },
+  },
 }, base);
 if (!biome.success) throw new Error(`fidelity district biome failed: ${JSON.stringify(biome.error)}`);
 const biomeInstances = (biome.result as { instances: number }).instances;
@@ -127,6 +146,7 @@ function render(): void {
   const pose = fidelityCameraPose(routeFrame, [centerX, centerY, centerZ]);
   engine.camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
   engine.camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
+  for (const lod of ctx.world.lods ?? []) lod.update(engine.camera);
   renderSyncSystem(engine.world);
 
   const submittedAt = performance.now();

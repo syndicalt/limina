@@ -256,6 +256,12 @@ assert(biomeScatterConfigs("islands", TEST_PACK, isl.survey)[0].elevationMin ===
 assert(biomeScatterConfigs("plains", TEST_PACK, plains.survey)[0].elevationMin === undefined, "plains layer should not be water-gated");
 // resolveLayer omits unset fields (so a no-gate layer stays a plain density scatter).
 assert(!("elevationMax" in resolveLayer({ seed: 1, assets: [{ role: "grass" }] }, TEST_PACK, isl.survey)), "resolveLayer emitted an unset elevation gate");
+const lodConfig = resolveLayer(
+  { seed: 2, assets: [{ role: "conifer" }], cellSize: 32 },
+  { conifer: { id: "pine.glb", lods: [{ id: "pine-mid.glb", distance: 36, hysteresis: 0.15 }] } },
+  isl.survey,
+);
+assert(lodConfig.cellSize === 32 && lodConfig.assets[0]?.lods?.[0]?.id === "pine-mid.glb", "resolveLayer dropped population LOD metadata");
 
 ops.op_log(
   `p11_biome_content OK: 5 curated CC0 assets place as hashed gltf entities (pine/broadleaf/cactus/bush/grass, distinct hashes); ` +

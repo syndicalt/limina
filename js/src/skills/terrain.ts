@@ -649,6 +649,9 @@ export function registerTerrainSkills(
     waterLevel: z.number().optional(),
     /** Dry margin (world Y) added ABOVE the water level for waterGated layers. Default 0. */
     waterMargin: z.number().optional(),
+    /** Spatial population render-cell size. Smaller cells improve LOD distance
+     *  accuracy; for non-LOD assets they trade culling granularity for draw calls. */
+    cellSize: z.number().positive().optional(),
     /** Override the scatter seed (default: the region's generation seed). */
     seed: z.number().int().optional(),
     /** The project's role→asset binding for the scatter (conifer/broadleaf/boulder/…). The engine
@@ -661,7 +664,15 @@ export function registerTerrainSkills(
     // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
     biomePack: z.partialRecord(
       z.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
-      z.object({ id: z.string(), embedRadius: z.number().optional() }),
+      z.object({
+        id: z.string(),
+        embedRadius: z.number().nonnegative().optional(),
+        lods: z.array(z.object({
+          id: z.string(),
+          distance: z.number().positive(),
+          hysteresis: z.number().min(0).max(1).optional(),
+        })).min(1).optional(),
+      }),
     ).optional(),
   });
   const populateBiomeOutput = z.object({
@@ -671,7 +682,7 @@ export function registerTerrainSkills(
     instances: z.number().int(),
     /** Surveyed relief the fractional elevation gates resolved against. */
     relief: z.object({ minY: z.number(), maxY: z.number() }),
-    /** Per-layer summary (instances + mounted InstancedMesh count). */
+    /** Per-layer summary (instances + mounted level-mesh count). */
     layers: z.array(z.object({ instances: z.number().int(), mounted: z.number().int() })),
   });
   const populateBiome: SkillDefinition<z.infer<typeof populateBiomeInput>, z.infer<typeof populateBiomeOutput>> = {
@@ -729,7 +740,7 @@ export function registerTerrainSkills(
       }
       const res = await scatterBiomeContent({
         registry, source, regions, regionId: input.regionId, type, pack, bounds, seed, base,
-        waterLevel: input.waterLevel, waterMargin: input.waterMargin,
+        waterLevel: input.waterLevel, waterMargin: input.waterMargin, cellSize: input.cellSize,
       });
       ctx.emit("terrain.region.populated", {
         regionId: input.regionId, type, instances: res.instances, layers: res.layers.length,

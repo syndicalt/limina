@@ -145,14 +145,15 @@ assert(bad.layers[0].instances < pineLayer.instances,
 // ── 4b. NO PROPS IN / BELOW WATER: the spawn mask keeps every layer above the shoreline ─
 // Over the demo's ACTUAL config (island-falloff eroded mountains flooded to 18% of relief + a
 // 2.5 m dry margin — the config the user A/B'd), assert ZERO mounted prop instances — pine AND
-// rock, across ALL layers, inland lakes + the island coast included — sit at or below
-// waterLevel + margin. The placements come from the REAL mount path (scatterBiomeContent →
+// rock, across ALL layers, inland lakes + the island coast included — sit below
+// waterLevel + margin. Equality is valid because elevationMin is an inclusive floor.
+// The placements come from the REAL mount path (scatterBiomeContent →
 // asset.scatter output), not a re-derived pure scatter.
 const dryFloor = seaLevel + WATER_MARGIN;
 const allPlacements = scattered.layers.flatMap((l) => l.placements);
 assert(allPlacements.length === scattered.instances, `placements (${allPlacements.length}) != total instances (${scattered.instances}) — mount path did not return every placement`);
-const inWater = allPlacements.filter((p) => p.y <= dryFloor);
-assert(inWater.length === 0, `${inWater.length} mounted props sit at/below the waterline+margin (dryFloor ${dryFloor.toFixed(2)}; lowest ${Math.min(...allPlacements.map((p) => p.y)).toFixed(2)}) — props standing in water`);
+const inWater = allPlacements.filter((p) => p.y < dryFloor);
+assert(inWater.length === 0, `${inWater.length} mounted props sit below the waterline+margin (dryFloor ${dryFloor.toFixed(2)}; lowest ${Math.min(...allPlacements.map((p) => p.y)).toFixed(2)}) — props standing in water`);
 // Non-vacuous: the region genuinely HAS surface below the dry floor (the flooded valleys are
 // submerged), so the empty result above is the gate doing work, not an empty candidate set.
 assert(relief.minY < dryFloor - 0.5, `relief floor ${relief.minY.toFixed(2)} is not below the dry floor ${dryFloor.toFixed(2)} — the no-props-in-water check would be vacuous`);
@@ -193,7 +194,7 @@ ops.op_log(
   `p11_biome_mount OK: demo config (mountains amp ${AMP} erode, 4×4, sea ${(SEA_FRACTION * 100) | 0}%, margin ${WATER_MARGIN}) ` +
   `mounts pine ${pineLayer.instances}× across ${pineLayer.mounted} sub-meshes (foliage+trunk) + rock ${rockLayer.instances}× across ${rockLayer.mounted} mesh ` +
   `(pines ≥ boulders); every InstancedMesh count > 0; pine sub-meshes instance distinct geometry. ` +
-  `Water spawn-mask (${WATER_MARGIN} m margin): 0/${scattered.instances} mounted props at/below dryFloor ${dryFloor.toFixed(1)} ` +
+  `Water spawn-mask (${WATER_MARGIN} m margin): 0/${scattered.instances} mounted props below dryFloor ${dryFloor.toFixed(1)} ` +
   `(relief ${relief.minY.toFixed(1)}..${relief.maxY.toFixed(1)}, sea ${seaLevel.toFixed(1)}); ungated control placed ${looseBelow.length} below (gate non-vacuous). ` +
   `Root cause pinned: bare type-hint survey collapses pines to ${bad.layers[0].instances} (region-hints survey is load-bearing). ` +
   `[${TEST_PACK.conifer!.id}/${TEST_PACK.broadleaf!.id}/${TEST_PACK.boulder!.id}]`,

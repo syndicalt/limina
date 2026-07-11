@@ -1855,8 +1855,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
         entityStream?.update(streamX, streamZ);
       }
-      // Screen-distance LOD (asset.placeLod): pick each LOD's level for THIS frame's camera before
-      // the scene is drawn. Cheap (a distance compare per LOD); render-only.
+      // Screen-distance and population LOD: select render-only levels/residency for THIS frame's
+      // camera before drawing. Population controllers rebuild aggregate buffers only on transitions.
       const wl = (world as unknown as { lods?: Array<{ update: (c: unknown) => void }> }).lods;
       if (wl !== undefined) for (const l of wl) l.update(camera);
       if (editorNavigation !== undefined) {

@@ -96,7 +96,9 @@ const streamed = ok(await registry.invoke("world.streamFollow", {
 assert((streamed.removed as string[]).length > 0, "streamFollow did not unload the original tile");
 assert(meshes.every((mesh) => removed.includes(mesh)), "stream unload did not remove every scatter InstancedMesh from the scene");
 assert(objectDisposed === meshes.length, `stream unload disposed ${objectDisposed}/${meshes.length} scatter InstancedMeshes`);
-assert(ownedGeometryDisposed === meshes.length, `stream unload disposed ${ownedGeometryDisposed}/${meshes.length} owned scatter geometries`);
+// Parsed GLTF geometry is retained by the host cache and shared across scene clones.
+// Stream-out disposes the InstancedMesh and clone-owned materials, never cache geometry.
+assert(ownedGeometryDisposed === 0, `stream unload disposed ${ownedGeometryDisposed} host-owned scatter geometries`);
 assert(ownedMaterialDisposed === meshes.length, `stream unload disposed ${ownedMaterialDisposed}/${meshes.length} owned scatter materials`);
 
 ops.op_log("p40_asset_scatter_lifecycle OK: streamed-out region disposes mounted asset.scatter InstancedMeshes");

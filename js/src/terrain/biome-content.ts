@@ -52,7 +52,11 @@ export type BiomeRole = "conifer" | "broadleaf" | "boulder" | "bush" | "grass" |
  *  FOOTPRINT half-extent (world units at scale 1), fed to asset.scatter's embed-sink so a prop on a
  *  slope beds its downhill base lip into the ground instead of floating ~r·slope above it (the
  *  "floating trees" artefact). Omit for props that need no sink (slope≈0 → sink≈0 regardless). */
-export interface BiomePackEntry { id: string; embedRadius?: number; }
+export interface BiomePackEntry {
+  id: string;
+  embedRadius?: number;
+  lods?: { id: string; distance: number; hysteresis?: number }[];
+}
 
 /** A project-supplied binding of roles → assets. Partial: any unmapped role is scattered as nothing
  *  (graceful). The engine ships NO pack — a project drops one in (biome-pack.json). */
@@ -97,6 +101,8 @@ export interface BiomeLayer {
   clusterFreq?: number;
   slopeMax?: number;
   sizeRange?: [number, number];
+  /** Optional spatial render-cell size used by population LOD or scatter chunking. */
+  cellSize?: number;
   /** Layer-default footprint radius for the embed-sink (world units), applied to any
    *  palette asset that doesn't set its own ScatterAsset.embedRadius. 0/unset → no sink. */
   embedRadius?: number;
@@ -241,6 +247,7 @@ export function resolveLayer(layer: BiomeLayer, pack: BiomePack, survey: ReliefS
       id: bound.id,
       ...(weight !== undefined ? { weight } : {}),
       ...(bound.embedRadius !== undefined ? { embedRadius: bound.embedRadius } : {}),
+      ...(bound.lods !== undefined ? { lods: bound.lods } : {}),
     });
   }
   const config: ScatterConfig = { seed: layer.seed, assets: palette };
@@ -250,6 +257,7 @@ export function resolveLayer(layer: BiomeLayer, pack: BiomePack, survey: ReliefS
   if (layer.clusterFreq !== undefined) config.clusterFreq = layer.clusterFreq;
   if (layer.slopeMax !== undefined) config.slopeMax = layer.slopeMax;
   if (layer.sizeRange !== undefined) config.sizeRange = layer.sizeRange;
+  if (layer.cellSize !== undefined) config.cellSize = layer.cellSize;
   if (layer.embedRadius !== undefined) config.embedRadius = layer.embedRadius;
   if (layer.biomes !== undefined) config.biomes = layer.biomes;
   if (layer.tempMin !== undefined) config.tempMin = layer.tempMin;
@@ -332,6 +340,9 @@ export interface ScatterBiomeContentDeps {
   /** Dry margin (world Y) added ABOVE the water level for waterGated layers, so props sit
    *  clear of the shoreline rather than at it. Default 0 (byte-identical to the prior path). */
   waterMargin?: number;
+  /** Optional render-cell size applied to every resolved layer. This changes only
+   *  derived render batching/LOD granularity, never canonical placements. */
+  cellSize?: number;
   /** The live region table the terrain.* skills populate (core.terrain.regions). When the
    *  region is found, the relief is surveyed with the EXACT hints it was generated with
    *  (e.g. an amp/erode override) so fractional gates like the pine tree-line resolve
@@ -349,7 +360,7 @@ export interface ScatterBiomeContentResult {
   configs: ScatterConfig[];
   /** Total instances placed across all layers. */
   instances: number;
-  /** Per-layer asset.scatter results (instances + mounted mesh count + pinned hashes +
+  /** Per-layer asset.scatter results (instances + mounted level-mesh count + pinned hashes +
    *  the computed placements). `placements` are the REAL transforms the mount path placed
    *  (asset.scatter's output), so callers/tests can verify the spawn mask — e.g. that no
    *  waterGated prop sits at/below the waterline — on the actual mounted set, not a
@@ -382,7 +393,10 @@ export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promis
   const wl = deps.waterLevel ?? (isWaterType(deps.type) ? defaultWaterLevel(survey) : undefined);
   // Configs are already filtered to non-empty palettes (unmapped roles dropped). If the pack maps
   // nothing, configs=[] → the loop drives zero asset.scatter calls → 0 instances, no throw.
-  const configs = biomeScatterConfigs(deps.type, deps.pack, survey, wl, deps.waterMargin ?? 0);
+  const resolvedConfigs = biomeScatterConfigs(deps.type, deps.pack, survey, wl, deps.waterMargin ?? 0);
+  const configs = deps.cellSize === undefined
+    ? resolvedConfigs
+    : resolvedConfigs.map((config) => ({ ...config, cellSize: deps.cellSize }));
 
   const layers: ScatterBiomeContentResult["layers"] = [];
   let total = 0;

@@ -77,6 +77,9 @@ const CREST_SLOPE = 0.05;     // pivot slope below which the convex/concave bran
 export interface ScatterAsset {
   id: string;
   weight?: number;
+  /** Optional lower-detail assets for population rendering. The base `id` is always
+   *  level 0 at distance 0; these levels must use strictly increasing distances. */
+  lods?: ScatterAssetLod[];
   /** OPT-IN footprint radius (world units at scale 1, the XZ half-extent of the
    *  asset's flat base). 0 (default) → no change, byte-identical. >0 enables CURVATURE-AWARE
    *  placement: on a convex ridge the instance seats at the lowest point of its footprint
@@ -85,6 +88,12 @@ export interface ScatterAsset {
    *  into the floor). See the curvature-aware block in scatterAssets.
    *  Per-asset; overrides the layer-default ScatterConfig.embedRadius. */
   embedRadius?: number;
+}
+
+export interface ScatterAssetLod {
+  id: string;
+  distance: number;
+  hysteresis?: number;
 }
 
 /** A circular keep-out disc in world XZ (center + radius). A candidate whose XZ falls
@@ -106,6 +115,9 @@ export interface ScatterConfig {
   density?: number;
   /** The curated asset palette (>=1). Weighted, deterministic pick per candidate. */
   assets: ScatterAsset[];
+  /** Render-cell size in world units. LOD-enabled assets default to 24; non-LOD
+   *  assets use an explicit value for independent frustum-culling batches. */
+  cellSize?: number;
   /** Inclusive world-Y floor: no assets below this elevation (e.g. above water). */
   elevationMin?: number;
   /** Inclusive world-Y ceiling — the TREE LINE: no assets above this elevation. */

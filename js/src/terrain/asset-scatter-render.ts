@@ -17,6 +17,7 @@ import type { AssetInstance } from "./asset-scatter.ts";
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const disposedScatterResources = new WeakSet<object>();
+const INSTANCE_LOCAL_MATRIX = "liminaPopulationLocalMatrix";
 
 function isHostLifetime(resource: unknown): boolean {
   return !!resource && typeof resource === "object"
@@ -165,15 +166,8 @@ export function buildAssetInstancedMeshes(
     }
     for (const bucket of buckets) {
       const inst = new THREE.InstancedMesh(geometry, instMaterial, bucket.length);
-      for (let i = 0; i < bucket.length; i++) {
-        const p = bucket[i];
-        pos.set(p.x, p.y, p.z);
-        q.setFromAxisAngle(Y_AXIS, p.yaw);
-        scl.set(p.scale, p.scale, p.scale);
-        m.compose(pos, q, scl).multiply(placed);
-        inst.setMatrixAt(i, m);
-      }
-      inst.instanceMatrix.needsUpdate = true;
+      inst.userData[INSTANCE_LOCAL_MATRIX] = placed.clone();
+      setAssetInstancedMeshInstances(inst, bucket, { matrix: m, position: pos, quaternion: q, scale: scl });
       inst.castShadow = false;
       inst.receiveShadow = true;
       // A REAL bounding sphere: THREE's InstancedMesh.computeBoundingSphere() (three ^0.184) unions the
@@ -188,6 +182,34 @@ export function buildAssetInstancedMeshes(
     }
   }
   return meshes;
+}
+
+/** Replace the active instances of a population mesh without reallocating its GPU buffer. */
+export function setAssetInstancedMeshInstances(
+  mesh: THREE.InstancedMesh,
+  instances: readonly AssetInstance[],
+  scratch?: { matrix: THREE.Matrix4; position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 },
+): void {
+  const capacity = mesh.instanceMatrix.count;
+  if (instances.length > capacity) throw new RangeError(`population batch capacity ${capacity} cannot hold ${instances.length} instances`);
+  const placed = mesh.userData[INSTANCE_LOCAL_MATRIX];
+  if (!(placed instanceof THREE.Matrix4)) throw new TypeError("population mesh is missing its asset-local matrix");
+  const m = scratch?.matrix ?? new THREE.Matrix4();
+  const pos = scratch?.position ?? new THREE.Vector3();
+  const q = scratch?.quaternion ?? new THREE.Quaternion();
+  const scl = scratch?.scale ?? new THREE.Vector3();
+  for (let index = 0; index < instances.length; index++) {
+    const instance = instances[index]!;
+    pos.set(instance.x, instance.y, instance.z);
+    q.setFromAxisAngle(Y_AXIS, instance.yaw);
+    scl.set(instance.scale, instance.scale, instance.scale);
+    m.compose(pos, q, scl).multiply(placed);
+    mesh.setMatrixAt(index, m);
+  }
+  mesh.count = instances.length;
+  mesh.visible = instances.length > 0;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (instances.length > 0) mesh.computeBoundingSphere();
 }
 
 /** Dispose world-owned scatter resources. Cache-owned geometry/textures survive until host disposal. */
