@@ -97,6 +97,17 @@ export interface WorldLike {
 // the array on parse via skills/permissions.ts. v1 lines (full `perms` array, no
 // `profile`) parse forever; the change is additive, so parseWorldLog accepts any
 // logVersion in [1, LOG_VERSION].
+//
+// FROZEN PROFILE MAPPINGS (additive within v2, both fields already optional in the
+// line schema): pinning a profile NAME coupled replay to the CURRENT profile
+// definition — narrowing a profile broke old-log replay, widening silently granted
+// replayed commands more than the caller held. The FIRST line pinning each profile
+// now keeps its full `perms` array ALONGSIDE the name, freezing the mapping into
+// the log; later pinned lines stay name-only and parse resolves them from the
+// frozen mapping (in seq order; a later both-fields line re-freezes). Only logs
+// with NO frozen mapping for a profile (v2 logs written before this fix) fall back
+// to resolveProfile — accepted with a parse-time warning, since the live definition
+// may have drifted from what the caller held.
 export const LOG_VERSION = 2;
 
 /** Native Rapier ops recorded as raw `physics` commands (mutating only). */
@@ -215,6 +226,10 @@ export interface WorldLogMeta {
 export interface ParsedWorldLog {
   meta?: WorldLogMeta;
   commands: WorldCommand[];
+  /** Non-fatal parse findings — currently one entry per profile that had to be
+   *  resolved from the LIVE definition because the log carries no frozen mapping
+   *  (pre-freeze v2 logs). Empty/absent when the log is fully self-describing. */
+  warnings?: string[];
 }
 
 export interface ParseWorldLogOptions {
@@ -223,6 +238,9 @@ export interface ParseWorldLogOptions {
    *  interior lines always fail closed. */
   recoverPartialFinalLine?: boolean;
   onRecoverableError?: (message: string) => void;
+  /** Receives each non-fatal warning as it is found (same strings as
+   *  ParsedWorldLog.warnings). */
+  onWarning?: (message: string) => void;
 }
 
 // Sorted-joined permission string per profile, cached: profiles are static data,
@@ -249,19 +267,33 @@ export function permissionProfileFor(profile: string | undefined, sortedPerms: r
 /** One command as a JSONL line. A skill command whose `perms` is exactly its
  *  pinned `profile`'s set persists the profile name INSTEAD of the array (v2);
  *  parseWorldLog materializes `perms` back from the profile. Every other command
- *  serializes unchanged (v1-identical bytes). */
-export function serializeWorldCommand(cmd: WorldCommand): string {
+ *  serializes unchanged (v1-identical bytes).
+ *
+ *  `pinnedProfiles` is the writer's freeze state (one Set per log/segment): a
+ *  pinned profile NOT yet in the set keeps its full `perms` array alongside the
+ *  name — the FROZEN MAPPING replay resolves later name-only lines from, so a
+ *  live-profile edit can never narrow or widen a recorded caller's permissions.
+ *  Callers without a set (single-line/legacy uses) emit name-only lines, exactly
+ *  the pre-freeze format. */
+export function serializeWorldCommand(cmd: WorldCommand, pinnedProfiles?: Set<string>): string {
   if (cmd.kind === "skill" && cmd.profile !== undefined && permissionProfileFor(cmd.profile, cmd.perms) === cmd.profile) {
+    if (pinnedProfiles !== undefined && !pinnedProfiles.has(cmd.profile)) {
+      pinnedProfiles.add(cmd.profile);
+      return JSON.stringify(cmd); // first pin: freeze {profile -> perms} into the log
+    }
     const { perms: _perms, ...rest } = cmd;
     return JSON.stringify(rest);
   }
   return JSON.stringify(cmd);
 }
 
-/** JSONL: meta header line, then one command per line (seq order preserved). */
+/** JSONL: meta header line, then one command per line (seq order preserved).
+ *  The first line pinning each profile freezes its permission mapping (see
+ *  serializeWorldCommand). */
 export function serializeWorldLog(meta: WorldLogMeta, commands: WorldCommand[]): string {
+  const pinnedProfiles = new Set<string>();
   const lines: string[] = [JSON.stringify(meta)];
-  for (const cmd of commands) lines.push(serializeWorldCommand(cmd));
+  for (const cmd of commands) lines.push(serializeWorldCommand(cmd, pinnedProfiles));
   return lines.join("\n") + "\n";
 }
 
@@ -331,26 +363,50 @@ export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): P
       meta = result.data;
       continue;
     }
-    if (result.data.kind === "skill" && result.data.perms === undefined) {
-      // v2 profile-pinned line: materialize the full permission array so every
-      // consumer of a parsed SkillCommand sees `perms` populated (replay invokes
-      // with it; the kernel/editor bridges forward it). An unknown profile fails
-      // CLOSED here — replaying with silently-empty permissions would fail
-      // partway through the stream with a far less diagnosable permission error.
-      const profile = result.data.profile;
-      if (profile === undefined) {
-        throw new Error(`world log: skill command on line ${i + 1} carries neither perms nor profile`);
-      }
-      const resolved = resolveProfile(profile);
-      if (resolved.size === 0) {
-        throw new Error(`world log: skill command on line ${i + 1} names unknown permission profile '${profile}'`);
-      }
-      result.data.perms = [...resolved].sort();
+    if (result.data.kind === "skill" && result.data.perms === undefined && result.data.profile === undefined) {
+      throw new Error(`world log: skill command on line ${i + 1} carries neither perms nor profile`);
     }
     out.push(result.data as WorldCommand);
   }
   out.sort((a, b) => a.seq - b.seq);
-  return { meta, commands: out };
+  // Materialize `perms` for profile-pinned lines, IN SEQ ORDER, from the log's
+  // own FROZEN mappings: a line carrying BOTH profile and perms (re)freezes that
+  // profile's mapping for every later name-only line, so replay grants exactly
+  // the set the caller held at record time — a live-profile edit after recording
+  // can neither narrow nor widen it. Only a profile with NO frozen mapping in
+  // the log (pre-freeze v2 logs) falls back to the CURRENT resolveProfile
+  // definition — accepted with a warning, because that definition may have
+  // drifted. An unknown profile with no frozen mapping still fails CLOSED —
+  // replaying with silently-empty permissions would fail partway through the
+  // stream with a far less diagnosable permission error.
+  const warnings: string[] = [];
+  const frozenProfiles = new Map<string, readonly string[]>();
+  const warnedProfiles = new Set<string>();
+  for (const cmd of out) {
+    if (cmd.kind !== "skill" || cmd.profile === undefined) continue;
+    if (cmd.perms !== undefined) {
+      frozenProfiles.set(cmd.profile, cmd.perms);
+      continue;
+    }
+    const frozen = frozenProfiles.get(cmd.profile);
+    if (frozen !== undefined) {
+      cmd.perms = [...frozen];
+      continue;
+    }
+    const resolved = resolveProfile(cmd.profile);
+    if (resolved.size === 0) {
+      throw new Error(`world log: skill command seq ${cmd.seq} names unknown permission profile '${cmd.profile}' with no frozen mapping in the log`);
+    }
+    cmd.perms = [...resolved].sort();
+    if (!warnedProfiles.has(cmd.profile)) {
+      warnedProfiles.add(cmd.profile);
+      const message = `world log: profile '${cmd.profile}' has no frozen permission mapping in this log (recorded pre-freeze); ` +
+        `replay uses the CURRENT profile definition, which may differ from what the caller held`;
+      warnings.push(message);
+      opts.onWarning?.(message);
+    }
+  }
+  return { meta, commands: out, warnings };
 }
 
 // ---- Deterministic PRNG ---------------------------------------------------

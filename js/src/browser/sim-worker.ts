@@ -49,6 +49,7 @@ import {
   type DerivedTerrainIndexEntry,
   type DerivedTerrainManifestChunk,
 } from "./derived-terrain-index.ts";
+import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 import { createTerrainGridSpec } from "../terrain/grid.mjs";
 import { tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
@@ -120,23 +121,13 @@ function derivedError(code: string, message: string): DerivedSimActivationError 
   return new DerivedSimActivationError(code, message);
 }
 
+// The ONE plain-data shape contract (derived-plain-data.ts carries the no-fork rule);
+// only the thrown error type is seam-specific, bound here to DerivedSimActivationError.
+const derivedPlainError = (message: string): Error => derivedError("INVALID_DERIVED_MESSAGE", message);
+
 function exactPlainRecord(value: unknown, keys: readonly string[], optional: readonly string[], label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw derivedError("INVALID_DERIVED_MESSAGE", `${label} must be a plain object`);
-  }
-  const record = value as Record<string, unknown>;
-  const allowed = new Set([...keys, ...optional]);
-  const names = Object.getOwnPropertyNames(record);
-  if (Object.getOwnPropertySymbols(record).length !== 0 || keys.some((key) => !names.includes(key))
-      || names.some((key) => !allowed.has(key))) {
-    throw derivedError("INVALID_DERIVED_MESSAGE", `${label} has unsupported or missing fields`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(record, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw derivedError("INVALID_DERIVED_MESSAGE", `${label}.${name} must be an enumerable data field`);
-    }
-  }
+  const record = plainRecord(value, label, derivedPlainError);
+  exactDataKeys(record, keys, optional, label, derivedPlainError);
   return record;
 }
 

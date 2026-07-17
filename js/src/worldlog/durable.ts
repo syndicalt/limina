@@ -29,6 +29,14 @@ export class DurableWorldLog {
   private flushed = 0;
   private opened = false;
   private resumed = false;
+  /** Frozen-profile-mapping state for THIS segment (see serializeWorldCommand):
+   *  the first flushed line pinning each profile keeps its full perms array so
+   *  replay resolves later name-only lines from the log, not the live profile.
+   *  resume() starts empty on purpose — the first pinned line after a resume
+   *  re-freezes the mapping, which is redundant but harmless (parse is
+   *  latest-mapping-wins in seq order) and covers a live-profile edit between
+   *  sessions. */
+  private readonly pinnedProfiles = new Set<string>();
 
   constructor(
     readonly recorder: WorldRecorder,
@@ -42,6 +50,7 @@ export class DurableWorldLog {
     this.flushed = 0;
     this.opened = true;
     this.resumed = false;
+    this.pinnedProfiles.clear();
   }
 
   /** Resume streaming after an existing on-disk segment. Unlike open(), this
@@ -68,7 +77,7 @@ export class DurableWorldLog {
       if (cmd === undefined) {
         throw new Error(`DurableWorldLog: command ${i} was compacted before it was flushed`);
       }
-      chunk += serializeWorldCommand(cmd) + "\n";
+      chunk += serializeWorldCommand(cmd, this.pinnedProfiles) + "\n";
     }
     ops.op_append_trace(this.name, chunk);
     const n = limit - this.flushed;
@@ -95,13 +104,16 @@ export class DurableWorldLog {
     if (limit !== this.recorder.commandCount) {
       throw new Error("DurableWorldLog: cannot rewrite while recorder commands are still pending");
     }
+    // The segment is rebuilt from scratch, so the freeze state restarts with it.
+    this.pinnedProfiles.clear();
+    const rewritePins = this.pinnedProfiles;
     let chunk = "";
     for (let i = 0; i < limit; i++) {
       const cmd = this.recorder.commandAt(i);
       if (cmd === undefined) {
         throw new Error(`DurableWorldLog: command ${i} missing during rewrite`);
       }
-      chunk += serializeWorldCommand(cmd) + "\n";
+      chunk += serializeWorldCommand(cmd, rewritePins) + "\n";
     }
     ops.op_write_trace(this.name, chunk);
     this.flushed = limit;

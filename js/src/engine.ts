@@ -407,12 +407,34 @@ export class EntityTable {
   private readonly byEid = new Map<number, string>();
   private seq = 0;
   private tableVersion = 0;
+  /** One-shot hooks fired at the TOP of the next identity mutation (create/
+   *  destroy/restore/rewindAllocator), BEFORE any state changes. The registry's
+   *  per-chain undo ledger arms one so its O(entities) allocator capture runs
+   *  only when a chain actually touches entities (lazy head-frame capture); a
+   *  companion hook on the bitECS side (ecs/world.ts armEntityIndexMutationHook)
+   *  covers eid allocation, which happens BEFORE `create` is called. All armed
+   *  hooks fire once and clear; frame end disarms via the returned function. */
+  private readonly mutationHooks = new Set<() => void>();
 
   get version(): number {
     return this.tableVersion;
   }
 
+  /** Arm a one-shot pre-mutation hook. Returns its disarm function (idempotent). */
+  armMutationHook(fn: () => void): () => void {
+    this.mutationHooks.add(fn);
+    return () => { this.mutationHooks.delete(fn); };
+  }
+
+  private fireMutationHooks(): void {
+    if (this.mutationHooks.size === 0) return;
+    const fired = [...this.mutationHooks];
+    this.mutationHooks.clear();
+    for (const fn of fired) fn();
+  }
+
   create(entry: Omit<EntityEntry, "generation">): string {
+    this.fireMutationHooks();
     const id = `ent_${this.seq++}`;
     this.map.set(id, { generation: 0, ...entry });
     if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, id);
@@ -565,6 +587,7 @@ export class EntityTable {
    *  (spatial index, reconcilers) consistent with replay, which never ran the
    *  failed chain. */
   rewindAllocator(seq: number, version: number): void {
+    this.fireMutationHooks();
     if (seq > this.seq || version > this.tableVersion) {
       throw new Error(`EntityTable.rewindAllocator: cannot rewind forward (seq ${this.seq}→${seq}, version ${this.tableVersion}→${version})`);
     }
@@ -577,6 +600,7 @@ export class EntityTable {
     this.tableVersion = version;
   }
   destroy(id: string): EntityEntry | undefined {
+    this.fireMutationHooks();
     const entry = this.map.get(id);
     if (entry !== undefined) {
       this.map.delete(id);
@@ -610,6 +634,7 @@ export class EntityTable {
    *  index's version gate behave exactly as in the original run. Mesh/resource
    *  bindings are runtime-only and left unbound (rebound on demand). */
   restore(snapshot: EntityTableSnapshot): void {
+    this.fireMutationHooks();
     this.map.clear();
     this.byBody.clear();
     this.byEid.clear();

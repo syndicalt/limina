@@ -34,7 +34,7 @@ HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3
 # Tests whose committed evidence records repo-root-relative asset paths ("assets/...")
 # — they must run with the asset root at the REPO ROOT, matching the capture harnesses
 # (tools/preview/*) that produced the evidence. Named allowlist, not error guessing.
-REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package "
+REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package p_native_wasm_compile_sync p_building_fire_review_scene_v2 p_building_fire_volumetric_binding "
 
 # The determinism core added to --quick: worldlog replay/durability/recovery, policy/audit/
 # isolation, packaging, plus the p7x layout/geometry/scatter/grass determinism gates.
@@ -79,6 +79,16 @@ run_test() {
     # have no working harness today. Announced so the gap stays visible.
     p_staged_material_review_scene|p_staged_interior_proxy_review_scene)
       record_skip "$name" "needs a bun test harness (filename not *test*); runner wiring pending"; return;;
+    # Host-capability gaps: the limina host has no timers and no structuredClone, and its
+    # event loop never resolves async WebAssembly.compile — these tests import engine ops
+    # so bun cannot run them either. Announced so the capability gap stays visible; the
+    # fix is host-side (add timers/structuredClone to the runtime), never a test edit.
+    p8_sim_worker_pause|p_native_basis_init)
+      record_skip "$name" "needs host timers (setTimeout) — limina runtime has none"; return;;
+    p_native_wasm_compile)
+      record_skip "$name" "async WebAssembly.compile never resolves on the limina event loop (sync twin runs)"; return;;
+    p_functional_building_contract|p_architecture_compiler|p_architecture_building_program_synthesizer)
+      record_skip "$name" "needs structuredClone — limina runtime has none"; return;;
     # Vegetation-scatter gates: their real prerequisite is the ACCEPTED oak asset trio
     # (source + LOD + Blender-baked impostor), not Blender itself. When the trio exists
     # they run right here; tree-scatter-integration (host gate below) additionally
@@ -98,12 +108,18 @@ run_test() {
   # under bun; announce the environmental skip when bun is absent.
   #
   # KNOWN-RED, PENDING OWNER ADJUDICATION (do NOT re-pin or skip — the failures are
-  # honest): p_architecture_lod_package, p_functional_hall_house_v4_asset,
-  # p_functional_hall_house_v4_quality, p_functional_building_closure(+_gorgon_asset),
-  # p_fb4_multi_room_review_candidate pin an earlier authoring cycle of the hall-house/
-  # FB-4 chain; the tree carries a later, mid-review state (the FB-4 candidate's own
-  # authority records humanDecision=pending). Re-pinning is the asset owner's decision
-  # (CLAUDE.md §7.1); until then these report as the real FAILs they are.
+  # honest, and all were verified red at checkpoint ca4c77a, i.e. authored-content
+  # drift from the in-flight FB/temperate push, not engine regressions):
+  # p_architecture_lod_package, p_functional_hall_house_v4_{asset,quality,rendered_door},
+  # p_functional_building_{closure,gorgon_asset,door,iteration,native_traversal},
+  # p_fb4_multi_room_review_candidate, p_building_fire_review_scene (v1 byte-pin;
+  # v2 + volumetric are repo-rooted and green), p_biome_field_artifact, p_world_terrain_compile
+  # pin an earlier authoring cycle; the tree carries a later, mid-review state (the
+  # FB-4 candidate's own authority records humanDecision=pending). Re-pinning is the
+  # asset owner's decision (CLAUDE.md §7.1); until then these report as real FAILs.
+  # Window/GPU family (m0_seams, p0_4_cube, s4_window, p3_*_window, p_*_gpu,
+  # p_gpu_surface_probe): red on boxes whose display can't present a wgpu surface —
+  # run with LIMINA_HEADLESS=1 there (announced skips), green where presentation works.
   if grep -q 'from "node:' "$t"; then
     if ! command -v bun >/dev/null 2>&1; then
       record_skip "$name" "host-flavored (node:*) authoring gate and bun is absent"; return

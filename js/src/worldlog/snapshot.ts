@@ -360,6 +360,16 @@ function ecsInternal(ecs: unknown): BitEcsInternal {
   return internal;
 }
 
+/** Whether `ecs` is a real bitECS world carrying the `$internal` entity index.
+ *  Stub worlds (registry unit gates drive `invoke` with minimal WorldContext
+ *  literals) have no index — there are no eids to rewind, so the undo ledger's
+ *  head-frame capture skips it rather than failing the invoke. */
+export function hasEntityIndex(ecs: unknown): boolean {
+  if (ecs === null || typeof ecs !== "object") return false;
+  const internal = (ecs as Record<symbol, BitEcsInternal | undefined>)[$internal as unknown as symbol];
+  return internal !== undefined && internal.entityIndex !== undefined;
+}
+
 /** Exported for the registry's per-chain undo ledger (H1): a failed chain must
  *  rewind the bitECS allocator so replay (which never runs the failed chain)
  *  allocates the SAME eids for every subsequent command. */
@@ -427,6 +437,20 @@ export interface CaptureSnapshotOptions {
    *  the per-join AoI view): skips every participant capture so the join stays O(relevant).
    *  Such a snapshot is NOT self-sufficient for manager state — never persist it as a save. */
   includeManagers?: boolean;
+  /** Set false on the same hot paths to skip the native physics blob:
+   *  op_physics_snapshot serializes the ENTIRE Rapier world (bodies, colliders,
+   *  contact graph — megabytes at scale) and the base64 encode doubles the cost,
+   *  all under the caller's authority lock. `physics` is then "" — such a
+   *  snapshot cannot restore dynamics and must NEVER be persisted as a save.
+   *  Durable/save paths keep the default (true). */
+  includePhysics?: boolean;
+  /** "full" (default) captures each entity's authoring state (tags, resource,
+   *  origin, parent/localOffset, material, behavior, runtimeBodyIds). "transform"
+   *  captures only identity + transform — the narrowest projection the per-join
+   *  AoI view needs — skipping the per-entity resolve/tag-sort work and the
+   *  per-entity object churn. A transform projection is NOT self-sufficient;
+   *  never persist it. */
+  entityProjection?: "full" | "transform";
 }
 
 /** Capture a complete world snapshot at the current tick boundary. MUST be called
@@ -435,8 +459,23 @@ export interface CaptureSnapshotOptions {
 export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotOptions): WorldSnapshot {
   const table = world.entities.snapshot();
   const entities: SnapshotEntity[] = [];
+  const transformOnly = opts.entityProjection === "transform";
   for (const entry of table.entries) {
     const eid = entry.eid;
+    if (transformOnly) {
+      // Hot-path projection (per-join AoI view): identity + transform only.
+      entities.push({
+        id: entry.id,
+        eid,
+        bodyId: entry.bodyId,
+        generation: entry.generation,
+        pos: [Position.x[eid], Position.y[eid], Position.z[eid]],
+        rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
+        scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]],
+        tags: [],
+      });
+      continue;
+    }
     // Tags (world.tags is keyed by eid) and resource (a runtime binding on the live
     // entry) are the two authoring-state pieces the identity slice drops — capture
     // them so the snapshot alone reproduces the entity, no pre-snapshot replay needed.
@@ -468,7 +507,9 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
   const events: EventSpecSnapshotEntry[] = opts.events !== undefined
     ? opts.events.listEventSpecs()
     : (opts.participants?.get(EVENTS_PARTICIPANT_KEY)?.capture() as EventSpecSnapshotEntry[] | undefined) ?? [];
-  const physics = world.ops.op_physics_snapshot();
+  // Skipped on the per-join hot path: the blob is the whole native Rapier world
+  // and the capture runs under the caller's authority lock (see includePhysics).
+  const physics = opts.includePhysics === false ? undefined : world.ops.op_physics_snapshot();
   return {
     snapshotVersion: SNAPSHOT_VERSION,
     sessionId: opts.sessionId,
@@ -483,7 +524,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
     characters,
     events,
     managers: opts.includeManagers === false ? {} : opts.participants?.captureManagers() ?? {},
-    physics: bytesToBase64(physics),
+    physics: physics === undefined ? "" : bytesToBase64(physics),
   };
 }
 

@@ -1278,6 +1278,11 @@ export class AuthoritativeServer {
       // Hot-path exemption (H2): the per-join view projects entities only and must
       // stay O(relevant) — manager capture is skipped, never persisted from here.
       includeManagers: false,
+      // The join view never restores dynamics and only wires id/pos/rot/scale, so
+      // skip the whole-world Rapier blob (op_physics_snapshot + base64, MBs under
+      // this authority lock) and the per-entity authoring-state capture too.
+      includePhysics: false,
+      entityProjection: "transform",
     });
     const entities: EntityState[] = [];
     for (const e of snap.entities) {

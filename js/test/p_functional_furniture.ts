@@ -52,7 +52,8 @@ function runtime(failTransformAt = Infinity): { world: WorldContext; added: numb
   return { world, added, removed };
 }
 const assetOps = { op_read_asset: () => bytes, op_sha256: () => "" } as unknown as EngineOps;
-const assets = new AssetRegistry(assetOps), registry = new SkillRegistry(new LiminaTracer("functional-furniture-test")); registerFurnitureSkills(registry, assets);
+const tracer = new LiminaTracer("functional-furniture-test");
+const assets = new AssetRegistry(assetOps), registry = new SkillRegistry(tracer); registerFurnitureSkills(registry, assets);
 const invoke = (world: WorldContext, input: Record<string, unknown>) => registry.invoke("furniture.placeFunctional", input, { agentId: "test", sessionId: "furniture", permissions: new Set(["scene.write"]), tick: 1, world });
 const success = runtime(), yaw = Math.PI / 2, position: [number, number, number] = [5, 1, 7];
 const response = await invoke(success.world, { assetId, position, yaw }); assert.equal(response.success, true);
@@ -74,7 +75,23 @@ assert.equal(restored.world.entities.ids().length, 0); assert.deepEqual(restored
 
 const failed = runtime(2), failedResponse = await invoke(failed.world, { assetId, hash: assets.hashOf(assetId), contractHash: parsed.contractHash });
 assert.equal(failedResponse.success, false); assert.equal(failed.world.entities.ids().length, 0, "failed placement leaked entities"); assert.deepEqual(failed.removed.sort(), failed.added.sort(), "failed placement leaked physics bodies");
+// A mismatched CONTRACT hash still throws: furnitureDesignContractHash is a pure-JS sha256 over
+// canonical JSON (host-independent), so a mismatch there is genuine contract drift, never a
+// cross-host artifact.
 const pinResponse = await invoke(runtime().world, { assetId, contractHash: "sha256:" + "f".repeat(64) }); assert.equal(pinResponse.success, false);
-const bytePinResponse = await invoke(runtime().world, { assetId, hash: "sha256:" + "e".repeat(64), contractHash: parsed.contractHash }); assert.equal(bytePinResponse.success, false);
+// A mismatched committed ASSET hash WARNS AND CONTINUES (failure mode #12): resolved hashes come
+// from op_sha256, which is host-dependent, so a cross-host replay of a healthy placement can
+// mismatch — the placement must succeed and surface exactly ONE furniture.hash_mismatch event.
+// FALSIFIABLE both ways: every matching/absent-hash invoke above emitted ZERO mismatch events,
+// and removing the handler's hash check makes the event below disappear.
+assert.equal(tracer.trace("test").filter((e) => e.type === "furniture.hash_mismatch").length, 0,
+  "matching/absent committed hashes must not emit furniture.hash_mismatch");
+const swappedHash = "sha256:" + "e".repeat(64);
+const bytePinResponse = await invoke(runtime().world, { assetId, hash: swappedHash, contractHash: parsed.contractHash });
+assert.equal(bytePinResponse.success, true, `a committed-hash mismatch must warn-and-continue, not abort the replay: ${JSON.stringify(bytePinResponse.error)}`);
+const mismatchEvents = tracer.trace("test").filter((e) => e.type === "furniture.hash_mismatch");
+assert.equal(mismatchEvents.length, 1, `a swapped committed hash MUST surface exactly one furniture.hash_mismatch event (got ${mismatchEvents.length})`);
+const mismatchPayload = mismatchEvents[0].payload as { assetId?: string; committed?: string; resolved?: string };
+assert.equal(mismatchPayload.assetId, assetId); assert.equal(mismatchPayload.committed, swappedHash); assert.equal(mismatchPayload.resolved, assets.hashOf(assetId));
 
-console.log(`p_functional_furniture OK: exact contract ${parsed.contractHash}, ${parsed.partIds.length} semantic parts, ${parsed.sockets.length} transformed sockets, ${parsed.colliders.length} compound bodies; teardown and rollback exact`);
+console.log(`p_functional_furniture OK: exact contract ${parsed.contractHash}, ${parsed.partIds.length} semantic parts, ${parsed.sockets.length} transformed sockets, ${parsed.colliders.length} compound bodies; teardown and rollback exact; committed-asset-hash mismatch warns-and-continues (1 furniture.hash_mismatch event), contract-hash mismatch still throws`);

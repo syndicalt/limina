@@ -988,17 +988,36 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // ── Derived snapshot verification venue (H8). The hash/re-encode pass over an
   //    untrusted snapshot runs in a dedicated verify worker so a full residency
   //    window never stalls the rAF thread; environments without Worker (headless
-  //    gates) run the SAME verifier inline. Buffers are TRANSFERRED both ways, so
-  //    the bytes verified are provably the bytes mounted. A channel-level worker
-  //    failure fails that activation (its buffers are already detached) and every
-  //    later activation verifies inline. ──
+  //    gates) run the SAME verifier inline. The request path COPIES buffers (the
+  //    editor retains + re-activates the same snapshot); the response path transfers
+  //    the worker-verified bytes, which are the only bytes mounted. A channel-level
+  //    worker failure fails that activation; the NEXT activation attempts ONE
+  //    respawn (a single flaky spawn must not degrade every later activation to
+  //    main-thread hashing), and only a second failure pins verification inline —
+  //    announced on EVERY inline fallback, not once. ──
   let verifyWorker: { terminate(): void } | null = null;
   let derivedVerifier: DerivedSnapshotVerifier | null = null;
-  let verifyWorkerUnavailable = false;
+  // Each worker failure consumes one credit; the first leaves one respawn for the
+  // next activation, the second pins verification inline for this runtime.
+  let verifyWorkerFailures = 0;
+  const MAX_VERIFY_WORKER_FAILURES = 2;
+  const failVerifyWorker = (spawned: Worker, client: DerivedSnapshotVerifier, error: Error): void => {
+    verifyWorkerFailures++;
+    client.fail(error);
+    try { spawned.terminate(); } catch { /* already torn down */ }
+    if (verifyWorker === (spawned as unknown as { terminate(): void })) { verifyWorker = null; derivedVerifier = null; }
+  };
+  const verifyDerivedSnapshotInline = (snapshot: unknown): Promise<ParsedTransferredDerivedSnapshot> => {
+    try { return Promise.resolve(parseTransferredDerivedRuntimeSnapshot(snapshot)); }
+    catch (error) { return Promise.reject(error); }
+  };
   const verifyDerivedSnapshotOffThread = (snapshot: unknown): Promise<ParsedTransferredDerivedSnapshot> => {
-    if (typeof Worker !== "function" || verifyWorkerUnavailable) {
-      try { return Promise.resolve(parseTransferredDerivedRuntimeSnapshot(snapshot)); }
-      catch (error) { return Promise.reject(error); }
+    if (typeof Worker !== "function") return verifyDerivedSnapshotInline(snapshot);
+    if (verifyWorkerFailures >= MAX_VERIFY_WORKER_FAILURES) {
+      // Per-occurrence, not once: every activation that lost its off-thread venue is
+      // a main-thread hashing stall the session's owner should be able to see.
+      console.warn(`derived verify worker unavailable after ${verifyWorkerFailures} failure(s); verifying inline`);
+      return verifyDerivedSnapshotInline(snapshot);
     }
     if (derivedVerifier === null) {
       try {
@@ -1009,19 +1028,21 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           listen: (handler) => { spawned.onmessage = (ev: MessageEvent<unknown>): void => handler(ev.data); },
         });
         spawned.onerror = (event: unknown): void => {
-          verifyWorkerUnavailable = true;
           const detail = (event as { message?: unknown } | null)?.message;
-          client.fail(new Error(`derived verify worker failed: ${typeof detail === "string" && detail.length > 0 ? detail : "worker error"}`));
-          try { spawned.terminate(); } catch { /* already torn down */ }
-          if (verifyWorker === spawned) { verifyWorker = null; derivedVerifier = null; }
+          failVerifyWorker(spawned, client,
+            new Error(`derived verify worker failed: ${typeof detail === "string" && detail.length > 0 ? detail : "worker error"}`));
+        };
+        // A deserialization failure never delivers its response, so without this the
+        // pending request would idle out its full 60s budget instead of failing fast.
+        spawned.onmessageerror = (): void => {
+          failVerifyWorker(spawned, client, new Error("derived verify worker message failed to deserialize"));
         };
         verifyWorker = spawned;
         derivedVerifier = client;
       } catch (error) {
-        verifyWorkerUnavailable = true;
-        console.warn("derived verify worker unavailable; verifying inline", error);
-        try { return Promise.resolve(parseTransferredDerivedRuntimeSnapshot(snapshot)); }
-        catch (parseError) { return Promise.reject(parseError); }
+        verifyWorkerFailures++;
+        console.warn("derived verify worker spawn failed; verifying inline", error);
+        return verifyDerivedSnapshotInline(snapshot);
       }
     }
     return derivedVerifier.verify(snapshot);
@@ -1156,14 +1177,33 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     () => handshake.fail(`sim worker init did not reply ready within ${HANDSHAKE_TIMEOUT_MS / 1000}s`),
     HANDSHAKE_TIMEOUT_MS,
   );
-  worker.onmessage = (ev: { data: unknown }): void => { handshake.offer(ev.data); };
+  // The worker posts its isolated per-command loadWorld failures BEFORE `ready`
+  // (sim-worker.ts posts `authoringFailures` then the handshake). Capture them here —
+  // the handshake itself ignores that message type — so the render-side authoring
+  // below can be checked for realm symmetry against the worker's outcome.
+  let workerInitAuthoringFailures: AuthorCommandFailure[] | null = null;
+  worker.onmessage = (ev: { data: unknown }): void => {
+    const data = ev.data as { type?: string; phase?: string; failures?: AuthorCommandFailure[] } | null;
+    if (data?.type === "authoringFailures" && data.phase === "loadWorld") {
+      workerInitAuthoringFailures = data.failures ?? [];
+      return;
+    }
+    handshake.offer(ev.data);
+  };
   worker.onerror = (ev: { message?: string }): void => handshake.fail("sim worker error: " + (ev.message ?? "unknown"));
-  worker.postMessage({
-    type: "init",
-    commands: opts.commands,
-    authoringProjectId: initialAuthoringProjectId,
-    assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
-  });
+  try {
+    worker.postMessage({
+      type: "init",
+      commands: opts.commands,
+      authoringProjectId: initialAuthoringProjectId,
+      assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
+    });
+  } catch (error) {
+    // A synchronous post failure (an unserializable command/asset payload) must
+    // settle the handshake here: throwing past it would leak the 30s deadline timer
+    // and skip the specific-reason error path below.
+    handshake.fail("sim worker init postMessage failed: " + (error instanceof Error ? error.message : String(error)));
+  }
   const handshakeResult = await handshake.promise;
   clearTimeout(handshakeDeadline);
   if (!handshakeResult.ok) {
@@ -1268,9 +1308,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       return;
     }
     if (msg.type === "authoringFailures") {
-      // NON-FATAL: the worker isolated a bad/out-of-band command (it kept stepping). The render
-      // thread re-authors the same log and reports the same failures via `authoringFailures`, so this
-      // is surfaced for observability, not treated as a fatal sim throw.
+      // NON-FATAL observability only. Divergence is detected elsewhere: init-phase
+      // ("loadWorld") failures were captured during the handshake and are checked for
+      // render/worker symmetry before the runtime is returned; forwarded-batch
+      // ("applyCommands") failures are counted by the per-batch `commandsApplied` ack,
+      // which escalates any shortfall to needsReboot. This message only names WHICH
+      // commands failed and why.
       console.warn(
         `limina sim worker isolated ${msg.failures?.length ?? 0} authoring failure(s) in ${msg.phase ?? "loadWorld"}:`,
         (msg.failures ?? []).map((f) => `#${f.index} ${f.command}: ${f.message}`).join("; "),
@@ -1299,6 +1342,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     submerged: false,
   };
   const readWorkerTick = (): number => (statusShared ? Atomics.load(statusView, 0) : statusView[0]);
+  // ORDERING CONSTRAINT: the worker serializes ALL message handling through one promise
+  // tail (sim-worker.ts messageTail), so a pause/resume posted behind a forwarded
+  // structural command batch cannot be acknowledged until that batch finishes — and the
+  // batch is legally allowed its own 10s ack budget (forwardCommandsToWorker below).
+  // The control budget must therefore sit ABOVE the batch budget, or a perfectly
+  // healthy worker fails pause acks under authoring load.
+  const WORKER_CONTROL_ACK_TIMEOUT_MS = 12_000;
   const requestWorkerControl = (type: "pause" | "resume"): Promise<void> => {
     const requestId = ++controlRequestId;
     const expected = type === "pause" ? "paused" : "resumed";
@@ -1306,7 +1356,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       const timer = setTimeout(() => {
         controlWaiters.delete(requestId);
         reject(new Error(`sim worker ${type} acknowledgement timed out`));
-      }, 2_000);
+      }, WORKER_CONTROL_ACK_TIMEOUT_MS);
       controlWaiters.set(requestId, { expected, resolve, reject, timer });
       try { worker.postMessage({ type, requestId }); }
       catch (error) {
@@ -1490,6 +1540,30 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       `limina live authoring isolated ${authoringFailures.length} failure(s):`,
       authoringFailures.map((f) => `#${f.index} ${authoringFailureMessage(opts.commands[f.index], f.message)}`).join("; "),
     );
+  }
+  // ── REALM SYMMETRY (init/reboot replay): the worker authored this exact command log in
+  //    loadWorld and reported ITS isolated failures before `ready` (captured above). Both realms
+  //    allocate entities/bodies/eids sequentially per applied command, so any asymmetry in the
+  //    failed-command sets means the allocations have permanently diverged — wrong SAB lanes,
+  //    wrong physics — the same shortfall the live applyAuthorCommands path escalates via
+  //    needsReboot. Init has no needsReboot channel and a reboot would deterministically diverge
+  //    again, so escalate like every other fatal startup shortfall: report + teardown + null
+  //    (the "environment cannot host the viewport" signal). ──
+  {
+    // The cast defeats TS's closure-assignment narrowing: the value is assigned only
+    // inside the handshake-era onmessage handler above.
+    const workerFailed = new Set(((workerInitAuthoringFailures as AuthorCommandFailure[] | null) ?? []).map((failure) => failure.index));
+    const renderFailed = new Set(authoringFailures.map((failure) => failure.index));
+    const symmetric = workerFailed.size === renderFailed.size
+      && [...workerFailed].every((index) => renderFailed.has(index));
+    if (!symmetric) {
+      const message = "sim worker and render realm isolated DIFFERENT init authoring failures "
+        + `(worker [${[...workerFailed].join(", ")}] vs render [${[...renderFailed].join(", ")}]) — `
+        + "entity/body/eid allocation diverged between the realms";
+      status("error", message);
+      await teardown(message).catch(reportTeardownFailure);
+      return null;
+    }
   }
 
   // ── Cel-shading (toon) render style: swap PBR meshes → hard-banded MeshToonNodeMaterial now that the
@@ -1751,9 +1825,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const eids: number[] = [];
   // BODILESS statics (asset.place / asset.scatter / any renderable with no physics body)
   // need their authored pose SEEDED into the transform SAB below: the sim-worker streams
-  // ONLY body-bound entities into the SAB each tick (sim-worker syncTransforms skips
-  // `bodyId === undefined`), so a bodiless slot would otherwise stay at the SAB's zero and
-  // the mesh would collapse onto the origin. Body-bound entities are left out here — the
+  // ONLY body-bound entities into the SAB each tick (syncTransforms iterates the
+  // EntityTable's byBody reverse index, so a bodiless slot is never visited, let alone
+  // written), so a bodiless slot would otherwise stay at the SAB's zero and the mesh
+  // would collapse onto the origin. Body-bound entities are left out here — the
   // worker owns their per-tick pose (seeding them would fight the live physics sync).
   const bodilessEids: number[] = [];
   for (const id of entities.ids()) {

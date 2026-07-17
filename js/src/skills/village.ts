@@ -234,7 +234,11 @@ export function registerVillageSkills(
 ): void {
   const build: SkillDefinition<z.infer<typeof buildInput>, z.infer<typeof buildOutput>> = {
     name: "village.build",
-    version: "1.0.0",
+    // 2.0.0 — replay-VISIBLE behavior change this cycle: per-yard lawn fields plus
+    // unconditional lawn/tint/deco entity creation changed the ent_ id sequence a
+    // recorded log produces. SkillCommand does not record versions, so this bump is
+    // documentation of the log-visible change, not a compatibility switch.
+    version: "2.0.0",
     description: "Lay a terrain-aware settlement onto an editable terrain layer by placing curated library GLB assets. Reads the live heightfield, runs the shared deterministic layout planner (focal on the chosen ground, cluster terraced below, edge building beyond), and invokes asset.place per building. Deterministic + replay-safe: the world log records the direction + steering + seed + PINNED asset hashes, NEVER the transforms, which replay recomputes. Returns the placed entities + computed placements.",
     category: "three",
     permissions: [...PLACE_PERMS],
@@ -613,15 +617,17 @@ export function registerVillageSkills(
 
         // LAWN DECORATION — the "vegetation features" of a tended yard: a light scatter of wildflowers +
         // grass tufts CONFINED to the lawn discs (inclusion), the building footprint excluded, low density
-        // so it reads as sprinkled flowers, not a meadow. Instanced exactly like asset.scatter. GRACEFUL:
-        // a curated GLB that doesn't RESOLVE (bare checkout) is dropped from the config before the
-        // deterministic scatter; a resolved GLB that fails to PARSE loses only its mesh — the entity is
-        // still created and the failure surfaces as a village.lawn_deco_failed event, so a render fault
-        // can never fork the entity sequence.
-        const decoAssets: { id: string; weight: number }[] = [];
-        for (const a of siting.lawnVegetation) {
-          try { assets.resolve(a.id); decoAssets.push({ id: a.id, weight: a.weight }); } catch { /* asset absent — skip */ }
-        }
+        // so it reads as sprinkled flowers, not a meadow. Instanced exactly like asset.scatter.
+        // ENTITY DETERMINISM (H4): the deco config — and therefore the deco ENTITY count — is a pure
+        // function of the recorded steering + seed, NEVER of which curated GLBs happen to resolve on
+        // this checkout. A pre-filter that dropped unresolvable assets from the config forked the
+        // ent_ id sequence between a curated checkout and a bare one (the exact env-fork mechanism
+        // H4 fixed for render capability). GRACEFUL rendering only: a GLB that fails to RESOLVE or
+        // PARSE in the render branch below loses its MESH and surfaces as a village.lawn_deco_failed
+        // event — the entity is still created, so neither a missing asset nor a render fault can
+        // ever fork the entity sequence.
+        const decoAssets: { id: string; weight: number }[] =
+          siting.lawnVegetation.map((a) => ({ id: a.id, weight: a.weight }));
         if (decoAssets.length > 0) {
           const decoConfig: ScatterConfig = {
             seed: (villageSeed ^ 0x0051ed12) >>> 0,

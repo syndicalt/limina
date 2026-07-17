@@ -133,7 +133,15 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
     handler: async (input, ctx) => {
       if (input.lodDistances[1] <= input.lodDistances[0]) throw new Error("functional building LOD: distances must be strictly increasing");
       const resolved = assets.resolve(input.assetId);
-      if (input.hash !== undefined && input.hash !== resolved.hash) throw new Error(`functional building: pinned hash mismatch for ${input.assetId}`);
+      // Committed-hash pin: WARN (never THROW) on a mismatch — mirrors asset.place exactly.
+      // resolved.hash comes from op_sha256, which is NOT byte-identical across the Rust and JS
+      // hosts, so a cross-host replay of a healthy placement can mismatch; throwing here aborts
+      // the replay (failure mode #12, shipped three times). assetId pins authored identity; a
+      // genuinely swapped asset surfaces as a visible building.hash_mismatch event (and the
+      // byte-validating contract parse below rejects anything that is not a functional building).
+      if (input.hash !== undefined && input.hash !== resolved.hash) {
+        ctx.emit("building.hash_mismatch", { assetId: input.assetId, committed: input.hash, resolved: resolved.hash });
+      }
       const contract = parseFunctionalBuildingContract(resolved.bytes); // validate every byte before mutation
       const staticBatch = parseFunctionalBuildingStaticBatch(resolved.bytes);
       const created: string[] = [];

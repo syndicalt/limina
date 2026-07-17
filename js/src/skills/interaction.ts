@@ -247,7 +247,14 @@ export function registerInteractionSkills(
     output: z.object({ ok: z.boolean(), itemEntity: z.string().optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
       if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
-      const removed = inv.removeItem(input.actorEntity, input.itemId, input.slot, input.quantity);
+      // TRUE-INVERSE rollback prep: resolve the slot the removal will ACTUALLY
+      // take from (removeItem's own lowest-slot-first rule) BEFORE removing.
+      // Re-adding with the caller's possibly-omitted slot would auto-assign or
+      // stack elsewhere, leaving the inventory layout diverged from "the drop
+      // never happened" after a failed spawn.
+      const sourceSlot = input.slot
+        ?? inv.listItems(input.actorEntity).find((s) => s.itemId === input.itemId)?.slot;
+      const removed = inv.removeItem(input.actorEntity, input.itemId, sourceSlot, input.quantity);
       if (!removed) return { ok: false, reason: `actor "${input.actorEntity}" does not hold "${input.itemId}"` };
       // Spawn a REAL world item entity (the ECS path terrain/scene use): a renderable
       // bound to an inert transform at the drop position, registered in the entity table.
@@ -258,9 +265,10 @@ export function registerInteractionSkills(
         despawnRenderable(ctx.world.ecs, eid);
         // ROLLBACK: the item was already removed from inventory; a failed drop must
         // leave the inventory intact, never destroy the item (same remove→rollback
-        // contract as InventoryManager.transferItem). The slot was freed by the
-        // removal above, so the re-add cannot lack space.
-        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: input.slot });
+        // contract as InventoryManager.transferItem). Restore to the CAPTURED source
+        // slot — freed (or decremented) by the removal above, so the re-add cannot
+        // lack space and lands where the item actually was.
+        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: sourceSlot });
         return { ok: false, reason: "entity capacity exceeded (MAX_ENTITIES) — item returned to inventory" };
       }
       const itemEntity = ctx.world.entities.create({ eid });

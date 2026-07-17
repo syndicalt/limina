@@ -13,11 +13,15 @@
  * constructor accepts only that branded output. Do not fork any check in this file
  * into a sibling module — one verifier, reused, is the seam.
  *
- * Worker protocol: the main thread posts the untrusted snapshot TRANSFERRING its
- * ArrayBuffers (detaching them from the sender closes the TOCTOU window — the bytes
- * verified are provably the bytes used); the worker verifies and posts the
- * structured-clone-safe verification back transferring the same buffers; the main
- * realm hydrates (index/closure rebuild only, no re-validation of verified content).
+ * Worker protocol: the main thread posts the untrusted snapshot WITHOUT a transfer
+ * list — callers RETAIN their snapshot (the editor re-activates the same object for
+ * Play-start and edit-reboot), so the request must never detach the caller's buffers;
+ * the structured clone copies each one (one memcpy ≪ the hashing this offloads). The
+ * worker verifies and posts the structured-clone-safe verification back TRANSFERRING
+ * its buffers. Verify-before-use still holds — TOCTOU is closed on the RESPONSE path:
+ * the render candidate consumes only the worker-verified copy moved back here, never
+ * the caller's still-mutable original. The main realm hydrates that verified copy
+ * (index/closure rebuild only, no re-validation of verified content).
  */
 
 import {
@@ -866,8 +870,11 @@ export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTr
 }
 
 /** Every ArrayBuffer reachable from a snapshot/verification graph, deduplicated —
- *  the postMessage transfer list. SharedArrayBuffer-backed views are deliberately
- *  excluded: they cannot be detached, and the verifier rejects them anyway. */
+ *  the worker→main RESPONSE transfer list (and the client's detached-buffer scan).
+ *  Never used as a request transfer list: callers retain their snapshot, so the
+ *  request path must copy, not detach (see the module doc). SharedArrayBuffer-backed
+ *  views are deliberately excluded: they cannot be detached, and the verifier
+ *  rejects them anyway. */
 export function collectDerivedSnapshotTransferables(value: unknown): ArrayBuffer[] {
   const buffers = new Set<ArrayBuffer>();
   const seen = new Set<object>();
@@ -987,6 +994,24 @@ interface PendingVerify {
   readonly timer: ReturnType<typeof setTimeout> | null;
 }
 
+/** Fail fast, with a cause the caller can act on, when a snapshot already carries
+ *  detached ArrayBuffers — the signature of a snapshot whose memory was transferred
+ *  away by an earlier postMessage. Without this the detachment surfaces later as an
+ *  opaque verification failure (zero-length views) or a browser DataCloneError.
+ *  Detection uses `ArrayBuffer.prototype.detached` where the host provides it;
+ *  elsewhere the downstream verification failure remains the (less specific) signal. */
+function assertNoDetachedSnapshotBuffers(snapshot: unknown): void {
+  if (!("detached" in ArrayBuffer.prototype)) return;
+  for (const buffer of collectDerivedSnapshotTransferables(snapshot)) {
+    if ((buffer as ArrayBuffer & { detached: boolean }).detached) {
+      throw new TypeError(
+        "derived snapshot carries a detached ArrayBuffer — its memory was already transferred away; "
+        + "verify requests never detach (buffers are cloned), so the snapshot was detached before it reached this client",
+      );
+    }
+  }
+}
+
 /**
  * Main-realm client over any DerivedVerifyChannel. On success it hydrates the
  * worker's verification into the branded snapshot — the identical object contract
@@ -1026,10 +1051,15 @@ export class DerivedSnapshotVerifier {
       }, this.#timeoutMs);
       this.#pending.set(requestId, { resolve, reject, timer });
       try {
-        this.#channel.post(
-          { schema: DERIVED_VERIFY_WORKER_SCHEMA, type: "verify", requestId, snapshot },
-          collectDerivedSnapshotTransferables(snapshot),
-        );
+        // The caller RETAINS its snapshot (the editor re-posts the same object on
+        // Play-start and edit-reboot re-activation), so the request transfer list is
+        // EMPTY: the channel's structured clone copies each buffer (one memcpy per
+        // buffer, far cheaper than the hashing this offloads) and the caller's
+        // original stays attached for later re-verification. TOCTOU stays closed on
+        // the response path — the candidate consumes the worker's verified copy,
+        // transferred back, never the caller's still-mutable original.
+        assertNoDetachedSnapshotBuffers(snapshot);
+        this.#channel.post({ schema: DERIVED_VERIFY_WORKER_SCHEMA, type: "verify", requestId, snapshot }, []);
       } catch (error) {
         this.#settle(requestId)?.reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -1037,8 +1067,9 @@ export class DerivedSnapshotVerifier {
   }
 
   /** Channel-level failure (worker error/termination): reject everything in flight
-   *  and every later call. Transferred buffers are already detached, so a failed
-   *  request cannot be silently retried against different bytes. */
+   *  and every later call on THIS client. The caller's snapshots stay attached
+   *  (requests never detach), so a fresh client — or the inline verifier — can
+   *  legitimately re-verify the same retained snapshot after a worker failure. */
   fail(error: Error): void {
     if (this.#failure === null) this.#failure = error;
     for (const requestId of [...this.#pending.keys()]) this.#settle(requestId)?.reject(error);

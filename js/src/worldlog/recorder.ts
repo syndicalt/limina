@@ -137,6 +137,13 @@ export class WorldRecorder {
    *  `worldlog.ops.recordedDuringChain` trace event, so a stray in-skill path that
    *  captured the recording proxy is visible instead of silent. */
   private readonly liveChains = new Set<string>();
+  /** Per live head chain: how many `step` commands were RECORDED inside its
+   *  async window (the legitimate C3 tick-loop-under-chain case). Feeds the
+   *  registry's `skill.rollback.stepsDuringChain` disclosure — a failed chain's
+   *  unwind restores state, but recorded steps that simulated WITH the chain's
+   *  transient bodies cannot be un-run and replay re-runs them without those
+   *  bodies. Entries are dropped when their chain settles. */
+  private readonly chainRecordedSteps = new Map<string, number>();
   /** Recording proxy -> the base ops it wraps. chainOps must call through the BASE
    *  ops: calling through the recording proxy would record the in-skill op. */
   private readonly recordingProxyBase = new WeakMap<EngineOps, EngineOps>();
@@ -250,7 +257,15 @@ export class WorldRecorder {
    *  (recorded here AND reproduced by its skill command) -- this event is how
    *  that stray path is found. */
   private opDuringChainTripwire(op: PhysicsOpName, recorded: boolean): void {
-    if (this.liveChains.size === 0 || this.tracer === undefined) return;
+    if (this.liveChains.size === 0) return;
+    // Count RECORDED steps against every live chain's window: replay re-runs
+    // exactly these steps, so they are the ones the unwind boundary discloses.
+    if (op === "step" && recorded) {
+      for (const chainId of this.liveChains) {
+        this.chainRecordedSteps.set(chainId, (this.chainRecordedSteps.get(chainId) ?? 0) + 1);
+      }
+    }
+    if (this.tracer === undefined) return;
     this.tracer.emit({
       type: "worldlog.ops.recordedDuringChain",
       actorId: "worldlog",
@@ -344,6 +359,9 @@ export class WorldRecorder {
   attach(registry: SkillRegistry): void {
     const rec = this;
     rec.tracer = registry.tracer;
+    // H1 boundary probe: the registry's unwind reads this BEFORE the finally
+    // below clears the chain's entry (unwind runs inside the original invoke).
+    registry.setChainStepProbe((chainId) => rec.chainRecordedSteps.get(chainId) ?? 0);
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
       const isHead = base.chainId === undefined;
@@ -389,8 +407,11 @@ export class WorldRecorder {
       // The chain executes against the world facade: same shared WorldContext, but
       // `ops` resolves to the non-recording chainOps pass-through. Nested invokes
       // forward ctx.world (already the facade) + ctx.chainId, so the whole chain
-      // rides one facade with no per-call rewrapping.
-      const childBase: InvokeBase = { ...base, chainId, world: rec.chainWorld(base.world) };
+      // rides one facade with no per-call rewrapping — and no per-call base spread:
+      // a nested base already carrying this chain's id and the facade is reused as-is.
+      const childBase: InvokeBase = base.chainId === chainId && rec.facades.has(base.world)
+        ? base
+        : { ...base, chainId, world: rec.chainWorld(base.world) };
       return original(name, input, childBase)
         .then((res) => {
           if (cmd !== undefined && !res.success) {
@@ -438,6 +459,7 @@ export class WorldRecorder {
           // leaves the set untouched, so a concurrent sibling chain stays live.
           if (isHead) {
             rec.liveChains.delete(chainId);
+            rec.chainRecordedSteps.delete(chainId);
             if (cmd !== undefined) rec.markFinalized(cmd.seq);
           }
         });

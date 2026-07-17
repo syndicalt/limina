@@ -58,7 +58,16 @@ export function registerFurnitureSkills(registry: SkillRegistry, assets: AssetRe
     input: inputSchema, output: z.object({ root: z.string(), colliders: z.array(z.string()), sockets: z.array(socketSchema), hash: z.string(), contractHash: z.string() }), commitFields: ["hash", "contractHash"],
     handler: async (input, ctx) => {
       const resolved = assets.resolve(input.assetId);
-      if (input.hash !== undefined && input.hash !== resolved.hash) throw new Error(`functional furniture: pinned asset hash mismatch for ${input.assetId}`);
+      // Committed-asset-hash pin: WARN (never THROW) on a mismatch — mirrors asset.place exactly.
+      // resolved.hash comes from op_sha256, which is NOT byte-identical across the Rust and JS
+      // hosts, so a cross-host replay of a healthy placement can mismatch; throwing here aborts
+      // the replay (failure mode #12, shipped three times). assetId pins authored identity; a
+      // genuinely swapped asset surfaces as a visible furniture.hash_mismatch event. The
+      // contractHash pin below still throws: it is a pure-JS sha256 over canonical JSON
+      // (host-independent), so a mismatch there is genuine contract drift.
+      if (input.hash !== undefined && input.hash !== resolved.hash) {
+        ctx.emit("furniture.hash_mismatch", { assetId: input.assetId, committed: input.hash, resolved: resolved.hash });
+      }
       const contract = parseFunctionalFurnitureContract(resolved.bytes);
       if (input.contractHash !== undefined && input.contractHash !== contract.contractHash) throw new Error(`functional furniture: pinned contract hash mismatch for ${input.assetId}`);
       const sockets = contract.sockets.map((socket): PlacedFurnitureSocket => ({ ...socket, position: add(input.position, rotateY(socket.position, input.yaw)), facing: rotateY(socket.facing, input.yaw) }));

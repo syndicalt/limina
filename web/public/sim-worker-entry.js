@@ -9586,10 +9586,10 @@ var Source = class {
    * @return {Object} A JSON object representing the serialized source.
    * @see {@link ObjectLoader#parse}
    */
-  toJSON(meta3) {
-    const isRootObject = meta3 === void 0 || typeof meta3 === "string";
-    if (!isRootObject && meta3.images[this.uuid] !== void 0) {
-      return meta3.images[this.uuid];
+  toJSON(meta4) {
+    const isRootObject = meta4 === void 0 || typeof meta4 === "string";
+    if (!isRootObject && meta4.images[this.uuid] !== void 0) {
+      return meta4.images[this.uuid];
     }
     const output3 = {
       uuid: this.uuid,
@@ -9613,7 +9613,7 @@ var Source = class {
       output3.url = url2;
     }
     if (!isRootObject) {
-      meta3.images[this.uuid] = output3;
+      meta4.images[this.uuid] = output3;
     }
     return output3;
   }
@@ -9823,10 +9823,10 @@ var Texture = class _Texture extends EventDispatcher {
    * @return {Object} A JSON object representing the serialized texture.
    * @see {@link ObjectLoader#parse}
    */
-  toJSON(meta3) {
-    const isRootObject = meta3 === void 0 || typeof meta3 === "string";
-    if (!isRootObject && meta3.textures[this.uuid] !== void 0) {
-      return meta3.textures[this.uuid];
+  toJSON(meta4) {
+    const isRootObject = meta4 === void 0 || typeof meta4 === "string";
+    if (!isRootObject && meta4.textures[this.uuid] !== void 0) {
+      return meta4.textures[this.uuid];
     }
     const output3 = {
       metadata: {
@@ -9836,7 +9836,7 @@ var Texture = class _Texture extends EventDispatcher {
       },
       uuid: this.uuid,
       name: this.name,
-      image: this.source.toJSON(meta3).uuid,
+      image: this.source.toJSON(meta4).uuid,
       mapping: this.mapping,
       channel: this.channel,
       repeat: [this.repeat.x, this.repeat.y],
@@ -9859,7 +9859,7 @@ var Texture = class _Texture extends EventDispatcher {
     };
     if (Object.keys(this.userData).length > 0) output3.userData = this.userData;
     if (!isRootObject) {
-      meta3.textures[this.uuid] = output3;
+      meta4.textures[this.uuid] = output3;
     }
     return output3;
   }
@@ -13190,11 +13190,11 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @return {Object} A JSON object representing the serialized 3D object.
    * @see {@link ObjectLoader#parse}
    */
-  toJSON(meta3) {
-    const isRootObject = meta3 === void 0 || typeof meta3 === "string";
+  toJSON(meta4) {
+    const isRootObject = meta4 === void 0 || typeof meta4 === "string";
     const output3 = {};
     if (isRootObject) {
-      meta3 = {
+      meta4 = {
         geometries: {},
         materials: {},
         textures: {},
@@ -13255,10 +13255,10 @@ var Object3D = class _Object3D extends EventDispatcher {
       object4.maxVertexCount = this._maxVertexCount;
       object4.maxIndexCount = this._maxIndexCount;
       object4.geometryInitialized = this._geometryInitialized;
-      object4.matricesTexture = this._matricesTexture.toJSON(meta3);
-      object4.indirectTexture = this._indirectTexture.toJSON(meta3);
+      object4.matricesTexture = this._matricesTexture.toJSON(meta4);
+      object4.indirectTexture = this._indirectTexture.toJSON(meta4);
       if (this._colorsTexture !== null) {
-        object4.colorsTexture = this._colorsTexture.toJSON(meta3);
+        object4.colorsTexture = this._colorsTexture.toJSON(meta4);
       }
       if (this.boundingSphere !== null) {
         object4.boundingSphere = this.boundingSphere.toJSON();
@@ -13269,7 +13269,7 @@ var Object3D = class _Object3D extends EventDispatcher {
     }
     function serialize(library, element3) {
       if (library[element3.uuid] === void 0) {
-        library[element3.uuid] = element3.toJSON(meta3);
+        library[element3.uuid] = element3.toJSON(meta4);
       }
       return element3.uuid;
     }
@@ -13278,24 +13278,24 @@ var Object3D = class _Object3D extends EventDispatcher {
         if (this.background.isColor) {
           object4.background = this.background.toJSON();
         } else if (this.background.isTexture) {
-          object4.background = this.background.toJSON(meta3).uuid;
+          object4.background = this.background.toJSON(meta4).uuid;
         }
       }
       if (this.environment && this.environment.isTexture && this.environment.isRenderTargetTexture !== true) {
-        object4.environment = this.environment.toJSON(meta3).uuid;
+        object4.environment = this.environment.toJSON(meta4).uuid;
       }
     } else if (this.isMesh || this.isLine || this.isPoints) {
-      object4.geometry = serialize(meta3.geometries, this.geometry);
+      object4.geometry = serialize(meta4.geometries, this.geometry);
       const parameters = this.geometry.parameters;
       if (parameters !== void 0 && parameters.shapes !== void 0) {
         const shapes = parameters.shapes;
         if (Array.isArray(shapes)) {
           for (let i2 = 0, l2 = shapes.length; i2 < l2; i2++) {
             const shape = shapes[i2];
-            serialize(meta3.shapes, shape);
+            serialize(meta4.shapes, shape);
           }
         } else {
-          serialize(meta3.shapes, shapes);
+          serialize(meta4.shapes, shapes);
         }
       }
     }
@@ -13303,7 +13303,7 @@ var Object3D = class _Object3D extends EventDispatcher {
       object4.bindMode = this.bindMode;
       object4.bindMatrix = this.bindMatrix.toArray();
       if (this.skeleton !== void 0) {
-        serialize(meta3.skeletons, this.skeleton);
+        serialize(meta4.skeletons, this.skeleton);
         object4.skeleton = this.skeleton.uuid;
       }
     }
@@ -13311,35 +13311,35 @@ var Object3D = class _Object3D extends EventDispatcher {
       if (Array.isArray(this.material)) {
         const uuids = [];
         for (let i2 = 0, l2 = this.material.length; i2 < l2; i2++) {
-          uuids.push(serialize(meta3.materials, this.material[i2]));
+          uuids.push(serialize(meta4.materials, this.material[i2]));
         }
         object4.material = uuids;
       } else {
-        object4.material = serialize(meta3.materials, this.material);
+        object4.material = serialize(meta4.materials, this.material);
       }
     }
     if (this.children.length > 0) {
       object4.children = [];
       for (let i2 = 0; i2 < this.children.length; i2++) {
-        object4.children.push(this.children[i2].toJSON(meta3).object);
+        object4.children.push(this.children[i2].toJSON(meta4).object);
       }
     }
     if (this.animations.length > 0) {
       object4.animations = [];
       for (let i2 = 0; i2 < this.animations.length; i2++) {
         const animation = this.animations[i2];
-        object4.animations.push(serialize(meta3.animations, animation));
+        object4.animations.push(serialize(meta4.animations, animation));
       }
     }
     if (isRootObject) {
-      const geometries = extractFromCache(meta3.geometries);
-      const materials = extractFromCache(meta3.materials);
-      const textures = extractFromCache(meta3.textures);
-      const images = extractFromCache(meta3.images);
-      const shapes = extractFromCache(meta3.shapes);
-      const skeletons = extractFromCache(meta3.skeletons);
-      const animations = extractFromCache(meta3.animations);
-      const nodes = extractFromCache(meta3.nodes);
+      const geometries = extractFromCache(meta4.geometries);
+      const materials = extractFromCache(meta4.materials);
+      const textures = extractFromCache(meta4.textures);
+      const images = extractFromCache(meta4.images);
+      const shapes = extractFromCache(meta4.shapes);
+      const skeletons = extractFromCache(meta4.skeletons);
+      const animations = extractFromCache(meta4.animations);
+      const nodes = extractFromCache(meta4.nodes);
       if (geometries.length > 0) output3.geometries = geometries;
       if (materials.length > 0) output3.materials = materials;
       if (textures.length > 0) output3.textures = textures;
@@ -14531,8 +14531,8 @@ var Scene = class extends Object3D {
     this.matrixAutoUpdate = source.matrixAutoUpdate;
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     if (this.fog !== null) data.object.fog = this.fog.toJSON();
     if (this.backgroundBlurriness > 0) data.object.backgroundBlurriness = this.backgroundBlurriness;
     if (this.backgroundIntensity !== 1) data.object.backgroundIntensity = this.backgroundIntensity;
@@ -17860,10 +17860,10 @@ var Material = class extends EventDispatcher {
    * @return {Object} A JSON object representing the serialized material.
    * @see {@link ObjectLoader#parse}
    */
-  toJSON(meta3) {
-    const isRootObject = meta3 === void 0 || typeof meta3 === "string";
+  toJSON(meta4) {
+    const isRootObject = meta4 === void 0 || typeof meta4 === "string";
     if (isRootObject) {
-      meta3 = {
+      meta4 = {
         textures: {},
         images: {}
       };
@@ -17893,69 +17893,69 @@ var Material = class extends EventDispatcher {
     if (this.clearcoat !== void 0) data.clearcoat = this.clearcoat;
     if (this.clearcoatRoughness !== void 0) data.clearcoatRoughness = this.clearcoatRoughness;
     if (this.clearcoatMap && this.clearcoatMap.isTexture) {
-      data.clearcoatMap = this.clearcoatMap.toJSON(meta3).uuid;
+      data.clearcoatMap = this.clearcoatMap.toJSON(meta4).uuid;
     }
     if (this.clearcoatRoughnessMap && this.clearcoatRoughnessMap.isTexture) {
-      data.clearcoatRoughnessMap = this.clearcoatRoughnessMap.toJSON(meta3).uuid;
+      data.clearcoatRoughnessMap = this.clearcoatRoughnessMap.toJSON(meta4).uuid;
     }
     if (this.clearcoatNormalMap && this.clearcoatNormalMap.isTexture) {
-      data.clearcoatNormalMap = this.clearcoatNormalMap.toJSON(meta3).uuid;
+      data.clearcoatNormalMap = this.clearcoatNormalMap.toJSON(meta4).uuid;
       data.clearcoatNormalScale = this.clearcoatNormalScale.toArray();
     }
     if (this.sheenColorMap && this.sheenColorMap.isTexture) {
-      data.sheenColorMap = this.sheenColorMap.toJSON(meta3).uuid;
+      data.sheenColorMap = this.sheenColorMap.toJSON(meta4).uuid;
     }
     if (this.sheenRoughnessMap && this.sheenRoughnessMap.isTexture) {
-      data.sheenRoughnessMap = this.sheenRoughnessMap.toJSON(meta3).uuid;
+      data.sheenRoughnessMap = this.sheenRoughnessMap.toJSON(meta4).uuid;
     }
     if (this.dispersion !== void 0) data.dispersion = this.dispersion;
     if (this.iridescence !== void 0) data.iridescence = this.iridescence;
     if (this.iridescenceIOR !== void 0) data.iridescenceIOR = this.iridescenceIOR;
     if (this.iridescenceThicknessRange !== void 0) data.iridescenceThicknessRange = this.iridescenceThicknessRange;
     if (this.iridescenceMap && this.iridescenceMap.isTexture) {
-      data.iridescenceMap = this.iridescenceMap.toJSON(meta3).uuid;
+      data.iridescenceMap = this.iridescenceMap.toJSON(meta4).uuid;
     }
     if (this.iridescenceThicknessMap && this.iridescenceThicknessMap.isTexture) {
-      data.iridescenceThicknessMap = this.iridescenceThicknessMap.toJSON(meta3).uuid;
+      data.iridescenceThicknessMap = this.iridescenceThicknessMap.toJSON(meta4).uuid;
     }
     if (this.anisotropy !== void 0) data.anisotropy = this.anisotropy;
     if (this.anisotropyRotation !== void 0) data.anisotropyRotation = this.anisotropyRotation;
     if (this.anisotropyMap && this.anisotropyMap.isTexture) {
-      data.anisotropyMap = this.anisotropyMap.toJSON(meta3).uuid;
+      data.anisotropyMap = this.anisotropyMap.toJSON(meta4).uuid;
     }
-    if (this.map && this.map.isTexture) data.map = this.map.toJSON(meta3).uuid;
-    if (this.matcap && this.matcap.isTexture) data.matcap = this.matcap.toJSON(meta3).uuid;
-    if (this.alphaMap && this.alphaMap.isTexture) data.alphaMap = this.alphaMap.toJSON(meta3).uuid;
+    if (this.map && this.map.isTexture) data.map = this.map.toJSON(meta4).uuid;
+    if (this.matcap && this.matcap.isTexture) data.matcap = this.matcap.toJSON(meta4).uuid;
+    if (this.alphaMap && this.alphaMap.isTexture) data.alphaMap = this.alphaMap.toJSON(meta4).uuid;
     if (this.lightMap && this.lightMap.isTexture) {
-      data.lightMap = this.lightMap.toJSON(meta3).uuid;
+      data.lightMap = this.lightMap.toJSON(meta4).uuid;
       data.lightMapIntensity = this.lightMapIntensity;
     }
     if (this.aoMap && this.aoMap.isTexture) {
-      data.aoMap = this.aoMap.toJSON(meta3).uuid;
+      data.aoMap = this.aoMap.toJSON(meta4).uuid;
       data.aoMapIntensity = this.aoMapIntensity;
     }
     if (this.bumpMap && this.bumpMap.isTexture) {
-      data.bumpMap = this.bumpMap.toJSON(meta3).uuid;
+      data.bumpMap = this.bumpMap.toJSON(meta4).uuid;
       data.bumpScale = this.bumpScale;
     }
     if (this.normalMap && this.normalMap.isTexture) {
-      data.normalMap = this.normalMap.toJSON(meta3).uuid;
+      data.normalMap = this.normalMap.toJSON(meta4).uuid;
       data.normalMapType = this.normalMapType;
       data.normalScale = this.normalScale.toArray();
     }
     if (this.displacementMap && this.displacementMap.isTexture) {
-      data.displacementMap = this.displacementMap.toJSON(meta3).uuid;
+      data.displacementMap = this.displacementMap.toJSON(meta4).uuid;
       data.displacementScale = this.displacementScale;
       data.displacementBias = this.displacementBias;
     }
-    if (this.roughnessMap && this.roughnessMap.isTexture) data.roughnessMap = this.roughnessMap.toJSON(meta3).uuid;
-    if (this.metalnessMap && this.metalnessMap.isTexture) data.metalnessMap = this.metalnessMap.toJSON(meta3).uuid;
-    if (this.emissiveMap && this.emissiveMap.isTexture) data.emissiveMap = this.emissiveMap.toJSON(meta3).uuid;
-    if (this.specularMap && this.specularMap.isTexture) data.specularMap = this.specularMap.toJSON(meta3).uuid;
-    if (this.specularIntensityMap && this.specularIntensityMap.isTexture) data.specularIntensityMap = this.specularIntensityMap.toJSON(meta3).uuid;
-    if (this.specularColorMap && this.specularColorMap.isTexture) data.specularColorMap = this.specularColorMap.toJSON(meta3).uuid;
+    if (this.roughnessMap && this.roughnessMap.isTexture) data.roughnessMap = this.roughnessMap.toJSON(meta4).uuid;
+    if (this.metalnessMap && this.metalnessMap.isTexture) data.metalnessMap = this.metalnessMap.toJSON(meta4).uuid;
+    if (this.emissiveMap && this.emissiveMap.isTexture) data.emissiveMap = this.emissiveMap.toJSON(meta4).uuid;
+    if (this.specularMap && this.specularMap.isTexture) data.specularMap = this.specularMap.toJSON(meta4).uuid;
+    if (this.specularIntensityMap && this.specularIntensityMap.isTexture) data.specularIntensityMap = this.specularIntensityMap.toJSON(meta4).uuid;
+    if (this.specularColorMap && this.specularColorMap.isTexture) data.specularColorMap = this.specularColorMap.toJSON(meta4).uuid;
     if (this.envMap && this.envMap.isTexture) {
-      data.envMap = this.envMap.toJSON(meta3).uuid;
+      data.envMap = this.envMap.toJSON(meta4).uuid;
       if (this.combine !== void 0) data.combine = this.combine;
     }
     if (this.envMapRotation !== void 0) data.envMapRotation = this.envMapRotation.toArray();
@@ -17963,12 +17963,12 @@ var Material = class extends EventDispatcher {
     if (this.reflectivity !== void 0) data.reflectivity = this.reflectivity;
     if (this.refractionRatio !== void 0) data.refractionRatio = this.refractionRatio;
     if (this.gradientMap && this.gradientMap.isTexture) {
-      data.gradientMap = this.gradientMap.toJSON(meta3).uuid;
+      data.gradientMap = this.gradientMap.toJSON(meta4).uuid;
     }
     if (this.transmission !== void 0) data.transmission = this.transmission;
-    if (this.transmissionMap && this.transmissionMap.isTexture) data.transmissionMap = this.transmissionMap.toJSON(meta3).uuid;
+    if (this.transmissionMap && this.transmissionMap.isTexture) data.transmissionMap = this.transmissionMap.toJSON(meta4).uuid;
     if (this.thickness !== void 0) data.thickness = this.thickness;
-    if (this.thicknessMap && this.thicknessMap.isTexture) data.thicknessMap = this.thicknessMap.toJSON(meta3).uuid;
+    if (this.thicknessMap && this.thicknessMap.isTexture) data.thicknessMap = this.thicknessMap.toJSON(meta4).uuid;
     if (this.attenuationDistance !== void 0 && this.attenuationDistance !== Infinity) data.attenuationDistance = this.attenuationDistance;
     if (this.attenuationColor !== void 0) data.attenuationColor = this.attenuationColor.getHex();
     if (this.size !== void 0) data.size = this.size;
@@ -18033,8 +18033,8 @@ var Material = class extends EventDispatcher {
       return values;
     }
     if (isRootObject) {
-      const textures = extractFromCache(meta3.textures);
-      const images = extractFromCache(meta3.images);
+      const textures = extractFromCache(meta4.textures);
+      const images = extractFromCache(meta4.images);
       if (textures.length > 0) data.textures = textures;
       if (images.length > 0) data.images = images;
     }
@@ -18444,8 +18444,8 @@ var LOD = class extends Object3D {
       }
     }
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     if (this.autoUpdate === false) data.object.autoUpdate = false;
     data.object.levels = [];
     const levels = this.levels;
@@ -22056,8 +22056,8 @@ var DepthTexture = class extends Texture {
     this.compareFunction = source.compareFunction;
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     if (this.compareFunction !== null) data.compareFunction = this.compareFunction;
     return data;
   }
@@ -26687,8 +26687,8 @@ var ShaderMaterial = class extends Material {
     this.uniformsNeedUpdate = source.uniformsNeedUpdate;
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.glslVersion = this.glslVersion;
     data.uniforms = {};
     for (const name in this.uniforms) {
@@ -26697,7 +26697,7 @@ var ShaderMaterial = class extends Material {
       if (value && value.isTexture) {
         data.uniforms[name] = {
           type: "t",
-          value: value.toJSON(meta3).uuid
+          value: value.toJSON(meta4).uuid
         };
       } else if (value && value.isColor) {
         data.uniforms[name] = {
@@ -29737,8 +29737,8 @@ var Light = class extends Object3D {
     this.intensity = source.intensity;
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.color = this.color.getHex();
     data.object.intensity = this.intensity;
     return data;
@@ -29765,8 +29765,8 @@ var HemisphereLight = class extends Light {
     this.groundColor.copy(source.groundColor);
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.groundColor = this.groundColor.getHex();
     return data;
   }
@@ -30231,8 +30231,8 @@ var PerspectiveCamera = class extends Camera {
     this.projectionMatrix.makePerspective(left, left + width, top, top - height, near3, this.far, this.coordinateSystem, this.reversedDepth);
     this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.fov = this.fov;
     data.object.zoom = this.zoom;
     data.object.near = this.near;
@@ -30326,14 +30326,14 @@ var SpotLight = class extends Light {
     this.shadow = source.shadow.clone();
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.distance = this.distance;
     data.object.angle = this.angle;
     data.object.decay = this.decay;
     data.object.penumbra = this.penumbra;
     data.object.target = this.target.uuid;
-    if (this.map && this.map.isTexture) data.object.map = this.map.toJSON(meta3).uuid;
+    if (this.map && this.map.isTexture) data.object.map = this.map.toJSON(meta4).uuid;
     data.object.shadow = this.shadow.toJSON();
     return data;
   }
@@ -30387,8 +30387,8 @@ var PointLight = class extends Light {
     this.shadow = source.shadow.clone();
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.distance = this.distance;
     data.object.decay = this.decay;
     data.object.shadow = this.shadow.toJSON();
@@ -30498,8 +30498,8 @@ var OrthographicCamera = class extends Camera {
     this.projectionMatrix.makeOrthographic(left, right, top, bottom, this.near, this.far, this.coordinateSystem, this.reversedDepth);
     this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.zoom = this.zoom;
     data.object.left = this.left;
     data.object.right = this.right;
@@ -30546,8 +30546,8 @@ var DirectionalLight = class extends Light {
     this.shadow = source.shadow.clone();
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.shadow = this.shadow.toJSON();
     data.object.target = this.target.uuid;
     return data;
@@ -30600,8 +30600,8 @@ var RectAreaLight = class extends Light {
     this.height = source.height;
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.width = this.width;
     data.object.height = this.height;
     return data;
@@ -30833,8 +30833,8 @@ var LightProbe = class extends Light {
     this.sh.copy(source.sh);
     return this;
   }
-  toJSON(meta3) {
-    const data = super.toJSON(meta3);
+  toJSON(meta4) {
+    const data = super.toJSON(meta4);
     data.object.sh = this.sh.toArray();
     return data;
   }
@@ -38804,29 +38804,29 @@ var Node = class _Node extends EventDispatcher {
    * @param {?Object} meta - An optional JSON object that already holds serialized data from other scene objects.
    * @return {Object} The serialized node.
    */
-  toJSON(meta3) {
+  toJSON(meta4) {
     const { uuid: uuid3, type } = this;
-    const isRoot = meta3 === void 0 || typeof meta3 === "string";
+    const isRoot = meta4 === void 0 || typeof meta4 === "string";
     if (isRoot) {
-      meta3 = {
+      meta4 = {
         textures: {},
         images: {},
         nodes: {}
       };
     }
-    let data = meta3.nodes[uuid3];
+    let data = meta4.nodes[uuid3];
     if (data === void 0) {
       data = {
         uuid: uuid3,
         type,
-        meta: meta3,
+        meta: meta4,
         metadata: {
           version: 4.7,
           type: "Node",
           generator: "Node.toJSON"
         }
       };
-      if (isRoot !== true) meta3.nodes[data.uuid] = data;
+      if (isRoot !== true) meta4.nodes[data.uuid] = data;
       this.serialize(data);
       delete data.meta;
     }
@@ -38840,9 +38840,9 @@ var Node = class _Node extends EventDispatcher {
       return values;
     }
     if (isRoot) {
-      const textures = extractFromCache(meta3.textures);
-      const images = extractFromCache(meta3.images);
-      const nodes = extractFromCache(meta3.nodes);
+      const textures = extractFromCache(meta4.textures);
+      const images = extractFromCache(meta4.images);
+      const nodes = extractFromCache(meta4.nodes);
       if (textures.length > 0) data.textures = textures;
       if (images.length > 0) data.images = images;
       if (nodes.length > 0) data.nodes = nodes;
@@ -47046,19 +47046,19 @@ var NodeMaterial = class extends Material {
    * @param {?(Object|string)} meta - The meta information for serialization.
    * @return {Object} The serialized node.
    */
-  toJSON(meta3) {
-    const isRoot = meta3 === void 0 || typeof meta3 === "string";
+  toJSON(meta4) {
+    const isRoot = meta4 === void 0 || typeof meta4 === "string";
     if (isRoot) {
-      meta3 = {
+      meta4 = {
         textures: {},
         images: {},
         nodes: {}
       };
     }
-    const data = Material.prototype.toJSON.call(this, meta3);
+    const data = Material.prototype.toJSON.call(this, meta4);
     data.inputNodes = {};
     for (const { property: property3, childNode } of this._getNodeChildren()) {
-      data.inputNodes[property3] = childNode.toJSON(meta3).uuid;
+      data.inputNodes[property3] = childNode.toJSON(meta4).uuid;
     }
     function extractFromCache(cache3) {
       const values = [];
@@ -47070,9 +47070,9 @@ var NodeMaterial = class extends Material {
       return values;
     }
     if (isRoot) {
-      const textures = extractFromCache(meta3.textures);
-      const images = extractFromCache(meta3.images);
-      const nodes = extractFromCache(meta3.nodes);
+      const textures = extractFromCache(meta4.textures);
+      const images = extractFromCache(meta4.images);
+      const nodes = extractFromCache(meta4.nodes);
       if (textures.length > 0) data.textures = textures;
       if (images.length > 0) data.images = images;
       if (nodes.length > 0) data.nodes = nodes;
@@ -81370,9 +81370,9 @@ var NodeLoader = class extends Loader {
         nodes[uuid3] = this.createNodeFromType(type);
         nodes[uuid3].uuid = uuid3;
       }
-      const meta3 = { nodes, textures: this.textures };
+      const meta4 = { nodes, textures: this.textures };
       for (const nodeJSON of json2) {
-        nodeJSON.meta = meta3;
+        nodeJSON.meta = meta4;
         const node = nodes[nodeJSON.uuid];
         node.deserialize(nodeJSON);
         delete nodeJSON.meta;
@@ -81394,8 +81394,8 @@ var NodeLoader = class extends Loader {
     const node = this.createNodeFromType(json2.type);
     node.uuid = json2.uuid;
     const nodes = this.parseNodes(json2.nodes);
-    const meta3 = { nodes, textures: this.textures };
-    json2.meta = meta3;
+    const meta4 = { nodes, textures: this.textures };
+    json2.meta = meta4;
     node.deserialize(json2);
     delete json2.meta;
     return node;
@@ -91698,7 +91698,29 @@ var renderables = [];
 function createEcsWorld() {
   return Je2();
 }
+var entityIndexHooks = /* @__PURE__ */ new WeakMap();
+function armEntityIndexMutationHook(world, fn) {
+  if (world === null || typeof world !== "object") return () => {
+  };
+  let hooks = entityIndexHooks.get(world);
+  if (hooks === void 0) {
+    hooks = /* @__PURE__ */ new Set();
+    entityIndexHooks.set(world, hooks);
+  }
+  hooks.add(fn);
+  return () => {
+    hooks.delete(fn);
+  };
+}
+function fireEntityIndexHooks(world) {
+  const hooks = entityIndexHooks.get(world);
+  if (hooks === void 0 || hooks.size === 0) return;
+  const fired = [...hooks];
+  hooks.clear();
+  for (const fn of fired) fn();
+}
 function spawnRenderable(world, object4, x3, y4, z4) {
+  fireEntityIndexHooks(world);
   const eid = Ne(world);
   if (eid < 0 || eid >= MAX_ENTITIES) {
     Le(world, eid);
@@ -91721,6 +91743,7 @@ function spawnRenderable(world, object4, x3, y4, z4) {
   return eid;
 }
 function despawnRenderable(world, eid) {
+  fireEntityIndexHooks(world);
   renderables[eid] = void 0;
   Le(world, eid);
 }
@@ -91991,10 +92014,32 @@ var EntityTable = class {
   byEid = /* @__PURE__ */ new Map();
   seq = 0;
   tableVersion = 0;
+  /** One-shot hooks fired at the TOP of the next identity mutation (create/
+   *  destroy/restore/rewindAllocator), BEFORE any state changes. The registry's
+   *  per-chain undo ledger arms one so its O(entities) allocator capture runs
+   *  only when a chain actually touches entities (lazy head-frame capture); a
+   *  companion hook on the bitECS side (ecs/world.ts armEntityIndexMutationHook)
+   *  covers eid allocation, which happens BEFORE `create` is called. All armed
+   *  hooks fire once and clear; frame end disarms via the returned function. */
+  mutationHooks = /* @__PURE__ */ new Set();
   get version() {
     return this.tableVersion;
   }
+  /** Arm a one-shot pre-mutation hook. Returns its disarm function (idempotent). */
+  armMutationHook(fn) {
+    this.mutationHooks.add(fn);
+    return () => {
+      this.mutationHooks.delete(fn);
+    };
+  }
+  fireMutationHooks() {
+    if (this.mutationHooks.size === 0) return;
+    const fired = [...this.mutationHooks];
+    this.mutationHooks.clear();
+    for (const fn of fired) fn();
+  }
   create(entry) {
+    this.fireMutationHooks();
     const id4 = `ent_${this.seq++}`;
     this.map.set(id4, { generation: 0, ...entry });
     if (entry.bodyId !== void 0) this.byBody.set(entry.bodyId, id4);
@@ -92056,6 +92101,40 @@ var EntityTable = class {
     const entry = this.map.get(id4);
     if (entry !== void 0) entry.behavior = behavior;
   }
+  /** Replace a live entry's standalone-owned physics body ids (M18) — used by the writing
+   *  skill (append via record + chainRuntimeDispose) and by snapshot restore (wholesale
+   *  rebind before re-arming the dispose). No-op if the id is not live. */
+  bindRuntimeBodies(id4, bodyIds) {
+    const entry = this.map.get(id4);
+    if (entry !== void 0) entry.runtimeBodyIds = [...bodyIds];
+  }
+  /** Chain a runtime-only cleanup onto a live entry's `runtimeDispose`. The chained closure is
+   *  finished-guarded (idempotent): teardownEntity runs runtimeDispose exactly once, and an undo
+   *  path that already disposed makes the later teardown call a no-op — never a double
+   *  op_physics_remove_body. Failures from both links aggregate so neither masks the other.
+   *  No-op if the id is not live. */
+  chainRuntimeDispose(id4, label4, cleanup) {
+    const entry = this.map.get(id4);
+    if (entry === void 0) return;
+    const prior = entry.runtimeDispose;
+    let finished = false;
+    entry.runtimeDispose = () => {
+      if (finished) return;
+      finished = true;
+      const errors = [];
+      try {
+        cleanup();
+      } catch (error51) {
+        errors.push(error51);
+      }
+      try {
+        prior?.();
+      } catch (error51) {
+        errors.push(error51);
+      }
+      if (errors.length > 0) throw new AggregateError(errors, `${label4} runtime disposal failed`);
+    };
+  }
   /** Set (or move) a child's parent + captured local offset, maintaining the byParent
    *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */
   setParent(childId, parentId, localOffset) {
@@ -92115,7 +92194,29 @@ var EntityTable = class {
     }
     return out;
   }
+  /** Rewind the `ent_` allocation counter + table version to a captured point,
+   *  after a failed skill chain's compensation (the registry's per-chain undo
+   *  ledger). Only sound when every id allocated at or after `seq` is no longer
+   *  live — a live survivor means a future create would RE-ISSUE its id, so this
+   *  throws instead of corrupting identity (the caller treats that as a failed
+   *  rollback and poisons). Rewinding version keeps version-gated derived state
+   *  (spatial index, reconcilers) consistent with replay, which never ran the
+   *  failed chain. */
+  rewindAllocator(seq, version2) {
+    this.fireMutationHooks();
+    if (seq > this.seq || version2 > this.tableVersion) {
+      throw new Error(`EntityTable.rewindAllocator: cannot rewind forward (seq ${this.seq}\u2192${seq}, version ${this.tableVersion}\u2192${version2})`);
+    }
+    for (let s2 = seq; s2 < this.seq; s2++) {
+      if (this.map.has(`ent_${s2}`)) {
+        throw new Error(`EntityTable.rewindAllocator: 'ent_${s2}' allocated by the unwound chain is still live \u2014 rewinding would re-issue its id`);
+      }
+    }
+    this.seq = seq;
+    this.tableVersion = version2;
+  }
   destroy(id4) {
+    this.fireMutationHooks();
     const entry = this.map.get(id4);
     if (entry !== void 0) {
       this.map.delete(id4);
@@ -92144,6 +92245,7 @@ var EntityTable = class {
    *  index's version gate behave exactly as in the original run. Mesh/resource
    *  bindings are runtime-only and left unbound (rebound on demand). */
   restore(snapshot) {
+    this.fireMutationHooks();
     this.map.clear();
     this.byBody.clear();
     this.byEid.clear();
@@ -102365,10 +102467,10 @@ var $ZodRegistry = class {
     this._idmap = /* @__PURE__ */ new Map();
   }
   add(schema, ..._meta) {
-    const meta3 = _meta[0];
-    this._map.set(schema, meta3);
-    if (meta3 && typeof meta3 === "object" && "id" in meta3) {
-      this._idmap.set(meta3.id, schema);
+    const meta32 = _meta[0];
+    this._map.set(schema, meta32);
+    if (meta32 && typeof meta32 === "object" && "id" in meta32) {
+      this._idmap.set(meta32.id, schema);
     }
     return this;
   }
@@ -102378,9 +102480,9 @@ var $ZodRegistry = class {
     return this;
   }
   remove(schema) {
-    const meta3 = this._map.get(schema);
-    if (meta3 && typeof meta3 === "object" && "id" in meta3) {
-      this._idmap.delete(meta3.id);
+    const meta32 = this._map.get(schema);
+    if (meta32 && typeof meta32 === "object" && "id" in meta32) {
+      this._idmap.delete(meta32.id);
     }
     this._map.delete(schema);
     return this;
@@ -103503,9 +103605,9 @@ function process(schema, ctx, _params = { path: [], schemaPath: [] }) {
       ctx.seen.get(parent).isParent = true;
     }
   }
-  const meta3 = ctx.metadataRegistry.get(schema);
-  if (meta3)
-    Object.assign(result.schema, meta3);
+  const meta32 = ctx.metadataRegistry.get(schema);
+  if (meta32)
+    Object.assign(result.schema, meta32);
   if (ctx.io === "input" && isTransforming(schema)) {
     delete result.schema.examples;
     delete result.schema.default;
@@ -104785,8 +104887,8 @@ var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
     brand() {
       return this;
     },
-    register(reg, meta3) {
-      reg.add(this, meta3);
+    register(reg, meta32) {
+      reg.add(this, meta32);
       return this;
     },
     refine(check2, params) {
@@ -106519,6 +106621,142 @@ function date4(params) {
 }
 config(en_default());
 
+// src/behavior/behavior-spec.ts
+var BEHAVIOR_SPEC_VERSION = 1;
+var Ver = external_exports.literal(BEHAVIOR_SPEC_VERSION);
+var Positive = external_exports.number().positive();
+var Finite = external_exports.number().refine(Number.isFinite, "expected finite number");
+var Vec3 = external_exports.tuple([Finite, Finite, Finite]);
+var JsonRecord = external_exports.record(external_exports.string(), external_exports.unknown());
+function canonicalJsonValue(v3) {
+  if (Array.isArray(v3)) return v3.map(canonicalJsonValue);
+  if (v3 !== null && typeof v3 === "object") {
+    const src = v3;
+    const out = {};
+    for (const k3 of Object.keys(src).sort()) out[k3] = canonicalJsonValue(src[k3]);
+    return out;
+  }
+  return v3;
+}
+var IdleBehavior = external_exports.object({
+  version: Ver,
+  kind: external_exports.literal("idle")
+}).strict();
+var PatrolBehavior = external_exports.object({
+  version: Ver,
+  kind: external_exports.literal("patrol"),
+  waypoints: external_exports.array(Vec3).min(2),
+  speed: Positive,
+  loop: external_exports.boolean().default(true)
+}).strict();
+var WanderBehavior = external_exports.object({
+  version: Ver,
+  kind: external_exports.literal("wander"),
+  radius: Positive,
+  speed: Positive
+}).strict();
+var ScriptBehavior = external_exports.object({
+  version: Ver,
+  kind: external_exports.literal("script"),
+  ref: external_exports.string().min(1),
+  params: JsonRecord.default({})
+}).strict();
+var BehaviorSpecSchema = external_exports.discriminatedUnion("kind", [
+  IdleBehavior,
+  PatrolBehavior,
+  WanderBehavior,
+  ScriptBehavior
+]);
+function canonicalizeBehaviorSpec(s2) {
+  switch (s2.kind) {
+    case "idle":
+      return { version: s2.version, kind: "idle" };
+    case "patrol":
+      return {
+        version: s2.version,
+        kind: "patrol",
+        waypoints: s2.waypoints.map(([x3, y4, z4]) => [x3, y4, z4]),
+        speed: s2.speed,
+        loop: s2.loop
+      };
+    case "wander":
+      return { version: s2.version, kind: "wander", radius: s2.radius, speed: s2.speed };
+    case "script":
+      return {
+        version: s2.version,
+        kind: "script",
+        ref: s2.ref,
+        params: canonicalJsonValue(s2.params)
+      };
+  }
+}
+var OnTickTrigger = external_exports.object({
+  type: external_exports.literal("onTick"),
+  every: external_exports.number().int().min(1).default(1)
+}).strict();
+var OnEnterRegionTrigger = external_exports.object({
+  type: external_exports.literal("onEnterRegion"),
+  center: Vec3,
+  radius: Positive
+}).strict();
+var OnInteractTrigger = external_exports.object({
+  type: external_exports.literal("onInteract"),
+  entity: external_exports.string().min(1)
+}).strict();
+var TriggerSchema = external_exports.discriminatedUnion("type", [
+  OnTickTrigger,
+  OnEnterRegionTrigger,
+  OnInteractTrigger
+]);
+var EmitAction = external_exports.object({
+  type: external_exports.literal("emit"),
+  event: external_exports.string().min(1),
+  payload: JsonRecord.default({})
+}).strict();
+var SetBehaviorAction = external_exports.object({
+  type: external_exports.literal("setBehavior"),
+  entity: external_exports.string().min(1),
+  behavior: BehaviorSpecSchema
+}).strict();
+var SpawnAction = external_exports.object({
+  type: external_exports.literal("spawn"),
+  recipe: external_exports.string().min(1),
+  origin: Vec3
+}).strict();
+var ActionSchema = external_exports.discriminatedUnion("type", [
+  EmitAction,
+  SetBehaviorAction,
+  SpawnAction
+]);
+var EventSpecSchema = external_exports.object({
+  version: Ver,
+  trigger: TriggerSchema,
+  action: ActionSchema
+}).strict();
+function canonicalTrigger(t3) {
+  switch (t3.type) {
+    case "onTick":
+      return { type: "onTick", every: t3.every };
+    case "onEnterRegion":
+      return { type: "onEnterRegion", center: [t3.center[0], t3.center[1], t3.center[2]], radius: t3.radius };
+    case "onInteract":
+      return { type: "onInteract", entity: t3.entity };
+  }
+}
+function canonicalAction(a2) {
+  switch (a2.type) {
+    case "emit":
+      return { type: "emit", event: a2.event, payload: canonicalJsonValue(a2.payload) };
+    case "setBehavior":
+      return { type: "setBehavior", entity: a2.entity, behavior: canonicalizeBehaviorSpec(a2.behavior) };
+    case "spawn":
+      return { type: "spawn", recipe: a2.recipe, origin: [a2.origin[0], a2.origin[1], a2.origin[2]] };
+  }
+}
+function canonicalizeEventSpec(s2) {
+  return { version: s2.version, trigger: canonicalTrigger(s2.trigger), action: canonicalAction(s2.action) };
+}
+
 // src/skills/permissions.ts
 var DERIVED_RUNTIME_DISCOVERY_PERMISSION = "runtime.derived.read";
 var PERMISSION_PROFILES = {
@@ -106776,6 +107014,859 @@ function resolveProfile(name) {
   return new Set(PERMISSION_PROFILES[name] ?? []);
 }
 
+// src/worldlog/log.ts
+var LOG_VERSION = 2;
+var PHYSICS_OP_FN = {
+  create_world: "op_physics_create_world",
+  add_ground: "op_physics_add_ground",
+  add_box: "op_physics_add_box",
+  add_box_material: "op_physics_add_box_material",
+  add_sphere: "op_physics_add_sphere",
+  add_capsule: "op_physics_add_capsule",
+  add_static_box: "op_physics_add_static_box",
+  add_static_sphere: "op_physics_add_static_sphere",
+  add_static_capsule: "op_physics_add_static_capsule",
+  add_character: "op_physics_add_character",
+  move_character: "op_physics_move_character",
+  remove_body: "op_physics_remove_body",
+  apply_impulse: "op_physics_apply_impulse",
+  step: "op_physics_step"
+};
+var PHYSICS_OP_OUT_BUFFER = {
+  move_character: 4
+};
+var profilePermsKeyCache = /* @__PURE__ */ new Map();
+function profilePermsKey(profile) {
+  let key = profilePermsKeyCache.get(profile);
+  if (key === void 0) {
+    key = [...resolveProfile(profile)].sort().join("\n");
+    profilePermsKeyCache.set(profile, key);
+  }
+  return key;
+}
+function permissionProfileFor(profile, sortedPerms) {
+  if (profile === void 0) return void 0;
+  return profilePermsKey(profile) === sortedPerms.join("\n") ? profile : void 0;
+}
+function serializeWorldCommand(cmd, pinnedProfiles) {
+  if (cmd.kind === "skill" && cmd.profile !== void 0 && permissionProfileFor(cmd.profile, cmd.perms) === cmd.profile) {
+    if (pinnedProfiles !== void 0 && !pinnedProfiles.has(cmd.profile)) {
+      pinnedProfiles.add(cmd.profile);
+      return JSON.stringify(cmd);
+    }
+    const { perms: _perms, ...rest } = cmd;
+    return JSON.stringify(rest);
+  }
+  return JSON.stringify(cmd);
+}
+function serializeWorldLog(meta4, commands) {
+  const pinnedProfiles = /* @__PURE__ */ new Set();
+  const lines = [JSON.stringify(meta4)];
+  for (const cmd of commands) lines.push(serializeWorldCommand(cmd, pinnedProfiles));
+  return lines.join("\n") + "\n";
+}
+var physicsOpEnum = external_exports.enum([
+  "create_world",
+  "add_ground",
+  "add_box",
+  "add_box_material",
+  "add_sphere",
+  "add_capsule",
+  "add_static_box",
+  "add_static_sphere",
+  "add_static_capsule",
+  "add_character",
+  "move_character",
+  "remove_body",
+  "apply_impulse",
+  "step"
+]);
+var metaSchema = external_exports.object({
+  kind: external_exports.literal("meta"),
+  logVersion: external_exports.number(),
+  sessionId: external_exports.string(),
+  createdAt: external_exports.string(),
+  commands: external_exports.number(),
+  ticks: external_exports.number()
+});
+var lineSchema = external_exports.discriminatedUnion("kind", [
+  metaSchema,
+  external_exports.object({ kind: external_exports.literal("seed"), seq: external_exports.number(), seed: external_exports.number() }),
+  external_exports.object({ kind: external_exports.literal("physics"), seq: external_exports.number(), tick: external_exports.number(), op: physicsOpEnum, args: external_exports.array(external_exports.number()) }),
+  // v1 lines carry `perms` (full array); v2 lines may carry `profile` instead.
+  // Both optional here — parseWorldLog enforces that at least one is present and
+  // materializes `perms` from `profile`, so a parsed SkillCommand always has perms.
+  external_exports.object({
+    kind: external_exports.literal("skill"),
+    seq: external_exports.number(),
+    tick: external_exports.number(),
+    tool: external_exports.string(),
+    input: external_exports.unknown(),
+    actorId: external_exports.string(),
+    sessionId: external_exports.string(),
+    perms: external_exports.array(external_exports.string()).optional(),
+    profile: external_exports.string().optional()
+  })
+]);
+function parseWorldLog(jsonl, opts = {}) {
+  const out = [];
+  let meta4;
+  const rawLines = jsonl.split("\n");
+  const canRecover = (lineIndex) => opts.recoverPartialFinalLine === true && !jsonl.endsWith("\n") && lineIndex === rawLines.length - 1;
+  for (let i2 = 0; i2 < rawLines.length; i2++) {
+    const line = rawLines[i2];
+    if (line.length === 0) continue;
+    let json2;
+    try {
+      json2 = JSON.parse(line);
+    } catch (err) {
+      const message = `world log: invalid JSON on line ${i2 + 1}: ${err instanceof Error ? err.message : String(err)}`;
+      if (canRecover(i2)) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
+    }
+    const result = lineSchema.safeParse(json2);
+    if (!result.success) {
+      const message = `world log: malformed command on line ${i2 + 1}: ${result.error.message}`;
+      if (canRecover(i2)) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
+    }
+    if (result.data.kind === "meta") {
+      meta4 = result.data;
+      continue;
+    }
+    if (result.data.kind === "skill" && result.data.perms === void 0 && result.data.profile === void 0) {
+      throw new Error(`world log: skill command on line ${i2 + 1} carries neither perms nor profile`);
+    }
+    out.push(result.data);
+  }
+  out.sort((a2, b3) => a2.seq - b3.seq);
+  const warnings = [];
+  const frozenProfiles = /* @__PURE__ */ new Map();
+  const warnedProfiles = /* @__PURE__ */ new Set();
+  for (const cmd of out) {
+    if (cmd.kind !== "skill" || cmd.profile === void 0) continue;
+    if (cmd.perms !== void 0) {
+      frozenProfiles.set(cmd.profile, cmd.perms);
+      continue;
+    }
+    const frozen2 = frozenProfiles.get(cmd.profile);
+    if (frozen2 !== void 0) {
+      cmd.perms = [...frozen2];
+      continue;
+    }
+    const resolved = resolveProfile(cmd.profile);
+    if (resolved.size === 0) {
+      throw new Error(`world log: skill command seq ${cmd.seq} names unknown permission profile '${cmd.profile}' with no frozen mapping in the log`);
+    }
+    cmd.perms = [...resolved].sort();
+    if (!warnedProfiles.has(cmd.profile)) {
+      warnedProfiles.add(cmd.profile);
+      const message = `world log: profile '${cmd.profile}' has no frozen permission mapping in this log (recorded pre-freeze); replay uses the CURRENT profile definition, which may differ from what the caller held`;
+      warnings.push(message);
+      opts.onWarning?.(message);
+    }
+  }
+  return { meta: meta4, commands: out, warnings };
+}
+function statefulMulberry32(seed) {
+  let a2 = seed >>> 0;
+  const next = () => {
+    a2 = a2 + 1831565813 | 0;
+    let t3 = Math.imul(a2 ^ a2 >>> 15, 1 | a2);
+    t3 = t3 + Math.imul(t3 ^ t3 >>> 7, 61 | t3) ^ t3;
+    return ((t3 ^ t3 >>> 14) >>> 0) / 4294967296;
+  };
+  return { next, getState: () => a2 >>> 0, setState: (state) => {
+    a2 = state >>> 0;
+  } };
+}
+var installedRng;
+var SKILL_RNG_SEED_XOR = 2654435769;
+var installedSkillRng;
+function installSeededRandom(seed, force = false) {
+  if (installedRng !== void 0 && !force && typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery)."
+    );
+  }
+  const gen = statefulMulberry32(seed >>> 0);
+  installedRng = gen;
+  installedSkillRng = statefulMulberry32((seed ^ SKILL_RNG_SEED_XOR) >>> 0);
+  Math.random = gen.next;
+  return gen.next;
+}
+function getInstalledSkillRng() {
+  return installedSkillRng;
+}
+function captureWorldState(world, sorted = true, includeGameplay = true) {
+  const scratch = new Float32Array(7);
+  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
+  const entities = [];
+  for (const id4 of ids) {
+    const entry = world.entities.resolve(id4);
+    if (entry === void 0) continue;
+    const eid = entry.eid;
+    const state = {
+      id: id4,
+      eid,
+      pos: [Position.x[eid], Position.y[eid], Position.z[eid]],
+      rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
+      scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]]
+    };
+    if (entry.bodyId !== void 0) {
+      world.ops.op_physics_body_transform(entry.bodyId, scratch);
+      state.body = [scratch[0], scratch[1], scratch[2], scratch[3], scratch[4], scratch[5], scratch[6]];
+    }
+    if (includeGameplay) captureEntityGameplay(state, entry, world.tags?.get(eid));
+    entities.push(state);
+  }
+  return { entities };
+}
+function captureEntityGameplay(state, entry, tagSet) {
+  if (entry.generation !== void 0) state.generation = entry.generation;
+  if (entry.parent !== void 0) state.parent = entry.parent;
+  if (tagSet !== void 0 && tagSet.size > 0) state.tags = [...tagSet].sort();
+  if (entry.material !== void 0) state.material = entry.material;
+  if (entry.resource !== void 0) state.resource = entry.resource;
+  if (entry.behavior !== void 0) state.behavior = entry.behavior;
+}
+function syncAllBodies(world) {
+  const scratch = new Float32Array(7);
+  for (const id4 of world.entities.ids()) {
+    const entry = world.entities.resolve(id4);
+    if (entry === void 0 || entry.bodyId === void 0) continue;
+    syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+  }
+}
+
+// src/observability/event.ts
+var TraceIntegrityError = class extends Error {
+  constructor(reason, lineNumber, message) {
+    super(message);
+    this.reason = reason;
+    this.lineNumber = lineNumber;
+    this.name = "TraceIntegrityError";
+  }
+  reason;
+  lineNumber;
+};
+function fnv1a16(input) {
+  let hash7 = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let i2 = 0; i2 < input.length; i2++) {
+    hash7 ^= BigInt(input.charCodeAt(i2));
+    hash7 = hash7 * prime & mask;
+  }
+  return hash7.toString(16).padStart(16, "0");
+}
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
+  const obj = value;
+  const keys = Object.keys(obj).sort();
+  return "{" + keys.filter((k3) => obj[k3] !== void 0).map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
+}
+function canonicalEvent(ev) {
+  return stableStringify({
+    id: ev.id,
+    type: ev.type,
+    actorId: ev.actorId,
+    threadId: ev.threadId,
+    parentEventId: ev.parentEventId,
+    causedBy: ev.causedBy,
+    payload: ev.payload
+  });
+}
+function hashEvent(ev, previousHash) {
+  return "sha256:" + ops.op_sha256(canonicalEvent(ev) + (previousHash ?? ""));
+}
+function withoutIntegrity(ev) {
+  return {
+    id: ev.id,
+    type: ev.type,
+    actorId: ev.actorId,
+    threadId: ev.threadId,
+    parentEventId: ev.parentEventId,
+    causedBy: [...ev.causedBy],
+    timestamp: ev.timestamp,
+    payload: ev.payload
+  };
+}
+function eventSeq(id4) {
+  const match = /^evt_.+_(\d{12})_[0-9a-f]{16}$/.exec(id4);
+  if (match === null) return null;
+  const n3 = Number(match[1]);
+  return Number.isSafeInteger(n3) ? n3 : null;
+}
+function completeJsonlLines(jsonl, policy) {
+  if (jsonl.length === 0) return { lines: [] };
+  const raw = jsonl.split("\n");
+  const final = raw[raw.length - 1] ?? "";
+  if (final === "") return { lines: raw.slice(0, -1) };
+  try {
+    JSON.parse(final);
+    return { lines: raw };
+  } catch {
+  }
+  if (policy === "ignore") return { lines: raw.slice(0, -1), partialFinalLine: final };
+  throw new TraceIntegrityError("partial_final_line", raw.length, "trace has an incomplete final JSONL line");
+}
+var LiminaTracer = class _LiminaTracer {
+  constructor(threadId, maxInMemory = 8192, retainDurableInMemory = true) {
+    this.threadId = threadId;
+    this.maxInMemory = maxInMemory;
+    this.retainDurableInMemory = retainDurableInMemory;
+  }
+  threadId;
+  maxInMemory;
+  retainDurableInMemory;
+  seq = 0;
+  events = [];
+  durableEvents = [];
+  appendTraceName;
+  lastIntegrityHash = null;
+  replayCache;
+  enableAppend(name) {
+    this.appendTraceName = name;
+    this.lastIntegrityHash = lastIntegrityHash(this.durableEvents);
+    return this;
+  }
+  emit(e2) {
+    const seq = this.seq;
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const body = stableStringify({ seq, type: e2.type, actorId: e2.actorId, payload: e2.payload });
+    const id4 = `evt_${e2.actorId}_${String(seq).padStart(12, "0")}_${fnv1a16(body)}`;
+    const event = { id: id4, timestamp, ...e2 };
+    if (this.appendTraceName !== void 0) {
+      const hash7 = hashEvent(event, this.lastIntegrityHash);
+      const withIntegrity = { ...event, integrity: { hash: hash7, previousHash: this.lastIntegrityHash } };
+      ops.op_append_trace(this.appendTraceName, JSON.stringify(withIntegrity) + "\n");
+      this.lastIntegrityHash = hash7;
+    }
+    this.seq++;
+    this.events.push(event);
+    if (this.appendTraceName === void 0 && this.retainDurableInMemory) this.durableEvents.push(event);
+    this.replayCache = void 0;
+    if (this.events.length > this.maxInMemory) this.events.shift();
+    return id4;
+  }
+  trace(actorId, sinceTick) {
+    return this.events.filter((ev) => {
+      if (ev.actorId !== actorId) return false;
+      if (sinceTick === void 0) return true;
+      const p2 = ev.payload;
+      if (p2 !== null && typeof p2 === "object" && "tick" in p2) {
+        const tick = p2.tick;
+        return typeof tick === "number" ? tick >= sinceTick : true;
+      }
+      return true;
+    });
+  }
+  /** Serialize to EventLoom-shaped JSONL, computing the sha256 integrity chain
+   *  here (genesis previousHash=null; previousHash(N)=hash(N-1)). */
+  exportJsonl() {
+    if (this.appendTraceName !== void 0) return ops.op_read_trace(this.appendTraceName);
+    if (!this.retainDurableInMemory) return serializeEvents(this.events);
+    return serializeEvents(this.durableEvents);
+  }
+  durableEventCount() {
+    if (this.appendTraceName !== void 0) return this.replay().events.length;
+    if (!this.retainDurableInMemory) return this.events.length;
+    return this.durableEvents.length;
+  }
+  flush(name) {
+    const content = this.exportJsonl();
+    ops.op_write_trace(name, content);
+    return { name, events: this.durableEventCount(), bytes: content.length };
+  }
+  tail(opts = {}) {
+    const afterSeq = opts.afterSeq ?? -1;
+    const limit = Math.max(0, Math.min(opts.limit ?? 100, 1e3));
+    const source = this.appendTraceName !== void 0 ? this.replay().events : this.retainDurableInMemory ? this.durableEvents : this.events;
+    const events = source.filter((ev) => {
+      const seq = eventSeq(ev.id);
+      if (seq === null || seq <= afterSeq) return false;
+      if (opts.actorId !== void 0 && ev.actorId !== opts.actorId) return false;
+      if (opts.type !== void 0 && ev.type !== opts.type) return false;
+      return true;
+    }).slice(0, limit);
+    const last = events.length > 0 ? eventSeq(events[events.length - 1].id) : null;
+    return { events, nextAfterSeq: last };
+  }
+  explainEvent(eventId) {
+    const replay = this.replay();
+    const event = replay.byId.get(eventId);
+    if (event === void 0) return void 0;
+    return {
+      event,
+      parents: replay.parentsById.get(eventId) ?? [],
+      children: replay.childrenById.get(eventId) ?? []
+    };
+  }
+  /** The full durable history with a resolved causal index (byId / parentsById /
+   *  childrenById) — the M8 audit surface walks this to answer "why was X
+   *  allowed/denied" from the real recorded events. */
+  replay() {
+    if (this.appendTraceName !== void 0) return _LiminaTracer.replayTrace(this.appendTraceName);
+    if (this.replayCache === void 0) {
+      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events);
+    }
+    return this.replayCache;
+  }
+  inspect() {
+    const actors = [...new Set(this.events.map((e2) => e2.actorId))];
+    return {
+      threadId: this.threadId,
+      eventCount: this.events.length,
+      actors,
+      recent: this.events.slice(-20)
+    };
+  }
+  static replayTrace(name, opts = {}) {
+    return _LiminaTracer.replayJsonl(ops.op_read_trace(name), opts);
+  }
+  static fromTrace(name, maxInMemory = 8192, opts = {}) {
+    return _LiminaTracer.fromJsonl(ops.op_read_trace(name), maxInMemory, opts);
+  }
+  static appendOnEmit(threadId, name, maxInMemory = 8192, opts = {}) {
+    const recoverPartialFinalLine = opts.recoverPartialFinalLine ?? true;
+    let jsonl = "";
+    try {
+      jsonl = ops.op_read_trace(name);
+    } catch {
+      ops.op_write_trace(name, "");
+    }
+    const replayOpts = {
+      ...opts,
+      onPartialFinalLine: recoverPartialFinalLine ? "ignore" : opts.onPartialFinalLine
+    };
+    let replay;
+    try {
+      replay = _LiminaTracer.replayJsonl(jsonl, replayOpts);
+    } catch (err) {
+      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError)) throw err;
+      const lines = jsonl.split("\n");
+      const prefixLineCount = Math.max(0, err.lineNumber - 1);
+      const prefix = prefixLineCount === 0 ? "" : lines.slice(0, prefixLineCount).join("\n") + "\n";
+      replay = _LiminaTracer.replayJsonl(prefix, { ...opts, onPartialFinalLine: "error" });
+      ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
+    }
+    const tracer = _LiminaTracer.fromReplay(replay, maxInMemory, false);
+    tracer.appendTraceName = name;
+    if (tracer.threadId !== threadId && replay.events.length === 0) {
+      return new _LiminaTracer(threadId, maxInMemory).enableAppend(name);
+    }
+    tracer.lastIntegrityHash = integrityTail(replay.events);
+    if (recoverPartialFinalLine && replay.partialFinalLine !== void 0) ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
+    return tracer;
+  }
+  static ephemeral(threadId, maxInMemory = 8192) {
+    return new _LiminaTracer(threadId, maxInMemory, false);
+  }
+  static fromJsonl(jsonl, maxInMemory = 8192, opts = {}) {
+    const replay = _LiminaTracer.replayJsonl(jsonl, opts);
+    return _LiminaTracer.fromReplay(replay, maxInMemory, true);
+  }
+  static fromReplay(replay, maxInMemory, keepDurable) {
+    const tracer = new _LiminaTracer(replay.threadId ?? "trace_replay", maxInMemory);
+    let maxSeq = -1;
+    for (const ev of replay.events) {
+      const clean = withoutIntegrity(ev);
+      if (keepDurable) tracer.durableEvents.push(clean);
+      tracer.events.push(clean);
+      const seq = eventSeq(ev.id);
+      if (seq !== null && seq > maxSeq) maxSeq = seq;
+    }
+    while (tracer.events.length > maxInMemory) tracer.events.shift();
+    tracer.seq = maxSeq + 1;
+    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail(replay.events);
+    return tracer;
+  }
+  static replayJsonl(jsonl, opts = {}) {
+    const policy = opts.onPartialFinalLine ?? "error";
+    const { lines, partialFinalLine } = completeJsonlLines(jsonl, policy);
+    const events = [];
+    let previousHash = null;
+    for (let i2 = 0; i2 < lines.length; i2++) {
+      const lineNumber = i2 + 1;
+      let parsed;
+      try {
+        parsed = JSON.parse(lines[i2]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TraceIntegrityError("invalid_json", lineNumber, `invalid trace JSON at line ${lineNumber}: ${message}`);
+      }
+      const ev = parsed;
+      if (ev.integrity === void 0 || typeof ev.integrity.hash !== "string") {
+        throw new TraceIntegrityError("missing_integrity", lineNumber, `trace line ${lineNumber} is missing integrity`);
+      }
+      if (ev.integrity.previousHash !== previousHash) {
+        throw new TraceIntegrityError("previous_hash_mismatch", lineNumber, `trace line ${lineNumber} previousHash mismatch`);
+      }
+      const expected = hashEvent(ev, previousHash);
+      if (ev.integrity.hash !== expected) {
+        throw new TraceIntegrityError("hash_mismatch", lineNumber, `trace line ${lineNumber} hash mismatch`);
+      }
+      events.push(ev);
+      previousHash = ev.integrity.hash;
+    }
+    return { ...buildReplay(events), partialFinalLine };
+  }
+};
+function lastIntegrityHash(events) {
+  let previousHash = null;
+  for (const ev of events) {
+    previousHash = hashEvent(ev, previousHash);
+  }
+  return previousHash;
+}
+function integrityTail(events) {
+  if (events.length === 0) return null;
+  const last = events[events.length - 1];
+  return last.integrity?.hash ?? lastIntegrityHash(events.map(withoutIntegrity));
+}
+function serializeEvents(events) {
+  let previousHash = null;
+  const lines = [];
+  for (const ev of events) {
+    const clean = withoutIntegrity(ev);
+    const hash7 = hashEvent(clean, previousHash);
+    const withIntegrity = { ...clean, integrity: { hash: hash7, previousHash } };
+    lines.push(JSON.stringify(withIntegrity));
+    previousHash = hash7;
+  }
+  return lines.length > 0 ? lines.join("\n") + "\n" : "";
+}
+function buildReplay(events) {
+  const byId = /* @__PURE__ */ new Map();
+  const parentsById = /* @__PURE__ */ new Map();
+  const childrenById = /* @__PURE__ */ new Map();
+  let threadId = null;
+  for (const ev of events) {
+    byId.set(ev.id, ev);
+    if (threadId === null) threadId = ev.threadId;
+  }
+  for (const ev of events) {
+    const parents = [];
+    const parentIds = ev.parentEventId === null ? ev.causedBy : [ev.parentEventId, ...ev.causedBy];
+    for (const parentId of new Set(parentIds)) {
+      const parent = byId.get(parentId);
+      if (parent === void 0) continue;
+      parents.push(parent);
+      const children = childrenById.get(parentId) ?? [];
+      children.push(ev);
+      childrenById.set(parentId, children);
+    }
+    parentsById.set(ev.id, parents);
+  }
+  return { threadId, events, byId, parentsById, childrenById };
+}
+
+// src/worldlog/snapshot.ts
+var SNAPSHOT_VERSION = 3;
+var CHARACTERS_PARTICIPANT_KEY = "characters";
+var EVENTS_PARTICIPANT_KEY = "events";
+var SnapshotParticipantRegistry = class {
+  participants = /* @__PURE__ */ new Map();
+  register(participant2) {
+    if (this.participants.has(participant2.key)) {
+      throw new Error(`snapshot participants: duplicate key '${participant2.key}'`);
+    }
+    this.participants.set(participant2.key, participant2);
+  }
+  get(key) {
+    return this.participants.get(key);
+  }
+  has(key) {
+    return this.participants.has(key);
+  }
+  /** Registered keys, sorted (the canonical capture order). */
+  keys() {
+    return [...this.participants.keys()].sort();
+  }
+  /** Capture every non-reserved participant into the snapshot's `managers`
+   *  record, keys sorted so the serialized snapshot is byte-deterministic. */
+  captureManagers() {
+    const out = {};
+    for (const key of this.keys()) {
+      if (key === CHARACTERS_PARTICIPANT_KEY || key === EVENTS_PARTICIPANT_KEY) continue;
+      out[key] = this.participants.get(key).capture();
+    }
+    return out;
+  }
+};
+function eventsParticipant(events) {
+  return {
+    key: EVENTS_PARTICIPANT_KEY,
+    schema: external_exports.array(external_exports.object({ id: external_exports.string(), spec: EventSpecSchema })),
+    capture: () => events.listEventSpecs(),
+    restore: (state) => events.restoreEventSpecs(state)
+  };
+}
+var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var B64_INV = (() => {
+  const inv = new Array(128).fill(-1);
+  for (let i2 = 0; i2 < B64.length; i2++) inv[B64.charCodeAt(i2)] = i2;
+  return inv;
+})();
+function bytesToBase64(bytes) {
+  let out = "";
+  let i2 = 0;
+  for (; i2 + 2 < bytes.length; i2 += 3) {
+    const n3 = bytes[i2] << 16 | bytes[i2 + 1] << 8 | bytes[i2 + 2];
+    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + B64[n3 >> 6 & 63] + B64[n3 & 63];
+  }
+  const rem = bytes.length - i2;
+  if (rem === 1) {
+    const n3 = bytes[i2] << 16;
+    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + "==";
+  } else if (rem === 2) {
+    const n3 = bytes[i2] << 16 | bytes[i2 + 1] << 8;
+    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + B64[n3 >> 6 & 63] + "=";
+  }
+  return out;
+}
+function base64ToBytes(b64) {
+  if (b64.length % 4 !== 0) throw new Error("world snapshot: invalid base64 length");
+  const firstPad = b64.indexOf("=");
+  if (firstPad !== -1 && !/^=+$/.test(b64.slice(firstPad))) {
+    throw new Error("world snapshot: invalid base64 padding");
+  }
+  let len = b64.length;
+  while (len > 0 && b64[len - 1] === "=") len--;
+  const outLen = len * 3 >> 2;
+  const out = new Uint8Array(outLen);
+  let o2 = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i2 = 0; i2 < len; i2++) {
+    const code3 = b64.charCodeAt(i2);
+    const v3 = code3 < B64_INV.length ? B64_INV[code3] : -1;
+    if (v3 === void 0 || v3 < 0) throw new Error("world snapshot: invalid base64 character");
+    acc = acc << 6 | v3;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[o2++] = acc >> bits & 255;
+    }
+  }
+  return out;
+}
+function ecsInternal(ecs) {
+  const internal = ecs[u3];
+  if (internal === void 0 || internal.entityIndex === void 0) {
+    throw new Error("world snapshot: bitECS world has no $internal entity index");
+  }
+  return internal;
+}
+function hasEntityIndex(ecs) {
+  if (ecs === null || typeof ecs !== "object") return false;
+  const internal = ecs[u3];
+  return internal !== void 0 && internal.entityIndex !== void 0;
+}
+function captureEntityIndex(ecs) {
+  const idx = ecsInternal(ecs).entityIndex;
+  return {
+    aliveCount: idx.aliveCount,
+    maxId: idx.maxId,
+    versioning: idx.versioning,
+    versionBits: idx.versionBits,
+    entityMask: idx.entityMask,
+    versionShift: idx.versionShift,
+    versionMask: idx.versionMask,
+    dense: idx.dense.slice(),
+    sparse: idx.sparse.slice()
+  };
+}
+function restoreEntityIndex(ecs, snap) {
+  ecsInternal(ecs).entityIndex = {
+    aliveCount: snap.aliveCount,
+    maxId: snap.maxId,
+    versioning: snap.versioning,
+    versionBits: snap.versionBits,
+    entityMask: snap.entityMask,
+    versionShift: snap.versionShift,
+    versionMask: snap.versionMask,
+    dense: snap.dense.slice(),
+    sparse: snap.sparse.slice()
+  };
+}
+var finite = external_exports.number().refine(Number.isFinite, "expected finite number");
+var int4 = finite.refine(Number.isInteger, "expected integer");
+var sparseNumberArray = external_exports.array(external_exports.union([int4, external_exports.null()])).transform((slots) => {
+  const out = new Array(slots.length);
+  for (let i2 = 0; i2 < slots.length; i2++) {
+    const v3 = slots[i2];
+    if (v3 !== null) out[i2] = v3;
+  }
+  return out;
+});
+var vec33 = external_exports.tuple([finite, finite, finite]);
+var vec43 = external_exports.tuple([finite, finite, finite, finite]);
+var entityIndexSchema = external_exports.object({
+  aliveCount: int4,
+  maxId: int4,
+  versioning: external_exports.boolean(),
+  versionBits: int4,
+  entityMask: int4,
+  versionShift: int4,
+  versionMask: int4,
+  dense: sparseNumberArray,
+  sparse: sparseNumberArray
+});
+var resourceMetaSchema = external_exports.object({
+  kind: external_exports.literal("gltf"),
+  assetId: external_exports.string(),
+  source: external_exports.string(),
+  hash: external_exports.string(),
+  bytes: int4,
+  rootName: external_exports.string().optional(),
+  objectCount: int4,
+  meshCount: int4,
+  materialCount: int4,
+  textureCount: int4
+}).passthrough();
+var snapshotEntitySchema = external_exports.object({
+  id: external_exports.string(),
+  eid: int4,
+  bodyId: int4.optional(),
+  generation: int4,
+  pos: vec33,
+  rot: vec43,
+  scale: vec33,
+  // Optional/defaulted so a pre-v3 or minimal snapshot literal still parses.
+  tags: external_exports.array(external_exports.string()).optional().default([]),
+  resource: resourceMetaSchema.optional(),
+  // The create command; input is arbitrary skill params (passthrough — do not strip).
+  origin: external_exports.object({ tool: external_exports.string(), input: external_exports.record(external_exports.string(), external_exports.unknown()) }).optional(),
+  // Scene hierarchy: parent id + this entity's transform relative to it.
+  parent: external_exports.string().optional(),
+  localOffset: external_exports.object({ pos: vec33, rot: vec43, scale: vec33 }).optional(),
+  // First-class surface material (color/roughness/metalness, or palette/imported name + pbr).
+  material: external_exports.object({
+    color: external_exports.number().optional(),
+    roughness: external_exports.number().optional(),
+    metalness: external_exports.number().optional(),
+    name: external_exports.string().optional(),
+    pbr: external_exports.boolean().optional()
+  }).optional(),
+  // First-class declarative behaviour — validated by the real BehaviorSpec schema (a torn/forged
+  // snapshot behaviour is rejected on parse, never trusted). Optional so a pre-behaviour snapshot
+  // (or a behaviour-less entity) still parses.
+  behavior: BehaviorSpecSchema.optional(),
+  // Standalone collider bodies owned by this entity (M18). Optional: pre-M18 snapshots lack it.
+  runtimeBodyIds: external_exports.array(int4).optional()
+});
+var characterSnapshotSchema = external_exports.object({
+  bodyId: int4,
+  vy: finite,
+  grounded: external_exports.boolean(),
+  heading: finite,
+  // Additive within schema v3: old v3 snapshots default to the legacy dry state.
+  swimming: external_exports.boolean().optional().default(false)
+});
+var worldSnapshotSchema = external_exports.object({
+  snapshotVersion: external_exports.literal(SNAPSHOT_VERSION),
+  sessionId: external_exports.string(),
+  tick: int4,
+  snapshotSeq: int4,
+  rngState: int4,
+  // Additive within v3: absent -> restore seeds the skill stream from rngState.
+  skillRngState: int4.optional(),
+  entitySeq: int4,
+  entityVersion: int4,
+  entityIndex: entityIndexSchema,
+  entities: external_exports.array(snapshotEntitySchema),
+  characters: external_exports.array(characterSnapshotSchema).optional().default([]),
+  // World-level event definitions — each spec validated by the real EventSpec schema. Optional +
+  // defaulted so a pre-events snapshot still parses (additive, back-compatible with v3).
+  events: external_exports.array(external_exports.object({ id: external_exports.string(), spec: EventSpecSchema })).optional().default([]),
+  // Per-participant manager state (H2). Optional + defaulted so a pre-participant snapshot still
+  // parses; each entry is validated by its participant's OWN schema at restore time (parse cannot
+  // know the registry).
+  managers: external_exports.record(external_exports.string(), external_exports.unknown()).optional().default({}),
+  physics: external_exports.string()
+});
+
+// src/render/entity-scene-resources.ts
+var HOST_LIFETIME = "host";
+function isRecord(value) {
+  return value !== null && typeof value === "object";
+}
+function isHostOwned(resource) {
+  return isRecord(resource.userData) && resource.userData.liminaLifetime === HOST_LIFETIME;
+}
+function disposeEntitySceneResources(root) {
+  const geometries = /* @__PURE__ */ new Set();
+  const materials = /* @__PURE__ */ new Set();
+  const textures = /* @__PURE__ */ new Set();
+  const visit = (object4) => {
+    if (!isRecord(object4)) return;
+    if (isRecord(object4.geometry)) geometries.add(object4.geometry);
+    const objectMaterials = Array.isArray(object4.material) ? object4.material : [object4.material];
+    for (const material of objectMaterials) {
+      if (!isRecord(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) {
+        if (isRecord(value) && value.isTexture === true) textures.add(value);
+      }
+    }
+  };
+  const traversable = root;
+  if (typeof traversable.traverse === "function") traversable.traverse(visit);
+  else visit(root);
+  const errors = [];
+  const dispose = (resource) => {
+    if (isHostOwned(resource) || typeof resource.dispose !== "function") return;
+    try {
+      resource.dispose();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  };
+  for (const texture3 of textures) dispose(texture3);
+  for (const material of materials) dispose(material);
+  for (const geometry of geometries) dispose(geometry);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `entity scene-resource disposal failed for ${errors.length} resource(s)`);
+  }
+}
+
+// src/skills/entity-teardown.ts
+function teardownEntity(world, entity) {
+  const entry = world.entities.destroy(entity);
+  if (entry === void 0) return void 0;
+  const errors = [];
+  const attempt = (operation) => {
+    try {
+      operation();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  };
+  if (entry.runtimeDispose !== void 0) attempt(entry.runtimeDispose);
+  if (entry.mesh !== void 0) {
+    attempt(() => world.scene.remove(entry.mesh));
+    attempt(() => disposeEntitySceneResources(entry.mesh));
+  }
+  if (entry.bodyId !== void 0) attempt(() => world.ops.op_physics_remove_body(entry.bodyId));
+  attempt(() => despawnRenderable(world.ecs, entry.eid));
+  attempt(() => {
+    world.tags.delete(entry.eid);
+  });
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `entity teardown failed for '${entity}' in ${errors.length} operation(s)`);
+  }
+  return entry;
+}
+
 // src/policy/engine.ts
 function policyEventType(d2) {
   return d2.allow ? "policy.decision" : "policy.denied";
@@ -106811,10 +107902,15 @@ var SkillInvocationError = class extends Error {
   }
   code;
 };
+function skillEffect(skill) {
+  return skill.effect ?? "write";
+}
 var SkillRegistry = class _SkillRegistry {
-  constructor(tracer, policy) {
+  constructor(tracer, policy, opts) {
     this.tracer = tracer;
     this.policy = policy;
+    this.chainUndoLedgerEnabled = opts?.disableChainUndoLedger !== true;
+    this.chainEntityCatchAllEnabled = opts?.disableChainEntityCatchAll !== true;
   }
   tracer;
   worldReconcilers = /* @__PURE__ */ new Set();
@@ -106833,6 +107929,40 @@ var SkillRegistry = class _SkillRegistry {
    *  check at this choke point and adds quotas/revocation/budgets; when unset the
    *  registry falls back to the static permission check (legacy callers). */
   policy;
+  /** Live head-chain unwind frames, keyed by chainId (H1). Data, not a counter —
+   *  concurrent head chains each keep their own frame. */
+  chainFrames = /* @__PURE__ */ new Map();
+  /** Mints chain ids for top-level invokes with NO recorder attached (the
+   *  recorder mints `chain_N` before original invoke runs). Distinct prefix so
+   *  the two namespaces can never collide. */
+  localChainSeq = 0;
+  /** First failed rollback. A world that failed to roll back is indeterminate:
+   *  once set, every further WRITE invoke fails closed (reads stay available for
+   *  diagnosis) and hosts map it to their authority poison (net/server.ts). */
+  poisonError;
+  rollbackFailureHandlers = [];
+  chainUndoLedgerEnabled;
+  chainEntityCatchAllEnabled;
+  /** Recorder seam (H1 boundary disclosure): reports how many physics `step`
+   *  commands were RECORDED while the given head chain was live (the legitimate
+   *  C3 tick-loop-under-async-chain window). Set by WorldRecorder.attach; unset
+   *  (0 steps assumed) when no recorder is attached. */
+  chainStepProbe;
+  /** Install the recorded-steps-during-chain probe (see chainStepProbe). */
+  setChainStepProbe(probe) {
+    this.chainStepProbe = probe;
+  }
+  /** The first rollback failure, or undefined while the registry is healthy.
+   *  Mirrors authoring/kernel.ts `poisoned`: hosts check it (or subscribe via
+   *  onRollbackFailure) and stop authoring against the indeterminate world. */
+  get poisoned() {
+    return this.poisonError;
+  }
+  /** Subscribe to rollback failures (called at most the moment the registry
+   *  poisons). net/server.ts maps this to its existing poisonAuthority. */
+  onRollbackFailure(handler) {
+    this.rollbackFailureHandlers.push(handler);
+  }
   /** Attach (or replace) the policy engine that governs every invoke crossing. */
   setPolicy(policy) {
     this.policy = policy;
@@ -107056,8 +108186,11 @@ var SkillRegistry = class _SkillRegistry {
     }));
   }
   /** Build the per-invocation execution context + a metadata thunk. Shared by
-   *  invoke() and resolveApproval() so emitted-event accounting is identical. */
-  makeCtx(base) {
+   *  invoke() and resolveApproval() so emitted-event accounting is identical.
+   *  `chainId` is the EFFECTIVE chain id (the caller's, or one this invoke
+   *  minted): ctx.chainId must always be forwardable by nested invokes so the
+   *  whole chain shares one undo ledger even with no recorder attached. */
+  makeCtx(base, chainId) {
     const start = Date.now();
     const emitted = [];
     const ctx = {
@@ -107067,7 +108200,15 @@ var SkillRegistry = class _SkillRegistry {
       permissions: base.permissions,
       tick: base.tick,
       world: base.world,
-      chainId: base.chainId,
+      chainId,
+      undo: (label4, fn) => {
+        if (!this.chainUndoLedgerEnabled) return;
+        const frame2 = this.chainFrames.get(chainId);
+        if (frame2 === void 0) {
+          throw new Error(`ctx.undo('${label4}'): no live chain frame for '${chainId}' \u2014 undo registered outside the handler window`);
+        }
+        frame2.ledger.push({ label: label4, fn });
+      },
       emit: (type, payload, causedBy) => {
         const id4 = this.tracer.emit({
           type,
@@ -107092,7 +108233,7 @@ var SkillRegistry = class _SkillRegistry {
    *  stampTick; an early/zero reviewer tick is floored to the propose tick so an action
    *  is never stamped "applied before proposed"). Absent (the direct invoke() path), it
    *  falls back to `base.tick`, so a non-gated call stamps propose==apply as before. */
-  async applyHandler(skill, input, base, ctx, meta3, execCausedBy, applyTick) {
+  async applyHandler(skill, input, base, ctx, meta4, execCausedBy, applyTick) {
     try {
       for (const reconcile of this.worldReconcilers) reconcile(base.world);
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
@@ -107108,27 +108249,35 @@ var SkillRegistry = class _SkillRegistry {
         return {
           success: false,
           error: { code: "contract_error", message: `skill '${skill.name}' returned output that violates its schema: ${parsedResult.error.message}` },
-          metadata: meta3()
+          metadata: meta4()
         };
       }
       if (skill.hooks?.after) await skill.hooks.after(result, ctx);
       ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
-      return { success: true, result, metadata: meta3() };
+      return { success: true, result, metadata: meta4() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const code3 = err instanceof SkillInvocationError ? err.code : "handler_error";
-      return { success: false, error: { code: code3, message }, metadata: meta3() };
+      return { success: false, error: { code: code3, message }, metadata: meta4() };
     }
   }
   async invoke(name, input, base) {
-    const { ctx, meta: meta3 } = this.makeCtx(base);
+    const chainId = base.chainId ?? `lchain_${this.localChainSeq++}`;
+    const { ctx, meta: meta4 } = this.makeCtx(base, chainId);
     const skill = this.skills.get(name);
     if (skill === void 0) {
       return { success: false, error: { code: "not_found", message: `unknown skill: ${name}` } };
     }
+    if (this.poisonError !== void 0 && skillEffect(skill) !== "read") {
+      return {
+        success: false,
+        error: { code: "conflict", message: `registry is poisoned after a failed rollback; restart required: ${this.poisonError.message}` },
+        metadata: meta4()
+      };
+    }
     const parsed = skill.input.safeParse(input);
     if (!parsed.success) {
-      return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta3() };
+      return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta4() };
     }
     let policyEventId;
     if (this.policy !== void 0 && base[policyAlreadyCommitted] !== true) {
@@ -107149,13 +108298,13 @@ var SkillRegistry = class _SkillRegistry {
         if (decision.permissionDenial) {
           ctx.emit("security.permission.denied", { skill: name, missing: decision.reason, rule: decision.rule, agentId: base.agentId });
         }
-        return { success: false, error: { code: "forbidden", message: decision.reason }, metadata: meta3() };
+        return { success: false, error: { code: "forbidden", message: decision.reason }, metadata: meta4() };
       }
     } else {
       for (const perm of skill.permissions) {
         if (!base.permissions.has(perm)) {
           ctx.emit("security.permission.denied", { skill: name, missing: perm, agentId: base.agentId });
-          return { success: false, error: { code: "forbidden", message: `missing permission: ${perm}` }, metadata: meta3() };
+          return { success: false, error: { code: "forbidden", message: `missing permission: ${perm}` }, metadata: meta4() };
         }
       }
     }
@@ -107171,7 +108320,7 @@ var SkillRegistry = class _SkillRegistry {
           pending: this.pending.size,
           limit: this.maxPendingApprovals
         }, execCausedBy);
-        return { success: false, error: { code: "resource_exhausted", message: `approval queue full (${this.pending.size}/${this.maxPendingApprovals})` }, metadata: meta3() };
+        return { success: false, error: { code: "resource_exhausted", message: `approval queue full (${this.pending.size}/${this.maxPendingApprovals})` }, metadata: meta4() };
       }
       const approvalId = ctx.emit(
         "skill.approval.pending",
@@ -107179,9 +108328,150 @@ var SkillRegistry = class _SkillRegistry {
         execCausedBy
       );
       this.pending.set(approvalId, { approvalId, skill: name, input: parsed.data, base, createdTick: base.tick });
-      return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta3() };
+      return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta4() };
     }
-    return this.applyHandler(skill, parsed.data, base, ctx, meta3, execCausedBy);
+    const frame2 = this.chainUndoLedgerEnabled && !this.chainFrames.has(chainId) ? this.beginChainFrame(chainId, skill, base.world) : void 0;
+    try {
+      const res = await this.applyHandler(skill, parsed.data, base, ctx, meta4, execCausedBy);
+      if (frame2 !== void 0 && !res.success) this.unwindChainFrame(frame2, ctx);
+      return res;
+    } finally {
+      if (frame2 !== void 0) {
+        frame2.disarm?.();
+        this.chainFrames.delete(chainId);
+      }
+    }
+  }
+  /** Arm a head chain's unwind frame. The O(1) captures (RNG state, EntityTable
+   *  seq/version) are taken eagerly for every WRITE skill; the O(entities) bitECS
+   *  entity-index copy is captured LAZILY at the chain's first entity mutation,
+   *  via one-shot hooks on BOTH mutation seams — the EntityTable identity ops and
+   *  the bitECS eid allocation path (ecs/world.ts). The allocation seam is load-
+   *  bearing: skills allocate the eid (spawnRenderable) BEFORE entities.create,
+   *  so a table-only hook would capture an index already containing the chain's
+   *  first eid and the unwind would leak it. Declared READ skills skip capture
+   *  entirely, so hot polling paths — the editor's per-tick inspector.snapshot /
+   *  worldlog.tail — pay nothing; write invokes that never touch an entity
+   *  (per-tick movement intents) now pay only the O(1) part. */
+  beginChainFrame(chainId, skill, world) {
+    const overlapped = this.chainFrames.size > 0;
+    if (overlapped) for (const f2 of this.chainFrames.values()) f2.overlapped = true;
+    const frame2 = { chainId, skill: skill.name, ledger: [], overlapped };
+    if (skillEffect(skill) !== "read") {
+      const capture = {
+        world,
+        rngState: world.rng?.getState(),
+        entitySeq: world.entities.nextSeq,
+        entityVersion: world.entities.version
+      };
+      frame2.capture = capture;
+      const captureIndex = () => {
+        if (capture.entityIndex === void 0 && hasEntityIndex(world.ecs)) {
+          capture.entityIndex = captureEntityIndex(world.ecs);
+        }
+      };
+      const disarmers = [armEntityIndexMutationHook(world.ecs, captureIndex)];
+      if (typeof world.entities.armMutationHook === "function") {
+        disarmers.push(world.entities.armMutationHook(captureIndex));
+      }
+      frame2.disarm = () => {
+        for (const disarm of disarmers) disarm();
+      };
+    }
+    this.chainFrames.set(chainId, frame2);
+    return frame2;
+  }
+  /** Unwind a failed head chain: run its undo ledger LIFO, tear down every
+   *  entity the chain created that still survives (the CATCH-ALL — see below),
+   *  then rewind the skill RNG, the bitECS entity index, and the EntityTable
+   *  seq/version captured at head start — teardown alone is not enough, because
+   *  `ent_`/eid allocation is monotonic and replay (which never runs the failed
+   *  chain) would otherwise allocate DIFFERENT ids for every subsequent command.
+   *  Synchronous: no other chain can interleave mid-unwind on this single thread.
+   *
+   *  CATCH-ALL (D3): the ledger is a registration seam, and most entity-creating
+   *  skills never registered a teardown undo — their survivors used to reach
+   *  rewindAllocator as live ids, which refuses (correctly) and POISONED the
+   *  whole session: a survivable partial failure became session loss. Entity
+   *  creation is now compensated structurally (idsCreatedSince → teardownEntity,
+   *  newest-first); per-skill ctx.undo remains for NON-entity effects (terrain
+   *  heights, footprints, manager entries).
+   *
+   *  KNOWN BOUNDARY (not full rewind): recorded tick-loop `step`s that ran inside
+   *  this chain's async window (legitimate under C3) simulated WITH the chain's
+   *  transient bodies; replay re-runs those steps WITHOUT them. State is restored
+   *  here, but those steps' dynamics cannot be un-run — disclosed via the
+   *  `skill.rollback.stepsDuringChain` warning event (recorder-fed probe). */
+  unwindChainFrame(frame2, ctx) {
+    frame2.disarm?.();
+    frame2.disarm = void 0;
+    const capture = frame2.capture;
+    const world = capture?.world ?? ctx.world;
+    const rngMoved = capture?.rngState !== void 0 && world.rng !== void 0 && world.rng.getState() !== capture.rngState;
+    const tableMoved = capture !== void 0 && world.entities.version !== capture.entityVersion;
+    const indexCaptured = capture?.entityIndex !== void 0;
+    if (frame2.ledger.length === 0 && !rngMoved && !tableMoved && !indexCaptured) return;
+    const stepsDuringChain = this.chainStepProbe?.(frame2.chainId) ?? 0;
+    if (stepsDuringChain > 0) {
+      ctx.emit("skill.rollback.stepsDuringChain", {
+        chainId: frame2.chainId,
+        skill: frame2.skill,
+        steps: stepsDuringChain,
+        note: "recorded steps in this chain's async window simulated with the rolled-back mutations; replay re-runs them without"
+      });
+    }
+    if (frame2.overlapped) {
+      this.poisonRegistry(ctx, frame2, "concurrent_chains", [
+        { label: "chain overlap", message: `chain '${frame2.chainId}' (${frame2.skill}) failed with compensable mutations while another head chain was live` }
+      ]);
+      return;
+    }
+    const failures = [];
+    for (let i2 = frame2.ledger.length - 1; i2 >= 0; i2--) {
+      const entry = frame2.ledger[i2];
+      try {
+        entry.fn();
+      } catch (error51) {
+        failures.push({ label: entry.label, message: error51 instanceof Error ? error51.message : String(error51) });
+      }
+    }
+    if (capture !== void 0) {
+      if (this.chainEntityCatchAllEnabled && typeof world.entities.idsCreatedSince === "function") {
+        const created = world.entities.idsCreatedSince(capture.entitySeq);
+        for (let i2 = created.length - 1; i2 >= 0; i2--) {
+          try {
+            teardownEntity(world, created[i2]);
+          } catch (error51) {
+            failures.push({ label: `catch-all teardown '${created[i2]}'`, message: error51 instanceof Error ? error51.message : String(error51) });
+          }
+        }
+      }
+      try {
+        if (capture.rngState !== void 0) world.rng?.setState(capture.rngState);
+        if (capture.entityIndex !== void 0) restoreEntityIndex(world.ecs, capture.entityIndex);
+        world.entities.rewindAllocator(capture.entitySeq, capture.entityVersion);
+      } catch (error51) {
+        failures.push({ label: "allocator rewind", message: error51 instanceof Error ? error51.message : String(error51) });
+      }
+    }
+    if (failures.length > 0) this.poisonRegistry(ctx, frame2, "undo_failed", failures);
+  }
+  /** Mirror authoring/kernel.ts #rollback: collect the failures, emit
+   *  `skill.rollback.failed`, poison, and notify hosts (net/server.ts maps the
+   *  callback to its existing poisonAuthority). A world that failed to roll back
+   *  is indeterminate; nothing may author against it. */
+  poisonRegistry(ctx, frame2, reason, failures) {
+    const error51 = new Error(
+      `skill rollback failed (${reason}) for chain '${frame2.chainId}' (${frame2.skill}): ${failures.map((f2) => `${f2.label}: ${f2.message}`).join("; ")}`
+    );
+    if (this.poisonError === void 0) this.poisonError = error51;
+    ctx.emit("skill.rollback.failed", { chainId: frame2.chainId, skill: frame2.skill, reason, failures: [...failures] });
+    for (const handler of this.rollbackFailureHandlers) {
+      try {
+        handler(error51);
+      } catch {
+      }
+    }
   }
   /** Resolve a held approval. `grant` -> apply the parked intent now and return
    *  its result; deny -> drop it. Honest failure on an unknown/already-resolved
@@ -107325,78 +108615,6 @@ var AssetRegistry = class _AssetRegistry {
     return this.cache.size;
   }
 };
-
-// src/render/entity-scene-resources.ts
-var HOST_LIFETIME = "host";
-function isRecord(value) {
-  return value !== null && typeof value === "object";
-}
-function isHostOwned(resource) {
-  return isRecord(resource.userData) && resource.userData.liminaLifetime === HOST_LIFETIME;
-}
-function disposeEntitySceneResources(root) {
-  const geometries = /* @__PURE__ */ new Set();
-  const materials = /* @__PURE__ */ new Set();
-  const textures = /* @__PURE__ */ new Set();
-  const visit = (object4) => {
-    if (!isRecord(object4)) return;
-    if (isRecord(object4.geometry)) geometries.add(object4.geometry);
-    const objectMaterials = Array.isArray(object4.material) ? object4.material : [object4.material];
-    for (const material of objectMaterials) {
-      if (!isRecord(material)) continue;
-      materials.add(material);
-      for (const value of Object.values(material)) {
-        if (isRecord(value) && value.isTexture === true) textures.add(value);
-      }
-    }
-  };
-  const traversable = root;
-  if (typeof traversable.traverse === "function") traversable.traverse(visit);
-  else visit(root);
-  const errors = [];
-  const dispose = (resource) => {
-    if (isHostOwned(resource) || typeof resource.dispose !== "function") return;
-    try {
-      resource.dispose();
-    } catch (error51) {
-      errors.push(error51);
-    }
-  };
-  for (const texture3 of textures) dispose(texture3);
-  for (const material of materials) dispose(material);
-  for (const geometry of geometries) dispose(geometry);
-  if (errors.length > 0) {
-    throw new AggregateError(errors, `entity scene-resource disposal failed for ${errors.length} resource(s)`);
-  }
-}
-
-// src/skills/entity-teardown.ts
-function teardownEntity(world, entity) {
-  const entry = world.entities.destroy(entity);
-  if (entry === void 0) return void 0;
-  const errors = [];
-  const attempt = (operation) => {
-    try {
-      operation();
-    } catch (error51) {
-      errors.push(error51);
-    }
-  };
-  if (entry.runtimeDispose !== void 0) attempt(entry.runtimeDispose);
-  if (entry.mesh !== void 0) {
-    attempt(() => world.scene.remove(entry.mesh));
-    attempt(() => disposeEntitySceneResources(entry.mesh));
-  }
-  if (entry.bodyId !== void 0) attempt(() => world.ops.op_physics_remove_body(entry.bodyId));
-  attempt(() => despawnRenderable(world.ecs, entry.eid));
-  attempt(() => {
-    world.tags.delete(entry.eid);
-  });
-  if (errors.length > 0) {
-    throw new AggregateError(errors, `entity teardown failed for '${entity}' in ${errors.length} operation(s)`);
-  }
-  return entry;
-}
 
 // src/terrain/types.ts
 var CLIMATE_TEMP_C = 0;
@@ -108419,7 +109637,7 @@ function registerEcsSkills(registry2) {
 }
 
 // src/skills/architecture.ts
-var Vec3 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec32 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function spawnStaticMesh(world, mesh, pos, half, yaw = 0, origin) {
   const [x3, y4, z4] = pos;
   world.scene.add(mesh);
@@ -108486,7 +109704,7 @@ function gableTriangleGeometry(baseWidth, pitch, thickness3) {
   return { geo, half: [hw, pitch / 2, hz] };
 }
 var buildingInput = external_exports.object({
-  position: Vec3.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
+  position: Vec32.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
   width: external_exports.number().positive().max(200).default(8).describe("Footprint extent along X (meters)."),
   depth: external_exports.number().positive().max(200).default(6).describe("Footprint extent along Z (meters)."),
   height: external_exports.number().positive().max(80).default(3.2).describe("Wall height (meters)."),
@@ -108506,73 +109724,73 @@ function registerArchitectureSkills(_registry) {
 
 // src/geometry/geometry-spec.ts
 var GEOMETRY_SPEC_VERSION = 1;
-var Ver = external_exports.literal(GEOMETRY_SPEC_VERSION);
-var Positive = external_exports.number().positive();
+var Ver2 = external_exports.literal(GEOMETRY_SPEC_VERSION);
+var Positive2 = external_exports.number().positive();
 var NonNeg = external_exports.number().min(0);
 var Radial = external_exports.number().int().min(3).max(256);
 var HeightSeg = external_exports.number().int().min(1).max(256);
 var BoxSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("box"),
-  width: Positive,
-  height: Positive,
-  depth: Positive
+  width: Positive2,
+  height: Positive2,
+  depth: Positive2
 }).strict();
 var SphereSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("sphere"),
-  radius: Positive,
+  radius: Positive2,
   widthSegments: Radial.default(24),
   heightSegments: external_exports.number().int().min(2).max(256).default(16)
 }).strict();
 var CylinderSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("cylinder"),
   radiusTop: NonNeg,
   // 0 collapses the top to a point (a cone) — allowed
   radiusBottom: NonNeg,
-  height: Positive,
+  height: Positive2,
   radialSegments: Radial.default(24)
 }).strict();
 var ConeSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("cone"),
-  radius: Positive,
-  height: Positive,
+  radius: Positive2,
+  height: Positive2,
   radialSegments: Radial.default(24)
 }).strict();
 var PlaneSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("plane"),
-  width: Positive,
-  height: Positive,
+  width: Positive2,
+  height: Positive2,
   widthSegments: HeightSeg.default(1),
   heightSegments: HeightSeg.default(1)
 }).strict();
 var CapsuleSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("capsule"),
-  radius: Positive,
-  length: Positive,
+  radius: Positive2,
+  length: Positive2,
   // length of the cylindrical middle section (total height = length + 2*radius)
   capSegments: HeightSeg.default(8),
   radialSegments: Radial.default(16)
 }).strict();
 var TorusSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("torus"),
-  radius: Positive,
+  radius: Positive2,
   // center of the tube to the center of the torus
-  tube: Positive,
+  tube: Positive2,
   // radius of the tube
   radialSegments: Radial.default(12),
   tubularSegments: Radial.default(24)
 }).strict();
 var ExtrudeSpec = external_exports.object({
-  version: Ver,
+  version: Ver2,
   kind: external_exports.literal("extrude"),
   profile: external_exports.array(external_exports.tuple([external_exports.number(), external_exports.number()])).min(3),
-  depth: Positive,
+  depth: Positive2,
   steps: HeightSeg.default(1)
 }).strict();
 var GeometrySpecSchema = external_exports.discriminatedUnion("kind", [
@@ -108614,13 +109832,13 @@ function buildGeometry(spec) {
 
 // src/scene/entity-recipe.ts
 var ENTITY_RECIPE_VERSION = 1;
-var Ver2 = external_exports.literal(ENTITY_RECIPE_VERSION);
-var Vec32 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Ver3 = external_exports.literal(ENTITY_RECIPE_VERSION);
+var Vec33 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Quat = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
 var OffsetSchema = external_exports.object({
-  pos: Vec32,
+  pos: Vec33,
   rot: Quat,
-  scale: Vec32
+  scale: Vec33
 }).strict();
 var OriginSchema = external_exports.object({
   tool: external_exports.string().min(1),
@@ -108634,7 +109852,7 @@ var NodeSchema = external_exports.object({
   offset: OffsetSchema
 }).strict();
 var EntityRecipeSchema = external_exports.object({
-  version: Ver2,
+  version: Ver3,
   name: external_exports.string().min(1),
   nodes: external_exports.array(NodeSchema).min(1)
 }).strict();
@@ -108650,7 +109868,7 @@ function validateEntityRecipe(recipe) {
 }
 
 // src/skills/scene.ts
-var Vec33 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec34 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function mulberry32(seed) {
   let a2 = seed >>> 0;
   return () => {
@@ -108737,7 +109955,7 @@ var createEntityInput = external_exports.object({
   // (already PBR) and for the numeric color path.
   pbr: external_exports.boolean().default(false),
   color: external_exports.number().int().min(0).max(16777215).default(16777215),
-  position: Vec33.default([0, 0, 0]),
+  position: Vec34.default([0, 0, 0]),
   dynamic: external_exports.boolean().default(false),
   static: external_exports.boolean().default(false),
   friction: external_exports.number().min(0).max(10).default(0.5),
@@ -108803,7 +110021,7 @@ function makeCreateEntity(materials) {
 }
 var createMeshInput = external_exports.object({
   geometry: GeometrySpecSchema,
-  position: Vec33.default([0, 0, 0]),
+  position: Vec34.default([0, 0, 0]),
   // Heading in radians about +Y — the simple "turn it" knob. Ignored if `rotation` is given.
   yaw: external_exports.number().optional(),
   // Full orientation quaternion [x,y,z,w] (overrides `yaw`). Re-poses the collider too.
@@ -108914,7 +110132,7 @@ var reparent = {
   }
 };
 var queryEntitiesInput = external_exports.object({
-  near: Vec33.optional(),
+  near: Vec34.optional(),
   radius: external_exports.number().positive().optional(),
   tag: external_exports.string().optional()
 });
@@ -108927,7 +110145,7 @@ var queryEntities = {
   effect: "read",
   input: queryEntitiesInput,
   output: external_exports.object({
-    entities: external_exports.array(external_exports.object({ entity: external_exports.string(), position: Vec33, distance: external_exports.number() }))
+    entities: external_exports.array(external_exports.object({ entity: external_exports.string(), position: Vec34, distance: external_exports.number() }))
   }),
   handler: (input, ctx) => {
     const entities = querySpatialEntities(ctx.world, {
@@ -108957,11 +110175,11 @@ var inspectScene = {
   input: inspectInput,
   output: external_exports.object({
     entityCount: external_exports.number(),
-    bounds: external_exports.object({ min: Vec33, max: Vec33 }).nullable(),
-    center: Vec33.nullable(),
-    size: Vec33.nullable(),
+    bounds: external_exports.object({ min: Vec34, max: Vec34 }).nullable(),
+    center: Vec34.nullable(),
+    size: Vec34.nullable(),
     tagCounts: external_exports.record(external_exports.string(), external_exports.number()),
-    sample: external_exports.array(external_exports.object({ entity: external_exports.string(), position: Vec33 }))
+    sample: external_exports.array(external_exports.object({ entity: external_exports.string(), position: Vec34 }))
   }),
   handler: (input, ctx) => {
     const ents = querySpatialEntities(ctx.world, { tag: input.tag, sortBy: "entity" }).entities;
@@ -109145,7 +110363,7 @@ var instantiateGroupInput = external_exports.object({
   // The recipe name registered by scene.group.
   name: external_exports.string().min(1),
   // Where to stamp the fresh root [x,y,z].
-  position: Vec33.default([0, 0, 0]),
+  position: Vec34.default([0, 0, 0]),
   // Heading of the stamped instance in radians about +Y.
   yaw: external_exports.number().default(0),
   // Uniform scale (number) or per-axis [x,y,z] applied to the whole instance.
@@ -109180,7 +110398,7 @@ var duplicateInput = external_exports.object({
   // The entity (root of a subtree) to duplicate. Its descendants are duplicated with it.
   entity: external_exports.string(),
   // Offset added to the source's world position for the copy [x,y,z].
-  offset: Vec33.default([0, 0, 0]),
+  offset: Vec34.default([0, 0, 0]),
   // Extra yaw (radians about +Y) applied to the copy ON TOP of the source's orientation.
   yaw: external_exports.number().default(0),
   // Optional seed to reseed seed-bearing parts of the copy (else the copy matches the source).
@@ -109396,7 +110614,7 @@ function sha256(input) {
 }
 
 // src/skills/three.ts
-var Vec34 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var gltfResourceSchema = external_exports.object({
   kind: external_exports.literal("gltf"),
   assetId: external_exports.string(),
@@ -109411,10 +110629,10 @@ var gltfResourceSchema = external_exports.object({
 });
 var setTransformInput = external_exports.object({
   entity: external_exports.string(),
-  position: Vec34.optional(),
-  rotationEuler: Vec34.optional(),
+  position: Vec35.optional(),
+  rotationEuler: Vec35.optional(),
   // radians (x,y,z)
-  scale: Vec34.optional()
+  scale: Vec35.optional()
 });
 var setTransform = {
   name: "three.setTransform",
@@ -109550,7 +110768,7 @@ var setLightingInput = external_exports.object({
   ambientIntensity: external_exports.number().min(0).max(10).default(1.2),
   directionalColor: external_exports.number().int().min(0).max(16777215).default(16777215),
   directionalIntensity: external_exports.number().min(0).max(10).default(3),
-  direction: Vec34.default([5, 9, 6]),
+  direction: Vec35.default([5, 9, 6]),
   // Real shadow mapping: when castShadow is set the directional light renders a
   // depth map each frame (renderer.shadowMap must be enabled, which engine.ts
   // does). The shadow camera is an orthographic frustum sized to cover the floor.
@@ -109610,12 +110828,12 @@ var addLightInput = external_exports.object({
   intensity: external_exports.number().min(0).max(100).default(1),
   // directional: the light's position (it points at `target`, default origin).
   // point/spot: the light's world position.
-  position: Vec34.default([0, 0, 0]),
+  position: Vec35.default([0, 0, 0]),
   // directional/spot only: the point the light aims at. Default is three's own
   // default target (world origin) — set only when the caller wants otherwise, so
   // its Object3D (which three requires added to the scene to take effect) is only
   // created when actually needed.
-  target: Vec34.optional(),
+  target: Vec35.optional(),
   // point/spot: max range before falloff hits zero. 0 = no limit (three.js default).
   distance: external_exports.number().min(0).default(0),
   // point/spot: physical falloff exponent (2 = physically correct, three.js default).
@@ -109727,7 +110945,7 @@ var removeLight = {
 };
 var loadGltfInput = external_exports.object({
   assetId: external_exports.string(),
-  position: Vec34.default([0, 0, 0])
+  position: Vec35.default([0, 0, 0])
 });
 function isRecord2(value) {
   return typeof value === "object" && value !== null;
@@ -110315,6 +111533,9 @@ async function loadGltfIntoScene(ctx, assetId, bytes, hash7, placement) {
   }
   const resource = root !== void 0 ? collectGltfMetadata(assetId, hash7, bytes, root) : { kind: "gltf", assetId, source: `assets/${assetId}`, hash: hash7, bytes: bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
   const entity = root !== void 0 ? ctx.world.entities.create({ eid, mesh: root, resource }) : ctx.world.entities.create({ eid, origin: { tool: "asset.load", input: { assetId, position: placement.position } } });
+  ctx.undo?.(`gltf entity ${assetId}`, () => {
+    teardownEntity(ctx.world, entity);
+  });
   return { entity, resource };
 }
 var INERT_GLTF_TRANSFORM = { position: { set() {
@@ -110366,6 +111587,9 @@ async function loadLodIntoScene(ctx, levels, placement) {
   }
   const resource = lod !== void 0 ? collectGltfMetadata(base.assetId, base.hash, base.bytes, lod) : { kind: "gltf", assetId: base.assetId, source: `assets/${base.assetId}`, hash: base.hash, bytes: base.bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
   const entity = lod !== void 0 ? ctx.world.entities.create({ eid, mesh: lod, resource }) : ctx.world.entities.create({ eid, origin: { tool: "asset.loadLod", input: { assetId: base.assetId, position: placement.position } } });
+  ctx.undo?.(`gltf lod entity ${base.assetId}`, () => {
+    teardownEntity(ctx.world, entity);
+  });
   return { entity, resource, lod };
 }
 function makeLoadGltf(assets) {
@@ -111258,12 +112482,12 @@ var TREE_POPULATION_PAGE_SIZE = 48;
 var TREE_POPULATION_MAX_SPECIES = 12;
 var TREE_POPULATION_MAX_ACTIVE = 24576;
 var TREE_POPULATION_MAX_ACTIVE_AND_PENDING = 30720;
-function finite(value, label4) {
+function finite2(value, label4) {
   if (!Number.isFinite(value)) throw new RangeError(`${label4} must be finite`);
   return value;
 }
 function positive(value, label4) {
-  finite(value, label4);
+  finite2(value, label4);
   if (value <= 0) throw new RangeError(`${label4} must be positive`);
   return value;
 }
@@ -111314,7 +112538,7 @@ function buildTreePopulationPlan(placements, policies, pageSize = TREE_POPULATIO
     const policy = policyBySpecies.get(placement.speciesId);
     if (policy === void 0) throw new RangeError(`tree placement ${ordinal} references unknown species '${placement.speciesId}'`);
     for (const [label4, value] of [["x", placement.x], ["y", placement.y], ["z", placement.z], ["yaw", placement.yaw], ["scale", placement.scale]]) {
-      finite(value, `tree placement ${ordinal}.${label4}`);
+      finite2(value, `tree placement ${ordinal}.${label4}`);
     }
     if (placement.scale <= 0) throw new RangeError(`tree placement ${ordinal}.scale must be positive`);
     const pageX = Math.floor(placement.x / pageSize), pageZ = Math.floor(placement.z / pageSize);
@@ -111356,7 +112580,7 @@ function buildTreePopulationPlan(placements, policies, pageSize = TREE_POPULATIO
   });
 }
 function classifyTreePopulationRung(distance4, policy, current) {
-  finite(distance4, "tree population distance");
+  finite2(distance4, "tree population distance");
   if (distance4 < 0) throw new RangeError("tree population distance must be non-negative");
   const h2 = policy.hysteresis ?? 0.15;
   if (current === 0) {
@@ -111379,9 +112603,9 @@ function classifyTreePopulationRung(distance4, policy, current) {
   return void 0;
 }
 function selectTreePopulationPage(plan, page, camera, previous) {
-  finite(camera.x, "tree population camera.x");
-  finite(camera.y, "tree population camera.y");
-  finite(camera.z, "tree population camera.z");
+  finite2(camera.x, "tree population camera.x");
+  finite2(camera.y, "tree population camera.y");
+  finite2(camera.z, "tree population camera.z");
   const selected = [];
   const signatureWords = [page.pageX, page.pageZ];
   let nearestDistance = Infinity;
@@ -112041,14 +113265,14 @@ var MAX_TERRAIN_FIELD_SAMPLES = 4097;
 var MIN_TERRAIN_CHUNK_COORD = -2147483648;
 var MAX_TERRAIN_CHUNK_COORD = 2147483647;
 var GRID_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-function finite2(name, value) {
+function finite3(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${name} must be finite`);
   }
   return value;
 }
 function positiveFinite(name, value) {
-  finite2(name, value);
+  finite3(name, value);
   if (!(value > 0)) throw new Error(`${name} must be > 0`);
   return value;
 }
@@ -112106,7 +113330,7 @@ function createTerrainGridSpec(input) {
   const spec = {
     schema: TERRAIN_GRID_SCHEMA,
     gridId,
-    origin: [finite2("terrain grid origin x", origin[0]), finite2("terrain grid origin z", origin[1])],
+    origin: [finite3("terrain grid origin x", origin[0]), finite3("terrain grid origin z", origin[1])],
     chunkSizeM: positiveFinite("terrain grid chunkSizeM", input.chunkSizeM),
     defaultSamples: validateTerrainChunkSamples(input.defaultSamples)
   };
@@ -112116,8 +113340,8 @@ function validateGridSpec(grid) {
   if (grid?.schema !== TERRAIN_GRID_SCHEMA) throw new Error(`terrain grid schema must be '${TERRAIN_GRID_SCHEMA}'`);
   validateTerrainGridId(grid.gridId);
   if (!Array.isArray(grid.origin) || grid.origin.length !== 2) throw new Error("terrain grid origin must be [x, z]");
-  finite2("terrain grid origin x", grid.origin[0]);
-  finite2("terrain grid origin z", grid.origin[1]);
+  finite3("terrain grid origin x", grid.origin[0]);
+  finite3("terrain grid origin z", grid.origin[1]);
   positiveFinite("terrain grid chunkSizeM", grid.chunkSizeM);
   validateTerrainChunkSamples(grid.defaultSamples);
   return grid;
@@ -112170,10 +113394,10 @@ function terrainFieldTopologyHash(input) {
   const bounds = input?.bounds;
   if (bounds === null || typeof bounds !== "object") throw new Error("terrain field bounds are required");
   const canonicalBounds = {
-    minX: finite2("terrain field minX", bounds.minX),
-    minZ: finite2("terrain field minZ", bounds.minZ),
-    maxX: finite2("terrain field maxX", bounds.maxX),
-    maxZ: finite2("terrain field maxZ", bounds.maxZ)
+    minX: finite3("terrain field minX", bounds.minX),
+    minZ: finite3("terrain field minZ", bounds.minZ),
+    maxX: finite3("terrain field maxX", bounds.maxX),
+    maxZ: finite3("terrain field maxZ", bounds.maxZ)
   };
   if (!(canonicalBounds.maxX > canonicalBounds.minX) || !(canonicalBounds.maxZ > canonicalBounds.minZ)) {
     throw new Error("terrain field bounds must have positive width and height");
@@ -112184,8 +113408,8 @@ function terrainFieldTopologyHash(input) {
 }
 function terrainWorldToChunk(gridInput, x3, z4) {
   const grid = validateGridSpec(gridInput);
-  const tx = Math.floor((finite2("terrain world x", x3) - grid.origin[0]) / grid.chunkSizeM);
-  const tz = Math.floor((finite2("terrain world z", z4) - grid.origin[1]) / grid.chunkSizeM);
+  const tx = Math.floor((finite3("terrain world x", x3) - grid.origin[0]) / grid.chunkSizeM);
+  const tz = Math.floor((finite3("terrain world z", z4) - grid.origin[1]) / grid.chunkSizeM);
   return Object.freeze({
     tx: validateTerrainChunkCoordinate("tx", tx),
     tz: validateTerrainChunkCoordinate("tz", tz)
@@ -113267,27 +114491,7 @@ function verifyWorldMap(parsed) {
 }
 
 // src/skills/asset.ts
-var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
-function chainAssetRuntimeDispose(entry, label4, cleanup) {
-  const prior = entry.runtimeDispose;
-  let finished = false;
-  entry.runtimeDispose = () => {
-    if (finished) return;
-    finished = true;
-    const errors = [];
-    try {
-      cleanup();
-    } catch (error51) {
-      errors.push(error51);
-    }
-    try {
-      prior?.();
-    } catch (error51) {
-      errors.push(error51);
-    }
-    if (errors.length) throw new AggregateError(errors, `${label4} runtime disposal failed`);
-  };
-}
+var Vec36 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function placedWorldAabb(local, position, rotationEuler, scale2, normalizeHeight, ground) {
   const m2 = new Matrix4().compose(
     new Vector3(position[0], position[1], position[2]),
@@ -113332,10 +114536,10 @@ function placedWorldAabb(local, position, rotationEuler, scale2, normalizeHeight
 }
 var placeInput = external_exports.object({
   assetId: external_exports.string(),
-  position: Vec35.default([0, 0, 0]),
+  position: Vec36.default([0, 0, 0]),
   /** Euler radians (x,y,z). */
-  rotation: Vec35.optional(),
-  scale: Vec35.optional(),
+  rotation: Vec36.optional(),
+  scale: Vec36.optional(),
   /** Sit the asset's BASE at position.y (not its glTF origin, usually centred → half-sunk). Measured
    *  from the loaded bytes, so it is deterministic + replay-safe. Default on; pass false to keep the
    *  raw origin. */
@@ -113372,9 +114576,9 @@ var lodLevel = external_exports.object({
 });
 var placeLodInput = external_exports.object({
   lods: external_exports.array(lodLevel).min(1),
-  position: Vec35.default([0, 0, 0]),
-  rotation: Vec35.optional(),
-  scale: Vec35.optional(),
+  position: Vec36.default([0, 0, 0]),
+  rotation: Vec36.optional(),
+  scale: Vec36.optional(),
   ground: external_exports.boolean().default(true),
   normalizeHeight: external_exports.number().positive().max(500).optional(),
   /** COMMITTED content address of LEVEL 0 (pins the base identity across replay). */
@@ -113450,7 +114654,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
     // the replay log COMMITS to the resolved content hash (pins authored identity).
     commitFields: ["hash"],
     input: placeInput,
-    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), resource: gltfResourceSchema, bounds: Vec35 }),
+    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), resource: gltfResourceSchema, bounds: Vec36 }),
     handler: async (input, ctx) => {
       const resolved = assets.resolve(input.assetId);
       if (input.hash !== void 0 && input.hash !== resolved.hash) {
@@ -113504,7 +114708,11 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
             ctx.world.ops.op_physics_remove_body(colliderBodyId);
             throw new Error("asset.place collider owner disappeared before lifecycle binding");
           }
-          chainAssetRuntimeDispose(rec, "asset.place", () => ctx.world.ops.op_physics_remove_body(colliderBodyId));
+          ctx.world.entities.chainRuntimeDispose(entity, "asset.place", () => ctx.world.ops.op_physics_remove_body(colliderBodyId));
+          ctx.world.entities.bindRuntimeBodies(entity, [colliderBodyId]);
+          ctx.undo("asset.place collider", () => {
+            rec.runtimeDispose?.();
+          });
         }
       }
       if (input.material !== void 0) {
@@ -113549,7 +114757,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
     permissions: [...PLACE_PERMS],
     commitFields: ["hash"],
     input: placeLodInput,
-    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), levels: external_exports.number().int(), resource: gltfResourceSchema, bounds: Vec35 }),
+    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), levels: external_exports.number().int(), resource: gltfResourceSchema, bounds: Vec36 }),
     handler: async (input, ctx) => {
       const ordered2 = [...input.lods].sort((a2, b3) => a2.distance - b3.distance);
       const resolved = ordered2.map((l2) => {
@@ -113612,7 +114820,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
       }
       if (rec !== void 0 && (colliderBodyId !== void 0 || lod !== void 0)) {
         const body = colliderBodyId, lods = ctx.world.lods;
-        chainAssetRuntimeDispose(rec, "asset.placeLod", () => {
+        ctx.world.entities.chainRuntimeDispose(entity, "asset.placeLod", () => {
           const errors = [];
           if (body !== void 0) try {
             ctx.world.ops.op_physics_remove_body(body);
@@ -113624,6 +114832,10 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
             if (index >= 0) lods.splice(index, 1);
           }
           if (errors.length) throw new AggregateError(errors, "asset.placeLod owned resource cleanup failed");
+        });
+        if (body !== void 0) ctx.world.entities.bindRuntimeBodies(entity, [body]);
+        ctx.undo("asset.placeLod collider/lod", () => {
+          rec.runtimeDispose?.();
         });
       }
       const levelCount = lod !== void 0 ? lod.levels.length : 0;
@@ -114247,7 +115459,7 @@ var MaterialRegistry = class {
 };
 
 // src/skills/physics.ts
-var Vec36 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec37 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var collisionEventOutput = external_exports.object({
   events: external_exports.array(external_exports.object({
     started: external_exports.boolean(),
@@ -114255,12 +115467,12 @@ var collisionEventOutput = external_exports.object({
     bodyB: external_exports.number().int().nonnegative(),
     entityA: external_exports.string().optional(),
     entityB: external_exports.string().optional(),
-    point: Vec36.nullable(),
-    normal: Vec36.nullable()
+    point: Vec37.nullable(),
+    normal: Vec37.nullable()
   })),
   dropped: external_exports.number().int().nonnegative()
 });
-var applyImpulseInput = external_exports.object({ entity: external_exports.string(), impulse: Vec36 });
+var applyImpulseInput = external_exports.object({ entity: external_exports.string(), impulse: Vec37 });
 var applyImpulse = {
   name: "physics.applyImpulse",
   version: "1.0.0",
@@ -114278,8 +115490,8 @@ var applyImpulse = {
   }
 };
 var raycastInput = external_exports.object({
-  origin: Vec36,
-  direction: Vec36,
+  origin: Vec37,
+  direction: Vec37,
   maxDistance: external_exports.number().positive().default(1e3)
 });
 var raycast = {
@@ -114293,7 +115505,7 @@ var raycast = {
   output: external_exports.object({
     hit: external_exports.boolean(),
     distance: external_exports.number().optional(),
-    point: Vec36.optional(),
+    point: Vec37.optional(),
     entity: external_exports.string().optional()
   }),
   handler: (input, ctx) => {
@@ -114391,7 +115603,7 @@ function registerAgentSkills(registry2) {
 }
 
 // src/skills/system.ts
-var Vec37 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec38 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Quat2 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
 function isRecord3(value) {
   return typeof value === "object" && value !== null;
@@ -114675,7 +115887,7 @@ function registerSystemSkills(registry2) {
         eid: external_exports.number().int(),
         generation: external_exports.number().int(),
         parent: external_exports.string().nullable(),
-        transform: external_exports.object({ position: Vec37, rotation: Quat2, scale: Vec37 }),
+        transform: external_exports.object({ position: Vec38, rotation: Quat2, scale: Vec38 }),
         tags: external_exports.array(external_exports.string()),
         physics: external_exports.object({ bodyId: external_exports.number().int().optional() }),
         resource: external_exports.unknown().optional(),
@@ -120735,7 +121947,7 @@ async function scatterBiomeContent(deps) {
 }
 
 // src/skills/terrain.ts
-var Vec38 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec39 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function inertTransform() {
   return { position: { set() {
   } }, quaternion: { set() {
@@ -121069,7 +122281,7 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
   };
   const streamFollowInput = external_exports.object({
     regionId: external_exports.string(),
-    anchor: Vec38,
+    anchor: Vec39,
     radius: external_exports.number().int().min(0).max(8).default(1)
   });
   const streamFollowOutput = external_exports.object({
@@ -121338,7 +122550,7 @@ function grassFieldInstanceSpacing(pkg, quality, lod) {
 var GRASS_FIELD_MAX_SLOTS = 1024;
 var GRASS_FIELD_MAX_RESIDENT_SLOTS = 524288;
 var GRASS_FIELD_PAGE_AXIS = 32;
-function finite3(value, label4) {
+function finite4(value, label4) {
   if (!Number.isFinite(value)) throw new RangeError(`${label4} must be finite`);
   return value;
 }
@@ -121357,9 +122569,9 @@ function gridCeil(value, spacing) {
   return Math.ceil(gridQuotient(value, spacing));
 }
 function grassFieldGridShape(bounds, requestedSpacing) {
-  const spacing = finite3(requestedSpacing, "grass field spacing");
+  const spacing = finite4(requestedSpacing, "grass field spacing");
   if (spacing <= 0) throw new RangeError("grass field spacing must be positive");
-  for (const [key, value] of Object.entries(bounds)) finite3(value, `grass field bounds.${key}`);
+  for (const [key, value] of Object.entries(bounds)) finite4(value, `grass field bounds.${key}`);
   if (bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) throw new RangeError("grass field bounds must be non-empty and half-open");
   const minGridX = gridFloor(bounds.minX, spacing);
   const minGridZ = gridFloor(bounds.minZ, spacing);
@@ -121376,9 +122588,9 @@ function grassFieldGridShape(bounds, requestedSpacing) {
   return Object.freeze({ spacing, minGridX, minGridZ, maxGridX, maxGridZ, columns, rows, slots });
 }
 function partitionGrassFieldBounds(bounds, spacing) {
-  const pitch = finite3(spacing, "grass field spacing");
+  const pitch = finite4(spacing, "grass field spacing");
   if (pitch <= 0) throw new RangeError("grass field spacing must be positive");
-  for (const [key, value] of Object.entries(bounds)) finite3(value, `grass field bounds.${key}`);
+  for (const [key, value] of Object.entries(bounds)) finite4(value, `grass field bounds.${key}`);
   if (bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) throw new RangeError("grass field bounds must be non-empty and half-open");
   const minGridX = gridFloor(bounds.minX, pitch), maxGridX = gridCeil(bounds.maxX, pitch);
   const minGridZ = gridFloor(bounds.minZ, pitch), maxGridZ = gridCeil(bounds.maxZ, pitch);
@@ -122834,14 +124046,14 @@ function fail4(message) {
 function canonicalNumber2(value) {
   return Object.is(value, -0) ? 0 : value;
 }
-function finite4(value, label4, maxAbs = MAX_WATER_FIELD_ABS_WORLD_M) {
+function finite5(value, label4, maxAbs = MAX_WATER_FIELD_ABS_WORLD_M) {
   if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > maxAbs) {
     fail4(`${label4} must be finite with absolute value <= ${maxAbs}`);
   }
   return canonicalNumber2(value);
 }
 function positiveFinite2(value, label4) {
-  const parsed = finite4(value, label4);
+  const parsed = finite5(value, label4);
   if (!(parsed > 0)) fail4(`${label4} must be positive`);
   return parsed;
 }
@@ -122934,12 +124146,12 @@ function validateWorldMapIdentity(input) {
   if (typeof map2.id !== "string" || map2.id.length === 0) fail4("water field WorldMap id must be non-empty");
   positiveFinite2(map2.unitsPerMeter, "water field WorldMap unitsPerMeter");
   if (!Array.isArray(map2.origin) || map2.origin.length !== 2) fail4("water field WorldMap origin must be a 2-tuple");
-  finite4(map2.origin[0], "water field WorldMap origin[0]");
-  finite4(map2.origin[1], "water field WorldMap origin[1]");
+  finite5(map2.origin[0], "water field WorldMap origin[0]");
+  finite5(map2.origin[1], "water field WorldMap origin[1]");
   const extent = plainRecord(map2.extent, "water field WorldMap extent");
   positiveFinite2(extent.w, "water field WorldMap extent.w");
   positiveFinite2(extent.h, "water field WorldMap extent.h");
-  finite4(map2.seaLevel, "water field WorldMap seaLevel", WATER_LIMITS.absLevelM);
+  finite5(map2.seaLevel, "water field WorldMap seaLevel", WATER_LIMITS.absLevelM);
   for (const key of REQUIRED_ARRAY_KEYS) if (!Array.isArray(map2[key])) fail4(`water field WorldMap ${key} must be an array`);
   const provenance2 = plainRecord(map2.provenance, "water field WorldMap provenance");
   if (!CONTENT_HASH_RE.test(provenance2.contentHash)) fail4("water field WorldMap provenance.contentHash must be lowercase sha256 hex");
@@ -122954,8 +124166,8 @@ function validateWorldMapIdentity(input) {
 }
 function transformedPoint(point3, originX, originZ, unitsPerMeter, label4) {
   return Object.freeze([
-    finite4(originX + point3[0] * unitsPerMeter, `${label4}[0]`),
-    finite4(originZ + point3[1] * unitsPerMeter, `${label4}[1]`)
+    finite5(originX + point3[0] * unitsPerMeter, `${label4}[0]`),
+    finite5(originZ + point3[1] * unitsPerMeter, `${label4}[1]`)
   ]);
 }
 function transformRing(ring2, originX, originZ, unitsPerMeter, label4, shouldCancel, work) {
@@ -123345,10 +124557,10 @@ var WaterField = class {
     Object.freeze(this);
   }
   #queryRaw(xValue, zValue, terrainHeightValue) {
-    const x3 = finite4(xValue, "water query x");
-    const z4 = finite4(zValue, "water query z");
+    const x3 = finite5(xValue, "water query x");
+    const z4 = finite5(zValue, "water query z");
     const terrainSupplied = terrainHeightValue !== void 0;
-    const terrainHeightM = terrainSupplied ? finite4(terrainHeightValue, "water query terrainHeightM") : null;
+    const terrainHeightM = terrainSupplied ? finite5(terrainHeightValue, "water query terrainHeightM") : null;
     const stats = { visitedNodes: 0, candidateBodies: 0, testedBodies: 0, edgeNodesVisited: 0, segmentTests: 0 };
     let winner = null;
     if (this.#nodes.length > 0) {
@@ -123455,12 +124667,12 @@ var WaterField = class {
   sampleGrid(options) {
     const source = plainRecord(options, "water sample options");
     const rect = plainRecord(source.rect, "water sample rect");
-    const x0 = finite4(rect.x0, "water sample rect.x0");
-    const z0 = finite4(rect.z0, "water sample rect.z0");
+    const x0 = finite5(rect.x0, "water sample rect.x0");
+    const z0 = finite5(rect.z0, "water sample rect.z0");
     const width = positiveFinite2(rect.w, "water sample rect.w");
     const height = positiveFinite2(rect.h, "water sample rect.h");
-    finite4(x0 + width, "water sample rect max x");
-    finite4(z0 + height, "water sample rect max z");
+    finite5(x0 + width, "water sample rect max x");
+    finite5(z0 + height, "water sample rect max z");
     const rows = sampleDimension(source.rows, "water sample rows", MAX_WATER_FIELD_ROWS);
     const cols = sampleDimension(source.cols, "water sample cols", MAX_WATER_FIELD_COLS);
     if (source.terrainSampler !== void 0 && typeof source.terrainSampler !== "function") fail4("water sample terrainSampler must be a function");
@@ -123477,7 +124689,7 @@ var WaterField = class {
         checkpoint2(source.shouldCancel, work++);
         const x3 = cols === 1 ? x0 + width / 2 : x0 + col / (cols - 1) * width;
         const terrainHeightM = source.terrainSampler === void 0 ? void 0 : source.terrainSampler(x3, z4, row, col);
-        if (source.terrainSampler !== void 0) finite4(terrainHeightM, `water sample terrainSampler(${row},${col})`);
+        if (source.terrainSampler !== void 0) finite5(terrainHeightM, `water sample terrainSampler(${row},${col})`);
         const queried = this.#queryRaw(x3, z4, terrainHeightM);
         const result = queried.result;
         const offset = (row * cols + col) * WATER_SAMPLE_RECORD_BYTES;
@@ -123516,12 +124728,12 @@ var WaterField = class {
     const body = this.#bodies[bodyIndex];
     if (body.source !== "authored") fail4("water body depth masks require an authored body with depth zones");
     const rect = plainRecord(source.rect, "water body depth mask rect");
-    const x0 = finite4(rect.x0, "water body depth mask rect.x0");
-    const z0 = finite4(rect.z0, "water body depth mask rect.z0");
+    const x0 = finite5(rect.x0, "water body depth mask rect.x0");
+    const z0 = finite5(rect.z0, "water body depth mask rect.z0");
     const width = positiveFinite2(rect.w, "water body depth mask rect.w");
     const height = positiveFinite2(rect.h, "water body depth mask rect.h");
-    finite4(x0 + width, "water body depth mask rect max x");
-    finite4(z0 + height, "water body depth mask rect max z");
+    finite5(x0 + width, "water body depth mask rect max x");
+    finite5(z0 + height, "water body depth mask rect max z");
     const rows = sampleDimension(source.rows, "water body depth mask rows", MAX_WATER_FIELD_ROWS);
     const cols = sampleDimension(source.cols, "water body depth mask cols", MAX_WATER_FIELD_COLS);
     const maximumDepthM = positiveFinite2(source.maximumDepthM, "water body depth mask maximumDepthM");
@@ -123604,17 +124816,17 @@ function createWaterField(worldMapInput, options = {}) {
 
 // src/world/water-contact.ts
 var CONTENT_HASH = /^[0-9a-f]{64}$/;
-function finite5(value, label4) {
+function finite6(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
 function parseBounds(value) {
   if (value === void 0) return null;
   const bounds = Object.freeze({
-    minX: finite5(value.minX, "water contact bounds.minX"),
-    maxX: finite5(value.maxX, "water contact bounds.maxX"),
-    minZ: finite5(value.minZ, "water contact bounds.minZ"),
-    maxZ: finite5(value.maxZ, "water contact bounds.maxZ")
+    minX: finite6(value.minX, "water contact bounds.minX"),
+    maxX: finite6(value.maxX, "water contact bounds.maxX"),
+    minZ: finite6(value.minZ, "water contact bounds.minZ"),
+    maxZ: finite6(value.maxZ, "water contact bounds.maxZ")
   });
   if (!(bounds.maxX > bounds.minX) || !(bounds.maxZ > bounds.minZ)) {
     throw new RangeError("water contact bounds must have positive width and height");
@@ -123678,9 +124890,9 @@ var WaterContactRuntime = class {
       throw new TypeError("water contact offset must be a 3-tuple");
     }
     const offset = Object.freeze([
-      finite5(offsetInput[0], "water contact offset[0]"),
-      finite5(offsetInput[1], "water contact offset[1]"),
-      finite5(offsetInput[2], "water contact offset[2]")
+      finite6(offsetInput[0], "water contact offset[0]"),
+      finite6(offsetInput[1], "water contact offset[1]"),
+      finite6(offsetInput[2], "water contact offset[2]")
     ]);
     const bounds = parseBounds(spec.bounds);
     const identity = Object.freeze({ worldMapContentHash: contentHash2, generatedArtifactContentHash });
@@ -123751,15 +124963,15 @@ var WaterContactRuntime = class {
     return true;
   }
   query(worldXValue, worldZValue) {
-    const worldX = finite5(worldXValue, "water contact query x");
-    const worldZ = finite5(worldZValue, "water contact query z");
+    const worldX = finite6(worldXValue, "water contact query x");
+    const worldZ = finite6(worldZValue, "water contact query z");
     const active = this.#active;
     if (active === null) return drySample();
     const bounds = active.bounds;
     if (bounds !== null && (worldX < bounds.minX || worldX > bounds.maxX || worldZ < bounds.minZ || worldZ > bounds.maxZ)) {
       return drySample();
     }
-    const terrainHeightM = finite5(active.sampleTerrainHeight(worldX, worldZ), "water contact terrain height");
+    const terrainHeightM = finite6(active.sampleTerrainHeight(worldX, worldZ), "water contact terrain height");
     const [offsetX, offsetY, offsetZ] = active.offset;
     const result = active.field.query(worldX - offsetX, worldZ - offsetZ, terrainHeightM - offsetY);
     if (result.isSubmerged !== true || result.surfaceLevelM === null || result.actualSubmergedDepthM === null) {
@@ -123801,7 +125013,7 @@ var inertTransform2 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
-var Vec39 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec310 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var ProceduralErosionOverridesSchema = external_exports.object({
   rain: external_exports.number().min(0).optional(),
   thermal: external_exports.number().int().min(0).optional(),
@@ -123817,7 +125029,7 @@ var createInput = external_exports.object({
   /** Grid vertices per edge (resolution). Higher = finer sculpting, more geometry. */
   resolution: external_exports.number().int().min(2).max(1025).default(129),
   /** World-space center of the layer [x, y, z]. */
-  origin: Vec39.default([0, 0, 0]),
+  origin: Vec310.default([0, 0, 0]),
   /** Starting height (meters, relative to origin.y) for every cell — a flat slab by default. */
   baseHeight: external_exports.number().default(0),
   /** Ground color for the render mesh. */
@@ -123937,6 +125149,47 @@ function applyBrushPaint(tile, input) {
       }
     }
   }
+}
+function captureHeightPatch(tile, center, radius) {
+  const { nrows, ncols, origin, scale: scale2, heights } = tile;
+  const x0 = origin[0] - scale2[0] / 2;
+  const z0 = origin[2] - scale2[2] / 2;
+  const dxStep = scale2[0] / (ncols - 1);
+  const dzStep = scale2[2] / (nrows - 1);
+  const col0 = Math.min(ncols - 1, Math.max(0, Math.floor((center[0] - radius - x0) / dxStep)));
+  const col1 = Math.max(0, Math.min(ncols - 1, Math.ceil((center[0] + radius - x0) / dxStep)));
+  const row0 = Math.min(nrows - 1, Math.max(0, Math.floor((center[1] - radius - z0) / dzStep)));
+  const row1 = Math.max(0, Math.min(nrows - 1, Math.ceil((center[1] + radius - z0) / dzStep)));
+  const cols = Math.max(0, col1 - col0 + 1);
+  const rows = Math.max(0, row1 - row0 + 1);
+  const data = new Float32Array(rows * cols);
+  for (let r2 = 0; r2 < rows; r2++) {
+    for (let c2 = 0; c2 < cols; c2++) data[r2 * cols + c2] = heights[(row0 + r2) * ncols + (col0 + c2)];
+  }
+  return { row0, col0, rows, cols, data };
+}
+function restoreHeightPatch(tile, patch) {
+  const { ncols, heights } = tile;
+  for (let r2 = 0; r2 < patch.rows; r2++) {
+    for (let c2 = 0; c2 < patch.cols; c2++) heights[(patch.row0 + r2) * ncols + (patch.col0 + c2)] = patch.data[r2 * patch.cols + c2];
+  }
+}
+function reprojectLayerHeights(world, layer, cx, cz, radius) {
+  const { tile } = layer;
+  const [dox, doy, doz] = tile.origin;
+  const [dsx, dsy, dsz] = tile.scale;
+  world.ops.op_physics_remove_body(layer.bodyId);
+  const newBodyId = world.ops.op_physics_add_heightfield(dox, doy, doz, tile.nrows, tile.ncols, dsx, dsy, dsz, tile.heights);
+  layer.bodyId = newBodyId;
+  world.entities.rebindBody(layer.entity, newBodyId);
+  if (layer.mesh !== void 0) {
+    const next = terrainTileBufferGeometry(tile);
+    if (layer.elevationColors !== void 0) applyElevationColors(next, tile, layer.elevationColors);
+    const old = layer.mesh.geometry;
+    layer.mesh.geometry = next;
+    old.dispose?.();
+  }
+  layer.grass?.refreshCircle(cx, cz, radius + 3);
 }
 function applyBrush(tile, input) {
   const { nrows, ncols, origin, scale: scale2, heights } = tile;
@@ -124158,22 +125411,14 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
       }
       const layer = id4 !== void 0 ? layers.get(id4) : void 0;
       if (layer === void 0) return { ok: false };
+      const patch = captureHeightPatch(layer.tile, input.center, input.radius);
+      const undoLayer = layer, undoWorld = ctx.world;
+      ctx.undo("terrain.deform height patch", () => {
+        restoreHeightPatch(undoLayer.tile, patch);
+        reprojectLayerHeights(undoWorld, undoLayer, input.center[0], input.center[1], input.radius);
+      });
       applyBrush(layer.tile, input);
-      const { tile } = layer;
-      const [dox, doy, doz] = tile.origin;
-      const [dsx, dsy, dsz] = tile.scale;
-      ctx.world.ops.op_physics_remove_body(layer.bodyId);
-      const newBodyId = ctx.world.ops.op_physics_add_heightfield(dox, doy, doz, tile.nrows, tile.ncols, dsx, dsy, dsz, tile.heights);
-      layer.bodyId = newBodyId;
-      ctx.world.entities.rebindBody(layer.entity, newBodyId);
-      if (layer.mesh !== void 0) {
-        const next = terrainTileBufferGeometry(layer.tile);
-        if (layer.elevationColors !== void 0) applyElevationColors(next, layer.tile, layer.elevationColors);
-        const old = layer.mesh.geometry;
-        layer.mesh.geometry = next;
-        old.dispose?.();
-      }
-      layer.grass?.refreshCircle(input.center[0], input.center[1], input.radius + 3);
+      reprojectLayerHeights(ctx.world, layer, input.center[0], input.center[1], input.radius);
       ctx.emit("terrain.deformed", { entity: id4, mode: input.mode });
       return { ok: true };
     }
@@ -126181,7 +127426,11 @@ var LANE_HALF_WIDTH = 1.4;
 function registerVillageSkills(registry2, layers, assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), grassVisualPackage) {
   const build = {
     name: "village.build",
-    version: "1.0.0",
+    // 2.0.0 — replay-VISIBLE behavior change this cycle: per-yard lawn fields plus
+    // unconditional lawn/tint/deco entity creation changed the ent_ id sequence a
+    // recorded log produces. SkillCommand does not record versions, so this bump is
+    // documentation of the log-visible change, not a compatibility switch.
+    version: "2.0.0",
     description: "Lay a terrain-aware settlement onto an editable terrain layer by placing curated library GLB assets. Reads the live heightfield, runs the shared deterministic layout planner (focal on the chosen ground, cluster terraced below, edge building beyond), and invokes asset.place per building. Deterministic + replay-safe: the world log records the direction + steering + seed + PINNED asset hashes, NEVER the transforms, which replay recomputes. Returns the placed entities + computed placements.",
     category: "three",
     permissions: [...PLACE_PERMS2],
@@ -126200,6 +127449,13 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       const layer = id4 !== void 0 ? layers.get(id4) : void 0;
       if (layer === void 0 || id4 === void 0) {
         throw new Error("village.build: no terrain layer to build on \u2014 create one with terrain.create first");
+      }
+      {
+        const seqBefore = ctx.world.entities.nextSeq;
+        ctx.undo("village.build entities", () => {
+          const created = ctx.world.entities.idsCreatedSince(seqBefore);
+          for (let i2 = created.length - 1; i2 >= 0; i2--) teardownEntity(ctx.world, created[i2]);
+        });
       }
       const tile = layer.tile;
       const siting = input.steering.siting;
@@ -126492,14 +127748,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
           }
           entities.push(ctx.world.entities.create({ eid: teid, mesh: tintMesh, origin: { tool: "village.build", input: { lawn: true } } }));
         }
-        const decoAssets = [];
-        for (const a2 of siting.lawnVegetation) {
-          try {
-            assets.resolve(a2.id);
-            decoAssets.push({ id: a2.id, weight: a2.weight });
-          } catch {
-          }
-        }
+        const decoAssets = siting.lawnVegetation.map((a2) => ({ id: a2.id, weight: a2.weight }));
         if (decoAssets.length > 0) {
           const decoConfig = {
             seed: (villageSeed ^ 5369106) >>> 0,
@@ -126582,6 +127831,22 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
           }
           prev = s2;
         }
+      }
+      {
+        const prior = footprints.get(id4);
+        const undoTerrainId = id4;
+        ctx.undo("village.build footprints", () => {
+          if (prior === void 0) footprints.delete(undoTerrainId);
+          else footprints.set(undoTerrainId, prior);
+          for (const clear of vegetationClears.get(undoTerrainId) ?? []) {
+            try {
+              const r2 = clear();
+              if (r2 instanceof Promise) r2.catch(() => {
+              });
+            } catch {
+            }
+          }
+        });
       }
       footprints.set(id4, exclusions);
       const clears = vegetationClears.get(id4);
@@ -127663,13 +128928,13 @@ var RIVER_TARGET_ALONG_EDGE_M = 1;
 var RIVER_MIN_CROSS_SUBDIVISIONS = 6;
 var RIVER_MAX_CROSS_SUBDIVISIONS = 20;
 var RIVER_TARGET_CROSS_EDGE_M = 0.5;
-function finite6(value, label4) {
+function finite7(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
 function point2(value, label4) {
   if (!Array.isArray(value) || value.length !== 2) throw new TypeError(`${label4} must be a 2-tuple`);
-  return [finite6(value[0], `${label4}[0]`), finite6(value[1], `${label4}[1]`)];
+  return [finite7(value[0], `${label4}[0]`), finite7(value[1], `${label4}[1]`)];
 }
 function ring(value, label4) {
   if (!Array.isArray(value) || value.length < 3 || value.length > WATER_LIMITS.ringPoints) {
@@ -127745,9 +129010,9 @@ function cleanRiver(input) {
   const cleaned = [];
   for (let index = 0; index < input.points.length; index++) {
     const [x3, z4] = point2(input.points[index], `river points[${index}]`);
-    const widthM = finite6(input.widthsM[index], `river widthsM[${index}]`);
+    const widthM = finite7(input.widthsM[index], `river widthsM[${index}]`);
     if (!(widthM > 0) || widthM > WATER_LIMITS.widthM) throw new RangeError(`river widthsM[${index}] is outside supported bounds`);
-    const elevationM = finite6(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
+    const elevationM = finite7(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
     const previous = cleaned[cleaned.length - 1];
     if (previous !== void 0 && Math.hypot(x3 - previous.x, z4 - previous.z) <= DUPLICATE_EPSILON_M) {
       previous.widthM = Math.max(previous.widthM, widthM);
@@ -127829,7 +129094,7 @@ function riverPointFlowDirections(segmentDirections, pointCount) {
 }
 function buildVariableRiverRibbonGeometry(input) {
   const points2 = cleanRiver(input);
-  const miterLimit = finite6(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
+  const miterLimit = finite7(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
   if (miterLimit < 1 || miterLimit > 16) throw new RangeError("river miterLimit must be in [1, 16]");
   const built = joins(points2, miterLimit);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -129891,7 +131156,7 @@ var CharacterController = class {
 };
 
 // src/skills/player.ts
-var Vec310 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec311 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var WaterMode = external_exports.enum(["dry", "wading", "swimming"]);
 var boundedPositive = (defaultValue, maximum) => external_exports.number().refine((value) => Number.isFinite(value) && value > 0 && value <= maximum, `Expected a finite number in (0, ${maximum}]`).default(defaultValue);
@@ -130000,7 +131265,7 @@ var queryAxisInput = external_exports.object({
   meta: MetaField
 });
 var spawnPlayerInput = external_exports.object({
-  position: Vec310.describe("Spawn position \u2014 the capsule CENTER. Rest height = surfaceY + halfHeight + radius."),
+  position: Vec311.describe("Spawn position \u2014 the capsule CENTER. Rest height = surfaceY + halfHeight + radius."),
   // Human-scale capsule: total height 2·(halfHeight+radius) = 2·(0.6+0.3) = 1.8 m, so a person reads
   // correctly next to a ~3.5 m church portal and a ~12 m keep (not doll-scaled).
   halfHeight: external_exports.number().positive().default(0.6).describe("Capsule cylindrical half-height (excludes the radius caps). 0.6 \u21D2 ~1.8 m human with the 0.3 radius caps."),
@@ -130106,7 +131371,7 @@ function registerPlayerSkills(registry2, opts) {
     category: "player",
     permissions: ["player.write"],
     input: spawnPlayerInput,
-    output: external_exports.object({ entity: external_exports.string(), bodyId: external_exports.number(), position: Vec310, grounded: external_exports.boolean(), swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
+    output: external_exports.object({ entity: external_exports.string(), bodyId: external_exports.number(), position: Vec311, grounded: external_exports.boolean(), swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
     handler: (i2, ctx) => {
       const physics = ctx.world.ops;
       const controller = new CharacterController(physics, i2.position, {
@@ -130143,7 +131408,7 @@ function registerPlayerSkills(registry2, opts) {
     category: "player",
     permissions: ["player.write"],
     input: movePlayerInput,
-    output: external_exports.object({ moved: external_exports.boolean(), grounded: external_exports.boolean(), newPosition: Vec310, swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
+    output: external_exports.object({ moved: external_exports.boolean(), grounded: external_exports.boolean(), newPosition: Vec311, swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
     handler: (i2, ctx) => {
       const entry = controllers.get(i2.entity);
       if (entry === void 0) throw new Error(`player.move: no character controller for '${i2.entity}' (spawn one with player.spawn)`);
@@ -130167,7 +131432,7 @@ function registerPlayerSkills(registry2, opts) {
     category: "player",
     permissions: ["player.write"],
     input: jumpPlayerInput,
-    output: external_exports.object({ jumped: external_exports.boolean(), grounded: external_exports.boolean(), newPosition: Vec310, swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
+    output: external_exports.object({ jumped: external_exports.boolean(), grounded: external_exports.boolean(), newPosition: Vec311, swimming: external_exports.boolean(), submerged: external_exports.boolean(), waterMode: WaterMode }),
     handler: (i2, ctx) => {
       const entry = controllers.get(i2.entity);
       if (entry === void 0) throw new Error(`player.jump: no character controller for '${i2.entity}' (spawn one with player.spawn)`);
@@ -130273,7 +131538,7 @@ var ThirdPersonCamera = class {
 };
 
 // src/skills/camera.ts
-var Vec311 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec312 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField2 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var DEFAULT_LOOK_HEIGHT = 1.2;
 var DEFAULT_HEAD_HEIGHT = 1.6;
@@ -130441,8 +131706,8 @@ var setFOVInput = external_exports.object({
   meta: MetaField2
 });
 var cutInput = external_exports.object({
-  position: Vec311.optional().describe("Camera position. If omitted, keeps current position."),
-  target: Vec311.optional().describe("Look-at target. If omitted, keeps current target."),
+  position: Vec312.optional().describe("Camera position. If omitted, keeps current position."),
+  target: Vec312.optional().describe("Look-at target. If omitted, keeps current target."),
   meta: MetaField2
 });
 function registerCameraSkills(registry2, opts) {
@@ -131037,7 +132302,7 @@ function registerAnimationSkills(registry2, opts) {
 }
 
 // src/skills/interaction.ts
-var Vec312 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec313 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField4 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var InteractionManager = class {
   interactables = /* @__PURE__ */ new Map();
@@ -131078,6 +132343,21 @@ var InteractionManager = class {
     }
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
+  /** Deterministic capture of every registered interactable INCLUDING its mutable `state`
+   *  (door open, lastInteractTick, …), sorted by entity (snapshot participant, H2). The
+   *  `handlers` map is runtime closures and is NOT captured — handler wiring is derived
+   *  state the functional-building reconciler rebuilds from entity origins. */
+  captureSnapshot() {
+    return [...this.interactables.values()].sort((a2, b3) => a2.entity < b3.entity ? -1 : a2.entity > b3.entity ? 1 : 0).map((d2) => ({ ...d2, state: { ...d2.state } }));
+  }
+  /** Wholesale replace the registered interactables (participant restore). Handlers are
+   *  cleared too: a closure for a dropped def must not survive, and live defs get their
+   *  handlers re-registered by the origin-driven reconciler on the next skill invoke. */
+  restoreSnapshot(defs) {
+    this.interactables.clear();
+    this.handlers.clear();
+    for (const d2 of defs) this.interactables.set(d2.entity, { ...d2, state: { ...d2.state } });
+  }
 };
 function entityPosition(world, entity) {
   const entry = world.entities.resolve(entity);
@@ -131111,7 +132391,7 @@ function registerInteractionSkills(registry2, opts) {
     }
   };
   const queryInput = external_exports.object({
-    position: Vec312.optional().describe("Query position. If omitted, uses the actor entity's position (actorEntity)."),
+    position: Vec313.optional().describe("Query position. If omitted, uses the actor entity's position (actorEntity)."),
     actorEntity: external_exports.string().optional().describe("Actor entity whose position to query from (used when position is omitted)."),
     maxRange: external_exports.number().positive().default(5).describe("Maximum search radius."),
     meta: MetaField4
@@ -131189,7 +132469,7 @@ function registerInteractionSkills(registry2, opts) {
     actorEntity: external_exports.string(),
     itemId: external_exports.string().describe("Item id to drop."),
     slot: external_exports.number().int().min(0).optional().describe("Inventory slot. If omitted, drops first matching item."),
-    position: Vec312.optional().describe("Drop position. If omitted, uses actor's position."),
+    position: Vec313.optional().describe("Drop position. If omitted, uses actor's position."),
     quantity: external_exports.number().int().min(1).default(1),
     meta: MetaField4
   });
@@ -131203,14 +132483,15 @@ function registerInteractionSkills(registry2, opts) {
     output: external_exports.object({ ok: external_exports.boolean(), itemEntity: external_exports.string().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
       if (inv === void 0) return { ok: false, reason: "no inventory system on this world" };
-      const removed = inv.removeItem(input.actorEntity, input.itemId, input.slot, input.quantity);
+      const sourceSlot = input.slot ?? inv.listItems(input.actorEntity).find((s2) => s2.itemId === input.itemId)?.slot;
+      const removed = inv.removeItem(input.actorEntity, input.itemId, sourceSlot, input.quantity);
       if (!removed) return { ok: false, reason: `actor "${input.actorEntity}" does not hold "${input.itemId}"` };
       const pos = input.position ?? entityPosition(ctx.world, input.actorEntity) ?? [0, 0, 0];
       const [x3, y4, z4] = pos;
       const eid = spawnRenderable(ctx.world.ecs, inertTransform7(), x3, y4, z4);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
-        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: input.slot });
+        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: sourceSlot });
         return { ok: false, reason: "entity capacity exceeded (MAX_ENTITIES) \u2014 item returned to inventory" };
       }
       const itemEntity = ctx.world.entities.create({ eid });
@@ -131478,6 +132759,40 @@ var InventoryManager = class {
       if (!inv.slots.has(i2)) return i2;
     }
     return void 0;
+  }
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant, H2):
+   *  item defs sorted by id, inventories by entity, slots by index, equipment by slot name. */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      itemDefs: [...this.itemDefs.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((d2) => ({ ...d2 })),
+      inventories: [...this.inventories.values()].sort((a2, b3) => byString(a2.entity, b3.entity)).map((inv) => ({
+        entity: inv.entity,
+        capacity: inv.capacity,
+        typeRestrictions: inv.typeRestrictions === void 0 ? void 0 : [...inv.typeRestrictions],
+        slots: [...inv.slots.values()].sort((a2, b3) => a2.slot - b3.slot).map((s2) => ({ ...s2 })),
+        equipment: [...inv.equipment.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([equipmentSlot, item]) => ({ equipmentSlot, item: { ...item } }))
+      }))
+    };
+  }
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(state) {
+    this.itemDefs.clear();
+    this.inventories.clear();
+    for (const def of state.itemDefs) this.itemDefs.set(def.id, { ...def });
+    for (const inv of state.inventories) {
+      const slots = /* @__PURE__ */ new Map();
+      for (const s2 of inv.slots) slots.set(s2.slot, { ...s2 });
+      const equipment = /* @__PURE__ */ new Map();
+      for (const e2 of inv.equipment) equipment.set(e2.equipmentSlot, { ...e2.item });
+      this.inventories.set(inv.entity, {
+        entity: inv.entity,
+        capacity: inv.capacity,
+        typeRestrictions: inv.typeRestrictions === void 0 ? void 0 : [...inv.typeRestrictions],
+        slots,
+        equipment
+      });
+    }
   }
 };
 var createInvInput = external_exports.object({
@@ -132015,6 +133330,33 @@ var GameStateManager = class {
     this.state.state = "running";
     this.state.endedAtTick = void 0;
   }
+  /** Deterministic capture of the whole game state (snapshot participant, H2): every Map
+   *  flattened to name-sorted entries, timers/conditions with their full mutable state. */
+  captureSnapshot() {
+    const byName = (entries) => [...entries].sort((a2, b3) => a2[0] < b3[0] ? -1 : a2[0] > b3[0] ? 1 : 0);
+    return {
+      variables: byName(this.state.variables.entries()).map(([name, value]) => ({ name, value })),
+      flags: byName(this.state.flags.entries()).map(([name, value]) => ({ name, value })),
+      counters: byName(this.state.counters.entries()).map(([name, value]) => ({ name, value })),
+      timers: byName(this.state.timers.entries()).map(([name, t3]) => ({ name, ...t3 })),
+      conditions: byName(this.state.conditions.entries()).map(([name, c2]) => ({ name, expression: c2.expression, lastValue: c2.lastValue, onTrue: c2.onTrue })),
+      state: this.state.state,
+      endedAtTick: this.state.endedAtTick
+    };
+  }
+  /** Wholesale replace the game state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap) {
+    this.reset();
+    for (const v3 of snap.variables) this.state.variables.set(v3.name, v3.value);
+    for (const f2 of snap.flags) this.state.flags.set(f2.name, f2.value);
+    for (const c2 of snap.counters) this.state.counters.set(c2.name, c2.value);
+    for (const t3 of snap.timers) {
+      this.state.timers.set(t3.name, { remaining: t3.remaining, duration: t3.duration, paused: t3.paused, direction: t3.direction, onComplete: t3.onComplete, done: t3.done });
+    }
+    for (const c2 of snap.conditions) this.state.conditions.set(c2.name, { expression: c2.expression, lastValue: c2.lastValue, onTrue: c2.onTrue });
+    this.state.state = snap.state;
+    this.state.endedAtTick = snap.endedAtTick;
+  }
 };
 function registerGameStateSkills(registry2, opts) {
   const mgr = opts?.gameStateManager ?? new GameStateManager();
@@ -132222,7 +133564,7 @@ function registerGameStateSkills(registry2, opts) {
 }
 
 // src/skills/triggers.ts
-var Vec313 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec314 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField7 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension data (custom action definitions, parameters, etc.).");
 var TriggerManager = class {
   triggers = /* @__PURE__ */ new Map();
@@ -132296,20 +133638,39 @@ var TriggerManager = class {
     return Math.abs(dx) <= trigger.size[0] && Math.abs(dy) <= trigger.size[1] && Math.abs(dz) <= trigger.size[2];
   }
   /** Deterministic, JSON-able snapshot (insertion order; Sets → sorted arrays) for
-   *  replay-equivalence checks + host inspection. */
+   *  replay-equivalence checks + host inspection. Ids are `trigger_N` (dense, per-manager
+   *  seq) so insertion order IS id order — two captures of one world are byte-identical.
+   *  Also the world-snapshot participant capture (H2): restoreSnapshot round-trips it. */
   snapshot() {
     return {
       seq: this.seq,
       triggers: [...this.triggers.values()].map((t3) => ({
         id: t3.id,
         shape: t3.shape,
-        center: [...t3.center],
-        size: [...t3.size],
+        center: [t3.center[0], t3.center[1], t3.center[2]],
+        size: [t3.size[0], t3.size[1], t3.size[2]],
         actions: { onEnter: [...t3.actions.onEnter], onExit: [...t3.actions.onExit], onStay: [...t3.actions.onStay] },
         entitiesInside: [...t3.entitiesInside].sort(),
         config: t3.config
       }))
     };
+  }
+  /** Wholesale replace the zones + resume the id counter (participant restore, H2):
+   *  a post-restore trigger.create allocates the SAME next `trigger_N` it would have live. */
+  restoreSnapshot(snap) {
+    this.triggers.clear();
+    this.seq = snap.seq;
+    for (const t3 of snap.triggers) {
+      this.triggers.set(t3.id, {
+        id: t3.id,
+        shape: t3.shape,
+        center: [t3.center[0], t3.center[1], t3.center[2]],
+        size: [t3.size[0], t3.size[1], t3.size[2]],
+        actions: { onEnter: [...t3.actions.onEnter], onExit: [...t3.actions.onExit], onStay: [...t3.actions.onStay] },
+        entitiesInside: new Set(t3.entitiesInside),
+        config: t3.config
+      });
+    }
   }
 };
 var EventManager = class {
@@ -132338,12 +133699,20 @@ var EventManager = class {
   list() {
     return [...this.listeners.values()].map((l2) => ({ id: l2.id, eventName: l2.eventName, type: l2.action.type }));
   }
-  /** Deterministic, JSON-able snapshot (registration order) for replay-equivalence. */
+  /** Deterministic, JSON-able snapshot (registration order — ids are dense `listener_N`,
+   *  so registration order IS id order) for replay-equivalence AND the world-snapshot
+   *  participant capture (H2). */
   snapshot() {
     return {
       seq: this.seq,
       listeners: [...this.listeners.values()].map((l2) => ({ id: l2.id, eventName: l2.eventName, action: l2.action }))
     };
+  }
+  /** Wholesale replace the listeners + resume the id counter (participant restore, H2). */
+  restoreSnapshot(snap) {
+    this.listeners.clear();
+    this.seq = snap.seq;
+    for (const l2 of snap.listeners) this.listeners.set(l2.id, { id: l2.id, eventName: l2.eventName, action: l2.action });
   }
 };
 var triggerActionSchema = external_exports.object({
@@ -132353,8 +133722,8 @@ var triggerActionSchema = external_exports.object({
 });
 var createTriggerInput = external_exports.object({
   shape: external_exports.enum(["box", "sphere"]).default("box"),
-  center: Vec313.describe("Trigger center position."),
-  size: Vec313.describe("Box half-extents or sphere radius (radius = size[0] for sphere)."),
+  center: Vec314.describe("Trigger center position."),
+  size: Vec314.describe("Box half-extents or sphere radius (radius = size[0] for sphere)."),
   config: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Custom trigger configuration data."),
   meta: MetaField7
 });
@@ -132574,6 +133943,24 @@ var CutsceneManager = class {
     }
     return fired;
   }
+  /** Deterministic capture of definitions (id-sorted; keyframes already atTick-sorted) AND
+   *  the mid-playback cursor (snapshot participant, H2). The cursor is sim-affecting: the
+   *  pump's not-yet-fired keyframes drive world mutations, so dropping it on restore would
+   *  silently truncate an in-flight cutscene. */
+  captureSnapshot() {
+    return {
+      cutscenes: [...this.defs.entries()].sort((a2, b3) => a2[0] < b3[0] ? -1 : a2[0] > b3[0] ? 1 : 0).map(([id4, d2]) => ({ id: id4, keyframes: d2.keyframes.map((k3) => ({ atTick: k3.atTick, action: { ...k3.action } })), durationTicks: d2.durationTicks, loop: d2.loop })),
+      active: this.active === void 0 ? void 0 : { ...this.active }
+    };
+  }
+  /** Wholesale replace definitions + playback cursor (participant restore). */
+  restoreSnapshot(snap) {
+    this.defs.clear();
+    for (const c2 of snap.cutscenes) {
+      this.defs.set(c2.id, { keyframes: c2.keyframes.map((k3) => ({ atTick: k3.atTick, action: { ...k3.action } })), durationTicks: c2.durationTicks, loop: c2.loop });
+    }
+    this.active = snap.active === void 0 ? void 0 : { ...snap.active };
+  }
 };
 var actionSchema = external_exports.object({
   type: external_exports.string().min(1).describe('Action type the host maps to a skill, e.g. "camera.cut".'),
@@ -132666,7 +134053,7 @@ function registerCutsceneSkills(registry2) {
 }
 
 // src/skills/building/skill.ts
-var Vec314 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec315 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var PaletteRoleEnum3 = external_exports.enum(PALETTE_ROLE_NAMES);
 var OpeningSchema = external_exports.object({
   wall: external_exports.enum(["north", "south", "east", "west"]),
@@ -132684,7 +134071,7 @@ var RoofSchema = external_exports.object({
   bargeboards: external_exports.boolean().optional().describe("Timber verge/eave trim; keeps the cover on the slopes only.")
 }).strict();
 var assembleInput = external_exports.object({
-  position: Vec314.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
+  position: Vec315.default([0, 0, 0]).describe("Building CENTER on the ground (the floor sits at position.y)."),
   width: external_exports.number().positive().max(200).default(8).describe("Footprint extent along X (meters)."),
   depth: external_exports.number().positive().max(200).default(6).describe("Footprint extent along Z (meters)."),
   height: external_exports.number().positive().max(80).default(3.2).describe("Wall height (meters)."),
@@ -132699,11 +134086,18 @@ var assembleInput = external_exports.object({
   baseRole: PaletteRoleEnum3.optional().describe("Palette role the base course resolves from (default 'stone')."),
   seed: external_exports.number().optional().describe("Deterministic variation seed for the kit parts.")
 });
+function undoCreatedEntities(ctx, label4) {
+  const seqBefore = ctx.world.entities.nextSeq;
+  ctx.undo(label4, () => {
+    const created = ctx.world.entities.idsCreatedSince(seqBefore);
+    for (let i2 = created.length - 1; i2 >= 0; i2--) teardownEntity(ctx.world, created[i2]);
+  });
+}
 var assembleOutput = external_exports.object({
   root: external_exports.string().describe("The building-root entity \u2014 the whole structure as one selectable/exportable unit."),
   entities: external_exports.array(external_exports.string()).describe("Every part entity (parented under root)."),
   entityCount: external_exports.number(),
-  bounds: external_exports.object({ min: Vec314, max: Vec314 })
+  bounds: external_exports.object({ min: Vec315, max: Vec315 })
 });
 function makeAssemble() {
   return {
@@ -132716,6 +134110,7 @@ function makeAssemble() {
     output: assembleOutput,
     handler: (input, ctx) => {
       const { position, seed, ...recipe } = input;
+      undoCreatedEntities(ctx, "building.assemble parts");
       const res = assembleBuilding(recipe, position, ctx.world, seed !== void 0 ? { seed } : void 0);
       ctx.emit("building.assembled", { root: res.root, center: position, parts: res.entityCount, width: recipe.width, depth: recipe.depth, height: recipe.height });
       return { root: res.root, entities: res.parts.map((p2) => p2.entity), entityCount: res.entityCount, bounds: res.bounds };
@@ -132723,7 +134118,7 @@ function makeAssemble() {
   };
 }
 var archInput = external_exports.object({
-  position: Vec314.default([0, 0, 0]).describe("Building CENTER on the ground (floor at position.y)."),
+  position: Vec315.default([0, 0, 0]).describe("Building CENTER on the ground (floor at position.y)."),
   width: external_exports.number().positive().max(200).default(8),
   depth: external_exports.number().positive().max(200).default(6),
   height: external_exports.number().positive().max(80).default(3.2),
@@ -132740,8 +134135,8 @@ var archInput = external_exports.object({
 });
 var archOutput = external_exports.object({
   entities: external_exports.array(external_exports.string()),
-  parts: external_exports.array(external_exports.object({ kind: external_exports.string(), entity: external_exports.string(), position: Vec314, size: Vec314 })),
-  bounds: external_exports.object({ min: Vec314, max: Vec314 }),
+  parts: external_exports.array(external_exports.object({ kind: external_exports.string(), entity: external_exports.string(), position: Vec315, size: Vec315 })),
+  bounds: external_exports.object({ min: Vec315, max: Vec315 }),
   entityCount: external_exports.number(),
   root: external_exports.string()
 });
@@ -132781,6 +134176,7 @@ function makeArchitectureBuilding() {
         openings,
         roof: input.withRoof ? { type: input.roofStyle, pitch: input.roofPitch, overhang: input.roofOverhang } : null
       };
+      undoCreatedEntities(ctx, "architecture.building parts");
       const res = assembleBuilding(recipe, input.position, ctx.world, input.seed !== void 0 ? { seed: input.seed } : void 0);
       ctx.emit("architecture.built", {
         kind: "building",
@@ -132823,19 +134219,19 @@ function stableId(value, label4) {
   if (!STABLE_ID.test(out)) throw new Error(`functional building: ${label4} must be a stable lowercase id`);
   return out;
 }
-function finite7(value, label4) {
+function finite8(value, label4) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`functional building: ${label4} must be finite`);
   return value;
 }
-function vec33(value, label4, positive4 = false) {
+function vec34(value, label4, positive4 = false) {
   if (!Array.isArray(value) || value.length !== 3) throw new Error(`functional building: ${label4} must be a vec3`);
-  const out = [finite7(value[0], `${label4}[0]`), finite7(value[1], `${label4}[1]`), finite7(value[2], `${label4}[2]`)];
+  const out = [finite8(value[0], `${label4}[0]`), finite8(value[1], `${label4}[1]`), finite8(value[2], `${label4}[2]`)];
   if (positive4 && out.some((axis) => axis <= 0)) throw new Error(`functional building: ${label4} axes must be positive`);
   return out;
 }
 function vec23(value, label4, positive4 = false) {
   if (!Array.isArray(value) || value.length !== 2) throw new Error(`functional building: ${label4} must be a vec2`);
-  const out = [finite7(value[0], `${label4}[0]`), finite7(value[1], `${label4}[1]`)];
+  const out = [finite8(value[0], `${label4}[0]`), finite8(value[1], `${label4}[1]`)];
   if (positive4 && out.some((axis) => axis <= 0)) throw new Error(`functional building: ${label4} axes must be positive`);
   return out;
 }
@@ -132855,12 +134251,12 @@ function boundedArray(value, label4, minimum, maximum) {
   return value;
 }
 function coefficient(value, label4) {
-  const out = finite7(value, label4);
+  const out = finite8(value, label4);
   if (out < 0 || out > 1) throw new Error(`functional building: ${label4} must be within [0,1]`);
   return out;
 }
 function positive3(value, label4) {
-  const out = finite7(value, label4);
+  const out = finite8(value, label4);
   if (out <= 0) throw new Error(`functional building: ${label4} must be positive`);
   return out;
 }
@@ -132910,14 +134306,14 @@ function parseFunctionalBuildingContract(bytes) {
   const rootNodeId = string4(authority.rootNodeId, "rootNodeId");
   const roomIds = stringArray(authority.roomIds, "roomIds");
   const portalIds = stringArray(authority.portalIds, "portalIds");
-  const entryAnchor = vec33(authority.entryAnchor, "entryAnchor");
+  const entryAnchor = vec34(authority.entryAnchor, "entryAnchor");
   let site;
   if (authority.site !== void 0) {
     const rawSite = object2(authority.site, "site");
-    const finishedFloorY = finite7(rawSite.finishedFloorY, "site.finishedFloorY");
-    const terrainClearance = finite7(rawSite.terrainClearance, "site.terrainClearance");
-    const vegetationClearance = finite7(rawSite.vegetationClearance, "site.vegetationClearance");
-    const maximumTerrainRelief = finite7(rawSite.maximumTerrainRelief, "site.maximumTerrainRelief");
+    const finishedFloorY = finite8(rawSite.finishedFloorY, "site.finishedFloorY");
+    const terrainClearance = finite8(rawSite.terrainClearance, "site.terrainClearance");
+    const vegetationClearance = finite8(rawSite.vegetationClearance, "site.vegetationClearance");
+    const maximumTerrainRelief = finite8(rawSite.maximumTerrainRelief, "site.maximumTerrainRelief");
     if (terrainClearance < 0.05 || terrainClearance > 1 || vegetationClearance < 0 || vegetationClearance > 5 || maximumTerrainRelief <= 0 || maximumTerrainRelief > 5) throw new Error("functional building: site policy is outside bounded construction limits");
     site = {
       footprintCenter: vec23(rawSite.footprintCenter, "site.footprintCenter"),
@@ -132928,7 +134324,7 @@ function parseFunctionalBuildingContract(bytes) {
       maximumTerrainRelief
     };
     if (rawSite.entranceSupport !== void 0) {
-      const support2 = object2(rawSite.entranceSupport, "site.entranceSupport"), yawRadians = finite7(support2.yawRadians, "site.entranceSupport.yawRadians"), exteriorGradeY = finite7(support2.exteriorGradeY, "site.entranceSupport.exteriorGradeY"), bearingDepth = finite7(support2.bearingDepth, "site.entranceSupport.bearingDepth"), maximumCutDepth = finite7(support2.maximumCutDepth, "site.entranceSupport.maximumCutDepth"), maximumVariation = finite7(support2.maximumVariation, "site.entranceSupport.maximumVariation");
+      const support2 = object2(rawSite.entranceSupport, "site.entranceSupport"), yawRadians = finite8(support2.yawRadians, "site.entranceSupport.yawRadians"), exteriorGradeY = finite8(support2.exteriorGradeY, "site.entranceSupport.exteriorGradeY"), bearingDepth = finite8(support2.bearingDepth, "site.entranceSupport.bearingDepth"), maximumCutDepth = finite8(support2.maximumCutDepth, "site.entranceSupport.maximumCutDepth"), maximumVariation = finite8(support2.maximumVariation, "site.entranceSupport.maximumVariation");
       if (bearingDepth <= 0 || bearingDepth > 0.5 || maximumCutDepth < 0 || maximumCutDepth > 0.2 || maximumVariation <= 0 || maximumVariation > 0.25)
         throw new Error("functional building: entrance support policy is outside bounded construction limits");
       site.entranceSupport = {
@@ -132951,7 +134347,7 @@ function parseFunctionalBuildingContract(bytes) {
     const data = extras?.limina;
     if (data === void 0) continue;
     if (node.scale !== void 0) {
-      const scale2 = vec33(node.scale, `nodes[${index}].scale`);
+      const scale2 = vec34(node.scale, `nodes[${index}].scale`);
       if (scale2.some((axis) => axis <= 0) || Math.max(...scale2) - Math.min(...scale2) > 1e-6) {
         throw new Error(`functional building: nodes[${index}] has articulated-unsafe scale`);
       }
@@ -132963,7 +134359,7 @@ function parseFunctionalBuildingContract(bytes) {
   }
   const root = semantic.get(rootNodeId);
   if (root?.role !== "root") throw new Error("functional building: rootNodeId does not resolve to a root node");
-  const scenes = Array.isArray(json2.scenes) ? json2.scenes : [], sceneIndex = json2.scene === void 0 ? 0 : finite7(json2.scene, "scene");
+  const scenes = Array.isArray(json2.scenes) ? json2.scenes : [], sceneIndex = json2.scene === void 0 ? 0 : finite8(json2.scene, "scene");
   if (!Number.isSafeInteger(sceneIndex) || scenes.length !== 1 || sceneIndex !== 0) throw new Error("functional building: asset requires exactly one canonical scene");
   const scene = object2(scenes[sceneIndex], `scenes[${sceneIndex}]`), sceneRoots = scene.nodes;
   if (!Array.isArray(sceneRoots) || sceneRoots.length !== 1 || sceneRoots[0] !== root.index) throw new Error("functional building: semantic root must be the sole scene root");
@@ -132977,7 +134373,7 @@ function parseFunctionalBuildingContract(bytes) {
     const raw = object2(nodes[index], `nodes[${index}]`);
     if (raw.children !== void 0) {
       if (!Array.isArray(raw.children)) throw new Error(`functional building: nodes[${index}].children must be an array`);
-      for (const child of raw.children) visit(finite7(child, `nodes[${index}].children`));
+      for (const child of raw.children) visit(finite8(child, `nodes[${index}].children`));
     }
     visiting.delete(index);
   };
@@ -132990,24 +134386,24 @@ function parseFunctionalBuildingContract(bytes) {
   for (const item of semantic.values()) {
     if (item.role === "collider") {
       if (item.data.shape !== "box") throw new Error(`functional building: collider ${item.nodeId} must be a box`);
-      colliders.push({ id: item.nodeId, nodeId: item.nodeId, halfExtents: vec33(item.data.halfExtents, `${item.nodeId}.halfExtents`, true), center: vec33(item.data.center, `${item.nodeId}.center`) });
+      colliders.push({ id: item.nodeId, nodeId: item.nodeId, halfExtents: vec34(item.data.halfExtents, `${item.nodeId}.halfExtents`, true), center: vec34(item.data.center, `${item.nodeId}.center`) });
     } else if (item.role === "door") {
       const roomId = string4(item.data.roomId, `${item.nodeId}.roomId`);
       const portalId = string4(item.data.portalId, `${item.nodeId}.portalId`);
       if (!roomIds.includes(roomId) || !portalIds.includes(portalId)) throw new Error(`functional building: door ${item.nodeId} has unresolved room/portal`);
-      const closedYaw = finite7(item.data.closedYaw, `${item.nodeId}.closedYaw`);
-      const openYaw = finite7(item.data.openYaw, `${item.nodeId}.openYaw`);
+      const closedYaw = finite8(item.data.closedYaw, `${item.nodeId}.closedYaw`);
+      const openYaw = finite8(item.data.openYaw, `${item.nodeId}.openYaw`);
       if (Math.abs(openYaw - closedYaw) < 0.5) throw new Error(`functional building: door ${item.nodeId} has no useful open sweep`);
       doors.push({
         id: item.nodeId,
         nodeId: item.nodeId,
         roomId,
         portalId,
-        hinge: vec33(item.data.hinge, `${item.nodeId}.hinge`),
+        hinge: vec34(item.data.hinge, `${item.nodeId}.hinge`),
         closedYaw,
         openYaw,
-        halfExtents: vec33(item.data.halfExtents, `${item.nodeId}.halfExtents`, true),
-        center: vec33(item.data.center, `${item.nodeId}.center`)
+        halfExtents: vec34(item.data.halfExtents, `${item.nodeId}.halfExtents`, true),
+        center: vec34(item.data.center, `${item.nodeId}.center`)
       });
     }
   }
@@ -133016,7 +134412,7 @@ function parseFunctionalBuildingContract(bytes) {
   if (site?.entranceSupport) {
     const support2 = site.entranceSupport, item = semantic.get(support2.sourcePrimitiveId), boxData = item?.data.box === void 0 ? void 0 : object2(item.data.box, `${support2.sourcePrimitiveId}.box`);
     if (item?.role !== "architecture-primitive" || boxData === void 0) throw new Error("functional building: entrance support source primitive is unresolved");
-    const center = vec33(boxData.center, `${support2.sourcePrimitiveId}.box.center`), halfExtents = vec33(boxData.halfExtents, `${support2.sourcePrimitiveId}.box.halfExtents`, true), yaw = finite7(boxData.yawRadians, `${support2.sourcePrimitiveId}.box.yawRadians`);
+    const center = vec34(boxData.center, `${support2.sourcePrimitiveId}.box.center`), halfExtents = vec34(boxData.halfExtents, `${support2.sourcePrimitiveId}.box.halfExtents`, true), yaw = finite8(boxData.yawRadians, `${support2.sourcePrimitiveId}.box.yawRadians`);
     if (Math.abs(center[0] - support2.center[0]) > 1e-3 || Math.abs(center[2] - support2.center[1]) > 1e-3 || Math.abs(halfExtents[0] - support2.halfExtents[0]) > 1e-3 || Math.abs(halfExtents[2] - support2.halfExtents[1]) > 1e-3 || Math.abs(yaw - support2.yawRadians) > 1e-3 || Math.abs(center[1] - halfExtents[1] - (support2.exteriorGradeY - support2.bearingDepth)) > 1e-3)
       throw new Error("functional building: entrance support does not match its structural source primitive");
     const c2 = Math.cos(support2.yawRadians), s2 = Math.sin(support2.yawRadians), limitX = site.footprintHalfExtents[0] + site.vegetationClearance, limitZ = site.footprintHalfExtents[1] + site.vegetationClearance;
@@ -133043,9 +134439,9 @@ function parseFunctionalBuildingContract(bytes) {
     exactKeys(value, ["id", "bounds", "finishedFloorY", "ceilingY", "storey", "visibilityCellId", "acoustics"], [], label4);
     const id4 = stableId(value.id, `${label4}.id`), boundsRaw = object2(value.bounds, `${label4}.bounds`);
     exactKeys(boundsRaw, ["center", "halfExtents"], [], `${label4}.bounds`);
-    const bounds = { center: vec33(boundsRaw.center, `${label4}.bounds.center`), halfExtents: vec33(boundsRaw.halfExtents, `${label4}.bounds.halfExtents`, true) };
-    const finishedFloorY = finite7(value.finishedFloorY, `${label4}.finishedFloorY`), ceilingY = finite7(value.ceilingY, `${label4}.ceilingY`);
-    const storey = finite7(value.storey, `${label4}.storey`);
+    const bounds = { center: vec34(boundsRaw.center, `${label4}.bounds.center`), halfExtents: vec34(boundsRaw.halfExtents, `${label4}.bounds.halfExtents`, true) };
+    const finishedFloorY = finite8(value.finishedFloorY, `${label4}.finishedFloorY`), ceilingY = finite8(value.ceilingY, `${label4}.ceilingY`);
+    const storey = finite8(value.storey, `${label4}.storey`);
     if (!Number.isSafeInteger(storey) || storey < 0 || storey > 63) throw new Error(`functional building: ${label4}.storey must be an integer within [0,63]`);
     if (ceilingY - finishedFloorY < 1.8 || Math.abs(bounds.center[1] - bounds.halfExtents[1] - finishedFloorY) > 1e-4 || Math.abs(bounds.center[1] + bounds.halfExtents[1] - ceilingY) > 1e-4)
       throw new Error(`functional building: ${label4} bounds must span its finished floor and ceiling with at least 1.8m headroom`);
@@ -133064,7 +134460,7 @@ function parseFunctionalBuildingContract(bytes) {
     const endpoints = value.roomIds.map((entry, endpoint) => entry === null ? null : string4(entry, `${label4}.roomIds[${endpoint}]`));
     if (endpoints[0] === null && endpoints[1] === null || endpoints[0] === endpoints[1] || endpoints.some((entry) => entry !== null && !roomMap.has(entry))) throw new Error(`functional building: ${label4}.roomIds has unresolved or degenerate endpoints`);
     if (typeof value.exterior !== "boolean" || value.exterior !== endpoints.includes(null)) throw new Error(`functional building: ${label4}.exterior must exactly match its null exterior endpoint`);
-    const center = vec33(value.center, `${label4}.center`), halfExtents = vec33(value.halfExtents, `${label4}.halfExtents`, true);
+    const center = vec34(value.center, `${label4}.center`), halfExtents = vec34(value.halfExtents, `${label4}.halfExtents`, true);
     for (const endpoint of endpoints) if (endpoint !== null) {
       const room = roomMap.get(endpoint);
       if (!center.every((axis, dimension) => Math.abs(axis - room.bounds.center[dimension]) <= room.bounds.halfExtents[dimension] + halfExtents[dimension] + 1e-6)) throw new Error(`functional building: ${label4} does not touch room ${endpoint}`);
@@ -133080,11 +134476,11 @@ function parseFunctionalBuildingContract(bytes) {
     exactKeys(value, ["id", "kind", "fromRoomId", "toRoomId", "from", "to", "clearWidth", "clearHeight", "rise", "run", "riserCount", "treadDepth", "upperFloorOpening"], [], label4);
     const id4 = stableId(value.id, `${label4}.id`), kind = string4(value.kind, `${label4}.kind`);
     if (kind !== "stairs") throw new Error(`functional building: ${label4}.kind must be stairs`);
-    const fromRoomId = string4(value.fromRoomId, `${label4}.fromRoomId`), toRoomId = string4(value.toRoomId, `${label4}.toRoomId`), from = vec33(value.from, `${label4}.from`), to = vec33(value.to, `${label4}.to`);
+    const fromRoomId = string4(value.fromRoomId, `${label4}.fromRoomId`), toRoomId = string4(value.toRoomId, `${label4}.toRoomId`), from = vec34(value.from, `${label4}.from`), to = vec34(value.to, `${label4}.to`);
     const fromRoom = roomMap.get(fromRoomId), toRoom = roomMap.get(toRoomId);
     if (!fromRoom || !toRoom || fromRoom === toRoom || !contains(fromRoom, from) || !contains(toRoom, to)) throw new Error(`functional building: ${label4} endpoints must resolve inside two distinct rooms`);
     const rise = positive3(value.rise, `${label4}.rise`), run = positive3(value.run, `${label4}.run`), actualRise = Math.abs(to[1] - from[1]);
-    const riserCount = finite7(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
+    const riserCount = finite8(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
     const clearWidth = positive3(value.clearWidth, `${label4}.clearWidth`), clearHeight = positive3(value.clearHeight, `${label4}.clearHeight`);
     const openingRaw = object2(value.upperFloorOpening, `${label4}.upperFloorOpening`);
     exactKeys(openingRaw, ["center", "halfExtents"], [], `${label4}.upperFloorOpening`);
@@ -133098,7 +134494,7 @@ function parseFunctionalBuildingContract(bytes) {
   const spawnAnchors = boundedArray(authority.spawnAnchors, "spawnAnchors", 1, 256).map((raw, index) => {
     const label4 = `spawnAnchors[${index}]`, value = object2(raw, label4);
     exactKeys(value, ["id", "roomId", "kind", "position", "direction", "clearanceRadius", "clearanceHeight"], [], label4);
-    const id4 = stableId(value.id, `${label4}.id`), roomId = stableId(value.roomId, `${label4}.roomId`), kind = string4(value.kind, `${label4}.kind`), position = vec33(value.position, `${label4}.position`), direction3 = vec33(value.direction, `${label4}.direction`), length3 = Math.hypot(...direction3);
+    const id4 = stableId(value.id, `${label4}.id`), roomId = stableId(value.roomId, `${label4}.roomId`), kind = string4(value.kind, `${label4}.kind`), position = vec34(value.position, `${label4}.position`), direction3 = vec34(value.direction, `${label4}.direction`), length3 = Math.hypot(...direction3);
     if (kind !== "player" && kind !== "npc" && kind !== "item") throw new Error(`functional building: ${label4}.kind is unsupported`);
     const clearanceRadius = positive3(value.clearanceRadius, `${label4}.clearanceRadius`), clearanceHeight = positive3(value.clearanceHeight, `${label4}.clearanceHeight`);
     const room = roomMap.get(roomId);
@@ -133249,7 +134645,7 @@ var FunctionalBuildingLodController = class {
 };
 
 // src/skills/functional-building.ts
-var Vec315 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec316 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var inert = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
@@ -133348,7 +134744,7 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
   registry2.registerWorldReconciler(reconcile);
   const placeInput3 = external_exports.object({
     assetId: external_exports.string(),
-    position: Vec315.default([0, 0, 0]),
+    position: Vec316.default([0, 0, 0]),
     yaw: external_exports.number().default(0),
     hash: external_exports.string().optional(),
     locks: external_exports.record(external_exports.string(), external_exports.string()).default({}),
@@ -133367,7 +134763,9 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     handler: async (input, ctx) => {
       if (input.lodDistances[1] <= input.lodDistances[0]) throw new Error("functional building LOD: distances must be strictly increasing");
       const resolved = assets.resolve(input.assetId);
-      if (input.hash !== void 0 && input.hash !== resolved.hash) throw new Error(`functional building: pinned hash mismatch for ${input.assetId}`);
+      if (input.hash !== void 0 && input.hash !== resolved.hash) {
+        ctx.emit("building.hash_mismatch", { assetId: input.assetId, committed: input.hash, resolved: resolved.hash });
+      }
       const contract = parseFunctionalBuildingContract(resolved.bytes);
       const staticBatch = parseFunctionalBuildingStaticBatch(resolved.bytes);
       const created = [];
@@ -133621,7 +135019,7 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
       return { removed };
     }
   };
-  const queryRoomInput = external_exports.object({ position: Vec315, root: external_exports.string().optional() });
+  const queryRoomInput = external_exports.object({ position: Vec316, root: external_exports.string().optional() });
   const queryRoom = {
     name: "building.queryRoom",
     version: "1.0.0",
@@ -133651,7 +135049,7 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
       return path2 === void 0 ? { found: false, roomIds: [], connectionIds: [] } : { found: true, roomIds: path2.roomIds, connectionIds: path2.connectionIds };
     }
   };
-  const cellsInput = external_exports.object({ position: Vec315, root: external_exports.string().optional(), maxConnections: external_exports.number().int().min(0).max(32).default(2), maxCells: external_exports.number().int().min(1).max(32).default(32) });
+  const cellsInput = external_exports.object({ position: Vec316, root: external_exports.string().optional(), maxConnections: external_exports.number().int().min(0).max(32).default(2), maxCells: external_exports.number().int().min(1).max(32).default(32) });
   const cells = {
     name: "building.queryResidentCells",
     version: "1.0.0",
@@ -133687,7 +135085,7 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     permissions: ["scene.read"],
     effect: "read",
     input: anchorsInput,
-    output: external_exports.object({ anchors: external_exports.array(external_exports.object({ buildingId: external_exports.string(), id: external_exports.string(), roomId: external_exports.string(), kind: external_exports.enum(["player", "npc", "item"]), position: Vec315, direction: Vec315, clearanceRadius: external_exports.number().positive(), clearanceHeight: external_exports.number().positive() })) }),
+    output: external_exports.object({ anchors: external_exports.array(external_exports.object({ buildingId: external_exports.string(), id: external_exports.string(), roomId: external_exports.string(), kind: external_exports.enum(["player", "npc", "item"]), position: Vec316, direction: Vec316, clearanceRadius: external_exports.number().positive(), clearanceHeight: external_exports.number().positive() })) }),
     handler: (input) => ({ anchors: (deps?.topology?.worldSpawnAnchors(input.root, input.roomId) ?? []).filter((anchor2) => input.kind === void 0 || anchor2.kind === input.kind) })
   };
   registry2.register(place);
@@ -134306,7 +135704,7 @@ function array4(value, length3, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== length3 || Object.getOwnPropertySymbols(value).length || Object.getOwnPropertyNames(value).length !== length3 + 1) fail6(`${label4} must be a dense, field-free ${length3}-vector`);
   return value;
 }
-function finite8(value, minimum, maximum, label4) {
+function finite9(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail6(`${label4} must be a bounded finite number`);
   return value;
 }
@@ -134327,17 +135725,17 @@ function path(value, label4) {
   return value;
 }
 function vector(value, length3, label4, magnitude = FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude) {
-  return Object.freeze(array4(value, length3, label4).map((item, index) => finite8(item, -magnitude, magnitude, `${label4}[${index}]`)));
+  return Object.freeze(array4(value, length3, label4).map((item, index) => finite9(item, -magnitude, magnitude, `${label4}[${index}]`)));
 }
 function metrics(value, label4) {
   const d2 = record3(value, /* @__PURE__ */ new Set(["terrainMinimum", "terrainMaximum", "terrainRelief", "sampleCount"]), /* @__PURE__ */ new Set(), label4);
-  const terrainMinimum = finite8(d2.terrainMinimum.value, -FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMinimum`), terrainMaximum = finite8(d2.terrainMaximum.value, terrainMinimum, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMaximum`), terrainRelief = finite8(d2.terrainRelief.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainRelief`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
+  const terrainMinimum = finite9(d2.terrainMinimum.value, -FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMinimum`), terrainMaximum = finite9(d2.terrainMaximum.value, terrainMinimum, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMaximum`), terrainRelief = finite9(d2.terrainRelief.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainRelief`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
   if (Math.abs(terrainMaximum - terrainMinimum - terrainRelief) > EPS3) fail6(`${label4}.terrainRelief is inconsistent with its extrema`);
   return Object.freeze({ terrainMinimum, terrainMaximum, terrainRelief, sampleCount });
 }
 function support(value, label4) {
   const d2 = record3(value, /* @__PURE__ */ new Set(["terrainMinimum", "terrainMaximum", "terrainVariation", "worldGradeY", "fillDepth", "cutDepth", "sampleCount"]), /* @__PURE__ */ new Set(), label4);
-  const terrainMinimum = finite8(d2.terrainMinimum.value, -1e9, 1e9, `${label4}.terrainMinimum`), terrainMaximum = finite8(d2.terrainMaximum.value, terrainMinimum, 1e9, `${label4}.terrainMaximum`), terrainVariation = finite8(d2.terrainVariation.value, 0, 1e9, `${label4}.terrainVariation`), worldGradeY = finite8(d2.worldGradeY.value, -1e9, 1e9, `${label4}.worldGradeY`), fillDepth = finite8(d2.fillDepth.value, 0, 1e9, `${label4}.fillDepth`), cutDepth = finite8(d2.cutDepth.value, 0, 1e9, `${label4}.cutDepth`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
+  const terrainMinimum = finite9(d2.terrainMinimum.value, -1e9, 1e9, `${label4}.terrainMinimum`), terrainMaximum = finite9(d2.terrainMaximum.value, terrainMinimum, 1e9, `${label4}.terrainMaximum`), terrainVariation = finite9(d2.terrainVariation.value, 0, 1e9, `${label4}.terrainVariation`), worldGradeY = finite9(d2.worldGradeY.value, -1e9, 1e9, `${label4}.worldGradeY`), fillDepth = finite9(d2.fillDepth.value, 0, 1e9, `${label4}.fillDepth`), cutDepth = finite9(d2.cutDepth.value, 0, 1e9, `${label4}.cutDepth`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
   if (Math.abs(terrainMaximum - terrainMinimum - terrainVariation) > EPS3 || Math.abs(Math.max(0, worldGradeY - terrainMinimum) - fillDepth) > EPS3 || Math.abs(Math.max(0, terrainMaximum - worldGradeY) - cutDepth) > EPS3) fail6(`${label4} metrics are internally inconsistent`);
   return Object.freeze({ terrainMinimum, terrainMaximum, terrainVariation, worldGradeY, fillDepth, cutDepth, sampleCount });
 }
@@ -134345,13 +135743,13 @@ function parseFunctionalBuildingSiteArtifact(value) {
   const d2 = record3(value, /* @__PURE__ */ new Set(["schema", "artifactId", "placementId", "bindings", "placement", "policy", "footprint", "foundation", "routeContact"]), /* @__PURE__ */ new Set(["entranceSupport"]), "functional building site artifact");
   if (d2.schema.value !== FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA) fail6("functional building site artifact.schema is unsupported");
   const bindingsRaw = record3(d2.bindings.value, /* @__PURE__ */ new Set(["contractHash", "semanticFingerprint", "worldMapHash"]), /* @__PURE__ */ new Set(), "functional building site artifact.bindings"), bindings = Object.freeze({ contractHash: hash5(bindingsRaw.contractHash.value, "bindings.contractHash"), semanticFingerprint: hash5(bindingsRaw.semanticFingerprint.value, "bindings.semanticFingerprint"), worldMapHash: hash5(bindingsRaw.worldMapHash.value, "bindings.worldMapHash") });
-  const placementRaw = record3(d2.placement.value, /* @__PURE__ */ new Set(["position", "yaw"]), /* @__PURE__ */ new Set(), "functional building site artifact.placement"), placement = Object.freeze({ position: vector(placementRaw.position.value, 3, "placement.position"), yaw: finite8(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw") });
-  const policyRaw = record3(d2.policy.value, /* @__PURE__ */ new Set(["maximumSampleSpacing", "maximumTerrainGrade", "maximumRouteElevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.policy"), policy = Object.freeze({ maximumSampleSpacing: finite8(policyRaw.maximumSampleSpacing.value, Number.MIN_VALUE, 1, "policy.maximumSampleSpacing"), maximumTerrainGrade: finite8(policyRaw.maximumTerrainGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "policy.maximumTerrainGrade"), maximumRouteElevationDelta: finite8(policyRaw.maximumRouteElevationDelta.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumRouteElevationTolerance, "policy.maximumRouteElevationDelta") });
-  const footprintRaw = record3(d2.footprint.value, /* @__PURE__ */ new Set(["center", "halfExtents", "metrics", "maximumObservedGrade"]), /* @__PURE__ */ new Set(), "functional building site artifact.footprint"), footprint = Object.freeze({ center: vector(footprintRaw.center.value, 2, "footprint.center"), halfExtents: vector(footprintRaw.halfExtents.value, 2, "footprint.halfExtents"), metrics: metrics(footprintRaw.metrics.value, "footprint.metrics"), maximumObservedGrade: finite8(footprintRaw.maximumObservedGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "footprint.maximumObservedGrade") });
+  const placementRaw = record3(d2.placement.value, /* @__PURE__ */ new Set(["position", "yaw"]), /* @__PURE__ */ new Set(), "functional building site artifact.placement"), placement = Object.freeze({ position: vector(placementRaw.position.value, 3, "placement.position"), yaw: finite9(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw") });
+  const policyRaw = record3(d2.policy.value, /* @__PURE__ */ new Set(["maximumSampleSpacing", "maximumTerrainGrade", "maximumRouteElevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.policy"), policy = Object.freeze({ maximumSampleSpacing: finite9(policyRaw.maximumSampleSpacing.value, Number.MIN_VALUE, 1, "policy.maximumSampleSpacing"), maximumTerrainGrade: finite9(policyRaw.maximumTerrainGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "policy.maximumTerrainGrade"), maximumRouteElevationDelta: finite9(policyRaw.maximumRouteElevationDelta.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumRouteElevationTolerance, "policy.maximumRouteElevationDelta") });
+  const footprintRaw = record3(d2.footprint.value, /* @__PURE__ */ new Set(["center", "halfExtents", "metrics", "maximumObservedGrade"]), /* @__PURE__ */ new Set(), "functional building site artifact.footprint"), footprint = Object.freeze({ center: vector(footprintRaw.center.value, 2, "footprint.center"), halfExtents: vector(footprintRaw.halfExtents.value, 2, "footprint.halfExtents"), metrics: metrics(footprintRaw.metrics.value, "footprint.metrics"), maximumObservedGrade: finite9(footprintRaw.maximumObservedGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "footprint.maximumObservedGrade") });
   if (footprint.halfExtents.some((axis) => axis <= 0) || footprint.maximumObservedGrade > policy.maximumTerrainGrade + EPS3) fail6("functional building site artifact footprint exceeds its grade policy");
-  const foundationRaw = record3(d2.foundation.value, /* @__PURE__ */ new Set(["rootWorldY", "finishedFloorWorldY", "bearingPlaneWorldY", "maximumFillDepth", "maximumCutDepth"]), /* @__PURE__ */ new Set(), "functional building site artifact.foundation"), foundation = Object.freeze({ rootWorldY: finite8(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"), finishedFloorWorldY: finite8(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"), bearingPlaneWorldY: finite8(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"), maximumFillDepth: finite8(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"), maximumCutDepth: finite8(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth") });
+  const foundationRaw = record3(d2.foundation.value, /* @__PURE__ */ new Set(["rootWorldY", "finishedFloorWorldY", "bearingPlaneWorldY", "maximumFillDepth", "maximumCutDepth"]), /* @__PURE__ */ new Set(), "functional building site artifact.foundation"), foundation = Object.freeze({ rootWorldY: finite9(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"), finishedFloorWorldY: finite9(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"), bearingPlaneWorldY: finite9(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"), maximumFillDepth: finite9(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"), maximumCutDepth: finite9(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth") });
   if (Math.abs(foundation.bearingPlaneWorldY - footprint.metrics.terrainMaximum) > EPS3 || Math.abs(foundation.maximumFillDepth - footprint.metrics.terrainRelief) > EPS3 || foundation.maximumCutDepth > EPS3) fail6("functional building site artifact foundation does not bear on the sampled terrain envelope");
-  const routeRaw = record3(d2.routeContact.value, /* @__PURE__ */ new Set(["position", "terrainY", "worldGradeY", "elevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.routeContact"), routeContact = Object.freeze({ position: vector(routeRaw.position.value, 3, "routeContact.position"), terrainY: finite8(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"), worldGradeY: finite8(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"), elevationDelta: finite8(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta") });
+  const routeRaw = record3(d2.routeContact.value, /* @__PURE__ */ new Set(["position", "terrainY", "worldGradeY", "elevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.routeContact"), routeContact = Object.freeze({ position: vector(routeRaw.position.value, 3, "routeContact.position"), terrainY: finite9(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"), worldGradeY: finite9(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"), elevationDelta: finite9(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta") });
   if (Math.abs(Math.abs(routeContact.worldGradeY - routeContact.terrainY) - routeContact.elevationDelta) > EPS3 || routeContact.elevationDelta > policy.maximumRouteElevationDelta + EPS3 || Math.abs(routeContact.position[1] - routeContact.worldGradeY) > EPS3) fail6("functional building site artifact route contact violates its elevation policy");
   const entranceSupport = d2.entranceSupport === void 0 ? void 0 : support(d2.entranceSupport.value, "functional building site artifact.entranceSupport");
   if (entranceSupport === void 0 || Math.abs(entranceSupport.worldGradeY - routeContact.worldGradeY) > EPS3) fail6("functional building site artifact requires one entrance support sharing the route grade");
@@ -134388,7 +135786,7 @@ function pointInSupport(site, localX, localZ) {
 function resolveFunctionalBuildingSiteArtifact(input) {
   const site = input.contract?.site;
   if (!site?.entranceSupport) fail6("site artifact requires an authored entrance support");
-  const spacing = finite8(input.maximumSampleSpacing ?? 0.5, Number.MIN_VALUE, 1, "maximumSampleSpacing"), maximumTerrainGrade = finite8(input.maximumTerrainGrade ?? 0.75, 0, 4, "maximumTerrainGrade"), maximumRouteElevationDelta = finite8(input.maximumRouteElevationDelta ?? 0.1, 0, 0.5, "maximumRouteElevationDelta"), position = vector(input.position, 3, "position"), yaw = finite8(input.yaw, -Math.PI, Math.PI, "yaw"), route2 = vector(input.routeContact, 3, "routeContact");
+  const spacing = finite9(input.maximumSampleSpacing ?? 0.5, Number.MIN_VALUE, 1, "maximumSampleSpacing"), maximumTerrainGrade = finite9(input.maximumTerrainGrade ?? 0.75, 0, 4, "maximumTerrainGrade"), maximumRouteElevationDelta = finite9(input.maximumRouteElevationDelta ?? 0.1, 0, 0.5, "maximumRouteElevationDelta"), position = vector(input.position, 3, "position"), yaw = finite9(input.yaw, -Math.PI, Math.PI, "yaw"), route2 = vector(input.routeContact, 3, "routeContact");
   if (typeof input.sampleHeight !== "function") fail6("site artifact sampleHeight must be a function");
   const resolved = resolveFunctionalBuildingSitePlacement({ contract: input.contract, position, yaw, sampleHeight: input.sampleHeight, maximumSampleSpacing: spacing });
   const maximumObservedGrade = sampleFootprint(site, position, yaw, spacing, input.sampleHeight);
@@ -134451,7 +135849,7 @@ function verifyFunctionalBuildingSiteArtifact(bytes, expectedRef, liveInput) {
     semanticFingerprint: hash5(liveInput.semanticFingerprint, "live settlement semanticFingerprint"),
     worldMapHash: hash5(liveInput.worldMapHash, "live settlement worldMapHash"),
     position: vector(liveInput.position, 3, "live settlement position"),
-    yaw: finite8(liveInput.yaw, -Math.PI, Math.PI, "live settlement yaw"),
+    yaw: finite9(liveInput.yaw, -Math.PI, Math.PI, "live settlement yaw"),
     routeContact: vector(liveInput.routeContact, 3, "live settlement routeContact")
   };
   if (decoded.artifact.placementId !== expected.placementId || decoded.artifact.bindings.contractHash !== expected.contractHash || decoded.artifact.bindings.semanticFingerprint !== expected.semanticFingerprint || decoded.artifact.bindings.worldMapHash !== expected.worldMapHash || canonicalCompilerJson(decoded.artifact.placement) !== canonicalCompilerJson({ position: expected.position, yaw: expected.yaw }) || canonicalCompilerJson(decoded.artifact.routeContact.position) !== canonicalCompilerJson(expected.routeContact)) fail6("site artifact bindings do not match the exact settlement placement");
@@ -134535,7 +135933,7 @@ function id3(value, label4) {
 function hash6(value, label4) {
   return text(value, HASH3, 71, label4);
 }
-function finite9(value, minimum, maximum, label4) {
+function finite10(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail7(`${label4} is not a bounded finite number`);
   return value;
 }
@@ -134544,7 +135942,7 @@ function uint5(value, maximum, label4, positive4 = false) {
   return value;
 }
 function vector2(value, length3, label4, magnitude = FUNCTIONAL_SETTLEMENT_LIMITS.coordinateMagnitude) {
-  return Object.freeze(denseArray3(value, length3, length3, label4).map((component, index) => finite9(component, -magnitude, magnitude, `${label4}[${index}]`)));
+  return Object.freeze(denseArray3(value, length3, length3, label4).map((component, index) => finite10(component, -magnitude, magnitude, `${label4}[${index}]`)));
 }
 function direction2(value, label4) {
   const output3 = vector2(value, 2, label4, 1);
@@ -134618,13 +136016,13 @@ function parsePlacement2(value, planId, catalogEntries, label4) {
   if (catalogContractHash !== entry.functionalContract.hash) fail7(`${label4} does not preserve the catalog contract hash`);
   if (semanticFingerprint !== entry.semanticIdentity.fingerprint) fail7(`${label4} does not preserve the catalog semantic fingerprint`);
   const position = vector2(d2.position.value, 3, `${label4}.position`);
-  const yaw = finite9(d2.yaw.value, -Math.PI, Math.PI, `${label4}.yaw`);
+  const yaw = finite10(d2.yaw.value, -Math.PI, Math.PI, `${label4}.yaw`);
   const atlas = record4(d2.atlasBinding.value, /* @__PURE__ */ new Set(["anchorId", "routeId", "anchorPosition", "anchorYaw"]), /* @__PURE__ */ new Set(), `${label4}.atlasBinding`);
   const atlasBinding = Object.freeze({
     anchorId: id3(atlas.anchorId.value, `${label4}.atlasBinding.anchorId`),
     routeId: id3(atlas.routeId.value, `${label4}.atlasBinding.routeId`),
     anchorPosition: vector2(atlas.anchorPosition.value, 3, `${label4}.atlasBinding.anchorPosition`),
-    anchorYaw: finite9(atlas.anchorYaw.value, -Math.PI, Math.PI, `${label4}.atlasBinding.anchorYaw`)
+    anchorYaw: finite10(atlas.anchorYaw.value, -Math.PI, Math.PI, `${label4}.atlasBinding.anchorYaw`)
   });
   if (!nearVector(position, atlasBinding.anchorPosition) || !near(yaw, atlasBinding.anchorYaw)) fail7(`${label4}.atlasBinding must retain the exact placement position and rotation`);
   const placementId = id3(d2.placementId.value, `${label4}.placementId`);
@@ -134713,7 +136111,7 @@ var FunctionalSettlementAtlasResolutionError = class extends Error {
 function fail8(message) {
   throw new FunctionalSettlementAtlasResolutionError(message);
 }
-function finite10(value, minimum, maximum, label4) {
+function finite11(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail8(`${label4} is not a bounded finite number`);
   return value;
 }
@@ -134751,7 +136149,7 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     if (key !== "connectorToleranceM") fail8(`Atlas resolution options has unknown field '${key}'`);
     if (!("value" in descriptor) || descriptor.enumerable !== true) fail8(`Atlas resolution options.${key} must be an enumerable data field`);
   }
-  const connectorToleranceM = optionDescriptors.connectorToleranceM === void 0 ? 0 : finite10(optionDescriptors.connectorToleranceM.value, 0, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.connectorToleranceM, "Atlas connectorToleranceM");
+  const connectorToleranceM = optionDescriptors.connectorToleranceM === void 0 ? 0 : finite11(optionDescriptors.connectorToleranceM.value, 0, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.connectorToleranceM, "Atlas connectorToleranceM");
   const verification = verifyWorldMap(worldMap);
   if (!verification.ok) fail8(`WorldMap content hash mismatch: expected ${verification.expected}, actual ${verification.actual}`);
   if (worldMap.id !== plan.atlas.mapId) fail8(`settlement Atlas map id '${plan.atlas.mapId}' does not match WorldMap '${worldMap.id}'`);
@@ -134775,8 +136173,8 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     totalRoutePoints += route2.points.length;
     if (totalRoutePoints > FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.totalRoutePoints) fail8(`WorldMap route geometry exceeds ${FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.totalRoutePoints} points`);
     for (let pointIndex = 0; pointIndex < route2.points.length; pointIndex++) {
-      finite10(route2.points[pointIndex][0], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][0]`);
-      finite10(route2.points[pointIndex][1], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][1]`);
+      finite11(route2.points[pointIndex][0], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][0]`);
+      finite11(route2.points[pointIndex][1], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][1]`);
     }
     routes.set(route2.id, route2);
   }
@@ -134784,7 +136182,7 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     const anchor2 = anchors.get(placement.atlasBinding.anchorId);
     if (anchor2 === void 0) fail8(`placement '${placement.placementId}' references missing WorldMap anchor '${placement.atlasBinding.anchorId}'`);
     if (anchor2.rot === void 0) fail8(`WorldMap anchor '${anchor2.id}' has no authored yaw`);
-    finite10(anchor2.rot, -Math.PI, Math.PI, `WorldMap anchor '${anchor2.id}'.rot`);
+    finite11(anchor2.rot, -Math.PI, Math.PI, `WorldMap anchor '${anchor2.id}'.rot`);
     if (!near2(anchor2.position[0], placement.position[0]) || !near2(anchor2.position[1], placement.position[2]) || !near2(anchor2.rot, placement.yaw)) {
       fail8(`placement '${placement.placementId}' loses the WorldMap anchor position or rotation`);
     }
@@ -135136,7 +136534,7 @@ function canonicalHash2(sha2562, value) {
 // src/architecture/furniture-design-contract.ts
 var HASH4 = /^sha256:[0-9a-f]{64}$/;
 var ID4 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
-var finite11 = (v3, label4) => {
+var finite12 = (v3, label4) => {
   if (typeof v3 !== "number" || !Number.isFinite(v3)) throw new Error(`${label4} must be finite`);
   return v3;
 };
@@ -135159,7 +136557,7 @@ function validateFurnitureDesignContract(value, visual) {
   if (!c2 || typeof c2 !== "object" || c2.schema !== "limina.furniture-design-contract/v1") throw new Error("unsupported furniture design contract");
   if (!ID4.test(c2.id) || typeof c2.role !== "string" || !c2.role.trim() || !c2.visualDesign?.id || !HASH4.test(c2.visualDesign.hash)) throw new Error("furniture design identity is incomplete");
   if (visual && visual.id !== c2.visualDesign.id) throw new Error("furniture visual design id drifted");
-  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite11(v3, `dimensions.${key}`);
+  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite12(v3, `dimensions.${key}`);
   if (c2.dimensions.widthM <= 0 || c2.dimensions.heightM <= 0 || c2.dimensions.depthM <= 0) throw new Error("furniture outer dimensions are invalid");
   if (!Array.isArray(c2.parts) || c2.parts.length < 4) throw new Error("furniture requires semantic construction parts");
   const parts = /* @__PURE__ */ new Set(), roles = new Set(c2.materialRoles);
@@ -135172,21 +136570,21 @@ function validateFurnitureDesignContract(value, visual) {
     const g4 = part.geometry;
     if (g4.kind === "shaped-board") {
       vec(g4.size, "shaped-board size");
-      if (g4.size.some((v3) => v3 <= 0) || finite11(g4.edgeRadiusM, "edge radius") <= 0) throw new Error("shaped board geometry is invalid");
+      if (g4.size.some((v3) => v3 <= 0) || finite12(g4.edgeRadiusM, "edge radius") <= 0) throw new Error("shaped board geometry is invalid");
     } else if (g4.kind === "tapered-member") {
-      if (finite11(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite11(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite11(v3, "top section") <= 0) || finite11(g4.chamferM, "member chamfer") <= 0) throw new Error("tapered member geometry is invalid");
+      if (finite12(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite12(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite12(v3, "top section") <= 0) || finite12(g4.chamferM, "member chamfer") <= 0) throw new Error("tapered member geometry is invalid");
     } else if (g4.kind === "profile-extrusion") {
-      if (g4.profile.length < 3 || g4.profile.some((point3) => point3.length !== 2 || point3.some((v3) => !Number.isFinite(v3))) || finite11(g4.depthM, "profile depth") <= 0 || finite11(g4.bevelM, "profile bevel") <= 0) throw new Error("profile extrusion geometry is invalid");
+      if (g4.profile.length < 3 || g4.profile.some((point3) => point3.length !== 2 || point3.some((v3) => !Number.isFinite(v3))) || finite12(g4.depthM, "profile depth") <= 0 || finite12(g4.bevelM, "profile bevel") <= 0) throw new Error("profile extrusion geometry is invalid");
     } else if (g4.kind === "panel") {
       vec(g4.size, "panel size");
-      if (g4.size.some((v3) => v3 <= 0) || finite11(g4.fieldDepthM, "field depth") <= 0 || finite11(g4.fieldMarginM, "field margin") <= 0 || finite11(g4.edgeRadiusM, "panel edge radius") <= 0) throw new Error("panel geometry is invalid");
+      if (g4.size.some((v3) => v3 <= 0) || finite12(g4.fieldDepthM, "field depth") <= 0 || finite12(g4.fieldMarginM, "field margin") <= 0 || finite12(g4.edgeRadiusM, "panel edge radius") <= 0) throw new Error("panel geometry is invalid");
     } else if (g4.kind === "peg") {
-      if (finite11(g4.diameterM, "peg diameter") <= 0 || finite11(g4.lengthM, "peg length") <= 0) throw new Error("peg geometry is invalid");
+      if (finite12(g4.diameterM, "peg diameter") <= 0 || finite12(g4.lengthM, "peg length") <= 0) throw new Error("peg geometry is invalid");
     }
   }
   if (!Array.isArray(c2.joints) || c2.joints.length < 2) throw new Error("furniture requires an explicit join graph");
   for (const joint of c2.joints) {
-    if (!ID4.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite11(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01) throw new Error("furniture joint is invalid");
+    if (!ID4.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite12(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01) throw new Error("furniture joint is invalid");
   }
   if (!Array.isArray(c2.sockets)) throw new Error("furniture sockets must be an array");
   const roleClass = furnitureRoleClass(c2.role), chairRole = isChairRole(c2.role), settleRole = isSettleRole(c2.role), legacySettle = settleRole && LEGACY_SETTLE_IDS.has(c2.id), storageRole = isStorageRole(c2.role), occupancySockets = c2.sockets.filter((socket) => socket.kind === "occupancy"), approachSockets = c2.sockets.filter((socket) => socket.kind === "approach");
@@ -135199,7 +136597,7 @@ function validateFurnitureDesignContract(value, visual) {
     if (approachSockets.length < 1) throw new Error("table/storage furniture requires an approach socket");
   }
   for (const socket of c2.sockets) {
-    if (!ID4.test(socket.id) || !parts.has(socket.supportedBy) || finite11(socket.clearanceRadiusM, "socket clearance") <= 0) throw new Error("furniture socket is invalid");
+    if (!ID4.test(socket.id) || !parts.has(socket.supportedBy) || finite12(socket.clearanceRadiusM, "socket clearance") <= 0) throw new Error("furniture socket is invalid");
     vec(socket.position, "socket position");
     vec(socket.facing, "socket facing");
   }
@@ -135208,7 +136606,7 @@ function validateFurnitureDesignContract(value, visual) {
     if (!chair || c2.dimensions.occupancy !== 1 || occupancySockets.length !== 1) throw new Error("chair furniture requires exactly one occupancy and explicit chair semantics");
     if (!ID4.test(chair.seatPartId) || !parts.has(chair.seatPartId) || !Array.isArray(chair.backPartIds) || chair.backPartIds.length < 1 || chair.backPartIds.some((id4) => !ID4.test(id4) || !parts.has(id4)) || !Array.isArray(chair.legPartIds) || chair.legPartIds.length !== 4 || chair.legPartIds.some((id4) => !ID4.test(id4) || !parts.has(id4)) || (/* @__PURE__ */ new Set([chair.seatPartId, ...chair.backPartIds, ...chair.legPartIds])).size !== 1 + chair.backPartIds.length + 4) throw new Error("chair semantic seat/back/four-leg identities are invalid");
     if (occupancySockets[0].supportedBy !== chair.seatPartId) throw new Error("chair occupancy must be supported by its semantic seat");
-    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite11(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite11(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite11(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250) throw new Error("chair ergonomics or rated load are outside the bounded dining policy");
+    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite12(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite12(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite12(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250) throw new Error("chair ergonomics or rated load are outside the bounded dining policy");
     vec(chair.canonicalForward, "chair canonical forward");
     if (Math.abs(chair.canonicalForward[0]) > 1e-8 || Math.abs(chair.canonicalForward[1]) > 1e-8 || Math.abs(chair.canonicalForward[2] + 1) > 1e-8 || occupancySockets[0].facing.some((value2, index) => Math.abs(value2 - chair.canonicalForward[index]) > 1e-8)) throw new Error("chair canonical and occupancy forward must be local -Z");
   } else if (c2.chair !== void 0) throw new Error("non-chair furniture cannot claim chair semantics");
@@ -135221,7 +136619,7 @@ function validateFurnitureDesignContract(value, visual) {
     if (semanticParts.some((id4) => !ID4.test(id4) || !parts.has(id4)) || new Set(semanticParts).size !== semanticParts.length) throw new Error("settle semantic construction parts must be unique real parts");
     const semanticSockets = settle.occupancySocketIds.map((id4) => c2.sockets.find((socket) => socket.id === id4)), approach = c2.sockets.find((socket) => socket.id === settle.approachSocketId);
     if (semanticSockets.some((socket) => !socket || socket.kind !== "occupancy" || socket.supportedBy !== settle.seatPartId) || !approach || approach.kind !== "approach") throw new Error("settle semantic sockets do not resolve the seat occupancies and front approach");
-    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite11(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite11(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite11(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300) throw new Error("settle dimensions, ergonomics, or rated load are outside the exact I1 r3 policy");
+    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite12(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite12(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite12(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300) throw new Error("settle dimensions, ergonomics, or rated load are outside the exact I1 r3 policy");
     vec(settle.canonicalForward, "settle canonical forward");
     if (settle.canonicalForward.some((value2, index) => Math.abs(value2 - [0, 0, -1][index]) > 1e-8)) throw new Error("settle canonical forward must be local -Z");
     const expectedOccupancies = [[-0.32, 0.46, -0.05], [0.32, 0.46, -0.05]];
@@ -135242,7 +136640,7 @@ function validateFurnitureDesignContract(value, visual) {
     vec(storage3.canonicalFront, "storage canonical front");
     if (storage3.canonicalFront.some((value2, index) => Math.abs(value2 - [-1, 0, 0][index]) > 1e-8)) throw new Error("storage canonical front must be local -X");
     if (approach.position.some((value2, index) => Math.abs(value2 - [-0.65, 0, 0][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [1, 0, 0][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8) throw new Error("storage approach must exactly bind the approved local I1 clearance");
-    const load2 = finite11(storage3.ratedLoadKgPerTier, "storage rated load per tier");
+    const load2 = finite12(storage3.ratedLoadKgPerTier, "storage rated load per tier");
     if (load2 < 10 || load2 > 50) throw new Error("storage per-tier rated load is outside the bounded policy");
   } else if (c2.storage !== void 0) throw new Error("non-storage furniture cannot claim storage semantics");
   if (!Array.isArray(c2.colliders) || c2.colliders.length < 2) throw new Error("furniture requires compound collision, not a whole AABB");
@@ -135271,13 +136669,13 @@ var string6 = (value, label4) => {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`functional furniture: ${label4} must be a non-empty string`);
   return value;
 };
-var finite12 = (value, label4) => {
+var finite13 = (value, label4) => {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`functional furniture: ${label4} must be finite`);
   return value;
 };
-var vec34 = (value, label4, positive4 = false) => {
+var vec35 = (value, label4, positive4 = false) => {
   if (!Array.isArray(value) || value.length !== 3) throw new Error(`functional furniture: ${label4} must be a vec3`);
-  const result = [finite12(value[0], `${label4}[0]`), finite12(value[1], `${label4}[1]`), finite12(value[2], `${label4}[2]`)];
+  const result = [finite13(value[0], `${label4}[0]`), finite13(value[1], `${label4}[1]`), finite13(value[2], `${label4}[2]`)];
   if (positive4 && result.some((axis) => axis <= 0)) throw new Error(`functional furniture: ${label4} axes must be positive`);
   return result;
 };
@@ -135334,10 +136732,10 @@ function parseFunctionalFurnitureContract(bytes) {
     if (item?.role !== "socket" || item.extras["limina.kind"] !== socket.kind) throw new Error(`functional furniture: socket ${socket.id} is unresolved`);
     const supportedBy = string6(item.extras["limina.supportedBy"], `${socket.id}.supportedBy`);
     if (supportedBy !== socket.supportedBy || !partSet.has(supportedBy)) throw new Error(`functional furniture: socket ${socket.id} has unresolved support`);
-    const position = vec34(item.extras["limina.position"], `${socket.id}.position`), facing = vec34(item.extras["limina.facing"], `${socket.id}.facing`);
+    const position = vec35(item.extras["limina.position"], `${socket.id}.position`), facing = vec35(item.extras["limina.facing"], `${socket.id}.facing`);
     const length3 = Math.hypot(...facing);
     if (length3 < 1e-6 || Math.abs(length3 - 1) > 1e-5) throw new Error(`functional furniture: socket ${socket.id} facing must be normalized`);
-    const clearanceRadiusM = finite12(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
+    const clearanceRadiusM = finite13(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
     if (clearanceRadiusM <= 0) throw new Error(`functional furniture: socket ${socket.id} clearance must be positive`);
     if (!sameVec3(position, socket.position) || !sameVec3(facing, socket.facing) || clearanceRadiusM !== socket.clearanceRadiusM) throw new Error(`functional furniture: socket ${socket.id} node metadata drifted from its pinned contract`);
     return { id: socket.id, kind: socket.kind, position, facing, supportedBy, clearanceRadiusM };
@@ -135346,7 +136744,7 @@ function parseFunctionalFurnitureContract(bytes) {
   const colliders = design.colliders.map((collider) => {
     const item = semantic.get(collider.id);
     if (item?.role !== "collider") throw new Error(`functional furniture: collider ${collider.id} is unresolved`);
-    const center = vec34(item.extras["limina.center"], `${collider.id}.center`), halfExtents = vec34(item.extras["limina.halfExtents"], `${collider.id}.halfExtents`, true);
+    const center = vec35(item.extras["limina.center"], `${collider.id}.center`), halfExtents = vec35(item.extras["limina.halfExtents"], `${collider.id}.halfExtents`, true);
     if (!Array.isArray(item.extras["limina.covers"])) throw new Error(`functional furniture: collider ${collider.id} lacks semantic coverage`);
     const covers = item.extras["limina.covers"].map((value, index) => string6(value, `${collider.id}.covers[${index}]`));
     if (covers.length === 0 || covers.some((id4) => !partSet.has(id4)) || new Set(covers).size !== covers.length) throw new Error(`functional furniture: collider ${collider.id} has malformed coverage`);
@@ -135362,7 +136760,7 @@ function parseFunctionalFurnitureContract(bytes) {
 }
 
 // src/skills/furniture.ts
-var Vec316 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec317 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var inert2 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
@@ -135430,8 +136828,8 @@ function spawnSemanticRoot(world, position, yaw, origin) {
   }
 }
 function registerFurnitureSkills(registry2, assets) {
-  const inputSchema2 = external_exports.object({ assetId: external_exports.string(), position: Vec316.default([0, 0, 0]), yaw: external_exports.number().default(0), visual: external_exports.boolean().default(true), hash: external_exports.string().optional(), contractHash: external_exports.string().optional() });
-  const socketSchema = external_exports.object({ id: external_exports.string(), kind: external_exports.enum(["occupancy", "approach", "inspect"]), position: Vec316, facing: Vec316, supportedBy: external_exports.string(), clearanceRadiusM: external_exports.number().positive() });
+  const inputSchema2 = external_exports.object({ assetId: external_exports.string(), position: Vec317.default([0, 0, 0]), yaw: external_exports.number().default(0), visual: external_exports.boolean().default(true), hash: external_exports.string().optional(), contractHash: external_exports.string().optional() });
+  const socketSchema = external_exports.object({ id: external_exports.string(), kind: external_exports.enum(["occupancy", "approach", "inspect"]), position: Vec317, facing: Vec317, supportedBy: external_exports.string(), clearanceRadiusM: external_exports.number().positive() });
   const place = {
     name: "furniture.placeFunctional",
     version: "1.1.0",
@@ -135443,7 +136841,9 @@ function registerFurnitureSkills(registry2, assets) {
     commitFields: ["hash", "contractHash"],
     handler: async (input, ctx) => {
       const resolved = assets.resolve(input.assetId);
-      if (input.hash !== void 0 && input.hash !== resolved.hash) throw new Error(`functional furniture: pinned asset hash mismatch for ${input.assetId}`);
+      if (input.hash !== void 0 && input.hash !== resolved.hash) {
+        ctx.emit("furniture.hash_mismatch", { assetId: input.assetId, committed: input.hash, resolved: resolved.hash });
+      }
       const contract = parseFunctionalFurnitureContract(resolved.bytes);
       if (input.contractHash !== void 0 && input.contractHash !== contract.contractHash) throw new Error(`functional furniture: pinned contract hash mismatch for ${input.assetId}`);
       const sockets = contract.sockets.map((socket) => ({ ...socket, position: add4(input.position, rotateY2(socket.position, input.yaw)), facing: rotateY2(socket.facing, input.yaw) }));
@@ -135625,6 +137025,20 @@ var DirectorManager = class {
       }
     }
   }
+  /** Deterministic capture of config + the tension state machine (snapshot participant, H2).
+   *  The machine is sim-affecting mid-run: its phase/tension decide future directives, so a
+   *  restore that dropped it would re-pace the world differently from the captured run. */
+  captureSnapshot() {
+    return { cfg: { ...this.cfg }, running: this.running, phase: this.phase, tension: this.tension, phaseTicksLeft: this.phaseTicksLeft };
+  }
+  /** Wholesale replace config + state machine (participant restore). */
+  restoreSnapshot(snap) {
+    this.cfg = { ...snap.cfg };
+    this.running = snap.running;
+    this.phase = snap.phase;
+    this.tension = snap.tension;
+    this.phaseTicksLeft = snap.phaseTicksLeft;
+  }
 };
 var configInput = external_exports.object({
   buildRate: external_exports.number().positive().max(1).optional(),
@@ -135658,9 +137072,9 @@ function registerDirectorSkills(registry2) {
       })
     }),
     handler: (input, ctx) => {
-      const { meta: meta3, ...partial2 } = input;
+      const { meta: meta4, ...partial2 } = input;
       const config2 = mgr.configure(partial2);
-      ctx.emit("director.configured", { ...config2, ...meta3 });
+      ctx.emit("director.configured", { ...config2, ...meta4 });
       return { ok: true, config: config2 };
     }
   };
@@ -135761,6 +137175,21 @@ var AbilityManager = class {
     }
     this.lastCast.set(castKey(entity, id4), tick);
     return { ok: true, spent };
+  }
+  /** Deterministic capture of defs + cooldown stamps, key-sorted (snapshot participant, H2). */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      defs: [...this.defs.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([id4, d2]) => ({ id: id4, ...d2 })),
+      lastCast: [...this.lastCast.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([key, tick]) => ({ key, tick }))
+    };
+  }
+  /** Wholesale replace defs + cooldown stamps (participant restore). */
+  restoreSnapshot(snap) {
+    this.defs.clear();
+    this.lastCast.clear();
+    for (const d2 of snap.defs) this.defs.set(d2.id, { cooldownTicks: d2.cooldownTicks, resourceStat: d2.resourceStat, cost: d2.cost });
+    for (const c2 of snap.lastCast) this.lastCast.set(c2.key, c2.tick);
   }
 };
 function registerAbilitySkills(registry2, opts) {
@@ -136036,6 +137465,35 @@ var QuestManager = class {
     q3.tracked = true;
     return true;
   }
+  /** Deterministic capture of the whole manager (snapshot participant, H2): definitions
+   *  sorted by id, per-entity instance lists by entity (each list keeps its offer order —
+   *  it is observable via quest.list). */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      definitions: [...this.definitions.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((d2) => ({
+        ...d2,
+        prerequisites: [...d2.prerequisites],
+        objectives: d2.objectives.map((o2) => ({ ...o2 })),
+        followUpQuests: [...d2.followUpQuests]
+      })),
+      instances: [...this.instances.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, quests]) => ({
+        entity,
+        quests: quests.map((q3) => ({ ...q3, objectives: q3.objectives.map((o2) => ({ ...o2 })) }))
+      }))
+    };
+  }
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap) {
+    this.definitions.clear();
+    this.instances.clear();
+    for (const d2 of snap.definitions) {
+      this.definitions.set(d2.id, { ...d2, prerequisites: [...d2.prerequisites], objectives: d2.objectives.map((o2) => ({ ...o2 })), followUpQuests: [...d2.followUpQuests] });
+    }
+    for (const e2 of snap.instances) {
+      this.instances.set(e2.entity, e2.quests.map((q3) => ({ ...q3, objectives: q3.objectives.map((o2) => ({ ...o2 })) })));
+    }
+  }
 };
 var defineQuestInput = external_exports.object({
   id: external_exports.string().min(1),
@@ -136286,7 +137744,7 @@ function registerQuestSkills(registry2, opts) {
 
 // src/skills/combat.ts
 var MetaField9 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
-var Vec317 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec318 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var TICKS_PER_SECOND = 60;
 var StatsManager = class {
   entityStats = /* @__PURE__ */ new Map();
@@ -136352,6 +137810,45 @@ var StatsManager = class {
   listStatusEffects(entity) {
     return this.entityStats.get(entity)?.statusEffects ?? [];
   }
+  /** Deterministic capture of the whole manager (snapshot participant, H2): entities
+   *  sorted, stats by name; status effects keep application order (ids are dense
+   *  `status_N`, so order is deterministic). `seq` rides so a post-restore
+   *  applyStatusEffect mints the SAME next id it would have live. */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      seq: this.seq,
+      entities: [...this.entityStats.values()].sort((a2, b3) => byString(a2.entity, b3.entity)).map((es) => ({
+        entity: es.entity,
+        stats: [...es.stats.values()].sort((a2, b3) => byString(a2.name, b3.name)).map((s2) => ({ ...s2 })),
+        // Explicit key order (canonical capture): a live StatusEffect is built as
+        // `{ ...effect, id, elapsed }`, whose key order differs from a restored one —
+        // spreading it would make capture bytes depend on construction history.
+        statusEffects: es.statusEffects.map((e2) => ({
+          id: e2.id,
+          type: e2.type,
+          duration: e2.duration,
+          elapsed: e2.elapsed,
+          magnitude: e2.magnitude,
+          tickInterval: e2.tickInterval,
+          onApply: e2.onApply,
+          onRemove: e2.onRemove,
+          onTick: e2.onTick,
+          config: e2.config
+        }))
+      }))
+    };
+  }
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap) {
+    this.entityStats.clear();
+    this.seq = snap.seq;
+    for (const e2 of snap.entities) {
+      const stats = /* @__PURE__ */ new Map();
+      for (const s2 of e2.stats) stats.set(s2.name, { ...s2 });
+      this.entityStats.set(e2.entity, { entity: e2.entity, stats, statusEffects: e2.statusEffects.map((fx) => ({ ...fx })) });
+    }
+  }
 };
 var CombatManager = class {
   statsManager;
@@ -136401,6 +137898,18 @@ var CombatManager = class {
     const change = this.statsManager.modifyStat(targetEntity, hp.name, amount);
     const after = change?.value ?? before;
     return { healed: after - before, remaining: after };
+  }
+  /** Deterministic capture of the live defend stances, entity-sorted (snapshot participant, H2).
+   *  Stat state itself is the StatsManager participant's; this carries only combat's own state. */
+  captureSnapshot() {
+    return {
+      stances: [...this.stances.entries()].sort((a2, b3) => a2[0] < b3[0] ? -1 : a2[0] > b3[0] ? 1 : 0).map(([entity, s2]) => ({ entity, ...s2 }))
+    };
+  }
+  /** Wholesale replace the defend stances (participant restore). */
+  restoreSnapshot(snap) {
+    this.stances.clear();
+    for (const s2 of snap.stances) this.stances.set(s2.entity, { damageReduction: s2.damageReduction, reflectChance: s2.reflectChance, expiresTick: s2.expiresTick });
   }
 };
 function hash32(s2) {
@@ -136494,7 +138003,7 @@ var meleeInput = external_exports.object({
 var rangedInput = external_exports.object({
   attackerEntity: external_exports.string(),
   targetEntity: external_exports.string().optional(),
-  direction: Vec317.optional().describe("Projectile direction. If omitted, fires toward targetEntity."),
+  direction: Vec318.optional().describe("Projectile direction. If omitted, fires toward targetEntity."),
   damage: external_exports.number().positive().describe("Base projectile damage."),
   speed: external_exports.number().positive().default(20).describe("Projectile speed (world units/second)."),
   config: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Custom projectile data (critChance 0-1, critMultiplier, visual effect, etc.)."),
@@ -136729,7 +138238,7 @@ function registerCombatSkills(registry2, opts) {
 }
 
 // src/skills/behavior.ts
-var Vec318 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var Vec319 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var MetaField10 = external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Agent-supplied extension metadata.");
 var BehaviorManager = class {
   profiles = /* @__PURE__ */ new Map();
@@ -136854,7 +138363,7 @@ var defineBehaviorInput = external_exports.object({
       hour: external_exports.number().min(0).max(23),
       action: external_exports.string().describe("Action name (patrol, work, sleep, socialize, etc.)."),
       target: external_exports.string().optional(),
-      position: Vec318.optional()
+      position: Vec319.optional()
     })),
     config: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
   })).default([]),
@@ -136869,7 +138378,7 @@ var defineBehaviorInput = external_exports.object({
     id: external_exports.string(),
     type: external_exports.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
     target: external_exports.string().optional(),
-    position: Vec318.optional(),
+    position: Vec319.optional(),
     priority: external_exports.number().int().default(0),
     config: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
   })).default([]),
@@ -136885,7 +138394,7 @@ var setGoalInput = external_exports.object({
   entity: external_exports.string(),
   type: external_exports.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
   target: external_exports.string().optional(),
-  position: Vec318.optional(),
+  position: Vec319.optional(),
   priority: external_exports.number().int().default(0),
   config: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
   meta: MetaField10
@@ -137224,142 +138733,6 @@ function registerBehaviorDialogueSkills(registry2, opts) {
   return { behaviorManager: behaviorMgr, dialogueManager: dialogueMgr };
 }
 
-// src/behavior/behavior-spec.ts
-var BEHAVIOR_SPEC_VERSION = 1;
-var Ver3 = external_exports.literal(BEHAVIOR_SPEC_VERSION);
-var Positive2 = external_exports.number().positive();
-var Finite = external_exports.number().refine(Number.isFinite, "expected finite number");
-var Vec319 = external_exports.tuple([Finite, Finite, Finite]);
-var JsonRecord = external_exports.record(external_exports.string(), external_exports.unknown());
-function canonicalJsonValue(v3) {
-  if (Array.isArray(v3)) return v3.map(canonicalJsonValue);
-  if (v3 !== null && typeof v3 === "object") {
-    const src = v3;
-    const out = {};
-    for (const k3 of Object.keys(src).sort()) out[k3] = canonicalJsonValue(src[k3]);
-    return out;
-  }
-  return v3;
-}
-var IdleBehavior = external_exports.object({
-  version: Ver3,
-  kind: external_exports.literal("idle")
-}).strict();
-var PatrolBehavior = external_exports.object({
-  version: Ver3,
-  kind: external_exports.literal("patrol"),
-  waypoints: external_exports.array(Vec319).min(2),
-  speed: Positive2,
-  loop: external_exports.boolean().default(true)
-}).strict();
-var WanderBehavior = external_exports.object({
-  version: Ver3,
-  kind: external_exports.literal("wander"),
-  radius: Positive2,
-  speed: Positive2
-}).strict();
-var ScriptBehavior = external_exports.object({
-  version: Ver3,
-  kind: external_exports.literal("script"),
-  ref: external_exports.string().min(1),
-  params: JsonRecord.default({})
-}).strict();
-var BehaviorSpecSchema = external_exports.discriminatedUnion("kind", [
-  IdleBehavior,
-  PatrolBehavior,
-  WanderBehavior,
-  ScriptBehavior
-]);
-function canonicalizeBehaviorSpec(s2) {
-  switch (s2.kind) {
-    case "idle":
-      return { version: s2.version, kind: "idle" };
-    case "patrol":
-      return {
-        version: s2.version,
-        kind: "patrol",
-        waypoints: s2.waypoints.map(([x3, y4, z4]) => [x3, y4, z4]),
-        speed: s2.speed,
-        loop: s2.loop
-      };
-    case "wander":
-      return { version: s2.version, kind: "wander", radius: s2.radius, speed: s2.speed };
-    case "script":
-      return {
-        version: s2.version,
-        kind: "script",
-        ref: s2.ref,
-        params: canonicalJsonValue(s2.params)
-      };
-  }
-}
-var OnTickTrigger = external_exports.object({
-  type: external_exports.literal("onTick"),
-  every: external_exports.number().int().min(1).default(1)
-}).strict();
-var OnEnterRegionTrigger = external_exports.object({
-  type: external_exports.literal("onEnterRegion"),
-  center: Vec319,
-  radius: Positive2
-}).strict();
-var OnInteractTrigger = external_exports.object({
-  type: external_exports.literal("onInteract"),
-  entity: external_exports.string().min(1)
-}).strict();
-var TriggerSchema = external_exports.discriminatedUnion("type", [
-  OnTickTrigger,
-  OnEnterRegionTrigger,
-  OnInteractTrigger
-]);
-var EmitAction = external_exports.object({
-  type: external_exports.literal("emit"),
-  event: external_exports.string().min(1),
-  payload: JsonRecord.default({})
-}).strict();
-var SetBehaviorAction = external_exports.object({
-  type: external_exports.literal("setBehavior"),
-  entity: external_exports.string().min(1),
-  behavior: BehaviorSpecSchema
-}).strict();
-var SpawnAction = external_exports.object({
-  type: external_exports.literal("spawn"),
-  recipe: external_exports.string().min(1),
-  origin: Vec319
-}).strict();
-var ActionSchema = external_exports.discriminatedUnion("type", [
-  EmitAction,
-  SetBehaviorAction,
-  SpawnAction
-]);
-var EventSpecSchema = external_exports.object({
-  version: Ver3,
-  trigger: TriggerSchema,
-  action: ActionSchema
-}).strict();
-function canonicalTrigger(t3) {
-  switch (t3.type) {
-    case "onTick":
-      return { type: "onTick", every: t3.every };
-    case "onEnterRegion":
-      return { type: "onEnterRegion", center: [t3.center[0], t3.center[1], t3.center[2]], radius: t3.radius };
-    case "onInteract":
-      return { type: "onInteract", entity: t3.entity };
-  }
-}
-function canonicalAction(a2) {
-  switch (a2.type) {
-    case "emit":
-      return { type: "emit", event: a2.event, payload: canonicalJsonValue(a2.payload) };
-    case "setBehavior":
-      return { type: "setBehavior", entity: a2.entity, behavior: canonicalizeBehaviorSpec(a2.behavior) };
-    case "spawn":
-      return { type: "spawn", recipe: a2.recipe, origin: [a2.origin[0], a2.origin[1], a2.origin[2]] };
-  }
-}
-function canonicalizeEventSpec(s2) {
-  return { version: s2.version, trigger: canonicalTrigger(s2.trigger), action: canonicalAction(s2.action) };
-}
-
 // src/skills/behavior-spec.ts
 var EventSpecRegistry = class {
   map = /* @__PURE__ */ new Map();
@@ -137550,6 +138923,22 @@ var NavmeshManager = class {
     this.portals.delete(id4);
     this.navRevision++;
     return true;
+  }
+  /** Deterministic capture of the PORTAL layer only (snapshot participant, H2), id-sorted.
+   *  The base grid + agents are deliberately NOT captured: the grid is rebuilt by the
+   *  navmesh.build command / the functional-building reconciler, and portal `cells` are a
+   *  pure derivation from (bounds, grid) recomputed at registration. */
+  capturePortalSnapshot() {
+    return {
+      portals: [...this.portals.values()].sort((a2, b3) => a2.id < b3.id ? -1 : a2.id > b3.id ? 1 : 0).map((p2) => ({ id: p2.id, bounds: { ...p2.bounds }, open: p2.open }))
+    };
+  }
+  /** Wholesale replace the portal layer (participant restore): every existing portal is
+   *  unregistered, then each captured one re-registers with its open state — closed-cell
+   *  refcounts and the nav revision advance exactly as live registration would. */
+  restorePortalSnapshot(snap) {
+    for (const id4 of [...this.portals.keys()]) this.unregisterPortal(id4);
+    for (const p2 of snap.portals) this.registerPortal(p2.id, p2.bounds, p2.open);
   }
   validBounds(bounds) {
     return Number.isFinite(bounds.minX) && Number.isFinite(bounds.minZ) && Number.isFinite(bounds.maxX) && Number.isFinite(bounds.maxZ) && bounds.maxX > bounds.minX && bounds.maxZ > bounds.minZ;
@@ -138096,6 +139485,14 @@ var GazetteerManager = class {
   }
   clear() {
     this.byId.clear();
+  }
+  /** Deterministic capture, placeId-sorted (snapshot participant, H2). */
+  captureSnapshot() {
+    return [...this.byId.values()].sort((a2, b3) => a2.placeId < b3.placeId ? -1 : a2.placeId > b3.placeId ? 1 : 0).map((r2) => ({ ...r2, position: [r2.position[0], r2.position[1]] }));
+  }
+  /** Wholesale replace the index (participant restore) — `load` already replaces. */
+  restoreSnapshot(records) {
+    this.load(records.map((r2) => ({ ...r2, position: [r2.position[0], r2.position[1]] })));
   }
 };
 var gazetteerLoadInput = external_exports.object({
@@ -138665,538 +140062,6 @@ function registerVFXSkills(registry2, opts) {
   return { vfxManager: mgr };
 }
 
-// src/worldlog/log.ts
-var LOG_VERSION = 2;
-var PHYSICS_OP_FN = {
-  create_world: "op_physics_create_world",
-  add_ground: "op_physics_add_ground",
-  add_box: "op_physics_add_box",
-  add_box_material: "op_physics_add_box_material",
-  add_sphere: "op_physics_add_sphere",
-  add_capsule: "op_physics_add_capsule",
-  add_static_box: "op_physics_add_static_box",
-  add_static_sphere: "op_physics_add_static_sphere",
-  add_static_capsule: "op_physics_add_static_capsule",
-  add_character: "op_physics_add_character",
-  move_character: "op_physics_move_character",
-  remove_body: "op_physics_remove_body",
-  apply_impulse: "op_physics_apply_impulse",
-  step: "op_physics_step"
-};
-var PHYSICS_OP_OUT_BUFFER = {
-  move_character: 4
-};
-var profilePermsKeyCache = /* @__PURE__ */ new Map();
-function profilePermsKey(profile) {
-  let key = profilePermsKeyCache.get(profile);
-  if (key === void 0) {
-    key = [...resolveProfile(profile)].sort().join("\n");
-    profilePermsKeyCache.set(profile, key);
-  }
-  return key;
-}
-function permissionProfileFor(profile, sortedPerms) {
-  if (profile === void 0) return void 0;
-  return profilePermsKey(profile) === sortedPerms.join("\n") ? profile : void 0;
-}
-function serializeWorldCommand(cmd) {
-  if (cmd.kind === "skill" && cmd.profile !== void 0 && permissionProfileFor(cmd.profile, cmd.perms) === cmd.profile) {
-    const { perms: _perms, ...rest } = cmd;
-    return JSON.stringify(rest);
-  }
-  return JSON.stringify(cmd);
-}
-function serializeWorldLog(meta3, commands) {
-  const lines = [JSON.stringify(meta3)];
-  for (const cmd of commands) lines.push(serializeWorldCommand(cmd));
-  return lines.join("\n") + "\n";
-}
-var physicsOpEnum = external_exports.enum([
-  "create_world",
-  "add_ground",
-  "add_box",
-  "add_box_material",
-  "add_sphere",
-  "add_capsule",
-  "add_static_box",
-  "add_static_sphere",
-  "add_static_capsule",
-  "add_character",
-  "move_character",
-  "remove_body",
-  "apply_impulse",
-  "step"
-]);
-var metaSchema = external_exports.object({
-  kind: external_exports.literal("meta"),
-  logVersion: external_exports.number(),
-  sessionId: external_exports.string(),
-  createdAt: external_exports.string(),
-  commands: external_exports.number(),
-  ticks: external_exports.number()
-});
-var lineSchema = external_exports.discriminatedUnion("kind", [
-  metaSchema,
-  external_exports.object({ kind: external_exports.literal("seed"), seq: external_exports.number(), seed: external_exports.number() }),
-  external_exports.object({ kind: external_exports.literal("physics"), seq: external_exports.number(), tick: external_exports.number(), op: physicsOpEnum, args: external_exports.array(external_exports.number()) }),
-  // v1 lines carry `perms` (full array); v2 lines may carry `profile` instead.
-  // Both optional here — parseWorldLog enforces that at least one is present and
-  // materializes `perms` from `profile`, so a parsed SkillCommand always has perms.
-  external_exports.object({
-    kind: external_exports.literal("skill"),
-    seq: external_exports.number(),
-    tick: external_exports.number(),
-    tool: external_exports.string(),
-    input: external_exports.unknown(),
-    actorId: external_exports.string(),
-    sessionId: external_exports.string(),
-    perms: external_exports.array(external_exports.string()).optional(),
-    profile: external_exports.string().optional()
-  })
-]);
-function parseWorldLog(jsonl, opts = {}) {
-  const out = [];
-  let meta3;
-  const rawLines = jsonl.split("\n");
-  const canRecover = (lineIndex) => opts.recoverPartialFinalLine === true && !jsonl.endsWith("\n") && lineIndex === rawLines.length - 1;
-  for (let i2 = 0; i2 < rawLines.length; i2++) {
-    const line = rawLines[i2];
-    if (line.length === 0) continue;
-    let json2;
-    try {
-      json2 = JSON.parse(line);
-    } catch (err) {
-      const message = `world log: invalid JSON on line ${i2 + 1}: ${err instanceof Error ? err.message : String(err)}`;
-      if (canRecover(i2)) {
-        opts.onRecoverableError?.(message);
-        continue;
-      }
-      throw new Error(message);
-    }
-    const result = lineSchema.safeParse(json2);
-    if (!result.success) {
-      const message = `world log: malformed command on line ${i2 + 1}: ${result.error.message}`;
-      if (canRecover(i2)) {
-        opts.onRecoverableError?.(message);
-        continue;
-      }
-      throw new Error(message);
-    }
-    if (result.data.kind === "meta") {
-      meta3 = result.data;
-      continue;
-    }
-    if (result.data.kind === "skill" && result.data.perms === void 0) {
-      const profile = result.data.profile;
-      if (profile === void 0) {
-        throw new Error(`world log: skill command on line ${i2 + 1} carries neither perms nor profile`);
-      }
-      const resolved = resolveProfile(profile);
-      if (resolved.size === 0) {
-        throw new Error(`world log: skill command on line ${i2 + 1} names unknown permission profile '${profile}'`);
-      }
-      result.data.perms = [...resolved].sort();
-    }
-    out.push(result.data);
-  }
-  out.sort((a2, b3) => a2.seq - b3.seq);
-  return { meta: meta3, commands: out };
-}
-function statefulMulberry32(seed) {
-  let a2 = seed >>> 0;
-  const next = () => {
-    a2 = a2 + 1831565813 | 0;
-    let t3 = Math.imul(a2 ^ a2 >>> 15, 1 | a2);
-    t3 = t3 + Math.imul(t3 ^ t3 >>> 7, 61 | t3) ^ t3;
-    return ((t3 ^ t3 >>> 14) >>> 0) / 4294967296;
-  };
-  return { next, getState: () => a2 >>> 0, setState: (state) => {
-    a2 = state >>> 0;
-  } };
-}
-var installedRng;
-var SKILL_RNG_SEED_XOR = 2654435769;
-var installedSkillRng;
-function installSeededRandom(seed, force = false) {
-  if (installedRng !== void 0 && !force && typeof console !== "undefined" && typeof console.warn === "function") {
-    console.warn(
-      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery)."
-    );
-  }
-  const gen = statefulMulberry32(seed >>> 0);
-  installedRng = gen;
-  installedSkillRng = statefulMulberry32((seed ^ SKILL_RNG_SEED_XOR) >>> 0);
-  Math.random = gen.next;
-  return gen.next;
-}
-function getInstalledSkillRng() {
-  return installedSkillRng;
-}
-function captureWorldState(world, sorted = true, includeGameplay = true) {
-  const scratch = new Float32Array(7);
-  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
-  const entities = [];
-  for (const id4 of ids) {
-    const entry = world.entities.resolve(id4);
-    if (entry === void 0) continue;
-    const eid = entry.eid;
-    const state = {
-      id: id4,
-      eid,
-      pos: [Position.x[eid], Position.y[eid], Position.z[eid]],
-      rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
-      scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]]
-    };
-    if (entry.bodyId !== void 0) {
-      world.ops.op_physics_body_transform(entry.bodyId, scratch);
-      state.body = [scratch[0], scratch[1], scratch[2], scratch[3], scratch[4], scratch[5], scratch[6]];
-    }
-    if (includeGameplay) captureEntityGameplay(state, entry, world.tags?.get(eid));
-    entities.push(state);
-  }
-  return { entities };
-}
-function captureEntityGameplay(state, entry, tagSet) {
-  if (entry.generation !== void 0) state.generation = entry.generation;
-  if (entry.parent !== void 0) state.parent = entry.parent;
-  if (tagSet !== void 0 && tagSet.size > 0) state.tags = [...tagSet].sort();
-  if (entry.material !== void 0) state.material = entry.material;
-  if (entry.resource !== void 0) state.resource = entry.resource;
-  if (entry.behavior !== void 0) state.behavior = entry.behavior;
-}
-function syncAllBodies(world) {
-  const scratch = new Float32Array(7);
-  for (const id4 of world.entities.ids()) {
-    const entry = world.entities.resolve(id4);
-    if (entry === void 0 || entry.bodyId === void 0) continue;
-    syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
-  }
-}
-
-// src/observability/event.ts
-var TraceIntegrityError = class extends Error {
-  constructor(reason, lineNumber, message) {
-    super(message);
-    this.reason = reason;
-    this.lineNumber = lineNumber;
-    this.name = "TraceIntegrityError";
-  }
-  reason;
-  lineNumber;
-};
-function fnv1a16(input) {
-  let hash7 = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (let i2 = 0; i2 < input.length; i2++) {
-    hash7 ^= BigInt(input.charCodeAt(i2));
-    hash7 = hash7 * prime & mask;
-  }
-  return hash7.toString(16).padStart(16, "0");
-}
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
-  const obj = value;
-  const keys = Object.keys(obj).sort();
-  return "{" + keys.filter((k3) => obj[k3] !== void 0).map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
-}
-function canonicalEvent(ev) {
-  return stableStringify({
-    id: ev.id,
-    type: ev.type,
-    actorId: ev.actorId,
-    threadId: ev.threadId,
-    parentEventId: ev.parentEventId,
-    causedBy: ev.causedBy,
-    payload: ev.payload
-  });
-}
-function hashEvent(ev, previousHash) {
-  return "sha256:" + ops.op_sha256(canonicalEvent(ev) + (previousHash ?? ""));
-}
-function withoutIntegrity(ev) {
-  return {
-    id: ev.id,
-    type: ev.type,
-    actorId: ev.actorId,
-    threadId: ev.threadId,
-    parentEventId: ev.parentEventId,
-    causedBy: [...ev.causedBy],
-    timestamp: ev.timestamp,
-    payload: ev.payload
-  };
-}
-function eventSeq(id4) {
-  const match = /^evt_.+_(\d{12})_[0-9a-f]{16}$/.exec(id4);
-  if (match === null) return null;
-  const n3 = Number(match[1]);
-  return Number.isSafeInteger(n3) ? n3 : null;
-}
-function completeJsonlLines(jsonl, policy) {
-  if (jsonl.length === 0) return { lines: [] };
-  const raw = jsonl.split("\n");
-  const final = raw[raw.length - 1] ?? "";
-  if (final === "") return { lines: raw.slice(0, -1) };
-  try {
-    JSON.parse(final);
-    return { lines: raw };
-  } catch {
-  }
-  if (policy === "ignore") return { lines: raw.slice(0, -1), partialFinalLine: final };
-  throw new TraceIntegrityError("partial_final_line", raw.length, "trace has an incomplete final JSONL line");
-}
-var LiminaTracer = class _LiminaTracer {
-  constructor(threadId, maxInMemory = 8192, retainDurableInMemory = true) {
-    this.threadId = threadId;
-    this.maxInMemory = maxInMemory;
-    this.retainDurableInMemory = retainDurableInMemory;
-  }
-  threadId;
-  maxInMemory;
-  retainDurableInMemory;
-  seq = 0;
-  events = [];
-  durableEvents = [];
-  appendTraceName;
-  lastIntegrityHash = null;
-  replayCache;
-  enableAppend(name) {
-    this.appendTraceName = name;
-    this.lastIntegrityHash = lastIntegrityHash(this.durableEvents);
-    return this;
-  }
-  emit(e2) {
-    const seq = this.seq;
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-    const body = stableStringify({ seq, type: e2.type, actorId: e2.actorId, payload: e2.payload });
-    const id4 = `evt_${e2.actorId}_${String(seq).padStart(12, "0")}_${fnv1a16(body)}`;
-    const event = { id: id4, timestamp, ...e2 };
-    if (this.appendTraceName !== void 0) {
-      const hash7 = hashEvent(event, this.lastIntegrityHash);
-      const withIntegrity = { ...event, integrity: { hash: hash7, previousHash: this.lastIntegrityHash } };
-      ops.op_append_trace(this.appendTraceName, JSON.stringify(withIntegrity) + "\n");
-      this.lastIntegrityHash = hash7;
-    }
-    this.seq++;
-    this.events.push(event);
-    if (this.appendTraceName === void 0 && this.retainDurableInMemory) this.durableEvents.push(event);
-    this.replayCache = void 0;
-    if (this.events.length > this.maxInMemory) this.events.shift();
-    return id4;
-  }
-  trace(actorId, sinceTick) {
-    return this.events.filter((ev) => {
-      if (ev.actorId !== actorId) return false;
-      if (sinceTick === void 0) return true;
-      const p2 = ev.payload;
-      if (p2 !== null && typeof p2 === "object" && "tick" in p2) {
-        const tick = p2.tick;
-        return typeof tick === "number" ? tick >= sinceTick : true;
-      }
-      return true;
-    });
-  }
-  /** Serialize to EventLoom-shaped JSONL, computing the sha256 integrity chain
-   *  here (genesis previousHash=null; previousHash(N)=hash(N-1)). */
-  exportJsonl() {
-    if (this.appendTraceName !== void 0) return ops.op_read_trace(this.appendTraceName);
-    if (!this.retainDurableInMemory) return serializeEvents(this.events);
-    return serializeEvents(this.durableEvents);
-  }
-  durableEventCount() {
-    if (this.appendTraceName !== void 0) return this.replay().events.length;
-    if (!this.retainDurableInMemory) return this.events.length;
-    return this.durableEvents.length;
-  }
-  flush(name) {
-    const content = this.exportJsonl();
-    ops.op_write_trace(name, content);
-    return { name, events: this.durableEventCount(), bytes: content.length };
-  }
-  tail(opts = {}) {
-    const afterSeq = opts.afterSeq ?? -1;
-    const limit = Math.max(0, Math.min(opts.limit ?? 100, 1e3));
-    const source = this.appendTraceName !== void 0 ? this.replay().events : this.retainDurableInMemory ? this.durableEvents : this.events;
-    const events = source.filter((ev) => {
-      const seq = eventSeq(ev.id);
-      if (seq === null || seq <= afterSeq) return false;
-      if (opts.actorId !== void 0 && ev.actorId !== opts.actorId) return false;
-      if (opts.type !== void 0 && ev.type !== opts.type) return false;
-      return true;
-    }).slice(0, limit);
-    const last = events.length > 0 ? eventSeq(events[events.length - 1].id) : null;
-    return { events, nextAfterSeq: last };
-  }
-  explainEvent(eventId) {
-    const replay = this.replay();
-    const event = replay.byId.get(eventId);
-    if (event === void 0) return void 0;
-    return {
-      event,
-      parents: replay.parentsById.get(eventId) ?? [],
-      children: replay.childrenById.get(eventId) ?? []
-    };
-  }
-  /** The full durable history with a resolved causal index (byId / parentsById /
-   *  childrenById) — the M8 audit surface walks this to answer "why was X
-   *  allowed/denied" from the real recorded events. */
-  replay() {
-    if (this.appendTraceName !== void 0) return _LiminaTracer.replayTrace(this.appendTraceName);
-    if (this.replayCache === void 0) {
-      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events);
-    }
-    return this.replayCache;
-  }
-  inspect() {
-    const actors = [...new Set(this.events.map((e2) => e2.actorId))];
-    return {
-      threadId: this.threadId,
-      eventCount: this.events.length,
-      actors,
-      recent: this.events.slice(-20)
-    };
-  }
-  static replayTrace(name, opts = {}) {
-    return _LiminaTracer.replayJsonl(ops.op_read_trace(name), opts);
-  }
-  static fromTrace(name, maxInMemory = 8192, opts = {}) {
-    return _LiminaTracer.fromJsonl(ops.op_read_trace(name), maxInMemory, opts);
-  }
-  static appendOnEmit(threadId, name, maxInMemory = 8192, opts = {}) {
-    const recoverPartialFinalLine = opts.recoverPartialFinalLine ?? true;
-    let jsonl = "";
-    try {
-      jsonl = ops.op_read_trace(name);
-    } catch {
-      ops.op_write_trace(name, "");
-    }
-    const replayOpts = {
-      ...opts,
-      onPartialFinalLine: recoverPartialFinalLine ? "ignore" : opts.onPartialFinalLine
-    };
-    let replay;
-    try {
-      replay = _LiminaTracer.replayJsonl(jsonl, replayOpts);
-    } catch (err) {
-      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError)) throw err;
-      const lines = jsonl.split("\n");
-      const prefixLineCount = Math.max(0, err.lineNumber - 1);
-      const prefix = prefixLineCount === 0 ? "" : lines.slice(0, prefixLineCount).join("\n") + "\n";
-      replay = _LiminaTracer.replayJsonl(prefix, { ...opts, onPartialFinalLine: "error" });
-      ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
-    }
-    const tracer = _LiminaTracer.fromReplay(replay, maxInMemory, false);
-    tracer.appendTraceName = name;
-    if (tracer.threadId !== threadId && replay.events.length === 0) {
-      return new _LiminaTracer(threadId, maxInMemory).enableAppend(name);
-    }
-    tracer.lastIntegrityHash = integrityTail(replay.events);
-    if (recoverPartialFinalLine && replay.partialFinalLine !== void 0) ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
-    return tracer;
-  }
-  static ephemeral(threadId, maxInMemory = 8192) {
-    return new _LiminaTracer(threadId, maxInMemory, false);
-  }
-  static fromJsonl(jsonl, maxInMemory = 8192, opts = {}) {
-    const replay = _LiminaTracer.replayJsonl(jsonl, opts);
-    return _LiminaTracer.fromReplay(replay, maxInMemory, true);
-  }
-  static fromReplay(replay, maxInMemory, keepDurable) {
-    const tracer = new _LiminaTracer(replay.threadId ?? "trace_replay", maxInMemory);
-    let maxSeq = -1;
-    for (const ev of replay.events) {
-      const clean = withoutIntegrity(ev);
-      if (keepDurable) tracer.durableEvents.push(clean);
-      tracer.events.push(clean);
-      const seq = eventSeq(ev.id);
-      if (seq !== null && seq > maxSeq) maxSeq = seq;
-    }
-    while (tracer.events.length > maxInMemory) tracer.events.shift();
-    tracer.seq = maxSeq + 1;
-    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail(replay.events);
-    return tracer;
-  }
-  static replayJsonl(jsonl, opts = {}) {
-    const policy = opts.onPartialFinalLine ?? "error";
-    const { lines, partialFinalLine } = completeJsonlLines(jsonl, policy);
-    const events = [];
-    let previousHash = null;
-    for (let i2 = 0; i2 < lines.length; i2++) {
-      const lineNumber = i2 + 1;
-      let parsed;
-      try {
-        parsed = JSON.parse(lines[i2]);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new TraceIntegrityError("invalid_json", lineNumber, `invalid trace JSON at line ${lineNumber}: ${message}`);
-      }
-      const ev = parsed;
-      if (ev.integrity === void 0 || typeof ev.integrity.hash !== "string") {
-        throw new TraceIntegrityError("missing_integrity", lineNumber, `trace line ${lineNumber} is missing integrity`);
-      }
-      if (ev.integrity.previousHash !== previousHash) {
-        throw new TraceIntegrityError("previous_hash_mismatch", lineNumber, `trace line ${lineNumber} previousHash mismatch`);
-      }
-      const expected = hashEvent(ev, previousHash);
-      if (ev.integrity.hash !== expected) {
-        throw new TraceIntegrityError("hash_mismatch", lineNumber, `trace line ${lineNumber} hash mismatch`);
-      }
-      events.push(ev);
-      previousHash = ev.integrity.hash;
-    }
-    return { ...buildReplay(events), partialFinalLine };
-  }
-};
-function lastIntegrityHash(events) {
-  let previousHash = null;
-  for (const ev of events) {
-    previousHash = hashEvent(ev, previousHash);
-  }
-  return previousHash;
-}
-function integrityTail(events) {
-  if (events.length === 0) return null;
-  const last = events[events.length - 1];
-  return last.integrity?.hash ?? lastIntegrityHash(events.map(withoutIntegrity));
-}
-function serializeEvents(events) {
-  let previousHash = null;
-  const lines = [];
-  for (const ev of events) {
-    const clean = withoutIntegrity(ev);
-    const hash7 = hashEvent(clean, previousHash);
-    const withIntegrity = { ...clean, integrity: { hash: hash7, previousHash } };
-    lines.push(JSON.stringify(withIntegrity));
-    previousHash = hash7;
-  }
-  return lines.length > 0 ? lines.join("\n") + "\n" : "";
-}
-function buildReplay(events) {
-  const byId = /* @__PURE__ */ new Map();
-  const parentsById = /* @__PURE__ */ new Map();
-  const childrenById = /* @__PURE__ */ new Map();
-  let threadId = null;
-  for (const ev of events) {
-    byId.set(ev.id, ev);
-    if (threadId === null) threadId = ev.threadId;
-  }
-  for (const ev of events) {
-    const parents = [];
-    const parentIds = ev.parentEventId === null ? ev.causedBy : [ev.parentEventId, ...ev.causedBy];
-    for (const parentId of new Set(parentIds)) {
-      const parent = byId.get(parentId);
-      if (parent === void 0) continue;
-      parents.push(parent);
-      const children = childrenById.get(parentId) ?? [];
-      children.push(ev);
-      childrenById.set(parentId, children);
-    }
-    parentsById.set(ev.id, parents);
-  }
-  return { threadId, events, byId, parentsById, childrenById };
-}
-
 // src/worldlog/replay.ts
 async function replayCommands(commands, deps) {
   const tracer = deps.tracer ?? new LiminaTracer("ses_worldlog_replay");
@@ -139314,148 +140179,6 @@ function parseKeyframes(jsonl) {
   out.sort((a2, b3) => a2.tick - b3.tick);
   return out;
 }
-
-// src/worldlog/snapshot.ts
-var SNAPSHOT_VERSION = 3;
-var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-var B64_INV = (() => {
-  const inv = new Array(128).fill(-1);
-  for (let i2 = 0; i2 < B64.length; i2++) inv[B64.charCodeAt(i2)] = i2;
-  return inv;
-})();
-function bytesToBase64(bytes) {
-  let out = "";
-  let i2 = 0;
-  for (; i2 + 2 < bytes.length; i2 += 3) {
-    const n3 = bytes[i2] << 16 | bytes[i2 + 1] << 8 | bytes[i2 + 2];
-    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + B64[n3 >> 6 & 63] + B64[n3 & 63];
-  }
-  const rem = bytes.length - i2;
-  if (rem === 1) {
-    const n3 = bytes[i2] << 16;
-    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + "==";
-  } else if (rem === 2) {
-    const n3 = bytes[i2] << 16 | bytes[i2 + 1] << 8;
-    out += B64[n3 >> 18 & 63] + B64[n3 >> 12 & 63] + B64[n3 >> 6 & 63] + "=";
-  }
-  return out;
-}
-function base64ToBytes(b64) {
-  if (b64.length % 4 !== 0) throw new Error("world snapshot: invalid base64 length");
-  const firstPad = b64.indexOf("=");
-  if (firstPad !== -1 && !/^=+$/.test(b64.slice(firstPad))) {
-    throw new Error("world snapshot: invalid base64 padding");
-  }
-  let len = b64.length;
-  while (len > 0 && b64[len - 1] === "=") len--;
-  const outLen = len * 3 >> 2;
-  const out = new Uint8Array(outLen);
-  let o2 = 0;
-  let acc = 0;
-  let bits = 0;
-  for (let i2 = 0; i2 < len; i2++) {
-    const code3 = b64.charCodeAt(i2);
-    const v3 = code3 < B64_INV.length ? B64_INV[code3] : -1;
-    if (v3 === void 0 || v3 < 0) throw new Error("world snapshot: invalid base64 character");
-    acc = acc << 6 | v3;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out[o2++] = acc >> bits & 255;
-    }
-  }
-  return out;
-}
-var finite13 = external_exports.number().refine(Number.isFinite, "expected finite number");
-var int4 = finite13.refine(Number.isInteger, "expected integer");
-var sparseNumberArray = external_exports.array(external_exports.union([int4, external_exports.null()])).transform((slots) => {
-  const out = new Array(slots.length);
-  for (let i2 = 0; i2 < slots.length; i2++) {
-    const v3 = slots[i2];
-    if (v3 !== null) out[i2] = v3;
-  }
-  return out;
-});
-var vec35 = external_exports.tuple([finite13, finite13, finite13]);
-var vec43 = external_exports.tuple([finite13, finite13, finite13, finite13]);
-var entityIndexSchema = external_exports.object({
-  aliveCount: int4,
-  maxId: int4,
-  versioning: external_exports.boolean(),
-  versionBits: int4,
-  entityMask: int4,
-  versionShift: int4,
-  versionMask: int4,
-  dense: sparseNumberArray,
-  sparse: sparseNumberArray
-});
-var resourceMetaSchema = external_exports.object({
-  kind: external_exports.literal("gltf"),
-  assetId: external_exports.string(),
-  source: external_exports.string(),
-  hash: external_exports.string(),
-  bytes: int4,
-  rootName: external_exports.string().optional(),
-  objectCount: int4,
-  meshCount: int4,
-  materialCount: int4,
-  textureCount: int4
-}).passthrough();
-var snapshotEntitySchema = external_exports.object({
-  id: external_exports.string(),
-  eid: int4,
-  bodyId: int4.optional(),
-  generation: int4,
-  pos: vec35,
-  rot: vec43,
-  scale: vec35,
-  // Optional/defaulted so a pre-v3 or minimal snapshot literal still parses.
-  tags: external_exports.array(external_exports.string()).optional().default([]),
-  resource: resourceMetaSchema.optional(),
-  // The create command; input is arbitrary skill params (passthrough — do not strip).
-  origin: external_exports.object({ tool: external_exports.string(), input: external_exports.record(external_exports.string(), external_exports.unknown()) }).optional(),
-  // Scene hierarchy: parent id + this entity's transform relative to it.
-  parent: external_exports.string().optional(),
-  localOffset: external_exports.object({ pos: vec35, rot: vec43, scale: vec35 }).optional(),
-  // First-class surface material (color/roughness/metalness, or palette/imported name + pbr).
-  material: external_exports.object({
-    color: external_exports.number().optional(),
-    roughness: external_exports.number().optional(),
-    metalness: external_exports.number().optional(),
-    name: external_exports.string().optional(),
-    pbr: external_exports.boolean().optional()
-  }).optional(),
-  // First-class declarative behaviour — validated by the real BehaviorSpec schema (a torn/forged
-  // snapshot behaviour is rejected on parse, never trusted). Optional so a pre-behaviour snapshot
-  // (or a behaviour-less entity) still parses.
-  behavior: BehaviorSpecSchema.optional()
-});
-var characterSnapshotSchema = external_exports.object({
-  bodyId: int4,
-  vy: finite13,
-  grounded: external_exports.boolean(),
-  heading: finite13,
-  // Additive within schema v3: old v3 snapshots default to the legacy dry state.
-  swimming: external_exports.boolean().optional().default(false)
-});
-var worldSnapshotSchema = external_exports.object({
-  snapshotVersion: external_exports.literal(SNAPSHOT_VERSION),
-  sessionId: external_exports.string(),
-  tick: int4,
-  snapshotSeq: int4,
-  rngState: int4,
-  // Additive within v3: absent -> restore seeds the skill stream from rngState.
-  skillRngState: int4.optional(),
-  entitySeq: int4,
-  entityVersion: int4,
-  entityIndex: entityIndexSchema,
-  entities: external_exports.array(snapshotEntitySchema),
-  characters: external_exports.array(characterSnapshotSchema).optional().default([]),
-  // World-level event definitions — each spec validated by the real EventSpec schema. Optional +
-  // defaulted so a pre-events snapshot still parses (additive, back-compatible with v3).
-  events: external_exports.array(external_exports.object({ id: external_exports.string(), spec: EventSpecSchema })).optional().default([]),
-  physics: external_exports.string()
-});
 
 // src/export/package.ts
 var EXPORT_VERSION = 1;
@@ -139728,10 +140451,10 @@ function registerSaveSkills(registry2, opts) {
         if (recorder.compactedCommandCount > 0) {
           throw new Error("save.export: recorder command prefix was compacted; export from the durable world-log segment instead");
         }
-        const meta3 = deterministicMeta(recorder, ctx.tick);
+        const meta4 = deterministicMeta(recorder, ctx.tick);
         const files = assembleExport({
           worldId,
-          meta: meta3,
+          meta: meta4,
           commands: recorder.commands,
           keyframes: [],
           keyframeInterval: 0,
@@ -139961,6 +140684,52 @@ var ProgressionManager = class {
     const hooks = [...this.levelUpActions.keys()].sort().map((entity) => ({ entity, actions: this.levelUpActions.get(entity) }));
     return JSON.stringify({ prog, hooks });
   }
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant, H2):
+   *  per-entity progression, level-up hooks, and skill-tree definitions, all key-sorted.
+   *  (The string `snapshot()` above is the legacy comparison view; this one restores.) */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      progression: [...this.progression.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, d2]) => ({
+        entity,
+        xp: d2.xp,
+        level: d2.level,
+        xpToNext: d2.xpToNext,
+        skillPoints: d2.skillPoints,
+        unlocked: [...d2.unlocked].sort(),
+        allocated: [...d2.allocated.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([nodeId, points2]) => ({ nodeId, points: points2 }))
+      })),
+      levelUpActions: [...this.levelUpActions.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, actions]) => ({ entity, actions: actions.map((a2) => ({ ...a2 })) })),
+      skillTrees: [...this.skillTrees.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((t3) => ({
+        id: t3.id,
+        name: t3.name,
+        nodes: [...t3.nodes.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((n3) => ({ ...n3, prerequisites: [...n3.prerequisites] })),
+        config: t3.config
+      }))
+    };
+  }
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap) {
+    this.progression.clear();
+    this.levelUpActions.clear();
+    this.skillTrees.clear();
+    for (const p2 of snap.progression) {
+      this.progression.set(p2.entity, {
+        xp: p2.xp,
+        level: p2.level,
+        xpToNext: p2.xpToNext,
+        skillPoints: p2.skillPoints,
+        unlocked: new Set(p2.unlocked),
+        allocated: new Map(p2.allocated.map((a2) => [a2.nodeId, a2.points]))
+      });
+    }
+    for (const h2 of snap.levelUpActions) this.levelUpActions.set(h2.entity, h2.actions.map((a2) => ({ ...a2 })));
+    for (const t3 of snap.skillTrees) {
+      const nodes = /* @__PURE__ */ new Map();
+      for (const n3 of t3.nodes) nodes.set(n3.id, { ...n3, prerequisites: [...n3.prerequisites] });
+      this.skillTrees.set(t3.id, { id: t3.id, name: t3.name, nodes, config: t3.config });
+    }
+  }
 };
 var addXPInput = external_exports.object({
   entity: external_exports.string(),
@@ -140143,6 +140912,14 @@ var WorldStateManager = class {
   }
   getSpawn() {
     return this.state.spawnPosition;
+  }
+  /** Deterministic capture of the whole world-dynamics state (snapshot participant, H2). */
+  captureSnapshot() {
+    return { ...this.state, spawnPosition: [...this.state.spawnPosition] };
+  }
+  /** Wholesale replace the world-dynamics state (participant restore). */
+  restoreSnapshot(state) {
+    this.state = { ...state, spawnPosition: [state.spawnPosition[0], state.spawnPosition[1], state.spawnPosition[2]] };
   }
 };
 var BGMManager = class {
@@ -141302,6 +142079,259 @@ function registerDesignSkills(registry2) {
   registry2.register(getSkill);
 }
 
+// src/skills/snapshot-participants.ts
+var meta3 = external_exports.record(external_exports.string(), external_exports.unknown());
+var inventorySlotSchema = external_exports.object({
+  itemId: external_exports.string(),
+  quantity: external_exports.number(),
+  slot: external_exports.number(),
+  equipped: external_exports.boolean(),
+  data: meta3.optional()
+});
+var inventorySchema = external_exports.object({
+  itemDefs: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    name: external_exports.string(),
+    description: external_exports.string(),
+    icon: external_exports.string().optional(),
+    stackable: external_exports.boolean(),
+    maxStack: external_exports.number(),
+    weight: external_exports.number(),
+    category: external_exports.string(),
+    config: meta3,
+    usageBehavior: external_exports.string().optional(),
+    onUse: external_exports.string().optional(),
+    onEquip: external_exports.string().optional()
+  })),
+  inventories: external_exports.array(external_exports.object({
+    entity: external_exports.string(),
+    capacity: external_exports.number(),
+    typeRestrictions: external_exports.array(external_exports.string()).optional(),
+    slots: external_exports.array(inventorySlotSchema),
+    equipment: external_exports.array(external_exports.object({ equipmentSlot: external_exports.string(), item: inventorySlotSchema }))
+  }))
+});
+var interactionSchema = external_exports.array(external_exports.object({
+  entity: external_exports.string(),
+  prompt: external_exports.string(),
+  maxRange: external_exports.number(),
+  type: external_exports.enum(["pickup", "use", "talk", "open", "toggle", "custom"]),
+  action: external_exports.string().optional(),
+  config: meta3.optional(),
+  state: meta3
+}));
+var gameStateSchema = external_exports.object({
+  variables: external_exports.array(external_exports.object({ name: external_exports.string(), value: external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), meta3]) })),
+  flags: external_exports.array(external_exports.object({ name: external_exports.string(), value: external_exports.boolean() })),
+  counters: external_exports.array(external_exports.object({ name: external_exports.string(), value: external_exports.number() })),
+  timers: external_exports.array(external_exports.object({
+    name: external_exports.string(),
+    remaining: external_exports.number(),
+    duration: external_exports.number(),
+    paused: external_exports.boolean(),
+    direction: external_exports.enum(["countdown", "countup"]),
+    onComplete: external_exports.string(),
+    done: external_exports.boolean()
+  })),
+  conditions: external_exports.array(external_exports.object({ name: external_exports.string(), expression: external_exports.string(), lastValue: external_exports.boolean(), onTrue: external_exports.string().optional() })),
+  state: external_exports.enum(["running", "won", "lost", "paused"]),
+  endedAtTick: external_exports.number().optional()
+});
+var triggerActionSchema2 = external_exports.object({
+  type: external_exports.enum(["emit", "setState", "spawn", "destroy", "audio", "animation", "custom"]),
+  target: external_exports.string().optional(),
+  data: meta3
+});
+var triggersSchema = external_exports.object({
+  seq: external_exports.number(),
+  triggers: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    shape: external_exports.string(),
+    center: external_exports.array(external_exports.number()),
+    size: external_exports.array(external_exports.number()),
+    actions: external_exports.object({ onEnter: external_exports.array(triggerActionSchema2), onExit: external_exports.array(triggerActionSchema2), onStay: external_exports.array(triggerActionSchema2) }),
+    entitiesInside: external_exports.array(external_exports.string()),
+    config: meta3.optional()
+  }))
+});
+var eventListenersSchema = external_exports.object({
+  seq: external_exports.number(),
+  listeners: external_exports.array(external_exports.object({ id: external_exports.string(), eventName: external_exports.string(), action: triggerActionSchema2 }))
+});
+var questObjectiveStateSchema = external_exports.object({ id: external_exports.string(), progress: external_exports.number(), completed: external_exports.boolean() });
+var questsSchema = external_exports.object({
+  definitions: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    name: external_exports.string(),
+    description: external_exports.string(),
+    prerequisites: external_exports.array(external_exports.string()),
+    objectives: external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      type: external_exports.enum(["kill", "collect", "reach", "talk", "custom"]),
+      description: external_exports.string(),
+      target: external_exports.string().optional(),
+      required: external_exports.number(),
+      progress: external_exports.number(),
+      completed: external_exports.boolean(),
+      config: meta3.optional()
+    })),
+    rewards: meta3,
+    followUpQuests: external_exports.array(external_exports.string()),
+    config: meta3.optional()
+  })),
+  instances: external_exports.array(external_exports.object({
+    entity: external_exports.string(),
+    quests: external_exports.array(external_exports.object({
+      questId: external_exports.string(),
+      entity: external_exports.string(),
+      status: external_exports.enum(["available", "active", "completed", "failed"]),
+      objectives: external_exports.array(questObjectiveStateSchema),
+      tracked: external_exports.boolean(),
+      offeredTick: external_exports.number().optional(),
+      acceptedTick: external_exports.number().optional(),
+      completedTick: external_exports.number().optional(),
+      failedTick: external_exports.number().optional()
+    }))
+  }))
+});
+var onZeroActionSchema2 = external_exports.object({
+  type: external_exports.enum(["emit", "setState", "spawn", "destroy", "audio", "animation", "custom"]),
+  target: external_exports.string().optional(),
+  data: meta3
+});
+var statsSchema = external_exports.object({
+  seq: external_exports.number(),
+  entities: external_exports.array(external_exports.object({
+    entity: external_exports.string(),
+    stats: external_exports.array(external_exports.object({
+      name: external_exports.string(),
+      value: external_exports.number(),
+      maxValue: external_exports.number(),
+      minValue: external_exports.number(),
+      config: meta3.optional(),
+      onZero: onZeroActionSchema2.optional()
+    })),
+    statusEffects: external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      type: external_exports.string(),
+      duration: external_exports.number(),
+      elapsed: external_exports.number(),
+      magnitude: external_exports.number(),
+      tickInterval: external_exports.number().optional(),
+      onApply: external_exports.string().optional(),
+      onRemove: external_exports.string().optional(),
+      onTick: external_exports.string().optional(),
+      config: meta3.optional()
+    }))
+  }))
+});
+var combatSchema = external_exports.object({
+  stances: external_exports.array(external_exports.object({ entity: external_exports.string(), damageReduction: external_exports.number(), reflectChance: external_exports.number(), expiresTick: external_exports.number() }))
+});
+var abilitiesSchema = external_exports.object({
+  defs: external_exports.array(external_exports.object({ id: external_exports.string(), cooldownTicks: external_exports.number(), resourceStat: external_exports.string().optional(), cost: external_exports.number().optional() })),
+  lastCast: external_exports.array(external_exports.object({ key: external_exports.string(), tick: external_exports.number() }))
+});
+var navmeshPortalsSchema = external_exports.object({
+  portals: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    bounds: external_exports.object({ minX: external_exports.number(), minZ: external_exports.number(), maxX: external_exports.number(), maxZ: external_exports.number() }),
+    open: external_exports.boolean()
+  }))
+});
+var levelUpActionSchema = external_exports.object({ type: external_exports.string(), data: meta3 });
+var progressionSchema = external_exports.object({
+  progression: external_exports.array(external_exports.object({
+    entity: external_exports.string(),
+    xp: external_exports.number(),
+    level: external_exports.number(),
+    xpToNext: external_exports.number(),
+    skillPoints: external_exports.number(),
+    unlocked: external_exports.array(external_exports.string()),
+    allocated: external_exports.array(external_exports.object({ nodeId: external_exports.string(), points: external_exports.number() }))
+  })),
+  levelUpActions: external_exports.array(external_exports.object({ entity: external_exports.string(), actions: external_exports.array(levelUpActionSchema) })),
+  skillTrees: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    name: external_exports.string(),
+    nodes: external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      name: external_exports.string(),
+      description: external_exports.string(),
+      prerequisites: external_exports.array(external_exports.string()),
+      cost: external_exports.number(),
+      maxLevel: external_exports.number(),
+      effects: meta3,
+      config: meta3.optional()
+    })),
+    config: meta3.optional()
+  }))
+});
+var worldStateSchema = external_exports.object({
+  timeOfDay: external_exports.number(),
+  weather: external_exports.string(),
+  weatherIntensity: external_exports.number(),
+  timeScale: external_exports.number(),
+  spawnPosition: external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]),
+  config: meta3.optional()
+});
+var gazetteerSchema = external_exports.array(external_exports.object({
+  placeId: external_exports.string(),
+  name: external_exports.string(),
+  kind: external_exports.string(),
+  parentId: external_exports.string().nullable(),
+  position: external_exports.tuple([external_exports.number(), external_exports.number()]),
+  radiusM: external_exports.number().optional()
+}));
+var cutsceneActionSchema = external_exports.object({ type: external_exports.string(), data: meta3.optional() });
+var cutscenesSchema = external_exports.object({
+  cutscenes: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    keyframes: external_exports.array(external_exports.object({ atTick: external_exports.number(), action: cutsceneActionSchema })),
+    durationTicks: external_exports.number(),
+    loop: external_exports.boolean()
+  })),
+  active: external_exports.object({ id: external_exports.string(), startTick: external_exports.number(), firedThrough: external_exports.number() }).optional()
+});
+var directorSchema = external_exports.object({
+  cfg: external_exports.object({
+    buildRate: external_exports.number(),
+    fadeRate: external_exports.number(),
+    sustainTicks: external_exports.number(),
+    restTicks: external_exports.number(),
+    peakLevel: external_exports.number(),
+    restLevel: external_exports.number(),
+    pressureDamping: external_exports.number()
+  }),
+  running: external_exports.boolean(),
+  phase: external_exports.enum(["build_up", "sustain", "fade", "rest"]),
+  tension: external_exports.number(),
+  phaseTicksLeft: external_exports.number()
+});
+function participant(key, schema, capture, restore) {
+  return { key, schema, capture, restore: (state) => restore(state) };
+}
+function buildCoreSnapshotParticipants(m2) {
+  const registry2 = new SnapshotParticipantRegistry();
+  registry2.register(participant("inventory", inventorySchema, () => m2.inventoryManager.captureSnapshot(), (s2) => m2.inventoryManager.restoreSnapshot(s2)));
+  registry2.register(participant("interaction", interactionSchema, () => m2.interactionManager.captureSnapshot(), (s2) => m2.interactionManager.restoreSnapshot(s2)));
+  registry2.register(participant("gameState", gameStateSchema, () => m2.gameStateManager.captureSnapshot(), (s2) => m2.gameStateManager.restoreSnapshot(s2)));
+  registry2.register(participant("triggers", triggersSchema, () => m2.triggerManager.snapshot(), (s2) => m2.triggerManager.restoreSnapshot(s2)));
+  registry2.register(participant("eventListeners", eventListenersSchema, () => m2.eventManager.snapshot(), (s2) => m2.eventManager.restoreSnapshot(s2)));
+  registry2.register(participant("quests", questsSchema, () => m2.questManager.captureSnapshot(), (s2) => m2.questManager.restoreSnapshot(s2)));
+  registry2.register(participant("stats", statsSchema, () => m2.statsManager.captureSnapshot(), (s2) => m2.statsManager.restoreSnapshot(s2)));
+  registry2.register(participant("combat", combatSchema, () => m2.combatManager.captureSnapshot(), (s2) => m2.combatManager.restoreSnapshot(s2)));
+  registry2.register(participant("abilities", abilitiesSchema, () => m2.abilityManager.captureSnapshot(), (s2) => m2.abilityManager.restoreSnapshot(s2)));
+  registry2.register(participant("navmeshPortals", navmeshPortalsSchema, () => m2.navmeshManager.capturePortalSnapshot(), (s2) => m2.navmeshManager.restorePortalSnapshot(s2)));
+  registry2.register(participant("progression", progressionSchema, () => m2.progressionManager.captureSnapshot(), (s2) => m2.progressionManager.restoreSnapshot(s2)));
+  registry2.register(participant("worldState", worldStateSchema, () => m2.worldStateManager.captureSnapshot(), (s2) => m2.worldStateManager.restoreSnapshot(s2)));
+  registry2.register(participant("gazetteer", gazetteerSchema, () => m2.gazetteerManager.captureSnapshot(), (s2) => m2.gazetteerManager.restoreSnapshot(s2)));
+  registry2.register(participant("cutscenes", cutscenesSchema, () => m2.cutsceneManager.captureSnapshot(), (s2) => m2.cutsceneManager.restoreSnapshot(s2)));
+  registry2.register(participant("director", directorSchema, () => m2.directorManager.captureSnapshot(), (s2) => m2.directorManager.restoreSnapshot(s2)));
+  registry2.register(eventsParticipant(m2.eventSpecs));
+  return registry2;
+}
+
 // src/skills/index.ts
 function registerCoreSkills(registry2, opts) {
   const assets = opts?.assets ?? new AssetRegistry();
@@ -141374,6 +142404,24 @@ function registerCoreSkills(registry2, opts) {
   const save = registerSaveSkills(registry2);
   const progression = registerProgressionSkills(registry2);
   const worldstate = registerWorldAudioExtensionSkills(registry2);
+  const snapshotParticipants = buildCoreSnapshotParticipants({
+    inventoryManager: inventory.inventoryManager,
+    interactionManager: interaction.interactionManager,
+    gameStateManager: gamestate.gameStateManager,
+    triggerManager: triggers.triggerManager,
+    eventManager: triggers.eventManager,
+    questManager: quest.questManager,
+    statsManager: combat.statsManager,
+    combatManager: combat.combatManager,
+    abilityManager: ability.abilityManager,
+    navmeshManager: nav.navmeshManager,
+    progressionManager: progression.progressionManager,
+    worldStateManager: worldstate.worldStateManager,
+    gazetteerManager: navigation.gazetteerManager,
+    cutsceneManager: cutscene.cutsceneManager,
+    directorManager: director.directorManager,
+    eventSpecs: behaviorSpec.events
+  });
   return {
     packages,
     ui,
@@ -141406,7 +142454,8 @@ function registerCoreSkills(registry2, opts) {
     vfx,
     save,
     progression,
-    worldstate
+    worldstate,
+    snapshotParticipants
   };
 }
 
@@ -143851,12 +144900,12 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   op_physics_snapshot() {
     const w5 = this.requireWorld();
     const rapierBytes = w5.takeSnapshot();
-    const meta3 = JSON.stringify({
+    const meta4 = JSON.stringify({
       nextBodyId: this.nextBodyId,
       gravityY: this.gravityY,
       entries: [...this.idToHandle.entries()]
     });
-    const metaBytes = new TextEncoder().encode(meta3);
+    const metaBytes = new TextEncoder().encode(meta4);
     const blob = new Uint8Array(4 + metaBytes.length + rapierBytes.length);
     new DataView(blob.buffer).setUint32(0, metaBytes.length, true);
     blob.set(metaBytes, 4);
@@ -143868,18 +144917,18 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metaLen = dv.getUint32(0, true);
     const metaBytes = bytes.subarray(4, 4 + metaLen);
-    const meta3 = JSON.parse(new TextDecoder().decode(metaBytes));
+    const meta4 = JSON.parse(new TextDecoder().decode(metaBytes));
     const rapierBytes = bytes.slice(4 + metaLen);
     const restoredWorld = this.R.World.restoreSnapshot(rapierBytes);
     this.releaseWorldResources();
     this.world = restoredWorld;
-    this.gravityY = meta3.gravityY;
+    this.gravityY = meta4.gravityY;
     this.configureWorld();
     this.events = new this.R.EventQueue(true);
     this.controller = this.makeController();
-    this.nextBodyId = meta3.nextBodyId;
-    this.idToHandle = new Map(meta3.entries);
-    this.handleToId = new Map(meta3.entries.map(([id4, handle]) => [handle, id4]));
+    this.nextBodyId = meta4.nextBodyId;
+    this.idToHandle = new Map(meta4.entries);
+    this.handleToId = new Map(meta4.entries.map(([id4, handle]) => [handle, id4]));
   }
   dispose() {
     if (this.disposed) return;
@@ -144141,6 +145190,28 @@ var InputRingBuffer = class {
   }
 };
 
+// src/browser/derived-plain-data.ts
+var typeError = (message) => new TypeError(message);
+function plainRecord2(value, label4, error51 = typeError) {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw error51(`${label4} must be a plain object`);
+  }
+  return value;
+}
+function exactDataKeys(value, required2, optional2, label4, error51 = typeError) {
+  const allowed = /* @__PURE__ */ new Set([...required2, ...optional2]);
+  const names = Object.getOwnPropertyNames(value);
+  if (Object.getOwnPropertySymbols(value).length !== 0 || required2.some((key) => !names.includes(key)) || names.some((key) => !allowed.has(key))) {
+    throw error51(`${label4} has unsupported or missing fields`);
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor?.enumerable !== true || descriptor.get !== void 0 || descriptor.set !== void 0) {
+      throw error51(`${label4}.${name} must be an enumerable data field`);
+    }
+  }
+}
+
 // src/browser/derived-terrain-index.ts
 function assertDerivedTerrainTilePlacement(tile, chunk, grid) {
   if (chunk.lod !== 0) throw new Error(`derived terrain index supports only LOD0, received '${chunk.chunkId}'`);
@@ -144260,22 +145331,10 @@ var DerivedSimActivationError = class extends Error {
 function derivedError(code3, message) {
   return new DerivedSimActivationError(code3, message);
 }
+var derivedPlainError = (message) => derivedError("INVALID_DERIVED_MESSAGE", message);
 function exactPlainRecord(value, keys, optional2, label4) {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw derivedError("INVALID_DERIVED_MESSAGE", `${label4} must be a plain object`);
-  }
-  const record5 = value;
-  const allowed = /* @__PURE__ */ new Set([...keys, ...optional2]);
-  const names = Object.getOwnPropertyNames(record5);
-  if (Object.getOwnPropertySymbols(record5).length !== 0 || keys.some((key) => !names.includes(key)) || names.some((key) => !allowed.has(key))) {
-    throw derivedError("INVALID_DERIVED_MESSAGE", `${label4} has unsupported or missing fields`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(record5, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== void 0 || descriptor.set !== void 0) {
-      throw derivedError("INVALID_DERIVED_MESSAGE", `${label4}.${name} must be an enumerable data field`);
-    }
-  }
+  const record5 = plainRecord2(value, label4, derivedPlainError);
+  exactDataKeys(record5, keys, optional2, label4, derivedPlainError);
   return record5;
 }
 function derivedId(value, label4) {

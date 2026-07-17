@@ -16,6 +16,7 @@ import {
   DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
   DERIVED_VERIFY_WORKER_SCHEMA,
   DerivedSnapshotVerifier,
+  collectDerivedSnapshotTransferables,
   createDerivedVerifyWorkerController,
   isVerifiedTransferredDerivedSnapshot,
   parseTransferredDerivedRuntimeSnapshot,
@@ -308,4 +309,118 @@ assert(workerDuplicate !== null && workerDuplicate.message === inlineDuplicate!.
     "a failed verify channel accepted later requests");
 }
 
-console.log("[js] p99_derived_verify_worker OK: one verifier accepts the golden snapshot and rejects flipped-byte/re-encode/duplicate tampers identically inline and through the worker-shell controller; unverified snapshots cannot reach the mounting constructor");
+// ── 5. RETAIN-AND-REUSE (D1 — the editor's exact pattern). The editor keeps ONE snapshot
+//       object and re-activates it for Play-start and edit-reboot, so the verify client must
+//       never detach the caller's buffers. This channel emulates REAL postMessage transfer
+//       semantics headlessly (structured clone of the message, then source-side detach of every
+//       transfer-listed buffer via ArrayBuffer.prototype.transfer, and a DataCloneError on an
+//       already-detached transferable) — a plain synchronous loopback would never detach
+//       anything and could not falsify the copy-before-post behavior. ──
+
+function structuredCloneLike(value: unknown, seen = new Map<object, unknown>()): unknown {
+  if (value === null || typeof value !== "object") {
+    if (typeof value === "function") throw new Error("gate clone: functions are not structured-clone-safe");
+    return value;
+  }
+  const cached = seen.get(value as object);
+  if (cached !== undefined) return cached;
+  if (value instanceof ArrayBuffer) {
+    if ((value as ArrayBuffer & { detached?: boolean }).detached === true) throw new Error("DataCloneError: ArrayBuffer is detached");
+    const copy = value.slice(0);
+    seen.set(value, copy);
+    return copy;
+  }
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView;
+    if ((view.buffer as ArrayBuffer & { detached?: boolean }).detached === true) throw new Error("DataCloneError: ArrayBuffer is detached");
+    const Ctor = view.constructor as new (input: unknown) => ArrayBufferView;
+    const copy = new Ctor(view); // typed arrays copy-construct into a fresh owned buffer
+    seen.set(value, copy);
+    return copy;
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = [];
+    seen.set(value, out);
+    for (const entry of value) out.push(structuredCloneLike(entry, seen));
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  seen.set(value, out);
+  for (const key of Object.getOwnPropertyNames(value)) out[key] = structuredCloneLike((value as Record<string, unknown>)[key], seen);
+  return out;
+}
+
+function emulatePostMessage(message: unknown, transfer: readonly unknown[]): unknown {
+  for (const entry of transfer) {
+    if (entry instanceof ArrayBuffer && (entry as ArrayBuffer & { detached?: boolean }).detached === true) {
+      throw new Error("DataCloneError: cannot transfer a detached ArrayBuffer");
+    }
+  }
+  const delivered = structuredCloneLike(message);
+  // Source-side detach — exactly what a real postMessage transfer list does.
+  for (const entry of transfer) {
+    if (entry instanceof ArrayBuffer) (entry as ArrayBuffer & { transfer(): ArrayBuffer }).transfer();
+  }
+  return delivered;
+}
+
+function transferEmulatingVerifier(): DerivedSnapshotVerifier {
+  const listeners: ((message: unknown) => void)[] = [];
+  const controller = createDerivedVerifyWorkerController((message, transfer) => {
+    const delivered = emulatePostMessage(message, transfer ?? []);
+    for (const listener of listeners) listener(delivered);
+  });
+  return new DerivedSnapshotVerifier({
+    post: (message, transfer) => { controller(emulatePostMessage(message, transfer)); },
+    listen: (handler) => { listeners.push(handler); },
+  }, { timeoutMs: null });
+}
+
+{
+  assert(typeof (ArrayBuffer.prototype as unknown as { transfer?: unknown }).transfer === "function",
+    "this host lacks ArrayBuffer.prototype.transfer — the transfer emulation cannot run");
+  const retained = snapshot();
+  const client = transferEmulatingVerifier();
+  const first = await client.verify(retained);
+  assertGolden(first, "retain-first");
+  // Same client, same retained object (Play-start re-activation through the same runtime)…
+  const second = await client.verify(retained);
+  assertGolden(second, "retain-reuse");
+  // …and a FRESH client over the same retained object (edit-reboot spawns a new runtime).
+  const third = await transferEmulatingVerifier().verify(retained);
+  assertGolden(third, "retain-reboot");
+  assert(first.manifestHash === second.manifestHash && second.manifestHash === third.manifestHash,
+    "retained-snapshot re-verifications disagreed");
+}
+
+// ── 6. FALSIFIABILITY of leg 5's emulation + the retained-buffer contract, in code: posting the
+//       caller's ORIGINAL buffers as the request transfer list (the pre-fix client behavior)
+//       detaches them, and the SECOND use of the same snapshot fails with the DataCloneError the
+//       editor hit (DERIVED_PLAY_INITIAL_ACTIVATION_FAILED). Proves the channel's detach
+//       emulation is live — leg 5 cannot pass vacuously. ──
+{
+  const doomed = snapshot();
+  const responses: unknown[] = [];
+  const controller = createDerivedVerifyWorkerController((message, transfer) => {
+    responses.push(emulatePostMessage(message, transfer ?? []));
+  });
+  controller(emulatePostMessage(
+    { schema: DERIVED_VERIFY_WORKER_SCHEMA, type: "verify", requestId: 61, snapshot: doomed },
+    collectDerivedSnapshotTransferables(doomed),
+  ));
+  assert((responses[0] as { type?: string } | undefined)?.type === "verified",
+    "the transfer-emulating channel must deliver intact bytes on first use");
+  const detachedReuse = caught(() => emulatePostMessage(
+    { schema: DERIVED_VERIFY_WORKER_SCHEMA, type: "verify", requestId: 62, snapshot: doomed },
+    collectDerivedSnapshotTransferables(doomed),
+  ));
+  assert(detachedReuse !== null && /DataCloneError/.test(detachedReuse.message),
+    "transferring the caller's own buffers must detach them and fail the snapshot's second use");
+  // The client also names the condition up front: a snapshot whose buffers were already
+  // detached is rejected with a clear error instead of an opaque verification failure.
+  const clientReject = await caughtAsync(() => transferEmulatingVerifier().verify(doomed));
+  assert(clientReject !== null && /detached/.test(clientReject.message),
+    `an already-detached snapshot must be rejected with a clear detached-buffer error (${clientReject?.message ?? "accepted"})`);
+}
+
+console.log("[js] p99_derived_verify_worker OK: one verifier accepts the golden snapshot and rejects flipped-byte/re-encode/duplicate tampers identically inline and through the worker-shell controller; unverified snapshots cannot reach the mounting constructor; a RETAINED snapshot re-verifies through transfer-emulating channels (editor Play-start/edit-reboot pattern) while transferring the caller's own buffers provably detaches them");

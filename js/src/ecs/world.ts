@@ -154,6 +154,40 @@ export function createEcsWorld(): World {
   return createWorld();
 }
 
+// ---- Entity-index mutation hooks (registry lazy head-frame capture) --------
+// One-shot hooks fired BEFORE the next eid allocation/free on a world. The skill
+// registry's per-chain undo ledger (H1) must capture the bitECS entity index in
+// its PRE-chain state so a failed chain can rewind eid allocation; capturing it
+// eagerly on every write invoke is O(maxId) churn most invokes never need. The
+// seam lives HERE (not only on the EntityTable) because skills allocate the eid
+// via spawnRenderable BEFORE calling entities.create — a table-only hook would
+// capture an index that already contains the chain's first eid. Keyed by the
+// bitECS world object; multiple in-flight head chains may each arm one hook, and
+// the first index mutation fires (and clears) all of them.
+const entityIndexHooks = new WeakMap<object, Set<() => void>>();
+
+/** Arm a one-shot hook fired before the next eid allocation/free on `world`.
+ *  Returns a disarm function (idempotent). Non-object worlds (stub contexts
+ *  without a real bitECS world) get a no-op disarm and never fire. */
+export function armEntityIndexMutationHook(world: unknown, fn: () => void): () => void {
+  if (world === null || typeof world !== "object") return () => {};
+  let hooks = entityIndexHooks.get(world);
+  if (hooks === undefined) {
+    hooks = new Set();
+    entityIndexHooks.set(world, hooks);
+  }
+  hooks.add(fn);
+  return () => { hooks.delete(fn); };
+}
+
+function fireEntityIndexHooks(world: World): void {
+  const hooks = entityIndexHooks.get(world as unknown as object);
+  if (hooks === undefined || hooks.size === 0) return;
+  const fired = [...hooks];
+  hooks.clear();
+  for (const fn of fired) fn();
+}
+
 /** Spawn an entity with identity transform bound to a scene object. */
 export function spawnRenderable(
   world: World,
@@ -162,6 +196,7 @@ export function spawnRenderable(
   y: number,
   z: number,
 ): number {
+  fireEntityIndexHooks(world);
   const eid: number = addEntity(world);
   if (eid < 0 || eid >= MAX_ENTITIES) {
     removeEntity(world, eid);
@@ -187,6 +222,7 @@ export function spawnRenderable(
 /** Tear down an entity: free the eid (bitECS may recycle it) and drop its scene
  *  object binding so a recycled eid never renders the old mesh. */
 export function despawnRenderable(world: World, eid: number): void {
+  fireEntityIndexHooks(world);
   renderables[eid] = undefined;
   removeEntity(world, eid);
 }

@@ -70,4 +70,26 @@ assert(closed.success && restoredWorld.tags.get(restored.eid)?.has("door-closed"
 const closedAgain = await restoredRegistry.invoke("door.setOpen", { door, open: false },
   { agentId: "builder", sessionId: "functional-restored", permissions: perms, tick: 4, world: restoredWorld });
 assert(closedAgain.success, "absolute close was not idempotent after snapshot restore");
-console.log(`p_functional_building_replay OK: hash=${out.hash}, door=${door}, replay and snapshot-toggle stable`);
+
+// ── Committed-hash pin: WARN-AND-CONTINUE (failure mode #12). The committed hash comes from
+//    op_sha256, which is host-dependent, so a cross-host replay of a healthy placement can
+//    mismatch — the placement must succeed and surface exactly ONE building.hash_mismatch event.
+//    FALSIFIABLE both ways: a MATCHING pin emits zero events, and removing the handler's hash
+//    check makes the mismatch event disappear. ──
+const pinTracer = new LiminaTracer("functional-pin");
+const pinRegistry = makeRegistry(pinTracer), pinWorld = makeWorld(ops);
+const pinAt = (tick: number) => ({ agentId: "builder", sessionId: "functional-pin", permissions: perms, tick, world: pinWorld });
+const pinMatch = await pinRegistry.invoke("building.placeFunctional", { assetId, position: [80, 0, 80], yaw: 0, hash: approvedR1EngineHash }, pinAt(1));
+assert(pinMatch.success, `matching committed hash must place: ${JSON.stringify(pinMatch.error)}`);
+assert(pinTracer.trace("builder").filter((e) => e.type === "building.hash_mismatch").length === 0,
+  "a matching committed hash must not emit building.hash_mismatch");
+const swappedHash = `sha256:${"e".repeat(64)}`;
+const pinSwap = await pinRegistry.invoke("building.placeFunctional", { assetId, position: [140, 0, 140], yaw: 0, hash: swappedHash }, pinAt(2));
+assert(pinSwap.success, `a committed-hash mismatch must warn-and-continue, not abort the replay (failure mode #12): ${JSON.stringify(pinSwap.error)}`);
+const pinEvents = pinTracer.trace("builder").filter((e) => e.type === "building.hash_mismatch");
+assert(pinEvents.length === 1, `a swapped committed hash MUST surface exactly one building.hash_mismatch event (got ${pinEvents.length})`);
+const pinPayload = pinEvents[0].payload as { assetId?: string; committed?: string; resolved?: string };
+assert(pinPayload.assetId === assetId && pinPayload.committed === swappedHash && pinPayload.resolved === approvedR1EngineHash,
+  `building.hash_mismatch payload must carry {assetId, committed, resolved}: ${JSON.stringify(pinPayload)}`);
+
+console.log(`p_functional_building_replay OK: hash=${out.hash}, door=${door}, replay and snapshot-toggle stable; committed-hash mismatch warns-and-continues (1 building.hash_mismatch event)`);

@@ -14,8 +14,14 @@
 //      (renderer present + injected grass package, the sim-worker shape) yields the IDENTICAL
 //      entity id sequence AND bit-identical world state. Includes a lawnVegetation deco asset
 //      whose stub GLB FAILS to parse in the render path — the deco entity must exist anyway
-//      (mesh lost, entity kept), so a render fault can never fork the sequence.
-//   4. NOT VACUOUS — a different terrain seed re-rolls the placements (the comparisons above
+//      (mesh lost, entity kept), so a render fault can never fork the sequence. The deco leg is
+//      NOT vacuous: the seeded plan must actually yield deco entities (count > 0).
+//   4. CURATED-GLB AVAILABILITY PARITY (the D8 env-fork) — the same render-capable build with a
+//      NON-RESOLVING assets stub (a bare checkout without the curated deco GLB) yields the
+//      IDENTICAL entity id sequence and deco-entity count, and the resolve failure surfaces as a
+//      village.lawn_deco_failed event instead of being swallowed. Pre-fix code dropped the
+//      unresolvable asset from the scatter config BEFORE entity creation → fewer entities → FAIL.
+//   5. NOT VACUOUS — a different terrain seed re-rolls the placements (the comparisons above
 //      could not pass by comparing constants).
 //
 // Run: LIMINA_AUDIO=null ./target/release/limina js/test/p97_village_entity_replay.ts   (exit 0 = pass)
@@ -55,6 +61,13 @@ function makeWorld(worldOps: EngineOps, renderGrass: boolean): WorldContext {
 // to EMPTY bytes: headless never parses it; the render path parses, FAILS, and must still create
 // the deco entity. The stub keeps this gate independent of the gitignored library GLBs (p78 style).
 const stubAssets = { resolve: (id: string) => ({ assetId: id, bytes: new Uint8Array(), hash: "sha256:stub-" + id }) } as never;
+// A BARE-CHECKOUT stub: the curated deco GLB does not resolve at all (leg 4 — the D8 env-fork).
+const absentDecoAssets = {
+  resolve: (id: string) => {
+    if (id === "p97-stub-flower") throw new Error(`asset not found: ${id}`);
+    return { assetId: id, bytes: new Uint8Array(), hash: "sha256:stub-" + id };
+  },
+} as never;
 const perms = resolveProfile("builder.readWrite");
 const SIZE = 120, RES = 128, SEED = 6;
 const direction = { setting: "medieval", mood: "weathered, lived-in" };
@@ -71,16 +84,20 @@ type Placement = { assetId: string; role: string; x: number; y: number; z: numbe
 interface RunResult {
   entities: string[]; placements: Placement[]; placed: number;
   state: WorldStateSnapshot; lawnEntities: number; lawnDecoEntities: number;
+  tracer: LiminaTracer;
 }
 
-async function build(session: string, opts: { record?: WorldRecorder; renderGrass?: boolean; terrainSeed?: number }): Promise<RunResult> {
+async function build(session: string, opts: {
+  record?: WorldRecorder; renderGrass?: boolean; terrainSeed?: number; assets?: never;
+}): Promise<RunResult> {
   const worldOps = opts.record !== undefined ? opts.record.wrapOps(ops) : ops;
   const world = makeWorld(worldOps, opts.renderGrass === true);
   const layers = new Map<string, EditableTerrain>();
-  const registry = new SkillRegistry(new LiminaTracer(session));
+  const tracer = new LiminaTracer(session);
+  const registry = new SkillRegistry(tracer);
   registerTerrainEditSkills(registry, layers);
   registerBuildingSkills(registry);
-  registerVillageSkills(registry, layers, stubAssets, new Map(), new Map(),
+  registerVillageSkills(registry, layers, opts.assets ?? stubAssets, new Map(), new Map(),
     opts.renderGrass === true ? INTERACTIVE_TEMPERATE_MEADOW_PACKAGE : undefined);
   opts.record?.attach(registry);
   const at = (t: number) => ({ agentId: "agt_p97", sessionId: session, permissions: perms, tick: t, world });
@@ -110,7 +127,7 @@ async function build(session: string, opts: { record?: WorldRecorder; renderGras
   // run in this gate overwrites the live arrays (ids/copies below stay valid).
   return {
     entities: [...res.entities], placements: res.placements, placed: res.placed,
-    state: captureWorldState(world), lawnEntities, lawnDecoEntities,
+    state: captureWorldState(world), lawnEntities, lawnDecoEntities, tracer,
   };
 }
 
@@ -140,6 +157,10 @@ const cmpReplay = compareWorldState(runA.state, replay.state);
 assert(cmpReplay.identical, `record→replay world state diverged: ${cmpReplay.detail}`);
 
 // ── 3. RENDER/HEADLESS ENTITY-ID PARITY (the H4 fork, plus the deco parse-failure path) ────────
+// The deco leg must not pass vacuously: the seeded scatter has to actually yield deco entities,
+// or every deco-count comparison below would be 0 === 0.
+assert(runA.lawnDecoEntities > 0,
+  `the seeded lawn-deco plan must create at least one deco entity (got ${runA.lawnDecoEntities}) — the deco legs would otherwise be vacuous`);
 const runC = await build("ses_p97_render", { renderGrass: true });
 assert(runC.entities.length === runA.entities.length,
   `render-capable run created ${runC.entities.length} entities vs headless ${runA.entities.length} — the ent_ sequence forked`);
@@ -153,7 +174,27 @@ assert(runC.lawnDecoEntities === runA.lawnDecoEntities,
 const cmpRender = compareWorldState(runA.state, runC.state);
 assert(cmpRender.identical, `render-capable vs headless world state diverged: ${cmpRender.detail}`);
 
-// ── 4. NOT VACUOUS: a different terrain seed re-rolls the placements ───────────────────────────
+// ── 4. CURATED-GLB AVAILABILITY PARITY (D8): a bare checkout where the deco GLB does NOT resolve
+//      must produce the IDENTICAL entity sequence — deco entities included — and surface the
+//      resolve failure as a village.lawn_deco_failed event, never a silent drop. Pre-fix code
+//      filtered the unresolvable asset out of the scatter config before entity creation, so this
+//      leg FAILS on it (fewer entities than runC). ──
+const runE = await build("ses_p97_absent", { renderGrass: true, assets: absentDecoAssets });
+assert(runE.entities.length === runC.entities.length,
+  `non-resolving deco checkout created ${runE.entities.length} entities vs resolving ${runC.entities.length} — curated-GLB availability forked the ent_ sequence (the D8 env-fork)`);
+for (let i = 0; i < runC.entities.length; i++) {
+  assert(runC.entities[i] === runE.entities[i],
+    `entity id sequence diverged at index ${i} between resolving and non-resolving checkouts: '${runC.entities[i]}' vs '${runE.entities[i]}'`);
+}
+assert(runE.lawnDecoEntities === runC.lawnDecoEntities,
+  `deco-entity count diverged between resolving (${runC.lawnDecoEntities}) and non-resolving (${runE.lawnDecoEntities}) assets stubs`);
+const decoFailures = runE.tracer.trace("agt_p97").filter((e) => e.type === "village.lawn_deco_failed");
+assert(decoFailures.length > 0,
+  "a non-resolving deco GLB must surface a village.lawn_deco_failed event — not be silently swallowed");
+const cmpAbsent = compareWorldState(runC.state, runE.state);
+assert(cmpAbsent.identical, `resolving vs non-resolving assets stub world state diverged: ${cmpAbsent.detail}`);
+
+// ── 5. NOT VACUOUS: a different terrain seed re-rolls the placements ───────────────────────────
 const runD = await build("ses_p97_seed", { terrainSeed: 99 });
 assert(runD.placements.length === runA.placements.length, "seed change must not change the building COUNT (steering-driven)");
 let rerolled = false;
@@ -165,7 +206,9 @@ assert(rerolled, "a different terrain seed must re-roll placements — the parit
 
 ops.op_log(
   `[js] p97_village_entity_replay OK: headless village.build created ${runA.lawnEntities} meshless lawn entities + ` +
-  `${runA.lawnDecoEntities} deco entities; record→replay BIT-IDENTICAL (${cmpReplay.comparisons} comparisons); ` +
+  `${runA.lawnDecoEntities} deco entities (> 0, non-vacuous); record→replay BIT-IDENTICAL (${cmpReplay.comparisons} comparisons); ` +
   `render-capable run reproduced the exact ${runA.entities.length}-entity id sequence (deco GLB parse failure kept its entity); ` +
+  `a NON-RESOLVING deco checkout reproduced the same sequence + ${runE.lawnDecoEntities} deco entities ` +
+  `(${decoFailures.length} village.lawn_deco_failed event(s), never swallowed); ` +
   `terrain seed re-roll proves the comparisons are live.`,
 );

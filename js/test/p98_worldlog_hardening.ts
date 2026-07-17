@@ -76,21 +76,58 @@ const PERMS = resolveProfile(PROFILE);
     assert(c.perms.length === PERMS.size, "in-memory command keeps the full perms array");
   }
 
-  // On the wire: profile-pinned lines drop the array; parse materializes it back.
+  // On the wire: the FIRST pinned line per profile keeps its perms array — the
+  // frozen mapping later name-only lines resolve from (D10: replay must grant
+  // what the caller held at RECORD time, not what the live profile says now) —
+  // and every later same-profile line drops the array.
   const jsonl = rec.toJsonl();
-  for (const line of jsonl.split("\n")) {
-    if (line.length === 0) continue;
-    const parsed = JSON.parse(line) as { kind?: string; perms?: unknown; profile?: unknown };
-    if (parsed.kind !== "skill") continue;
-    assert(parsed.perms === undefined, "v2 skill line must not carry the perms array");
-    assert(parsed.profile === PROFILE, "v2 skill line carries the profile name");
-  }
+  const wireSkillLines = jsonl.split("\n").filter((l) => l.length > 0)
+    .map((l) => JSON.parse(l) as { kind?: string; perms?: unknown; profile?: unknown })
+    .filter((p) => p.kind === "skill");
+  assert(wireSkillLines.length === 2, "two skill lines on the wire");
+  assert(Array.isArray(wireSkillLines[0].perms) && (wireSkillLines[0].perms as unknown[]).length === PERMS.size,
+    "first pinned line freezes the profile's full perms array into the log");
+  assert(wireSkillLines[0].profile === PROFILE, "freeze line also carries the profile name");
+  assert(wireSkillLines[1].perms === undefined, "later v2 skill lines drop the perms array");
+  assert(wireSkillLines[1].profile === PROFILE, "later v2 skill lines carry the profile name");
   const meta = parseWorldLog(jsonl).meta;
   assert(meta !== undefined && meta.logVersion === 2, `meta carries logVersion 2 (got ${meta?.logVersion})`);
   const parsedCmds = parseWorldLog(jsonl).commands;
   for (const c of parsedCmds) {
     if (c.kind !== "skill") continue;
-    assert([...c.perms].join(",") === [...PERMS].sort().join(","), "parse materializes perms from the profile");
+    assert([...c.perms].join(",") === [...PERMS].sort().join(","), "parse materializes perms from the frozen mapping");
+  }
+  // The frozen mapping decouples replay from live profile edits: a name-only line
+  // with NO freeze in the log falls back to resolveProfile WITH a warning — and a
+  // doctored freeze line proves parse reads the mapping, not the live profile.
+  {
+    const lines = jsonl.split("\n").filter((l) => l.length > 0);
+    const noFreeze = lines.filter((l) => {
+      if (!l.includes('"kind":"skill"')) return true;
+      const p = JSON.parse(l) as { perms?: unknown };
+      return p.perms === undefined;
+    });
+    // Drop the freeze line entirely: remaining name-only line must warn + fall back.
+    const fallbackWarnings: string[] = [];
+    const fallback = parseWorldLog(noFreeze.join("\n") + "\n", { onWarning: (m) => fallbackWarnings.push(m) });
+    assert(fallbackWarnings.length === 1 && fallbackWarnings[0].includes(PROFILE),
+      "pre-freeze v2 log warns once per profile resolved from the live definition");
+    assert(fallback.commands.filter((c) => c.kind === "skill").every((c) => c.perms.length === PERMS.size),
+      "pre-freeze fallback still materializes from the live profile");
+    // Doctor the freeze to a narrowed set: later name-only lines must inherit the
+    // FROZEN (narrowed) set even though the live profile is wider — falsifiability
+    // that the mapping, not resolveProfile, is authoritative.
+    const doctored = lines.map((l) => {
+      if (!l.includes('"kind":"skill"')) return l;
+      const p = JSON.parse(l) as SkillCommand & { perms?: string[] };
+      if (p.perms !== undefined) return JSON.stringify({ ...p, perms: ["scene.read"] });
+      return l;
+    });
+    const frozenParse = parseWorldLog(doctored.join("\n") + "\n");
+    const frozenSkills = frozenParse.commands.filter((c): c is SkillCommand => c.kind === "skill");
+    assert(frozenSkills.every((c) => c.perms.length === 1 && c.perms[0] === "scene.read"),
+      "replay grants the FROZEN mapping, not the live profile definition");
+    assert((frozenParse.warnings ?? []).length === 0, "a frozen log parses with no fallback warning");
   }
 
   // The parsed v2 stream replays to the recorded world, bit-identical.

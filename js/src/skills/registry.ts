@@ -11,7 +11,9 @@ import type { Tracer } from "../observability/event.ts";
 import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import type { SeededRng } from "../worldlog/log.ts";
-import { captureEntityIndex, restoreEntityIndex, type EntityIndexSnapshot } from "../worldlog/snapshot.ts";
+import { captureEntityIndex, hasEntityIndex, restoreEntityIndex, type EntityIndexSnapshot } from "../worldlog/snapshot.ts";
+import { armEntityIndexMutationHook } from "../ecs/world.ts";
+import { teardownEntity } from "./entity-teardown.ts";
 import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import type { DesignArtifactStore } from "../world/design-artifacts.ts";
 import type { GltfSceneCache } from "./three.ts";
@@ -101,9 +103,20 @@ export interface ExecutionContext {
    *  nested invokes append to their head's ledger — and run only when the head
    *  invocation fails (handler throw, output contract_error, hooks.after throw);
    *  success drops the ledger. With the recorder's discard-on-failure this makes
-   *  a failed multi-step skill exactly "never happened": live == log == replay.
+   *  a failed multi-step skill "never happened" for WORLD STATE: live == log ==
+   *  replay. ENTITY creation needs no undo — the unwind tears down every entity
+   *  the chain created (the catch-all in unwindChainFrame); register undos for
+   *  NON-entity effects (terrain heights, footprints, manager entries).
    *  `fn` must be synchronous and must tolerate state already freed by a later
-   *  (earlier-run) undo — teardownEntity's undefined-on-missing contract. */
+   *  (earlier-run) undo — teardownEntity's undefined-on-missing contract.
+   *
+   *  KNOWN BOUNDARY (C3 window, disclosed — not full rewind): tick-loop `step`s
+   *  legitimately RECORDED while an async chain was in flight simulated WITH the
+   *  chain's transient bodies. Unwind removes the bodies but cannot un-run those
+   *  recorded steps, and replay re-runs them WITHOUT the transient bodies — so a
+   *  dynamic body that interacted with a failed chain's transient collider can
+   *  diverge on replay. The unwind emits `skill.rollback.stepsDuringChain` when
+   *  this window was observed, so the boundary is loud, never silent. */
   undo(label: string, fn: () => void): void;
   emit(type: string, payload: unknown, causedBy?: string[]): string;
 }
@@ -255,8 +268,18 @@ interface ChainHeadFrame {
     rngState?: number;
     entitySeq: number;
     entityVersion: number;
-    entityIndex: EntityIndexSnapshot;
+    /** LAZILY captured at the chain's FIRST entity mutation (the one-shot hooks
+     *  beginChainFrame arms) — captureEntityIndex is O(maxId) + two array
+     *  allocations, and most write invokes (per-tick movement intents above all)
+     *  never touch an entity. Absent when the chain mutated no entities, or when
+     *  the world has no bitECS index (stub worlds) — either way there are no
+     *  eids to rewind; EntityTable seq/version rewind still applies. */
+    entityIndex?: EntityIndexSnapshot;
   };
+  /** Disarms the lazy-capture mutation hooks (EntityTable + bitECS allocation
+   *  seams). Called before unwind runs (so unwind's own teardown cannot trigger
+   *  a late, post-mutation capture) and again at frame end. */
+  disarm?: () => void;
   /** True when another head chain was live at any point during this frame's
    *  life. Rewinding allocators is only sound if no other chain allocated in
    *  the window, so an overlapped unwind poisons instead of guessing. */
@@ -269,6 +292,12 @@ export interface SkillRegistryOptions {
    *  the ledger a failed multi-step skill leaves a half-built world that the
    *  discarded command can never replay. */
   disableChainUndoLedger?: boolean;
+  /** FALSIFIABILITY FIXTURE ONLY (p103 proves the catch-all is load-bearing).
+   *  Without the catch-all, a failed chain whose skill created entities WITHOUT
+   *  registering undos leaves live survivors facing rewindAllocator — which
+   *  refuses (correctly) and poisons the whole session, turning a survivable
+   *  partial failure into session loss. */
+  disableChainEntityCatchAll?: boolean;
 }
 
 export class SkillRegistry {
@@ -299,9 +328,21 @@ export class SkillRegistry {
   private poisonError?: Error;
   private readonly rollbackFailureHandlers: Array<(error: Error) => void> = [];
   private readonly chainUndoLedgerEnabled: boolean;
+  private readonly chainEntityCatchAllEnabled: boolean;
+  /** Recorder seam (H1 boundary disclosure): reports how many physics `step`
+   *  commands were RECORDED while the given head chain was live (the legitimate
+   *  C3 tick-loop-under-async-chain window). Set by WorldRecorder.attach; unset
+   *  (0 steps assumed) when no recorder is attached. */
+  private chainStepProbe?: (chainId: string) => number;
   constructor(readonly tracer: Tracer, policy?: PolicyEngine, opts?: SkillRegistryOptions) {
     this.policy = policy;
     this.chainUndoLedgerEnabled = opts?.disableChainUndoLedger !== true;
+    this.chainEntityCatchAllEnabled = opts?.disableChainEntityCatchAll !== true;
+  }
+
+  /** Install the recorded-steps-during-chain probe (see chainStepProbe). */
+  setChainStepProbe(probe: (chainId: string) => number): void {
+    this.chainStepProbe = probe;
   }
 
   /** The first rollback failure, or undefined while the registry is healthy.
@@ -757,14 +798,24 @@ export class SkillRegistry {
       if (frame !== undefined && !res.success) this.unwindChainFrame(frame, ctx);
       return res;
     } finally {
-      if (frame !== undefined) this.chainFrames.delete(chainId);
+      if (frame !== undefined) {
+        frame.disarm?.();
+        this.chainFrames.delete(chainId);
+      }
     }
   }
 
-  /** Arm a head chain's unwind frame. The allocator/RNG capture is skipped for
-   *  declared READ skills (they mutate nothing) so hot polling paths — the
-   *  editor's per-tick inspector.snapshot / worldlog.tail — never pay the
-   *  O(entities) index copy. */
+  /** Arm a head chain's unwind frame. The O(1) captures (RNG state, EntityTable
+   *  seq/version) are taken eagerly for every WRITE skill; the O(entities) bitECS
+   *  entity-index copy is captured LAZILY at the chain's first entity mutation,
+   *  via one-shot hooks on BOTH mutation seams — the EntityTable identity ops and
+   *  the bitECS eid allocation path (ecs/world.ts). The allocation seam is load-
+   *  bearing: skills allocate the eid (spawnRenderable) BEFORE entities.create,
+   *  so a table-only hook would capture an index already containing the chain's
+   *  first eid and the unwind would leak it. Declared READ skills skip capture
+   *  entirely, so hot polling paths — the editor's per-tick inspector.snapshot /
+   *  worldlog.tail — pay nothing; write invokes that never touch an entity
+   *  (per-tick movement intents) now pay only the O(1) part. */
   private beginChainFrame(chainId: string, skill: SkillDefinition, world: WorldContext): ChainHeadFrame {
     const overlapped = this.chainFrames.size > 0;
     // Overlap is symmetric: every frame alive while another exists is marked, so
@@ -772,31 +823,78 @@ export class SkillRegistry {
     if (overlapped) for (const f of this.chainFrames.values()) f.overlapped = true;
     const frame: ChainHeadFrame = { chainId, skill: skill.name, ledger: [], overlapped };
     if (skillEffect(skill) !== "read") {
-      frame.capture = {
+      const capture: NonNullable<ChainHeadFrame["capture"]> = {
         world,
         rngState: world.rng?.getState(),
         entitySeq: world.entities.nextSeq,
         entityVersion: world.entities.version,
-        entityIndex: captureEntityIndex(world.ecs),
       };
+      frame.capture = capture;
+      const captureIndex = (): void => {
+        if (capture.entityIndex === undefined && hasEntityIndex(world.ecs)) {
+          capture.entityIndex = captureEntityIndex(world.ecs);
+        }
+      };
+      const disarmers: Array<() => void> = [armEntityIndexMutationHook(world.ecs, captureIndex)];
+      // Stub worlds (registry unit gates drive invoke with minimal WorldContext
+      // literals) may lack the EntityTable hook; the guard mirrors hasEntityIndex.
+      if (typeof world.entities.armMutationHook === "function") {
+        disarmers.push(world.entities.armMutationHook(captureIndex));
+      }
+      frame.disarm = () => { for (const disarm of disarmers) disarm(); };
     }
     this.chainFrames.set(chainId, frame);
     return frame;
   }
 
-  /** Unwind a failed head chain: run its undo ledger LIFO, then rewind the skill
-   *  RNG, the bitECS entity index, and the EntityTable seq/version captured at
-   *  head start — teardown alone is not enough, because `ent_`/eid allocation is
-   *  monotonic and replay (which never runs the failed chain) would otherwise
-   *  allocate DIFFERENT ids for every subsequent command. Synchronous: no other
-   *  chain can interleave mid-unwind on this single thread. */
+  /** Unwind a failed head chain: run its undo ledger LIFO, tear down every
+   *  entity the chain created that still survives (the CATCH-ALL — see below),
+   *  then rewind the skill RNG, the bitECS entity index, and the EntityTable
+   *  seq/version captured at head start — teardown alone is not enough, because
+   *  `ent_`/eid allocation is monotonic and replay (which never runs the failed
+   *  chain) would otherwise allocate DIFFERENT ids for every subsequent command.
+   *  Synchronous: no other chain can interleave mid-unwind on this single thread.
+   *
+   *  CATCH-ALL (D3): the ledger is a registration seam, and most entity-creating
+   *  skills never registered a teardown undo — their survivors used to reach
+   *  rewindAllocator as live ids, which refuses (correctly) and POISONED the
+   *  whole session: a survivable partial failure became session loss. Entity
+   *  creation is now compensated structurally (idsCreatedSince → teardownEntity,
+   *  newest-first); per-skill ctx.undo remains for NON-entity effects (terrain
+   *  heights, footprints, manager entries).
+   *
+   *  KNOWN BOUNDARY (not full rewind): recorded tick-loop `step`s that ran inside
+   *  this chain's async window (legitimate under C3) simulated WITH the chain's
+   *  transient bodies; replay re-runs those steps WITHOUT them. State is restored
+   *  here, but those steps' dynamics cannot be un-run — disclosed via the
+   *  `skill.rollback.stepsDuringChain` warning event (recorder-fed probe). */
   private unwindChainFrame(frame: ChainHeadFrame, ctx: ExecutionContext): void {
+    // Disarm the lazy-capture hooks FIRST: the catch-all teardown below mutates
+    // the entity table/index, and a late hook fire would capture post-chain state.
+    frame.disarm?.();
+    frame.disarm = undefined;
     const capture = frame.capture;
     const world = capture?.world ?? ctx.world;
     const rngMoved = capture?.rngState !== undefined && world.rng !== undefined && world.rng.getState() !== capture.rngState;
     const tableMoved = capture !== undefined && world.entities.version !== capture.entityVersion;
-    // The failed chain left no compensable tracks — nothing to rewind.
-    if (frame.ledger.length === 0 && !rngMoved && !tableMoved) return;
+    const indexCaptured = capture?.entityIndex !== undefined;
+    // The failed chain left no compensable tracks — nothing to rewind. (A captured
+    // entity index counts as a track: the capture hook only fires on a mutation.)
+    if (frame.ledger.length === 0 && !rngMoved && !tableMoved && !indexCaptured) return;
+    // H1 boundary disclosure: recorded tick-loop steps inside this chain's window
+    // simulated with state the unwind is about to remove. Emitted for ANY
+    // compensating unwind (conservative: nearly every compensable mutation —
+    // colliders, bodies, heightfields — is physics-affecting), including ones
+    // that go on to poison, so the window is never silent.
+    const stepsDuringChain = this.chainStepProbe?.(frame.chainId) ?? 0;
+    if (stepsDuringChain > 0) {
+      ctx.emit("skill.rollback.stepsDuringChain", {
+        chainId: frame.chainId,
+        skill: frame.skill,
+        steps: stepsDuringChain,
+        note: "recorded steps in this chain's async window simulated with the rolled-back mutations; replay re-runs them without",
+      });
+    }
     if (frame.overlapped) {
       // Another head chain was live inside this chain's window: rewinding SHARED
       // allocator/RNG state would clobber its allocations, and range-scoped undos
@@ -817,9 +915,23 @@ export class SkillRegistry {
       }
     }
     if (capture !== undefined) {
+      // CATCH-ALL entity compensation (D3): every still-live entity the chain
+      // created is torn down through the canonical four-part path (idempotent —
+      // entities a ledger undo already destroyed no longer resolve and are
+      // skipped). Newest-first mirrors the ledger's LIFO order.
+      if (this.chainEntityCatchAllEnabled && typeof world.entities.idsCreatedSince === "function") {
+        const created = world.entities.idsCreatedSince(capture.entitySeq);
+        for (let i = created.length - 1; i >= 0; i--) {
+          try {
+            teardownEntity(world, created[i]);
+          } catch (error) {
+            failures.push({ label: `catch-all teardown '${created[i]}'`, message: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
       try {
         if (capture.rngState !== undefined) world.rng?.setState(capture.rngState);
-        restoreEntityIndex(world.ecs, capture.entityIndex);
+        if (capture.entityIndex !== undefined) restoreEntityIndex(world.ecs, capture.entityIndex);
         world.entities.rewindAllocator(capture.entitySeq, capture.entityVersion);
       } catch (error) {
         failures.push({ label: "allocator rewind", message: error instanceof Error ? error.message : String(error) });
