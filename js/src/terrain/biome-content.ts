@@ -156,6 +156,17 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       seed: 32, assets: [{ role: "boulder" }], coverage: 0.08, cluster: 0.35,
       slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
+    {
+      // VALLEY MEADOW — real mountain ranges carry grass in their low valley floors
+      // and gentle benches; a "conifers and rock only" mountain reads as dead ground.
+      // Gated to gentle gradients (valley flats and benches, not eroded flanks) below
+      // the forest's densest band. The LOW bound comes from the water gate alone
+      // (waterLevel + margin), never a static elevation floor: a static floor under
+      // the flood margin yields an empty band on islands whose valleys sit low.
+      // Dense clustered drifts, not uniform carpet — a meadow reads as patches.
+      seed: 33, assets: [{ role: "grass" }], coverage: 0.45, cluster: 0.55, clusterFreq: 1 / 18,
+      slopeMax: 0.5, sizeRange: [0.8, 1.6], elevMaxFrac: 0.42, waterGated: true,
+    },
   ],
   // Dense temperate woodland: broadleaf + conifer mix over a bush understorey.
   forest: [

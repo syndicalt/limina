@@ -8,5 +8,8 @@
   },
   "boulder": {
     "id": "rock.glb"
+  },
+  "grass": {
+    "id": "grass.glb"
   }
 }
