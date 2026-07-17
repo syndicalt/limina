@@ -837,9 +837,22 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await eventually(() => messages(state, "revision").length === 2, "unchanged revision outcome");
   assert(messages(state, "activate").length === 1 && state.transport.fetchCurrentCount === fetchesBeforeUnchanged + 1,
     "unchanged watch poll re-entered activation or duplicated authority I/O");
+  assert(!state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0])
+    && state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[1]),
+  "an unchanged watch poll kept the fixed base cadence instead of decaying");
+  for (let step = 1; step < DERIVED_RUNTIME_POLL_DELAYS_MS.length; step++) {
+    state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[step]);
+    await eventually(() => messages(state, "revision").length === step + 2, `unchanged revision outcome ${step + 2}`);
+    const expected = DERIVED_RUNTIME_POLL_DELAYS_MS[Math.min(step + 1, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1)];
+    assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === expected),
+      `sustained no-change poll ${step + 1} was not scheduled at ${expected}ms`);
+  }
+  assert(state.timers.entries.filter((entry) => entry.active)
+    .every((entry) => entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS.at(-1)),
+  "sustained no-change polling exceeded its deterministic slow ceiling");
 
   state.transport.current = current(secondManifest, 2);
-  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS.at(-1)!);
   await eventually(() => messages(state, "activate").length === 2, "second activation message");
   await state.controller.handleMessage({
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
@@ -847,7 +860,9 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
     activationId: messages(state, "activate")[1].activationId,
     accepted: true,
   });
-  await eventually(() => messages(state, "revision").length === 3, "second revision outcome");
+  await eventually(() => messages(state, "revision").length === DERIVED_RUNTIME_POLL_DELAYS_MS.length + 2, "second revision outcome");
+  assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]),
+    "an observed change did not reset idle polling to the base delay");
   const secondSnapshot = (messages(state, "activate")[1].snapshot as { chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> });
   assert(secondSnapshot.chunks[0].resource.decoded.tile.heights.length === 4,
     "first activation detached a worker-owned buffer needed for unchanged-resource reuse");
@@ -1384,6 +1399,8 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
 }
 
 // Missing main-thread acknowledgement times out, rolls staging back, and remains retryable.
+// A late ack for the timed-out activation and a duplicate ack for a completed one are ignored;
+// an id the worker never issued stays a fatal protocol violation.
 {
   const state = harness(current(manifest(91)), 100);
   await state.init();
@@ -1393,6 +1410,41 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await eventually(() => messages(state, "error").some((entry) => entry.code === "ACTIVATION_ACK_TIMEOUT"), "activation acknowledgement timeout");
   assert(state.timers.entries.some((entry) => entry.active && entry.delayMs === DERIVED_RUNTIME_POLL_DELAYS_MS[0]),
     "activation acknowledgement timeout stopped watch mode instead of retrying");
+  const errorsBeforeLateAck = messages(state, "error").length;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[0].activationId,
+    accepted: true,
+  });
+  assert(messages(state, "error").length === errorsBeforeLateAck,
+    "a late ack for a timed-out activation escalated to a fatal error");
+  state.timers.runNext(DERIVED_RUNTIME_POLL_DELAYS_MS[0]);
+  await eventually(() => messages(state, "activate").length === 2, "post-timeout retry activation");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  await eventually(() => messages(state, "revision").length === 1, "post-timeout retry revision");
+  const errorsBeforeDuplicateAck = messages(state, "error").length;
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: messages(state, "activate")[1].activationId,
+    accepted: true,
+  });
+  assert(messages(state, "error").length === errorsBeforeDuplicateAck,
+    "a duplicate ack for a completed activation escalated to a fatal error");
+  await state.controller.handleMessage({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+    type: "activation-ack",
+    activationId: "derived-activation-4096",
+    accepted: true,
+  });
+  assert(messages(state, "error").at(-1)?.code === "UNKNOWN_ACTIVATION",
+    "an acknowledgement for a never-issued activation id was not rejected");
   await state.controller.close("close-timeout");
 }
 

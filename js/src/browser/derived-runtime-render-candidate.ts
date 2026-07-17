@@ -106,6 +106,7 @@ import {
   buildBiomeSurfaceMaterial,
   type BiomeSurfaceMaterialMount,
 } from "../terrain/biome-surface-material.ts";
+import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 
 export const MAX_DETACHED_DERIVED_TERRAIN_RADIUS = MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS;
 export const MAX_DETACHED_DERIVED_TERRAIN_MESHES = MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS;
@@ -291,25 +292,11 @@ export interface DetachedWorldOverviewBounds {
 }
 
 function plain(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new TypeError(`${label} must be a plain object`);
-  }
-  return value as Record<string, unknown>;
+  return plainRecord(value, label);
 }
 
 function exact(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const expected = new Set(keys);
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size
-      || names.some((name) => !expected.has(name))) {
-    throw new TypeError(`${label} fields are invalid`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw new TypeError(`${label}.${name} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, keys, [], label);
 }
 
 function dense(value: unknown, maximum: number, label: string): unknown[] {
@@ -839,7 +826,9 @@ function buildWorldOverviewMesh(
       for (let col = minCol; col <= maxCol; col++) covered[row * quadCols + col] = 1;
     }
   }
-  const indices = new Uint16Array(quadRows * quadCols * 6);
+  // A Uint16 index buffer wraps silently past 65 536 vertices; the overview format allows up to
+  // WORLD_OVERVIEW_MAX_DIMENSION² = 257×257 = 66 049.
+  const indices = count > 65_536 ? new Uint32Array(quadRows * quadCols * 6) : new Uint16Array(quadRows * quadCols * 6);
   let offset = 0;
   for (let row = 0; row < quadRows; row++) {
     for (let col = 0; col < quadCols; col++) {

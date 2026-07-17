@@ -1,4 +1,5 @@
 import { terrainWorldToChunk } from "../terrain/grid.mjs";
+import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 
 export const DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
 export const MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS = 7;
@@ -14,24 +15,11 @@ export interface DerivedTerrainResidency {
 type TerrainGrid = Readonly<{ origin: readonly [number, number]; chunkSizeM: number }>;
 type TerrainChunk = Readonly<{ chunkId: string; lod: number; tx: number; tz: number }>;
 function plain(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new TypeError(`${label} must be a plain object`);
-  }
-  return value as Record<string, unknown>;
+  return plainRecord(value, label);
 }
 
 function exact(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const names = Object.getOwnPropertyNames(value);
-  const expected = new Set(keys);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
-    throw new TypeError(`${label} fields are invalid`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw new TypeError(`${label}.${name} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, keys, [], label);
 }
 
 function centerTuple(value: unknown): readonly [number, number] {

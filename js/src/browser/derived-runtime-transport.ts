@@ -5,6 +5,7 @@ import {
   parseDerivedRevisionManifest,
 } from "../world/compiler/manifest.mjs";
 import { portableAssetContentHash } from "../world/asset-content-hash.mjs";
+import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 
 export const DERIVED_RUNTIME_CURRENT_SCHEMA = "limina.derived-runtime-current/v1";
 export const DERIVED_RUNTIME_ERROR_SCHEMA = "limina.derived-runtime-error/v1";
@@ -107,26 +108,14 @@ function transient(code: DerivedRuntimeTransportErrorCode, message: string): Der
   return new DerivedRuntimeTransportError(code, "transient", message);
 }
 
+const protocolError = (message: string): Error => fatal("PROTOCOL_ERROR", message);
+
 function plainObject(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw fatal("PROTOCOL_ERROR", `${label} must be a plain object`);
-  }
-  return value as Record<string, unknown>;
+  return plainRecord(value, label, protocolError);
 }
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[], label: string): void {
-  const actual = Object.getOwnPropertyNames(value).sort();
-  const wanted = [...expected].sort();
-  if (Object.getOwnPropertySymbols(value).length !== 0 || actual.length !== wanted.length
-      || actual.some((key, index) => key !== wanted[index])) {
-    throw fatal("PROTOCOL_ERROR", `${label} has unsupported or missing fields`);
-  }
-  for (const key of actual) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw fatal("PROTOCOL_ERROR", `${label}.${key} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, expected, [], label, protocolError);
 }
 
 function strictConfig(input: DerivedRuntimeTransportConfig): Readonly<DerivedRuntimeTransportConfig> {

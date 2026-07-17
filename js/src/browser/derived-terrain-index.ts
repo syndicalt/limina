@@ -1,4 +1,5 @@
 import { createTerrainGridSpec, terrainWorldToChunk } from "../terrain/grid.mjs";
+import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 import { tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 
@@ -34,25 +35,11 @@ export interface DerivedTerrainIndexEntry {
 }
 
 function plain(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new TypeError(`${label} must be a plain object`);
-  }
-  return value as Record<string, unknown>;
+  return plainRecord(value, label);
 }
 
 function exact(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const expected = new Set(keys);
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size
-      || names.some((name) => !expected.has(name))) {
-    throw new TypeError(`${label} fields are invalid`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw new TypeError(`${label}.${name} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, keys, [], label);
 }
 
 function float32(value: unknown, length: number, label: string): Float32Array {
@@ -88,17 +75,8 @@ export function parseTransferredTerrainTile(
   exact(decoded, ["metadata", "tile"], `${label} decoded`);
   const metadata = plain(decoded.metadata, `${label} metadata`);
   const tile = plain(decoded.tile, `${label} tile`);
-  const allowedTileKeys = new Set(["nrows", "ncols", "origin", "scale", "heights", "paintMat", "paintW", "climate", "climateChannels", "blight"]);
-  const tileNames = Object.getOwnPropertyNames(tile);
-  if (Object.getOwnPropertySymbols(tile).length !== 0 || tileNames.some((key) => !allowedTileKeys.has(key))) {
-    throw new TypeError(`${label} tile fields are invalid`);
-  }
-  for (const name of tileNames) {
-    const field = Object.getOwnPropertyDescriptor(tile, name);
-    if (field?.enumerable !== true || field.get !== undefined || field.set !== undefined) {
-      throw new TypeError(`${label} tile.${name} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(tile, [], ["nrows", "ncols", "origin", "scale", "heights", "paintMat", "paintW", "climate", "climateChannels", "blight"],
+    `${label} tile`);
   const nrows = tile.nrows, ncols = tile.ncols;
   if (!Number.isSafeInteger(nrows) || !Number.isSafeInteger(ncols) || (nrows as number) < 2 || (ncols as number) < 2) {
     throw new TypeError(`${label} tile dimensions are invalid`);

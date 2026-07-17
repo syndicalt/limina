@@ -66,6 +66,10 @@ import {
   selectDerivedTerrainChunks,
   type DerivedTerrainResidency,
 } from "./derived-terrain-residency.ts";
+import {
+  exactDataKeys as exactPlainDataKeys,
+  plainRecord as plainDataRecord,
+} from "./derived-plain-data.ts";
 
 export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
 export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
@@ -79,6 +83,10 @@ const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ACTIVATION_ID = /^derived-activation-[1-9][0-9]{0,15}$/;
 const MAX_WORKER_ERROR_MESSAGE_LENGTH = 512;
+// A stalled main thread can deliver an activation ack after the 15s timeout already rejected it,
+// or deliver one twice. Those ids must stay distinguishable from ids this controller never issued
+// (which remain a fatal protocol violation), so the most recently settled ids are retained.
+const MAX_SETTLED_ACTIVATION_IDS = 16;
 
 export type DerivedRuntimeWorkerMode = "watch" | "pinned";
 
@@ -206,26 +214,14 @@ function transient(code: string, message: string): DerivedRuntimeWorkerError {
   return new DerivedRuntimeWorkerError(code, "transient", message);
 }
 
+const invalidMessage = (message: string): Error => fatal("INVALID_MESSAGE", message);
+
 function plainRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw fatal("INVALID_MESSAGE", `${label} must be a plain object`);
-  }
-  return value as Record<string, unknown>;
+  return plainDataRecord(value, label, invalidMessage);
 }
 
 function exactDataKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[], label: string): void {
-  const allowed = new Set([...required, ...optional]);
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || required.some((key) => !names.includes(key))
-      || names.some((key) => !allowed.has(key))) {
-    throw fatal("INVALID_MESSAGE", `${label} has unsupported or missing fields`);
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor?.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
-      throw fatal("INVALID_MESSAGE", `${label}.${name} must be an enumerable data field`);
-    }
-  }
+  exactPlainDataKeys(value, required, optional, label, invalidMessage);
 }
 
 function requestId(value: unknown, label: string): string {
@@ -584,8 +580,10 @@ export class DerivedRuntimeWorkerController {
   #pollTimerExplicit = false;
   #polling = false;
   #backoffIndex = 0;
+  #idlePollIndex = 0;
   #activationSequence = 0;
   #pendingActivation: PendingActivation | null = null;
+  readonly #settledActivationIds = new Set<string>();
   #initialized = false;
   #closed = false;
   #closePromise: Promise<void> | null = null;
@@ -722,6 +720,7 @@ export class DerivedRuntimeWorkerController {
     this.#desiredResidency = pending.residency;
     if (pending.kind === "reconcile") this.#activeReconcileRequestId = pending.requestId;
     this.#backoffIndex = 0;
+    this.#idlePollIndex = 0;
     if (this.#pollTimer !== null) {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;
@@ -887,6 +886,7 @@ export class DerivedRuntimeWorkerController {
       const timeout = this.#timers.setTimeout(() => {
         if (this.#pendingActivation?.activationId !== activationId) return;
         this.#pendingActivation = null;
+        this.#recordSettledActivation(activationId);
         reject(transient("ACTIVATION_ACK_TIMEOUT", "derived runtime activation acknowledgement timed out"));
       }, this.#ackTimeoutMs);
       this.#pendingActivation = { activationId, ...(requestId === null ? {} : { requestId }), resolve, reject, timeout };
@@ -906,10 +906,24 @@ export class DerivedRuntimeWorkerController {
     });
   }
 
+  #recordSettledActivation(activationId: string): void {
+    this.#settledActivationIds.add(activationId);
+    for (const oldest of this.#settledActivationIds) {
+      if (this.#settledActivationIds.size <= MAX_SETTLED_ACTIVATION_IDS) break;
+      this.#settledActivationIds.delete(oldest);
+    }
+  }
+
   #acknowledge(message: Readonly<DerivedRuntimeWorkerActivationAckMessage>): void {
     if (!this.#initialized) throw fatal("NOT_INITIALIZED", "derived runtime worker is not initialized");
     const pending = this.#pendingActivation;
     if (pending === null || pending.activationId !== message.activationId) {
+      // A late ack (after the timeout already rejected) or a duplicate ack must not escalate to a
+      // fatal error — under main-thread load that would poison an otherwise healthy runtime.
+      if (this.#settledActivationIds.has(message.activationId)) {
+        console.warn(`[derived-runtime-worker] ignored late or duplicate acknowledgement for settled activation '${message.activationId}'`);
+        return;
+      }
       throw fatal("UNKNOWN_ACTIVATION", "derived runtime activation acknowledgement is not pending");
     }
     if (pending.requestId !== message.requestId) {
@@ -917,6 +931,7 @@ export class DerivedRuntimeWorkerController {
     }
     this.#timers.clearTimeout(pending.timeout);
     this.#pendingActivation = null;
+    this.#recordSettledActivation(pending.activationId);
     if (message.accepted) pending.resolve();
     else pending.reject(transient("ACTIVATION_REJECTED", `main thread rejected activation (${message.errorCode})`));
   }
@@ -973,7 +988,12 @@ export class DerivedRuntimeWorkerController {
           revision: current.source.revision,
         }));
         if (this.#activeReconcileRequestId === submissionReconcileRequestId) this.#activeReconcileRequestId = null;
-        if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
+        if (this.#mode === "watch") {
+          // Healthy idle polling decays up the ladder toward the 8s ceiling — a fixed base
+          // cadence is ~350k requests per unattended night. Any change resets to the base delay.
+          this.#idlePollIndex = Math.min(this.#idlePollIndex + 1, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1);
+          this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[this.#idlePollIndex], false);
+        }
         return;
       }
       this.#submissionCurrent = current;
@@ -989,6 +1009,7 @@ export class DerivedRuntimeWorkerController {
       this.#submissionResidency = null;
       this.#submissionReconcileRequestId = null;
       this.#backoffIndex = 0;
+      this.#idlePollIndex = 0;
       this.#postMessage(Object.freeze({
         schema: DERIVED_RUNTIME_WORKER_SCHEMA,
         type: "revision",
@@ -1053,6 +1074,7 @@ export class DerivedRuntimeWorkerController {
     if (pending !== null) {
       this.#timers.clearTimeout(pending.timeout);
       this.#pendingActivation = null;
+      this.#recordSettledActivation(pending.activationId);
       pending.reject(fatal("DERIVED_RUNTIME_CLOSED", "derived runtime worker closed during activation"));
     }
     this.#closePromise = (async () => {

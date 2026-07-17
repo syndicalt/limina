@@ -964,6 +964,8 @@ assert(Array.isArray(waterDepthTextures) && waterDepthTextures.length === 1
 const stableWindow = candidate.terrainWindow();
 const stableOverviewPositionArray = overviewPositions.array;
 const stableOverviewIndexArray = overviewMesh.geometry.index!.array;
+assert(stableOverviewIndexArray instanceof Uint16Array,
+  "a sub-65k-vertex overview grid abandoned compact 16-bit index storage");
 const stableTerrainMaterial = firstTerrainMesh.material;
 const stableTerrainOwnedTextures = firstTerrainMaterial.userData.liminaOwnedTextures;
 candidate.setQuality("cinematic");
@@ -1308,6 +1310,59 @@ assert(candidate.disposed && candidate.root.children.length === 0 && candidate.t
   "candidate disposal leaked revision-scoped resources or was not idempotent");
 assert(derivedTextureDisposes === 4 && derivedMaterialDisposes === 2,
   `derived PBR teardown did not release each owned texture/material exactly once (${derivedTextureDisposes}/${derivedMaterialDisposes})`);
+
+// The overview format allows up to 257×257 = 66,049 vertices — past the 65,536 ceiling of a
+// 16-bit index buffer. The widened index must address every vertex without wrapping.
+const bigOverviewCells = 257 * 257;
+const bigOverviewBytes = encodeWorldOverviewArtifact({
+  rows: 257,
+  cols: 257,
+  origin: [FAR, FAR],
+  stepM: 200,
+  heights: new Float32Array(bigOverviewCells).fill(100),
+  paintMaterial: new Uint8Array(bigOverviewCells).fill(2),
+  paintWeight: new Uint8Array(bigOverviewCells).fill(128),
+});
+const bigOverviewDescriptor = {
+  artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(bigOverviewBytes),
+  byteLength: bigOverviewBytes.byteLength,
+  mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
+};
+const maxGridOverview = snapshot();
+{
+  const nextManifest = createDerivedRevisionManifest({
+    schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+    projectId: maxGridOverview.manifest.projectId,
+    branchId: maxGridOverview.manifest.branchId,
+    source: maxGridOverview.manifest.source,
+    compiler: maxGridOverview.manifest.compiler,
+    grid: maxGridOverview.manifest.grid,
+    globalArtifacts: maxGridOverview.manifest.globalArtifacts.map((artifact: any) =>
+      artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE ? bigOverviewDescriptor : artifact),
+    chunks: maxGridOverview.manifest.chunks,
+  });
+  maxGridOverview.manifest = nextManifest;
+  maxGridOverview.manifestHash = nextManifest.manifestHash;
+  maxGridOverview.source = nextManifest.source;
+  maxGridOverview.chunks = maxGridOverview.chunks.map((entry: any) => ({ ...entry,
+    chunk: nextManifest.chunks.find((chunk) => chunk.chunkId === entry.chunkId)! }));
+  maxGridOverview.globals = maxGridOverview.globals.map((entry: any) => entry.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE
+    ? { ...entry, artifact: bigOverviewDescriptor, resource: { kind: WORLD_OVERVIEW_ARTIFACT_TYPE, decoded: decodeWorldOverviewArtifact(bigOverviewBytes) } }
+    : entry);
+}
+const maxGridCandidate = new DetachedDerivedRenderCandidate(maxGridOverview, {});
+const maxGridMesh = maxGridCandidate.overviewRoot.children[0] as THREE.Mesh;
+const maxGridIndex = maxGridMesh.geometry.index!;
+assert(maxGridIndex.array instanceof Uint32Array,
+  "a 66,049-vertex overview grid kept overflowing 16-bit index storage");
+let maxGridHighestIndex = 0;
+for (let index = 0; index < maxGridIndex.count; index++) {
+  maxGridHighestIndex = Math.max(maxGridHighestIndex, maxGridIndex.array[index] as number);
+}
+assert(maxGridCandidate.overviewTriangleCount === 256 * 256 * 2 && maxGridHighestIndex === bigOverviewCells - 1,
+  `max-dimension overview indices wrapped or dropped quads (${maxGridCandidate.overviewTriangleCount} triangles, max index ${maxGridHighestIndex})`);
+maxGridCandidate.dispose();
 
 const faultCandidate = new DetachedDerivedRenderCandidate(snapshot(), {});
 const faultOverview = faultCandidate.overviewRoot.children[0] as THREE.Mesh;
