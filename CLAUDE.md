@@ -26,7 +26,7 @@ Read this whole file before your first edit. The rules here override your defaul
 Environment facts:
 
 - **No root `package.json`.** JS scripts: `js/package.json` (npm). Tools: `tools/package.json` (bun). Site: `site/` (npm, separate Astro app).
-- **No tsconfig, no tsc, no eslint/prettier.** TS runs untranspiled on the host's V8. "Type-clean" means `deno check` reports no new errors anchored to files you changed.
+- **No transpile step, no eslint/prettier.** TS runs untranspiled on the host's V8. "Type-clean" means `js/node_modules/.bin/tsc -p js/tsconfig.check.json` exits 0 (`deno check` also works where deno is installed; it is not installed everywhere).
 - TS imports use explicit `.ts` extensions; `zod` and `three` come from `js/build/*.bundle.mjs`, not node_modules.
 - Blender 5.1.2 lives at `~/blender-5.1.2-linux-x64/blender` (override with `BLENDER_BIN`). Asset-fetch API keys (`POLY_PIZZA_API_KEY`, `THREEDAI_API_KEY`) live in the gitignored root `.env`; the Bash tool's shell does not inherit exported vars — keys must be in `.env`.
 - If Zaxy MCP memory tools are available, follow the activation ritual in `AGENTS.md` before substantial work. If they are not available, note that and proceed — do not block on it.
