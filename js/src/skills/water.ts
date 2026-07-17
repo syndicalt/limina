@@ -90,7 +90,10 @@ const waterRegionInput = z.object({
    *  Merged over the type defaults so the depth field is baked against the ACTUAL surface
    *  the terrain was built with — without it a region generated with overrides (e.g. an
    *  island falloff + erosion) bakes its depth against a flat type-default surface, and the
-   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). */
+   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). When
+   *  OMITTED, the skill defaults to the recorded merged hints of the already-generated
+   *  region matching (seed, bounds) in the live region table (generateRegion precedes
+   *  addWater in every log, so replay re-derives the same map). */
   hints: z.record(z.string(), z.number()).optional(),
   resolution: z.number().int().positive().max(1024).optional(),
 });
@@ -182,6 +185,38 @@ export function deriveDepthFromRegions(
   };
 
   return { sampleHeight, bounds: { minX: uMinX, minZ: uMinZ, maxX: uMaxX, maxZ: uMaxZ } };
+}
+
+/** The recorded merged hint map (type defaults + overrides, as world.generateRegion stored it)
+ *  of the ALREADY-GENERATED region matching (seed, tile bounds) in the live region table.
+ *  Used when an explicit `region` descriptor arrives WITHOUT `hints`: the depth field MUST be
+ *  baked against the same shaped/eroded surface the region's colliders were built with, or a
+ *  region generated with overrides (island falloff + erosion) bakes against the bare
+ *  type-default surface — that surface can sit entirely ABOVE the sea level, the whole
+ *  submerged shelf then reads depth≈0 ("at the waterline"), and the water material's
+ *  shoreline foam band (a diagonal world-XZ ripple) stripes the entire shelf instead of
+ *  hugging the coast. Deterministic + replay-safe: the region table is itself rebuilt by
+ *  replaying world.generateRegion, which precedes world.addWater in every log. */
+export function recordedRegionHints(
+  regions: Map<string, RegionState> | undefined,
+  seed: number,
+  bounds: { minTx: number; minTz: number; maxTx: number; maxTz: number },
+): Record<string, number> | undefined {
+  if (regions === undefined) return undefined;
+  for (const r of regions.values()) {
+    if (r.seed !== seed || r.hints === undefined) continue;
+    let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
+    for (const t of r.tiles.values()) {
+      if (t.tx < minTx) minTx = t.tx;
+      if (t.tx > maxTx) maxTx = t.tx;
+      if (t.tz < minTz) minTz = t.tz;
+      if (t.tz > maxTz) maxTz = t.tz;
+    }
+    if (minTx === bounds.minTx && minTz === bounds.minTz && maxTx === bounds.maxTx && maxTz === bounds.maxTz) {
+      return r.hints;
+    }
+  }
+  return undefined;
 }
 
 /** Derive a TRUE water-column-depth descriptor from an EDITABLE terrain layer (terrain.create).
@@ -333,9 +368,16 @@ export function registerWaterSkills(
       let depth: WaterDepthOptions | undefined;
       const region = input.region;
       if (region !== undefined && terrainSource !== undefined && isTerrainType(region.type)) {
-        // Type defaults + the region's actual overrides (mirrors world.generateRegion's
-        // merge), so the depth bake samples the SAME shaped+eroded surface as the colliders.
-        const hints = { ...terrainTypeHints(region.type, region.bounds), ...(region.hints ?? {}) };
+        // Type defaults, then the generated region's RECORDED merged hints (when the caller
+        // omitted `region.hints`), then any explicit hints — so the depth bake samples the
+        // SAME shaped+eroded surface as the colliders even when the descriptor carries no
+        // hints (the recorded-hints fallback is what keeps an island region's submerged
+        // shelf from reading depth≈0 and zebra-striping under the shoreline foam band).
+        const hints = {
+          ...terrainTypeHints(region.type, region.bounds),
+          ...(recordedRegionHints(terrainRegions, region.seed, region.bounds) ?? {}),
+          ...(region.hints ?? {}),
+        };
         const b = region.bounds;
         depth = {
           sampleHeight: (x, z) => terrainSource.sampleHeight(region.seed, x, z, 0, hints),

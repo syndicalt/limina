@@ -16,6 +16,14 @@
 //       terrain was generated with, and an empty region table returns undefined (so the
 //       proxy stands in only when there is genuinely no terrain). Its descriptor bakes to
 //       the same TRUE depth as the explicit path.
+//   (5) SUBMERGED-SHELF SHADING: an EXPLICIT region descriptor WITHOUT hints must bake the
+//       depth field against the generated region's RECORDED merged hints (region table),
+//       never the bare type defaults. The baked depth along a submerged transect must grade
+//       MONOTONICALLY with real spread — a depth≈0 plateau across the shelf turns the ocean
+//       material's shoreline foam band (a diagonal world-XZ ripple, render/water/material.ts)
+//       into alternating zebra stripes over the whole shelf. Falsifiable in-code: the same
+//       checks are run against a bake using ONLY the type defaults (the pre-fix expression)
+//       and MUST fail there.
 //
 // Run: limina js/test/p11_water_depth.ts   (exit 0 = pass)
 
@@ -30,6 +38,7 @@ import { LiminaTracer } from "../src/observability/event.ts";
 import { bakeWaterDepth, type WaterDepthOptions } from "../src/water.ts";
 import { deriveDepthFromRegions, registerWaterSkills } from "../src/skills/water.ts";
 import { TILE_SIZE } from "../src/terrain/procedural.ts";
+import { terrainTypeHints } from "../src/terrain/terrain-types.ts";
 import type { RegionState } from "../src/skills/terrain.ts";
 import type { TerrainSource, TerrainTile, TileRequest, ClimateSample } from "../src/terrain/types.ts";
 
@@ -208,6 +217,125 @@ const author = { agentId: "limina:builder", sessionId: "ses_p11_water_depth", pe
   const res = await reg.invoke("world.addWater", { level: 0 }, author);
   assert(res.success, `proxy-path addWater failed: ${JSON.stringify(res.error)}`);
   assert(counter.calls === 0, `FALSIFIABILITY: with no terrain the proxy must stand in (sampleHeight calls=${counter.calls}, expected 0)`);
+}
+
+// ===========================================================================
+// (5) SUBMERGED-SHELF SHADING — an EXPLICIT region descriptor WITHOUT `hints` must bake
+//     against the generated region's RECORDED merged hints (the live region table), never
+//     the bare type defaults. Defect this pins (island scaffold template): generateRegion
+//     ran with island/erosion overrides but addWater's logged region carried no hints, so
+//     the depth bake sampled the un-shaped type-default surface — which sat entirely ABOVE
+//     sea level — the whole submerged shelf read depth≈0 ("at the waterline"), and the ocean
+//     material's shoreline foam band (diagonal ripple sin(0.73x+0.57z−0.8t), see
+//     src/render/water/material.ts) striped the entire shelf green/white instead of hugging
+//     the coast. The checks below are proven falsifiable against that exact broken bake.
+// ===========================================================================
+{
+  const SEA5 = 0;
+  const B5 = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 }; // world 0..96 on both axes
+  const SPAN5 = 2 * TILE_SIZE;
+  const SEED5 = 1234;
+  // Height model keyed on the ISLAND OVERRIDE hint: with `islandRadius` present the floor
+  // tapers below the sea (2 − 0.12·x — the real shelf); with only the type defaults it is a
+  // plateau ABOVE the sea (+8 — depth reads 0 everywhere, the striping precondition).
+  const shelfHeight = (x: number, hints?: Record<string, number>): number =>
+    hints?.islandRadius !== undefined ? 2 - 0.12 * x : 8;
+  let lastHints5: Record<string, number> | undefined;
+  const src5: TerrainSource = {
+    name: "stub:shelf",
+    generateTile: (_r: TileRequest): TerrainTile => { throw new Error("generateTile not used"); },
+    sampleHeight: (_seed, x, _z, _lod, hints) => { lastHints5 = hints; return shelfHeight(x, hints); },
+    sampleClimate: (): ClimateSample => ({ tempC: 20, precipMm: 1000, biome: 5 }),
+  };
+  // The region table as world.generateRegion leaves it: MERGED hints (type defaults + the
+  // island overrides) recorded on the generated region covering exactly B5.
+  const tiles5 = new Map<string, { bodyId: number; entity: string; eid: number; tx: number; tz: number }>();
+  for (let tz = 0; tz <= 1; tz++) for (let tx = 0; tx <= 1; tx++) tiles5.set(`${tx},${tz}`, { bodyId: 0, entity: "e", eid: 0, tx, tz });
+  const recordedHints = { ...terrainTypeHints("mountains", B5), islandRadius: 38.4, islandFalloff: 59.5, erode: 1 };
+  const regions5 = new Map<string, RegionState>([
+    ["rgn5", { seed: SEED5, lod: 0, hints: recordedHints, tiles: tiles5 } as RegionState],
+  ]);
+
+  // Author the EXACT defect-shaped command: explicit region, NO hints.
+  const reg5 = new SkillRegistry(new LiminaTracer("ses_p11_water_depth"));
+  const water5 = registerWaterSkills(reg5, src5, regions5);
+  const res5 = await reg5.invoke("world.addWater", {
+    level: SEA5,
+    region: { seed: SEED5, type: "mountains", bounds: B5, resolution: 64 },
+  } as unknown as Record<string, unknown>, author);
+  assert(res5.success, `shelf addWater failed: ${JSON.stringify(res5.error)}`);
+  assert(lastHints5?.islandRadius !== undefined,
+    "explicit region WITHOUT hints must bake with the region table's RECORDED merged hints (islandRadius missing from the sampled hints)");
+
+  // Read the baked depth field off the REAL mounted water material.
+  const mesh5 = water5.surfaces[0].mesh as { material: { userData: Record<string, unknown> } };
+  const owned5 = mesh5.material.userData["liminaOwnedTextures"] as { image: { data: Uint8Array; width: number } }[];
+  assert(Array.isArray(owned5) && owned5.length > 0, "no baked depth texture on the shelf water material");
+  const img5 = owned5[0].image;
+  const byteAtX = (data: Uint8Array, res: number, x: number): number => {
+    const c = Math.min(res - 1, Math.max(0, Math.round((x / SPAN5) * (res - 1))));
+    const r = Math.min(res - 1, Math.max(0, Math.round(0.5 * (res - 1))));
+    return data[r * res + c];
+  };
+  // The ocean material's foam factor at t=0 (src/render/water/material.ts shoreline band):
+  // foam = (1 − smoothstep(0.025, 0.16, depth01)) · smoothstep(0.2, 0.78, ripple(x,z)).
+  const sm = (a: number, b: number, x: number): number => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const foamAt = (depth01: number, x: number, z: number): number =>
+    (1 - sm(0.025, 0.16, depth01)) * sm(0.2, 0.78, Math.sin(x * 0.73 + z * 0.57) * 0.5 + 0.5);
+  // Shelf shading metrics along the transect z=mid over the CLEARLY-SUBMERGED floor:
+  // true column depth ≥ 2 m — strictly outside the legitimate shoreline foam ring, whose
+  // band ends at depth01 0.16 (≈1.5 m of this shelf's 9.5 m normalisation range).
+  const shelfMetrics = (data: Uint8Array, res: number): { monotone: boolean; spread: number; alternations: number } => {
+    let prevByte = -1, monotone = true, minB = 255, maxB = 0, alternations = 0;
+    let prevOn: boolean | undefined;
+    for (let x = 0; x <= SPAN5; x++) {
+      if (SEA5 - shelfHeight(x, recordedHints) < 2) continue; // not clearly submerged
+      const b = byteAtX(data, res, x);
+      if (b < prevByte - 2) monotone = false; // allow bake-resolution quantisation jitter
+      prevByte = Math.max(prevByte, b);
+      if (b < minB) minB = b;
+      if (b > maxB) maxB = b;
+      const on = foamAt(b / 255, x, SPAN5 / 2) > 0.35;
+      if (prevOn !== undefined && on !== prevOn) alternations++;
+      prevOn = on;
+    }
+    return { monotone, spread: maxB - minB, alternations };
+  };
+  const fixed = shelfMetrics(img5.data as Uint8Array, img5.width);
+  assert(fixed.monotone, "submerged-shelf depth must grade monotonically along the taper (no plateau/bands)");
+  assert(fixed.spread >= 150, `submerged-shelf depth field has no spread (${fixed.spread}) — shelf reads flat`);
+  assert(fixed.alternations === 0, `SHELF STRIPING: foam band alternates ${fixed.alternations}× over the clearly-submerged shelf (must be 0 — foam belongs only at the shoreline ring)`);
+
+  // FALSIFIABILITY — rebake with ONLY the type defaults (the pre-fix expression
+  // `{...terrainTypeHints(type, bounds)}` with no recorded-hints merge): the SAME checks
+  // must FAIL on it, proving they detect the band bug if it is reintroduced.
+  const brokenHints = terrainTypeHints("mountains", B5);
+  const brokenBake = readField(bakeWaterDepth({
+    sampleHeight: (x, _z) => shelfHeight(x, brokenHints),
+    bounds: { minX: 0, minZ: 0, maxX: SPAN5, maxZ: SPAN5 },
+    resolution: 64,
+  }, SEA5));
+  const broken = shelfMetrics(brokenBake.data, brokenBake.res);
+  assert(broken.spread < 150, `falsifiability broke: type-default bake unexpectedly has spread ${broken.spread}`);
+  assert(broken.alternations >= 4, `FALSIFIABILITY: the type-default (band-bug) bake must stripe (foam alternations ${broken.alternations}, expected ≥4) — the shelf checks would not catch a regression`);
+
+  // Old logs carry EXPLICIT region hints — they must still win over the region table.
+  {
+    const regE = new SkillRegistry(new LiminaTracer("ses_p11_water_depth"));
+    lastHints5 = undefined;
+    registerWaterSkills(regE, src5, new Map());
+    const resE = await regE.invoke("world.addWater", {
+      level: SEA5,
+      region: { seed: SEED5, type: "mountains", bounds: B5, resolution: 16, hints: { islandRadius: 38.4 } },
+    } as unknown as Record<string, unknown>, author);
+    assert(resE.success, `explicit-hints addWater failed: ${JSON.stringify(resE.error)}`);
+    assert(lastHints5?.islandRadius !== undefined, "explicit region.hints must reach the depth bake with no region table present");
+  }
+  ops.op_log(
+    `p11_water_depth (5) OK: hint-less region descriptor baked with RECORDED region hints — shelf depth monotone, ` +
+    `spread ${fixed.spread}, foam alternations ${fixed.alternations}; type-default (band-bug) bake stripes ` +
+    `(spread ${broken.spread}, alternations ${broken.alternations}) and is caught.`,
+  );
 }
 
 ops.op_log(
