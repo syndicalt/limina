@@ -22,9 +22,12 @@ export function resolvePwc() {
 export function resolveChrome() {
   if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
   const base = join(process.env.HOME || "", ".cache", "ms-playwright");
+  // x64 unpacks to chrome-linux64/, arm64 to chrome-linux/ — try both.
   if (existsSync(base)) for (const d of readdirSync(base).filter((x) => x.startsWith("chromium-")).sort().reverse()) {
-    const p = join(base, d, "chrome-linux64", "chrome");
-    if (existsSync(p)) return p;
+    for (const layout of ["chrome-linux64", "chrome-linux"]) {
+      const p = join(base, d, layout, "chrome");
+      if (existsSync(p)) return p;
+    }
   }
   return null;
 }

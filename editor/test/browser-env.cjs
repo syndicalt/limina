@@ -14,8 +14,11 @@ function chromeExecutable() {
   if (fs.existsSync(base)) {
     const revisions = fs.readdirSync(base).filter((d) => d.startsWith("chromium-")).sort().reverse();
     for (const rev of revisions) {
-      const candidate = path.join(base, rev, "chrome-linux64", "chrome");
-      if (fs.existsSync(candidate)) return candidate;
+      // x64 unpacks to chrome-linux64/, arm64 to chrome-linux/ — try both.
+      for (const layout of ["chrome-linux64", "chrome-linux"]) {
+        const candidate = path.join(base, rev, layout, "chrome");
+        if (fs.existsSync(candidate)) return candidate;
+      }
     }
   }
   return path.join(base, "chromium-none", "chrome-linux64", "chrome");
