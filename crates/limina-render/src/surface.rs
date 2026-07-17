@@ -147,33 +147,55 @@ pub fn op_create_window_context<'s>(
 /// Present the current swapchain image and clear the context's cached texture so
 /// the next `getCurrentTexture()` acquires a fresh one (this is what Deno's own
 /// `UnsafeWindowSurface.present` does).
+///
+/// Error classification: wgpu-core reports the transient surface conditions
+/// (`Outdated`/`Lost`/`Timeout`/`Occluded`, e.g. mid-resize) as an `Ok` status,
+/// not an error — those frames are simply skipped and the next
+/// configure/acquire recovers. Among the genuine `SurfaceError`s,
+/// `AlreadyAcquired` (no freshly acquired texture to present — the resize-race
+/// shape of a redundant present) is also treated as a skipped frame; the rest
+/// (invalid/unconfigured surface, destroyed texture, device loss) have no
+/// recovery path in this host and throw.
 #[op2(fast)]
 pub fn op_surface_present(
     state: &mut OpState,
     #[cppgc] context: &GPUCanvasContext,
 ) -> Result<(), JsErrorBox> {
+    use deno_webgpu::wgpu_core::present::SurfaceError;
+
     let (instance, surface_id) = {
         let presenter = state
             .try_borrow::<SurfacePresenter>()
             .ok_or_else(|| JsErrorBox::generic("surface not created"))?;
         (presenter.instance.clone(), presenter.surface.borrow().id)
     };
-    instance
-        .surface_present(surface_id)
-        .map_err(|e| JsErrorBox::generic(format!("present: {e}")))?;
+    match instance.surface_present(surface_id) {
+        Ok(_status) => {}
+        Err(SurfaceError::AlreadyAcquired) => {}
+        Err(e) => return Err(JsErrorBox::generic(format!("present: {e}"))),
+    }
     context.current_texture.borrow_mut().take();
     Ok(())
 }
 
 /// Update the surface dimensions after a window resize. JS must then re-call
 /// `context.configure(...)` (which reads these dims) to reconfigure the swapchain.
+/// Zero is rejected: a 0-sized swapchain configuration is invalid in wgpu and
+/// would only fail later, far from the caller that passed the bad size (the host
+/// already clamps real winit resize events to >= 1).
 #[op2(fast)]
-pub fn op_surface_resize(state: &mut OpState, width: u32, height: u32) {
+pub fn op_surface_resize(state: &mut OpState, width: u32, height: u32) -> Result<(), JsErrorBox> {
+    if width == 0 || height == 0 {
+        return Err(JsErrorBox::generic(format!(
+            "surface resize dimensions must be non-zero (got {width}x{height})"
+        )));
+    }
     if let Some(presenter) = state.try_borrow::<SurfacePresenter>() {
         let mut surface = presenter.surface.borrow_mut();
         surface.width = width;
         surface.height = height;
     }
+    Ok(())
 }
 
 /// Register the JS function the host loop invokes each frame.

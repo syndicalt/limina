@@ -29,7 +29,10 @@ use std::time::{Duration, Instant};
 
 use deno_core::{extension, op2, OpState};
 use deno_error::JsErrorBox;
-use rquickjs::{CatchResultExt, Context, Ctx, Function, Object, Runtime, Value};
+use rquickjs::{
+    CatchResultExt, Context, Ctx, Function, IntoJs, Object, Persistent, Runtime,
+    String as QjsString, Value,
+};
 
 const MAX_SANDBOX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SANDBOX_STACK_BYTES: usize = 8 * 1024 * 1024;
@@ -56,6 +59,12 @@ struct SandboxShared {
     /// The calling agent's own perception view, injected per decision. Read caps
     /// return it verbatim; it NEVER carries another agent's private state.
     perception_json: String,
+    /// The perception payload already materialized as a QuickJS string
+    /// (immutable, refcounted). Built once per CHANGED payload at eval time so a
+    /// read crossing hands back a refcount bump instead of re-copying up to 4 MB
+    /// twice (Rust String clone + QuickJS string build) on every crossing. MUST
+    /// be dropped before the owning QuickJS runtime (see `Sandbox::drop`).
+    perception_cached: Option<Persistent<QjsString<'static>>>,
     /// Capabilities served synchronously as reads (return the perception snapshot).
     read_caps: HashSet<String>,
     /// Recorded MUTATING capability intents `(cap, argsJson)` in call order. The
@@ -75,6 +84,32 @@ struct Sandbox {
     rt: Runtime,
     ctx: Context,
     shared: Rc<RefCell<SandboxShared>>,
+}
+
+impl Drop for Sandbox {
+    fn drop(&mut self) {
+        // A `Persistent` outliving its QuickJS runtime aborts the process on the
+        // runtime's drop; release the cached perception string first, while the
+        // runtime/context fields are still alive.
+        self.shared.borrow_mut().perception_cached = None;
+    }
+}
+
+/// Return value of the injected `host.invoke`. `Shared` restores the cached
+/// QuickJS perception string (a refcount bump — no bytes copied); `Owned`
+/// materializes a fresh QuickJS string from a Rust one.
+enum InvokeReturn {
+    Owned(String),
+    Shared(Persistent<QjsString<'static>>),
+}
+
+impl<'js> IntoJs<'js> for InvokeReturn {
+    fn into_js(self, ctx: &Ctx<'js>) -> rquickjs::Result<Value<'js>> {
+        match self {
+            InvokeReturn::Owned(s) => s.into_js(ctx),
+            InvokeReturn::Shared(p) => p.restore(ctx)?.into_js(ctx),
+        }
+    }
 }
 
 /// Process-wide table of live sandboxes, held in `OpState`. Handles are opaque
@@ -222,7 +257,7 @@ fn sandbox_create_impl(
         let host = Object::new(ctx.clone())?;
         let invoke = Function::new(
             ctx.clone(),
-            move |cap: String, args: String| -> rquickjs::Result<String> {
+            move |cap: String, args: String| -> rquickjs::Result<InvokeReturn> {
                 let mut sh = s.borrow_mut();
                 if sh.crossings >= MAX_BOUNDARY_CROSSINGS {
                     return Err(rquickjs::Error::new_from_js_message(
@@ -241,11 +276,16 @@ fn sandbox_create_impl(
                 }
                 if sh.read_caps.contains(&cap) {
                     sh.reads += 1;
-                    // A read returns the agent's OWN perception snapshot verbatim.
+                    // A read returns the agent's OWN perception snapshot verbatim
+                    // — via the QuickJS string cached at eval time when present,
+                    // so the crossing copies no payload bytes.
                     if sh.perception_json.is_empty() {
-                        return Ok("null".to_string());
+                        return Ok(InvokeReturn::Owned("null".to_string()));
                     }
-                    return Ok(sh.perception_json.clone());
+                    if let Some(cached) = sh.perception_cached.as_ref() {
+                        return Ok(InvokeReturn::Shared(cached.clone()));
+                    }
+                    return Ok(InvokeReturn::Owned(sh.perception_json.clone()));
                 }
                 if args.len() > MAX_CALL_ARGS_BYTES {
                     return Err(rquickjs::Error::new_from_js_message(
@@ -273,7 +313,7 @@ fn sandbox_create_impl(
                 // here. The privileged JS host drives it through SkillRegistry.invoke.
                 sh.captured_bytes = new_total;
                 sh.captured.push((cap, args));
-                Ok("{\"queued\":true}".to_string())
+                Ok(InvokeReturn::Owned("{\"queued\":true}".to_string()))
             },
         )?;
         host.set("invoke", invoke)?;
@@ -343,7 +383,12 @@ fn sandbox_eval_impl(
 
     {
         let mut sh = sb.shared.borrow_mut();
-        sh.perception_json = perception_json;
+        // The cached QuickJS string stays valid across evals of an UNCHANGED
+        // payload; only a changed payload forces a re-materialization below.
+        if sh.perception_json != perception_json {
+            sh.perception_json = perception_json;
+            sh.perception_cached = None;
+        }
         sh.captured.clear();
         sh.captured_bytes = 0;
         sh.crossings = 0;
@@ -354,9 +399,20 @@ fn sandbox_eval_impl(
     sb.rt
         .set_interrupt_handler(Some(Box::new(move || Instant::now() >= dl)));
 
-    let outcome: Result<String, String> =
-        sb.ctx.with(
-            |ctx| match ctx.eval::<Value, _>(code.as_str()).catch(&ctx) {
+    let outcome: Result<String, String> = sb.ctx.with(|ctx| {
+        {
+            // Materialize the perception payload into QuickJS ONCE per changed
+            // payload; each read crossing then returns this string by refcount.
+            // A failed build (e.g. sandbox memory budget) is non-fatal: reads
+            // fall back to cloning the Rust string per crossing.
+            let mut sh = sb.shared.borrow_mut();
+            if sh.perception_cached.is_none() && !sh.perception_json.is_empty() {
+                if let Ok(js) = QjsString::from_str(ctx.clone(), &sh.perception_json) {
+                    sh.perception_cached = Some(Persistent::save(&ctx, js));
+                }
+            }
+        }
+        match ctx.eval::<Value, _>(code.as_str()).catch(&ctx) {
                 Ok(v) => value_to_envelope_string(&ctx, v).map_err(|err| {
                     format!("{err}")
                         .lines()
@@ -369,8 +425,8 @@ fn sandbox_eval_impl(
                     .next()
                     .unwrap_or("error")
                     .to_string()),
-            },
-        );
+        }
+    });
 
     sb.rt.set_interrupt_handler(None);
 
@@ -564,6 +620,79 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
         assert_eq!(parsed["ok"], false);
         assert_eq!(parsed["calls"].as_array().unwrap().len(), 5);
+    }
+
+    /// Read crossings must return the injected perception verbatim through the
+    /// cached QuickJS string: same payload across evals keeps the cache, a
+    /// changed payload rebuilds it, and an empty payload still reads "null".
+    #[test]
+    fn read_caps_serve_perception_via_cached_payload() {
+        let mut state = OpState::new(None);
+        let handle = sandbox_create_impl(
+            &mut state,
+            16.0 * 1024.0 * 1024.0,
+            256.0 * 1024.0,
+            r#"["read"]"#,
+        )
+        .expect("create sandbox with read cap");
+        let code = "host.invoke('read', '{}') === host.invoke('read', '{}') \
+                    ? host.invoke('read', '{}') : 'MISMATCH'";
+
+        let envelope = sandbox_eval_impl(
+            &mut state,
+            handle,
+            code.to_string(),
+            r#"{"x":42}"#.to_string(),
+            1_000.0,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["value"], r#"{"x":42}"#);
+        assert_eq!(parsed["reads"], 3);
+        {
+            let reg = state.borrow::<SandboxRegistry>();
+            let sb = reg.sandboxes.get(&handle).unwrap();
+            assert!(
+                sb.shared.borrow().perception_cached.is_some(),
+                "non-empty payload must be materialized once into QuickJS"
+            );
+        }
+
+        // A CHANGED payload must invalidate the cache and serve the new bytes.
+        let envelope = sandbox_eval_impl(
+            &mut state,
+            handle,
+            "host.invoke('read', '{}')".to_string(),
+            r#"{"x":43}"#.to_string(),
+            1_000.0,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["value"], r#"{"x":43}"#);
+
+        // Empty perception keeps returning the literal "null" string.
+        let envelope = sandbox_eval_impl(
+            &mut state,
+            handle,
+            "host.invoke('read', '{}')".to_string(),
+            String::new(),
+            1_000.0,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&envelope).unwrap();
+        assert_eq!(parsed["value"], "null");
+
+        // Destroy while a Persistent is cached: must not abort (drop-order guard).
+        sandbox_eval_impl(
+            &mut state,
+            handle,
+            "1".to_string(),
+            r#"{"x":44}"#.to_string(),
+            1_000.0,
+        )
+        .unwrap();
+        assert!(sandbox_destroy_impl(&mut state, handle));
     }
 
     #[test]

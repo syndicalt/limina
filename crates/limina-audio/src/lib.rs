@@ -846,12 +846,12 @@ fn run_audio(
 /// join handle. The channel is BOUNDED (`AUDIO_CMD_CAPACITY`) so a stalled thread
 /// applies backpressure instead of growing memory. On no device the thread keeps
 /// draining commands (no-op), so the returned sender is always valid.
-fn spawn_audio() -> (
+fn spawn_audio() -> std::io::Result<(
     Arc<SyncSender<AudioCmd>>,
     Arc<AtomicBool>,
     bool,
     thread::JoinHandle<()>,
-) {
+)> {
     let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
     // The audio thread holds only a `Weak` (for the TTS-back path), so dropping
     // this strong sender is what lets the receive loop terminate.
@@ -879,10 +879,9 @@ fn spawn_audio() -> (
                     }
                 }
             }
-        })
-        .expect("spawn limina-audio thread");
+        })?;
     let live = ready_rx.recv().unwrap_or(false);
-    (tx, shutdown, live, handle)
+    Ok((tx, shutdown, live, handle))
 }
 
 // ---- ops -------------------------------------------------------------------
@@ -902,10 +901,26 @@ pub fn op_audio_init(state: &mut OpState) -> u32 {
             dropped: AtomicU64::new(0),
             next_id: 0,
         });
-        println!("[audio] backend: null (LIMINA_AUDIO=null)");
+        // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
+        eprintln!("[audio] backend: null (LIMINA_AUDIO=null)");
         return 0;
     }
-    let (tx, shutdown, live, join) = spawn_audio();
+    // Thread-spawn failure degrades to the null backend (like a missing output
+    // device); audio must never take the engine down.
+    let (tx, shutdown, live, join) = match spawn_audio() {
+        Ok(parts) => parts,
+        Err(e) => {
+            eprintln!("[audio] failed to spawn audio thread ({e}); running null");
+            state.put(AudioHandle {
+                tx: None,
+                join: None,
+                shutdown: None,
+                dropped: AtomicU64::new(0),
+                next_id: 0,
+            });
+            return 0;
+        }
+    };
     state.put(AudioHandle {
         tx: Some(tx),
         join: Some(join),
@@ -913,7 +928,8 @@ pub fn op_audio_init(state: &mut OpState) -> u32 {
         dropped: AtomicU64::new(0),
         next_id: 0,
     });
-    println!(
+    // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
+    eprintln!(
         "[audio] backend: {}",
         if live { "live" } else { "null (no device)" }
     );

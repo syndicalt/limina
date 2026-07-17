@@ -190,6 +190,8 @@ fn run_headless(main_path: &str) -> anyhow::Result<()> {
 /// MCP stdio: load a JS module that owns the SkillRegistry and transport,
 /// then expose stdin/stdout ops so external agents exercise JSON-RPC framing.
 fn run_mcp_stdio(main_path: &str) -> anyhow::Result<()> {
+    // stdout is the JSON-RPC transport in this mode; JS logs must not touch it.
+    limina_ops::route_js_logs_to_stderr();
     let mut extensions = limina_render::deno_extensions();
     extensions.push(limina_ops::limina_ops::init());
     extensions.push(limina_physics::limina_physics::init());

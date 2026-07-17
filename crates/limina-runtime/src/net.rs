@@ -410,9 +410,16 @@ fn reject_browser_origin(req: &Request, response: Response) -> Result<Response, 
 }
 
 async fn net_accept_host_impl(state: Rc<RefCell<OpState>>) -> Result<u32, JsErrorBox> {
+    // The host listener exists only under `--mcp-ws`; this op is registered in the
+    // headless runtime too, so a stray call must surface as a catchable JS error,
+    // not a `borrow` panic that aborts the process mid-write.
     let listener = {
         let s = state.borrow();
-        s.borrow::<WsListener>().0.clone()
+        s.try_borrow::<WsListener>()
+            .map(|listener| listener.0.clone())
+            .ok_or_else(|| {
+                JsErrorBox::generic("net: no host websocket listener (not running --mcp-ws)")
+            })?
     };
     loop {
         let (tcp, _peer) = listener.accept().await.map_err(JsErrorBox::from_err)?;

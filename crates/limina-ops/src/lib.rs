@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufWriter, Read, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use deno_core::{extension, op2, OpState};
@@ -19,13 +19,28 @@ use deno_error::JsErrorBox;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, HOST};
 use reqwest::Url;
 
+/// When set (by the `--mcp-stdio` entry point), `op_log` writes to stderr:
+/// stdout is the JSON-RPC transport there and any stray write corrupts its
+/// framing. Every other mode keeps stdout — gates and exporters scrape it.
+static LOG_TO_STDERR: AtomicBool = AtomicBool::new(false);
+
+pub fn route_js_logs_to_stderr() {
+    LOG_TO_STDERR.store(true, Ordering::Relaxed);
+}
+
 /// String logging op. The `#[string]` arg forces the non-fast path; fine here.
 #[op2(fast)]
 pub fn op_log(#[string] msg: &str) {
-    println!("[js] {msg}");
+    if LOG_TO_STDERR.load(Ordering::Relaxed) {
+        eprintln!("[js] {msg}");
+    } else {
+        println!("[js] {msg}");
+    }
 }
 
-/// Fast numeric op (V8 fastcall path): all-scalar args/return.
+/// Fast numeric op (V8 fastcall path): all-scalar args/return. Kept registered:
+/// `js/test/p0_2_ops.ts` gates the op-bridge marshalling patterns through the
+/// phase-0 demo ops (op_sum/op_buffer_scale/op_fail/op_counter_inc).
 #[op2(fast)]
 pub fn op_sum(a: u32, b: u32) -> u32 {
     a.wrapping_add(b)
@@ -69,15 +84,25 @@ struct AssetRoot(std::path::PathBuf);
 
 const MAX_TRACE_CALL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACE_FILE_BYTES: u64 = 512 * 1024 * 1024;
+/// Cap on concurrently open trace file handles. Appends to more distinct trace
+/// names than this evict the least-recently-used writer (flushed, then closed);
+/// a later append to an evicted name transparently reopens it in append mode.
+const MAX_OPEN_TRACE_WRITERS: usize = 16;
 static TRACE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct TraceWriter {
     writer: BufWriter<std::fs::File>,
     bytes: u64,
+    /// Logical clock stamp of the most recent append (LRU eviction key).
+    last_used: u64,
 }
 
 #[derive(Default)]
-struct TraceWriters(HashMap<std::path::PathBuf, TraceWriter>);
+struct TraceWriters {
+    writers: HashMap<std::path::PathBuf, TraceWriter>,
+    /// Monotonic logical clock; bumped per append to stamp `last_used`.
+    clock: u64,
+}
 
 /// Read a relative asset file as bytes, sandboxed to the asset root. Rejects
 /// absolute paths, `..` traversal, and symlink escapes; caps size. Agents only
@@ -160,7 +185,7 @@ pub fn op_write_trace(
         std::fs::create_dir_all(parent).map_err(JsErrorBox::from_err)?;
     }
     if let Some(writers) = state.try_borrow_mut::<TraceWriters>() {
-        writers.0.remove(&path);
+        writers.writers.remove(&path);
     }
     let seq = TRACE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temp = path.with_extension(format!("limina-tmp-{}-{seq}", std::process::id()));
@@ -192,6 +217,16 @@ pub fn op_append_trace(
         ));
     }
     let path = trace_path(&name)?;
+    append_trace_at(state, path, &content)
+}
+
+/// The append body over a resolved path, split from the `op2` wrapper so the
+/// bounded-writer-map behavior is testable without touching `<cwd>/traces`.
+fn append_trace_at(
+    state: &mut OpState,
+    path: std::path::PathBuf,
+    content: &str,
+) -> Result<(), JsErrorBox> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(JsErrorBox::from_err)?;
     }
@@ -199,22 +234,41 @@ pub fn op_append_trace(
         state.put(TraceWriters::default());
     }
     let writers = state.borrow_mut::<TraceWriters>();
-    if !writers.0.contains_key(&path) {
+    writers.clock += 1;
+    let now = writers.clock;
+    if !writers.writers.contains_key(&path) {
+        // Bound the open-handle map: evict the least-recently-used writer before
+        // opening another. Every append already flushes, so eviction loses no
+        // bytes; the file reopens (append mode) on the next append to that name.
+        if writers.writers.len() >= MAX_OPEN_TRACE_WRITERS {
+            if let Some(lru) = writers
+                .writers
+                .iter()
+                .min_by_key(|(_, w)| w.last_used)
+                .map(|(p, _)| p.clone())
+            {
+                if let Some(mut evicted) = writers.writers.remove(&lru) {
+                    let _ = evicted.writer.flush();
+                }
+            }
+        }
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .map_err(JsErrorBox::from_err)?;
         let bytes = file.metadata().map_err(JsErrorBox::from_err)?.len();
-        writers.0.insert(
+        writers.writers.insert(
             path.clone(),
             TraceWriter {
                 writer: BufWriter::new(file),
                 bytes,
+                last_used: now,
             },
         );
     }
-    let trace = writers.0.get_mut(&path).expect("trace writer inserted");
+    let trace = writers.writers.get_mut(&path).expect("trace writer inserted");
+    trace.last_used = now;
     let next_bytes = trace
         .bytes
         .checked_add(content.len() as u64)
@@ -239,7 +293,7 @@ pub fn op_append_trace(
 pub fn op_read_trace(state: &mut OpState, #[string] name: String) -> Result<String, JsErrorBox> {
     let path = trace_path(&name)?;
     if let Some(writers) = state.try_borrow_mut::<TraceWriters>() {
-        if let Some(trace) = writers.0.get_mut(&path) {
+        if let Some(trace) = writers.writers.get_mut(&path) {
             trace.writer.flush().map_err(JsErrorBox::from_err)?;
         }
     }
@@ -639,9 +693,9 @@ fn sha256_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_http_post_host_allowed, is_http_post_target_ip_allowed, parse_http_post_headers,
-        read_allowlisted_env, read_asset_bytes, read_dotenv_value_in, sha256_hex,
-        validate_http_post_url,
+        append_trace_at, is_http_post_host_allowed, is_http_post_target_ip_allowed,
+        parse_http_post_headers, read_allowlisted_env, read_asset_bytes, read_dotenv_value_in,
+        sha256_hex, validate_http_post_url, TraceWriters, MAX_OPEN_TRACE_WRITERS,
     };
 
     /// A fresh, unique scratch directory under the OS temp dir. Canonicalizable
@@ -765,6 +819,38 @@ mod tests {
         let err = read_asset_bytes(&root, "big.bin").unwrap_err();
         assert!(err.to_string().contains("size cap"), "got: {err}");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The open trace-writer map is bounded: appending to more distinct names
+    /// than the cap evicts the LRU handle, and an evicted name keeps appending
+    /// correctly (reopen in append mode, byte count re-derived from disk).
+    #[test]
+    fn trace_writer_map_is_bounded_and_eviction_preserves_appends() {
+        let dir = temp_root("trace_lru");
+        let mut state = deno_core::OpState::new(None);
+
+        let path_of = |i: usize| dir.join(format!("t{i}.jsonl"));
+        for i in 0..MAX_OPEN_TRACE_WRITERS + 3 {
+            append_trace_at(&mut state, path_of(i), &format!("line-{i}\n")).unwrap();
+        }
+        assert!(
+            state.borrow::<TraceWriters>().writers.len() <= MAX_OPEN_TRACE_WRITERS,
+            "open trace writer map must stay bounded"
+        );
+
+        // t0 was evicted (least recently used); appending again must reopen and
+        // APPEND, not truncate or double-count.
+        append_trace_at(&mut state, path_of(0), "line-0b\n").unwrap();
+        let content = std::fs::read_to_string(path_of(0)).unwrap();
+        assert_eq!(content, "line-0\nline-0b\n");
+        for i in 1..MAX_OPEN_TRACE_WRITERS + 3 {
+            assert_eq!(
+                std::fs::read_to_string(path_of(i)).unwrap(),
+                format!("line-{i}\n"),
+                "evicted/live writer {i} lost bytes"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

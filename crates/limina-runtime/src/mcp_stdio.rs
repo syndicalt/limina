@@ -44,6 +44,13 @@ async fn op_mcp_read_stdin_line() -> Result<String, JsErrorBox> {
     // blocking read onto tokio's blocking pool so the event loop stays live;
     // the line semantics (one call == one newline-terminated line, "" on EOF)
     // are unchanged.
+    //
+    // SHUTDOWN CONSTRAINT: a blocking stdin read cannot be cancelled, so while a
+    // read is pending this op keeps `run_event_loop` from completing — the
+    // process exits only when the client closes stdin (EOF) or sends a final
+    // line. Releasing that requires the JS transport to unref the pending read
+    // promise (`Deno.core.unrefOpPromise` in js/src/mcp/stdio_runtime.ts); it is
+    // not fixable from this op alone.
     tokio::task::spawn_blocking(|| read_stdin_line_bounded(&mut std::io::stdin().lock()))
         .await
         .map_err(|e| JsErrorBox::generic(format!("stdin read task: {e}")))?

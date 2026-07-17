@@ -66,6 +66,10 @@ struct App {
     /// Cursor grabbed (pointer-locked + hidden) for free-fly look. Toggled by a
     /// left-click (grab) and Escape (release).
     grabbed: bool,
+    /// Window-creation failure captured in `resumed` (the winit handler cannot
+    /// return an error); drained by `run_windowed`, which surfaces it as the
+    /// startup error instead of a panic inside the event pump.
+    init_error: Option<String>,
 }
 
 impl App {
@@ -120,8 +124,13 @@ impl ApplicationHandler for App {
             if self.fullscreen {
                 attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
             }
-            let window = event_loop.create_window(attrs).expect("create window");
-            self.window = Some(Rc::new(window));
+            match event_loop.create_window(attrs) {
+                Ok(window) => self.window = Some(Rc::new(window)),
+                Err(e) => {
+                    self.init_error = Some(format!("create window: {e}"));
+                    event_loop.exit();
+                }
+            }
         }
     }
 
@@ -189,9 +198,18 @@ pub fn run_windowed(
     };
 
     while app.window.is_none() {
-        event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        let status = event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        if let Some(err) = app.init_error.take() {
+            anyhow::bail!("windowed startup failed: {err}");
+        }
+        if matches!(status, PumpStatus::Exit(_)) || app.close {
+            anyhow::bail!("window closed before startup completed");
+        }
     }
-    let window = app.window.clone().unwrap();
+    let window = match app.window.clone() {
+        Some(window) => window,
+        None => anyhow::bail!("windowed startup did not produce a window"),
+    };
     // X11 can return a requested inner size as soon as create_window succeeds while the native
     // surface is not presentable until the compositor's post-create ConfigureNotify is pumped.
     // Setup modules such as the guarded fidelity capture render during module evaluation, before
