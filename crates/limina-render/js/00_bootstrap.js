@@ -366,3 +366,56 @@ if (typeof globalThis.requestAnimationFrame === "undefined") {
 if (typeof globalThis.performance === "undefined") {
   globalThis.performance = { now: () => Date.now() };
 }
+
+// Web timers, backed by deno_core's built-in timer wheel (02_timers.js:
+// core.createTimer/cancelTimer -> op_timer_* ops; the event loop's
+// has_pending_timers keeps the process alive while a refed timer is
+// outstanding, matching web/Node semantics). Host-global scope only:
+// js/src/skills stays wall-clock-free (its determinism lint bans clock
+// reads); a timer here schedules work, it never feeds time into world state.
+// String callbacks (eval-by-string) are forbidden in this embedder.
+if (typeof globalThis.setTimeout === "undefined") {
+  const activeTimers = new Map();
+  let nextTimerHandle = 1;
+  const scheduleTimer = (callback, delay, args, repeat) => {
+    if (typeof callback !== "function") {
+      throw new TypeError("limina timers require a function callback");
+    }
+    const handle = nextTimerHandle++;
+    const fire = repeat ? callback : (...fireArgs) => {
+      activeTimers.delete(handle);
+      return callback(...fireArgs);
+    };
+    const timer = core.createTimer(fire, delay, args.length > 0 ? args : undefined, repeat, true, false);
+    activeTimers.set(handle, timer);
+    return handle;
+  };
+  const cancelTimer = (handle) => {
+    const timer = activeTimers.get(handle);
+    if (timer === undefined) return;
+    activeTimers.delete(handle);
+    core.cancelTimer(timer);
+  };
+  globalThis.setTimeout = function setTimeout(callback, delay = 0, ...args) {
+    return scheduleTimer(callback, delay, args, false);
+  };
+  globalThis.setInterval = function setInterval(callback, delay = 0, ...args) {
+    return scheduleTimer(callback, delay, args, true);
+  };
+  globalThis.clearTimeout = function clearTimeout(handle) { cancelTimer(handle); };
+  globalThis.clearInterval = function clearInterval(handle) { cancelTimer(handle); };
+}
+
+// structuredClone via deno_core's op_structured_clone (V8 ValueSerializer /
+// ValueDeserializer round-trip): plain objects/arrays, Map/Set, ArrayBuffer /
+// TypedArrays, Date, RegExp, and circular references all clone correctly;
+// functions and host objects throw DataCloneError-shaped TypeErrors from V8.
+// Transfer lists are not supported in this embedder (no cross-realm targets).
+if (typeof globalThis.structuredClone === "undefined") {
+  globalThis.structuredClone = function structuredClone(value, options) {
+    if (options?.transfer !== undefined && options.transfer.length > 0) {
+      throw new TypeError("limina structuredClone does not support transfer lists");
+    }
+    return core.structuredClone(value);
+  };
+}

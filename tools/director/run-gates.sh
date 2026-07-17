@@ -34,7 +34,7 @@ HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3
 # Tests whose committed evidence records repo-root-relative asset paths ("assets/...")
 # — they must run with the asset root at the REPO ROOT, matching the capture harnesses
 # (tools/preview/*) that produced the evidence. Named allowlist, not error guessing.
-REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package p_native_wasm_compile_sync p_building_fire_review_scene_v2 p_building_fire_volumetric_binding "
+REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package p_native_wasm_compile_sync p_native_wasm_compile p_native_basis_init p_building_fire_review_scene_v2 p_building_fire_volumetric_binding "
 
 # The determinism core added to --quick: worldlog replay/durability/recovery, policy/audit/
 # isolation, packaging, plus the p7x layout/geometry/scatter/grass determinism gates.
@@ -79,16 +79,6 @@ run_test() {
     # have no working harness today. Announced so the gap stays visible.
     p_staged_material_review_scene|p_staged_interior_proxy_review_scene)
       record_skip "$name" "needs a bun test harness (filename not *test*); runner wiring pending"; return;;
-    # Host-capability gaps: the limina host has no timers and no structuredClone, and its
-    # event loop never resolves async WebAssembly.compile — these tests import engine ops
-    # so bun cannot run them either. Announced so the capability gap stays visible; the
-    # fix is host-side (add timers/structuredClone to the runtime), never a test edit.
-    p8_sim_worker_pause|p_native_basis_init)
-      record_skip "$name" "needs host timers (setTimeout) — limina runtime has none"; return;;
-    p_native_wasm_compile)
-      record_skip "$name" "async WebAssembly.compile never resolves on the limina event loop (sync twin runs)"; return;;
-    p_functional_building_contract|p_architecture_compiler|p_architecture_building_program_synthesizer)
-      record_skip "$name" "needs structuredClone — limina runtime has none"; return;;
     # Vegetation-scatter gates: their real prerequisite is the ACCEPTED oak asset trio
     # (source + LOD + Blender-baked impostor), not Blender itself. When the trio exists
     # they run right here; tree-scatter-integration (host gate below) additionally

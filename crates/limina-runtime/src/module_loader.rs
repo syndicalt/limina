@@ -42,6 +42,39 @@ impl Default for TypescriptModuleLoader {
     }
 }
 
+/// Nearest-node_modules resolution for a BARE npm specifier, walking up from
+/// the referrer file. Browser-shared engine modules (the sim worker's
+/// `@dimforge/rapier3d-compat` import) use bare specifiers a bundler resolves;
+/// this is the host-side equivalent. Deliberately minimal: package.json
+/// `module` then `main` only — no exports-map conditions, no extension
+/// guessing, no self-references. Engine-authored imports keep explicit `.ts`
+/// paths (zod/three come from js/build bundles, never node_modules).
+fn resolve_bare_from_node_modules(specifier: &str, referrer: &str) -> Option<ModuleSpecifier> {
+    let referrer_path = ModuleSpecifier::parse(referrer).ok()?.to_file_path().ok()?;
+    for dir in referrer_path.ancestors().skip(1) {
+        let package_root = dir.join("node_modules").join(specifier);
+        if package_root.is_file() {
+            return ModuleSpecifier::from_file_path(&package_root).ok();
+        }
+        let manifest = package_root.join("package.json");
+        let Ok(manifest_text) = std::fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let manifest_json: deno_core::serde_json::Value =
+            deno_core::serde_json::from_str(&manifest_text).ok()?;
+        for entry_key in ["module", "main"] {
+            if let Some(entry) = manifest_json.get(entry_key).and_then(|v| v.as_str()) {
+                let entry_path = package_root.join(entry);
+                if entry_path.is_file() {
+                    return ModuleSpecifier::from_file_path(&entry_path).ok();
+                }
+            }
+        }
+        return None;
+    }
+    None
+}
+
 impl ModuleLoader for TypescriptModuleLoader {
     fn resolve(
         &self,
@@ -49,7 +82,11 @@ impl ModuleLoader for TypescriptModuleLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> Result<ModuleSpecifier, ModuleLoaderError> {
-        resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
+        match resolve_import(specifier, referrer) {
+            Ok(resolved) => Ok(resolved),
+            Err(err) => resolve_bare_from_node_modules(specifier, referrer)
+                .ok_or_else(|| JsErrorBox::from_err(err).into()),
+        }
     }
 
     fn load(

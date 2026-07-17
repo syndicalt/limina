@@ -164,6 +164,16 @@ fn run_headless(main_path: &str) -> anyhow::Result<()> {
     extensions.push(limina_audio::limina_audio::init());
     extensions.push(net::limina_net::init());
 
+    // JsRuntime::new only registers the isolate in deno_core's global platform
+    // registry when an ambient tokio handle exists; without that registration,
+    // V8 background threads (async WebAssembly.compile completion) post
+    // foreground tasks into the void and their promises never resolve. The
+    // tokio context must therefore be entered BEFORE constructing the runtime.
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_context = tokio_runtime.enter();
+
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
         extensions,
@@ -180,11 +190,7 @@ fn run_headless(main_path: &str) -> anyhow::Result<()> {
         result.await
     };
 
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(fut)
-        .map_err(Into::into)
+    tokio_runtime.block_on(fut).map_err(Into::into)
 }
 
 /// MCP stdio: load a JS module that owns the SkillRegistry and transport,
@@ -199,6 +205,12 @@ fn run_mcp_stdio(main_path: &str) -> anyhow::Result<()> {
     extensions.push(limina_ecs::limina_ecs::init());
     extensions.push(limina_audio::limina_audio::init());
     extensions.push(mcp_stdio::limina_mcp_stdio::init());
+
+    // Tokio context entered before JsRuntime::new — see run_headless.
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_context = tokio_runtime.enter();
 
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
@@ -215,11 +227,7 @@ fn run_mcp_stdio(main_path: &str) -> anyhow::Result<()> {
         result.await
     };
 
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(fut)
-        .map_err(Into::into)
+    tokio_runtime.block_on(fut).map_err(Into::into)
 }
 
 /// MCP WebSocket: bind a localhost TCP listener up front (so clients can connect
@@ -236,6 +244,12 @@ fn run_mcp_ws(main_path: &str, port: u16) -> anyhow::Result<()> {
     extensions.push(limina_ecs::limina_ecs::init());
     extensions.push(limina_audio::limina_audio::init());
     extensions.push(net::limina_net::init());
+
+    // Tokio context entered before JsRuntime::new — see run_headless.
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_context = tokio_runtime.enter();
 
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
@@ -271,11 +285,7 @@ fn run_mcp_ws(main_path: &str, port: u16) -> anyhow::Result<()> {
         result.await
     };
 
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(fut)
-        .map_err(Into::into)
+    tokio_runtime.block_on(fut).map_err(Into::into)
 }
 
 fn generate_ws_auth_token() -> anyhow::Result<String> {

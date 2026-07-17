@@ -243,6 +243,16 @@ pub fn run_windowed(
     extensions.push(limina_sandbox::limina_sandbox::init());
     extensions.push(limina_ecs::limina_ecs::init());
     extensions.push(limina_audio::limina_audio::init());
+
+    // JsRuntime::new only registers the isolate in deno_core's global platform
+    // registry when an ambient tokio handle exists; without it, V8 background
+    // threads (async WebAssembly.compile completion) post foreground tasks into
+    // the void. Enter the tokio context BEFORE constructing the runtime.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_context = rt.enter();
+
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
         extensions,
@@ -260,10 +270,6 @@ pub fn run_windowed(
     }
 
     let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
 
     rt.block_on(async move {
         // Evaluate the setup module: device + surface + callback registration.
