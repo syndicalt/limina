@@ -13,6 +13,7 @@
 
 import { ops as engineOps } from "../engine.ts";
 import type { TraceOps } from "../engine.ts";
+import { serializeWorldCommand } from "./log.ts";
 import type { WorldRecorder } from "./recorder.ts";
 
 // SEAM 3 (durable-log I/O): the durable sink depends on EXACTLY the trace ops --
@@ -67,7 +68,7 @@ export class DurableWorldLog {
       if (cmd === undefined) {
         throw new Error(`DurableWorldLog: command ${i} was compacted before it was flushed`);
       }
-      chunk += JSON.stringify(cmd) + "\n";
+      chunk += serializeWorldCommand(cmd) + "\n";
     }
     ops.op_append_trace(this.name, chunk);
     const n = limit - this.flushed;
@@ -96,7 +97,11 @@ export class DurableWorldLog {
     }
     let chunk = "";
     for (let i = 0; i < limit; i++) {
-      chunk += JSON.stringify(this.recorder.commandAt(i)) + "\n";
+      const cmd = this.recorder.commandAt(i);
+      if (cmd === undefined) {
+        throw new Error(`DurableWorldLog: command ${i} missing during rewrite`);
+      }
+      chunk += serializeWorldCommand(cmd) + "\n";
     }
     ops.op_write_trace(this.name, chunk);
     this.flushed = limit;

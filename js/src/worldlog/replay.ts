@@ -101,10 +101,13 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
       continue;
     }
     // cmd.kind === "skill": re-apply the recorded tool call (agent or scripted).
+    // `profile` is forwarded so a recorder attached to the replaying registry
+    // (rehydrate-style callers) re-records the same profile pin the log carried.
     const response = await registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
+      profile: cmd.profile,
       tick: cmd.tick,
       world,
       causedBy: [],

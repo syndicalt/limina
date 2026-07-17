@@ -57,22 +57,45 @@
 
 import type { EngineOps } from "../engine.ts";
 import { Position, Rotation, Scale, syncPhysicsBodyTransform } from "../ecs/world.ts";
+import { resolveProfile } from "../skills/permissions.ts";
 import { z } from "../../build/zod.bundle.mjs";
+
+/** The per-entity fields the world log can capture beyond eid/bodyId. All optional:
+ *  the real EntityTable's EntityEntry satisfies this structurally, and a minimal
+ *  stub table (tests, keyframe worlds) that resolves only {eid, bodyId} still
+ *  type-checks — absent fields are simply not captured. */
+export interface ResolvedEntityLike {
+  eid: number;
+  bodyId?: number;
+  generation?: number;
+  parent?: string;
+  material?: unknown;
+  resource?: unknown;
+  behavior?: unknown;
+}
 
 /** Minimal entity-table handle a recorder/replay reads from. The Engine and the
  *  skill-layer WorldContext both satisfy this structurally. */
 export interface EntityTableLike {
   ids(): string[];
-  resolve(id: string): { eid: number; bodyId?: number } | undefined;
+  resolve(id: string): ResolvedEntityLike | undefined;
 }
 
 /** The minimal world surface the world log reads (state capture + body sync). */
 export interface WorldLike {
   entities: EntityTableLike;
   ops: EngineOps;
+  /** Gameplay tag map (eid -> tag set). Real WorldContexts carry it; a stub world
+   *  without it simply captures no tags. */
+  tags?: ReadonlyMap<number, ReadonlySet<string>>;
 }
 
-export const LOG_VERSION = 1;
+// v2: a skill line may carry the caller's permission PROFILE NAME (`profile`)
+// instead of the full permission array (`perms`) — the profile is resolved back to
+// the array on parse via skills/permissions.ts. v1 lines (full `perms` array, no
+// `profile`) parse forever; the change is additive, so parseWorldLog accepts any
+// logVersion in [1, LOG_VERSION].
+export const LOG_VERSION = 2;
 
 /** Native Rapier ops recorded as raw `physics` commands (mutating only). */
 export type PhysicsOpName =
@@ -160,7 +183,15 @@ export interface SkillCommand {
   input: unknown;
   actorId: string;
   sessionId: string;
+  /** The caller's full permission set (sorted). ALWAYS populated in memory — a
+   *  line persisted with only `profile` has it materialized on parse — so every
+   *  in-process consumer (replay, worldlogTail, the kernel bridge) keeps working
+   *  on both formats. */
   perms: string[];
+  /** The caller's permission PROFILE NAME (skills/permissions.ts), recorded only
+   *  when `perms` is exactly that profile's set. When present, serialization
+   *  writes `profile` INSTEAD of the ~70-string `perms` array (v2 log format). */
+  profile?: string;
 }
 
 export type WorldCommand = SeedCommand | PhysicsCommand | SkillCommand;
@@ -169,6 +200,11 @@ export interface WorldLogMeta {
   kind: "meta";
   logVersion: number;
   sessionId: string;
+  /** Deterministic session marker ("tick:<maxTick>"), NOT a wall-clock time despite
+   *  the legacy name: the meta line rides byte-compared artifacts (durable-log
+   *  trailers, deterministic save/export headers — see skills/save.ts), so a real
+   *  timestamp here would break their byte-identity. Renaming is a coordinated
+   *  format change across save/publish/export consumers. */
   createdAt: string;
   commands: number;
   ticks: number;
@@ -187,10 +223,43 @@ export interface ParseWorldLogOptions {
   onRecoverableError?: (message: string) => void;
 }
 
+// Sorted-joined permission string per profile, cached: profiles are static data,
+// and the serializer/recorder compare against them once per skill command.
+const profilePermsKeyCache = new Map<string, string>();
+function profilePermsKey(profile: string): string {
+  let key = profilePermsKeyCache.get(profile);
+  if (key === undefined) {
+    key = [...resolveProfile(profile)].sort().join("\n");
+    profilePermsKeyCache.set(profile, key);
+  }
+  return key;
+}
+
+/** The profile name to pin into a recorded skill command: `profile` itself when the
+ *  caller's (sorted) permission set is EXACTLY that profile's set, else undefined
+ *  (a narrowed/custom set must keep recording the full array — resolving the
+ *  profile on replay would silently grant permissions the caller did not hold). */
+export function permissionProfileFor(profile: string | undefined, sortedPerms: readonly string[]): string | undefined {
+  if (profile === undefined) return undefined;
+  return profilePermsKey(profile) === sortedPerms.join("\n") ? profile : undefined;
+}
+
+/** One command as a JSONL line. A skill command whose `perms` is exactly its
+ *  pinned `profile`'s set persists the profile name INSTEAD of the array (v2);
+ *  parseWorldLog materializes `perms` back from the profile. Every other command
+ *  serializes unchanged (v1-identical bytes). */
+export function serializeWorldCommand(cmd: WorldCommand): string {
+  if (cmd.kind === "skill" && cmd.profile !== undefined && permissionProfileFor(cmd.profile, cmd.perms) === cmd.profile) {
+    const { perms: _perms, ...rest } = cmd;
+    return JSON.stringify(rest);
+  }
+  return JSON.stringify(cmd);
+}
+
 /** JSONL: meta header line, then one command per line (seq order preserved). */
 export function serializeWorldLog(meta: WorldLogMeta, commands: WorldCommand[]): string {
   const lines: string[] = [JSON.stringify(meta)];
-  for (const cmd of commands) lines.push(JSON.stringify(cmd));
+  for (const cmd of commands) lines.push(serializeWorldCommand(cmd));
   return lines.join("\n") + "\n";
 }
 
@@ -214,9 +283,13 @@ const lineSchema = z.discriminatedUnion("kind", [
   metaSchema,
   z.object({ kind: z.literal("seed"), seq: z.number(), seed: z.number() }),
   z.object({ kind: z.literal("physics"), seq: z.number(), tick: z.number(), op: physicsOpEnum, args: z.array(z.number()) }),
+  // v1 lines carry `perms` (full array); v2 lines may carry `profile` instead.
+  // Both optional here — parseWorldLog enforces that at least one is present and
+  // materializes `perms` from `profile`, so a parsed SkillCommand always has perms.
   z.object({
     kind: z.literal("skill"), seq: z.number(), tick: z.number(), tool: z.string(),
-    input: z.unknown(), actorId: z.string(), sessionId: z.string(), perms: z.array(z.string()),
+    input: z.unknown(), actorId: z.string(), sessionId: z.string(),
+    perms: z.array(z.string()).optional(), profile: z.string().optional(),
   }),
 ]);
 
@@ -256,7 +329,23 @@ export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): P
       meta = result.data;
       continue;
     }
-    out.push(result.data);
+    if (result.data.kind === "skill" && result.data.perms === undefined) {
+      // v2 profile-pinned line: materialize the full permission array so every
+      // consumer of a parsed SkillCommand sees `perms` populated (replay invokes
+      // with it; the kernel/editor bridges forward it). An unknown profile fails
+      // CLOSED here — replaying with silently-empty permissions would fail
+      // partway through the stream with a far less diagnosable permission error.
+      const profile = result.data.profile;
+      if (profile === undefined) {
+        throw new Error(`world log: skill command on line ${i + 1} carries neither perms nor profile`);
+      }
+      const resolved = resolveProfile(profile);
+      if (resolved.size === 0) {
+        throw new Error(`world log: skill command on line ${i + 1} names unknown permission profile '${profile}'`);
+      }
+      result.data.perms = [...resolved].sort();
+    }
+    out.push(result.data as WorldCommand);
   }
   out.sort((a, b) => a.seq - b.seq);
   return { meta, commands: out };
@@ -377,6 +466,20 @@ export interface EntityState {
   scale: [number, number, number];
   /** Native Rapier body transform [px,py,pz, rx,ry,rz,rw] when body-bound. */
   body?: [number, number, number, number, number, number, number];
+  // The per-entity GAMEPLAY component set — the same per-entity state view
+  // inspector.snapshot exposes (generation/parent/tags/material/resource), so the
+  // replay-equivalence comparator and the observability surface agree on ONE
+  // canonical notion of "the entity's state". `behavior` rides along because it is
+  // first-class entry state carried by v3 world snapshots. Captured by REFERENCE
+  // (these objects are replaced, not mutated, by the writing skills); compare two
+  // captures, not a capture against a world that kept authoring.
+  generation?: number;
+  parent?: string;
+  /** Sorted tag list (ecs.addComponent/removeComponent), omitted when untagged. */
+  tags?: string[];
+  material?: unknown;
+  resource?: unknown;
+  behavior?: unknown;
 }
 
 export interface WorldStateSnapshot {
@@ -385,13 +488,18 @@ export interface WorldStateSnapshot {
 
 /** Read the authoritative comparable state of every LIVE entity: its ECS
  *  Position/Rotation/Scale (JS-owned SoA) plus its native Rapier body transform
- *  (read fresh from the native world) when it has a body. Entities are returned
+ *  (read fresh from the native world) when it has a body, plus (by default) the
+ *  per-entity gameplay component set (generation/parent/tags/material/resource/
+ *  behavior — the inspector.snapshot per-entity view). Entities are returned
  *  sorted by their stable `ent_` id so two snapshots line up by identity. */
-export function captureWorldState(world: WorldLike, sorted = true): WorldStateSnapshot {
+export function captureWorldState(world: WorldLike, sorted = true, includeGameplay = true): WorldStateSnapshot {
   const scratch = new Float32Array(7);
   // Determinism/snapshot callers need a stable id order (default). The net server
   // builds a Map keyed by id and doesn't care about order, so it passes sorted=false
   // to drop the per-tick O(n log n) sort + sorted-array allocation on the hot path.
+  // It also passes includeGameplay=false: its per-tick delta diff compares
+  // transforms only, and EntityState objects go on the wire verbatim, so gameplay
+  // capture there would be pure cost + a wire-format change.
   const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities: EntityState[] = [];
   for (const id of ids) {
@@ -409,9 +517,22 @@ export function captureWorldState(world: WorldLike, sorted = true): WorldStateSn
       world.ops.op_physics_body_transform(entry.bodyId, scratch);
       state.body = [scratch[0], scratch[1], scratch[2], scratch[3], scratch[4], scratch[5], scratch[6]];
     }
+    if (includeGameplay) captureEntityGameplay(state, entry, world.tags?.get(eid));
     entities.push(state);
   }
   return { entities };
+}
+
+/** Copy the per-entity gameplay component set onto a captured EntityState. THE
+ *  single write site for that set: capture and comparison stay in lockstep with
+ *  the field list below (GAMEPLAY_FIELDS). */
+function captureEntityGameplay(state: EntityState, entry: ResolvedEntityLike, tagSet: ReadonlySet<string> | undefined): void {
+  if (entry.generation !== undefined) state.generation = entry.generation;
+  if (entry.parent !== undefined) state.parent = entry.parent;
+  if (tagSet !== undefined && tagSet.size > 0) state.tags = [...tagSet].sort();
+  if (entry.material !== undefined) state.material = entry.material;
+  if (entry.resource !== undefined) state.resource = entry.resource;
+  if (entry.behavior !== undefined) state.behavior = entry.behavior;
 }
 
 export interface DivergenceReport {
@@ -442,9 +563,43 @@ function vecDiff(label: string, id: string, a: number[], b: number[]): string | 
   return undefined;
 }
 
+/** The captured gameplay component set compareWorldState covers, in comparison
+ *  order. Must stay in lockstep with captureEntityGameplay above. */
+const GAMEPLAY_FIELDS = ["generation", "parent", "tags", "material", "resource", "behavior"] as const;
+
+/** Structural equality with the SAME bit-identical number semantics as vecDiff:
+ *  every leaf number compares via Object.is (+0/-0 distinct, NaN equals itself),
+ *  so extending the comparator to nested gameplay values cannot loosen it. A key
+ *  present with value `undefined` is distinct from an absent key. */
+function deepBitEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aArr = Array.isArray(a);
+  if (aArr !== Array.isArray(b)) return false;
+  if (aArr) {
+    const av = a as unknown[];
+    const bv = b as unknown[];
+    if (av.length !== bv.length) return false;
+    for (let i = 0; i < av.length; i++) if (!deepBitEqual(av[i], bv[i])) return false;
+    return true;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const ak = Object.keys(ar);
+  const bk = Object.keys(br);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    if (!Object.prototype.hasOwnProperty.call(br, k)) return false;
+    if (!deepBitEqual(ar[k], br[k])) return false;
+  }
+  return true;
+}
+
 /** Bit-identical comparison of two world-state snapshots. The acceptance check:
- *  every live entity's ECS Position/Rotation/Scale and every Rapier body
- *  transform must match exactly. Returns the FIRST divergence found. */
+ *  every live entity's ECS Position/Rotation/Scale, every Rapier body transform,
+ *  AND the per-entity gameplay component set (generation/parent/tags/material/
+ *  resource/behavior — the inspector.snapshot per-entity view) must match
+ *  exactly. Returns the FIRST divergence found. */
 export function compareWorldState(a: WorldStateSnapshot, b: WorldStateSnapshot): DivergenceReport {
   let comparisons = 0;
   if (a.entities.length !== b.entities.length) {
@@ -475,6 +630,12 @@ export function compareWorldState(a: WorldStateSnapshot, b: WorldStateSnapshot):
     }
     for (const detail of checks) {
       if (detail !== undefined) return { identical: false, comparisons, detail };
+    }
+    for (const field of GAMEPLAY_FIELDS) {
+      comparisons += 1;
+      if (!deepBitEqual(ea[field], eb[field])) {
+        return { identical: false, comparisons, detail: `entity ${ea.id} ${field} diverged` };
+      }
     }
   }
   return { identical: true, comparisons };

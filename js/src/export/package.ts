@@ -182,7 +182,11 @@ export function loadExport(
   }
   if (manifest.kind !== "limina.export") throw new Error(`export: not a limina export (kind=${String(manifest.kind)})`);
   if (manifest.exportVersion !== EXPORT_VERSION) throw new Error(`export: unsupported exportVersion ${manifest.exportVersion} (expected ${EXPORT_VERSION})`);
-  if (manifest.logVersion !== LOG_VERSION) throw new Error(`export: unsupported logVersion ${manifest.logVersion} (expected ${LOG_VERSION})`);
+  // The log format is additive across versions (parseWorldLog reads every version
+  // in range), so accept any [1, LOG_VERSION] bundle; only a FUTURE version fails.
+  if (!Number.isInteger(manifest.logVersion) || manifest.logVersion < 1 || manifest.logVersion > LOG_VERSION) {
+    throw new Error(`export: unsupported logVersion ${manifest.logVersion} (expected 1..${LOG_VERSION})`);
+  }
   const { commands } = parseWorldLog(files["log.jsonl"]);
   const keyframes = parseKeyframes(files["keyframes.jsonl"]);
   const tiles = parseTiles(files["tiles.jsonl"]);

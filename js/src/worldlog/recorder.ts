@@ -21,6 +21,7 @@ import { skillEffect, type InvokeBase, type SkillRegistry } from "../skills/regi
 import {
   installSeededRandom,
   LOG_VERSION,
+  permissionProfileFor,
   PHYSICS_OP_OUT_BUFFER,
   RECORDED_PHYSICS_METHODS,
   serializeWorldLog,
@@ -254,6 +255,12 @@ export class WorldRecorder {
           const tick = base.tick;
           if (tick > rec.maxTick) rec.maxTick = tick;
           const seq = rec.seq++;
+          const perms = [...base.permissions].sort();
+          // Pin the caller's permission PROFILE NAME when its set is exactly that
+          // profile's set: serialization then persists the name instead of the
+          // ~70-string array (v2 log format). A narrowed/custom set keeps the full
+          // array — resolving a profile on replay must never widen permissions.
+          const profile = permissionProfileFor(base.profile, perms);
           cmd = {
             kind: "skill",
             seq,
@@ -262,8 +269,9 @@ export class WorldRecorder {
             input: input === undefined ? undefined : cloneInput(input),
             actorId: base.agentId,
             sessionId: base.sessionId,
-            perms: [...base.permissions].sort(),
+            perms,
           };
+          if (profile !== undefined) cmd.profile = profile;
           rec.commands.push(cmd);
         }
       }

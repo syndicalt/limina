@@ -1,8 +1,8 @@
 {
   "kind": "limina.export",
   "exportVersion": 1,
-  "worldId": "limina-scaffold-sample",
-  "logVersion": 1,
+  "worldId": "sample-app",
+  "logVersion": 2,
   "keyframeInterval": 20,
   "ticks": 0,
   "commands": 7,

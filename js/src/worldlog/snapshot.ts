@@ -272,8 +272,11 @@ function restoreEntityIndex(ecs: unknown, snap: EntityIndexSnapshot): void {
 export interface CaptureSnapshotOptions {
   sessionId: string;
   tick: number;
-  /** The recorder's next seq value (== commands recorded so far). Commands with
-   *  seq < this are baked into the snapshot; seq >= this form the delta. */
+  /** The delta boundary: commands with seq < this are baked into the snapshot;
+   *  seq >= this form the delta. Callers MUST derive this from the recorder's
+   *  COMMITTED count (recorder.flushableCount()), never commandCount: an in-flight
+   *  command counted by commandCount can still fail, be discarded, and renumber
+   *  every later seq — a boundary past it then silently drops a delta command. */
   snapshotSeq: number;
   /** Live character controllers whose JS-owned resume state must be captured.
    *  Their kinematic bodies are already in the native blob; this captures the
@@ -297,6 +300,7 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
     // entry) are the two authoring-state pieces the identity slice drops — capture
     // them so the snapshot alone reproduces the entity, no pre-snapshot replay needed.
     const tagSet = world.tags.get(eid);
+    const live = world.entities.resolve(entry.id);
     entities.push({
       id: entry.id,
       eid,
@@ -306,12 +310,12 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
       scale: [Scale.x[eid], Scale.y[eid], Scale.z[eid]],
       tags: tagSet === undefined ? [] : [...tagSet].sort(),
-      resource: world.entities.resolve(entry.id)?.resource,
-      origin: world.entities.resolve(entry.id)?.origin,
-      parent: world.entities.resolve(entry.id)?.parent,
-      localOffset: world.entities.resolve(entry.id)?.localOffset,
-      material: world.entities.resolve(entry.id)?.material,
-      behavior: world.entities.resolve(entry.id)?.behavior,
+      resource: live?.resource,
+      origin: live?.origin,
+      parent: live?.parent,
+      localOffset: live?.localOffset,
+      material: live?.material,
+      behavior: live?.behavior,
     });
   }
   const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
@@ -341,7 +345,19 @@ export function serializeSnapshot(snapshot: WorldSnapshot): string {
 
 const finite = z.number().refine(Number.isFinite, "expected finite number");
 const int = finite.refine(Number.isInteger, "expected integer");
-const sparseIndexValue = z.union([int, z.null()]);
+// bitECS index arrays are SPARSE number[] (unset slots are holes). JSON turns a
+// hole into `null` on the wire, so parsing accepts null per slot but converts it
+// BACK into a hole — the parsed value then actually satisfies the declared
+// EntityIndexSnapshot number[] type, and the capture -> serialize -> parse ->
+// restore round-trip reproduces the original hole layout exactly.
+const sparseNumberArray = z.array(z.union([int, z.null()])).transform((slots: (number | null)[]): number[] => {
+  const out = new Array<number>(slots.length);
+  for (let i = 0; i < slots.length; i++) {
+    const v = slots[i];
+    if (v !== null) out[i] = v;
+  }
+  return out;
+});
 const vec3 = z.tuple([finite, finite, finite]);
 const vec4 = z.tuple([finite, finite, finite, finite]);
 const entityIndexSchema = z.object({
@@ -352,8 +368,8 @@ const entityIndexSchema = z.object({
   entityMask: int,
   versionShift: int,
   versionMask: int,
-  dense: z.array(sparseIndexValue),
-  sparse: z.array(sparseIndexValue),
+  dense: sparseNumberArray,
+  sparse: sparseNumberArray,
 });
 // Placed-asset metadata (LoadedResourceMetadata). passthrough() so a future field
 // survives a snapshot round-trip instead of being silently stripped on parse.
@@ -568,6 +584,7 @@ export async function recoverWorld(
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
+      profile: cmd.profile,
       tick: cmd.tick,
       world,
       causedBy: [],

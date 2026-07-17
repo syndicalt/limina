@@ -56,6 +56,12 @@ const MAX_WIRE_MESSAGE_CHARS = 1_048_576;
 const MAX_QUEUED_INTENTS = 4096;
 const MAX_QUEUED_INTENTS_PER_CONNECTION = 256;
 const MAX_INTENTS_PER_TICK = 256;
+/** Read-effect tools/call budget per connection per sim tick. Reads bypass the
+ *  intent queue (no tick-boundary wait) but each one holds the authority FIFO
+ *  lock, so unmetered readers delay the tick loop — and because the budget window
+ *  is the SIM TICK, read pressure that slows ticks automatically tightens the
+ *  budget. Generous: the live editor's routine polling is <1 read/tick. */
+const MAX_READS_PER_CONNECTION_PER_TICK = 32;
 
 /** The socket primitives the server drives. ws_runtime supplies `accept` over the
  *  host listener; a headless test supplies it over a self-bound listener. */
@@ -162,6 +168,10 @@ interface ClientConn {
   aoi?: AreaOfInterest;
   closing: boolean;
   queuedIntents: number;
+  /** Sim tick the read budget below was last reset at (M21 read quota). */
+  readBudgetTick: number;
+  /** Read-effect tools/call count spent within `readBudgetTick`. */
+  readsThisTick: number;
   /** K4: set once this connection calls worldlog/subscribe; the cursor advances on every
    *  worldlog/append push. undefined => not subscribed to the authoring-stream push (no listener
    *  work is done for it in pushWorldlogAppends). */
@@ -546,7 +556,7 @@ export class AuthoritativeServer {
       return false; // transient accept/handshake error on this slot -- keep the pool going
     }
     if (connId === ACCEPT_CLOSED || !this.running) return true;
-    const conn: ClientConn = { connId, subscribed: false, closing: false, queuedIntents: 0 };
+    const conn: ClientConn = { connId, subscribed: false, closing: false, queuedIntents: 0, readBudgetTick: -1, readsThisTick: 0 };
     this.conns.set(connId, conn);
     this.bgLoops.push(this.connLoop(conn));
     return false;
@@ -692,6 +702,21 @@ export class AuthoritativeServer {
         const skillName = p.name;
         const def = this.registry.describe(skillName);
         if (def !== undefined && skillEffect(def) === "read") {
+          // READ QUOTA (M21): reads have their own per-connection budget — they
+          // never consumed the intent quota, so a single client spamming e.g.
+          // inspector.snapshot could keep the authority lock saturated and starve
+          // the tick loop. Reads must still take that lock (an async authoring
+          // transaction can yield mid-batch; a lockless reader could observe a
+          // state that never committed), so metering is the remaining lever.
+          if (conn.readBudgetTick !== this.tick) {
+            conn.readBudgetTick = this.tick;
+            conn.readsThisTick = 0;
+          }
+          if (conn.readsThisTick >= MAX_READS_PER_CONNECTION_PER_TICK) {
+            await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Per-connection read budget for this tick is exhausted"));
+            return;
+          }
+          conn.readsThisTick += 1;
           const result = await this.withAuthorityLock(async () => {
             await this.ready;
             if (this.currentAuthorityFailure() !== undefined) return this.authorityUnavailableResponse();
@@ -1058,10 +1083,13 @@ export class AuthoritativeServer {
         if (cmd.op === "step") syncAllBodies(this.world);
         continue;
       }
+      // `profile` forwarded so the attached recorder re-records the same profile
+      // pin the persisted line carried (rewriteFromRecorder must round-trip it).
       const response = await this.registry.invoke(cmd.tool, cmd.input, {
         agentId: cmd.actorId,
         sessionId: cmd.sessionId,
         permissions: new Set(cmd.perms),
+        profile: cmd.profile,
         tick: cmd.tick,
         world: this.world,
         causedBy: [],
@@ -1167,7 +1195,10 @@ export class AuthoritativeServer {
   private snapshotMap(): Map<string, EntityState> {
     const out = new Map<string, EntityState>();
     // sorted=false: the diff keys by id, so the per-tick id sort is pure waste here.
-    for (const e of captureWorldState(this.world, false).entities) out.set(e.id, e);
+    // includeGameplay=false: the delta diff (sameState) compares transforms only,
+    // and these EntityState objects are serialized onto the wire verbatim —
+    // capturing gameplay here would bloat every delta without changing the diff.
+    for (const e of captureWorldState(this.world, false, false).entities) out.set(e.id, e);
     return out;
   }
 
@@ -1209,10 +1240,16 @@ export class AuthoritativeServer {
     // Reuse the M2 capture for the authoritative join view, then project it to
     // the wire + filter to the client's AoI (the snapshot is part of the stream,
     // so it must be O(relevant) too).
+    // Boundary from the COMMITTED count only (flushableCount), never commandCount:
+    // an in-flight command can still fail, be discarded, and renumber later seqs,
+    // which would silently drop a command out of this snapshot's delta. Same rule
+    // as worldlogTail. Mutating invokes run (and are awaited) under the authority
+    // lock this method is called inside, so the committed count IS the world the
+    // capture sees.
     const snap = captureWorldSnapshot(this.world, {
       sessionId: this.sessionId,
       tick: this.tick,
-      snapshotSeq: this.recorder.commandCount,
+      snapshotSeq: this.recorder.flushableCount(),
     });
     const entities: EntityState[] = [];
     for (const e of snap.entities) {
