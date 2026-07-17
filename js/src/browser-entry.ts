@@ -1557,8 +1557,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     const symmetric = workerFailed.size === renderFailed.size
       && [...workerFailed].every((index) => renderFailed.has(index));
     if (!symmetric) {
+      // Carry the per-command failure detail in the message itself: the banner
+      // truncates, but hosts (the editor console panel) log the full string —
+      // without this the WHY of a realm fork is unreachable from the UI.
+      const describe = (failures: AuthorCommandFailure[]): string =>
+        failures.map((f) => `#${f.index} ${f.command}: ${f.message}`).join("; ") || "none";
       const message = "sim worker and render realm isolated DIFFERENT init authoring failures "
-        + `(worker [${[...workerFailed].join(", ")}] vs render [${[...renderFailed].join(", ")}]) — `
+        + `(worker [${describe((workerInitAuthoringFailures as AuthorCommandFailure[] | null) ?? [])}] `
+        + `vs render [${describe(authoringFailures)}]) — `
         + "entity/body/eid allocation diverged between the realms";
       status("error", message);
       await teardown(message).catch(reportTeardownFailure);

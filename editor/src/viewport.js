@@ -145,6 +145,9 @@ const viewportUi = {
 function setStatus(phase, detail) {
   const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
   if (statusEl) statusEl.textContent = bounded ? `${phase}: ${bounded}` : phase;
+  // Viewport errors truncate in the one-line banner; the console panel keeps the
+  // FULL detail (realm-divergence failure lists above all) scrollable + copyable.
+  if (phase === "error") logConsolePanel(detail === undefined ? "viewport error" : String(detail), "err");
 }
 
 function setEditRuntimeStatus(phase, detail) {

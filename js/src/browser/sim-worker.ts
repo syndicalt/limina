@@ -27,7 +27,7 @@
 // import (so this module stays Deno-free / portable, and a native test can import
 // the controller without the shell touching a Worker global).
 
-import { EntityTable, type CameraLike, type EngineOps, type PhysicsOps, type SceneLike } from "../engine.ts";
+import { EntityTable, installOps, type CameraLike, type EngineOps, type PhysicsOps, type SceneLike } from "../engine.ts";
 import { createEcsWorld } from "../ecs/world.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
@@ -536,6 +536,12 @@ export class SimWorkerController {
     const assetBytes = new Map<string, Uint8Array>();
     for (const asset of opts.assets ?? []) assetBytes.set(asset.id, asset.bytes);
     const ops = composeWorkerOps(physics, assetBytes);
+    // Engine code outside skill handlers reaches the MODULE-LEVEL `ops` binding
+    // (terrain/tilecache.ts tileContentHash above all) — unset in a worker realm
+    // until installed. The render realm installs at browser-entry init; without
+    // this mirror install, the first world that hashes a generated tile crashes
+    // ONLY in the worker and forks the realms (init divergence guard trips).
+    installOps(ops);
 
     const world: WorldContext = {
       ecs,
