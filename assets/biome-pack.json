@@ -7,10 +7,10 @@
     "id": "vegetation/temperate-canopy/oak-101.glb",
     "treeLod": {
       "reducedId": "vegetation/temperate-canopy/oak-101-lod2.glb",
-      "reducedDistance": 45,
+      "reducedDistance": 80,
       "impostorId": "vegetation/temperate-canopy/oak-101-impostor.glb",
-      "impostorDistance": 110,
-      "cullDistance": 420,
+      "impostorDistance": 220,
+      "cullDistance": 360,
       "hysteresis": 0.15
     }
   },
