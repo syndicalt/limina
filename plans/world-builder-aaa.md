@@ -770,3 +770,19 @@ near-vertical cliffs before the SDF layer exists.
   endpoints, construction-valid stair links, contained typed spawn anchors, acoustic propagation, and
   visibility/residency cells. The old plural v1 ID inventories are not treated as a room graph. CPU
   closure precedes a new guarded engine artifact and exact owner review.
+- **2026-07-17 — WB-W1/WB-B2 live-editor quality pass landed; formal-release backlog folded in.**
+  Live-editor UAT (chromium over SSH tunnel, owner-read renders) drove and closed: ocean quality pass
+  (Beer–Lambert absorption, domain-warped foam, coverage-gated caustics, anisotropic whitecaps,
+  shallow-water candy-striping eliminated — `aad394f`, `e0d1b93`, `0e5b0b4`), weighted biome
+  archetypes (role→variants pack schema, determinism proven three ways in p105 — `4ea4f6a`), metre-
+  scale ez-tree bake normalization, mountains valley meadow/broadleaf layers, and the textured
+  temperate-canopy LOD chain baked with sha pins (`0fcc3c3`). Owner signed off both slices in UAT.
+  **Remaining WB-W1 release evidence (folded):** eye-level shallow paleness (underwater sand albedo —
+  terrain domain — plus sky art direction), faint region-depth square at stress vantages, plus the
+  standing native-backend/regression/lifecycle/target-hardware items. **Remaining WB-B2 release
+  evidence (folded):** wire the canopy LOD chains into pack entries when distance management returns,
+  verify the treeLod impostor path on presentable hardware (cards misrender: floating/trunk-up; oaks
+  use plain instancing meanwhile), and close the `grass-field`/`biome-surface` forceWebGL regression
+  gates. The editor/engine foundation items discovered in the same arc (host capability gaps, editor
+  full-replay boot hang, realm grant asymmetry) are tracked separately in
+  `plans/editor-engine-foundation.md`.
