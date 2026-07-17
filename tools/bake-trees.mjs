@@ -324,12 +324,45 @@ function rematerialTree(tree, species) {
   apply(tree.leavesMesh, true);
 }
 
+// Authored REAL-WORLD species heights (metres). ez-tree generates in its own
+// units (the raw bakes measured 60–80 m tall — flagged EXCLUDED OVERSIZE by
+// check:assets, and towering over whole terrain reliefs the first time a
+// browser actually rendered them). Every bake normalizes to these targets by
+// scaling the GEOMETRY, so the shipped GLB is intrinsically metre-scale — the
+// asset quality bar; never a runtime rescale.
+const TARGET_HEIGHT_M = {
+  spruce: 22,
+  pine: 17,
+  birch: 13,
+  oak: 15,
+  ash: 19,
+  "dead-oak": 11,
+};
+
+function normalizeTreeScale(tree, species) {
+  const target = TARGET_HEIGHT_M[species];
+  if (target === undefined) throw new Error(`bake-trees: no authored height for species '${species}'`);
+  const bounds = new THREE.Box3().setFromObject(tree);
+  const height = bounds.max.y - Math.min(bounds.min.y, 0);
+  if (!(height > 0)) throw new Error(`bake-trees: '${species}' generated a degenerate height ${height}`);
+  const factor = target / height;
+  for (const mesh of [tree.branchesMesh, tree.leavesMesh]) {
+    if (mesh?.geometry === undefined) continue;
+    mesh.geometry.scale(factor, factor, factor);
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+  }
+  return { rawHeightM: height, factor };
+}
+
 function buildTree(ez, species, seed) {
   const tree = new ez.Tree();
   tree.name = `${species}-${seed}`;
   configureTree(tree, ez, species, seed);
   tree.generate();
   rematerialTree(tree, species);
+  const scale = normalizeTreeScale(tree, species);
+  console.log(`  ${species}-${seed}: raw ${scale.rawHeightM.toFixed(1)}m -> ${TARGET_HEIGHT_M[species]}m (x${scale.factor.toFixed(3)})`);
   return tree;
 }
 
