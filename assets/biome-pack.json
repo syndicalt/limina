@@ -4,15 +4,7 @@
     "embedRadius": 0.6
   },
   "broadleaf": {
-    "id": "vegetation/temperate-canopy/oak-101.glb",
-    "treeLod": {
-      "reducedId": "vegetation/temperate-canopy/oak-101-lod2.glb",
-      "reducedDistance": 80,
-      "impostorId": "vegetation/temperate-canopy/oak-101-impostor.glb",
-      "impostorDistance": 220,
-      "cullDistance": 360,
-      "hysteresis": 0.15
-    }
+    "id": "vegetation/temperate-canopy/oak-101.glb"
   },
   "boulder": {
     "id": "rock.glb"
