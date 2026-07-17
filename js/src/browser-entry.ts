@@ -494,6 +494,8 @@ export interface RunLiveOptions {
   canvas: HTMLCanvasElement;
   width: number;
   height: number;
+  /** Log one console line per boot-authored command with its result summary. */
+  debugAuthoring?: boolean;
   /** The authoring command log (the agent's edits): each command is re-invoked
    *  through the registry (skill) or calls an engine physics op directly. The worker
    *  simulates it; the render thread re-authors it for meshes. */
@@ -882,12 +884,30 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     }
   };
   if (typeof fetch === "function") await fetchAsset("tree-pack.json");
+  // world.populateBiome WITHOUT an inline pack reads the project's
+  // biome-pack.json at author time (skills/terrain.ts): both realms need its
+  // BYTES (op_read_asset resolves from this prefetch map) and its GLB ids
+  // prewarmed — otherwise the browser silently scatters an EMPTY island while
+  // the disk-backed server scatters the real content.
+  const biomePackBytes = typeof fetch === "function" ? await fetchAsset("biome-pack.json") : undefined;
+  let projectBiomePack: Record<string, unknown> | undefined;
+  if (biomePackBytes !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(biomePackBytes));
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) projectBiomePack = parsed as Record<string, unknown>;
+    } catch { /* malformed project pack — the skill's own lenient read applies */ }
+  }
   const vegPack = loadVegetationPack({ op_read_asset: (id) => prefetchedAssets.get(id) ?? new Uint8Array(0) });
   const gltfIds = new Set<string>(Object.values(vegPack).flat().map((entry) => entry.id));
   const mapIds = new Set<string>();
   for (const cmd of opts.commands) {
     for (const id of gltfAssetIdsForCommand(cmd, vegPack)) gltfIds.add(id);
     for (const id of mapAssetIdsForCommand(cmd)) mapIds.add(id);
+    if (projectBiomePack !== undefined && cmd.kind === "skill" && cmd.tool === "world.populateBiome"
+      && (cmd.input as { biomePack?: unknown } | null)?.biomePack === undefined) {
+      const synthetic = { kind: "skill", tool: "world.populateBiome", input: { biomePack: projectBiomePack } } as AuthorCommand;
+      for (const id of gltfAssetIdsForCommand(synthetic, vegPack)) gltfIds.add(id);
+    }
   }
   const assetIds = [...new Set([...gltfIds, ...mapIds])];
   if (assetIds.length > 0) {
@@ -1529,6 +1549,17 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     defaultPerms: permissions,
     tick: 0,
   });
+  // Opt-in boot diagnostics: one line per authored command with its result
+  // summary — the render realm's authoring outcomes are otherwise invisible
+  // (success results are dropped; only failures surface).
+  if (opts.debugAuthoring) {
+    authoringOutcome.results.forEach((res, i) => {
+      const cmd = viewportBatch.commands[i];
+      const label = cmd.kind === "skill" ? cmd.tool : `physics:${cmd.op}`;
+      const summary = res.success ? JSON.stringify((res as { result?: unknown }).result ?? null).slice(0, 300) : `ERROR ${JSON.stringify(res.error).slice(0, 300)}`;
+      console.info(`limina boot #${i} ${label} -> ${summary}`);
+    });
+  }
   const authoringFailures = authoringOutcome.failures.map((failure) => ({
     ...failure,
     index: viewportBatch.originalIndices[failure.index],
@@ -2179,6 +2210,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         ? [camera.position.x, camera.position.y, camera.position.z] as const
         : orbitCenter;
       renderSession.updateShadowFocus(focus);
+      // Render-only distance/residency controllers (population LOD above all)
+      // classify against the POSED camera each frame — the game loop drives
+      // this in loop.ts; the live viewport must too, or draw-bounded population
+      // meshes never enter the scene at all.
+      if (world.lods !== undefined) for (const lod of world.lods) lod.update(camera);
       // Opt-in RENDER-ONLY post stack: render.enablePost stashes a PostPipeline on world.post;
       // when present, drive its GTAO/bloom/grade composite in place of the bare present.
       const wp = (world as unknown as { post?: { render: () => void } }).post;
