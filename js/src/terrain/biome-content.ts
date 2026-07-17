@@ -161,8 +161,8 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       // (broadleafs give up to conifers with altitude, so they stay below the
       // forest's mid-band). Sparse on purpose: accents against the pine mass,
       // not a second forest.
-      seed: 34, assets: [{ role: "broadleaf" }], coverage: 0.07, cluster: 0.4, clusterFreq: 1 / 26,
-      slopeMax: 0.55, sizeRange: [0.8, 1.3], elevMaxFrac: 0.34, waterGated: true,
+      seed: 34, assets: [{ role: "broadleaf" }], coverage: 0.16, cluster: 0.45, clusterFreq: 1 / 24,
+      slopeMax: 0.6, sizeRange: [0.8, 1.3], elevMaxFrac: 0.4, waterGated: true,
     },
     {
       // VALLEY MEADOW — real mountain ranges carry grass in their low valley floors
