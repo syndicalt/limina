@@ -606,6 +606,32 @@ pub fn op_sha256(#[string] input: &str) -> String {
     sha256_hex(input)
 }
 
+/// Hex-encoded bytes from the OS CSPRNG (getrandom). Backs the host's
+/// `crypto.getRandomValues` bootstrap shim (auth tokens, never world state:
+/// skills draw from the recorded seeded RNG, and this op is host-global only).
+/// Capped so a misbehaving caller cannot demand unbounded entropy per call.
+#[op2]
+#[string]
+pub fn op_crypto_random_hex(#[smi] len: u32) -> Result<String, JsErrorBox> {
+    crypto_random_hex(len)
+}
+
+fn crypto_random_hex(len: u32) -> Result<String, JsErrorBox> {
+    if len == 0 || len > 4096 {
+        return Err(JsErrorBox::generic(
+            "op_crypto_random_hex length must be 1..=4096 bytes",
+        ));
+    }
+    let mut bytes = vec![0u8; len as usize];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| JsErrorBox::generic(format!("OS random source failed: {e}")))?;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in &bytes {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    Ok(hex)
+}
+
 /// Read a tightly allowlisted environment variable for host-side configuration.
 /// The embedded JS runtime intentionally cannot access `Deno.env`; this op only
 /// exposes Limina/Anthropic configuration names, never arbitrary host secrets.
@@ -693,9 +719,10 @@ fn sha256_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_trace_at, is_http_post_host_allowed, is_http_post_target_ip_allowed,
-        parse_http_post_headers, read_allowlisted_env, read_asset_bytes, read_dotenv_value_in,
-        sha256_hex, validate_http_post_url, TraceWriters, MAX_OPEN_TRACE_WRITERS,
+        append_trace_at, crypto_random_hex, is_http_post_host_allowed,
+        is_http_post_target_ip_allowed, parse_http_post_headers, read_allowlisted_env,
+        read_asset_bytes, read_dotenv_value_in, sha256_hex, validate_http_post_url,
+        TraceWriters, MAX_OPEN_TRACE_WRITERS,
     };
 
     /// A fresh, unique scratch directory under the OS temp dir. Canonicalizable
@@ -725,6 +752,21 @@ mod tests {
         );
         assert_eq!(sha256_hex("limina"), sha256_hex("limina"));
         assert_ne!(sha256_hex("limina"), sha256_hex("Limina"));
+    }
+
+    /// The CSPRNG op returns exactly the requested byte count as lowercase hex,
+    /// two draws differ (a constant/zeroed source would collide), and the
+    /// per-call cap rejects 0 and oversize requests.
+    #[test]
+    fn op_crypto_random_hex_length_distinctness_and_cap() {
+        let a = crypto_random_hex(16).unwrap();
+        let b = crypto_random_hex(16).unwrap();
+        assert_eq!(a.len(), 32);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_ne!(a, b, "two 16-byte CSPRNG draws must not collide");
+        assert!(crypto_random_hex(0).is_err());
+        assert!(crypto_random_hex(4097).is_err());
+        assert!(crypto_random_hex(4096).is_ok());
     }
 
     #[test]
@@ -1059,6 +1101,7 @@ extension!(
         op_http_post_headers,
         op_sleep_ms,
         op_sha256,
+        op_crypto_random_hex,
         op_read_env,
         op_write_trace,
         op_append_trace,

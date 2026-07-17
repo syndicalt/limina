@@ -419,3 +419,30 @@ if (typeof globalThis.structuredClone === "undefined") {
     return core.structuredClone(value);
   };
 }
+
+// crypto.getRandomValues over op_crypto_random_hex (OS CSPRNG via getrandom).
+// Host-global scope only: skills draw from the recorded seeded RNG, never from
+// here - this exists for auth-token-grade entropy (the editor host's token
+// generator prefers crypto.getRandomValues and falls back to hashed native
+// Math.random draws, which are not CSPRNG-grade). Integer arrays are filled
+// through their underlying byte view per the web contract; the 65536-byte
+// quota error matches the WebCrypto spec shape.
+if (typeof globalThis.crypto === "undefined") {
+  globalThis.crypto = {
+    getRandomValues(array) {
+      if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
+        throw new TypeError("crypto.getRandomValues requires an integer TypedArray");
+      }
+      if (array.byteLength > 65536) {
+        throw new Error("crypto.getRandomValues quota exceeded (max 65536 bytes)");
+      }
+      if (array.byteLength === 0) return array;
+      const hex = core.ops.op_crypto_random_hex(array.byteLength);
+      const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      return array;
+    },
+  };
+}

@@ -149,7 +149,35 @@ const wasmModule = await WebAssembly.compile(
 );
 assert(wasmModule instanceof WebAssembly.Module, "async WebAssembly.compile must resolve with a Module");
 
+// ── crypto.getRandomValues (OS CSPRNG via op_crypto_random_hex) ─────────────
+// The editor host's auth-token generator prefers this global; without it the
+// token falls back to hashed native Math.random draws (not CSPRNG-grade).
+const cryptoGlobal = (globalThis as { crypto?: { getRandomValues?<T extends ArrayBufferView>(a: T): T } }).crypto;
+assert(typeof cryptoGlobal?.getRandomValues === "function", "host must expose crypto.getRandomValues");
+const drawA = cryptoGlobal.getRandomValues(new Uint8Array(16));
+const drawB = cryptoGlobal.getRandomValues(new Uint8Array(16));
+assert(drawA.some((b, i) => b !== drawB[i]), "two 16-byte CSPRNG draws must not be identical");
+assert(drawA.length === 16, "getRandomValues must fill in place and return the same-length array");
+const wide = cryptoGlobal.getRandomValues(new Uint32Array(4));
+assert(wide.some((v) => v !== 0), "integer TypedArrays must be filled through their byte view");
+// Falsifiability: the WebCrypto contract's rejections must throw, not silently no-op.
+let floatThrew = false;
+try {
+  cryptoGlobal.getRandomValues(new Float64Array(2) as unknown as Uint8Array);
+} catch {
+  floatThrew = true;
+}
+assert(floatThrew, "float arrays must throw per the WebCrypto contract");
+let quotaThrew = false;
+try {
+  cryptoGlobal.getRandomValues(new Uint8Array(65537));
+} catch {
+  quotaThrew = true;
+}
+assert(quotaThrew, "requests over 65536 bytes must throw the quota error");
+
 console.log(
   "p106_host_capabilities OK: timers (fire/args/order/cancel/interval), structuredClone " +
-  "(Map/Set/Date/RegExp/TypedArray/ArrayBuffer/alias/cycle + throw-on-function/transfer), async WebAssembly.compile",
+  "(Map/Set/Date/RegExp/TypedArray/ArrayBuffer/alias/cycle + throw-on-function/transfer), " +
+  "async WebAssembly.compile, crypto.getRandomValues (distinct draws, in-place fill, float/quota rejection)",
 );
