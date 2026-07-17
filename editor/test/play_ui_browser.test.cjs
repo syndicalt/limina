@@ -16,7 +16,7 @@ const { chromeExecutable, loadChromium, requireChromeBinary } = require("./brows
       const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      await page.goto("http://localhost:5173/", { waitUntil: "domcontentloaded" });
+      await page.goto((process.env.EDITOR_BASE_URL ?? "http://localhost:5173") + "/", { waitUntil: "domcontentloaded" });
       await page.waitForSelector("#viewport-play-state");
 
       const controls = await page.evaluate(() => {

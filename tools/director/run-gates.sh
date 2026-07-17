@@ -369,6 +369,16 @@ else
   # Browser suites against the live host + static server. All self-SKIP with exit 2 via
   # editor/test/browser-env.cjs when chromium is absent. The list now carries every
   # editor/test/*_browser.test.cjs (33 were orphaned from all runners before this).
+  # atlas_standalone_handoff needs the separate Astro site app (site/: npm run dev,
+  # port 4321) — an external service this runner does not manage; announced skip
+  # unless something is already listening there (LIMINA_ATLAS_URL overrides).
+  if node -e 'const s=require("node:net").connect(4321,"127.0.0.1");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),1500)' 2>/dev/null; then
+    ATLAS_SITE_UP=1
+  else
+    ATLAS_SITE_UP=0
+    echo "   SKIP: editor atlas_standalone_handoff_browser — needs the site dev server (site/: npm run dev, :4321)" >&2
+    skip=$((skip+1)); skipped+=("atlas_standalone_handoff_browser")
+  fi
   for et in \
     editor/test/fidelity_frame.test.cjs \
     editor/test/viewport_render.test.cjs \
@@ -376,7 +386,6 @@ else
     editor/test/visual_refine.test.cjs \
     editor/test/history_browser.test.cjs \
     editor/test/atlas_bridge_browser.test.cjs \
-    editor/test/atlas_standalone_handoff_browser.test.cjs \
     editor/test/atlas_water_authoring_browser.test.cjs \
     editor/test/camera_navigation_browser.test.cjs \
     editor/test/content_browser_browser.test.cjs \
@@ -397,8 +406,16 @@ else
     host_gate "editor $ename" "no chromium (self-declared exit 2)" \
       env EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
       EDITOR_BASE_URL="http://localhost:$editor_static_port" \
-      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" node "$et"
+      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
+      LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" node "$et"
   done
+  if [ "$ATLAS_SITE_UP" = 1 ]; then
+    host_gate "editor atlas_standalone_handoff_browser" "no chromium (self-declared exit 2)" \
+      env EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
+      EDITOR_BASE_URL="http://localhost:$editor_static_port" \
+      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
+      LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" node editor/test/atlas_standalone_handoff_browser.test.cjs
+  fi
 fi
 cleanup_editor_gates
 trap - EXIT

@@ -18,7 +18,7 @@ const overlaps = (left, right) => left.left < right.right && left.right > right.
       const page = await context.newPage();
       const pageErrors = [];
       page.on("pageerror", (error) => pageErrors.push(error.message));
-      await page.goto("http://localhost:5173/", { waitUntil: "domcontentloaded" });
+      await page.goto((process.env.EDITOR_BASE_URL ?? "http://localhost:5173") + "/", { waitUntil: "domcontentloaded" });
       await page.waitForSelector("#viewport-graphics-quality");
 
       assert.equal(await page.getAttribute('[data-quality-tier="balanced"]', "aria-checked"), "true");

@@ -14,6 +14,7 @@
     "@types/three": "0.184.0",
     "@webgpu/types": "0.1.71",
     "esbuild": "0.28.1",
+    "playwright-core": "^1.57.0",
     "sharp": "^0.34.4",
     "typescript": "5.9.3"
   },

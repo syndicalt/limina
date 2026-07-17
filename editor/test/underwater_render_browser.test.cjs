@@ -17,7 +17,7 @@ const { chromeExecutable, loadChromium, requireChromeBinary } = require("./brows
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   try {
-    await page.goto("http://localhost:5173/", { waitUntil: "domcontentloaded" });
+    await page.goto((process.env.EDITOR_BASE_URL ?? "http://localhost:5173") + "/", { waitUntil: "domcontentloaded" });
     const result = await page.evaluate(async () => {
       const { createBrowserRenderHost, THREE, UnderwaterEffect } = await import("../vendor/limina-runtime.js");
 

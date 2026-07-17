@@ -825,7 +825,12 @@ export class GltfSceneCache {
 
   configureKtx2(renderer: unknown): void {
     if (this.#disposed) throw new Error("glTF scene cache is disposed");
-    if (this.#activeWorlds !== 0 || this.#entries.size !== 0 || this.#inFlight.size !== 0) throw new Error("KTX2 must be configured before glTF prewarm or world acquisition");
+    // Late configuration is SAFE for already-parsed entries: a GLB that actually
+    // carries KTX2 textures fails its parse loudly when no loader is registered
+    // (GLTFLoader's setKTX2Loader contract), so nothing KTX2-textured can be
+    // resident from before this call. It cannot be earlier by design: runLive
+    // pre-warms asset bytes BEFORE renderer.init() (frame-collapse law), and the
+    // transcoder's detectSupport needs the initialized renderer.
     if (this.#ktx2TranscoderPath === undefined) return;
     if (this.#ktx2Loader !== undefined) return;
     const manager = new THREE.LoadingManager();

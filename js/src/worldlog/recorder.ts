@@ -44,6 +44,13 @@ import { IdleStepFilter } from "./step-filter.ts";
 // the control command before the mutation it applies.
 const NON_REPLAYABLE_CONTROL_SKILLS = new Set(["approval.grant", "approval.deny"]);
 
+/** Whether the recorder deliberately never (re)records this skill. Rehydrate's
+ *  strict accounting must exempt persisted lines from BEFORE this cut — they
+ *  replay-apply but re-record zero times (and a durable rewrite drops them). */
+export function isNonReplayableControlSkill(name: string): boolean {
+  return NON_REPLAYABLE_CONTROL_SKILLS.has(name);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

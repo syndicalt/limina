@@ -23,7 +23,7 @@ import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { SkillRegistry, skillEffect, type WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/engine.ts";
-import { WorldRecorder } from "../worldlog/recorder.ts";
+import { isNonReplayableControlSkill, WorldRecorder } from "../worldlog/recorder.ts";
 import { DurableWorldLog } from "../worldlog/durable.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
@@ -377,7 +377,7 @@ export class AuthoritativeServer {
       }
       const tail = prefixCount <= persisted.length ? persisted.slice(prefixCount) : [];
       this.ready = Promise.resolve().then(async () => {
-        const droppedSteps = await this.rehydrate(tail);
+        const { droppedSteps, skippedControl } = await this.rehydrate(tail);
         // LEGACY-LOG SELF-COMPACTION: a log recorded before the idle-step cut carries per-tick
         // step records; rehydrate still APPLIED them all (faithful physics), but the filter
         // re-recorded only the ones that mattered (bit-identical decision: replayed physics is
@@ -386,11 +386,15 @@ export class AuthoritativeServer {
         // to it would corrupt seq contiguity -- so rewrite it once from the recorder's full
         // in-memory history. One slow boot compacts the log permanently; a log recorded after
         // the cut drops nothing here and the segment is left byte-untouched.
-        if (droppedSteps > 0 && this.durableLog !== undefined) {
+        // The same disk/recorder seq divergence arises from persisted non-replayable
+        // control lines (approval.grant/deny recorded before that cut): the recorder
+        // holds fewer commands than the segment, so appends would corrupt seq
+        // contiguity. Either condition forces the one-time rewrite.
+        if ((droppedSteps > 0 || skippedControl > 0) && this.durableLog !== undefined) {
           const kept = this.durableLog.rewriteFromRecorder();
           defaultOps.op_log(
             `AuthoritativeServer: compacted durable world log ${opts.worldLog!.name}: ` +
-              `dropped ${droppedSteps} idle step records, kept ${kept} commands`,
+              `dropped ${droppedSteps} idle step records + ${skippedControl} control lines, kept ${kept} commands`,
           );
         }
         this.prev = this.snapshotMap();
@@ -1084,12 +1088,17 @@ export class AuthoritativeServer {
   /** Replay the persisted tail through the RECORDING ops so the recorder repopulates its
    *  in-memory history. Returns how many replayed step records the idle-step filter dropped
    *  from re-recording (legacy logs only; a post-cut log re-records 1:1 and returns 0). */
-  private async rehydrate(commands: WorldCommand[]): Promise<number> {
+  private async rehydrate(commands: WorldCommand[]): Promise<{ droppedSteps: number; skippedControl: number }> {
     const droppedBefore = this.recorder.droppedIdleSteps;
+    // Persisted lines from BEFORE the non-replayable-control cut (approval.grant/
+    // deny): they replay-apply below but the recorder deliberately never
+    // re-records them, so the strict accounting must expect their absence.
+    let skippedControl = 0;
     for (const cmd of commands) {
       if (cmd.kind === "seed") {
         throw new Error(`AuthoritativeServer rehydrate: unexpected seed command in replay tail at seq ${cmd.seq}`);
       }
+      if (cmd.kind === "skill" && isNonReplayableControlSkill(cmd.tool)) skippedControl++;
       // Thread the ORIGINAL tick into the recorder so a re-recorded physics command keeps its
       // historical tick (the ops proxy stamps rec.tick). Required for a faithful compacted
       // rewrite; previously the in-memory twin re-recorded rehydrated physics with tick 0.
@@ -1124,13 +1133,14 @@ export class AuthoritativeServer {
     // re-recorded + dropped must equal the persisted count, so a double-record or a silent miss
     // still fails loudly.
     const droppedSteps = this.recorder.droppedIdleSteps - droppedBefore;
-    if (this.recorder.commandCount + droppedSteps !== this.rehydratedCommands) {
+    if (this.recorder.commandCount + droppedSteps + skippedControl !== this.rehydratedCommands) {
       throw new Error(
         `AuthoritativeServer rehydrate: recorder has ${this.recorder.commandCount} commands after replay ` +
-          `(+${droppedSteps} idle steps dropped), expected ${this.rehydratedCommands}`,
+          `(+${droppedSteps} idle steps dropped, +${skippedControl} non-replayable control lines), ` +
+          `expected ${this.rehydratedCommands}`,
       );
     }
-    return droppedSteps;
+    return { droppedSteps, skippedControl };
   }
 
   private currentAuthorityFailure(): Error | undefined {
