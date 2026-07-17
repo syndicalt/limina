@@ -56,7 +56,9 @@ test("quality, suppression, and disposal lifecycle remain bounded", () => {
     "far-field terrain can z-fight the derived window");
   assert.match(source, /suppressedAuthoredTerrainBodies\.clear\(\);\s*for \(const bodyId of currentBodies\)/);
   assert.match(source, /MAX_FAILED_DERIVED_DISPOSALS = 8/);
-  assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,100}new DetachedDerivedRenderCandidate/);
+  // H8 (PR C1): capacity is reserved BEFORE verification, verification runs off the
+  // main thread, and the candidate is constructed only from the verified snapshot.
+  assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,600}await verifyDerivedSnapshotOffThread\(snapshot\);[\s\S]{0,60}cancelled\(\);[\s\S]{0,60}new DetachedDerivedRenderCandidate\(verifiedSnapshot/);
   assert.match(source, /await step\(\"derived disposal retries\", retryFailedDerivedDisposals\)/);
 });
 

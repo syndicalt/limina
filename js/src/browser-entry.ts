@@ -113,6 +113,11 @@ import {
   DetachedDerivedRenderCandidate,
   searchTransferredDerivedNavigation,
 } from "./browser/derived-runtime-render-candidate.ts";
+import {
+  DerivedSnapshotVerifier,
+  parseTransferredDerivedRuntimeSnapshot,
+  type ParsedTransferredDerivedSnapshot,
+} from "./browser/derived-runtime-verify.ts";
 import { mountTransportDerivedBiomePopulation } from "./browser/derived-biome-population-mount.ts";
 import {
   derivedTerrainResidencyKey,
@@ -505,6 +510,9 @@ export interface RunLiveOptions {
   /** Worker script URL override (tests / custom hosting). Defaults to the sibling
    *  `sim-worker-entry.js` chunk next to this bundle. */
   workerUrl?: unknown;
+  /** Derived-verify worker script URL override. Defaults to the sibling
+   *  `derived-verify-worker-entry.js` chunk next to this bundle. */
+  verifyWorkerUrl?: unknown;
   /** Authoring permission profile (default "builder.readWrite" — the broad authoring grant). */
   profile?: string;
   /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future).
@@ -977,6 +985,48 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     }
   };
 
+  // ── Derived snapshot verification venue (H8). The hash/re-encode pass over an
+  //    untrusted snapshot runs in a dedicated verify worker so a full residency
+  //    window never stalls the rAF thread; environments without Worker (headless
+  //    gates) run the SAME verifier inline. Buffers are TRANSFERRED both ways, so
+  //    the bytes verified are provably the bytes mounted. A channel-level worker
+  //    failure fails that activation (its buffers are already detached) and every
+  //    later activation verifies inline. ──
+  let verifyWorker: { terminate(): void } | null = null;
+  let derivedVerifier: DerivedSnapshotVerifier | null = null;
+  let verifyWorkerUnavailable = false;
+  const verifyDerivedSnapshotOffThread = (snapshot: unknown): Promise<ParsedTransferredDerivedSnapshot> => {
+    if (typeof Worker !== "function" || verifyWorkerUnavailable) {
+      try { return Promise.resolve(parseTransferredDerivedRuntimeSnapshot(snapshot)); }
+      catch (error) { return Promise.reject(error); }
+    }
+    if (derivedVerifier === null) {
+      try {
+        const verifyWorkerUrl = opts.verifyWorkerUrl ?? new URL("./derived-verify-worker-entry.js", import.meta.url);
+        const spawned = new Worker(verifyWorkerUrl as string | URL, { type: "module" }) as Worker;
+        const client = new DerivedSnapshotVerifier({
+          post: (message, transfer) => spawned.postMessage(message, transfer),
+          listen: (handler) => { spawned.onmessage = (ev: MessageEvent<unknown>): void => handler(ev.data); },
+        });
+        spawned.onerror = (event: unknown): void => {
+          verifyWorkerUnavailable = true;
+          const detail = (event as { message?: unknown } | null)?.message;
+          client.fail(new Error(`derived verify worker failed: ${typeof detail === "string" && detail.length > 0 ? detail : "worker error"}`));
+          try { spawned.terminate(); } catch { /* already torn down */ }
+          if (verifyWorker === spawned) { verifyWorker = null; derivedVerifier = null; }
+        };
+        verifyWorker = spawned;
+        derivedVerifier = client;
+      } catch (error) {
+        verifyWorkerUnavailable = true;
+        console.warn("derived verify worker unavailable; verifying inline", error);
+        try { return Promise.resolve(parseTransferredDerivedRuntimeSnapshot(snapshot)); }
+        catch (parseError) { return Promise.reject(parseError); }
+      }
+    }
+    return derivedVerifier.verify(snapshot);
+  };
+
   const requireDerivedDisposalCapacity = (): void => {
     // Reserve one slot for retirement and one for the active candidate's eventual teardown.
     if (failedDerivedDisposals.length < MAX_FAILED_DERIVED_DISPOSALS - 2) return;
@@ -1053,6 +1103,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       await step("visible water", () => cleanupWater?.dispose());
       await step("derived revision", () => cleanupDerivedRevision?.());
       await step("derived disposal retries", retryFailedDerivedDisposals);
+      await step("derived verify worker", () => {
+        derivedVerifier?.fail(new Error(reason));
+        derivedVerifier = null;
+        const spawned = verifyWorker;
+        verifyWorker = null;
+        spawned?.terminate();
+      });
       await step("post-processing", () => (cleanupWorld?.post as { dispose?(): void } | undefined)?.dispose?.());
       if (cleanupWorld !== undefined) cleanupWorld.post = undefined;
       await step("world render session", () => cleanupRenderSession?.dispose());
@@ -2133,7 +2190,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       };
       cancelled();
       requireDerivedDisposalCapacity();
-      const candidate = new DetachedDerivedRenderCandidate(snapshot, {
+      // Off-main-thread verification (H8): hash/re-encode runs in the verify worker
+      // (inline where no Worker exists) and a rejection fails this activation exactly
+      // as the former in-constructor parse throw did. Frames keep rendering while the
+      // worker verifies; only mounting below runs under the activation gate.
+      const verifiedSnapshot = await verifyDerivedSnapshotOffThread(snapshot);
+      cancelled();
+      const candidate = new DetachedDerivedRenderCandidate(verifiedSnapshot, {
         quality: renderSession.quality().tier,
       });
       const identity = derivedIdentity(candidate);

@@ -72,7 +72,10 @@ import {
 } from "./derived-plain-data.ts";
 
 export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
-export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
+// The snapshot schema is owned by the verifier (the module that consumes it across the
+// trust boundary); re-exported here so protocol consumers keep one import site.
+import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "./derived-runtime-verify.ts";
+export { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "./derived-runtime-verify.ts";
 export const DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 8_000] as const);
 export const DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15_000;
 

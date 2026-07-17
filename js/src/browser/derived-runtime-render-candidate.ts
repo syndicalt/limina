@@ -8,7 +8,6 @@ import {
   mountGeneratedWaterResource,
   generatedWaterCoversPoint,
   type GeneratedWaterRenderMount,
-  type VerifiedGeneratedWaterRenderResource,
 } from "../render/water/generated-water-renderer.ts";
 import { VisibleWaterManager } from "../render/water/visible-water-manager.ts";
 import {
@@ -19,208 +18,44 @@ import {
 import { TERRAIN_PAINT_ALBEDO_HEX } from "../terrain/material-palette.ts";
 import { tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
-import {
-  MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS,
-  MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS,
-  parseDerivedTerrainResidency,
-  selectDerivedTerrainChunks,
-  type DerivedTerrainResidency,
-} from "./derived-terrain-residency.ts";
-import {
-  DerivedLod0TerrainIndex,
-  assertDerivedTerrainTilePlacement,
-  parseTransferredTerrainTile,
-  type DerivedTerrainArtifactDescriptor,
-  type DerivedTerrainIndexEntry,
-  type DerivedTerrainManifestChunk,
-} from "./derived-terrain-index.ts";
+import { selectDerivedTerrainChunks } from "./derived-terrain-residency.ts";
 export { DerivedLod0TerrainIndex } from "./derived-terrain-index.ts";
-import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "./derived-runtime-worker.ts";
-import { compilerContentHash } from "../world/compiler/canonical.mjs";
-import {
-  derivedArtifactCompilerGraphHash,
-  derivedArtifactContentHash,
-  derivedGlobalArtifacts,
-  parseDerivedRevisionManifest,
-} from "../world/compiler/manifest.mjs";
-import {
-  TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
-  MAX_TERRAIN_CHUNK_ARTIFACT_BYTES,
-} from "../world/compiler/terrain-artifact.mjs";
-import {
-  HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
-  HYDROLOGY_FIELD_ARTIFACT_TYPE,
-  decodeHydrologyFieldArtifact,
-  encodeHydrologyFieldArtifact,
-} from "../world/hydrology-artifact.mjs";
-import {
-  HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE,
-  HYDROLOGY_WATER_ARTIFACT_TYPE,
-  inspectHydrologyWaterArtifactBindings,
-} from "../world/hydrology-water-artifact.mjs";
-import {
-  WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
-  WORLD_OVERVIEW_ARTIFACT_TYPE,
-  decodeWorldOverviewArtifact,
-  encodeWorldOverviewArtifact,
-} from "../world/compiler/world-overview-artifact.mjs";
-import {
-  NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
-  NAVIGATION_INDEX_ARTIFACT_TYPE,
-  decodeNavigationIndexArtifact,
-  searchNavigationIndexPrefix,
-} from "../world/compiler/navigation-index-artifact.mjs";
-import {
-  BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
-  BIOME_FIELD_ARTIFACT_TYPE,
-  decodeBiomeFieldArtifact,
-  encodeBiomeFieldArtifact,
-} from "../world/compiler/biome-field-artifact.mjs";
-import { createBiomeFieldSampler } from "../world/biome-field-sampler.mjs";
-import {
-  MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES,
-  SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
-  SURFACE_COMPOSITE_ARTIFACT_TYPE,
-  decodeSurfaceCompositeArtifact,
-  encodeSurfaceCompositeArtifact,
-} from "../world/compiler/surface-composite-artifact.mjs";
-import {
-  BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
-  BIOME_POPULATION_ARTIFACT_SCHEMA,
-  BIOME_POPULATION_ARTIFACT_TYPE,
-  MAX_BIOME_POPULATION_ARTIFACT_BYTES,
-  decodeBiomePopulationArtifact,
-  encodeBiomePopulationArtifact,
-} from "../world/compiler/biome-population-artifact.mjs";
-import {
-  BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
-  BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
-  decodeBiomeContentClosureArtifact,
-} from "../world/compiler/biome-content-closure-artifact.mjs";
-import {
-  BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE,
-  BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
-  decodeBiomeRuntimePackArtifact,
-} from "../world/compiler/biome-runtime-pack-artifact.mjs";
+import { searchNavigationIndexPrefix } from "../world/compiler/navigation-index-artifact.mjs";
+import { encodeBiomeFieldArtifact } from "../world/compiler/biome-field-artifact.mjs";
 import {
   buildBiomeSurfaceMaterial,
   type BiomeSurfaceMaterialMount,
 } from "../terrain/biome-surface-material.ts";
-import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
+import { plainRecord } from "./derived-plain-data.ts";
+import {
+  MAX_DETACHED_DERIVED_TERRAIN_MESHES,
+  assertVerifiedTransferredDerivedSnapshot,
+  type DetachedDerivedPopulationPlan,
+  type ParsedTransferredDerivedSnapshot,
+  type ParsedTransferredSurfaceComposite,
+  type VerifiedBiomeContentBundle,
+} from "./derived-runtime-verify.ts";
 
-export const MAX_DETACHED_DERIVED_TERRAIN_RADIUS = MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS;
-export const MAX_DETACHED_DERIVED_TERRAIN_MESHES = MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS;
-export const MAX_DETACHED_DERIVED_TERRAIN_CPU_BYTES = 256 * 1024 * 1024;
-const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
-const HASH = /^sha256:[0-9a-f]{64}$/;
-
-type ArtifactDescriptor = DerivedTerrainArtifactDescriptor;
-
-type ManifestChunk = DerivedTerrainManifestChunk;
-
-type ParsedManifest = Readonly<{
-  manifestHash: string;
-  projectId: string;
-  branchId: string;
-  source: Readonly<{ revision: number; headHash: string }>;
-  compiler: Readonly<{ graphHash: string }>;
-  grid: Readonly<{ schema: string; gridId: string; origin: readonly [number, number]; chunkSizeM: number; defaultSamples: number }>;
-  chunks: readonly ManifestChunk[];
-}>;
-
-export interface ParsedGeneratedWaterResource {
-  readonly artifact: ArtifactDescriptor;
-  readonly bytes: Uint8Array;
-  readonly bindings: Readonly<{
-    hydrologyFieldContentHash: string;
-    recipeHash: string;
-    erosionStageKey: string;
-    compilerGraphHash: string;
-  }>;
-  readonly render: VerifiedGeneratedWaterRenderResource;
-}
-
-type IndexedTerrainChunk = DerivedTerrainIndexEntry;
-
-export interface ParsedTransferredDerivedSnapshot {
-  readonly schema: typeof DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA;
-  readonly projectId: string;
-  readonly branchId: string;
-  readonly manifestHash: string;
-  readonly source: Readonly<{ revision: number; headHash: string }>;
-  readonly manifest: ParsedManifest;
-  readonly residency: Readonly<DerivedTerrainResidency>;
-  readonly terrain: DerivedLod0TerrainIndex;
-  readonly surfaceAt: (tx: number, tz: number) => ParsedTransferredSurfaceComposite | undefined;
-  readonly populationAt: (tx: number, tz: number) => ParsedTransferredBiomePopulation | undefined;
-  readonly populationPlan: DetachedDerivedPopulationPlan | null;
-  readonly biomeContent: VerifiedBiomeContentBundle | null;
-  readonly biomeRuntimePack: Readonly<{ bytes: Uint8Array; semanticContentHash: string }> | null;
-  readonly retainedCpuBytes: number;
-  readonly worldOverview: ReturnType<typeof decodeWorldOverviewArtifact> | null;
-  readonly navigationIndex: ReturnType<typeof decodeNavigationIndexArtifact> | null;
-  readonly biomeField: ReturnType<typeof decodeBiomeFieldArtifact> | null;
-  readonly biomeSampler: ReturnType<typeof createBiomeFieldSampler> | null;
-  readonly generatedWater: ParsedGeneratedWaterResource | null;
-}
-
-export interface ParsedTransferredSurfaceComposite {
-  readonly artifact: ArtifactDescriptor;
-  readonly decoded: ReturnType<typeof decodeSurfaceCompositeArtifact>;
-}
-
-export interface DetachedDerivedPopulationPlacement {
-  readonly role: string;
-  readonly assetId: string;
-  readonly contentHash: string;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  readonly yaw: number;
-  readonly scale: number;
-  readonly pageX: number;
-  readonly pageZ: number;
-}
-
-export interface ParsedTransferredBiomePopulation {
-  readonly artifact: ArtifactDescriptor;
-  readonly plan: Readonly<{
-    schema: typeof BIOME_POPULATION_ARTIFACT_SCHEMA;
-    coord: Readonly<{ tx: number; tz: number; lod: number }>;
-    identity: Readonly<{ fieldContentHash: string; runtimePackContentHash: string }>;
-    placements: readonly DetachedDerivedPopulationPlacement[];
-  }>;
-}
-
-export const DETACHED_DERIVED_POPULATION_PLAN_SCHEMA = "limina.detached-derived-population-plan/v1" as const;
-
-export interface DetachedDerivedPopulationPlan {
-  readonly schema: typeof DETACHED_DERIVED_POPULATION_PLAN_SCHEMA;
-  readonly identity: Readonly<{ fieldContentHash: string; runtimePackContentHash: string }>;
-  readonly chunks: readonly Readonly<{
-    tx: number;
-    tz: number;
-    lod: number;
-    contentHash: string;
-    placementCount: number;
-  }>[];
-  readonly placements: readonly DetachedDerivedPopulationPlacement[];
-}
-
-export interface VerifiedBiomeContentBundle {
-  readonly schema: string;
-  readonly id: string;
-  readonly version: string;
-  readonly status: "candidate" | "accepted";
-  readonly closureHash: string;
-  readonly runtimePack: Readonly<{ assetId: string; contentHash: string }>;
-  readonly entries: readonly Readonly<{
-    assetId: string;
-    contentHash: string;
-    kind: string;
-    byteLength: number;
-  }>[];
-}
+// Verification/decoding of a transferred snapshot lives in derived-runtime-verify.ts
+// (the ONE verifier — worker-loadable, no `three`/DOM). This module is MOUNTING only;
+// it re-exports the verify surface for its existing importers, and its constructor
+// accepts only the verify module's branded output (verify-before-construct).
+export {
+  DETACHED_DERIVED_POPULATION_PLAN_SCHEMA,
+  MAX_DETACHED_DERIVED_TERRAIN_CPU_BYTES,
+  MAX_DETACHED_DERIVED_TERRAIN_MESHES,
+  MAX_DETACHED_DERIVED_TERRAIN_RADIUS,
+  parseTransferredDerivedRuntimeSnapshot,
+} from "./derived-runtime-verify.ts";
+export type {
+  DetachedDerivedPopulationPlacement,
+  DetachedDerivedPopulationPlan,
+  ParsedGeneratedWaterResource,
+  ParsedTransferredBiomePopulation,
+  ParsedTransferredDerivedSnapshot,
+  ParsedTransferredSurfaceComposite,
+  VerifiedBiomeContentBundle,
+} from "./derived-runtime-verify.ts";
 
 export interface DetachedDerivedRenderCandidateOptions {
   readonly quality?: RenderQualityTier;
@@ -293,464 +128,6 @@ export interface DetachedWorldOverviewBounds {
 
 function plain(value: unknown, label: string): Record<string, unknown> {
   return plainRecord(value, label);
-}
-
-function exact(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  exactDataKeys(value, keys, [], label);
-}
-
-function dense(value: unknown, maximum: number, label: string): unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum) {
-    throw new TypeError(`${label} must be a bounded standard array`);
-  }
-  if (Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
-    throw new TypeError(`${label} must be dense and field-free`);
-  }
-  return value;
-}
-
-function descriptor(value: unknown, label: string): ArtifactDescriptor {
-  const record = plain(value, label);
-  exact(record, ["artifactType", "contentHash", "byteLength", "mediaType"], label);
-  if (typeof record.artifactType !== "string" || typeof record.mediaType !== "string"
-      || typeof record.contentHash !== "string" || !HASH.test(record.contentHash)
-      || !Number.isSafeInteger(record.byteLength) || (record.byteLength as number) < 0) {
-    throw new TypeError(`${label} is invalid`);
-  }
-  return Object.freeze({
-    artifactType: record.artifactType,
-    contentHash: record.contentHash,
-    byteLength: record.byteLength as number,
-    mediaType: record.mediaType,
-  });
-}
-
-function sameDescriptor(left: ArtifactDescriptor, right: ArtifactDescriptor): boolean {
-  return left.artifactType === right.artifactType && left.contentHash === right.contentHash
-    && left.byteLength === right.byteLength && left.mediaType === right.mediaType;
-}
-
-function completeUint8(value: unknown, label: string): Uint8Array {
-  if (!(value instanceof Uint8Array) || !(value.buffer instanceof ArrayBuffer)
-      || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
-    throw new TypeError(`${label} must be an owned complete Uint8Array`);
-  }
-  return value;
-}
-
-
-function bindings(value: unknown): ParsedGeneratedWaterResource["bindings"] {
-  const record = plain(value, "generated water bindings");
-  exact(record, ["hydrologyFieldContentHash", "recipeHash", "erosionStageKey", "compilerGraphHash"], "generated water bindings");
-  for (const key of Object.keys(record)) {
-    if (typeof record[key] !== "string" || !HASH.test(record[key] as string)) throw new TypeError(`generated water binding '${key}' is invalid`);
-  }
-  return Object.freeze(record as unknown as ParsedGeneratedWaterResource["bindings"]);
-}
-
-function generatedRenderTopology(value: unknown): VerifiedGeneratedWaterRenderResource["topology"] {
-  const topology = plain(value, "generated water render topology");
-  if (!Array.isArray(topology.basins) || !Array.isArray(topology.reaches)) {
-    throw new TypeError("generated water render topology requires basin and reach arrays");
-  }
-  return Object.freeze({
-    ...topology,
-    basins: Object.freeze(topology.basins.map((input, index) => {
-      const basin = plain(input, `generated water render basin ${index}`);
-      const footprint = plain(basin.footprint, `generated water render basin ${index} footprint`);
-      return Object.freeze({
-        ...basin,
-        footprint: Object.freeze({ ...footprint, holes: Object.freeze(Array.isArray(footprint.holes) ? footprint.holes : []) }),
-      });
-    })),
-    reaches: Object.freeze([...topology.reaches]),
-  }) as unknown as VerifiedGeneratedWaterRenderResource["topology"];
-}
-
-export function parseTransferredDerivedRuntimeSnapshot(input: unknown): ParsedTransferredDerivedSnapshot {
-  const snapshot = plain(input, "derived runtime resource snapshot");
-  exact(snapshot, ["schema", "projectId", "branchId", "manifestHash", "source", "manifest", "residency", "chunks", "globals"], "derived runtime resource snapshot");
-  if (snapshot.schema !== DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA) throw new Error("derived runtime resource snapshot schema is unsupported");
-  const manifest = parseDerivedRevisionManifest(snapshot.manifest) as ParsedManifest;
-  if (snapshot.projectId !== manifest.projectId || snapshot.branchId !== manifest.branchId
-      || snapshot.manifestHash !== manifest.manifestHash || compilerContentHash(snapshot.source) !== compilerContentHash(manifest.source)) {
-    throw new Error("derived runtime resource snapshot identity disagrees with its manifest");
-  }
-
-  const residency = parseDerivedTerrainResidency(snapshot.residency);
-  const expectedChunks = selectDerivedTerrainChunks(manifest, residency);
-  const entries = dense(snapshot.chunks, MAX_DETACHED_DERIVED_TERRAIN_MESHES, "derived runtime terrain chunks");
-  if (entries.length < 1 || entries.length !== expectedChunks.length) {
-    throw new Error("derived runtime terrain residency set is incomplete or exceeds its requested window");
-  }
-  const manifestChunks = new Map(manifest.chunks.map((chunk) => [chunk.chunkId, chunk]));
-  const manifestGlobals = derivedGlobalArtifacts(manifest) as ArtifactDescriptor[];
-  const manifestBiomeField = manifestGlobals.find((artifact) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE);
-  const seenIds = new Set<string>(), seenCoords = new Set<string>();
-  const indexed: IndexedTerrainChunk[] = [];
-  const surfaces = new Map<string, ParsedTransferredSurfaceComposite>();
-  const populations = new Map<string, ParsedTransferredBiomePopulation>();
-  const populationChunks: DetachedDerivedPopulationPlan["chunks"][number][] = [];
-  const populationPlacements: DetachedDerivedPopulationPlacement[] = [];
-  let populationIdentity: DetachedDerivedPopulationPlan["identity"] | null = null;
-  let retainedCpuBytes = 0;
-  for (let index = 0; index < entries.length; index++) {
-    const entry = plain(entries[index], `derived runtime terrain chunk ${index}`);
-    exact(entry, ["chunkId", "chunk", "resource"], `derived runtime terrain chunk ${index}`);
-    if (typeof entry.chunkId !== "string" || seenIds.has(entry.chunkId)) throw new Error("derived runtime terrain chunks contain duplicate or invalid ids");
-    if (entry.chunkId !== expectedChunks[index]?.chunkId) throw new Error("derived runtime terrain chunks do not match requested manifest order");
-    const canonical = manifestChunks.get(entry.chunkId);
-    if (canonical === undefined || compilerContentHash(entry.chunk) !== compilerContentHash(canonical)) {
-      throw new Error(`derived runtime terrain chunk '${entry.chunkId}' identity does not match its manifest`);
-    }
-    const coordinate = `${canonical.lod}:${canonical.tx}:${canonical.tz}`;
-    if (seenCoords.has(coordinate)) throw new Error(`derived runtime terrain coordinate '${coordinate}' is duplicated`);
-    if (canonical.artifacts.length < 1 || canonical.artifacts.length > 3) {
-      throw new Error(`derived terrain chunk '${canonical.chunkId}' must carry terrain and at most one surface and population artifact`);
-    }
-    const artifactByType = new Map(canonical.artifacts.map((artifact) => [artifact.artifactType, artifact]));
-    if (artifactByType.size !== canonical.artifacts.length
-        || [...artifactByType.keys()].some((type) => type !== TERRAIN_CHUNK_ARTIFACT_TYPE
-          && type !== SURFACE_COMPOSITE_ARTIFACT_TYPE && type !== BIOME_POPULATION_ARTIFACT_TYPE)) {
-      throw new Error(`derived terrain chunk '${canonical.chunkId}' artifact contract is unsupported`);
-    }
-    const artifact = artifactByType.get(TERRAIN_CHUNK_ARTIFACT_TYPE);
-    const surfaceArtifact = artifactByType.get(SURFACE_COMPOSITE_ARTIFACT_TYPE);
-    const populationArtifact = artifactByType.get(BIOME_POPULATION_ARTIFACT_TYPE);
-    if (artifact === undefined || artifact.mediaType !== TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE
-        || artifact.byteLength > MAX_TERRAIN_CHUNK_ARTIFACT_BYTES
-        || (surfaceArtifact !== undefined && (surfaceArtifact.mediaType !== SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE
-          || surfaceArtifact.byteLength > MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES))
-        || (populationArtifact !== undefined && (populationArtifact.mediaType !== BIOME_POPULATION_ARTIFACT_MEDIA_TYPE
-          || populationArtifact.byteLength > MAX_BIOME_POPULATION_ARTIFACT_BYTES))) {
-      throw new Error(`derived terrain chunk '${canonical.chunkId}' artifact contract is unsupported`);
-    }
-    if (populationArtifact !== undefined && surfaceArtifact === undefined) {
-      throw new Error(`derived terrain chunk '${canonical.chunkId}' population is missing its surface identity context`);
-    }
-    const resource = plain(entry.resource, `derived runtime terrain chunk '${canonical.chunkId}' resource`);
-    exact(resource, surfaceArtifact === undefined ? ["kind", "decoded"]
-      : populationArtifact === undefined ? ["kind", "decoded", "surface", "artifacts"]
-        : ["kind", "decoded", "surface", "population", "artifacts"],
-      `derived runtime terrain chunk '${canonical.chunkId}' resource`);
-    if (resource.kind !== TERRAIN_CHUNK_ARTIFACT_TYPE) throw new Error(`derived terrain chunk '${canonical.chunkId}' resource kind is unsupported`);
-    const tile = parseTransferredTerrainTile(resource.decoded, artifact, `derived terrain chunk '${canonical.chunkId}'`);
-    assertDerivedTerrainTilePlacement(tile, canonical, manifest.grid);
-    retainedCpuBytes += artifact.byteLength;
-    if (surfaceArtifact !== undefined) {
-      if (manifestBiomeField === undefined) {
-        throw new Error(`derived terrain chunk '${canonical.chunkId}' surface is missing its global biome field dependency`);
-      }
-      const transferredArtifacts = plain(resource.artifacts, `derived terrain chunk '${canonical.chunkId}' resource artifacts`);
-      exact(transferredArtifacts, populationArtifact === undefined ? ["terrain", "surface"] : ["terrain", "surface", "population"],
-        `derived terrain chunk '${canonical.chunkId}' resource artifacts`);
-      const transferredTerrain = descriptor(transferredArtifacts.terrain, `derived terrain chunk '${canonical.chunkId}' transferred terrain artifact`);
-      const transferredSurface = descriptor(transferredArtifacts.surface, `derived terrain chunk '${canonical.chunkId}' transferred surface artifact`);
-      const transferredPopulation = populationArtifact === undefined ? undefined
-        : descriptor(transferredArtifacts.population, `derived terrain chunk '${canonical.chunkId}' transferred population artifact`);
-      if (!sameDescriptor(transferredTerrain, artifact) || !sameDescriptor(transferredSurface, surfaceArtifact)
-          || (populationArtifact !== undefined && (transferredPopulation === undefined
-            || !sameDescriptor(transferredPopulation, populationArtifact)))) {
-        throw new Error(`derived terrain chunk '${canonical.chunkId}' transferred artifact bindings do not match its manifest`);
-      }
-      // Re-encoding independently revalidates the transferred map hashes, exact schema, and
-      // canonical codec bytes before descriptor identity is trusted in the main realm.
-      const decodedSurface = resource.surface as ReturnType<typeof decodeSurfaceCompositeArtifact>;
-      const canonicalSurfaceBytes = encodeSurfaceCompositeArtifact(decodedSurface);
-      if (canonicalSurfaceBytes.byteLength !== surfaceArtifact.byteLength
-          || derivedArtifactContentHash(canonicalSurfaceBytes) !== surfaceArtifact.contentHash) {
-        throw new Error(`derived terrain chunk '${canonical.chunkId}' surface does not match its canonical descriptor`);
-      }
-      const expectedOriginX = manifest.grid.origin[0] + canonical.tx * manifest.grid.chunkSizeM;
-      const expectedOriginZ = manifest.grid.origin[1] + canonical.tz * manifest.grid.chunkSizeM;
-      if (decodedSurface.coord.tx !== canonical.tx || decodedSurface.coord.tz !== canonical.tz || decodedSurface.coord.lod !== canonical.lod
-          || decodedSurface.source.terrainChunkHash !== artifact.contentHash
-          || decodedSurface.source.biomeFieldHash !== manifestBiomeField.contentHash) {
-        throw new Error(`derived terrain chunk '${canonical.chunkId}' surface bindings do not match its terrain, biome field, or coordinate`);
-      }
-      if (decodedSurface.placement.origin[0] !== expectedOriginX || decodedSurface.placement.origin[1] !== expectedOriginZ
-          || decodedSurface.placement.sizeM !== manifest.grid.chunkSizeM
-          || decodedSurface.placement.origin[0] !== tile.origin[0] - tile.scale[0] / 2
-          || decodedSurface.placement.origin[1] !== tile.origin[2] - tile.scale[2] / 2) {
-        throw new Error(`derived terrain chunk '${canonical.chunkId}' surface placement does not match the manifest grid or terrain tile`);
-      }
-      const decodedBytes = decodedSurface.maps.albedo.data.byteLength
-        + decodedSurface.maps.normal.data.byteLength + decodedSurface.maps.orm.data.byteLength;
-      retainedCpuBytes += decodedBytes;
-      surfaces.set(tileKey(canonical.tx, canonical.tz), Object.freeze({ artifact: surfaceArtifact, decoded: decodedSurface }));
-
-      if (populationArtifact !== undefined) {
-        if (manifestBiomeField === undefined) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population is missing its global biome field dependency`);
-        }
-        const transferredPopulationResource = plain(resource.population,
-          `derived terrain chunk '${canonical.chunkId}' population resource`);
-        exact(transferredPopulationResource, ["plan", "metadata"],
-          `derived terrain chunk '${canonical.chunkId}' population resource`);
-        const metadata = plain(transferredPopulationResource.metadata,
-          `derived terrain chunk '${canonical.chunkId}' population metadata`);
-        exact(metadata, ["schema", "artifactType", "mediaType", "version", "byteLength", "contentHash", "storage"],
-          `derived terrain chunk '${canonical.chunkId}' population metadata`);
-        const canonicalPopulationBytes = encodeBiomePopulationArtifact(transferredPopulationResource.plan);
-        if (canonicalPopulationBytes.byteLength !== populationArtifact.byteLength
-            || derivedArtifactContentHash(canonicalPopulationBytes) !== populationArtifact.contentHash
-            || metadata.artifactType !== BIOME_POPULATION_ARTIFACT_TYPE
-            || metadata.mediaType !== BIOME_POPULATION_ARTIFACT_MEDIA_TYPE
-            || metadata.schema !== BIOME_POPULATION_ARTIFACT_SCHEMA
-            || metadata.byteLength !== populationArtifact.byteLength
-            || metadata.contentHash !== populationArtifact.contentHash) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population does not match its canonical descriptor`);
-        }
-        // Decode the canonical main-realm bytes rather than retaining the worker's object graph.
-        const decodedPopulation = decodeBiomePopulationArtifact(canonicalPopulationBytes);
-        if (compilerContentHash(metadata) !== compilerContentHash(decodedPopulation.metadata)) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population metadata is not canonical`);
-        }
-        const plan = decodedPopulation.plan as ParsedTransferredBiomePopulation["plan"];
-        if (plan.coord.tx !== canonical.tx || plan.coord.tz !== canonical.tz || plan.coord.lod !== canonical.lod) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population coordinate does not match its manifest chunk`);
-        }
-        if (plan.identity.fieldContentHash !== manifestBiomeField.contentHash
-            || plan.identity.fieldContentHash !== decodedSurface.source.biomeFieldHash) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population biome-field identity does not match its publication`);
-        }
-        if (plan.identity.runtimePackContentHash !== decodedSurface.source.biomePackHash) {
-          throw new Error(`derived terrain chunk '${canonical.chunkId}' population runtime-pack identity does not match its surface`);
-        }
-        if (populationIdentity !== null
-            && (populationIdentity.fieldContentHash !== plan.identity.fieldContentHash
-              || populationIdentity.runtimePackContentHash !== plan.identity.runtimePackContentHash)) {
-          throw new Error("derived terrain population chunks do not share one publication identity");
-        }
-        if (populationIdentity === null) populationIdentity = Object.freeze({ ...plan.identity });
-        const parsedPopulation = Object.freeze({ artifact: populationArtifact, plan });
-        populations.set(tileKey(canonical.tx, canonical.tz), parsedPopulation);
-        populationChunks.push(Object.freeze({
-          tx: canonical.tx,
-          tz: canonical.tz,
-          lod: canonical.lod,
-          contentHash: populationArtifact.contentHash,
-          placementCount: plan.placements.length,
-        }));
-        populationPlacements.push(...plan.placements);
-        retainedCpuBytes += populationArtifact.byteLength;
-      }
-    }
-    if (!Number.isSafeInteger(retainedCpuBytes) || retainedCpuBytes > MAX_DETACHED_DERIVED_TERRAIN_CPU_BYTES) {
-      throw new RangeError("derived terrain snapshot exceeds the 256 MiB retained CPU budget");
-    }
-    seenIds.add(entry.chunkId);
-    seenCoords.add(coordinate);
-    indexed.push(Object.freeze({ chunk: canonical, tile }));
-  }
-  const terrain = new DerivedLod0TerrainIndex(indexed, manifest.grid);
-  const surfaceAt = (tx: number, tz: number): ParsedTransferredSurfaceComposite | undefined => surfaces.get(tileKey(tx, tz));
-  const populationAt = (tx: number, tz: number): ParsedTransferredBiomePopulation | undefined => populations.get(tileKey(tx, tz));
-  const populationPlan: DetachedDerivedPopulationPlan | null = populationIdentity === null ? null : Object.freeze({
-    schema: DETACHED_DERIVED_POPULATION_PLAN_SCHEMA,
-    identity: populationIdentity,
-    chunks: Object.freeze(populationChunks),
-    placements: Object.freeze(populationPlacements),
-  });
-
-  const globalEntries = dense(snapshot.globals, 64, "derived runtime globals");
-  if (globalEntries.length !== manifestGlobals.length) throw new Error("derived runtime global resource set is incomplete");
-  const globals = new Map<string, { artifact: ArtifactDescriptor; resource: Record<string, unknown> }>();
-  for (let index = 0; index < globalEntries.length; index++) {
-    const entry = plain(globalEntries[index], `derived runtime global ${index}`);
-    exact(entry, ["artifactType", "artifact", "resource"], `derived runtime global ${index}`);
-    if (typeof entry.artifactType !== "string" || globals.has(entry.artifactType)) throw new Error("derived runtime globals contain duplicate or invalid types");
-    const parsedArtifact = descriptor(entry.artifact, `derived runtime global '${entry.artifactType}' artifact`);
-    const canonical = manifestGlobals.find((artifact) => artifact.artifactType === entry.artifactType);
-    if (canonical === undefined || !sameDescriptor(parsedArtifact, canonical)) throw new Error(`derived runtime global '${entry.artifactType}' identity does not match its manifest`);
-    globals.set(entry.artifactType, { artifact: canonical, resource: plain(entry.resource, `derived runtime global '${entry.artifactType}' resource`) });
-  }
-
-  let generatedWater: ParsedGeneratedWaterResource | null = null;
-  let worldOverview: ReturnType<typeof decodeWorldOverviewArtifact> | null = null;
-  let navigationIndex: ReturnType<typeof decodeNavigationIndexArtifact> | null = null;
-  let biomeField: ReturnType<typeof decodeBiomeFieldArtifact> | null = null;
-  let biomeSampler: ReturnType<typeof createBiomeFieldSampler> | null = null;
-  const overview = globals.get(WORLD_OVERVIEW_ARTIFACT_TYPE);
-  if (overview !== undefined) {
-    exact(overview.resource, ["kind", "decoded"], "world overview resource");
-    if (overview.resource.kind !== WORLD_OVERVIEW_ARTIFACT_TYPE) throw new Error("world overview resource kind is unsupported");
-    const decodedEnvelope = plain(overview.resource.decoded, "world overview decoded resource");
-    exact(decodedEnvelope, ["grid", "metadata"], "world overview decoded resource");
-    const canonicalBytes = encodeWorldOverviewArtifact(decodedEnvelope.grid);
-    if (overview.artifact.mediaType !== WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE
-        || canonicalBytes.byteLength !== overview.artifact.byteLength
-        || derivedArtifactContentHash(canonicalBytes) !== overview.artifact.contentHash) {
-      throw new Error("world overview resource does not match its canonical descriptor");
-    }
-    worldOverview = decodeWorldOverviewArtifact(canonicalBytes);
-  }
-  const navigation = globals.get(NAVIGATION_INDEX_ARTIFACT_TYPE);
-  if (navigation !== undefined) {
-    exact(navigation.resource, ["kind", "bytes"], "navigation index resource");
-    if (navigation.resource.kind !== NAVIGATION_INDEX_ARTIFACT_TYPE) throw new Error("navigation index resource kind is unsupported");
-    const canonicalBytes = completeUint8(navigation.resource.bytes, "navigation index resource bytes");
-    if (navigation.artifact.mediaType !== NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE
-        || canonicalBytes.byteLength !== navigation.artifact.byteLength
-        || derivedArtifactContentHash(canonicalBytes) !== navigation.artifact.contentHash) {
-      throw new Error("navigation index resource does not match its canonical descriptor");
-    }
-    navigationIndex = decodeNavigationIndexArtifact(canonicalBytes);
-  }
-  const biome = globals.get(BIOME_FIELD_ARTIFACT_TYPE);
-  if (biome !== undefined) {
-    exact(biome.resource, ["kind", "bytes"], "biome field resource");
-    if (biome.resource.kind !== BIOME_FIELD_ARTIFACT_TYPE) throw new Error("biome field resource kind is unsupported");
-    const canonicalBytes = completeUint8(biome.resource.bytes, "biome field resource bytes");
-    if (biome.artifact.mediaType !== BIOME_FIELD_ARTIFACT_MEDIA_TYPE
-        || canonicalBytes.byteLength !== biome.artifact.byteLength
-        || derivedArtifactContentHash(canonicalBytes) !== biome.artifact.contentHash) {
-      throw new Error("biome field resource does not match its canonical descriptor");
-    }
-    biomeField = decodeBiomeFieldArtifact(canonicalBytes);
-    biomeSampler = createBiomeFieldSampler(biomeField.field);
-  }
-  let biomeContent: VerifiedBiomeContentBundle | null = null;
-  let biomeRuntimePack: ParsedTransferredDerivedSnapshot["biomeRuntimePack"] = null;
-  const content = globals.get(BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE);
-  if (content !== undefined) {
-    exact(content.resource, ["kind", "bytes"], "biome content closure resource");
-    if (content.resource.kind !== BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE) {
-      throw new Error("biome content closure resource kind is unsupported");
-    }
-    const bytes = completeUint8(content.resource.bytes, "biome content closure resource bytes");
-    if (content.artifact.mediaType !== BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE
-        || bytes.byteLength !== content.artifact.byteLength
-        || derivedArtifactContentHash(bytes) !== content.artifact.contentHash) {
-      throw new Error("biome content closure resource does not match its canonical descriptor");
-    }
-    biomeContent = decodeBiomeContentClosureArtifact(bytes).bundle as VerifiedBiomeContentBundle;
-  }
-  const runtimePackResource = globals.get(BIOME_RUNTIME_PACK_ARTIFACT_TYPE);
-  if (runtimePackResource !== undefined) {
-    exact(runtimePackResource.resource, ["kind", "bytes"], "biome runtime-pack resource");
-    if (runtimePackResource.resource.kind !== BIOME_RUNTIME_PACK_ARTIFACT_TYPE) throw new Error("biome runtime-pack resource kind is unsupported");
-    const bytes = completeUint8(runtimePackResource.resource.bytes, "biome runtime-pack resource bytes");
-    if (runtimePackResource.artifact.mediaType !== BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE
-        || bytes.byteLength !== runtimePackResource.artifact.byteLength
-        || derivedArtifactContentHash(bytes) !== runtimePackResource.artifact.contentHash) {
-      throw new Error("biome runtime-pack resource does not match its canonical descriptor");
-    }
-    const decoded = decodeBiomeRuntimePackArtifact(bytes);
-    biomeRuntimePack = Object.freeze({ bytes, semanticContentHash: decoded.semanticContentHash });
-  }
-  const water = globals.get(HYDROLOGY_WATER_ARTIFACT_TYPE);
-  const hydrologyField = globals.get(HYDROLOGY_FIELD_ARTIFACT_TYPE);
-  let renderField: VerifiedGeneratedWaterRenderResource["field"] | null = null;
-  if (hydrologyField !== undefined) {
-    exact(hydrologyField.resource, ["kind", "decoded"], "hydrology field resource");
-    if (hydrologyField.resource.kind !== HYDROLOGY_FIELD_ARTIFACT_TYPE) throw new Error("hydrology field resource kind is unsupported");
-    const decoded = plain(hydrologyField.resource.decoded, "hydrology field decoded resource");
-    exact(decoded, ["placement", "topology", "artifact"], "hydrology field decoded resource");
-    const canonicalBytes = encodeHydrologyFieldArtifact(decoded.topology, decoded.placement);
-    if (hydrologyField.artifact.mediaType !== HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE
-        || canonicalBytes.byteLength !== hydrologyField.artifact.byteLength
-        || derivedArtifactContentHash(canonicalBytes) !== hydrologyField.artifact.contentHash) {
-      throw new Error("hydrology field resource does not match its canonical descriptor");
-    }
-    const canonical = decodeHydrologyFieldArtifact(canonicalBytes) as unknown as Readonly<{
-      placement: Readonly<{ originX: number; originZ: number }>;
-      topology: Readonly<{ rows: number; cols: number; cellSizeM: number; seaLevelM: number; oceanMask: Uint8Array }>;
-    }>;
-    renderField = Object.freeze({
-      placement: Object.freeze({ originX: canonical.placement.originX, originZ: canonical.placement.originZ }),
-      rows: canonical.topology.rows,
-      cols: canonical.topology.cols,
-      cellSizeM: canonical.topology.cellSizeM,
-      seaLevelM: canonical.topology.seaLevelM,
-      oceanMask: canonical.topology.oceanMask,
-    });
-  }
-  for (const artifactType of globals.keys()) {
-    if (artifactType !== HYDROLOGY_FIELD_ARTIFACT_TYPE && artifactType !== HYDROLOGY_WATER_ARTIFACT_TYPE
-        && artifactType !== WORLD_OVERVIEW_ARTIFACT_TYPE && artifactType !== NAVIGATION_INDEX_ARTIFACT_TYPE
-        && artifactType !== BIOME_FIELD_ARTIFACT_TYPE && artifactType !== BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE
-        && artifactType !== BIOME_RUNTIME_PACK_ARTIFACT_TYPE) {
-      throw new Error(`derived render candidate does not support global '${artifactType}'`);
-    }
-  }
-  if (populationPlan !== null) {
-    if (biomeContent === null) throw new Error("verified biome population is missing its content closure");
-    if (biomeRuntimePack === null) throw new Error("verified biome population is missing its runtime-pack artifact");
-    if (biomeContent.runtimePack.contentHash !== populationPlan.identity.runtimePackContentHash) {
-      throw new Error("biome content closure runtime-pack identity does not match population plans");
-    }
-    if (biomeRuntimePack.semanticContentHash !== biomeContent.runtimePack.contentHash) {
-      throw new Error("biome runtime-pack artifact semantic identity does not match its content closure");
-    }
-    const authorized = new Map(biomeContent.entries.map((entry) => [entry.assetId, entry]));
-    for (const placement of populationPlan.placements) {
-      const entry = authorized.get(placement.assetId);
-      if (entry?.kind !== "population-descriptor" || entry.contentHash !== placement.contentHash) {
-        throw new Error(`biome population descriptor '${placement.assetId}' is not authorized by its content closure`);
-      }
-    }
-  }
-  if (water !== undefined) {
-    const field = hydrologyField;
-    if (field === undefined) throw new Error("generated water is missing its hydrology field dependency");
-    exact(water.resource, ["kind", "artifact", "bytes", "bindings", "prepared"], "generated water resource");
-    if (water.resource.kind !== HYDROLOGY_WATER_ARTIFACT_TYPE) throw new Error("generated water resource kind is unsupported");
-    const resourceArtifact = descriptor(water.resource.artifact, "generated water resource artifact");
-    if (!sameDescriptor(resourceArtifact, water.artifact) || resourceArtifact.mediaType !== HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE) {
-      throw new Error("generated water resource artifact does not match its manifest descriptor");
-    }
-    const bytes = completeUint8(water.resource.bytes, "generated water resource bytes");
-    if (bytes.byteLength !== resourceArtifact.byteLength || derivedArtifactContentHash(bytes) !== resourceArtifact.contentHash) {
-      throw new Error("generated water resource bytes do not match their canonical descriptor");
-    }
-    const parsedBindings = bindings(water.resource.bindings);
-    const rawBindings = inspectHydrologyWaterArtifactBindings(bytes) as ParsedGeneratedWaterResource["bindings"];
-    if (compilerContentHash(parsedBindings) !== compilerContentHash(rawBindings)
-        || parsedBindings.hydrologyFieldContentHash !== field.artifact.contentHash
-        || parsedBindings.compilerGraphHash !== derivedArtifactCompilerGraphHash(manifest, HYDROLOGY_WATER_ARTIFACT_TYPE)) {
-      throw new Error("generated water resource bindings do not match its bytes, field, or compiler graph");
-    }
-    const prepared = plain(water.resource.prepared, "generated water prepared resource");
-    exact(prepared, ["artifactContentHash", "bindings", "topology"], "generated water prepared resource");
-    if (prepared.artifactContentHash !== resourceArtifact.contentHash
-        || compilerContentHash(prepared.bindings) !== compilerContentHash(parsedBindings)) {
-      throw new Error("generated water prepared identity does not match its canonical artifact");
-    }
-    generatedWater = Object.freeze({
-      artifact: resourceArtifact,
-      bytes,
-      bindings: parsedBindings,
-      render: Object.freeze({
-        artifactHash: resourceArtifact.contentHash,
-        topology: generatedRenderTopology(prepared.topology),
-        field: renderField!,
-        sampleTerrainHeight: (x: number, z: number): number | null => terrain.sampleHeight(x, z),
-      }),
-    });
-  }
-
-  return Object.freeze({
-    schema: DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA,
-    projectId: manifest.projectId,
-    branchId: manifest.branchId,
-    manifestHash: manifest.manifestHash,
-    source: Object.freeze({ revision: manifest.source.revision, headHash: manifest.source.headHash }),
-    manifest,
-    residency,
-    terrain,
-    surfaceAt,
-    populationAt,
-    populationPlan,
-    biomeContent,
-    biomeRuntimePack,
-    retainedCpuBytes,
-    worldOverview,
-    navigationIndex,
-    biomeField,
-    biomeSampler,
-    generatedWater,
-  });
 }
 
 function hexRgb(hex: number): readonly [number, number, number] {
@@ -1013,7 +390,7 @@ export class DetachedDerivedRenderCandidate {
   #presentationStatus: Readonly<DerivedPresentationStatus> = UNSTAGED_POPULATION_STATUS;
   #disposed = false;
 
-  constructor(snapshotInput: unknown, options: DetachedDerivedRenderCandidateOptions) {
+  constructor(snapshotInput: ParsedTransferredDerivedSnapshot, options: DetachedDerivedRenderCandidateOptions) {
     const optionRecord = plain(options, "detached derived render candidate options");
     const optionKeys = Object.getOwnPropertyNames(optionRecord);
     const supportedOptions = new Set(["quality", "maxTerrainMeshes"]);
@@ -1033,7 +410,9 @@ export class DetachedDerivedRenderCandidate {
     const tier = options.quality ?? "balanced";
     const quality = DEFAULT_RENDER_QUALITY_PROFILES[tier];
     if (quality === undefined) throw new TypeError("derived render quality tier is invalid");
-    this.snapshot = parseTransferredDerivedRuntimeSnapshot(snapshotInput);
+    // Verify-before-construct: only derived-runtime-verify mints this input (branded
+    // type + runtime WeakSet), so unverified bytes cannot reach mounting.
+    this.snapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
 
     this.root.name = `limina:derived-revision:${this.snapshot.manifestHash}`;
     this.terrainRoot.name = "limina:derived-terrain";

@@ -678,6 +678,28 @@ function portableAssetContentHash(bytes) {
   return `sha256:${sha256(chunks.join(""))}`;
 }
 
+// src/browser/derived-plain-data.ts
+var typeError = (message) => new TypeError(message);
+function plainRecord(value, label, error = typeError) {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw error(`${label} must be a plain object`);
+  }
+  return value;
+}
+function exactDataKeys(value, required, optional, label, error = typeError) {
+  const allowed = /* @__PURE__ */ new Set([...required, ...optional]);
+  const names = Object.getOwnPropertyNames(value);
+  if (Object.getOwnPropertySymbols(value).length !== 0 || required.some((key) => !names.includes(key)) || names.some((key) => !allowed.has(key))) {
+    throw error(`${label} has unsupported or missing fields`);
+  }
+  for (const name of names) {
+    const descriptor2 = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
+      throw error(`${label}.${name} must be an enumerable data field`);
+    }
+  }
+}
+
 // src/browser/derived-runtime-transport.ts
 var DERIVED_RUNTIME_CURRENT_SCHEMA = "limina.derived-runtime-current/v1";
 var DERIVED_RUNTIME_ERROR_SCHEMA = "limina.derived-runtime-error/v1";
@@ -704,24 +726,12 @@ function fatal(code, message) {
 function transient(code, message) {
   return new DerivedRuntimeTransportError(code, "transient", message);
 }
+var protocolError = (message) => fatal("PROTOCOL_ERROR", message);
 function plainObject2(value, label) {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw fatal("PROTOCOL_ERROR", `${label} must be a plain object`);
-  }
-  return value;
+  return plainRecord(value, label, protocolError);
 }
 function exactKeys2(value, expected, label) {
-  const actual = Object.getOwnPropertyNames(value).sort();
-  const wanted = [...expected].sort();
-  if (Object.getOwnPropertySymbols(value).length !== 0 || actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    throw fatal("PROTOCOL_ERROR", `${label} has unsupported or missing fields`);
-  }
-  for (const key of actual) {
-    const descriptor2 = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
-      throw fatal("PROTOCOL_ERROR", `${label}.${key} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, expected, [], label, protocolError);
 }
 function strictConfig(input) {
   if (input === null || Array.isArray(input) || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype) {
@@ -2203,7 +2213,7 @@ var BIOME_SURFACE_PLAN_LIMITS = Object.freeze({ rows: 1025, cols: 1025, cells: 1
 
 // src/world/surface-composite-tile.mjs
 var SURFACE_COMPOSITE_TILE_SCHEMA = "limina.surface-composite-tile/v1";
-var SURFACE_COMPOSITE_POLICY_VERSION = 3;
+var SURFACE_COMPOSITE_POLICY_VERSION = 8;
 var SURFACE_COMPOSITE_LIMITS = Object.freeze({ interior: 256, gutter: 4, roles: 32, sourceDimension: 4096, outputBytes: 4 * 1024 * 1024 });
 
 // src/world/compiler/surface-composite-artifact.mjs
@@ -2289,7 +2299,7 @@ function canonicalMetadata(input, verifyPixels = true) {
     if (verifyPixels && `sha256:${sha256(entry.data)}` !== contentHash2) throw new Error(`surface composite ${name} content hash mismatch`);
     if (entry.colorSpace !== (name === "albedo" ? "srgb" : "none")) throw new Error(`surface composite ${name} color space is invalid`);
     if (name === "normal" && entry.convention !== "opengl-y-plus") throw new Error("surface composite normal convention is invalid");
-    if (name === "orm" && entry.channels !== "ao-roughness-metalness") throw new Error("surface composite ORM channels are invalid");
+    if (name === "orm" && entry.channels !== "ao-roughness-metalness-grass-density") throw new Error("surface composite ORM channels are invalid");
     mapMeta[name] = Object.freeze({
       contentHash: contentHash2,
       colorSpace: entry.colorSpace,
@@ -5757,23 +5767,10 @@ var DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
 var MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS = 7;
 var MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS = (MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS * 2 + 1) ** 2;
 function plain2(value, label) {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new TypeError(`${label} must be a plain object`);
-  }
-  return value;
+  return plainRecord(value, label);
 }
 function exact2(value, keys, label) {
-  const names = Object.getOwnPropertyNames(value);
-  const expected = new Set(keys);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
-    throw new TypeError(`${label} fields are invalid`);
-  }
-  for (const name of names) {
-    const descriptor2 = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
-      throw new TypeError(`${label}.${name} must be an enumerable data field`);
-    }
-  }
+  exactDataKeys(value, keys, [], label);
 }
 function centerTuple(value) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 2 || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== 3) {
@@ -5818,9 +5815,12 @@ function selectDerivedTerrainChunks(manifest, residencyInput) {
   return Object.freeze([...chunks]);
 }
 
+// src/browser/derived-runtime-verify.ts
+var DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
+var MAX_DETACHED_DERIVED_TERRAIN_CPU_BYTES = 256 * 1024 * 1024;
+
 // src/browser/derived-runtime-worker.ts
 var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
-var DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 var DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1e3, 2e3, 4e3, 8e3]);
 var DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15e3;
 var HASH8 = /^sha256:[0-9a-f]{64}$/;
@@ -5828,6 +5828,7 @@ var TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 var REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 var ACTIVATION_ID = /^derived-activation-[1-9][0-9]{0,15}$/;
 var MAX_WORKER_ERROR_MESSAGE_LENGTH = 512;
+var MAX_SETTLED_ACTIVATION_IDS = 16;
 var DerivedRuntimeWorkerError = class extends Error {
   code;
   classification;
@@ -5844,32 +5845,20 @@ function fatal2(code, message) {
 function transient2(code, message) {
   return new DerivedRuntimeWorkerError(code, "transient", message);
 }
-function plainRecord(value, label) {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw fatal2("INVALID_MESSAGE", `${label} must be a plain object`);
-  }
-  return value;
+var invalidMessage = (message) => fatal2("INVALID_MESSAGE", message);
+function plainRecord2(value, label) {
+  return plainRecord(value, label, invalidMessage);
 }
-function exactDataKeys(value, required, optional, label) {
-  const allowed = /* @__PURE__ */ new Set([...required, ...optional]);
-  const names = Object.getOwnPropertyNames(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || required.some((key) => !names.includes(key)) || names.some((key) => !allowed.has(key))) {
-    throw fatal2("INVALID_MESSAGE", `${label} has unsupported or missing fields`);
-  }
-  for (const name of names) {
-    const descriptor2 = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
-      throw fatal2("INVALID_MESSAGE", `${label}.${name} must be an enumerable data field`);
-    }
-  }
+function exactDataKeys2(value, required, optional, label) {
+  exactDataKeys(value, required, optional, label, invalidMessage);
 }
 function requestId(value, label) {
   if (typeof value !== "string" || !REQUEST_ID.test(value)) throw fatal2("INVALID_MESSAGE", `${label} is invalid`);
   return value;
 }
 function parsePinnedSource(value) {
-  const record4 = plainRecord(value, "derived runtime pinnedSource");
-  exactDataKeys(record4, ["revision", "headHash"], ["manifestHash"], "derived runtime pinnedSource");
+  const record4 = plainRecord2(value, "derived runtime pinnedSource");
+  exactDataKeys2(record4, ["revision", "headHash"], ["manifestHash"], "derived runtime pinnedSource");
   if (!Number.isSafeInteger(record4.revision) || record4.revision < 0 || typeof record4.headHash !== "string" || !HASH8.test(record4.headHash) || record4.manifestHash !== void 0 && (typeof record4.manifestHash !== "string" || !HASH8.test(record4.manifestHash))) {
     throw fatal2("INVALID_MESSAGE", "derived runtime pinnedSource is invalid");
   }
@@ -5880,12 +5869,12 @@ function parsePinnedSource(value) {
   });
 }
 function parseInit(value) {
-  exactDataKeys(value, ["schema", "type", "requestId", "config", "mode", "residency"], ["pinnedSource"], "derived runtime init");
+  exactDataKeys2(value, ["schema", "type", "requestId", "config", "mode", "residency"], ["pinnedSource"], "derived runtime init");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "init") throw fatal2("INVALID_MESSAGE", "derived runtime init schema/type is invalid");
   const mode = value.mode;
   if (mode !== "watch" && mode !== "pinned") throw fatal2("INVALID_MESSAGE", "derived runtime init mode must be watch or pinned");
-  const configRecord = plainRecord(value.config, "derived runtime init config");
-  exactDataKeys(configRecord, ["baseUrl", "token", "projectId", "branchId"], [], "derived runtime init config");
+  const configRecord = plainRecord2(value.config, "derived runtime init config");
+  exactDataKeys2(configRecord, ["baseUrl", "token", "projectId", "branchId"], [], "derived runtime init config");
   const config = configRecord;
   const pinnedSource = value.pinnedSource === void 0 ? void 0 : parsePinnedSource(value.pinnedSource);
   let residency;
@@ -5908,7 +5897,7 @@ function parseInit(value) {
   });
 }
 function parseAck(value) {
-  exactDataKeys(value, ["schema", "type", "activationId", "accepted"], ["requestId", "errorCode"], "derived runtime activation ack");
+  exactDataKeys2(value, ["schema", "type", "activationId", "accepted"], ["requestId", "errorCode"], "derived runtime activation ack");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "activation-ack" || typeof value.activationId !== "string" || !ACTIVATION_ID.test(value.activationId) || typeof value.accepted !== "boolean") {
     throw fatal2("INVALID_MESSAGE", "derived runtime activation ack is invalid");
   }
@@ -5925,7 +5914,7 @@ function parseAck(value) {
   });
 }
 function parseSetResidency(value) {
-  exactDataKeys(value, ["schema", "type", "requestId", "residency"], [], "derived runtime set-residency");
+  exactDataKeys2(value, ["schema", "type", "requestId", "residency"], [], "derived runtime set-residency");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "set-residency") {
     throw fatal2("INVALID_MESSAGE", "derived runtime set-residency schema/type is invalid");
   }
@@ -5943,7 +5932,7 @@ function parseSetResidency(value) {
   });
 }
 function parseReconcileResidency(value) {
-  exactDataKeys(value, ["schema", "type", "requestId", "residency"], [], "derived runtime reconcile-residency");
+  exactDataKeys2(value, ["schema", "type", "requestId", "residency"], [], "derived runtime reconcile-residency");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "reconcile-residency") {
     throw fatal2("INVALID_MESSAGE", "derived runtime reconcile-residency schema/type is invalid");
   }
@@ -5961,7 +5950,7 @@ function parseReconcileResidency(value) {
   });
 }
 function parseClose(value) {
-  exactDataKeys(value, ["schema", "type", "requestId"], [], "derived runtime close");
+  exactDataKeys2(value, ["schema", "type", "requestId"], [], "derived runtime close");
   if (value.schema !== DERIVED_RUNTIME_WORKER_SCHEMA || value.type !== "close") throw fatal2("INVALID_MESSAGE", "derived runtime close schema/type is invalid");
   return Object.freeze({
     schema: DERIVED_RUNTIME_WORKER_SCHEMA,
@@ -5970,7 +5959,7 @@ function parseClose(value) {
   });
 }
 function parseDerivedRuntimeWorkerInput(value) {
-  const record4 = plainRecord(value, "derived runtime worker message");
+  const record4 = plainRecord2(value, "derived runtime worker message");
   const type = Object.getOwnPropertyDescriptor(record4, "type")?.value;
   if (type === "init") return parseInit(record4);
   if (type === "set-residency") return parseSetResidency(record4);
@@ -6174,8 +6163,10 @@ var DerivedRuntimeWorkerController = class {
   #pollTimerExplicit = false;
   #polling = false;
   #backoffIndex = 0;
+  #idlePollIndex = 0;
   #activationSequence = 0;
   #pendingActivation = null;
+  #settledActivationIds = /* @__PURE__ */ new Set();
   #initialized = false;
   #closed = false;
   #closePromise = null;
@@ -6300,6 +6291,7 @@ var DerivedRuntimeWorkerController = class {
     this.#desiredResidency = pending.residency;
     if (pending.kind === "reconcile") this.#activeReconcileRequestId = pending.requestId;
     this.#backoffIndex = 0;
+    this.#idlePollIndex = 0;
     if (this.#pollTimer !== null) {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;
@@ -6445,6 +6437,7 @@ var DerivedRuntimeWorkerController = class {
       const timeout = this.#timers.setTimeout(() => {
         if (this.#pendingActivation?.activationId !== activationId) return;
         this.#pendingActivation = null;
+        this.#recordSettledActivation(activationId);
         reject(transient2("ACTIVATION_ACK_TIMEOUT", "derived runtime activation acknowledgement timed out"));
       }, this.#ackTimeoutMs);
       this.#pendingActivation = { activationId, ...requestId2 === null ? {} : { requestId: requestId2 }, resolve, reject, timeout };
@@ -6463,10 +6456,21 @@ var DerivedRuntimeWorkerController = class {
       }
     });
   }
+  #recordSettledActivation(activationId) {
+    this.#settledActivationIds.add(activationId);
+    for (const oldest of this.#settledActivationIds) {
+      if (this.#settledActivationIds.size <= MAX_SETTLED_ACTIVATION_IDS) break;
+      this.#settledActivationIds.delete(oldest);
+    }
+  }
   #acknowledge(message) {
     if (!this.#initialized) throw fatal2("NOT_INITIALIZED", "derived runtime worker is not initialized");
     const pending = this.#pendingActivation;
     if (pending === null || pending.activationId !== message.activationId) {
+      if (this.#settledActivationIds.has(message.activationId)) {
+        console.warn(`[derived-runtime-worker] ignored late or duplicate acknowledgement for settled activation '${message.activationId}'`);
+        return;
+      }
       throw fatal2("UNKNOWN_ACTIVATION", "derived runtime activation acknowledgement is not pending");
     }
     if (pending.requestId !== message.requestId) {
@@ -6474,6 +6478,7 @@ var DerivedRuntimeWorkerController = class {
     }
     this.#timers.clearTimeout(pending.timeout);
     this.#pendingActivation = null;
+    this.#recordSettledActivation(pending.activationId);
     if (message.accepted) pending.resolve();
     else pending.reject(transient2("ACTIVATION_REJECTED", `main thread rejected activation (${message.errorCode})`));
   }
@@ -6526,7 +6531,10 @@ var DerivedRuntimeWorkerController = class {
           revision: current.source.revision
         }));
         if (this.#activeReconcileRequestId === submissionReconcileRequestId) this.#activeReconcileRequestId = null;
-        if (this.#mode === "watch") this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[0], false);
+        if (this.#mode === "watch") {
+          this.#idlePollIndex = Math.min(this.#idlePollIndex + 1, DERIVED_RUNTIME_POLL_DELAYS_MS.length - 1);
+          this.#schedulePoll(DERIVED_RUNTIME_POLL_DELAYS_MS[this.#idlePollIndex], false);
+        }
         return;
       }
       this.#submissionCurrent = current;
@@ -6539,6 +6547,7 @@ var DerivedRuntimeWorkerController = class {
       this.#submissionResidency = null;
       this.#submissionReconcileRequestId = null;
       this.#backoffIndex = 0;
+      this.#idlePollIndex = 0;
       this.#postMessage(Object.freeze({
         schema: DERIVED_RUNTIME_WORKER_SCHEMA,
         type: "revision",
@@ -6599,6 +6608,7 @@ var DerivedRuntimeWorkerController = class {
     if (pending !== null) {
       this.#timers.clearTimeout(pending.timeout);
       this.#pendingActivation = null;
+      this.#recordSettledActivation(pending.activationId);
       pending.reject(fatal2("DERIVED_RUNTIME_CLOSED", "derived runtime worker closed during activation"));
     }
     this.#closePromise = (async () => {

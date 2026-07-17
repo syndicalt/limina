@@ -875,7 +875,9 @@ assert(parsed.terrain.sampleHeight(FAR - 1, FAR + 32) === null, "out-of-domain s
 rejects(() => parsed.terrain.sampleHeight(Number.NaN, 0), /finite/, "non-finite sampler input was accepted");
 
 const externalScene = new THREE.Scene();
-const candidate = new DetachedDerivedRenderCandidate(transferredBiome, {});
+rejects(() => new DetachedDerivedRenderCandidate(structuredCloneFixture(snapshot()) as never, {}), /requires a snapshot verified/,
+  "an unverified raw snapshot reached the mounting constructor");
+const candidate = new DetachedDerivedRenderCandidate(parsedBiome, {});
 assert(externalScene.children.length === 0 && candidate.root.parent === null, "detached candidate mutated or attached to a live scene");
 assert(candidate.terrainMeshCount === 2 && candidate.waterFragmentCount === 1, "bounded terrain/water window did not mount expected resources");
 assert(candidate.terrainRoot.children.length === 2 && candidate.waterRoot.children.length === 1
@@ -990,7 +992,7 @@ try {
 assert(candidate.populationRoot.children.length === 0 && candidate.presentationStatus() === groundCoverStatus,
 "failed water rebuild partially committed population state");
 
-const surfaceCandidate = new DetachedDerivedRenderCandidate(transferredSurface, {});
+const surfaceCandidate = new DetachedDerivedRenderCandidate(parsedSurface, {});
 assert(surfaceCandidate.root.parent === null && surfaceCandidate.terrainWindow().every((entry) => entry.surface !== undefined),
   "surface candidate attached externally or lost its one-surface-per-tile window binding");
 const surfaceMeshes = surfaceCandidate.terrainRoot.children as THREE.Mesh[];
@@ -1024,7 +1026,7 @@ surfaceCandidate.dispose();
 assert(surfaceGeometryDisposes === 2 && surfaceMaterialDisposes === 2 && surfaceTextureDisposes === 6,
   `surface terminal disposal was not exactly once (${surfaceGeometryDisposes}/${surfaceMaterialDisposes}/${surfaceTextureDisposes})`);
 
-const populationCandidate = new DetachedDerivedRenderCandidate(structuredCloneFixture(populationSnapshot()), {});
+const populationCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(structuredCloneFixture(populationSnapshot())), {});
 assert(populationCandidate.presentationStatus().canopy === "unfulfilled"
   && populationCandidate.presentationStatus().groundCover === "unfulfilled"
   && populationCandidate.populationRoot.children.length === 0,
@@ -1062,7 +1064,7 @@ await rejectsAsync(() => populationCandidate.stagePopulation(async () => ({
   canopyInstances: 0, groundCoverTiles: 0, groundCoverBlades: 0, dispose(): void {},
 })), /already staged/, "population staging was not one-shot after success");
 
-const failingPopulationCandidate = new DetachedDerivedRenderCandidate(structuredCloneFixture(populationSnapshot()), {});
+const failingPopulationCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(structuredCloneFixture(populationSnapshot())), {});
 const priorPopulationRootChild = populationCandidate.populationRoot.children[0];
 const priorPopulationStatus = populationCandidate.presentationStatus();
 await rejectsAsync(() => failingPopulationCandidate.stagePopulation(async ({ root }) => {
@@ -1079,7 +1081,7 @@ await rejectsAsync(() => failingPopulationCandidate.stagePopulation(async () => 
   canopyInstances: 0, groundCoverTiles: 0, groundCoverBlades: 0, dispose(): void {},
 })), /already failed/, "failed population stage was reusable instead of one-shot");
 let invalidPopulationMountDisposes = 0;
-const invalidPopulationCandidate = new DetachedDerivedRenderCandidate(structuredCloneFixture(populationSnapshot()), {});
+const invalidPopulationCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(structuredCloneFixture(populationSnapshot())), {});
 await rejectsAsync(() => invalidPopulationCandidate.stagePopulation(async ({ root }) => {
   root.add(new THREE.Group());
   return {
@@ -1092,7 +1094,7 @@ await rejectsAsync(() => invalidPopulationCandidate.stagePopulation(async ({ roo
 assert(invalidPopulationMountDisposes === 1 && invalidPopulationCandidate.populationRoot.children.length === 0
   && invalidPopulationCandidate.presentationStatus().canopy === "unfulfilled",
 "invalid returned population mount was not rolled back exactly once");
-const noPopulationCandidate = new DetachedDerivedRenderCandidate(structuredCloneFixture(surfaceSnapshot()), {});
+const noPopulationCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(structuredCloneFixture(surfaceSnapshot())), {});
 await rejectsAsync(() => noPopulationCandidate.stagePopulation(async () => ({
   canopyInstances: 0, groundCoverTiles: 0, groundCoverBlades: 0, dispose(): void {},
 })), /no verified population plan/, "surface-only candidate accepted an invented population stage");
@@ -1257,12 +1259,12 @@ const misplacedBytes = encodeTerrainChunkArtifact({
 wrongPlacement.chunks[0].resource.decoded = decodeTerrainChunkArtifact(misplacedBytes);
 rejects(() => parseTransferredDerivedRuntimeSnapshot(wrongPlacement), /placement|decoded metadata/,
   "tile/grid placement mismatch was accepted");
-rejects(() => new DetachedDerivedRenderCandidate(snapshot(), {
+rejects(() => new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(snapshot()), {
   maxTerrainMeshes: 1,
 }), /exceeding budget/, "terrain mesh window budget was enforced after staging");
 const emptyResidency = snapshot();
 emptyResidency.residency = { schema: DERIVED_TERRAIN_RESIDENCY_SCHEMA, center: [FAR + 10_000, FAR + 10_000], lod: 0, radius: 1 };
-rejects(() => new DetachedDerivedRenderCandidate(emptyResidency, {}), /no manifest chunks/, "empty terrain activation window reached simulation staging");
+rejects(() => new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(emptyResidency), {}), /no manifest chunks/, "empty terrain activation window reached simulation staging");
 
 let rollbackSurfaceGeometries = 0, rollbackSurfaceMaterials = 0, rollbackSurfaceTextures = 0;
 const originalGeometryDispose = THREE.BufferGeometry.prototype.dispose;
@@ -1283,7 +1285,7 @@ THREE.Texture.prototype.dispose = function (): void {
 };
 VisibleWaterManager.prototype.mount = function (): never { throw new Error("injected terminal staging failure"); };
 try {
-  rejects(() => new DetachedDerivedRenderCandidate(structuredCloneFixture(surfaceSnapshot()), {}), /injected terminal staging failure/,
+  rejects(() => new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(structuredCloneFixture(surfaceSnapshot())), {}), /injected terminal staging failure/,
     "terminal staging failure did not reject the detached surface candidate");
 } finally {
   THREE.BufferGeometry.prototype.dispose = originalGeometryDispose;
@@ -1351,7 +1353,7 @@ const maxGridOverview = snapshot();
     ? { ...entry, artifact: bigOverviewDescriptor, resource: { kind: WORLD_OVERVIEW_ARTIFACT_TYPE, decoded: decodeWorldOverviewArtifact(bigOverviewBytes) } }
     : entry);
 }
-const maxGridCandidate = new DetachedDerivedRenderCandidate(maxGridOverview, {});
+const maxGridCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(maxGridOverview), {});
 const maxGridMesh = maxGridCandidate.overviewRoot.children[0] as THREE.Mesh;
 const maxGridIndex = maxGridMesh.geometry.index!;
 assert(maxGridIndex.array instanceof Uint32Array,
@@ -1364,7 +1366,7 @@ assert(maxGridCandidate.overviewTriangleCount === 256 * 256 * 2 && maxGridHighes
   `max-dimension overview indices wrapped or dropped quads (${maxGridCandidate.overviewTriangleCount} triangles, max index ${maxGridHighestIndex})`);
 maxGridCandidate.dispose();
 
-const faultCandidate = new DetachedDerivedRenderCandidate(snapshot(), {});
+const faultCandidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(snapshot()), {});
 const faultOverview = faultCandidate.overviewRoot.children[0] as THREE.Mesh;
 let materialDisposed = false;
 (faultOverview.geometry as any).dispose = () => { throw new Error("geometry disposal fault"); };

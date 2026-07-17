@@ -1,6 +1,6 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { mountDerivedBiomePopulation } from "../browser/derived-biome-population-mount.ts";
-import { DetachedDerivedRenderCandidate } from "../browser/derived-runtime-render-candidate.ts";
+import { DetachedDerivedRenderCandidate, parseTransferredDerivedRuntimeSnapshot } from "../browser/derived-runtime-render-candidate.ts";
 import { DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA } from "../browser/derived-runtime-worker.ts";
 import { createTransformStorage } from "../ecs/facade.ts";
 import { createEcsWorld } from "../ecs/world.ts";
@@ -179,7 +179,7 @@ export async function loadTemperateFidelityCandidate(input: {
   const snapshot = { schema: DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA, projectId: bundle.manifest.projectId,
     branchId: bundle.manifest.branchId, manifestHash: bundle.manifest.manifestHash, source: bundle.manifest.source,
     manifest: bundle.manifest, residency: { ...bundle.residency, center: [authored.position[0], authored.position[2]], radius: captureRadius }, chunks, globals };
-  const candidate = new DetachedDerivedRenderCandidate(snapshot, { quality: "cinematic" });
+  const candidate = new DetachedDerivedRenderCandidate(parseTransferredDerivedRuntimeSnapshot(snapshot), { quality: "cinematic" });
   input.stageComplete?.("terrainCandidate");
   // deno-lint-ignore no-explicit-any
   const contentIndex = new Map<string, any>(bundle.contentIndex.map((entry: any) => [entry.sourceAssetId, entry]));

@@ -25,59 +25,25 @@ function presentationReach<T extends object>(reach: T): ReturnType<typeof smooth
   presentationReachCache.set(reach, smoothed); return smoothed;
 }
 
-export interface GeneratedWaterfallSpanView {
-  readonly startSegment: number;
-  readonly endSegmentExclusive: number;
-  readonly totalDropM: number;
-}
-
-export interface GeneratedBasinView {
-  readonly id: string;
-  readonly spillLevelM: number;
-  readonly maxDepthM: number;
-  readonly footprint: {
-    readonly points: readonly WaterPoint2[];
-    readonly holes: readonly (readonly WaterPoint2[])[];
-  };
-}
-
-export interface GeneratedWaterFieldView {
-  readonly placement: { readonly originX: number; readonly originZ: number };
-  readonly rows: number;
-  readonly cols: number;
-  readonly cellSizeM: number;
-  /** Descriptor-verified hydrology sea level; presentation consumers must not infer it from codec bounds. */
-  readonly seaLevelM: number;
-  readonly oceanMask: Uint8Array;
-}
-
-export interface GeneratedReachView {
-  readonly id: string;
-  readonly class: "stream" | "river";
-  readonly order: number;
-  readonly points: readonly WaterPoint2[];
-  readonly widths: readonly number[];
-  readonly terrainElevationsM: readonly number[];
-  readonly surfaceElevationsM: readonly number[];
-  readonly waterfalls: readonly GeneratedWaterfallSpanView[];
-}
-
-export interface GeneratedWaterTopologyView {
-  readonly schema: string;
-  readonly version: number;
-  readonly basins: readonly GeneratedBasinView[];
-  readonly reaches: readonly GeneratedReachView[];
-}
-
-/** Adapter boundary for a topology that was decoded and binding-verified off the render thread. */
-export interface VerifiedGeneratedWaterRenderResource {
-  readonly artifactHash: string;
-  readonly topology: GeneratedWaterTopologyView;
-  /** Descriptor-verified hydrology domain used to reject pixels outside this water artifact's field. */
-  readonly field: GeneratedWaterFieldView;
-  /** Exact resident derived-terrain sampler. Missing tiles produce transparent water, never guessed depth. */
-  readonly sampleTerrainHeight: (x: number, z: number) => number | null;
-}
+// The verified generated-water view shapes are owned by the worker-loadable verifier
+// (browser/derived-runtime-verify.ts) — the trust-boundary module that produces them.
+// Re-exported here so render-side importers keep their existing specifier.
+import type {
+  GeneratedBasinView,
+  GeneratedReachView,
+  GeneratedWaterFieldView,
+  GeneratedWaterTopologyView,
+  GeneratedWaterfallSpanView,
+  VerifiedGeneratedWaterRenderResource,
+} from "../../browser/derived-runtime-verify.ts";
+export type {
+  GeneratedBasinView,
+  GeneratedReachView,
+  GeneratedWaterFieldView,
+  GeneratedWaterTopologyView,
+  GeneratedWaterfallSpanView,
+  VerifiedGeneratedWaterRenderResource,
+} from "../../browser/derived-runtime-verify.ts";
 
 export interface GeneratedWaterRenderMount {
   readonly artifactHash: string;
