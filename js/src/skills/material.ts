@@ -7,7 +7,8 @@
 //     sha256). Resolving caches the bytes so they ride the export's assets.jsonl.
 //   • The world log records only the REQUEST (name + image ids + committed hashes); NEVER bytes.
 //     The recorder COMMITS the resolved hashes into the recorded command (commitFields), so the
-//     log PINS the authored pack identity — a swapped texture fails loudly on replay.
+//     log PINS the authored pack identity — a replay mismatch WARNS via a
+//     material.hash_mismatch event (never throws — op_sha256 differs across hosts).
 //   • On replay the images load from the package bundle (AssetRegistry.fromBundle), are decoded
 //     to sampleable DataTextures (the proven embedded-image→DataTexture bridge), and the named
 //     material is rebuilt — no host asset root touched.
@@ -66,7 +67,8 @@ const importInput = z.object({
   }).optional(),
   /** The COMMITTED content addresses of the pack images (id → "sha256:..."). Absent at
    *  authoring (resolved + returned, then committed back by the recorder); present on REPLAY,
-   *  where each resolved image is verified against it so a swapped texture is rejected. */
+   *  where each resolved image is verified against it — a mismatch warns
+   *  (material.hash_mismatch), never throws. */
   hashes: z.record(z.string(), z.string()).optional(),
 });
 
@@ -112,11 +114,13 @@ export function registerMaterialSkills(registry: SkillRegistry, assets: AssetReg
       const maps: string[] = [];
       for (const slot of slots) {
         const resolved = assets.resolve(slot.id);
-        // Replay/pinned path: a committed hash MUST match the resolved bytes, else the authored
-        // pack was swapped out from under the log — fail loudly (mirrors asset.place).
+        // Content-hash pin: WARN (never THROW) on a mismatch — mirrors asset.place. The
+        // committed hash may have been produced on a DIFFERENT HOST (Rust op_sha256 vs
+        // the browser's), so a cross-host replay of a healthy import can mismatch; the
+        // image id pins identity. Surface a genuinely swapped pack as a visible warning.
         const committed = input.hashes?.[slot.id];
         if (committed !== undefined && committed !== resolved.hash) {
-          throw new Error(`material.import: '${slot.id}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) — authored texture identity changed`);
+          ctx.emit("material.hash_mismatch", { assetId: slot.id, committed, resolved: resolved.hash });
         }
         hashes[slot.id] = resolved.hash;
         maps.push(slot.id);

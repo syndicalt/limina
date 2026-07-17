@@ -57,10 +57,15 @@ export class InteractionManager {
   }
 
   /** DETERMINISTIC interact: `tick` is `ctx.tick` (NEVER Date.now()) so the stored +
-   *  returned `lastInteractTick` recomputes bit-identically on replay. */
+   *  returned `lastInteractTick` recomputes bit-identically on replay. ONE state
+   *  path: every interact stamps `def.state` (actor + sim tick) BEFORE any custom
+   *  handler runs — a handler augments the result, it never bypasses the stamp, so
+   *  handler-backed and plain interactables mutate state identically. */
   interact(entity: string, actorEntity: string, tickOrCtx: number | ExecutionContext): { ok: boolean; result?: Record<string, unknown> } {
     const def = this.interactables.get(entity);
     if (def === undefined) return { ok: false };
+    def.state.lastInteractedBy = actorEntity;
+    def.state.lastInteractTick = typeof tickOrCtx === "number" ? tickOrCtx : tickOrCtx.tick;
     if (typeof tickOrCtx !== "number") {
       const handler = this.handlers.get(entity);
       if (handler !== undefined) {
@@ -68,8 +73,6 @@ export class InteractionManager {
         return { ok: result.ok !== false, result };
       }
     }
-    def.state.lastInteractedBy = actorEntity;
-    def.state.lastInteractTick = typeof tickOrCtx === "number" ? tickOrCtx : tickOrCtx.tick;
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
 }
@@ -234,7 +237,12 @@ export function registerInteractionSkills(
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), x, y, z);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
-        return { ok: false };
+        // ROLLBACK: the item was already removed from inventory; a failed drop must
+        // leave the inventory intact, never destroy the item (same remove→rollback
+        // contract as InventoryManager.transferItem). The slot was freed by the
+        // removal above, so the re-add cannot lack space.
+        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: input.slot });
+        return { ok: false, reason: "entity capacity exceeded (MAX_ENTITIES) — item returned to inventory" };
       }
       const itemEntity = ctx.world.entities.create({ eid });
       ctx.emit("interaction.dropped", { actorEntity: input.actorEntity, itemId: input.itemId, quantity: input.quantity, itemEntity, position: pos, ...input.meta });

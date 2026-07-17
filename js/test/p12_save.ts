@@ -158,7 +158,11 @@ ops.op_physics_create_world(-9.81);
 const recorder = new WorldRecorder("ses_p12_log");
 const logReg = new SkillRegistry(new LiminaTracer("ses_p12_log"));
 registerCoreSkills(logReg); // gives scene.createEntity etc.
-// Re-register save WITH a recorder + replay factories (overrides core's save by name).
+// Re-register save WITH a recorder + replay factories. INTENTIONAL override of core's save
+// skills, so unregister them first — a bare register on a taken name throws (collision-safe).
+for (const name of ["checkpoint.create", "checkpoint.load", "checkpoint.list", "checkpoint.delete", "save.export", "save.import", "save.slot"]) {
+  logReg.unregister(name);
+}
 registerSaveSkills(logReg, {
   recorder,
   worldId: "p12save",

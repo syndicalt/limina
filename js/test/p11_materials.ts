@@ -267,19 +267,28 @@ assert(isSet(replayedMat.map) && isSet(replayedMat.map.image) && replayedMat.map
 assert(replayCore.materials.hashesOf(PACK)[ALBEDO] === aHash, "replayed imported material lost the pinned albedo hash");
 assert(replayCore.materials.hashesOf(PACK)[DISPLACEMENT] === dHash, "replayed imported material lost the pinned displacement hash");
 
-// (B8) Pin enforcement: a WRONG committed hash is REJECTED on replay (FALSIFIABLE — drop the
-// handler's hash check and this loads a swapped texture).
+// (B8) Pin enforcement: a WRONG committed hash is DETECTED + SURFACED — never fatal.
+// Failure mode #12: op_sha256 is NOT byte-identical across hosts, so a cross-host replay of a
+// healthy import can mismatch its committed hashes; material.import therefore WARNS via a
+// material.hash_mismatch event and continues (the image id pins identity) — the same rule as
+// asset.place. FALSIFIABLE — drop the handler's hash check and the mismatch event disappears.
 const pkgReg2 = AssetRegistry.fromBundle(exportAssetBundle(loaded), guardOps);
-const pinReg = new SkillRegistry(new LiminaTracer("ses_p11_mat_pin"));
+const pinTracer = new LiminaTracer("ses_p11_mat_pin");
+const pinReg = new SkillRegistry(pinTracer);
 registerCoreSkills(pinReg, { assets: pkgReg2 });
 const pinCtx = { agentId: "a", sessionId: "s", permissions: BUILDER, tick: 0, world: makeWorld(guardOps) };
 const pinOk = await pinReg.invoke("material.import", { name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, occlusion: OCCLUSION, displacement: DISPLACEMENT, hashes: { [ALBEDO]: aHash, [NORMAL]: nHash, [DISPLACEMENT]: dHash } }, pinCtx);
 assert(pinOk.success, `pinned import with the correct hashes should load: ${JSON.stringify(pinOk.error)}`);
+assert(!pinTracer.trace("a").some((e) => e.type === "material.hash_mismatch"), "matching hashes must not emit material.hash_mismatch");
 const pinBad = await pinReg.invoke("material.import", { name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, hashes: { [ALBEDO]: nHash } }, pinCtx);
-assert(!pinBad.success && JSON.stringify(pinBad.error).includes("content hash mismatch"),
-  "replay did NOT verify the committed image hash (a swapped texture would load)");
+assert(pinBad.success, `a mismatched committed hash must not quarantine the import (warn-not-throw): ${JSON.stringify(pinBad.error)}`);
+// The check is PER SLOT: this import references the swapped image in TWO slots (albedo +
+// roughness both use ALBEDO's id), so exactly two mismatch events surface, both naming it.
+const matMismatches = pinTracer.trace("a").filter((e) => e.type === "material.hash_mismatch");
+assert(matMismatches.length === 2, `the swapped image (2 slots) MUST surface exactly two material.hash_mismatch events (got ${matMismatches.length})`);
+assert(matMismatches.every((e) => (e.payload as { assetId?: string }).assetId === ALBEDO), "mismatch events must name the swapped image id");
 
 ops.op_log(
   `p11_materials OK: (A) procedural-PBR primitives — createMaterial/createEntity { pbr } set colorNode+normalNode+roughnessNode wired to the shared 256² triplanar detail noise; flat default sets none (opt-in). ` +
-  `(B) material.import resolves ${assetIds.length} content-addressed images → a NAMED material (UV + triplanar) usable by createEntity; recorder commits the hashes (pinned); bytes ride assets.jsonl; replay rebuilds the material from the SERIALIZED package (guarded vs native root); a swapped/pinned-mismatch texture is rejected.`,
+  `(B) material.import resolves ${assetIds.length} content-addressed images → a NAMED material (UV + triplanar) usable by createEntity; recorder commits the hashes (pinned); bytes ride assets.jsonl; replay rebuilds the material from the SERIALIZED package (guarded vs native root); a swapped/pinned-mismatch texture is DETECTED (material.hash_mismatch event, warn-not-throw).`,
 );

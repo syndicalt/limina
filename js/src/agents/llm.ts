@@ -1,6 +1,13 @@
 // LLMProvider seam — one interface, swappable backends. Providers return
 // CANDIDATE tool calls; the DecisionSystem validates them against skill schemas
 // before enqueuing (so a malformed/hallucinated call is never executed).
+//
+// WALL-CLOCK BOUNDARY: the Date.now() latency stamps in this module (latencyMs)
+// are ADVISORY-ONLY diagnostics for the HUD/chat traces. They sit OUTSIDE the
+// determinism lint's scan (js/scripts/check-determinism.mjs covers js/src/skills/)
+// and outside the replay contract — they must NEVER feed world state, a skill
+// input, or anything the recorder logs as a replayable command. An LLM round-trip
+// is already nondeterministic; its timing must stay quarantined with it.
 
 import { ops } from "../engine.ts";
 import type { MCPRequest, MCPTool } from "../mcp/protocol.ts";

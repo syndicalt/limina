@@ -59,7 +59,9 @@ export class ReplayPlayer {
   /** Apply one command by the SAME rule as replayCommands. Returns true for a
    *  `step` (a tick boundary, after which bodies are synced from the keyframe). */
   private async apply(cmd: WorldCommand): Promise<boolean> {
-    if (cmd.kind === "seed") { installSeededRandom(cmd.seed); return false; }
+    // force: a playback run REPLACES any previously-installed world RNG (the documented
+    // legitimate re-install), so an unforced install would warn on every reload.
+    if (cmd.kind === "seed") { installSeededRandom(cmd.seed, true); return false; }
     if (cmd.kind === "physics") {
       const op = this.world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: number[]) => unknown;
       op(...cmd.args);

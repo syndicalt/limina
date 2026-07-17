@@ -277,6 +277,12 @@ export class SkillRegistry {
   }
 
   register<I, O>(def: SkillDefinition<I, O>): void {
+    // COLLISION-SAFE: a bare register on a taken name throws — silently clobbering
+    // defeated replace()'s live-swap contract and hid double-registration bugs.
+    // Intentional re-registration goes through replace() (or unregister() first).
+    if (this.skills.has(def.name)) {
+      throw new Error(`SkillRegistry.register: skill '${def.name}' is already registered — use replace()/unregister() for an intentional swap`);
+    }
     // Stored type-erased; the registry treats input/output as `unknown` internally.
     this.skills.set(def.name, def as unknown as SkillDefinition);
     this.listCache = undefined;

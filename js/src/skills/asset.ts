@@ -9,7 +9,8 @@
 // scale, hash } — as a single command. NEVER the instance bytes. The recorder
 // COMMITS the resolved content hash into the recorded command (via commitFields),
 // so the log PINS the authored asset identity: on replay the resolved bytes are
-// verified against that committed hash and a swapped asset fails loudly. The bytes
+// verified against that committed hash; a mismatch WARNS via an asset.hash_mismatch
+// event (never throws — op_sha256 is not byte-identical across hosts). The bytes
 // ride the registry/export package (content-addressed assets.jsonl), never the log.
 
 import * as THREE from "../../build/three.bundle.mjs";
@@ -24,6 +25,7 @@ import { buildPopulationLodBatches, validatePopulationLodLevels } from "../terra
 import { TreePopulationRuntime } from "../render/tree-population-runtime.ts";
 import type { TerrainSource, TileRequest } from "../terrain/types.ts";
 import { TileCache } from "../terrain/tilecache.ts";
+import { sampleTileSurfaceHeight } from "../terrain/mesh.ts";
 import type { RegionState } from "./terrain.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
@@ -208,7 +210,8 @@ const scatterInput = z.object({
   /** The COMMITTED content addresses of the palette assets (id -> "sha256:..."),
    *  pinning authored identity. Absent at authoring (resolved + returned, then
    *  committed back by the recorder); present on REPLAY where each resolved asset is
-   *  verified against it so a swapped asset is rejected (mirrors asset.place.hash). */
+   *  verified against it — a mismatch warns (asset.hash_mismatch), never throws
+   *  (mirrors asset.place.hash). */
   assetHashes: z.record(z.string(), z.string()).optional(),
 });
 
@@ -227,27 +230,13 @@ export interface ScatterTerrain {
  *  `terrain` wires asset.scatter to the deterministic terrain source/cache. */
 /** Bilinear terrain-surface height at world (x,z) over the most-recently-created editable layer (the
  *  same "last layer wins" default terrain.deform/village.build use). Returns undefined when no editable
- *  terrain exists — callers then keep the raw position.y. Mirrors village.build's sampler exactly. */
+ *  terrain exists — callers then keep the raw position.y. Delegates to the SHARED sampler
+ *  (terrain/mesh.ts sampleTileSurfaceHeight — the same mapping village.build uses). */
 function terrainSurfaceHeight(layers: Map<string, EditableTerrain>, x: number, z: number): number | undefined {
   let layer: EditableTerrain | undefined;
   for (const l of layers.values()) layer = l; // most-recent
   if (layer === undefined) return undefined;
-  const tile = layer.tile;
-  const n = tile.ncols, nr = tile.nrows;
-  const [ox, oy, oz] = tile.origin;
-  const sizeX = tile.scale[0], sizeZ = tile.scale[2], sy = tile.scale[1] ?? 1;
-  const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
-  const dx = sizeX / (n - 1), dz = sizeZ / (nr - 1);
-  const heights = tile.heights;
-  const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
-  const fc = clamp((x - x0) / dx, 0, n - 1), fr = clamp((z - z0) / dz, 0, nr - 1);
-  const c0 = Math.floor(fc), r0 = Math.floor(fr);
-  const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
-  const tx = fc - c0, tz = fr - r0;
-  const h = (r: number, c: number): number => oy + heights[r * n + c] * sy;
-  const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
-  const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
-  return a + (b - a) * tz;
+  return sampleTileSurfaceHeight(layer.tile, x, z);
 }
 
 export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegistry, terrain?: ScatterTerrain, layers?: Map<string, EditableTerrain>): void {
@@ -533,8 +522,12 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         throw new Error(`asset.scatter: unknown region '${input.regionId}' — generate it with world.generateRegion first`);
       }
 
-      // Resolve + PIN every palette asset (content-addressed). A committed hash must
-      // match the resolved bytes, else a swapped asset is rejected (mirrors asset.place).
+      // Resolve + PIN every palette asset (content-addressed). Content-hash pin:
+      // WARN (never THROW) on a mismatch — same rule as asset.place. The committed
+      // hash may have been produced on a DIFFERENT HOST (Rust op_sha256 vs the
+      // browser's), so a cross-host replay of a healthy scatter can mismatch;
+      // assetId pins identity. Surface a genuinely swapped asset as a visible
+      // warning instead of quarantining the whole scatter.
       const assetHashes: Record<string, string> = {};
       const referencedAssetIds = new Set<string>();
       for (const asset of config.assets) {
@@ -546,7 +539,7 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
         const resolved = assets.resolve(id);
         const committed = input.assetHashes?.[id];
         if (committed !== undefined && committed !== resolved.hash) {
-          throw new Error(`asset.scatter: '${id}' content hash mismatch (committed ${committed}, resolved ${resolved.hash}) — authored asset identity changed`);
+          ctx.emit("asset.hash_mismatch", { assetId: id, committed, resolved: resolved.hash });
         }
         assetHashes[id] = resolved.hash;
       }

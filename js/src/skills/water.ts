@@ -41,6 +41,7 @@ import { VisibleWaterManager } from "../render/water/visible-water-manager.ts";
 import { TILE_SIZE } from "../terrain/procedural.ts";
 import { isTerrainType, terrainTypeHints } from "../terrain/terrain-types.ts";
 import type { TerrainSource } from "../terrain/types.ts";
+import { sampleTileSurfaceHeight } from "../terrain/mesh.ts";
 import type { RegionState } from "./terrain.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
@@ -187,30 +188,15 @@ export function deriveDepthFromRegions(
  *  OUR settlement scene sculpts its ground with terrain.create — an editable heightfield held in
  *  `layer.tile`, NOT the region table — so deriveDepthFromRegions can't see it and the depth-fade
  *  would fall back to the camera-distance proxy. This builds `sampleHeight(x,z)` from the tile's
- *  heightfield with the SAME bilinear sampler village.build/grass read (world<->grid mapping from
- *  terrain/mesh.ts: x0 = ox - sizeX/2, y = origin.y + heights[r*ncols+c]), over the tile's world-XZ
- *  rectangle, so the shoreline depth-fade (turquoise shallows → opaque deep) tracks the eroded
- *  terrain. RENDER-ONLY: it only feeds colour/opacity, never sim state; deterministic and
+ *  heightfield with the SAME shared bilinear sampler village.build/asset.place read
+ *  (terrain/mesh.ts sampleTileSurfaceHeight), over the tile's world-XZ rectangle, so the shoreline
+ *  depth-fade (turquoise shallows → opaque deep) tracks the eroded terrain. RENDER-ONLY: it only feeds colour/opacity, never sim state; deterministic and
  *  re-derived on replay from the re-created layer. EXPORTED for the depth UAT. */
 export function deriveDepthFromLayer(layer: EditableTerrain): WaterDepthOptions {
   const tile = layer.tile;
-  const n = tile.ncols, nr = tile.nrows;
-  const [ox, oy, oz] = tile.origin;
   const sizeX = tile.scale[0], sizeZ = tile.scale[2];
-  const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
-  const dxStep = sizeX / (n - 1), dzStep = sizeZ / (nr - 1);
-  const heights = tile.heights;
-  const sampleHeight = (x: number, z: number): number => {
-    const fc = Math.min(n - 1, Math.max(0, (x - x0) / dxStep));
-    const fr = Math.min(nr - 1, Math.max(0, (z - z0) / dzStep));
-    const c0 = Math.floor(fc), r0 = Math.floor(fr);
-    const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
-    const tx = fc - c0, tz = fr - r0;
-    const h = (r: number, c: number): number => oy + heights[r * n + c];
-    const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
-    const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
-    return a + (b - a) * tz;
-  };
+  const x0 = tile.origin[0] - sizeX / 2, z0 = tile.origin[2] - sizeZ / 2;
+  const sampleHeight = (x: number, z: number): number => sampleTileSurfaceHeight(tile, x, z);
   return { sampleHeight, bounds: { minX: x0, minZ: z0, maxX: x0 + sizeX, maxZ: z0 + sizeZ } };
 }
 
@@ -225,16 +211,7 @@ function pickLayer(layers: Map<string, EditableTerrain> | undefined, id?: string
 }
 
 function sampleLayerHeight(layer: EditableTerrain, x: number, z: number): number {
-  const tile = layer.tile;
-  const fc = ((x - (tile.origin[0] - tile.scale[0] / 2)) / tile.scale[0]) * (tile.ncols - 1);
-  const fr = ((z - (tile.origin[2] - tile.scale[2] / 2)) / tile.scale[2]) * (tile.nrows - 1);
-  const col0 = Math.max(0, Math.min(tile.ncols - 2, Math.floor(fc)));
-  const row0 = Math.max(0, Math.min(tile.nrows - 2, Math.floor(fr)));
-  const tx = Math.max(0, Math.min(1, fc - col0));
-  const tz = Math.max(0, Math.min(1, fr - row0));
-  const h00 = tile.heights[row0 * tile.ncols + col0], h01 = tile.heights[row0 * tile.ncols + col0 + 1];
-  const h10 = tile.heights[(row0 + 1) * tile.ncols + col0], h11 = tile.heights[(row0 + 1) * tile.ncols + col0 + 1];
-  return tile.origin[1] + (h00 * (1 - tx) + h01 * tx) * (1 - tz) + (h10 * (1 - tx) + h11 * tx) * tz;
+  return sampleTileSurfaceHeight(layer.tile, x, z);
 }
 
 function resolveVerifiedMap(assets: AssetRegistry | undefined, mapAssetId: string, committedHash: string | undefined, skill: string): WorldMap {

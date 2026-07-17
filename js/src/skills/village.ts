@@ -34,13 +34,15 @@ import { buildLaneGeometry, buildGroundPadGeometry, laneCenterline } from "../wo
 import { briefToRecipe } from "./building-recipe.ts";
 import { archetypeBrief, type BuildingBrief } from "../game/building-brief.ts";
 // Grass builders — reused DIRECTLY (not via a nested skill invoke) so village.build can lay a tended
-// LAWN on each yard with no registry coupling; render-guarded like the ground pads (headless = no-op).
+// LAWN on each yard with no registry coupling; MESHES are render-guarded like the ground pads, but the
+// lawn ENTITIES are always created (headless = entity without mesh) so the ent_ id sequence never forks.
 import { planGrassBlades, GRASS_CLIMATES } from "./grass-plan.ts";
 import { buildGrassInstancedMesh, buildGrassGroundTint } from "../render/grass-placement-mesh.ts";
 import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
 // Lawn decoration: scatter wildflower/tuft GLBs confined to the lawn (the inclusion primitive), instanced
 // exactly like asset.scatter. Render-guarded + graceful (missing curated GLBs are skipped).
 import { scatterAssets, type ScatterConfig, type AssetInstance } from "../terrain/asset-scatter.ts";
+import { sampleTileSurfaceHeight } from "../terrain/mesh.ts";
 import { buildAssetInstancedMeshes } from "../terrain/asset-scatter-render.ts";
 import { parseGltfScene } from "./three.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
@@ -67,8 +69,6 @@ function meshFromBuffers(buf: { positions: ArrayLike<number>; uvs: ArrayLike<num
 /** Permission scope for village.build — the SAME scope asset.place declares (village.build's
  *  only side effect is invoking asset.place, under least-privilege, not the caller's full grant). */
 const PLACE_PERMS = ["scene.write"] as const;
-
-const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
 
 /** Default KIT house size [width, depth, height] (meters) when a kit building omits `sizeM`. */
 const DEFAULT_KIT_SIZE: readonly [number, number, number] = [7, 6, 3.4];
@@ -263,26 +263,15 @@ export function registerVillageSkills(
         throw new Error("village.build: lawn rendering requires an injected GrassFieldVisualPackage");
       }
 
-      // -- Build the sampler over the live heightfield. World<->grid mapping matches
-      //    terrain/mesh.ts exactly: x = ox - sizeX/2 + col*(sizeX/(ncols-1)), rows->z,
-      //    y = origin.y + heights[row*ncols+col] (scaleY === 1). heightAt bilinear-interpolates.
-      const n = tile.ncols, nr = tile.nrows;
-      const [ox, oy, oz] = tile.origin;
-      const sizeX = tile.scale[0], sizeZ = tile.scale[2];
-      const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
-      const dxStep = sizeX / (n - 1), dzStep = sizeZ / (nr - 1);
+      // -- Build the sampler over the live heightfield: the SHARED bilinear sampler
+      //    (terrain/mesh.ts sampleTileSurfaceHeight — the same world<->grid mapping as
+      //    the render mesh/collider vertices, including the scaleY factor).
+      const n = tile.ncols;
+      const oy = tile.origin[1];
+      const sizeX = tile.scale[0];
+      const dxStep = sizeX / (n - 1);
       const heights = tile.heights;
-      const heightAt = (x: number, z: number): number => {
-        const fc = clamp((x - x0) / dxStep, 0, n - 1);
-        const fr = clamp((z - z0) / dzStep, 0, nr - 1);
-        const c0 = Math.floor(fc), r0 = Math.floor(fr);
-        const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
-        const tx = fc - c0, tz = fr - r0;
-        const h = (r: number, c: number): number => oy + heights[r * n + c];
-        const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
-        const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
-        return a + (b - a) * tz;
-      };
+      const heightAt = (x: number, z: number): number => sampleTileSurfaceHeight(tile, x, z);
       const step = Math.max(1e-3, dxStep);
       const slopeAt = (x: number, z: number): number => {
         const hx = heightAt(x + step, z) - heightAt(x - step, z);
@@ -556,51 +545,65 @@ export function registerVillageSkills(
       //    dense SHORT turf confined to the yard via the INCLUSION primitive (r..r+4), with the building's
       //    own footprint excluded so no blade grows through the walls, plus a matching ground tint so the
       //    settled earth reads as kept lawn — never a bare grey scar or wild scrub. A high slopeMax means
-      //    the lawn covers even a graded knoll (the focal), where the wild carpet thins out. Render-only
-      //    (like the ground pads above): deterministic from the footprints, recomputed on replay, logs no
-      //    vertices; headless authoring/tests have no scene, so it is skipped.
-      if (siting.yard === "lawn" && canRenderGrass) {
+      //    the lawn covers even a graded knoll (the focal), where the wild carpet thins out.
+      //    ENTITY DETERMINISM (same discipline as the ground pads above): the entities — one per yard,
+      //    one tint, one per decoration batch — are created UNCONDITIONALLY, because the ent_ id counter
+      //    allocates by creation order (worldlog/log.ts) and a render-gated create forks the id sequence
+      //    between a windowed record and a headless replay. Only the MESHES are render-guarded: pure
+      //    functions of the recorded footprints, recomputed on replay, logging no vertices.
+      if (siting.yard === "lawn") {
         // The yard blankets the whole settled area (terrace + graded shoulder), so it covers the bare
         // knoll the wild carpet leaves grey. Excludes only the building's own footprint (no blades in the
         // walls). slopeMax is effectively off so even a steep graded knoll gets turf.
         const lawnIncl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] + 12 }));
         const lawnExcl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] * 0.6 }));
         const elevMin = sampler.seaLevel - 5, elevMax = oy + hi + 12;
-        const lawnMeshes: unknown[] = [];
         // Build one bounded dense field per yard, sharing the package's 60k performance budget
         // across the settlement. A single globally thinned placement list made every lawn wispy.
-        const lawnBladeBudget = Math.max(3, Math.floor(
+        // Render-only: the budget reads the injected visual package, absent headless.
+        const lawnBladeBudget = canRenderGrass ? Math.max(3, Math.floor(
           grassVisualPackage!.profile("performance").maxResidentBlades / Math.max(1, placements.length),
-        ));
+        )) : 0;
         for (let lawnIndex = 0; lawnIndex < placements.length; lawnIndex++) {
           const p = placements[lawnIndex];
-          const lawnPlacements = planGrassBlades(tile, {
-            seed: ((villageSeed ^ 0x1a2b3c4d) + lawnIndex * 0x9e3779b1) >>> 0,
-            density: 300, coverage: 0.97, cluster: 0.12, slopeMax: 4.0,
-            sizeRange: [0.7, 1.1], elevationMin: elevMin, elevationMax: elevMax,
-            exclusions: [lawnExcl[lawnIndex]], inclusions: [lawnIncl[lawnIndex]],
-          });
-          const lawnMesh = buildGrassInstancedMesh(lawnPlacements,
-            { maxBlades: lawnBladeBudget, featureOrigin: [p.x, 0, p.z] },
-            { visualPackage: grassVisualPackage!, quality: "performance", lod: 1, variant: "summer" });
-          if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
-        }
-        const lawnTint = buildGrassGroundTint(tile, {
-          baseColor: GRASS_CLIMATES.summer.base, elevationMin: elevMin, elevationMax: elevMax,
-          slopeMax: 4.0, exclusions: lawnExcl, inclusions: lawnIncl, opacity: 1.0,
-        });
-        if (lawnTint !== null) lawnMeshes.push(lawnTint);
-        for (const lm of lawnMeshes) {
-          scene!.add!(lm);
+          let lawnMesh: MeshLike | undefined;
+          if (canRenderGrass) {
+            const lawnPlacements = planGrassBlades(tile, {
+              seed: ((villageSeed ^ 0x1a2b3c4d) + lawnIndex * 0x9e3779b1) >>> 0,
+              density: 300, coverage: 0.97, cluster: 0.12, slopeMax: 4.0,
+              sizeRange: [0.7, 1.1], elevationMin: elevMin, elevationMax: elevMax,
+              exclusions: [lawnExcl[lawnIndex]], inclusions: [lawnIncl[lawnIndex]],
+            });
+            const built = buildGrassInstancedMesh(lawnPlacements,
+              { maxBlades: lawnBladeBudget, featureOrigin: [p.x, 0, p.z] },
+              { visualPackage: grassVisualPackage!, quality: "performance", lod: 1, variant: "summer" });
+            if (built !== null) { scene!.add!(built); lawnMesh = built as unknown as MeshLike; }
+          }
           const leid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
           if (leid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, leid); throw new Error("village.build: entity capacity exceeded (lawn)"); }
-          entities.push(ctx.world.entities.create({ eid: leid, mesh: lm as never, origin: { tool: "village.build", input: { lawn: true } } }));
+          entities.push(ctx.world.entities.create({ eid: leid, mesh: lawnMesh as never, origin: { tool: "village.build", input: { lawn: true } } }));
+        }
+        {
+          let tintMesh: MeshLike | undefined;
+          if (canRenderGrass) {
+            const lawnTint = buildGrassGroundTint(tile, {
+              baseColor: GRASS_CLIMATES.summer.base, elevationMin: elevMin, elevationMax: elevMax,
+              slopeMax: 4.0, exclusions: lawnExcl, inclusions: lawnIncl, opacity: 1.0,
+            });
+            if (lawnTint !== null) { scene!.add!(lawnTint); tintMesh = lawnTint as unknown as MeshLike; }
+          }
+          const teid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
+          if (teid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, teid); throw new Error("village.build: entity capacity exceeded (lawn tint)"); }
+          entities.push(ctx.world.entities.create({ eid: teid, mesh: tintMesh as never, origin: { tool: "village.build", input: { lawn: true } } }));
         }
 
         // LAWN DECORATION — the "vegetation features" of a tended yard: a light scatter of wildflowers +
         // grass tufts CONFINED to the lawn discs (inclusion), the building footprint excluded, low density
         // so it reads as sprinkled flowers, not a meadow. Instanced exactly like asset.scatter. GRACEFUL:
-        // a curated GLB that doesn't resolve (bare checkout) is skipped, so this never fails a build.
+        // a curated GLB that doesn't RESOLVE (bare checkout) is dropped from the config before the
+        // deterministic scatter; a resolved GLB that fails to PARSE loses only its mesh — the entity is
+        // still created and the failure surfaces as a village.lawn_deco_failed event, so a render fault
+        // can never fork the entity sequence.
         const decoAssets: { id: string; weight: number }[] = [];
         for (const a of siting.lawnVegetation) {
           try { assets.resolve(a.id); decoAssets.push({ id: a.id, weight: a.weight }); } catch { /* asset absent — skip */ }
@@ -618,18 +621,28 @@ export function registerVillageSkills(
             let l = byId.get(inst.assetId); if (l === undefined) { l = []; byId.set(inst.assetId, l); } l.push(inst);
           }
           for (const [id, list] of byId) {
-            try {
-              const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
-              // Normalize each decoration GLB to a sane lawn-plant height — curated library assets have
-              // wildly inconsistent authored scales (some are hundreds of metres, some empty); degenerate
-              // ones are skipped inside the builder. Keeps set-dressing from swamping the settlement.
-              for (const dm of buildAssetInstancedMeshes(root, list, { normalizeHeight: 0.5 })) {
-                scene!.add!(dm);
-                const deid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
-                if (deid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, deid); break; }
-                entities.push(ctx.world.entities.create({ eid: deid, mesh: dm as never, origin: { tool: "village.build", input: { lawnDeco: true } } }));
+            let decoMesh: MeshLike | undefined;
+            if (canRenderGrass) {
+              try {
+                const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
+                // Normalize each decoration GLB to a sane lawn-plant height — curated library assets have
+                // wildly inconsistent authored scales (some are hundreds of metres, some empty); degenerate
+                // ones are skipped inside the builder. Keeps set-dressing from swamping the settlement.
+                // One Group per batch so the ONE entity below owns every instanced mesh (teardown traverses).
+                const built = buildAssetInstancedMeshes(root, list, { normalizeHeight: 0.5 });
+                if (built.length > 0) {
+                  const group = new THREE.Group();
+                  for (const dm of built) group.add(dm);
+                  scene!.add!(group);
+                  decoMesh = group as unknown as MeshLike;
+                }
+              } catch (error) {
+                ctx.emit("village.lawn_deco_failed", { assetId: id, message: error instanceof Error ? error.message : String(error) });
               }
-            } catch { /* a decoration asset failed to parse (stub/absent GLB) — skip, never fatal */ }
+            }
+            const deid = spawnRenderable(ctx.world.ecs, inertTransform(), 0, 0, 0);
+            if (deid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, deid); throw new Error("village.build: entity capacity exceeded (lawn decoration)"); }
+            entities.push(ctx.world.entities.create({ eid: deid, mesh: decoMesh as never, origin: { tool: "village.build", input: { lawnDeco: true } } }));
           }
         }
       }

@@ -171,15 +171,17 @@ for (let k = 0; k < run1.placements.length; k++) {
   );
 }
 
-// A rendering host must supply presentation. The lawn must use that package and must never fall
-// back to engine-owned single-blade geometry.
+// A rendering host must supply presentation. Every yard lawn (one per placement — per-yard
+// budgets, see the lawn loop in village.ts) must use that package and must never fall back to
+// engine-owned single-blade geometry.
 let lawnGeometryBuilds = 0;
 const trackedPackage: GrassFieldVisualPackage = Object.freeze({
   ...INTERACTIVE_TEMPERATE_MEADOW_PACKAGE,
   createGeometry(context) { lawnGeometryBuilds++; return INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.createGeometry(context); },
 });
-await buildVillage("ses_p78_lawn_package", trackedPackage);
-assert(lawnGeometryBuilds === 1, `village lawn did not build exactly one injected package geometry (got ${lawnGeometryBuilds})`);
+const lawnRun = await buildVillage("ses_p78_lawn_package", trackedPackage);
+assert(lawnGeometryBuilds === lawnRun.placements.length && lawnGeometryBuilds > 0,
+  `village lawns must each build the injected package geometry — expected ${lawnRun.placements.length} (one per yard), got ${lawnGeometryBuilds}`);
 
 const missingWorld = makeHeadlessWorld(true);
 const missingLayers = new Map<string, EditableTerrain>();
