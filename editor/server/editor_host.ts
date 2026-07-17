@@ -235,6 +235,12 @@ installCottageScenario(server.registry, { world: server.world });
 registerWorldlogSkills(server.registry, {
   recorder: server.recorder,
   visibleCount: () => server.publishedWorldlogCommands,
+  // Editor session FAST-BOOT: worldlog.snapshotBoot serves a v3 snapshot + resume
+  // cursor so a long session's viewport boots by snapshot restore + bounded tail
+  // instead of re-authoring the whole recorded stream (the 7k-command boot hang).
+  // Ineligible sessions (state a snapshot cannot carry) answer eligible:false and
+  // the viewport keeps the full-replay path.
+  snapshotBoot: { participants: server.core.snapshotParticipants },
 });
 
 // The asset catalog: asset.catalog (browse, read-only) + catalog.publish (record a newly

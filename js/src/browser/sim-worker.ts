@@ -27,7 +27,7 @@
 // import (so this module stays Deno-free / portable, and a native test can import
 // the controller without the shell touching a Worker global).
 
-import { EntityTable, installOps, type CameraLike, type EngineOps, type PhysicsOps, type SceneLike } from "../engine.ts";
+import { EntityTable, installOps, ops as engineOps, type CameraLike, type EngineOps, type PhysicsOps, type SceneLike } from "../engine.ts";
 import { createEcsWorld } from "../ecs/world.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
@@ -41,6 +41,11 @@ import { LiminaTracer } from "../observability/event.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import type { CharacterController } from "../world/character.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
+import {
+  finalizeSnapshotBoot as finalizeSnapshotBootRealm,
+  parseSnapshotBootPayload,
+  type SnapshotBootPayload,
+} from "./snapshot-boot.ts";
 import { SharedTransformStorage } from "./sab-transforms.ts";
 import { InputRingBuffer, type InputFrame } from "./sab-ringbuffer.ts";
 import {
@@ -541,7 +546,11 @@ export class SimWorkerController {
     // until installed. The render realm installs at browser-entry init; without
     // this mirror install, the first world that hashes a generated tile crashes
     // ONLY in the worker and forks the realms (init divergence guard trips).
-    installOps(ops);
+    // Install ONLY when the realm has no binding: on the native host (headless
+    // gates embed this controller) module ops is the real Deno op surface and
+    // clobbering it with worker stubs would silence/stub every later module-ops
+    // consumer in the process.
+    if ((engineOps as unknown) === undefined) installOps(ops);
 
     const world: WorldContext = {
       ecs,
@@ -939,6 +948,21 @@ export class SimWorkerController {
     }
   }
 
+  /** Finalize an editor session FAST-BOOT after `loadWorldIsolated` authored the
+   *  snapshot boot PROGRAM (see browser/snapshot-boot.ts): verify allocation
+   *  parity, install both RNG streams, overwrite transforms/tags/manager state,
+   *  re-pose bodies, then sync the restored poses into the transform SAB so the
+   *  render thread frames the restored world before the first tick. THROWS on
+   *  any parity/restore failure — the shell escalates that to a fatal init error
+   *  and the caller falls back to full replay. */
+  finalizeSnapshotBoot(payload: SnapshotBootPayload): { entities: number } {
+    const snapshot = parseSnapshotBootPayload(payload);
+    const result = finalizeSnapshotBootRealm(this.world, snapshot, this.core.snapshotParticipants);
+    this.activePlayerDirty = true;
+    this.syncTransforms();
+    return result;
+  }
+
   /** `ecs.updateComponent` is the editor's live transform mutation path. The
    *  worker owns Rapier and then streams body transforms into the SAB, so for a
    *  body-bound entity the physics body must be updated before the next sync. */
@@ -1016,6 +1040,12 @@ export type InitMessage = {
   assets?: { id: string; bytes: Uint8Array }[];
   authoringProjectId?: string;
   hz?: number;
+  /** Editor session FAST-BOOT: `commands` is then the snapshot boot PROGRAM
+   *  (bootstrap ops + origin replay — see browser/snapshot-boot.ts), finalized
+   *  against `payload`'s snapshot before `tailCommands` (seq >= snapshotSeq)
+   *  apply. A program failure or finalize mismatch is FATAL init (no `ready`);
+   *  tail failures report like any live batch. */
+  snapshotBoot?: { payload: SnapshotBootPayload; tailCommands?: AuthorCommand[] };
 };
 type StepMessage = { type: "step" };
 type StopMessage = { type: "stop" };
@@ -1160,7 +1190,32 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
           authoringProjectId: msg.authoringProjectId,
         });
       }
-      if (msg.commands !== undefined) {
+      if (msg.snapshotBoot !== undefined) {
+        // Editor session FAST-BOOT: author the deterministic boot program, then
+        // finalize (allocation-parity verify + RNG/state/pose restore), then the
+        // bounded tail. Program/finalize failures are FATAL (no `ready`): the
+        // realm's identity would not match the snapshot, so the main thread must
+        // fall back to full replay instead of running a half-restored world.
+        const program = msg.commands ?? [];
+        const programOutcome = await controller.loadWorldIsolated(program);
+        if (programOutcome.failures.length > 0) {
+          postError("snapshotBoot", new Error(
+            `${programOutcome.failures.length} boot-program command(s) failed: ` +
+              programOutcome.failures.map((f) => `#${f.index} ${f.command}: ${f.message}`).join("; "),
+          ));
+          return;
+        }
+        try {
+          controller.finalizeSnapshotBoot(msg.snapshotBoot.payload);
+        } catch (err) {
+          postError("snapshotBoot", err);
+          return;
+        }
+        const tail = msg.snapshotBoot.tailCommands ?? [];
+        if (tail.length > 0) {
+          postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(tail)).failures);
+        }
+      } else if (msg.commands !== undefined) {
         // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
         // aborting the handshake — the worker still replies `ready` and self-drives.
         postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);

@@ -205,11 +205,32 @@ export function toAuthorCommands(commands) {
 }
 
 const val = (id) => { const el = document.getElementById(id); return el && el.value ? el.value.trim() : ""; };
+
+// Editor session FAST-BOOT: sessions past this many recorded commands ask the host for
+// worldlog.snapshotBoot (a v3 snapshot + resume cursor) and boot by snapshot restore +
+// bounded tail replay instead of re-authoring the whole stream (the 7k-command boot hang).
+// localStorage "limina.editor.fastboot": "off" disables; a number overrides the threshold.
+const SNAPSHOT_BOOT_MIN_COMMANDS = 512;
+function fastBootThreshold() {
+  try {
+    const raw = localStorage.getItem("limina.editor.fastboot");
+    if (raw === "off") return Infinity;
+    const n = Number(raw);
+    if (raw !== null && Number.isFinite(n) && n >= 0) return n;
+  } catch { /* storage unavailable */ }
+  return SNAPSHOT_BOOT_MIN_COMMANDS;
+}
+
 const state = {
   client: undefined,
   running: undefined,
   cursor: 0,
   commands: [],
+  // Editor session FAST-BOOT payload ({snapshotSeq, snapshot, bootstrapCommands}) from
+  // worldlog.snapshotBoot. While set, state.commands holds ONLY the tail (seq >= snapshotSeq)
+  // and reboot() hands the payload to runLive. Cleared on worldlog reset or a boot failure
+  // (fall back to the full-replay path).
+  bootPayload: undefined,
   // Indices (into toAuthorCommands(state.commands)) of commands that FAILED authoring on a prior
   // reboot. reboot() skips these so ONE historically-bad command (e.g. an out-of-band asset the agent
   // generated once) can't wedge every future reboot. Cleared on a worldlog reset.
@@ -1633,6 +1654,11 @@ async function tryConnect() {
     await discoverDerivedRuntime(client);
     requestEditDerivedClient();
     void requestCatalogRefresh(`reconnect:${++viewportConnectionGeneration}`);
+    // Editor session FAST-BOOT: before subscribing, ask the host whether this session can
+    // boot from a snapshot + bounded tail. Only on a fresh sync (cursor 0) — a reconnect
+    // mid-session resumes its cursor and needs no snapshot. Any failure (older server
+    // without the skill, ineligible session) keeps the full-replay path.
+    if (state.cursor === 0 && !state.bootPayload) await tryFastBoot(client);
     // Register the push handler BEFORE subscribing so the server's immediate join-batch push
     // (sent before the subscribe request's own ack) is never missed.
     client.onNotification(WORLDLOG_APPEND_METHOD, (params) => { void applyWorldlogBatch(params); });
@@ -1640,6 +1666,9 @@ async function tryConnect() {
       await client.worldlogSubscribe(state.cursor);
       state.subscribed = true;
       setStatus("following", "authoring stream (push)");
+      // A fast-booted viewport at the stream head gets NO join batch (nothing after its
+      // cursor), so the snapshot restore must be kicked explicitly.
+      if (state.dirty && !state.rebooting && !playLifecycle.isAuthoringLocked()) void reboot();
     } catch (subErr) {
       // Older server / transient failure — degrade to the 1s poll loop below (state.subscribed
       // stays false), rather than leaving the viewport with nothing at all.
@@ -1653,6 +1682,53 @@ async function tryConnect() {
     setStatus("waiting", "connect the panels first");
     try { client.close(); } catch { /* ignore */ }
   }
+}
+
+// Editor session FAST-BOOT request. On an eligible answer: stash the payload, point the
+// cursor at the snapshot boundary (the tail accumulates from there via subscribe/poll),
+// and mark dirty so the next reboot boots via snapshot restore. Every other outcome
+// (ineligible, older server without the skill, transport error) leaves the full-replay
+// path untouched. Never throws.
+async function tryFastBoot(client) {
+  const threshold = fastBootThreshold();
+  if (!Number.isFinite(threshold)) {
+    logConsolePanel("viewport fast-boot disabled (limina.editor.fastboot=off)", "info");
+    return;
+  }
+  try {
+    const res = await client.callTool("worldlog.snapshotBoot", { minCommands: Math.max(1, threshold) });
+    if (!res || res.eligible !== true || typeof res.next !== "number" || typeof res.snapshot !== "string") {
+      if (res && res.reason) logConsolePanel(`viewport fast-boot unavailable: ${res.reason}`, "info");
+      return;
+    }
+    state.bootPayload = {
+      snapshotSeq: res.snapshotSeq ?? res.next,
+      snapshot: res.snapshot,
+      bootstrapCommands: Array.isArray(res.bootstrapCommands) ? res.bootstrapCommands : [],
+    };
+    state.commands = [];
+    state.quarantined.clear();
+    state.cursor = res.next;
+    state.dirty = true;
+    logConsolePanel(`viewport fast-boot: snapshot@seq${res.next} + tail replay`, "info");
+  } catch (err) {
+    // Older server (unknown tool) or a transient failure — full replay covers it.
+    logConsolePanel("viewport fast-boot probe failed (using full replay): " + (err && err.message ? err.message : String(err)), "info");
+  }
+}
+
+// Abandon the snapshot-boot path (a program/finalize failure, or runLive returned null while
+// fast-booting) and resync the FULL authoring stream from scratch. Correctness over speed:
+// a failed snapshot restore must never leave a half-restored world on screen.
+function abandonFastBoot(reason) {
+  if (!state.bootPayload) return false;
+  logConsolePanel("viewport fast-boot failed — falling back to full replay: " + reason, "err");
+  state.bootPayload = undefined;
+  state.commands = [];
+  state.cursor = 0;
+  state.quarantined.clear();
+  state.dirty = true;
+  return true;
 }
 
 // K4: dedupe guard + serialization for a worldlog batch ({commands, next, reset}), shared by
@@ -1685,6 +1761,7 @@ async function applyWorldlogBatchInner(res) {
   }
   if (res.reset) {
     invalidateEditDerivedRevision();
+    state.bootPayload = undefined; // a stream reset invalidates any snapshot boot (full resync)
     state.commands = [];
     state.cursor = 0;
     state.quarantined.clear();
@@ -2567,6 +2644,9 @@ async function startPlay() {
         runtime = await runLive({
           canvas: playCanvas, width: w, height: h,
           commands: toAuthorCommands(snapshot.commands),
+          // Fast-booted sessions hold only the tail in state.commands — the Play world
+          // needs the same snapshot restore under it or it would boot near-empty.
+          ...(state.bootPayload ? { snapshotBoot: state.bootPayload } : {}),
           input: window,
           onStatus: (phase, detail) => {
             setStatus(phase, phase === "error" && initialDerivedRevision !== undefined
@@ -2710,7 +2790,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     // the playhead (state.scrubLimit); undefined = live (replay everything). state.commands still
     // accumulates in the background so returning to live is instant.
     const cmds = state.scrubLimit === undefined ? state.commands : state.commands.slice(0, state.scrubLimit);
-    if (cmds.length === 0) {
+    if (cmds.length === 0 && !state.bootPayload) {
       await stopRuntime(state.running);
       state.running = undefined;
       state.dirty = false;
@@ -2729,12 +2809,21 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     // position back to its index in authorCmds, so a NEW failure can be quarantined by that index.
     const authorCmds = toAuthorCommands(cmds);
     const { kept, keptIndex } = partitionQuarantined(authorCmds, state.quarantined);
-    setStatus(past ? "past" : "rendering", `${kept.length} authoring commands${past ? " (history)" : ""}`);
+    const bootPayload = state.bootPayload;
+    setStatus(
+      past ? "past" : "rendering",
+      bootPayload
+        ? `snapshot@seq${bootPayload.snapshotSeq} + ${kept.length} tail commands${past ? " (history)" : ""}`
+        : `${kept.length} authoring commands${past ? " (history)" : ""}`,
+    );
     const initialDerivedRevision = past ? undefined : state.latestEditDerivedRevision;
     try {
       state.running = await runLive({
         canvas, width: w, height: h,
         commands: kept,
+        // Editor session FAST-BOOT: runLive authors the snapshot boot program, finalizes
+        // against the snapshot, then applies `commands` as the bounded tail (both realms).
+        ...(bootPayload ? { snapshotBoot: bootPayload } : {}),
         input: window,
         renderHost: editRenderHost,
         quality: graphicsSettings.tier,
@@ -2767,6 +2856,16 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
       }
       throw error;
     }
+    if (state.running === null && bootPayload) {
+      // The snapshot boot path failed (program/finalize mismatch in either realm, reported
+      // via onStatus) OR the environment cannot host the viewport. Fall back to the full
+      // replay path — if the environment is truly unsupported the fallback fails the same
+      // way and leaves the specific status; if only the snapshot path was at fault, the
+      // full replay brings the viewport up correctly.
+      abandonFastBoot("runLive rejected the snapshot boot");
+      void poll();
+      return;
+    }
     if (state.running === null) {
       // The environment could not HOST the viewport (no COOP/COEP, no WebGPU, or a hard worker
       // startup error). runLive already reported the SPECIFIC reason via onStatus=setStatus — do NOT
@@ -2791,14 +2890,17 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     applyWireframeMode(state.running);
     restoreEditState(savedEditState);
     const authored = kept.length - failures.length;
+    const bootLabel = bootPayload ? `snapshot@seq${bootPayload.snapshotSeq} + ` : "";
     setStatus(
       past ? "past" : "live",
       failures.length > 0
-        ? `${authored} commands · ${failures.length} quarantined${past ? " · viewing history" : ""}`
-        : `${kept.length} commands${past ? " · viewing history" : ""}`,
+        ? `${bootLabel}${authored} commands · ${failures.length} quarantined${past ? " · viewing history" : ""}`
+        : `${bootLabel}${kept.length} commands${past ? " · viewing history" : ""}`,
     );
   } catch (e) {
-    setStatus("error", e && e.message ? e.message : String(e));
+    const message = e && e.message ? e.message : String(e);
+    setStatus("error", message);
+    if (abandonFastBoot(message)) void poll();
     if (throwOnError) throw e;
   } finally {
     state.rebooting = false;

@@ -59,6 +59,14 @@ import { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browse
 import { registerBrowserAuthoringRuntime } from "./browser/authoring-runtime.ts";
 export { AuthoringProjectBinding, authoringProjectIdForCommands } from "./browser/authoring-project.ts";
 import {
+  finalizeSnapshotBoot,
+  parseSnapshotBootPayload,
+  snapshotBootProgram,
+  type SnapshotBootPayload,
+} from "./browser/snapshot-boot.ts";
+export { finalizeSnapshotBoot, parseSnapshotBootPayload, snapshotBootProgram } from "./browser/snapshot-boot.ts";
+export type { SnapshotBootPayload } from "./browser/snapshot-boot.ts";
+import {
   composeAuthoringOps,
   crossOriginIsolatedAvailable,
   LivePlayerInput,
@@ -498,8 +506,17 @@ export interface RunLiveOptions {
   debugAuthoring?: boolean;
   /** The authoring command log (the agent's edits): each command is re-invoked
    *  through the registry (skill) or calls an engine physics op directly. The worker
-   *  simulates it; the render thread re-authors it for meshes. */
+   *  simulates it; the render thread re-authors it for meshes.
+   *  With `snapshotBoot` set, this is the BOUNDED TAIL (commands with
+   *  seq >= snapshotSeq) applied after the snapshot restore. */
   commands: AuthorCommand[];
+  /** Editor session FAST-BOOT (worldlog.snapshotBoot payload): both realms author
+   *  the deterministic snapshot boot PROGRAM (bootstrap ops + origin replay), then
+   *  finalize against the snapshot (allocation-parity verify, both RNG streams,
+   *  transforms/tags/manager state, body re-pose), then apply `commands` as the
+   *  tail. A program/finalize failure returns null (the caller falls back to the
+   *  full-replay path) — never a half-restored world. */
+  snapshotBoot?: SnapshotBootPayload;
   /** Optional event target for keyboard input (usually `window`). */
   input?: unknown;
   /** The injected rapier-compat module for render-main authoring. Defaults to a
@@ -863,7 +880,29 @@ interface ReadyMessage { type: "ready"; buffer: SharedArrayBuffer | ArrayBuffer;
  *  never throws for an unsupported environment). */
 export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null> {
   const status = opts.onStatus ?? ((): void => {});
-  const initialAuthoringProjectId = authoringProjectIdForCommands(opts.commands);
+  // Editor session FAST-BOOT: derive the deterministic boot program ONCE here and
+  // hand the SAME array to both realms (worker init + render authoring below), so
+  // the realms cannot even in principle author different programs. A malformed
+  // payload fails fast (before any worker/renderer resources exist).
+  let bootSnapshotProgram: AuthorCommand[] | undefined;
+  let bootParsedSnapshot: ReturnType<typeof parseSnapshotBootPayload> | undefined;
+  if (opts.snapshotBoot !== undefined) {
+    try {
+      bootParsedSnapshot = parseSnapshotBootPayload(opts.snapshotBoot);
+      bootSnapshotProgram = snapshotBootProgram(bootParsedSnapshot, opts.snapshotBoot.bootstrapCommands ?? []);
+    } catch (err) {
+      status("error", "snapshot boot payload rejected: " + (err instanceof Error ? err.message : String(err)));
+      return null;
+    }
+  }
+  // Prewarm/terrain/project scans must see the WHOLE effective stream (program + tail).
+  const effectiveCommands = bootSnapshotProgram === undefined ? opts.commands : [...bootSnapshotProgram, ...opts.commands];
+  console.info(
+    bootSnapshotProgram === undefined
+      ? `limina viewport boot path: full-replay (${opts.commands.length} commands)`
+      : `limina viewport boot path: snapshot@seq${opts.snapshotBoot!.snapshotSeq} program(${bootSnapshotProgram.length}) + tail(${opts.commands.length})`,
+  );
+  const initialAuthoringProjectId = authoringProjectIdForCommands(effectiveCommands);
 
   // ── Gate 1: cross-origin isolation (no COOP/COEP ⇒ no SharedArrayBuffer ⇒ no
   //    zero-copy worker bridge). Degrade gracefully — the caller shows a poster.
@@ -911,7 +950,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const vegPack = loadVegetationPack({ op_read_asset: (id) => prefetchedAssets.get(id) ?? new Uint8Array(0) });
   const gltfIds = new Set<string>(Object.values(vegPack).flat().map((entry) => entry.id));
   const mapIds = new Set<string>();
-  for (const cmd of opts.commands) {
+  for (const cmd of effectiveCommands) {
     for (const id of gltfAssetIdsForCommand(cmd, vegPack)) gltfIds.add(id);
     for (const id of mapAssetIdsForCommand(cmd)) mapIds.add(id);
     if (projectBiomePack !== undefined && cmd.kind === "skill" && cmd.tool === "world.populateBiome"
@@ -1225,7 +1264,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   try {
     worker.postMessage({
       type: "init",
-      commands: opts.commands,
+      // Fast-boot: the worker authors the PROGRAM, finalizes against the snapshot,
+      // then applies the tail — mirroring the render realm's sequence below.
+      commands: bootSnapshotProgram ?? opts.commands,
+      ...(opts.snapshotBoot !== undefined ? { snapshotBoot: { payload: opts.snapshotBoot, tailCommands: opts.commands } } : {}),
       authoringProjectId: initialAuthoringProjectId,
       assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
     });
@@ -1465,11 +1507,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // policy as run()'s terrain mode: suppress the baseline ground when the recorded log binds a
   // map terrain source (known from the commands up front). An explicit renderBaseline override
   // still wins (spread last).
-  const streamingPlanned = opts.commands.some((cmd) =>
+  const streamingPlanned = effectiveCommands.some((cmd) =>
     cmd.kind === "skill" && cmd.tool === "world.setTerrainSource" &&
     (cmd.input as { kind?: unknown } | undefined)?.kind === "map"
   );
-  const commandCameraFrame = deriveCommandCameraFrame(opts.commands);
+  const commandCameraFrame = deriveCommandCameraFrame(effectiveCommands);
   const largeMapTerrainPlanned = streamingPlanned || commandCameraFrame.largeMapTerrain;
   // Both streamed map worlds and editable terrain generated from a map need a production-scale
   // far plane and atmosphere. Map-generated terrain derives those values from its bounded local
@@ -1485,7 +1527,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // dark "checkerboard/blob" pattern (the shallow-water artifact NE/SE of the map island).
   // Same policy run()'s terrain mode and the map-streamed path already apply: suppress the
   // baseline ground whenever the log builds terrain. An explicit override still wins.
-  const terrainAuthored = opts.commands.some((cmd) =>
+  const terrainAuthored = effectiveCommands.some((cmd) =>
     cmd.kind === "skill" && (cmd.tool === "terrain.create" || cmd.tool === "world.generateRegion")
   );
   const liveBaseline: RenderBaselineOverride = largeMapTerrainPlanned
@@ -1553,6 +1595,35 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // abort policy differs. This adds NO fetch/import/createImageBitmap between renderer.init() and the
   // first render — the assets were pre-warmed above — so the forceWebGL init-collapse window is
   // untouched: this loop's awaits are identical in kind to the original per-command loop.)
+  // Editor session FAST-BOOT (render realm): author the boot PROGRAM first, then
+  // finalize against the snapshot, then fall through to the tail below — the
+  // exact sequence the worker's init runs, so both realms stay byte-identical.
+  // A program failure or finalize mismatch is fatal for the snapshot path (the
+  // caller falls back to full replay); it must never present a half-restored world.
+  if (bootSnapshotProgram !== undefined) {
+    const programOutcome = await applyAuthorCommandsIsolated(registry, world, bootSnapshotProgram, {
+      sessionId: "ses_browser_live",
+      defaultAgentId: "author",
+      defaultPerms: permissions,
+      tick: 0,
+    });
+    let bootError: string | undefined;
+    if (programOutcome.failures.length > 0) {
+      bootError = `snapshot boot program isolated ${programOutcome.failures.length} failure(s): `
+        + programOutcome.failures.map((f) => `#${f.index} ${f.command}: ${f.message}`).join("; ");
+    } else {
+      try {
+        finalizeSnapshotBoot(world, bootParsedSnapshot!, core.snapshotParticipants);
+      } catch (err) {
+        bootError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (bootError !== undefined) {
+      status("error", "snapshot boot failed: " + bootError);
+      await teardown(bootError).catch(reportTeardownFailure);
+      return null;
+    }
+  }
   const viewportBatch = partitionViewportCommands(opts.commands);
   const authoringOutcome = await applyAuthorCommandsIsolated(registry, world, viewportBatch.commands, {
     sessionId: "ses_browser_live",
@@ -1670,7 +1741,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // (tools/preview/stream-1km-proof-c.json). Still bounded: keep window (2·15+1)² = 961
       // tiles ≈ 9.6 MB of 33×33 heightfields, amortized in at ≤2 mounts/frame.
       let radius = 3;
-      for (const cmd of opts.commands) {
+      for (const cmd of effectiveCommands) {
         if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") {
           const r = (cmd.input as { radius?: unknown } | undefined)?.radius;
           if (typeof r === "number" && r >= 1 && r <= 14) radius = Math.floor(r);
