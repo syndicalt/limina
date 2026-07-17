@@ -343,10 +343,28 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     // pale clear colour wash the mid-field out.
     const hazeMix = T.smoothstep(240, 500, viewDistance).mul(0.92);
     waterColor = T.mix(waterColor, T.vec3(0.804, 0.851, 0.902), hazeMix);
-    material.colorNode = T.mix(waterColor, T.vec3(0.82, 0.94, 0.9), foam.mul(0.72));
+    // OPEN-WATER WHITECAPS: sparse wind-blown foam riding the swell crests AWAY
+    // from the shoreline ring. Crest-gated (only wave tops), masked by a slow
+    // advected noise so open sea stays mostly clean patches-not-carpet, depth-
+    // gated OFF the shelf (the shoreline ring owns that band — p11_water_depth
+    // pins the baked gate, which this shader term never touches), and faded
+    // with the aerial haze so the far field keeps its calm.
+    // Anisotropic mask coords: compressed along the swell travel axis so caps
+    // stretch into wind streaks instead of reading as round snowfall dots.
+    const whitecapMask = T.mx_noise_float(T.vec2(
+      T.positionWorld.x.mul(0.035).add(T.time.mul(0.05)),
+      T.positionWorld.z.mul(0.16).sub(T.time.mul(0.035)),
+    )).mul(0.5).add(0.5);
+    const whitecap = T.smoothstep(0.7, 0.94, height01)
+      .mul(T.smoothstep(0.6, 0.86, whitecapMask))
+      .mul(T.smoothstep(0.22, 0.45, depth01))
+      .mul(T.oneMinus(hazeMix))
+      .mul(ownership);
+    const foamAll = T.max(foam, whitecap.mul(0.8));
+    material.colorNode = T.mix(waterColor, T.vec3(0.82, 0.94, 0.9), foamAll.mul(0.72));
     const opacity = T.max(T.float(0.34).add(T.oneMinus(clarity).mul(0.64)), hazeMix.mul(0.95));
-    material.opacityNode = T.max(opacity, foam.mul(0.92)).mul(ownership).mul(edgeFeather);
-    material.roughnessNode = T.max(material.roughnessNode, foam.mul(0.72));
+    material.opacityNode = T.max(opacity, foamAll.mul(0.92)).mul(ownership).mul(edgeFeather);
+    material.roughnessNode = T.max(material.roughnessNode, foamAll.mul(0.72));
     oceanTransmittance = transmittance;
     oceanClarity = clarity;
     oceanAbyss = abyss;
