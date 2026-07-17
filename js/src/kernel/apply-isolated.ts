@@ -68,7 +68,11 @@ export async function applyAuthorCommandsIsolated(
     }
     results.push(res);
     if (!res.success) {
-      failures.push({ index, command: describeAuthorCommand(cmd), message: res.error?.message ?? "unknown error" });
+      // Carry the error's structured data (bounded) — replay-divergence reports
+      // are uninvestigable from the one-line message alone.
+      const data = (res.error as { data?: unknown } | undefined)?.data;
+      const detail = data === undefined ? "" : ` :: ${JSON.stringify(data).slice(0, 6144)}`;
+      failures.push({ index, command: describeAuthorCommand(cmd), message: (res.error?.message ?? "unknown error") + detail });
     }
   }
   return { results, failures };

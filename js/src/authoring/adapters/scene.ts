@@ -161,6 +161,9 @@ function transformState(world: WorldContext, entity: string): TransformState {
   const entry = world.entities.resolve(entity);
   if (entry === undefined) throw new Error(`scene entity '${entity}' does not exist`);
   const eid = entry.eid;
+  // The module SoA is the sim-truth store in EVERY realm (creation writes it;
+  // SharedTransformStorage mirrors authored writes into it) — capture must read
+  // it, never the SAB lanes, which carry only physics-bound entities.
   return {
     entity,
     eid,

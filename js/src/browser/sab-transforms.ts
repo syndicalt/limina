@@ -45,7 +45,7 @@
 // the heap-backed SoA in world.ts exactly so reads/writes are bit-identical.
 // ---------------------------------------------------------------------------
 
-import { MAX_ENTITIES } from "../ecs/world.ts";
+import { MAX_ENTITIES, Position, Rotation, Scale } from "../ecs/world.ts";
 import type { TransformStorage } from "../ecs/facade.ts";
 
 const BYTES_PER_FLOAT = Float32Array.BYTES_PER_ELEMENT; // 4
@@ -165,11 +165,18 @@ export class SharedTransformStorage implements TransformStorage {
   }
 
   // --- TransformStorage write surface (matches facade.ts EXACTLY) ----------
+  // Every write ALSO mirrors into the module SoA (the facade contract): the SoA
+  // is the sim-truth store creation writes and every capture/skill read path
+  // uses; without the mirror the sim worker's authoring writes were invisible
+  // to the scene adapter's after-state capture and commit replays diverged.
 
   writePosition(eid: number, x: number, y: number, z: number): void {
     this.Position.x[eid] = x;
     this.Position.y[eid] = y;
     this.Position.z[eid] = z;
+    Position.x[eid] = x;
+    Position.y[eid] = y;
+    Position.z[eid] = z;
     this.storageVersion++;
   }
 
@@ -178,6 +185,10 @@ export class SharedTransformStorage implements TransformStorage {
     this.Rotation.y[eid] = y;
     this.Rotation.z[eid] = z;
     this.Rotation.w[eid] = w;
+    Rotation.x[eid] = x;
+    Rotation.y[eid] = y;
+    Rotation.z[eid] = z;
+    Rotation.w[eid] = w;
     this.storageVersion++;
   }
 
@@ -185,6 +196,9 @@ export class SharedTransformStorage implements TransformStorage {
     this.Scale.x[eid] = x;
     this.Scale.y[eid] = y;
     this.Scale.z[eid] = z;
+    Scale.x[eid] = x;
+    Scale.y[eid] = y;
+    Scale.z[eid] = z;
     this.storageVersion++;
   }
 

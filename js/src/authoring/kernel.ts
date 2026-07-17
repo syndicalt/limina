@@ -717,10 +717,19 @@ export class AuthoringTransactionKernel {
       this.#durableTailHash,
       receipt,
     );
-    if (expectedRecord !== undefined && canonicalStringify(durableRecord) !== canonicalStringify(expectedRecord)) {
-      throw new AuthoringError("replay_diverged", "recorded authoring commit diverged from its embedded commitFields", {
+    const expectedCanonical = expectedRecord === undefined ? undefined : canonicalStringify(expectedRecord);
+    if (expectedCanonical !== undefined && canonicalStringify(durableRecord) !== expectedCanonical) {
+      // The windowed first-divergence excerpt rides the MESSAGE: error mapping
+      // keeps only the message across the skill boundary, and a replay
+      // divergence is uninvestigable from two opaque hashes — the diff IS the bug.
+      const actualCanonical = canonicalStringify(durableRecord);
+      let at = 0;
+      while (at < expectedCanonical.length && expectedCanonical[at] === actualCanonical[at]) at++;
+      const from = Math.max(0, at - 60);
+      const excerpt = `first divergence @${at}: recorded …${expectedCanonical.slice(from, at + 700)}… vs replayed …${actualCanonical.slice(from, at + 700)}…`;
+      throw new AuthoringError("replay_diverged", `recorded authoring commit diverged from its embedded commitFields (${excerpt})`, {
         transactionId: transaction.transactionId,
-        expectedRecordHash: expectedRecord.recordHash,
+        expectedRecordHash: expectedRecord!.recordHash,
         actualRecordHash: durableRecord.recordHash,
       });
     }
