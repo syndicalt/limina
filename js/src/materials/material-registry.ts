@@ -56,6 +56,10 @@ export interface ImportedMaterialSpec {
   color?: number;
 }
 
+/** Registry-owned decoded map type, named via ImportedTextures so disposal bookkeeping tracks the
+ * exact type the entries carry. */
+type OwnedTexture = NonNullable<ImportedTextures[keyof ImportedTextures]>;
+
 interface Entry {
   spec: ImportedMaterialSpec;
   textures: ImportedTextures;
@@ -107,10 +111,31 @@ export class MaterialRegistry {
       hashes: Object.freeze({ ...entry.hashes }), contentHash: entry.contentHash });
   }
 
+  /** Entries may legitimately share decoded textures (one pack defined under several names), so a
+   * retiring entry's GPU resources are resolved against every surviving entry, never per-entry. */
+  private disposeRetiredTextures(retired: ImportedTextures, errors: unknown[]): void {
+    const survivors = new Set<OwnedTexture>();
+    for (const entry of this.map.values()) {
+      for (const texture of Object.values(entry.textures)) if (texture !== null) survivors.add(texture);
+    }
+    const disposed = new Set<OwnedTexture>();
+    for (const texture of Object.values(retired)) {
+      if (texture === null || survivors.has(texture) || disposed.has(texture)) continue;
+      disposed.add(texture);
+      try {
+        texture.dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+
   /**
    * Register (or replace) an imported material recipe from already-DECODED textures. Builds the
    * per-material builder once (closing over the textures + spec); `build(name)` returns a fresh
-   * MeshStandardNodeMaterial each call so per-entity tweaks never alias.
+   * MeshStandardNodeMaterial each call so per-entity tweaks never alias. Replacing a name disposes
+   * the retired recipe's decoded textures unless another entry (including the replacement) still
+   * shares them — the registry owns their GPU lifetime (see surfaceOf).
    */
   define(name: string, spec: ImportedMaterialSpec, textures: ImportedTextures, hashes: Record<string, string>): void {
     const build = (): THREE.MeshStandardNodeMaterial => {
@@ -190,8 +215,17 @@ export class MaterialRegistry {
       ...(spec.parallax !== undefined ? { parallax: spec.parallax } : {}),
       ...(spec.color !== undefined ? { color: spec.color } : {}),
     };
-    this.map.set(name, { spec, textures, hashes: pinnedHashes,
-      contentHash: compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes }), build });
+    // Hash before inserting so a canonicalization throw leaves the prior entry untouched.
+    const contentHash = compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes });
+    const replaced = this.map.get(name);
+    this.map.set(name, { spec, textures, hashes: pinnedHashes, contentHash, build });
+    if (replaced !== undefined) {
+      const errors: unknown[] = [];
+      this.disposeRetiredTextures(replaced.textures, errors);
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `imported material "${name}" replacement failed to dispose ${errors.length} retired texture(s)`);
+      }
+    }
   }
 
   /** Build a fresh material instance for a registered imported name (throws if unknown). */
@@ -199,5 +233,26 @@ export class MaterialRegistry {
     const e = this.map.get(name);
     if (e === undefined) throw new Error(`unknown imported material "${name}"`);
     return e.build();
+  }
+
+  /** Dispose every registry-owned decoded texture (each exactly once, however shared) and clear
+   * the registry. Session-teardown seam: materials built from these entries must already be torn
+   * down — built node graphs sample these textures. Entries are cleared before disposal so a
+   * throwing texture cannot be double-disposed by a retry. */
+  dispose(): void {
+    const owned = new Set<OwnedTexture>();
+    for (const entry of this.map.values()) {
+      for (const texture of Object.values(entry.textures)) if (texture !== null) owned.add(texture);
+    }
+    this.map.clear();
+    const errors: unknown[] = [];
+    for (const texture of owned) {
+      try {
+        texture.dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, `imported-material registry disposal failed for ${errors.length} texture(s)`);
   }
 }

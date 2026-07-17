@@ -54,7 +54,9 @@ export interface RenderTelemetrySnapshot {
   backingWidth: number;
   backingHeight: number;
   pixelRatio: number;
-  fps: Readonly<{ mean: number; p50: number; p95: number; minimum: number }>;
+  /** fps.p05 is the low-end rate 1000 / frameMs.p95 (the inverted high-frame-time percentile),
+   * not an independently ranked fps quantile. */
+  fps: Readonly<{ mean: number; p50: number; p05: number; minimum: number }>;
   frameMs: Readonly<{ mean: number; p50: number; p95: number; maximum: number }>;
   submitMs: Readonly<{ mean: number; p50: number; p95: number; maximum: number }>;
   render: Readonly<{ drawCalls: number; triangles: number }>;
@@ -269,7 +271,7 @@ export class RenderTelemetryRing {
       fps: Object.freeze({
         mean: fpsFromFrame(frame.mean),
         p50: fpsFromFrame(frame.p50),
-        p95: fpsFromFrame(frame.p95),
+        p05: fpsFromFrame(frame.p95),
         minimum: fpsFromFrame(frame.maximum),
       }),
       frameMs: Object.freeze(frame),

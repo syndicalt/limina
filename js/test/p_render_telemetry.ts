@@ -107,6 +107,8 @@ assert(snapshot.samples === RENDER_TELEMETRY_CAPACITY && ring.size === RENDER_TE
 assert(snapshot.frameMs.maximum < 1000, "overwritten warmup samples leaked into the retained window");
 assert(snapshot.frameMs.p95 >= snapshot.frameMs.p50 && snapshot.frameMs.maximum >= snapshot.frameMs.p95, "frame percentiles are unordered");
 assert(snapshot.submitMs.p95 > 0 && snapshot.fps.minimum === 1000 / snapshot.frameMs.maximum, "submit/FPS statistics changed");
+assert(snapshot.fps.p05 === 1000 / snapshot.frameMs.p95 && snapshot.fps.p05 <= snapshot.fps.p50
+  && !("p95" in snapshot.fps), "low-end fps is not the inverted high-frame-time percentile under its honest key");
 assert(snapshot.render.drawCalls === RENDER_TELEMETRY_CAPACITY + 9 && snapshot.render.triangles === (RENDER_TELEMETRY_CAPACITY + 9) * 1000, "latest render counters changed");
 assert(snapshot.memory.textures === 3 && snapshot.memory.geometries === 4 && snapshot.memory.programs === 7 && snapshot.memory.renderTargets === 5, "latest memory counters changed");
 assert(snapshot.backingWidth === 1280 + RENDER_TELEMETRY_CAPACITY + 9 && snapshot.backingHeight === 720 && snapshot.pixelRatio === 1.5, "latest surface identity changed");

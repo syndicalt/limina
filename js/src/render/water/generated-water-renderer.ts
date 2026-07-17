@@ -99,9 +99,11 @@ function pointInWaterRing(points: readonly WaterPoint2[], x: number, z: number):
   return inside;
 }
 
-/** Exact CPU-side semantic water coverage for vegetation exclusion and other presentation masks.
- * It consumes only a binding-verified render resource; callers cannot invent a second river path. */
-export function generatedWaterCoversPoint(
+/** Reference full-topology coverage scan. `generatedWaterCoversPoint` must answer (and throw)
+ * identically to this for every input; the equivalence gate compares the two over dense and
+ * boundary sweeps, so a semantic change here must land in both paths together — a divergence is
+ * a placement/replay determinism bug, not a rendering nit. */
+export function generatedWaterCoversPointReference(
   resource: VerifiedGeneratedWaterRenderResource,
   x: number,
   z: number,
@@ -128,6 +130,185 @@ export function generatedWaterCoversPoint(
       const px = a[0] + dx * t, pz = a[1] + dz * t;
       const width = reach.widths[segment] + (reach.widths[segment + 1] - reach.widths[segment]) * t;
       if (Math.hypot(x - px, z - pz) <= width / 2 + marginM) return true;
+    }
+  }
+  return false;
+}
+
+interface CoverageBounds {
+  readonly minX: number;
+  readonly minZ: number;
+  readonly maxX: number;
+  readonly maxZ: number;
+}
+
+interface BasinCoverage {
+  readonly outer: readonly WaterPoint2[];
+  readonly holes: readonly (readonly WaterPoint2[])[];
+  /** Padded superset of the outer ring; skipping outside it can never flip an exact ring test. */
+  readonly bounds: CoverageBounds;
+}
+
+export interface ReachCoverageGrid {
+  readonly minX: number;
+  readonly minZ: number;
+  readonly maxX: number;
+  readonly maxZ: number;
+  readonly cellSize: number;
+  readonly cols: number;
+  readonly rows: number;
+}
+
+interface ReachCoverage {
+  /** The same presentation-smoothed arrays the reference scan consumes (shared via presentationReach). */
+  readonly points: readonly WaterPoint2[];
+  readonly widths: readonly number[];
+  readonly grid: ReachCoverageGrid;
+  /** Per grid cell: indices of segments whose half-width-expanded AABB (±1 cell) covers the cell. */
+  readonly cells: readonly (readonly number[] | undefined)[];
+}
+
+interface WaterCoverageIndex {
+  /** Slots fill lazily IN QUERY ORDER so malformed topology entries throw at exactly the same
+   * iteration point as the reference scan (an earlier hit must win over a later throw). */
+  readonly basins: (BasinCoverage | undefined)[];
+  readonly reaches: (ReachCoverage | undefined)[];
+}
+
+/** Keyed by topology object identity: a newly decoded topology version is a new object, matching
+ * the presentationReach cache. Mutating a verified topology in place is outside the adapter contract. */
+const coverageIndexCache = new WeakMap<object, WaterCoverageIndex>();
+
+/** Absorbs the few-ulp rounding of the exact predicates' intermediate arithmetic (coordinates are
+ * bounded by WATER_LIMITS.absCoordinateM) so a prefilter can never exclude a point the exact test accepts. */
+function coveragePad(minX: number, minZ: number, maxX: number, maxZ: number): number {
+  return (Math.abs(minX) + Math.abs(minZ) + Math.abs(maxX) + Math.abs(maxZ) + 1) * 1e-9;
+}
+
+function buildBasinCoverage(basin: GeneratedBasinView): BasinCoverage {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const point of basin.footprint.points) {
+    minX = Math.min(minX, point[0]); minZ = Math.min(minZ, point[1]);
+    maxX = Math.max(maxX, point[0]); maxZ = Math.max(maxZ, point[1]);
+  }
+  const pad = coveragePad(minX, minZ, maxX, maxZ);
+  return Object.freeze({
+    outer: basin.footprint.points,
+    holes: basin.footprint.holes,
+    bounds: Object.freeze({ minX: minX - pad, minZ: minZ - pad, maxX: maxX + pad, maxZ: maxZ + pad }),
+  });
+}
+
+function buildReachCoverage(sourceReach: GeneratedReachView): ReachCoverage {
+  const reach = presentationReach(sourceReach);
+  const points = reach.points, widths = reach.widths;
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (let index = 0; index < points.length; index++) {
+    const radius = widths[index] / 2, point = points[index];
+    minX = Math.min(minX, point[0] - radius); maxX = Math.max(maxX, point[0] + radius);
+    minZ = Math.min(minZ, point[1] - radius); maxZ = Math.max(maxZ, point[1] + radius);
+  }
+  const pad = coveragePad(minX, minZ, maxX, maxZ);
+  minX -= pad; minZ -= pad; maxX += pad; maxZ += pad;
+  const segments = Math.max(1, points.length - 1);
+  const axisCells = Math.max(1, Math.min(64, Math.ceil(Math.sqrt(segments))));
+  const cellSize = Math.max(maxX - minX, maxZ - minZ) / axisCells;
+  const cols = Math.max(1, Math.min(4096, Math.ceil((maxX - minX) / cellSize)));
+  const rows = Math.max(1, Math.min(4096, Math.ceil((maxZ - minZ) / cellSize)));
+  const cells: (number[] | undefined)[] = new Array(cols * rows);
+  for (let segment = 0; segment < points.length - 1; segment++) {
+    const a = points[segment], b = points[segment + 1];
+    const radius = Math.max(widths[segment], widths[segment + 1]) / 2;
+    const firstCol = Math.max(0, Math.floor((Math.min(a[0], b[0]) - radius - minX) / cellSize) - 1);
+    const lastCol = Math.min(cols - 1, Math.floor((Math.max(a[0], b[0]) + radius - minX) / cellSize) + 1);
+    const firstRow = Math.max(0, Math.floor((Math.min(a[1], b[1]) - radius - minZ) / cellSize) - 1);
+    const lastRow = Math.min(rows - 1, Math.floor((Math.max(a[1], b[1]) + radius - minZ) / cellSize) + 1);
+    for (let row = firstRow; row <= lastRow; row++) for (let col = firstCol; col <= lastCol; col++) {
+      const cell = row * cols + col;
+      (cells[cell] ??= []).push(segment);
+    }
+  }
+  return Object.freeze({
+    points, widths,
+    grid: Object.freeze({ minX, minZ, maxX, maxZ, cellSize, cols, rows }),
+    cells,
+  });
+}
+
+function coverageIndexOf(topology: GeneratedWaterTopologyView): WaterCoverageIndex {
+  const cached = coverageIndexCache.get(topology);
+  if (cached !== undefined) return cached;
+  const built: WaterCoverageIndex = {
+    basins: new Array(topology.basins.length),
+    reaches: new Array(topology.reaches.length),
+  };
+  coverageIndexCache.set(topology, built);
+  return built;
+}
+
+/** Coverage-grid introspection for the equivalence gate: exposes each reach's cell geometry so the
+ * gate can place queries exactly on cell boundaries. Not a rendering seam. */
+export function generatedWaterCoverageGrids(resource: VerifiedGeneratedWaterRenderResource): readonly ReachCoverageGrid[] {
+  const index = coverageIndexOf(resource.topology);
+  return resource.topology.reaches.map((sourceReach, position) =>
+    (index.reaches[position] ??= buildReachCoverage(sourceReach)).grid);
+}
+
+/** Exact CPU-side semantic water coverage for vegetation exclusion and other presentation masks.
+ * It consumes only a binding-verified render resource; callers cannot invent a second river path.
+ * Answers are bit-identical to generatedWaterCoversPointReference — the bbox/grid index only skips
+ * primitives provably outside the query's reach, then runs the reference's exact arithmetic. */
+export function generatedWaterCoversPoint(
+  resource: VerifiedGeneratedWaterRenderResource,
+  x: number,
+  z: number,
+  marginM = 0,
+): boolean {
+  if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(marginM) || marginM < 0) {
+    throw new RangeError("generated-water coverage query must be finite with a non-negative margin");
+  }
+  const field = resource.field;
+  const col = Math.round((x - field.placement.originX) / field.cellSizeM);
+  const row = Math.round((z - field.placement.originZ) / field.cellSizeM);
+  if (row >= 0 && row < field.rows && col >= 0 && col < field.cols
+      && field.oceanMask[row * field.cols + col] !== 0) return true;
+  const topology = resource.topology;
+  const index = coverageIndexOf(topology);
+  for (let position = 0; position < topology.basins.length; position++) {
+    const basin = index.basins[position] ??= buildBasinCoverage(topology.basins[position]);
+    const bounds = basin.bounds;
+    if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) continue;
+    if (pointInWaterRing(basin.outer, x, z)
+        && !basin.holes.some((hole) => pointInWaterRing(hole, x, z))) return true;
+  }
+  for (let position = 0; position < topology.reaches.length; position++) {
+    const reach = index.reaches[position] ??= buildReachCoverage(topology.reaches[position]);
+    const grid = reach.grid;
+    if (x < grid.minX - marginM || x > grid.maxX + marginM
+        || z < grid.minZ - marginM || z > grid.maxZ + marginM) continue;
+    const firstCol = Math.max(0, Math.min(grid.cols - 1, Math.floor((x - marginM - grid.minX) / grid.cellSize)));
+    const lastCol = Math.max(0, Math.min(grid.cols - 1, Math.floor((x + marginM - grid.minX) / grid.cellSize)));
+    const firstRow = Math.max(0, Math.min(grid.rows - 1, Math.floor((z - marginM - grid.minZ) / grid.cellSize)));
+    const lastRow = Math.max(0, Math.min(grid.rows - 1, Math.floor((z + marginM - grid.minZ) / grid.cellSize)));
+    const points = reach.points, widths = reach.widths;
+    // A passing segment lies within marginM (per axis) of its stamped, half-width-expanded AABB,
+    // so the query's [±marginM] cell range always intersects at least one of its stamped cells.
+    const tested = firstCol < lastCol || firstRow < lastRow ? new Set<number>() : null;
+    for (let cellRow = firstRow; cellRow <= lastRow; cellRow++) for (let cellCol = firstCol; cellCol <= lastCol; cellCol++) {
+      const candidates = reach.cells[cellRow * grid.cols + cellCol];
+      if (candidates === undefined) continue;
+      for (const segment of candidates) {
+        if (tested !== null) {
+          if (tested.has(segment)) continue;
+          tested.add(segment);
+        }
+        const a = points[segment], b = points[segment + 1];
+        const dx = b[0] - a[0], dz = b[1] - a[1], length2 = dx * dx + dz * dz;
+        const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / length2));
+        const px = a[0] + dx * t, pz = a[1] + dz * t;
+        const width = widths[segment] + (widths[segment + 1] - widths[segment]) * t;
+        if (Math.hypot(x - px, z - pz) <= width / 2 + marginM) return true;
+      }
     }
   }
   return false;
