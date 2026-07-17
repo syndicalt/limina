@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # AGGREGATE GATE RUNNER — the CI-in-a-script the repo lacked. Runs the full headless js/test suite
-# through the limina binary, then the host-side pipeline gates, and exits non-zero on ANY failure.
+# through the limina binary (host-flavored js/test files run under bun — see runner dispatch below),
+# then the host-side pipeline gates, and exits non-zero on ANY failure.
 # Self-locating; run from anywhere:  bash tools/director/run-gates.sh [--quick]
 #
-#   --quick : run only the game-director gates (p20..p27) + host gates, skipping the full js/test sweep.
+#   --quick : run the game-director gates (p20..p27) plus the determinism core (p4_* and the
+#             p7x determinism gates), skipping the rest of the js/test sweep.
 #
-# Tests that need external services we can't drive here (ollama, a model worker, a WS peer) are SKIPPED
+# Tests that need external services we can't drive here (ollama, a model worker) are SKIPPED
 # and reported as such — never silently counted as passing.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,6 +31,19 @@ for a in "$@"; do [ "$a" = "--headless" ] && HEADLESS=1; done
 # js/test that open a native window or need a real WebGPU adapter / readback:
 HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3_fidelity_readback p3_showcase_window p3_textured_gltf_window p5_text_substrate p_material_surface_gpu p_grass_field_gpu p_grass_field_stream_gpu p_biome_surface_gpu p_gpu_surface_probe "
 
+# Tests whose committed evidence records repo-root-relative asset paths ("assets/...")
+# — they must run with the asset root at the REPO ROOT, matching the capture harnesses
+# (tools/preview/*) that produced the evidence. Named allowlist, not error guessing.
+REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package "
+
+# The determinism core added to --quick: worldlog replay/durability/recovery, policy/audit/
+# isolation, packaging, plus the p7x layout/geometry/scatter/grass determinism gates.
+QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
+  js/test/p76_village_layout_determinism.ts
+  js/test/p77_village_geometry_determinism.ts
+  js/test/p78_scatter_exclusion_determinism.ts
+  js/test/p79_grass_exclusion_determinism.ts)
+
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
 # A SKIP is never silent: every skipped test is announced on stderr with the reason it matched, and the
@@ -45,16 +60,59 @@ record_failure() { # <name> <captured output>
 }
 
 run_test() {
-  local t="$1" name out rc reason; name="$(basename "$t" .ts)"
+  local t="$1" name out rc skipline reason; name="$(basename "$t" .ts)"
   case "$name" in
-    *ollama*|*_ws|*_ws_*|p4_multi_client*) record_skip "$name" "needs external service (ollama/ws)"; return;;
+    *ollama*) record_skip "$name" "needs external service (ollama)"; return;;
     p9_model_real_tile|p9_model_source_http) record_skip "$name" "needs external terrain-model worker"; return;;
-    p_tree_asset_scatter|p_tree_vegetation_scatter|p_tree_biome_scatter|p_biome_population_mount) record_skip "$name" "runs through the accepted-asset integration gate below"; return;;
+    # Authoring utilities that live in js/test but are not gates: sweeping them as
+    # passing tests inflated the pass count with vacuous greens.
+    _dump_quest_scene|_dump_siege_scene|w0_native_dump) record_skip "$name" "authoring utility, not a gate"; return;;
+    # Parameterized authoring gates: they REQUIRE argv (a candidate GLB/authority) and
+    # print usage + exit 1 without one. Run them from their authoring pipelines.
+    p_architecture_shell_artifact|p_architecture_furniture_pack|p_furniture_pack_review_scene)
+      record_skip "$name" "parameterized authoring gate (requires argv); run from its pipeline"; return;;
+    # bun:test-shaped review scenes whose filenames the bun test runner refuses; they
+    # have no working harness today. Announced so the gap stays visible.
+    p_staged_material_review_scene|p_staged_interior_proxy_review_scene)
+      record_skip "$name" "needs a bun test harness (filename not *test*); runner wiring pending"; return;;
+    # Vegetation-scatter gates: their real prerequisite is the ACCEPTED oak asset trio
+    # (source + LOD + Blender-baked impostor), not Blender itself. When the trio exists
+    # they run right here; tree-scatter-integration (host gate below) additionally
+    # exercises them against a freshly baked chain when Blender IS present.
+    p_tree_asset_scatter|p_tree_vegetation_scatter|p_tree_biome_scatter)
+      if [ ! -f assets/oak.glb ] || [ ! -f assets/oak-lod.glb ] || [ ! -f assets/oak-impostor.glb ]; then
+        record_skip "$name" "accepted oak inputs absent (assets/oak{,-lod,-impostor}.glb; bake via tools/asset/tree-scatter-integration.test.mjs)"; return
+      fi;;
   esac
   if [ "$HEADLESS" = 1 ] && [[ "$HEADLESS_TESTS" == *" $name "* ]]; then
     record_skip "$name" "needs GPU/window (headless runner)"; return
   fi
-  out="$(LIMINA_AUDIO=null timeout 240 "$BIN" "$t" 2>&1)"; rc=$?
+
+  # RUNNER DISPATCH: js/test/*.ts that import node: builtins are HOST-flavored authoring
+  # gates (bun/node), which the limina binary's module loader cannot load ("Only file://
+  # URLs are supported" — they exited 1 forever and read as sweep regressions). Run them
+  # under bun; announce the environmental skip when bun is absent.
+  #
+  # KNOWN-RED, PENDING OWNER ADJUDICATION (do NOT re-pin or skip — the failures are
+  # honest): p_architecture_lod_package, p_functional_hall_house_v4_asset,
+  # p_functional_hall_house_v4_quality, p_functional_building_closure(+_gorgon_asset),
+  # p_fb4_multi_room_review_candidate pin an earlier authoring cycle of the hall-house/
+  # FB-4 chain; the tree carries a later, mid-review state (the FB-4 candidate's own
+  # authority records humanDecision=pending). Re-pinning is the asset owner's decision
+  # (CLAUDE.md §7.1); until then these report as the real FAILs they are.
+  if grep -q 'from "node:' "$t"; then
+    if ! command -v bun >/dev/null 2>&1; then
+      record_skip "$name" "host-flavored (node:*) authoring gate and bun is absent"; return
+    fi
+    local cwd="$ROOT"
+    [ "$name" = "p_architecture_staged_partition" ] && cwd="$ROOT/js"  # reads ../assets/**
+    out="$(cd "$cwd" && timeout 240 bun run "$ROOT/$t" 2>&1)"; rc=$?
+  else
+    local -a env_extra=()
+    [[ "$REPO_ROOTED_TESTS" == *" $name "* ]] && env_extra=(LIMINA_ASSET_ROOT="$ROOT")
+    out="$(env LIMINA_AUDIO=null "${env_extra[@]}" timeout 240 "$BIN" "$t" 2>&1)"; rc=$?
+  fi
+
   if [ "$name" = "throw" ]; then
     if [ "$rc" -ne 0 ] \
       && grep -Fq 'Error: intentional failure for source-map check' <<<"$out" \
@@ -67,14 +125,23 @@ run_test() {
     fi
     return
   fi
-  if [ $rc -eq 0 ]; then pass=$((pass+1)); return; fi
-  # Explicit opt-in skip: a test that prints a line starting with __LIMINA_SKIP__ self-declares an
-  # environmental skip. PREFER this over error-text matching — it's auditable and can't be forged by a
-  # regression that merely happens to print a known startup phrase.
-  if reason="$(echo "$out" | grep -m1 '^__LIMINA_SKIP__')"; then
-    record_skip "$name" "self-declared${reason#__LIMINA_SKIP__}"
+  # Explicit opt-in skip: a test that prints a __LIMINA_SKIP__ line self-declares an
+  # environmental skip. The marker alone is NOT enough — the process must also have
+  # terminated cleanly (exit 0; the binary cannot emit 2, node/bun gates may): a crash
+  # AFTER printing the marker is a FAILURE, not a skip. This is auditable (the marker
+  # is grep-able in the test source) and can't be satisfied by a regression's stack.
+  skipline="$(printf '%s\n' "$out" | grep -m1 '__LIMINA_SKIP__' || true)"
+  if [ -n "$skipline" ]; then
+    reason="${skipline#*__LIMINA_SKIP__}"; reason="${reason# }"
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
+      record_skip "$name" "self-declared: ${reason:-no reason given}"
+    else
+      record_failure "$name" "declared __LIMINA_SKIP__ but exited $rc (a crash cannot self-skip):
+$out"
+    fi
     return
   fi
+  if [ "$rc" -eq 0 ]; then pass=$((pass+1)); return; fi
   # Exit code 2 is the reserved "can't run here" signal. Any other non-zero is a real failure.
   if [ "$rc" -eq 2 ]; then
     record_skip "$name" "exit code 2 (environmental)"
@@ -85,7 +152,7 @@ run_test() {
 
 echo "== js/test suite =="
 if [ "$QUICK" = "1" ]; then
-  for t in js/test/p2[0-7]_*.ts; do [ -f "$t" ] && run_test "$t"; done
+  for t in js/test/p2[0-7]_*.ts "${QUICK_DETERMINISM_GLOBS[@]}"; do [ -f "$t" ] && run_test "$t"; done
 else
   for t in js/test/*.ts; do run_test "$t"; done
 fi
@@ -97,88 +164,96 @@ echo "   js/test: $pass passed, $fail failed, $skip skipped"
 hostfail=0
 echo "== host gates =="
 
-# Determinism guard: the skills layer must stay RNG-/wall-clock-free (no Date.now/Math.random/
-# performance.now in js/src/skills/*.ts). Pure lexical scan — always runnable, no display needed.
-if node js/scripts/check-determinism.mjs >/dev/null 2>&1; then echo "   check-determinism: PASS"; else echo "   check-determinism: FAIL"; hostfail=1; fi
+# Uniform host-gate contract: exit 0 = PASS, exit 2 = announced SKIP, anything else =
+# FAIL **with the gate's captured output shown** — a failing gate whose evidence goes
+# to /dev/null cannot be diagnosed and was the "invisible red" failure mode.
+host_gate() { # <label> <skip-note> <cmd...>
+  local label="$1" skipnote="$2"; shift 2
+  local out rc=0
+  out="$("$@" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then echo "   $label: PASS"
+  elif [ "$rc" -eq 2 ]; then echo "   $label: SKIP${skipnote:+ ($skipnote)}"
+  else
+    echo "   $label: FAIL (exit $rc)"
+    printf '%s\n' "$out" | tail -n 25 | sed 's/^/      /'
+    hostfail=1
+  fi
+}
+
+# Determinism guard: the skills layer must stay RNG-/wall-clock-free (recursive scan of
+# js/src/skills/**/*.ts). Pure lexical scan — always runnable, no display needed.
+host_gate "check-determinism" "" node js/scripts/check-determinism.mjs
+# ...and the guard's own falsifiability fixture: planted violations must FAIL it.
+host_gate "check-determinism (falsifiability)" "" node js/scripts/check-determinism-check.mjs
 
 # Nested-invoke chainId guard: a skill handler that builds a registry invoke base from its
 # ctx.* MUST thread `chainId: ctx.chainId`, or the WorldRecorder double-records the nested
 # call (replay would apply it twice). Pure lexical scan — always runnable, no display needed.
-if node js/scripts/check-nested-invoke.mjs >/dev/null 2>&1; then echo "   check-nested-invoke: PASS"; else echo "   check-nested-invoke: FAIL"; hostfail=1; fi
+host_gate "check-nested-invoke" "" node js/scripts/check-nested-invoke.mjs
 
 # Pack-import gate: path safety (rejects traversal/absolute), manifest validation, the three manifest
 # merges, recipe expansion, and an end-to-end aethon-conifers recipe bake. Exit 2 = baker deps absent.
-pic_rc=0; node tools/design/pack-import-check.mjs >/dev/null 2>&1 || pic_rc=$?
-if [ $pic_rc -eq 0 ]; then echo "   pack-import-check: PASS"; elif [ $pic_rc -eq 2 ]; then echo "   pack-import-check: SKIP (baker deps absent)"; else echo "   pack-import-check: FAIL"; hostfail=1; fi
+host_gate "pack-import-check" "baker deps absent" node tools/design/pack-import-check.mjs
 
-if npm --prefix js run check:portability --silent >/dev/null 2>&1; then echo "   check-portability: PASS"; else echo "   check-portability: FAIL"; hostfail=1; fi
-if npm --prefix js run check:live --silent >/dev/null 2>&1; then echo "   check-live-composition: PASS"; else echo "   check-live-composition: FAIL"; hostfail=1; fi
-if npm --prefix js run check:coordinator-demo --silent >/dev/null 2>&1; then echo "   check-coordinator-demo: PASS"; else echo "   check-coordinator-demo: FAIL"; hostfail=1; fi
+host_gate "check-portability" "" npm --prefix js run check:portability --silent
+host_gate "check-live-composition" "" npm --prefix js run check:live --silent
+host_gate "check-coordinator-demo" "" npm --prefix js run check:coordinator-demo --silent
 
 # Node-native TypeScript module gate. This file is .mjs and therefore is not part
 # of the limina-driven js/test/*.ts sweep above.
-if node js/test/p69_tree_source.mjs >/dev/null 2>&1; then echo "   p69-tree-source: PASS"; else echo "   p69-tree-source: FAIL"; hostfail=1; fi
+host_gate "p69-tree-source" "" node js/test/p69_tree_source.mjs
 
 # Grass strategy guard: old TileGrass/grassSoup/renamed micro-tuft implementations may not return
 # in source or any shipped runtime. Mechanical density remains evidence, never a visual verdict.
-if node --test tools/material/grass-strategy-static.test.mjs >/dev/null 2>&1; then echo "   grass-strategy-static: PASS"; else echo "   grass-strategy-static: FAIL"; hostfail=1; fi
+host_gate "grass-strategy-static" "" node --test tools/material/grass-strategy-static.test.mjs
+
+# js/test static suites (node --test): map/axis-convention (cardinal rule #7), design refs,
+# navigation/world-overview artifacts, building material palette, browser wiring statics,
+# and the KTX2 package runtime. Previously orphaned from every runner.
+host_gate "js static suites (node --test)" "" node --test \
+  js/test/browser_camera_framing_static.test.cjs \
+  js/test/browser_derived_transaction_static.test.cjs \
+  js/test/browser_editor_navigation_static.test.cjs \
+  js/test/design_ref.test.mjs \
+  js/test/map_coordinate_frame.test.mjs \
+  js/test/navigation_index_artifact.test.mjs \
+  js/test/p_building_material_palette.test.mjs \
+  js/test/world_overview_artifact.test.mjs
 
 # Static-opaque retopo funnel: real pinned Blender/Cycles CPU build, deterministic duplicate build,
 # fail-closed input boundary, asset-sanity/QC integration, and atomic publication rollback.
 if command -v bun >/dev/null 2>&1 && [ -x "${BLENDER_BIN:-$HOME/blender-5.1.2-linux-x64/blender}" ]; then
-  if ( cd tools && bun run test:retopo >/dev/null 2>&1 ); then echo "   retopo-static: PASS"; else echo "   retopo-static: FAIL"; hostfail=1; fi
+  host_gate "retopo-static" "" bash -c 'cd tools && bun run test:retopo'
 else echo "   retopo-static: SKIP (bun or pinned Blender 5.1.2 absent)"; fi
 
 # A3 force-WebGL proof: compile the bounded TSL POM against the real CC0 pack and compare it to
 # an otherwise-identical control from two camera angles. SwiftShader keeps this CI-safe.
-material_surface_rc=0; node tools/material/material-surface-browser-gate.mjs >/dev/null 2>&1 || material_surface_rc=$?
-if [ $material_surface_rc -eq 0 ]; then echo "   material-surface-forceWebGL: PASS"
-elif [ $material_surface_rc -eq 2 ]; then echo "   material-surface-forceWebGL: SKIP (no Chromium/Playwright)"
-else echo "   material-surface-forceWebGL: FAIL"; hostfail=1; fi
-
-grass_field_browser_rc=0; node tools/material/grass-field-browser-gate.mjs >/dev/null 2>&1 || grass_field_browser_rc=$?
-if [ $grass_field_browser_rc -eq 0 ]; then echo "   grass-field-forceWebGL: PASS"
-elif [ $grass_field_browser_rc -eq 2 ]; then echo "   grass-field-forceWebGL: SKIP (no Chromium/Playwright)"
-else echo "   grass-field-forceWebGL: FAIL"; hostfail=1; fi
+host_gate "material-surface-forceWebGL" "no Chromium/Playwright" node tools/material/material-surface-browser-gate.mjs
+host_gate "grass-field-forceWebGL" "no Chromium/Playwright" node tools/material/grass-field-browser-gate.mjs
 
 # B2 tree proof: the browser gate compiles the pure-TSL foliage/impostor graph through the real
 # forceWebGL backend; the accepted-asset gate CPU-bakes a real oak chain and drives both scatter skills.
-tree_population_browser_rc=0; node tools/material/tree-population-browser-gate.mjs >/dev/null 2>&1 || tree_population_browser_rc=$?
-if [ $tree_population_browser_rc -eq 0 ]; then echo "   tree-population-forceWebGL: PASS"
-elif [ $tree_population_browser_rc -eq 2 ]; then echo "   tree-population-forceWebGL: SKIP (no Chromium/Playwright)"
-else echo "   tree-population-forceWebGL: FAIL"; hostfail=1; fi
-
-biome_surface_browser_rc=0; node tools/material/biome-surface-browser-gate.mjs >/dev/null 2>&1 || biome_surface_browser_rc=$?
-if [ $biome_surface_browser_rc -eq 0 ]; then echo "   biome-surface-forceWebGL: PASS"
-elif [ $biome_surface_browser_rc -eq 2 ]; then echo "   biome-surface-forceWebGL: SKIP (no Chromium/Playwright)"
-else echo "   biome-surface-forceWebGL: FAIL"; hostfail=1; fi
+host_gate "tree-population-forceWebGL" "no Chromium/Playwright" node tools/material/tree-population-browser-gate.mjs
+host_gate "biome-surface-forceWebGL" "no Chromium/Playwright" node tools/material/biome-surface-browser-gate.mjs
 
 # Real generated-river pixel proof: the exact mount/depth-bake/material path must animate, respond
 # to shallow/deep terrain, and stay below the measured repetitive-rib autocorrelation ceiling.
-generated_river_browser_rc=0; node tools/material/generated-river-browser-gate.mjs >/dev/null 2>&1 || generated_river_browser_rc=$?
-if [ $generated_river_browser_rc -eq 0 ]; then echo "   generated-river-forceWebGL: PASS"
-elif [ $generated_river_browser_rc -eq 2 ]; then echo "   generated-river-forceWebGL: SKIP (no Chromium/Playwright)"
-else echo "   generated-river-forceWebGL: FAIL"; hostfail=1; fi
+host_gate "generated-river-forceWebGL" "no Chromium/Playwright" node tools/material/generated-river-browser-gate.mjs
 
-tree_scatter_rc=0; node tools/asset/tree-scatter-integration.test.mjs >/dev/null 2>&1 || tree_scatter_rc=$?
-if [ $tree_scatter_rc -eq 0 ]; then echo "   tree-scatter-integration: PASS"
-elif [ $tree_scatter_rc -eq 2 ]; then echo "   tree-scatter-integration: SKIP (accepted oak inputs or pinned Blender absent)"
-else echo "   tree-scatter-integration: FAIL"; hostfail=1; fi
+host_gate "tree-scatter-integration" "accepted oak inputs or pinned Blender absent" node tools/asset/tree-scatter-integration.test.mjs
 
 # Genuine Zaxy/EventLoom integration. It is external by definition, so its absence
 # is announced; when available, incompatibility or round-trip failure is fatal.
 zaxy_bin="${ZAXY_BIN:-zaxy}"
 if command -v "$zaxy_bin" >/dev/null 2>&1; then
-  if ZAXY_BIN="$zaxy_bin" LIMINA_BIN="$BIN" node js/test/eventloom_bridge_roundtrip.mjs >/dev/null 2>&1; then echo "   eventloom-roundtrip: PASS"
-  else echo "   eventloom-roundtrip: FAIL"; hostfail=1; fi
+  host_gate "eventloom-roundtrip" "" env ZAXY_BIN="$zaxy_bin" LIMINA_BIN="$BIN" node js/test/eventloom_bridge_roundtrip.mjs
 else echo "   eventloom-roundtrip: SKIP (no zaxy; set ZAXY_BIN)"; fi
 
 if command -v bun >/dev/null 2>&1; then
-  if bun run tools/director/check-gds.ts >/dev/null 2>&1; then echo "   check-gds: PASS"; else echo "   check-gds: FAIL"; hostfail=1; fi
+  host_gate "check-gds" "" bun run tools/director/check-gds.ts
 else echo "   check-gds: SKIP (no bun)"; fi
 
-if node tools/director/engine-browser-gate.mjs >/dev/null 2>&1; then echo "   engine-browser-gate: PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   engine-browser-gate: SKIP (no chromium)"; else echo "   engine-browser-gate: FAIL"; hostfail=1; fi; fi
+host_gate "engine-browser-gate" "no chromium" node tools/director/engine-browser-gate.mjs
 
 # Editor gates: the DOM binding is display-independent; live/browser tests run against
 # a real editor host and static editor server. Browser tests self-SKIP with exit 2 when
@@ -191,13 +266,43 @@ else
   echo "   editor bundle: FAIL"
   hostfail=1
 fi
-if [ "$editor_bundle_ok" = 1 ] && node editor/test/history_panel.test.mjs >/dev/null 2>&1; then echo "   editor history panel: PASS"; else echo "   editor history panel: FAIL"; hostfail=1; fi
-if node tools/scaffold-editor-bundle.test.mjs >/dev/null 2>&1; then echo "   scaffold editor lifecycle: PASS"; else echo "   scaffold editor lifecycle: FAIL"; hostfail=1; fi
-if node tools/scaffold-serve.test.mjs >/dev/null 2>&1; then echo "   scaffold Atlas proxy: PASS"; else echo "   scaffold Atlas proxy: FAIL"; hostfail=1; fi
-if node tools/design/editor-launch.test.mjs >/dev/null 2>&1; then echo "   Atlas editor launch config: PASS"; else echo "   Atlas editor launch config: FAIL"; hostfail=1; fi
-if node --test editor/test/atlas_editor_protocol.test.mjs editor/test/atlas_handoff.test.mjs editor/test/atlas_workspace_state.test.mjs editor/test/atlas_bridge_wiring_static.test.mjs >/dev/null 2>&1; then echo "   Atlas editor bridge/workspace: PASS"; else echo "   Atlas editor bridge/workspace: FAIL"; hostfail=1; fi
-if node editor/test/app_event_retention.test.mjs >/dev/null 2>&1; then echo "   editor event retention: PASS"; else echo "   editor event retention: FAIL"; hostfail=1; fi
-if node editor/test/artifacts.test.cjs >/dev/null 2>&1; then echo "   editor artifacts: PASS"; else echo "   editor artifacts: FAIL"; hostfail=1; fi
+if [ "$editor_bundle_ok" = 1 ]; then
+  host_gate "editor history panel" "" node editor/test/history_panel.test.mjs
+  # Needs the freshly built editor/vendor + web/public basis runtimes, so it runs
+  # after the bundle step (it was orphaned from every runner before this).
+  host_gate "ktx2 package runtime" "" node --test js/test/p_ktx2_package_runtime.mjs
+else
+  echo "   editor history panel: FAIL (editor bundle missing)"; hostfail=1
+fi
+host_gate "scaffold editor lifecycle" "" node tools/scaffold-editor-bundle.test.mjs
+host_gate "scaffold Atlas proxy" "" node tools/scaffold-serve.test.mjs
+host_gate "Atlas editor launch config" "" node tools/design/editor-launch.test.mjs
+host_gate "Atlas editor bridge/workspace" "" node --test \
+  editor/test/atlas_editor_protocol.test.mjs \
+  editor/test/atlas_handoff.test.mjs \
+  editor/test/atlas_workspace_state.test.mjs \
+  editor/test/atlas_bridge_wiring_static.test.mjs
+host_gate "editor event retention" "" node editor/test/app_event_retention.test.mjs
+host_gate "editor artifacts" "" node editor/test/artifacts.test.cjs
+
+# Editor static/unit suites (previously orphaned from every runner): pure node, no
+# chromium — panel state, gateways, navigation state machines, source-wiring statics.
+host_gate "editor static suites (node --test)" "" node --test \
+  editor/test/authoring_gateway.test.mjs \
+  editor/test/content_browser.test.mjs \
+  editor/test/derived_runtime_client.test.mjs \
+  editor/test/graphics_settings.test.mjs \
+  editor/test/navigation_destination.test.mjs \
+  editor/test/navigation_state.test.mjs \
+  editor/test/navigation_ui_static.test.mjs \
+  editor/test/outliner.test.mjs \
+  editor/test/viewport_derived_wiring_static.test.cjs \
+  editor/test/viewport_navigation_wiring_static.test.cjs \
+  editor/test/derived_population_activation_static.test.cjs
+for eu in authoring_editor_wiring.test.mjs orbit_controls_static.test.cjs outliner_view.test.mjs play_lifecycle.test.mjs scene_graph.test.mjs; do
+  host_gate "editor $(basename "$eu" | sed 's/\.test\..*$//')" "" node "editor/test/$eu"
+done
+
 editor_host_log="$(mktemp)"
 editor_static_log="$(mktemp)"
 editor_host_pid=""
@@ -237,102 +342,110 @@ if [ -z "$editor_token" ]; then
   sed 's/^/      /' "$editor_host_log" | tail -n 12
   hostfail=1
 else
-  if EDITOR_AUTH_TOKEN="$editor_token" EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
-    node editor/test/history_live.test.mjs >/dev/null 2>&1; then echo "   editor history live: PASS"
-  else rc=$?; if [ $rc -eq 2 ]; then echo "   editor history live: SKIP"; else echo "   editor history live: FAIL"; hostfail=1; fi; fi
+  host_gate "editor history live" "self-declared exit 2" \
+    env EDITOR_AUTH_TOKEN="$editor_token" EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
+    node editor/test/history_live.test.mjs
+  # Browser suites against the live host + static server. All self-SKIP with exit 2 via
+  # editor/test/browser-env.cjs when chromium is absent. The list now carries every
+  # editor/test/*_browser.test.cjs (33 were orphaned from all runners before this).
   for et in \
     editor/test/fidelity_frame.test.cjs \
     editor/test/viewport_render.test.cjs \
     editor/test/archetype_render.test.cjs \
     editor/test/visual_refine.test.cjs \
-    editor/test/history_browser.test.cjs
+    editor/test/history_browser.test.cjs \
+    editor/test/atlas_bridge_browser.test.cjs \
+    editor/test/atlas_standalone_handoff_browser.test.cjs \
+    editor/test/atlas_water_authoring_browser.test.cjs \
+    editor/test/camera_navigation_browser.test.cjs \
+    editor/test/content_browser_browser.test.cjs \
+    editor/test/generated_water_workflow_browser.test.cjs \
+    editor/test/graphics_ui_browser.test.cjs \
+    editor/test/graphics_workflow_browser.test.cjs \
+    editor/test/navigation_ui_browser.test.cjs \
+    editor/test/outliner_browser.test.cjs \
+    editor/test/play_ui_browser.test.cjs \
+    editor/test/play_workflow_browser.test.cjs \
+    editor/test/project_navigation_browser.test.cjs \
+    editor/test/render_lifecycle_browser.test.cjs \
+    editor/test/run_live_teardown_browser.test.cjs \
+    editor/test/underwater_render_browser.test.cjs \
+    editor/test/water_render_browser.test.cjs
   do
     ename="$(basename "$et" .test.cjs)"
-    if EDITOR_AUTH_TOKEN="$editor_token" EDITOR_BASE_URL="http://localhost:$editor_static_port" \
-      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" node "$et" >/dev/null 2>&1; then echo "   editor $ename: PASS"
-    else rc=$?; if [ $rc -eq 2 ]; then echo "   editor $ename: SKIP"; else echo "   editor $ename: FAIL"; hostfail=1; fi; fi
+    host_gate "editor $ename" "no chromium (self-declared exit 2)" \
+      env EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
+      EDITOR_BASE_URL="http://localhost:$editor_static_port" \
+      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" node "$et"
   done
 fi
 cleanup_editor_gates
 trap - EXIT
 
 if [ -n "${LLMFF_BIN:-}" ] || command -v llmff >/dev/null 2>&1; then
-  if node tools/director/check-slice-builder.mjs >/dev/null 2>&1; then echo "   check-slice-builder: PASS"
-  else rc=$?; if [ $rc -eq 2 ]; then echo "   check-slice-builder: SKIP"; else echo "   check-slice-builder: FAIL"; hostfail=1; fi; fi
+  host_gate "check-slice-builder" "" node tools/director/check-slice-builder.mjs
 else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 
 # Design-quality gate (gamestack procgen-review, executed): the silhouette gate's own falsifiability —
-# distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium.
+# distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium;
+# gates/design/check.mjs exits 2 (announced) when they are absent.
 if [ "$HEADLESS" = 1 ]; then echo "   design-gate (silhouette): SKIP (headless: needs GPU/chromium)"
-elif node gates/design/check.mjs >/dev/null 2>&1; then echo "   design-gate (silhouette): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (silhouette): SKIP (no chromium)"; else echo "   design-gate (silhouette): FAIL"; hostfail=1; fi; fi
+else host_gate "design-gate (silhouette)" "no chromium" node gates/design/check.mjs; fi
 # Style-conformance gate (design direction): a build whose materials stay inside the Design Direction's
 # declared palette + surface envelope PASSES; an off-brief build (off-palette color / off-envelope
 # roughness) HARD-FAILS. Pure color/param geometry — no GPU/chromium, so it runs even headless.
-if node gates/design/style-conformance-check.mjs >/dev/null 2>&1; then echo "   design-gate (style conformance): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (style conformance): SKIP"; else echo "   design-gate (style conformance): FAIL"; hostfail=1; fi; fi
+host_gate "design-gate (style conformance)" "" node gates/design/style-conformance-check.mjs
 # Map Studio gate: MapDoc v2 migration round-trip + undo-command inversion property + the v2->
 # WorldMap compile bridge, each with a falsifiability self-check. Pure Node — runs even headless.
-if node gates/design/mapstudio-gate.mjs >/dev/null 2>&1; then echo "   design-gate (map studio): PASS"
-else echo "   design-gate (map studio): FAIL"; hostfail=1; fi
-# GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS).
+host_gate "design-gate (map studio)" "" node gates/design/mapstudio-gate.mjs
+# GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS,
+# and a GDS resolving ZERO assets FAILS — no vacuous green). Exit 2 = no chromium.
 if [ "$HEADLESS" = 1 ]; then echo "   design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
-elif node gates/design/gds-gate-check.mjs >/dev/null 2>&1; then echo "   design-gate (gds tiers): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   design-gate (gds tiers): SKIP (no chromium)"; else echo "   design-gate (gds tiers): FAIL"; hostfail=1; fi; fi
+else host_gate "design-gate (gds tiers)" "no chromium" node gates/design/gds-gate-check.mjs; fi
 # Packager: a direct-path game is rejected; a record+export world packs into a self-contained release
 # that RENDERS non-blank in the real engine.
-if node packager/check.mjs >/dev/null 2>&1; then echo "   packager: PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   packager: SKIP (no chromium/demo world)"; else echo "   packager: FAIL"; hostfail=1; fi; fi
+host_gate "packager" "no chromium/demo world" node packager/check.mjs
 
 # Compile & Run (World Designer): a GDS `world` slice compiles → packages → RENDERS non-blank in the
 # real engine (compileWorldToExport → packRelease → engine-browser-gate).
-if node tools/director/check-compile-run.mjs >/dev/null 2>&1; then echo "   check-compile-run: PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   check-compile-run: SKIP (no chromium)"; else echo "   check-compile-run: FAIL"; hostfail=1; fi; fi
+host_gate "check-compile-run" "no chromium" node tools/director/check-compile-run.mjs
 
 # Playable-build smoke: the pipeline gates the thing you actually PLAY (the native window build loads
 # its full graph + game + shared dressed field), not just the headless sim. Display-independent.
 if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon window): SKIP (headless: needs GPU)"
-elif node games/beacon-quest/smoke-playable.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon window): PASS"
-else echo "   playable-smoke (beacon window): FAIL"; hostfail=1; fi
+else host_gate "playable-smoke (beacon window)" "" node games/beacon-quest/smoke-playable.mjs; fi
 
 # Beacon Quest playable-render smoke: the "Light the Eastern Beacon" capstone on the MAP-PAINTER
 # world renders clean (painted terrain source + rigged models + HUD, N frames, zero errors). The
 # render sibling of js/test/p14_beacon_quest.ts (which proves the SIM + replay). Exit 2 = no GPU.
 if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon quest): SKIP (headless: needs GPU)"
-else
-  if node games/beacon-quest/smoke-quest.mjs >/dev/null 2>&1; then echo "   playable-smoke (beacon quest): PASS"
-  else rc=$?; if [ $rc -eq 2 ]; then echo "   playable-smoke (beacon quest): SKIP (no GPU surface)"; else echo "   playable-smoke (beacon quest): FAIL"; hostfail=1; fi; fi
-fi
+else host_gate "playable-smoke (beacon quest)" "no GPU surface" node games/beacon-quest/smoke-quest.mjs; fi
 
 # Beacon Quest headless determinism gate, PROJECT-LOCAL: the game is a self-contained project whose
 # assets live under games/beacon-quest/assets/. Run FROM the project dir so op_read_asset roots there
 # (the js/test sweep no longer picks this up — it moved out of js/test into the project's gates/).
-if ( cd games/beacon-quest && LIMINA_AUDIO=null "../../$BIN" gates/p14_beacon_quest.ts ) >/dev/null 2>&1; then echo "   beacon-quest gate (project-local): PASS"
-else echo "   beacon-quest gate (project-local): FAIL"; hostfail=1; fi
+host_gate "beacon-quest gate (project-local)" "" \
+  bash -c "cd games/beacon-quest && LIMINA_AUDIO=null '../../$BIN' gates/p14_beacon_quest.ts"
 
 # Asset-repository X0 gate (Phase 13 / Track 4): a QC-passed asset publishes to a content-addressed
 # store + resolves back byte-identical with its CatalogEntry intact (engine-scheme parity), and a
 # tampered object / malformed entry is rejected. Headless + fast, host-side (marketplace ≠ engine dep).
-if node gates/exchange/x0-roundtrip-check.mjs >/dev/null 2>&1; then echo "   x0-roundtrip (asset repository): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   x0-roundtrip (asset repository): SKIP (sample asset missing)"; else echo "   x0-roundtrip (asset repository): FAIL"; hostfail=1; fi; fi
+host_gate "x0-roundtrip (asset repository)" "sample asset missing" node gates/exchange/x0-roundtrip-check.mjs
 
 # On-ramp scaffold gate: create-limina-app produces a complete, BOOTABLE project — real file tree +
 # prebuilt sample world + a classic-script-safe (import.meta-free) player exposing window.LiminaPlayer.
 # Headless + fast (no GPU), catches the DOA-sample regression. Runs in CI.
-if node tools/create-limina-app/scaffold-gate.mjs >/dev/null 2>&1; then echo "   scaffold-gate (create-limina-app): PASS"
-else echo "   scaffold-gate (create-limina-app): FAIL"; hostfail=1; fi
+host_gate "scaffold-gate (create-limina-app)" "" node tools/create-limina-app/scaffold-gate.mjs
 
 # Beacon Quest W5 export gate: the painted-world Mode-A export (the /examples deliverable) is real +
 # replay-complete — peek scene replayed, stamped buildings placed, keyframes + asset bundle written,
 # package files parse. HEADLESS (the export needs no GPU), so it runs in CI where the dogfood SKIPs.
-if node games/beacon-quest/export-gate.mjs >/dev/null 2>&1; then echo "   export-gate (beacon painted world): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   export-gate (beacon painted world): SKIP (no engine binary)"; else echo "   export-gate (beacon painted world): FAIL"; hostfail=1; fi; fi
+host_gate "export-gate (beacon painted world)" "no engine binary" node games/beacon-quest/export-gate.mjs
 
 # DOGFOOD (the integration capstone): one real game (Beacon Run) through EVERY stage —
 # functional gate → design gate → export → package → render-verified release. Heavy (renders +
 # replays), so it's last and SKIPs without chromium/GPU. This is the end-to-end "the machine works" gate.
-if node games/beacon-quest/dogfood.mjs >/dev/null 2>&1; then echo "   dogfood (beacon end-to-end): PASS"
-else rc=$?; if [ $rc -eq 2 ]; then echo "   dogfood (beacon end-to-end): SKIP (no chromium/GPU)"; else echo "   dogfood (beacon end-to-end): FAIL"; hostfail=1; fi; fi
+host_gate "dogfood (beacon end-to-end)" "no chromium/GPU" node games/beacon-quest/dogfood.mjs
 
 echo "== summary =="
 echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"

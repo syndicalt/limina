@@ -1,3 +1,9 @@
+// LIMITATION (known, accepted): this is a SOURCE-TEXT wiring test — it asserts exact
+// code fragments in the module's source instead of executing it (execution needs a
+// real DOM/WebGPU browser realm; the behavioral twins are the *_browser.test.cjs
+// suites, which need chromium). It can FAIL on a harmless rename and stay GREEN
+// through a logic inversion the grepped fragments survive. A green here is a wiring
+// check, never a behavioral verdict.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -72,7 +78,7 @@ test("population activation fetches a bounded closure subset and cannot fall bac
     "derived package registry has no closure-authorized asset",
     "AssetRegistry.fromBundle(",
     "input.gltfCache.prewarmActiveWorld(",
-    "visualPackages.register(DENSE_TEMPERATE_GROUNDCOVER_PACKAGE)",
+    "visualPackages.register(INTERACTIVE_TEMPERATE_MEADOW_PACKAGE)",
     "visualPackages.register(RIPARIAN_REED_GRASS_PACKAGE)",
     "BiomePopulationMount.create(",
   ], "population content activation");

@@ -92,5 +92,5 @@ test("the locked temperate descriptor selects the independent-blade continuous-m
   const descriptor = JSON.parse(await readFile(resolve(repo, "assets/population/temperate-forest-grass.json"), "utf8"));
   assert.equal(descriptor.backend, "continuous-grass-field");
   assert.equal(descriptor.visualPackageId, "limina.grass.interactive-temperate-meadow");
-  assert.equal(descriptor.visualPackageVersion, "3.0.1");
+  assert.equal(descriptor.visualPackageVersion, "4.0.1");
 });

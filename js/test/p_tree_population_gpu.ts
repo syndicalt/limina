@@ -11,9 +11,26 @@ interface Adapter { requestDevice(): Promise<unknown> }
 declare const navigator: { gpu: { requestAdapter(): Promise<Adapter | null> } };
 declare const Deno: { core: { ops: SurfaceOps } };
 
+// PREREQUISITES are environmental, not failures: this smoke needs a real WebGPU adapter
+// AND a native window surface (`--window --frames 8`). In the headless swept glob both
+// can be legitimately absent — announce the skip and exit clean. With the surface in
+// hand, every downstream error is a real FAIL.
 const surfaceOps = Deno.core.ops, gpu = await navigator.gpu.requestAdapter();
-if (gpu === null) throw new Error("p_tree_population_gpu FAIL: no WebGPU adapter");
-const device = await gpu.requestDevice(), context = surfaceOps.op_create_window_context();
+let windowContext: unknown;
+if (gpu === null) {
+  surfaceOps.op_log("__LIMINA_SKIP__ p_tree_population_gpu: no WebGPU adapter (GPU-less runner)");
+} else {
+  try {
+    windowContext = surfaceOps.op_create_window_context();
+  } catch (error) {
+    if (!String(error).includes("no WindowTarget")) throw error;
+    surfaceOps.op_log("__LIMINA_SKIP__ p_tree_population_gpu: no window surface (headless run — needs --window --frames 8)");
+  }
+}
+if (gpu !== null && windowContext !== undefined) await runSmoke(gpu, windowContext);
+
+async function runSmoke(adapterHandle: Adapter, context: unknown): Promise<void> {
+const device = await adapterHandle.requestDevice();
 const canvas = { width: 640, height: 480, style: {} };
 const renderer = new THREE.WebGPURenderer({ device, context, canvas, antialias: false });
 await renderer.init(); renderer.setSize(canvas.width, canvas.height, false);
@@ -59,3 +76,4 @@ surfaceOps.op_set_frame_callback(() => {
     surfaceOps.op_log(`p_tree_population_gpu OK: native WebGPU compiled pure-TSL foliage/impostor and rendered ${capacity} trees through five population-constant instanced draws`);
   }
 });
+}

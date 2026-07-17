@@ -5,6 +5,26 @@
 // Run: node gates/design/gds-gate-check.mjs  (exit 0 = real + falsifiable · 1 = broken · 2 = no browser)
 
 import { runGdsDesignGate } from "./gds-gate.mjs";
+import { browserAvailable } from "./silhouette-gate.mjs";
+
+// FALSIFIABILITY of the zero-resolution guard, FIRST and browser-free: a GDS whose
+// content resolves NOTHING must FAIL — pass:true/score:1 here was the vacuous-green
+// bug this check exists to keep dead. Runs even where the render checks below skip.
+{
+  const vacuous = await runGdsDesignGate({ content: [{ id: "unsourced", kind: "environment" }] });
+  if (vacuous.pass || vacuous.score !== 0) {
+    console.error("FAIL: a GDS with zero resolved assets must not pass the design gate.");
+    process.exit(1);
+  }
+}
+
+// Exit-code contract: browser ABSENCE is an environmental skip (exit 2, announced),
+// never a FAIL — an uncaught renderMasks throw used to exit 1 here, turning every
+// chromium-less runner red.
+if (!browserAvailable()) {
+  console.error("check-gds-design-gate SKIP: no chromium/playwright-core (set CHROME_BIN / PWC_PATH)");
+  process.exit(2);
+}
 
 // A well-made game: each tier holds perceptually distinct assets.
 const GOOD = { content: [

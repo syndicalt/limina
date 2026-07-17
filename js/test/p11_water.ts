@@ -278,8 +278,10 @@ assert(firstMapRiver.userData.waterwayClass === "river" && firstMapRiver.userDat
   "world.addMapRivers dropped authored class/order");
 const firstRiverPosition = firstMapRiver.geometry.getAttribute("position") as THREE.BufferAttribute;
 // The first cross-row spans bank to bank; the ribbon is cross-tessellated, so the far bank sits
-// `across` vertices in, not at index 1.
-const firstRowAcross = (firstMapRiver.geometry.userData.liminaRiverTessellation as { across: number }).across;
+// `across` vertices in, not at index 1 (per-segment tessellation lives in segments[]).
+const firstRowAcross = (firstMapRiver.geometry.userData.liminaRiverTessellation as {
+  segments: ReadonlyArray<{ across: number }>;
+}).segments[0].across;
 assert(Math.abs(Math.hypot(firstRiverPosition.getX(0) - firstRiverPosition.getX(firstRowAcross), firstRiverPosition.getZ(0) - firstRiverPosition.getZ(firstRowAcross)) - 3) < 1e-5,
   "world.addMapRivers dropped/scaled the first authored per-point width incorrectly");
 const duplicateMapRivers = await mapRegistry.invoke("world.addMapRivers", { mapAssetId, widthScale: 1.5 }, mapAuthor);

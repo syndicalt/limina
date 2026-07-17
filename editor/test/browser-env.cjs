@@ -7,7 +7,18 @@ function skip(reason) {
 }
 
 function chromeExecutable() {
-  return process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+  if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
+  // Resolve the NEWEST installed playwright chromium — a pinned chromium-NNNN path
+  // rots every time playwright updates its browser revision.
+  const base = path.join(process.env.HOME || "", ".cache", "ms-playwright");
+  if (fs.existsSync(base)) {
+    const revisions = fs.readdirSync(base).filter((d) => d.startsWith("chromium-")).sort().reverse();
+    for (const rev of revisions) {
+      const candidate = path.join(base, rev, "chrome-linux64", "chrome");
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return path.join(base, "chromium-none", "chrome-linux64", "chrome");
 }
 
 function loadChromium() {

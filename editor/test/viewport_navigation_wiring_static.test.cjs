@@ -1,3 +1,9 @@
+// LIMITATION (known, accepted): this is a SOURCE-TEXT wiring test — it asserts exact
+// code fragments in the module's source instead of executing it (execution needs a
+// real DOM/WebGPU browser realm; the behavioral twins are the *_browser.test.cjs
+// suites, which need chromium). It can FAIL on a harmless rename and stay GREEN
+// through a logic inversion the grepped fragments survive. A green here is a wiring
+// check, never a behavioral verdict.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -63,5 +69,5 @@ test("bookmarks and recents render through textContent and never HTML injection"
 test("closing a navigation panel cannot fall through into catalog Escape handling", () => {
   assert.match(source, /const gotoOpen = viewportUi\.navigationGoto\?\.hidden === false;/);
   assert.match(source, /event\.stopImmediatePropagation\(\);\s*closeNavigationPanels\(\);/);
-  assert.match(source, /gotoOpen \? viewportUi\.navigationGotoToggle : viewportUi\.navigationViewsToggle/);
+  assert.match(source, /gotoOpen \? viewportUi\.navigationGotoToggle : searchOpen \? viewportUi\.navigationSearchToggle : viewportUi\.navigationViewsToggle/);
 });

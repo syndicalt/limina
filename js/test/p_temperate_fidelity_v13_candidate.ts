@@ -10,7 +10,16 @@ function assert(value: unknown, message: string): asserts value {
 }
 
 const root = new URL("../../", import.meta.url);
-const review = JSON.parse(readFileSync(new URL("art-direction/temperate-fidelity-v13-candidate-review.json", root), "utf8"));
+const reviewBytes = readFileSync(new URL("art-direction/temperate-fidelity-v13-candidate-review.json", root));
+const review = JSON.parse(reviewBytes.toString("utf8"));
+
+// The review record is a FROZEN owner decision. Without this byte pin the prose
+// assertions below are self-consistency (regenerating the JSON forges the verdict).
+// Re-pin ONLY alongside an explicit owner re-decision, in the same commit.
+if (createHash("sha256").update(reviewBytes).digest("hex")
+  !== "be5523e86fbd0ba184b70e1cd505c25ac709370341984dba1a085492e4baeae1") {
+  throw new Error("p_temperate_fidelity_v13_candidate FAIL: review record bytes drifted from the pinned owner decision");
+}
 const artifact = readFileSync(new URL(`assets/${review.artifact.assetId}`, root));
 const digest = createHash("sha256").update(artifact).digest("hex");
 assert(review.schema === "limina.visual-fidelity-candidate-review/v1", "candidate review schema drifted");

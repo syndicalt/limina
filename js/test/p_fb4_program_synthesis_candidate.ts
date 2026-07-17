@@ -12,7 +12,15 @@ const hash = (bytes: Uint8Array) => `sha256:${crypto.createHash("sha256").update
 const read = (path: string) => fs.readFileSync(path);
 const glbJson = (bytes: Buffer) => JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString("utf8"));
 
-const manifest = JSON.parse(read(`${root}/candidate-manifest.json`).toString("utf8"));
+const manifestBytes = read(`${root}/candidate-manifest.json`);
+const manifest = JSON.parse(manifestBytes.toString("utf8"));
+// Byte pins: manifest + synthesis evidence are FROZEN records; the status/binding
+// assertions below would otherwise be self-consistency (regenerating the JSON forges
+// the verdict). Re-pin ONLY with an explicit owner re-decision, in the same commit.
+assert(hash(manifestBytes) === "sha256:1eeccda410009e68be17dbada80a5c5568caf8f44f7bee3fbe095676a50322ad",
+  "candidate manifest bytes drifted from the pinned record");
+assert(hash(read(`${root}/synthesis-evidence.json`)) === "sha256:0b4f60bad5b2362136a3580a71e9f1b1085a02ca08914eb7b7200828c32fbd4e",
+  "synthesis evidence bytes drifted from the pinned record");
 assert(manifest.status === "cpu-verified-human-pending" && manifest.visualApprovalClaimed === false && manifest.gpuCaptureRun === false,
   "candidate escaped the CPU-only human-pending boundary");
 for (const record of manifest.files) {

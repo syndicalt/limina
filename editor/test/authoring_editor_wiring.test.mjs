@@ -1,3 +1,9 @@
+// LIMITATION (known, accepted): this is a SOURCE-TEXT wiring test — it asserts exact
+// code fragments in the module's source instead of executing it (execution needs a
+// real DOM/WebGPU browser realm; the behavioral twins are the *_browser.test.cjs
+// suites, which need chromium). It can FAIL on a harmless rename and stay GREEN
+// through a logic inversion the grepped fragments survive. A green here is a wiring
+// check, never a behavioral verdict.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

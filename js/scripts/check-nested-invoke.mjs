@@ -12,7 +12,9 @@
 // This scans every js/src/**/*.ts source and FAILS (exit 1) if it finds an object
 // literal that:
 //   1. is passed as the trailing argument to a `.invoke(` call, OR assigned to an
-//      `InvokeBase`-typed / `*base`-named binding; AND
+//      `InvokeBase`-typed / `*base`-named binding, OR produced by a base FACTORY
+//      (an arrow returning a parenthesized object literal, or a `return {...}`)
+//      -- the fresh-identity helper shape, e.g. village.ts's `nestedCtx()`; AND
 //   2. references `ctx.` (so it can ONLY exist where a handler's `ctx` is in scope
 //      -- top-level/demo bases never reference `ctx`, which is what keeps this
 //      precise); AND
@@ -145,6 +147,18 @@ function missingChainId(litText) {
 }
 
 const RE_INVOKE = /\.invoke\s*\(/g;
+const RE_FACTORY = /=>\s*\(\s*\{|\breturn\s*\{/g;
+
+/** Stricter predicate for Anchor C (factories): arbitrary returned objects may
+ *  incidentally mention ctx identity (policy decisions, inspector snapshots), so a
+ *  factory only counts as an invoke BASE when it has the load-bearing base shape --
+ *  `world: ctx.world` (a base is unusable without the live WorldContext) AND a ctx
+ *  identity self-assignment (`agentId: ctx.agentId` / `sessionId: ctx.sessionId`). */
+function factoryMissingChainId(litText) {
+  if (!/\bworld\s*:\s*ctx\s*\.\s*world\b/.test(litText)) return false;
+  if (!/\b(agentId|sessionId)\s*:\s*ctx\s*\.\s*\1\b/.test(litText)) return false;
+  return !/\bchainId\b/.test(litText);
+}
 const RE_BASEDECL =
   /(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*:\s*[\w$.]*InvokeBase\b[^=]*=\s*\{|(?:const|let|var)\s+[A-Za-z_$]\w*[Bb]ase\b\s*(?::[^=]+)?=\s*\{/g;
 
@@ -178,6 +192,18 @@ for (const file of files) {
     const braceClose = matchBrace(code, braceOpen);
     const lit = code.slice(braceOpen, braceClose === -1 ? code.length : braceClose + 1);
     if (missingChainId(lit)) sites.add(`:${lineOf(code, braceOpen)}: InvokeBase/base binding built from ctx.* without chainId`);
+  }
+
+  // Anchor C: base FACTORIES -- fresh-identity object literals produced by an arrow
+  // body `=> ({...})` or a `return {...}`. Catches the helper shape where the base is
+  // built in a function and passed as `.invoke(name, input, helper())`, which anchors
+  // A/B never see (the trailing invoke arg is a CALL, not a literal). The stricter
+  // factoryMissingChainId predicate keeps unrelated returned objects out.
+  for (const m of code.matchAll(RE_FACTORY)) {
+    const braceOpen = m.index + m[0].length - 1;
+    const braceClose = matchBrace(code, braceOpen);
+    const lit = code.slice(braceOpen, braceClose === -1 ? code.length : braceClose + 1);
+    if (factoryMissingChainId(lit)) sites.add(`:${lineOf(code, braceOpen)}: base-factory object built from ctx.* without chainId`);
   }
 
   for (const s of sites) {

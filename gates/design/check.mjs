@@ -4,7 +4,15 @@
 //
 // Run: node gates/design/check.mjs   (exit 0 = real + falsifiable · 1 = broken/rubber-stamp · 2 = no browser)
 
-import { runSilhouetteGate } from "./silhouette-gate.mjs";
+import { browserAvailable, runSilhouetteGate } from "./silhouette-gate.mjs";
+
+// Exit-code contract: browser ABSENCE is an environmental skip (exit 2, announced),
+// never a FAIL — an uncaught renderMasks throw used to exit 1 here, turning every
+// chromium-less runner red.
+if (!browserAvailable()) {
+  console.error("check-silhouette-gate SKIP: no chromium/playwright-core (set CHROME_BIN / PWC_PATH)");
+  process.exit(2);
+}
 
 const DISTINCT = ["pine.glb", "vegetation-dead-tree-1.glb", "building-wooden-watchtower-1.glb", "rock.glb", "prop-barrel-1.glb", "prop-water-well-1.glb", "broadleaf.glb", "bush.glb", "cottage.glb"].map((a) => ({ label: a, asset: a }));
 const OATMEAL = ["pine.glb", "pine.glb", "pine.glb", "pine.glb", "pine.glb", "rock.glb", "rock.glb", "bush.glb"].map((a, i) => ({ label: `${a}#${i}`, asset: a }));

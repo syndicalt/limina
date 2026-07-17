@@ -9,7 +9,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join, resolve, extname, dirname } from "node:path";
+import { join, resolve, extname, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
@@ -25,6 +25,12 @@ export const THRESHOLDS = { clone: 0.95, distinct: 0.9, oatmealRatio: 0.5, softR
 function resolvePwc() { if (process.env.PWC_PATH) return process.env.PWC_PATH; try { return require.resolve("playwright-core"); } catch { /**/ } const npx = join(process.env.HOME || "", ".npm", "_npx"); if (existsSync(npx)) for (const d of readdirSync(npx)) { const p = join(npx, d, "node_modules", "playwright-core"); if (existsSync(p)) return p; } return null; }
 function resolveChrome() { if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN; const base = join(process.env.HOME || "", ".cache", "ms-playwright"); if (existsSync(base)) for (const d of readdirSync(base).filter((x) => x.startsWith("chromium-")).sort().reverse()) { const p = join(base, d, "chrome-linux64", "chrome"); if (existsSync(p)) return p; } return null; }
 
+/** Preflight for callers honoring the exit-code contract: chromium + playwright-core
+ *  present? Check scripts use this to turn browser ABSENCE into an announced exit-2
+ *  environmental skip instead of an uncaught renderMasks throw (which exits 1 — a FAIL
+ *  where a SKIP was intended). */
+export function browserAvailable() { return Boolean(resolvePwc() && resolveChrome()); }
+
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".glb": "model/gltf-binary", ".json": "application/json", ".css": "text/css", ".wasm": "application/wasm" };
 
 /** Render each entry's asset to a 512² binary silhouette mask via the spike harness. Returns
@@ -39,8 +45,11 @@ export async function renderMasks(entries, opts = {}) {
   const server = createServer((req, res) => {
     let p = decodeURIComponent((req.url || "/").split("?")[0]);
     if (p === "/") p = "/index.html";
-    const f = join(REPO_ROOT, p);
-    if (!f.startsWith(REPO_ROOT) || !existsSync(f)) { res.writeHead(404); res.end(); return; }
+    const f = resolve(REPO_ROOT, "." + p);
+    // path.relative containment — a bare startsWith(REPO_ROOT) is defeated by sibling
+    // dirs sharing the basename prefix.
+    const rel = relative(REPO_ROOT, f);
+    if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(f)) { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { "content-type": MIME[extname(f)] || "application/octet-stream" });
     res.end(readFileSync(f));
   });

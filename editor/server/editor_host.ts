@@ -35,7 +35,6 @@ import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
 import { registerAssetCatalogSkills } from "../../js/src/skills/asset-catalog.ts";
 import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
 import { derivedRuntimeDiscovery, registerDerivedRuntimeDiscoverySkill } from "../../js/src/skills/derived-runtime-discovery.ts";
-import { resolveProfile } from "../../js/src/skills/permissions.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
 import type { ProviderMap } from "../../js/src/agents/systems.ts";
@@ -56,7 +55,25 @@ const DERIVED_RUNTIME_DISCOVERY = derivedRuntimeDiscovery({
 const WORLDLOG_NAME = ops.op_read_env("LIMINA_EDITOR_WORLDLOG") || "editor_host_worldlog.jsonl";
 const TRACE_NAME = ops.op_read_env("LIMINA_EDITOR_TRACE") || "editor_host_trace.jsonl";
 const CHAT_NAME = ops.op_read_env("LIMINA_EDITOR_CHAT") || "editor_host_chat.jsonl";
-const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN") || ops.op_sha256(`editor:${Date.now()}:${Math.random()}`).slice(0, 32);
+// Auth token: LIMINA_EDITOR_TOKEN wins. Otherwise use the host CSPRNG when exposed.
+// This deno_core host exposes no `crypto` global today, so the fallback hashes 64 draws
+// of the NATIVE Math.random (captured before any world can install the seeded
+// deterministic RNG over it — a seeded Math.random would make the token reproducible
+// from the world seed) through op_sha256. V8 seeds Math.random from OS entropy, but it
+// is not CSPRNG-grade; the real fix is a getrandom-backed host op (what --mcp-ws's
+// generate_ws_auth_token does in Rust).
+function generateEditorAuthToken(): string {
+  const hostCrypto = (globalThis as { crypto?: { getRandomValues?<T extends Uint8Array>(array: T): T } }).crypto;
+  if (hostCrypto?.getRandomValues) {
+    const bytes = hostCrypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  const nativeRandom = Math.random;
+  const samples: number[] = [];
+  for (let i = 0; i < 64; i++) samples.push(nativeRandom());
+  return ops.op_sha256(`editor:${Date.now()}:${samples.join(":")}`).slice(0, 32);
+}
+const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN") || generateEditorAuthToken();
 const EDITOR_ALLOWED_PROFILES = new Set([
   "reviewer",
   "system.readonly",

@@ -18,11 +18,15 @@ export function gdsTiers(gds) {
   return [...byTier.entries()].map(([tier, entries]) => ({ tier, entries }));
 }
 
-/** Render + score each tier (>=2 resolved assets) and aggregate. PASS iff every tier passes. */
+/** Render + score each tier (>=2 resolved assets) and aggregate. PASS iff every tier passes.
+ *  Zero comparable tiers is a FAIL, not a pass: a gate that verified nothing must not
+ *  report pass:true/score:1 (that vacuous green shipped once — a GDS whose assets all
+ *  failed to resolve sailed through). Unsourced content is a content problem, not an
+ *  environment problem, so this is exit-1 territory for callers, never a skip. */
 export async function runGdsDesignGate(gds, opts = {}) {
   const tiers = gdsTiers(gds).filter((t) => t.entries.length >= 2);
   if (!tiers.length) {
-    return { pass: true, score: 1, failures: [{ gate: "coverage", detail: "no tier has >=2 resolved assets to compare — design gate inert (nothing sourced yet)" }], tiers: [] };
+    return { pass: false, score: 0, failures: [{ gate: "coverage", detail: "no tier has >=2 resolved assets to compare — the gate verified nothing (unsourced or unresolved content cannot vacuously pass)" }], tiers: [] };
   }
   const results = [];
   let allPass = true, minScore = 1;

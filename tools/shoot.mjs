@@ -1,13 +1,14 @@
-// tools/shoot.mjs — THE AGENT'S EYES. Serve a web root, load it in headless chromium (WebGL2 via
-// swiftshader — no GPU needed), let the real limina engine render, and SAVE a PNG of the canvas so
-// the agent can Read it and judge the frame. This closes the visual loop: render → PNG → look → fix.
+// tools/shoot.mjs — THE AGENT'S EYES. Serve a web root, load it in headless chromium on the REAL GPU
+// (hardware ANGLE/GL — never swiftshader: software rendering can't do shadows, caps instancing, and
+// disagrees with the GPU), let the real limina engine render, and SAVE a PNG of the canvas so the
+// agent can Read it and judge the frame. This closes the visual loop: render → PNG → look → fix.
 //
 // Usage: node tools/shoot.mjs <web-root> <out.png> [wait-ms=4500] [canvas-selector=#limina-canvas]
 //   exit 0 = wrote a PNG · 2 = no chromium/playwright-core
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, join, resolve, extname } from "node:path";
+import { dirname, join, resolve, extname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { resolvePwc, resolveChrome } from "./_pw-resolve.mjs";
@@ -34,8 +35,11 @@ const { chromium } = require(pwc);
 const server = createServer((req, res) => {
   let p = decodeURIComponent(req.url.split("?")[0]);
   if (p === "/") p = "/index.html";
-  const f = join(webRoot, p);
-  if (!f.startsWith(webRoot) || !existsSync(f)) { res.writeHead(404); res.end(); return; }
+  const f = resolve(webRoot, "." + p);
+  // Containment: path.relative is authoritative — a prefix check alone is defeated by a
+  // sibling dir sharing the basename prefix (e.g. /web-root-evil next to /web-root).
+  const rel = relative(webRoot, f);
+  if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(f)) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, {
     "content-type": MIME[extname(f)] || "application/octet-stream",
     "cross-origin-opener-policy": "same-origin",
