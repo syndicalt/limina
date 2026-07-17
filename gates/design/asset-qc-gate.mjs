@@ -7,8 +7,9 @@
 //       material's base colour (from baseColorFactor) + roughness/metalness (from the GLB) must sit
 //       inside the DD palette + surface envelope, or the asset FAILS.
 //
-//   (2) FIDELITY RATCHET — a MONOTONIC quality floor (art-direction/fidelity-floor.json) that only ever
-//       goes UP (toward the Project Gorgon ceiling). Measured straight from the GLB bytes: vertex/tri
+//   (2) MECHANICAL IMPORT RATCHET — a MONOTONIC minimum (art-direction/fidelity-floor.json) that only
+//       ever goes UP. It is NOT the visual release contract and cannot certify reference fidelity.
+//       Measured straight from the GLB bytes: vertex/tri
 //       counts, presence of an ALBEDO/baseColor map and a NORMAL map (a flat vertex-colour / factor-only
 //       material fails requiresAlbedoMap), material count, and the node-transformed bounding-box extent
 //       (a speck fails). Below the floor on ANY axis → FAIL with a specific reason.

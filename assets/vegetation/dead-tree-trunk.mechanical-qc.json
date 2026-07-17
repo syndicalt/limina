@@ -1,0 +1,7 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1", "assetId": "polyhaven-dead-tree-trunk", "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/dead_tree_trunk", "licenseSpdx": "CC0-1.0", "attribution": "dead_tree_trunk by Poly Haven (CC0 1.0)" },
+  "models": [{ "level": 0, "path": "vegetation/dead-tree-trunk-lod0.glb", "sha256": "sha256:9210ae593cb43770e7d374b2b20a64c92c68c30c31da347456bfbdcd9665306d", "boundsM": [3.051015, 0.290432, 0.277528], "vertexCount": 52593, "triangleCount": 101802, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }],
+  "checks": { "glbReadable": true, "selfContained": true, "textureResolutionPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "lodChain": [], "lodStatus": "not-generated", "internalContactSheet": { "path": "qc/internal/polyhaven-ecosystem-candidates.png", "sha256": "sha256:3bf0695bf0a493f957e849d5468406f21ed7142ca57a527106bfd9573a337690" }, "humanVisualApproval": false, "releaseEligible": false
+}

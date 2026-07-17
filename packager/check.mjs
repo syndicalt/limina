@@ -31,7 +31,7 @@ const demoWorld = join(REPO_ROOT, "web", "public", "worlds", "demo");
 if (!existsSync(demoWorld)) { console.error("SKIP: no demo world at " + demoWorld + " (run js export:demo)"); process.exit(2); }
 const rel = mkdtempSync(join(tmpdir(), "limina-release-"));
 const m = packRelease({ worldDir: demoWorld, gameId: "demo", outDir: rel, gates: { functional: "pass", design: "pass" } });
-for (const f of ["index.html", "public/limina-runtime.js", "release.json", "public/worlds/demo/manifest.json"]) {
+for (const f of ["index.html", "public/limina-runtime.js", "runtime/basis/basis_transcoder.js", "runtime/basis/basis_transcoder.wasm", "release.json", "public/worlds/demo/manifest.json"]) {
   if (!existsSync(join(rel, f))) { console.error("FAIL: release missing " + f); ok = false; }
 }
 console.error(`packed demo -> ${rel} (${m.files.length} files)`);

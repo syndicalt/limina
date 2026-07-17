@@ -518,11 +518,16 @@ export interface GltfPlacement {
 export interface GltfSceneCacheOptions {
   maxEntries?: number;
   maxSourceBytes?: number;
+  maxResidentBytes?: number;
+  /** Project-owned Basis runtime URL. Must end in '/'. Configure after renderer init. */
+  ktx2TranscoderPath?: string;
+  ktx2TranscoderBytes?: { js: Uint8Array; wasm: Uint8Array };
 }
 
 export interface GltfSceneCacheStats {
   entries: number;
   sourceBytes: number;
+  residentBytes: number;
   inFlight: number;
   parses: number;
   evictions: number;
@@ -531,6 +536,7 @@ export interface GltfSceneCacheStats {
 interface GltfCacheEntry {
   readonly key: string;
   readonly sourceBytes: number;
+  readonly residentBytes: number;
   readonly template: SceneObject;
 }
 
@@ -556,6 +562,7 @@ export class GltfSceneCacheMissError extends Error {
 
 const DEFAULT_GLTF_CACHE_ENTRIES = 256;
 const DEFAULT_GLTF_CACHE_SOURCE_BYTES = 512 * 1024 * 1024;
+const DEFAULT_GLTF_CACHE_RESIDENT_BYTES = 2 * 1024 * 1024 * 1024;
 
 function positiveSafeInteger(value: number | undefined, fallback: number, label: string): number {
   const resolved = value ?? fallback;
@@ -626,6 +633,75 @@ function disposeGltfTemplate(root: SceneObject, disposedResources: WeakSet<objec
   return errors;
 }
 
+function arrayView(value: unknown): ArrayBufferView | undefined {
+  if (!isRecord(value)) return undefined;
+  const array = ArrayBuffer.isView(value.array) ? value.array
+    : isRecord(value.data) && ArrayBuffer.isView(value.data.array) ? value.data.array
+    : undefined;
+  return array;
+}
+
+/** Conservative CPU+GPU residency estimate for one parsed glTF template. */
+export function estimateGltfSceneResidentBytes(root: SceneObject): number {
+  const geometries = new Set<Record<string, unknown>>();
+  const materials = new Set<Record<string, unknown>>();
+  const textures = new Set<Record<string, unknown>>();
+  let objects = 0;
+  const visit = (object: unknown): void => {
+    if (!isRecord(object)) return;
+    objects++;
+    if (isRecord(object.geometry)) geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      if (!isRecord(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) if (isRecord(value) && value.isTexture === true) textures.add(value);
+    }
+  };
+  const candidate = root as unknown as { traverse?: (visitor: (object: unknown) => void) => void };
+  if (typeof candidate.traverse === "function") candidate.traverse(visit);
+  else visit(root);
+
+  const geometryBuffers = new Map<ArrayBufferLike, number>();
+  const takeGeometryArray = (value: unknown): void => {
+    const view = arrayView(value);
+    if (view !== undefined && !geometryBuffers.has(view.buffer)) geometryBuffers.set(view.buffer, view.buffer.byteLength);
+  };
+  for (const geometry of geometries) {
+    takeGeometryArray(geometry.index);
+    if (isRecord(geometry.attributes)) for (const attribute of Object.values(geometry.attributes)) takeGeometryArray(attribute);
+    if (isRecord(geometry.morphAttributes)) {
+      for (const attributes of Object.values(geometry.morphAttributes)) {
+        if (Array.isArray(attributes)) for (const attribute of attributes) takeGeometryArray(attribute);
+      }
+    }
+  }
+  // Parsed backing stores remain CPU-resident while GPU buffers hold another copy.
+  const geometryBytes = [...geometryBuffers.values()].reduce((sum, bytes) => sum + bytes, 0) * 2;
+
+  let textureBytes = 0;
+  for (const texture of textures) {
+    const images = [];
+    if (isRecord(texture.image)) images.push(texture.image);
+    if (Array.isArray(texture.mipmaps)) for (const mip of texture.mipmaps) if (isRecord(mip)) images.push(mip);
+    let baseBytes = 0;
+    for (const image of images) {
+      if (ArrayBuffer.isView(image.data)) baseBytes += image.data.byteLength;
+      else {
+        const width = image.width, height = image.height;
+        if (typeof width === "number" && typeof height === "number"
+            && Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0) {
+          baseBytes += width * height * 4;
+        }
+      }
+    }
+    // CPU decoded pixels plus GPU base level; generated mip chains add at most 1/3 GPU overhead.
+    textureBytes += baseBytes * (texture.generateMipmaps === true ? 7 / 3 : 2);
+  }
+  // Bounded structural overhead prevents empty/lightweight scenes from estimating as zero.
+  const structuralBytes = objects * 1024 + materials.size * 2048 + geometries.size * 512 + textures.size * 512;
+  return Math.max(1, Math.ceil(geometryBytes + textureBytes + structuralBytes));
+}
+
 function cloneGltfRoot(root: SceneObject): SceneObject {
   const r = root as unknown as { clone?: (recursive?: boolean) => SceneObject; animations?: unknown[] };
   if (typeof r.clone !== "function") return root;
@@ -652,7 +728,24 @@ function cloneGltfRoot(root: SceneObject): SceneObject {
   return copy;
 }
 
-async function parseGltfTemplate(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
+function gltfJson(bytes: Uint8Array, assetId: string): Record<string, unknown> | undefined {
+  try {
+    let json: unknown;
+    if (assetId.toLowerCase().endsWith(".gltf")) json = JSON.parse(new TextDecoder().decode(bytes));
+    else if (bytes.byteLength >= 20 && new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true) === 0x46546c67) {
+      const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(12, true);
+      json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + length)).replace(/\0+$/, ""));
+    }
+    return json as Record<string, unknown>;
+  } catch { return undefined; }
+}
+function usesKtx2(bytes: Uint8Array, assetId: string): boolean {
+  const document = gltfJson(bytes, assetId) as { extensionsUsed?: unknown; textures?: Array<{ extensions?: Record<string, unknown> }> } | undefined;
+  return document?.extensionsUsed instanceof Array && document.extensionsUsed.includes("KHR_texture_basisu")
+    || document?.textures?.some((texture) => texture.extensions?.KHR_texture_basisu !== undefined) === true;
+}
+
+async function parseGltfTemplate(assetId: string, bytes: Uint8Array, ktx2Loader?: unknown): Promise<SceneObject> {
   const manager = new THREE.LoadingManager();
   const base = assetId.includes("/") ? assetId.slice(0, assetId.lastIndexOf("/") + 1) : "";
   manager.setURLModifier((url: string) => {
@@ -660,10 +753,14 @@ async function parseGltfTemplate(assetId: string, bytes: Uint8Array): Promise<Sc
     return `limina-asset://${base}${url}`;
   });
   const loader = new THREE.GLTFLoader(manager);
+  if (usesKtx2(bytes, assetId)) {
+    if (ktx2Loader === undefined) throw new GltfSceneParseError(assetId, new Error("KHR_texture_basisu requires a renderer-configured project Basis transcoder"));
+    loader.setKTX2Loader(ktx2Loader as never);
+  }
   const payload: string | ArrayBuffer = assetId.toLowerCase().endsWith(".gltf")
     ? new TextDecoder().decode(bytes)
     : bytes.slice().buffer as ArrayBuffer;
-  let gltf: { scene: SceneObject; animations?: unknown[] };
+  let gltf: { scene: SceneObject; animations?: unknown[]; parser?: { getDependency(type: string, index: number): Promise<SceneObject> } };
   try {
     gltf = await new Promise<{ scene: SceneObject; animations?: unknown[] }>((resolve, reject) => {
       loader.parse(
@@ -677,6 +774,13 @@ async function parseGltfTemplate(assetId: string, bytes: Uint8Array): Promise<Sc
     throw new GltfSceneParseError(assetId, error);
   }
   const root = gltf.scene;
+  const document = gltfJson(bytes, assetId) as { asset?: { extras?: { liminaStaticBatch?: { lodRoots?: number[] } } } } | undefined;
+  const lodRoots = document?.asset?.extras?.liminaStaticBatch?.lodRoots;
+  if (Array.isArray(lodRoots) && lodRoots.length > 1 && gltf.parser !== undefined) {
+    for (const [level, index] of lodRoots.entries()) {
+      const node = await gltf.parser.getDependency("node", index); node.visible = level === 0; root.add(node);
+    }
+  }
   prepareGltfTextures(root);
   (root as unknown as { animations?: unknown[] }).animations = gltf.animations ?? [];
   markGltfHostResources(root);
@@ -691,21 +795,56 @@ async function parseGltfTemplate(assetId: string, bytes: Uint8Array): Promise<Sc
 export class GltfSceneCache {
   readonly #maxEntries: number;
   readonly #maxSourceBytes: number;
+  readonly #maxResidentBytes: number;
   readonly #entries = new Map<string, GltfCacheEntry>();
   readonly #aliases = new Map<string, string>();
   readonly #aliasRequests = new Map<string, number>();
   readonly #inFlight = new Map<string, Promise<GltfCacheEntry>>();
   readonly #disposedResources = new WeakSet<object>();
+  readonly #ktx2TranscoderPath?: string;
+  readonly #ktx2TranscoderBytes?: { js: Uint8Array; wasm: Uint8Array };
+  #ktx2Loader?: { dispose(): void };
   #sourceBytes = 0;
+  #residentBytes = 0;
   #activeWorlds = 0;
   #requestSequence = 0;
   #parses = 0;
   #evictions = 0;
+  #activePrewarm = false;
   #disposed = false;
 
   constructor(options: GltfSceneCacheOptions = {}) {
     this.#maxEntries = positiveSafeInteger(options.maxEntries, DEFAULT_GLTF_CACHE_ENTRIES, "glTF cache maxEntries");
     this.#maxSourceBytes = positiveSafeInteger(options.maxSourceBytes, DEFAULT_GLTF_CACHE_SOURCE_BYTES, "glTF cache maxSourceBytes");
+    this.#maxResidentBytes = positiveSafeInteger(options.maxResidentBytes, DEFAULT_GLTF_CACHE_RESIDENT_BYTES, "glTF cache maxResidentBytes");
+    if (options.ktx2TranscoderPath !== undefined && (!options.ktx2TranscoderPath.startsWith("/") || !options.ktx2TranscoderPath.endsWith("/"))) throw new Error("KTX2 transcoder path must be an absolute project URL ending in '/'");
+    this.#ktx2TranscoderPath = options.ktx2TranscoderPath;
+    this.#ktx2TranscoderBytes = options.ktx2TranscoderBytes;
+  }
+
+  configureKtx2(renderer: unknown): void {
+    if (this.#disposed) throw new Error("glTF scene cache is disposed");
+    if (this.#activeWorlds !== 0 || this.#entries.size !== 0 || this.#inFlight.size !== 0) throw new Error("KTX2 must be configured before glTF prewarm or world acquisition");
+    if (this.#ktx2TranscoderPath === undefined) return;
+    if (this.#ktx2Loader !== undefined) return;
+    const manager = new THREE.LoadingManager();
+    if (this.#ktx2TranscoderBytes !== undefined) {
+      const encode = (bytes: Uint8Array, mime: string): string => {
+        let binary = ""; for (let offset = 0; offset < bytes.length; offset += 32_768) binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 32_768, bytes.length)));
+        return `data:${mime};base64,${btoa(binary)}`;
+      };
+      const js = encode(this.#ktx2TranscoderBytes.js, "text/javascript");
+      const wasm = encode(this.#ktx2TranscoderBytes.wasm, "application/wasm");
+      manager.setURLModifier((url: string) => url.endsWith("basis_transcoder.js") ? js : url.endsWith("basis_transcoder.wasm") ? wasm : url);
+    }
+    const loader = new THREE.KTX2Loader(manager);
+    loader.setTranscoderPath(this.#ktx2TranscoderPath);
+    // Native transcoding uses the deliberately bounded same-isolate Worker shim.
+    // Multiple workers cannot run in parallel there and would instantiate the
+    // Basis WASM module repeatedly on the render isolate before useful work.
+    if (this.#ktx2TranscoderBytes !== undefined) loader.setWorkerLimit(1);
+    loader.detectSupport(renderer as never);
+    this.#ktx2Loader = loader;
   }
 
   beginWorld(): void {
@@ -717,6 +856,9 @@ export class GltfSceneCache {
 
   endWorld(): void {
     if (this.#activeWorlds < 1) throw new Error("glTF scene cache has no active world");
+    if (this.#activePrewarm || this.#inFlight.size > 0) {
+      throw new Error("cannot end a world while active-world glTF prewarming is in flight");
+    }
     this.#activeWorlds -= 1;
   }
 
@@ -733,6 +875,7 @@ export class GltfSceneCache {
     return Object.freeze({
       entries: this.#entries.size,
       sourceBytes: this.#sourceBytes,
+      residentBytes: this.#residentBytes,
       inFlight: this.#inFlight.size,
       parses: this.#parses,
       evictions: this.#evictions,
@@ -741,6 +884,38 @@ export class GltfSceneCache {
 
   async prewarm(assetId: string, bytes: Uint8Array): Promise<void> {
     await this.#template(assetId, bytes);
+  }
+
+  /**
+   * Fill previously unknown content while the sole world is active. The caller must suspend every
+   * render frame for the complete await; this method is reserved for atomic derived activation.
+   * Existing entries are never evicted because active clones may share their immutable resources.
+   */
+  async prewarmActiveWorld(entries: readonly Readonly<{ assetId: string; bytes: Uint8Array }>[]): Promise<void> {
+    if (this.#disposed) throw new Error("glTF scene cache is disposed");
+    if (this.#activeWorlds !== 1) throw new Error("active-world glTF prewarming requires exactly one active world");
+    if (this.#activePrewarm || this.#inFlight.size > 0) throw new Error("active-world glTF prewarming is already in flight");
+    if (!Array.isArray(entries) || Object.getPrototypeOf(entries) !== Array.prototype
+        || Object.getOwnPropertySymbols(entries).length !== 0
+        || Object.getOwnPropertyNames(entries).length !== entries.length + 1) {
+      throw new TypeError("active-world glTF prewarm entries must be a dense standard array");
+    }
+    const seen = new Map<string, string>();
+    for (const [index, entry] of entries.entries()) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+          || Object.getOwnPropertyNames(entry).sort().join() !== "assetId,bytes"
+          || typeof entry.assetId !== "string" || entry.assetId.length === 0
+          || !(entry.bytes instanceof Uint8Array)) {
+        throw new TypeError(`active-world glTF prewarm entry ${index} is invalid`);
+      }
+      const key = gltfSceneContentKey(entry.assetId, entry.bytes);
+      const prior = seen.get(entry.assetId);
+      if (prior !== undefined) throw new Error(`active-world glTF prewarm duplicates asset id '${entry.assetId}'`);
+      seen.set(entry.assetId, key);
+    }
+    this.#activePrewarm = true;
+    try { await Promise.all(entries.map((entry) => this.#template(entry.assetId, entry.bytes, true))); }
+    finally { this.#activePrewarm = false; }
   }
 
   async parse(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
@@ -753,14 +928,17 @@ export class GltfSceneCache {
     await Promise.allSettled(this.#inFlight.values());
     const errors: unknown[] = [];
     for (const entry of this.#entries.values()) errors.push(...disposeGltfTemplate(entry.template, this.#disposedResources));
+    try { this.#ktx2Loader?.dispose(); } catch (error) { errors.push(error); }
+    this.#ktx2Loader = undefined;
     this.#entries.clear();
     this.#aliases.clear();
     this.#aliasRequests.clear();
     this.#sourceBytes = 0;
+    this.#residentBytes = 0;
     if (errors.length > 0) throw new AggregateError(errors, `glTF cache disposal failed for ${errors.length} resource(s)`);
   }
 
-  async #template(assetId: string, bytes: Uint8Array): Promise<SceneObject> {
+  async #template(assetId: string, bytes: Uint8Array, allowActiveFill = false): Promise<SceneObject> {
     if (this.#disposed) throw new Error("glTF scene cache is disposed");
     const key = gltfSceneContentKey(assetId, bytes);
     const cached = this.#entries.get(key);
@@ -769,9 +947,10 @@ export class GltfSceneCache {
         this.#entries.delete(key);
         this.#entries.set(key, cached);
         this.#aliases.set(assetId, key);
-      }
+      } else if (allowActiveFill) this.#aliases.set(assetId, key);
       return cached.template;
     }
+    if (this.#activeWorlds > 0 && !allowActiveFill) throw new GltfSceneCacheMissError(assetId);
     const pending = this.#inFlight.get(key);
     if (pending !== undefined) {
       const request = ++this.#requestSequence;
@@ -780,7 +959,6 @@ export class GltfSceneCache {
       if (this.#aliasRequests.get(assetId) === request) this.#aliases.set(assetId, key);
       return entry.template;
     }
-    if (this.#activeWorlds > 0) throw new GltfSceneCacheMissError(assetId);
     if (bytes.byteLength > this.#maxSourceBytes) {
       throw new RangeError(`glTF source '${assetId}' is ${bytes.byteLength} bytes, exceeding cache budget ${this.#maxSourceBytes}`);
     }
@@ -788,8 +966,15 @@ export class GltfSceneCache {
     this.#aliasRequests.set(assetId, request);
     this.#parses += 1;
     const loading = (async (): Promise<GltfCacheEntry> => {
-      const template = await parseGltfTemplate(assetId, bytes);
-      const entry: GltfCacheEntry = { key, sourceBytes: bytes.byteLength, template };
+      const template = await parseGltfTemplate(assetId, bytes, this.#ktx2Loader);
+      const residentBytes = estimateGltfSceneResidentBytes(template);
+      if (residentBytes > this.#maxResidentBytes) {
+        const budgetError = new RangeError(`decoded glTF '${assetId}' is estimated at ${residentBytes} resident bytes, exceeding cache budget ${this.#maxResidentBytes}`);
+        const disposalErrors = disposeGltfTemplate(template, this.#disposedResources);
+        if (disposalErrors.length > 0) throw new AggregateError([budgetError, ...disposalErrors], budgetError.message);
+        throw budgetError;
+      }
+      const entry: GltfCacheEntry = { key, sourceBytes: bytes.byteLength, residentBytes, template };
       if (this.#disposed) {
         const errors = disposeGltfTemplate(template, this.#disposedResources);
         throw new AggregateError(
@@ -798,17 +983,32 @@ export class GltfSceneCache {
         );
       }
       const evictionErrors: unknown[] = [];
-      while (this.#entries.size >= this.#maxEntries || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes) {
-        const oldest = this.#entries.entries().next().value as [string, GltfCacheEntry] | undefined;
-        if (oldest === undefined) break;
-        this.#entries.delete(oldest[0]);
-        this.#sourceBytes -= oldest[1].sourceBytes;
-        for (const [alias, aliasKey] of this.#aliases) if (aliasKey === oldest[0]) this.#aliases.delete(alias);
-        evictionErrors.push(...disposeGltfTemplate(oldest[1].template, this.#disposedResources));
-        this.#evictions += 1;
+      if (allowActiveFill && this.#activeWorlds > 0) {
+        if (this.#entries.size >= this.#maxEntries
+            || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes
+            || this.#residentBytes + entry.residentBytes > this.#maxResidentBytes) {
+          const budgetError = new RangeError(`active-world glTF '${assetId}' cannot fit without evicting live cache resources`);
+          const disposalErrors = disposeGltfTemplate(template, this.#disposedResources);
+          if (disposalErrors.length > 0) throw new AggregateError([budgetError, ...disposalErrors], budgetError.message);
+          throw budgetError;
+        }
+      } else {
+        while (this.#entries.size >= this.#maxEntries
+            || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes
+            || this.#residentBytes + entry.residentBytes > this.#maxResidentBytes) {
+          const oldest = this.#entries.entries().next().value as [string, GltfCacheEntry] | undefined;
+          if (oldest === undefined) break;
+          this.#entries.delete(oldest[0]);
+          this.#sourceBytes -= oldest[1].sourceBytes;
+          this.#residentBytes -= oldest[1].residentBytes;
+          for (const [alias, aliasKey] of this.#aliases) if (aliasKey === oldest[0]) this.#aliases.delete(alias);
+          evictionErrors.push(...disposeGltfTemplate(oldest[1].template, this.#disposedResources));
+          this.#evictions += 1;
+        }
       }
       this.#entries.set(key, entry);
       this.#sourceBytes += entry.sourceBytes;
+      this.#residentBytes += entry.residentBytes;
       if (this.#aliasRequests.get(assetId) === request) this.#aliases.set(assetId, key);
       if (evictionErrors.length > 0) {
         console.warn(new AggregateError(evictionErrors, `glTF cache eviction failed for ${evictionErrors.length} resource(s)`));

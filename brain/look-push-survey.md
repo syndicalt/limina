@@ -10,7 +10,7 @@ self-contained, and dependency-free (no heavy framework lock-in) per the engine'
 
 Repo checks done first: `js/build/three.bundle.mjs` pins **three r184** (already TSL/WebGPU-native
 core). Already-referenced libs confirmed still in play: `threejs-water` (jeantimex, water.ts/render
-docs), `GrassSystemThreeJS` (achrefelouafi, `js/src/render/grass-source.ts`), `ez-tree`
+docs), `GrassSystemThreeJS` (achrefelouafi; its former tile-source strategy has been retired), `ez-tree`
 (dgreenheck, `js/src/render/tree-source.ts`), `MeshToonNodeMaterial` (`js/src/render/toon.ts`).
 limina's own `water.ts` already hand-rolls a TSL depth-faded sea material (not literally the
 jeantimex code) and `post.ts` already builds a TSL `PostProcessing` stack (GTAO + bloom + grade)
@@ -108,7 +108,7 @@ Instanced grass + tree systems.
 
 | Candidate | License | Renderer | What it does | Verdict | Effort |
 |---|---|---|---|---|---|
-| [GrassSystemThreeJS](https://github.com/achrefelouafi/GrassSystemThreeJS) (achrefelouafi) | MIT ([source](https://github.com/achrefelouafi/GrassSystemThreeJS)) | — | Coverage-mask-driven instanced grass | **already referenced**, adopted (`js/src/render/grass-source.ts`) | — |
+| [GrassSystemThreeJS](https://github.com/achrefelouafi/GrassSystemThreeJS) (achrefelouafi) | MIT ([source](https://github.com/achrefelouafi/GrassSystemThreeJS)) | — | Coverage-mask-driven instanced grass | Historical input only; superseded by the canonical pluggable grass-field pipeline | — |
 | [ez-tree](https://github.com/dgreenheck/ez-tree) (dgreenheck) | MIT ([source](https://github.com/dgreenheck/ez-tree)) | — | Seeded procedural tree generator | **already referenced**, adopted (`js/src/render/tree-source.ts`) | — |
 | [procedural-grass-threejs](https://github.com/CK42BB/procedural-grass-threejs) | MIT ([source](https://github.com/CK42BB/procedural-grass-threejs)) | WebGPU compute + WebGL2 fallback | Multi-layer wind system: global sway, rolling gust waves, per-blade turbulence | **port (reference only)** — the multi-layer wind technique is a real upgrade over a single sway term; very low-maturity repo (3 commits, 6 stars, educational series) so steal the technique into `grass-render.ts`, don't depend on the package | S |
 | [InstancedMesh2](https://github.com/agargaro/instanced-mesh) (agargaro) | MIT ([source](https://github.com/agargaro/instanced-mesh/blob/master/LICENSE), copyright Andrea Gargaro) | **WebGL-only** ("only works with `WebGLRenderer`", requires three r159+) | Enhanced `InstancedMesh` — per-instance frustum culling, BVH raycasting, LOD, sorting, per-instance uniforms | **skip (renderer)** for the WebGPU live path; **port** is real work (WebGPU-native instancing needs its own culling/LOD story) but could still land under the `forceWebGL2` headless path today without a port | port effort if pursued: M–L |

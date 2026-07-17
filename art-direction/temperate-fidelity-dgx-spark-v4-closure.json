@@ -1,0 +1,87 @@
+{
+  "schema": "limina.visual-fidelity-candidate-review/v1",
+  "artifact": {
+    "assetId": "qc/internal/temperate-river-leading-line-dgx-spark-gb10-continuous-turf-v4-candidate-2026-07-13.png",
+    "sha256": "e4da7f053d222cc16ff0b53f4a95a3b2ff503549e9537656ecb8fdc6881bedd0",
+    "byteLength": 3686760,
+    "width": 1920,
+    "height": 1080,
+    "cameraRoute": "river-leading-line"
+  },
+  "publication": {
+    "manifestHash": "sha256:e1ec8a4818cdd9cf94ca06f3730a6ee161b2fcf6b53ac4086e5ad9eab5555f1e",
+    "contentClosureHash": "sha256:4c973330e5cf908dc7c959f50133b39af46f6091b36e806bb2f27895ca40e787",
+    "grassVisualPackageVersion": "4.0.1",
+    "runtimePackVersion": "1.1.7",
+    "surfaceCompositePolicyVersion": 8,
+    "contentStatus": "accepted-nature-baseline"
+  },
+  "capture": {
+    "backend": "native-webgpu",
+    "adapterDescription": "NVIDIA GB10",
+    "driverVersion": "580.159.03",
+    "resolution": [1920, 1080],
+    "nvidiaXidObserved": false,
+    "timestampQueriesEnabled": false,
+    "scene": {
+      "terrain": 25,
+      "surfaces": 25,
+      "placements": 10918,
+      "canopy": 257,
+      "grassTiles": 59,
+      "grassBlades": 655637
+    },
+    "renderSubmission": {
+      "scope": "single-production-frame-all-passes",
+      "renderCalls": 16,
+      "drawCalls": 245,
+      "triangles": 65760242,
+      "cpuEncodeMs": 11
+    },
+    "constructionTimingsMs": {
+      "resourceFetchAndDecode": 582,
+      "terrainCandidate": 910,
+      "rendererInit": 409,
+      "populationMount": 71818,
+      "lightingAndEnvironment": 65,
+      "warmupAndReadback": 5548,
+      "total": 79333
+    }
+  },
+  "evidence": {
+    "schema": "limina.visual-fidelity-floor/v1",
+    "referenceSetId": "project-gorgon-floor-20260711",
+    "lane": "nature",
+    "captureClass": "production-engine",
+    "nativeBackend": true,
+    "fixedCameraRoute": true,
+    "facets": {
+      "pbrTerrain": true,
+      "terrainMacroDetail": true,
+      "waterDepthAndShore": true,
+      "vegetationDensityAndVariety": true,
+      "atmosphereAndSky": true,
+      "lightingAndShadows": true,
+      "assetProvenance": true,
+      "visualRegression": true,
+      "lifecycle": true,
+      "targetHardwarePerformance": false
+    },
+    "humanReview": {
+      "approved": true,
+      "reviewer": "project-owner",
+      "statement": "It blends better. I don't want to get bogged down on this particular item. We've spent a ton of time getting this one scene where it is."
+    }
+  },
+  "decision": {
+    "status": "owner-accepted-nature-baseline-closed",
+    "releasePassed": false,
+    "closedScope": "Nature-scene visual/content tuning and the DGX Spark fixed-camera baseline are closed. Do not reopen grass or water polish without a new concrete regression.",
+    "remainingCrossCuttingEvidence": [
+      "portable texture compression and runtime format negotiation",
+      "multi-profile GPU/texture/post-buffer memory budgets",
+      "startup, hitch, and sustained frame-time profiles beyond the guarded single-frame capture"
+    ],
+    "nextProgram": "functional-buildings"
+  }
+}

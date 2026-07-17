@@ -1,0 +1,235 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "furniture/dining-table/v1",
+  "subjectKind": "furniture",
+  "intendedFunction": "A compact four-place oak dining and work table for the cottage hall, stable on an uneven-looking timber floor while preserving knee room, chair approaches, and circulation inside the approved I1 envelope.",
+  "prompt": "Author a cohesive late-medieval oak trestle dining table from a dimensioned human-use section. Fit the exact 1400 by 800 by 780 mm I1 envelope. Use a substantial eased plank top, two inset trestle frames with broad floor feet, a low longitudinal stretcher secured by visibly plausible wedged through-tenons, and restrained chamfering. Derive every member from one load path: top into trestles, trestles into feet, and trestles tied by the stretcher. Preserve four-chair knee clearance, authored floor contact, centered local origin, exposed end grain at joints, and longitudinal grain on the top. Ornament must remain subordinate to construction.",
+  "references": [
+    {
+      "id": "met/table-468074",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/468074",
+      "creator": "Unknown Italian maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:11.773Z",
+      "localPath": "art-direction/reference-cache/met/table-468074.jpg",
+      "sha256": "sha256:e28586b4816f95762a91c704d29c8473b641dab7d99ea1d5d7fb5595e49ef2ec",
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/trestle-table-8810",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/8810",
+      "creator": "Unknown Massachusetts maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.462Z",
+      "localPath": "art-direction/reference-cache/met/trestle-table-8810.jpg",
+      "sha256": "sha256:be664e9589ad7e8f5f1cce84415254109b87403cb081ed994cbb320656e51c5b",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.802Z",
+      "localPath": "art-direction/reference-cache/met/library-table-14282.jpg",
+      "sha256": "sha256:88e2a242e1aebb71d080aa21b353553e4a00523fc52d5aaad12d81c3b902b273",
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ],
+  "cues": [
+    {
+      "id": "locked-i1-envelope",
+      "statement": "The authored geometry, pivot, and collision remain inside the exact approved I1 table envelope without post-export scaling.",
+      "sourceIds": [
+        "met/table-468074",
+        "met/trestle-table-8810"
+      ],
+      "measurements": [
+        {
+          "name": "overall-width",
+          "unit": "m",
+          "target": 1.4
+        },
+        {
+          "name": "overall-height",
+          "unit": "m",
+          "target": 0.78
+        },
+        {
+          "name": "overall-depth",
+          "unit": "m",
+          "target": 0.8
+        },
+        {
+          "name": "floor-contact-y",
+          "unit": "m",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "four-place-use-section",
+      "statement": "The table supports one chair on every side without aprons or trestles consuming the occupant knee volume.",
+      "sourceIds": [
+        "met/table-468074"
+      ],
+      "measurements": [
+        {
+          "name": "occupancy",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "top-height",
+          "unit": "m",
+          "minimum": 0.77,
+          "maximum": 0.79
+        },
+        {
+          "name": "clear-knee-height",
+          "unit": "m",
+          "minimum": 0.66
+        },
+        {
+          "name": "clear-long-side-knee-width",
+          "unit": "m",
+          "minimum": 0.92
+        },
+        {
+          "name": "top-overhang-depth",
+          "unit": "m",
+          "minimum": 0.1
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "coherent-trestle-load-path",
+      "statement": "Two inset trestles transfer the top load into broad feet and are tied by one low stretcher; no member reads as a decorative floating intersection.",
+      "sourceIds": [
+        "met/trestle-table-8810",
+        "met/library-table-14282"
+      ],
+      "measurements": [
+        {
+          "name": "trestle-count",
+          "unit": "count",
+          "target": 2
+        },
+        {
+          "name": "longitudinal-stretcher-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "support-foot-count",
+          "unit": "count",
+          "target": 2
+        },
+        {
+          "name": "support-span-depth-ratio",
+          "unit": "ratio",
+          "minimum": 0.72,
+          "maximum": 0.9
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "revealed-period-joinery",
+      "statement": "The stretcher terminates in bounded through-tenons with separate wedges, while trestle members meet with visible shoulders and credible contact.",
+      "sourceIds": [
+        "met/trestle-table-8810",
+        "met/library-table-14282"
+      ],
+      "measurements": [
+        {
+          "name": "wedged-through-tenon-count",
+          "unit": "count",
+          "minimum": 2
+        },
+        {
+          "name": "visible-wedge-count",
+          "unit": "count",
+          "minimum": 2
+        },
+        {
+          "name": "joint-tolerance",
+          "unit": "m",
+          "maximum": 0.003
+        },
+        {
+          "name": "disconnected-joint-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "material-direction-and-restraint",
+      "statement": "Oak grain follows each structural member, top grain runs along the long axis, end grain appears only at member ends and pegs, and restrained eased edges preserve a crafted silhouette.",
+      "sourceIds": [
+        "met/table-468074",
+        "met/library-table-14282"
+      ],
+      "measurements": [
+        {
+          "name": "top-longitudinal-grain",
+          "unit": "boolean",
+          "target": 1
+        },
+        {
+          "name": "misoriented-structural-grain-count",
+          "unit": "count",
+          "target": 0
+        },
+        {
+          "name": "edge-radius",
+          "unit": "m",
+          "minimum": 0.004,
+          "maximum": 0.012
+        }
+      ],
+      "verification": "engine"
+    }
+  ],
+  "avoid": [
+    "generic four-legged modern table",
+    "plain intersecting boxes",
+    "floating tabletop",
+    "feet that miss the floor",
+    "unstable narrow support polygon",
+    "ornament without structural purpose",
+    "blocked knee space",
+    "whole-object AABB collision",
+    "post-export scaling",
+    "cross-grain tabletop texture",
+    "anonymous baked geometry"
+  ],
+  "requiredViews": [
+    "front",
+    "right-side",
+    "back",
+    "three-quarter",
+    "joinery-detail",
+    "socket-overlay",
+    "collision-overlay"
+  ],
+  "status": "draft"
+}

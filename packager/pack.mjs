@@ -6,7 +6,7 @@
 // API:  packRelease({ worldDir, gameId, outDir, gates? }) -> manifest
 // CLI:  node packager/pack.mjs <worldDir> <gameId> <outDir>
 
-import { mkdirSync, copyFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, copyFileSync, cpSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,9 +51,12 @@ export function packRelease({ worldDir, gameId, outDir, gates = null, createdAt 
   const runtimeSrc = join(REPO_ROOT, "web", "public", "limina-runtime.js");
   if (!existsSync(runtimeSrc)) throw new Error(`packRelease: browser runtime missing at ${runtimeSrc} — build it: (cd js && npm run bundle:runtime)`);
   copyFileSync(runtimeSrc, join(outDir, "public", "limina-runtime.js"));
+  const basisSrc = join(REPO_ROOT, "runtime", "basis");
+  if (!existsSync(basisSrc)) throw new Error(`packRelease: Basis runtime missing at ${basisSrc} — run: (cd js && npm install)`);
+  cpSync(basisSrc, join(outDir, "runtime", "basis"), { recursive: true });
   writeFileSync(join(outDir, "index.html"), indexHtml(gameId));
   writeFileSync(join(outDir, "serve.sh"), serveSh(gameId));
-  files.push("index.html", "public/limina-runtime.js", "serve.sh");
+  files.push("index.html", "public/limina-runtime.js", "runtime/basis/basis_transcoder.js", "runtime/basis/basis_transcoder.wasm", "serve.sh");
 
   const manifest = { gameId, createdAt: createdAt ?? new Date().toISOString(), mode: "replay", files, gates };
   writeFileSync(join(outDir, "release.json"), JSON.stringify(manifest, null, 2));

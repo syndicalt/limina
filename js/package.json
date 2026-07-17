@@ -14,10 +14,16 @@
     "@types/three": "0.184.0",
     "@webgpu/types": "0.1.71",
     "esbuild": "0.28.1",
+    "sharp": "^0.34.4",
     "typescript": "5.9.3"
   },
   "scripts": {
-    "bundle:three": "esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs",
+    "sync:basis-runtime": "node scripts/sync-basis-runtime.mjs",
+    "postinstall": "node scripts/install-ktx-tools.mjs --required && npm run sync:basis-runtime",
+    "deps:ktx": "node scripts/install-ktx-tools.mjs --required",
+    "patch:three-timestamp": "node scripts/patch-three-timestamp-query.mjs",
+    "check:three-timestamp-patch": "node scripts/patch-three-timestamp-query.mjs --check --check-bundle",
+    "bundle:three": "npm run sync:basis-runtime && npm run patch:three-timestamp && esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs && node scripts/patch-three-timestamp-query.mjs --check --check-bundle",
     "bundle:runtime": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/limina-runtime.js --loader:.ts=ts",
     "bundle:worker": "esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/sim-worker-entry.js --loader:.ts=ts",
     "bundle:derived-runtime-worker": "esbuild src/browser/derived-runtime-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/derived-runtime-worker-entry.js --loader:.ts=ts",

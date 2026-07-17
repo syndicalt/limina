@@ -101,6 +101,8 @@ export class KeyframePhysics {
   op_physics_raycast(_ox: number, _oy: number, _oz: number, _dx: number, _dy: number, _dz: number, maxToi: number, out: Float32Array): void {
     out[0] = maxToi; out[1] = 0; out[2] = 0; out[3] = -1; // no-hit
   }
+  op_physics_overlap_box(_x: number, _y: number, _z: number, _hx: number, _hy: number, _hz: number,
+    _qx: number, _qy: number, _qz: number, _qw: number, _ignoreBodyId: number, _out: Uint32Array): number { return 0; }
   op_physics_snapshot(): Uint8Array { return new Uint8Array(0); }
   op_physics_restore(_bytes: Uint8Array): void { /* not used in playback */ }
 }
@@ -135,6 +137,7 @@ export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineO
     op_physics_set_body_transform: () => physics.op_physics_set_body_transform(),
     op_physics_drain_collisions: () => physics.op_physics_drain_collisions(),
     op_physics_raycast: (ox, oy, oz, dx, dy, dz, maxToi, out) => physics.op_physics_raycast(ox, oy, oz, dx, dy, dz, maxToi, out),
+    op_physics_overlap_box: (x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore, out) => physics.op_physics_overlap_box(x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore, out),
     // render / loop / input — stubs (browser host overrides)
     op_create_window_context: () => ({}),
     op_surface_present: noop,

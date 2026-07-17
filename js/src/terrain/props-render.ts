@@ -8,24 +8,21 @@
 //
 // This module imports THREE. The instance-transform MATH (render matches scatter) is
 // proven headlessly in js/test/p9_props.ts (matrices are CPU data); the in-tab WebGPU
-// DRAW of trees/rocks/grass is UAT.
+// DRAW of trees/rocks is UAT.
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { propGeometry } from "./props.ts";
 import { PropKind, type PropInstance } from "./scatter.ts";
 
 // Per-part COLOR lives in the geometry's vertex-color attribute (brown trunk + green
-// canopy, grey rock, green grass), so each kind needs only a roughness + whether it's
-// double-sided (grass blades are thin planes -> render both faces).
+// canopy, grey rock), so each kind needs only its PBR surface constants.
 interface PropMaterialSpec {
   roughness: number;
   metalness: number;
-  doubleSide: boolean;
 }
 const MATERIALS: Record<number, PropMaterialSpec> = {
-  [PropKind.Tree]: { roughness: 0.9, metalness: 0.0, doubleSide: false },
-  [PropKind.Rock]: { roughness: 0.95, metalness: 0.0, doubleSide: false },
-  [PropKind.Grass]: { roughness: 0.85, metalness: 0.0, doubleSide: true },
+  [PropKind.Tree]: { roughness: 0.9, metalness: 0.0 },
+  [PropKind.Rock]: { roughness: 0.95, metalness: 0.0 },
 };
 
 /** Build a THREE BufferGeometry from a prop kind's pure geometry (incl. vertex colors). */
@@ -58,8 +55,6 @@ export function buildPropInstancedMesh(kind: number, instances: PropInstance[]):
     roughness: spec.roughness,
     metalness: spec.metalness,
   });
-  if (spec.doubleSide) material.side = THREE.DoubleSide;
-
   const mesh = new THREE.InstancedMesh(geom, material, instances.length);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();

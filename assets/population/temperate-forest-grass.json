@@ -1,0 +1,16 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "temperate-forest-grass",
+  "version": "4.0.1",
+  "role": "flora/forest-grass",
+  "backend": "continuous-grass-field",
+  "visualPackageId": "limina.grass.interactive-temperate-meadow",
+  "visualPackageVersion": "4.0.1",
+  "densityScale": 40,
+  "bladeScale": [0.65, 1.2],
+  "climate": "summer",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "limina://procedural/continuous-grass-field/interactive-temperate-meadow"
+  }
+}

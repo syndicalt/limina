@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "temperate-grass-turf",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Grass001",
+    "assetUrl": "https://ambientcg.com/a/Grass001",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Grass001_1K-JPG.zip",
+    "archiveBytes": 10710313,
+    "archiveSha256": "sha256:902f447a64171c8099589642d5bf2d1d6e52c40e94d957eb78eae722084b0cfb"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/temperate-grass-turf/albedo.jpg",
+      "sha256": "sha256:b9b6d61bc3b6137b868a3447eef18737896acd26d58fe2f4b83ce8c0e9d3f8ad",
+      "assetHash": "sha256:55b0a4c4b9569a8ae867dafd4bbb74f3dd9b64c1d7e7ca2cec72a86206215ca7",
+      "bytes": 1764300
+    },
+    "normal": {
+      "assetId": "materials/temperate-grass-turf/normal.jpg",
+      "sha256": "sha256:eef0b56db5f00a6fcb3d0e0f8463e4e141e88aa85b26527a04d617b75a4ab5d2",
+      "assetHash": "sha256:756a4d24dfb6a2e534b803d22b89b115713b4664f1510b4951ef6252185c3174",
+      "bytes": 2338245
+    },
+    "roughness": {
+      "assetId": "materials/temperate-grass-turf/roughness.jpg",
+      "sha256": "sha256:8810effd44756341170d551501b7d0c645dc2395dbce46a8c7f1e61045258a06",
+      "assetHash": "sha256:0c8c52e883b78b63d041fd6d13d87c4a003cfd76735118cc8988eafc579e5417",
+      "bytes": 823623
+    },
+    "occlusion": {
+      "assetId": "materials/temperate-grass-turf/occlusion.jpg",
+      "sha256": "sha256:a5e6e6a1c4329562e99f009313f09e44dd179dedbfb5dd679feeaf17ca122ab9",
+      "assetHash": "sha256:d2256cbad172276bcbdcb564e2190fd95d68ae664856dad81f89738e93fb46a7",
+      "bytes": 902486
+    },
+    "displacement": {
+      "assetId": "materials/temperate-grass-turf/displacement.jpg",
+      "sha256": "sha256:1879e4fb292a6c091b73366b4b92b2cccff4dcf150b3f34c8943aea26d52ae53",
+      "assetHash": "sha256:99f4ff19152429f83ef103516161348391eb7048522e82250dfea0c2364f1da1",
+      "bytes": 913308
+    }
+  },
+  "materialImport": {
+    "name": "temperate-grass-turf",
+    "albedo": "materials/temperate-grass-turf/albedo.jpg",
+    "normal": "materials/temperate-grass-turf/normal.jpg",
+    "roughness": "materials/temperate-grass-turf/roughness.jpg",
+    "occlusion": "materials/temperate-grass-turf/occlusion.jpg",
+    "displacement": "materials/temperate-grass-turf/displacement.jpg"
+  }
+}

@@ -1,11 +1,11 @@
 {
   "engine": "limina",
-  "engineVersion": "0.1.0+8cf2ed8",
+  "engineVersion": "0.1.0+769bc2d",
   "generatedFrom": "skills-catalog",
-  "generatedAt": "2026-07-09T14:59:36.069Z",
+  "generatedAt": "2026-07-12T07:26:47.772Z",
   "description": "Canonical machine-readable catalog of Limina built-in skills. Each skill maps 1:1 to an MCP tool whose name IS the skill name; the tool input is validated against a JSON Schema (draft-07) derived from the skill's Zod schema. Generated from the real registry (js/src/skills/*) via tools/dump-skills.ts.",
   "docs": "https://www.liminaengine.com/skills",
-  "count": 232,
+  "count": 235,
   "categories": [
     "agent",
     "animation",
@@ -111,6 +111,7 @@
     "stats.write",
     "status.read",
     "status.write",
+    "system.admin",
     "terrain.generate",
     "terrain.read",
     "trace.read",
@@ -122,6 +123,8 @@
   ],
   "permissionProfiles": {
     "builder.readWrite": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -303,6 +306,8 @@
       "physics.read"
     ],
     "terrain.author": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -327,9 +332,25 @@
       "physics.read",
       "agent.read",
       "trace.read",
+      "design.read",
+      "runtime.derived.read"
+    ],
+    "system.admin": [
+      "system.admin",
+      "scene.read",
+      "ecs.read",
+      "physics.read",
+      "agent.read",
+      "trace.read",
       "design.read"
     ],
+    "system.derived-build": [
+      "authoring.read",
+      "authoring.write"
+    ],
     "builder.review": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -345,6 +366,7 @@
       "catalog.read"
     ],
     "reviewer": [
+      "authoring.read",
       "scene.read",
       "ecs.read",
       "physics.read",
@@ -352,7 +374,8 @@
       "approval.review",
       "trace.read",
       "design.read",
-      "catalog.read"
+      "catalog.read",
+      "runtime.derived.read"
     ],
     "reviewer.coordinator": [
       "orchestrate",
@@ -1638,6 +1661,7 @@
         "normalizeHeight?": "number>0,<=500",
         "material?": "{color,roughness,metalness}",
         "hash?": "string",
+        "designRef?": "{schema,mapId,kind,id}",
         "qcRender?": "string",
         "qcChecks?": "object"
       },
@@ -1734,6 +1758,41 @@
           "hash": {
             "type": "string"
           },
+          "designRef": {
+            "type": "object",
+            "properties": {
+              "schema": {
+                "type": "string",
+                "const": "limina.atlas-design-ref/v1"
+              },
+              "mapId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "feature",
+                  "marker",
+                  "place",
+                  "stamp"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "schema",
+              "mapId",
+              "kind",
+              "id"
+            ],
+            "additionalProperties": false
+          },
           "qcRender": {
             "type": "string"
           },
@@ -1763,17 +1822,135 @@
       }
     },
     {
+      "name": "asset.placeLod",
+      "version": "1.0.0",
+      "category": "three",
+      "priority": "standard",
+      "description": "Place a curated glTF asset as a screen-distance LOD: multiple resolution levels that the renderer swaps by camera distance for draw-call control. Level 0 is the nearest/highest-detail mesh and defines the collider + committed identity. Same transform/ground/normalize semantics as asset.place; records the REQUEST (ordered level ids + distances + level-0 hash).",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "lods": "{assetId,distance}[]",
+        "position": "[number,number,number]=[0,0,0]",
+        "rotation?": "[number,number,number]",
+        "scale?": "[number,number,number]",
+        "ground": "boolean=true",
+        "normalizeHeight?": "number>0,<=500",
+        "hash?": "string"
+      },
+      "output": {
+        "entity": "string",
+        "hash": "string",
+        "levels": "integer>=-9007199254740991,<=9007199254740991",
+        "resource": "{kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}",
+        "bounds": "[number,number,number]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "lods": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "assetId": {
+                  "type": "string"
+                },
+                "distance": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "assetId",
+                "distance"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "rotation": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scale": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "ground": {
+            "default": true,
+            "type": "boolean"
+          },
+          "normalizeHeight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          },
+          "hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lods",
+          "position",
+          "ground"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "asset.scatter",
       "version": "1.0.0",
       "category": "three",
       "priority": "standard",
-      "description": "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.",
+      "description": "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Optional LOD levels use cell-classified, draw-bounded aggregate instance batches. Returns the placement count + pinned hashes.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "regionId": "string",
-        "config": "{seed,density,assets,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,biomes,tempMin,tempMax,exclusions}",
+        "config": "{seed,density,assets,cellSize,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,embedRadius,biomes,tempMin,tempMax,exclusions,inclusions}",
         "assetHashes?": "object"
       },
       "output": {
@@ -1815,6 +1992,72 @@
                     "weight": {
                       "type": "number",
                       "exclusiveMinimum": 0
+                    },
+                    "embedRadius": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "lods": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "distance": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "hysteresis": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "distance"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "treeLod": {
+                      "type": "object",
+                      "properties": {
+                        "reducedId": {
+                          "type": "string"
+                        },
+                        "reducedDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "impostorId": {
+                          "type": "string"
+                        },
+                        "impostorDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "cullDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "hysteresis": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.49
+                        }
+                      },
+                      "required": [
+                        "reducedId",
+                        "reducedDistance",
+                        "impostorId",
+                        "impostorDistance",
+                        "cullDistance"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -1822,6 +2065,10 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "cellSize": {
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "elevationMin": {
                 "type": "number"
@@ -1860,6 +2107,10 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "embedRadius": {
+                "type": "number",
+                "minimum": 0
+              },
               "biomes": {
                 "type": "array",
                 "items": {
@@ -1875,6 +2126,30 @@
                 "type": "number"
               },
               "exclusions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "z": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "z",
+                    "r"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "inclusions": {
                 "type": "array",
                 "items": {
                   "type": "object",
@@ -4903,7 +5178,7 @@
       "priority": "standard",
       "description": "Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.",
       "permissions": [
-        "scene.read"
+        "system.admin"
       ],
       "input": {
         "target": "enum(skill|scene|data)",
@@ -6798,14 +7073,15 @@
       ],
       "input": {
         "afterEntity?": "string",
+        "entityVersion?": "integer>=0,<=9007199254740991",
         "limit": "integer>=0,<=500=100",
         "includeResources": "boolean=true",
         "includeSkills": "boolean=true"
       },
       "output": {
-        "page": "{limit,totalEntities,nextAfterEntity}",
+        "page": "{limit,totalEntities,nextAfterEntity,entityVersion}",
         "world": "any",
-        "entities": "{entity,eid,generation,transform,tags,physics,resource,origin,material}[]",
+        "entities": "{entity,eid,generation,parent,transform,tags,physics,resource,origin,material}[]",
         "agents": "any[]",
         "skills": "{name,version,category,permissions}[]",
         "permissions": "{caller,profiles}",
@@ -6818,6 +7094,11 @@
         "properties": {
           "afterEntity": {
             "type": "string"
+          },
+          "entityVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
           "limit": {
             "default": 100,
@@ -6975,7 +7256,7 @@
       },
       "output": {
         "ok": "boolean",
-        "result?": "any"
+        "result?": "object"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7109,7 +7390,7 @@
       "name": "interaction.query",
       "version": "1.0.0",
       "category": "interaction",
-      "priority": "core",
+      "priority": "standard",
       "description": "Query interactable entities within range of a position (or the actor entity), sorted by distance. Uses the world spatial index over real entity transforms. Pure read — emits nothing.",
       "permissions": [
         "interaction.read"
@@ -7310,7 +7591,7 @@
       },
       "output": {
         "ok": "boolean",
-        "result?": "any",
+        "result?": "object",
         "reason?": "string"
       },
       "input_schema": {
@@ -7914,10 +8195,10 @@
     },
     {
       "name": "material.import",
-      "version": "1.0.0",
+      "version": "1.2.0",
       "category": "three",
       "priority": "standard",
-      "description": "Import a CC0 texture pack (albedo + optional normal + roughness images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
+      "description": "Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
       "permissions": [
         "scene.write"
       ],
@@ -7926,6 +8207,9 @@
         "albedo": "string",
         "normal?": "string",
         "roughness?": "string",
+        "occlusion?": "string",
+        "displacement?": "string",
+        "occlusionStrength": "number>=0,<=1=1",
         "triplanar": "boolean=false",
         "scale": "number>0=0.5",
         "normalStrength": "number>=0=1",
@@ -7933,6 +8217,8 @@
         "metalness": "number>=0,<=1=0",
         "baseRoughness": "number>=0,<=1=0.85",
         "color?": "integer>=0,<=16777215",
+        "antiTiling": "boolean=false",
+        "parallax?": "{heightScale,minLayers,maxLayers,fadeStart,fadeEnd}",
         "hashes?": "object"
       },
       "output": {
@@ -7957,6 +8243,18 @@
           },
           "roughness": {
             "type": "string"
+          },
+          "occlusion": {
+            "type": "string"
+          },
+          "displacement": {
+            "type": "string"
+          },
+          "occlusionStrength": {
+            "default": 1,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           },
           "triplanar": {
             "default": false,
@@ -7994,6 +8292,53 @@
             "minimum": 0,
             "maximum": 16777215
           },
+          "antiTiling": {
+            "default": false,
+            "type": "boolean"
+          },
+          "parallax": {
+            "type": "object",
+            "properties": {
+              "heightScale": {
+                "default": 0.04,
+                "type": "number",
+                "minimum": 0,
+                "maximum": 0.2
+              },
+              "minLayers": {
+                "default": 8,
+                "type": "integer",
+                "minimum": 4,
+                "maximum": 16
+              },
+              "maxLayers": {
+                "default": 16,
+                "type": "integer",
+                "minimum": 8,
+                "maximum": 24
+              },
+              "fadeStart": {
+                "default": 20,
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "fadeEnd": {
+                "default": 40,
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 2000
+              }
+            },
+            "required": [
+              "heightScale",
+              "minLayers",
+              "maxLayers",
+              "fadeStart",
+              "fadeEnd"
+            ],
+            "additionalProperties": false
+          },
           "hashes": {
             "type": "object",
             "propertyNames": {
@@ -8007,12 +8352,14 @@
         "required": [
           "name",
           "albedo",
+          "occlusionStrength",
           "triplanar",
           "scale",
           "normalStrength",
           "sharpness",
           "metalness",
-          "baseRoughness"
+          "baseRoughness",
+          "antiTiling"
         ],
         "additionalProperties": false
       }
@@ -8852,7 +9199,8 @@
       ],
       "input": {},
       "output": {
-        "events": "{started,bodyA,bodyB,entityA,entityB,point,normal}[]"
+        "events": "{started,bodyA,bodyB,entityA,entityB,point,normal}[]",
+        "dropped": "integer>=0,<=9007199254740991"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -8979,7 +9327,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "core",
-      "description": "Trigger a jump on the player's character controller — only takes effect when grounded. Sets the controller's upward velocity (fed through move_character + gravity), NOT a force impulse (a kinematic body ignores impulses). Advances one fixed step; returns whether it jumped + the new position.",
+      "description": "Apply the player's vertical action for one fixed step: jump when grounded or accelerate toward the surface while swimming. Uses controller velocity, not a force impulse (kinematic bodies ignore impulses).",
       "permissions": [
         "player.write"
       ],
@@ -8990,7 +9338,10 @@
       "output": {
         "jumped": "boolean",
         "grounded": "boolean",
-        "newPosition": "[number,number,number]"
+        "newPosition": "[number,number,number]",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9019,7 +9370,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "core",
-      "description": "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving collisions, slopes, autostep, snap-to-ground, and gravity. Sprint (player.sprint) raises the speed; crouch (player.crouch) lowers it. Returns the corrected position + grounded.",
+      "description": "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving ground or swim movement. Sprint raises ground speed but is ignored while swimming; crouch lowers horizontal input. Returns position, grounded, and water state.",
       "permissions": [
         "player.write"
       ],
@@ -9035,7 +9386,10 @@
       "output": {
         "moved": "boolean",
         "grounded": "boolean",
-        "newPosition": "[number,number,number]"
+        "newPosition": "[number,number,number]",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9111,6 +9465,10 @@
         "runSpeed": "number>0=6",
         "gravity": "number>0=22",
         "jumpSpeed": "number>0=8",
+        "swimSpeed": "number=3",
+        "buoyancyGain": "number=18",
+        "waterDrag": "number=6",
+        "maxSwimVerticalSpeed": "number=4",
         "crouchSpeedScale": "number>0,<=1=0.5",
         "meta?": "object"
       },
@@ -9118,7 +9476,10 @@
         "entity": "string",
         "bodyId": "number",
         "position": "[number,number,number]",
-        "grounded": "boolean"
+        "grounded": "boolean",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9175,6 +9536,26 @@
             "type": "number",
             "exclusiveMinimum": 0
           },
+          "swimSpeed": {
+            "default": 3,
+            "description": "Horizontal swim speed (m/s); sprint is ignored while swimming.",
+            "type": "number"
+          },
+          "buoyancyGain": {
+            "default": 18,
+            "description": "Vertical spring gain toward the surface-relative float target (1/s^2).",
+            "type": "number"
+          },
+          "waterDrag": {
+            "default": 6,
+            "description": "Vertical damping while swimming (1/s).",
+            "type": "number"
+          },
+          "maxSwimVerticalSpeed": {
+            "default": 4,
+            "description": "Symmetric vertical swim-speed limit (m/s).",
+            "type": "number"
+          },
           "crouchSpeedScale": {
             "default": 0.5,
             "description": "Move-speed scale while crouching.",
@@ -9199,6 +9580,10 @@
           "runSpeed",
           "gravity",
           "jumpSpeed",
+          "swimSpeed",
+          "buoyancyGain",
+          "waterDrag",
+          "maxSwimVerticalSpeed",
           "crouchSpeedScale"
         ],
         "additionalProperties": false
@@ -9209,7 +9594,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "standard",
-      "description": "Toggle sprint for a player entity. While on, player.move runs the controller at run speed (a real, faster move) instead of walk speed.",
+      "description": "Toggle sprint for a player entity. While on, ground movement uses run speed instead of walk speed; swimming deliberately ignores it.",
       "permissions": [
         "player.write"
       ],
@@ -10187,22 +10572,29 @@
       "version": "1.0.0",
       "category": "world",
       "priority": "standard",
-      "description": "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). Returns the resolved preset + which stages are wired. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation). Render-only: never touches the sim/log/replay.",
+      "description": "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset and materialization status.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "ao?": "{enabled,radius,scale,distanceExponent,thickness,samples,resolutionScale,intensity}",
         "bloom?": "{enabled,strength,radius,threshold}",
-        "grade?": "{enabled,exposure,contrast,saturation}"
+        "grade?": "{enabled,exposure,contrast,saturation}",
+        "godrays?": "{enabled,density,maxDensity,distanceAttenuation,raymarchSteps,intensity}",
+        "dof?": "{enabled,focusDistance,focalLength,bokehScale}",
+        "outline?": "{enabled,strength}"
       },
       "output": {
         "enabled": "boolean",
+        "deferred": "boolean",
         "ao": "boolean",
         "bloom": "boolean",
         "grade": "boolean",
         "depth": "boolean",
         "normal": "boolean",
+        "godrays": "boolean",
+        "dof": "boolean",
+        "outline": "boolean",
         "preset": "any"
       },
       "input_schema": {
@@ -10272,6 +10664,62 @@
                 "type": "number"
               },
               "saturation": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "godrays": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "density": {
+                "type": "number"
+              },
+              "maxDensity": {
+                "type": "number"
+              },
+              "distanceAttenuation": {
+                "type": "number"
+              },
+              "raymarchSteps": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "intensity": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dof": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "focusDistance": {
+                "type": "number"
+              },
+              "focalLength": {
+                "type": "number"
+              },
+              "bokehScale": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "outline": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "strength": {
                 "type": "number"
               }
             },
@@ -11400,7 +11848,7 @@
       "name": "scene.queryEntities",
       "version": "1.0.0",
       "category": "scene",
-      "priority": "core",
+      "priority": "standard",
       "description": "List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances.",
       "permissions": [
         "scene.read"
@@ -11526,7 +11974,7 @@
       "name": "skills.describe",
       "version": "1.0.0",
       "category": "system",
-      "priority": "core",
+      "priority": "standard",
       "description": "Describe a skill: version, category, and JSON-Schema input.",
       "permissions": [],
       "input": {
@@ -11557,7 +12005,7 @@
       "name": "skills.list",
       "version": "1.0.0",
       "category": "system",
-      "priority": "core",
+      "priority": "standard",
       "description": "List the skills the caller is authorized to invoke (names + descriptions). `mode:\"bootstrap\"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:\"full\"` (default) lists everything authorized.",
       "permissions": [],
       "input": {
@@ -12258,23 +12706,109 @@
                 "minimum": 0
               },
               "erosion": {
-                "type": "object",
-                "properties": {
-                  "rain": {
-                    "type": "number",
-                    "minimum": 0
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "rain": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "thermal": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "talus": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
                   },
-                  "thermal": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "talus": {
-                    "type": "number",
-                    "minimum": 0
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "schema": {
+                            "type": "string",
+                            "const": "limina.erosion-recipe/v1"
+                          },
+                          "enabled": {
+                            "type": "boolean",
+                            "const": false
+                          }
+                        },
+                        "required": [
+                          "schema",
+                          "enabled"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "schema": {
+                            "type": "string",
+                            "const": "limina.erosion-recipe/v1"
+                          },
+                          "enabled": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "rain": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          },
+                          "thermal": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 32
+                          },
+                          "talus": {
+                            "type": "number",
+                            "minimum": 0.000001,
+                            "maximum": 10000
+                          },
+                          "lifetime": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 64
+                          },
+                          "capacity": {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 64
+                          },
+                          "deposition": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "erosionRate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "schema",
+                          "enabled",
+                          "rain",
+                          "thermal",
+                          "talus",
+                          "lifetime",
+                          "capacity",
+                          "deposition",
+                          "erosionRate"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
                   }
-                },
-                "additionalProperties": false
+                ]
               },
               "source": {
                 "default": "procedural",
@@ -12313,7 +12847,7 @@
       "name": "terrain.deform",
       "version": "1.0.0",
       "category": "terrain",
-      "priority": "core",
+      "priority": "standard",
       "description": "Reshape an editable terrain layer with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
       "permissions": [
         "scene.write"
@@ -12401,7 +12935,7 @@
         "radius": "number>0",
         "strength": "number>=0,<=1=0.5",
         "falloff": "enum(smooth|linear|constant)=\"smooth\"",
-        "material": "enum(sand|grass|rock|dirt|snow|murk)=\"grass\"",
+        "material": "enum(sand|grass|rock|dirt|snow|murk|tundra)=\"grass\"",
         "erase": "boolean=false"
       },
       "output": {
@@ -12453,7 +12987,8 @@
               "rock",
               "dirt",
               "snow",
-              "murk"
+              "murk",
+              "tundra"
             ]
           },
           "erase": {
@@ -20909,45 +21444,30 @@
       }
     },
     {
-      "name": "vegetation.grass",
+      "name": "vegetation.grassField",
       "version": "1.0.0",
       "category": "terrain",
-      "priority": "core",
-      "description": "Carpet an editable terrain layer in climate-aware instanced ground grass, gated by slope + elevation (above water / below the snow line) and the SAME settlement footprints trees honor (so grass stops at the building pads / courtyard / lane). One InstancedMesh of curved, tapered bezier blades with a WebGPU-native TSL material (climate colour, three-layer coherent wind, subsurface-scattering backlight). Deterministic + recorded: the log carries the config, never the per-blade transforms. Returns the grass entity + blade count.",
+      "priority": "standard",
+      "description": "Create a deterministic, bounded, paint-driven grass field using native WebGPU compute when available and the canonical CPU field plan otherwise.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "terrain?": "string",
-        "climate": "enum(summer|autumn|dry|winter)=\"summer\"",
-        "density": "integer>=1,<=1024=360",
-        "seed": "integer>=-9007199254740991,<=9007199254740991=1337",
-        "coverage?": "number>=0,<=1",
-        "cluster": "number>=0,<=1=0.3",
-        "slopeMax": "number>=0=0.6",
+        "seed": "integer>=-2147483648,<=2147483647=1337",
+        "spacing": "number>0=0.75",
+        "tileSize": "number>0=24",
         "elevationMin?": "number",
         "elevationMax?": "number",
-        "sizeRange": "[number>0,number>0]=[0.7,1.3]",
-        "bladeHeight": "number>0=0.3",
-        "bladeWidth": "number>0=0.045",
-        "segments": "integer>=1,<=8=3",
-        "curvature": "number>=0=0.06",
-        "windStrength": "number>=0=0.045",
-        "windSpeed": "number>=0=1.1",
-        "windGust": "number>=0=0.06",
-        "windGustFreq": "number>=0=0.18",
-        "sssStrength": "number>=0=0.5",
-        "aoStrength": "number>=0,<=1=0.45",
-        "groundTint": "number>=0,<=1=0.85",
-        "maxBlades": "integer>=1000,<=9007199254740991=320000",
-        "exclusions?": "{x,z,r}[]",
-        "include?": "{x,z,r}[]",
-        "tags?": "string[]"
+        "slopeMax": "number>=0=0.9",
+        "sizeRange": "[number>=0,number>=0]=[0.7,1.3]",
+        "climate": "enum(summer|autumn|dry|winter)=\"summer\""
       },
       "output": {
         "entity": "string",
-        "blades": "integer>=-9007199254740991,<=9007199254740991",
-        "exclusions": "integer>=-9007199254740991,<=9007199254740991"
+        "gridTiles": "integer>=-9007199254740991,<=9007199254740991",
+        "candidateSlots": "integer>=-9007199254740991,<=9007199254740991",
+        "planHash": "string"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -20956,49 +21476,32 @@
           "terrain": {
             "type": "string"
           },
-          "climate": {
-            "default": "summer",
-            "type": "string",
-            "enum": [
-              "summer",
-              "autumn",
-              "dry",
-              "winter"
-            ]
-          },
-          "density": {
-            "default": 360,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1024
-          },
           "seed": {
             "default": 1337,
             "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "minimum": -2147483648,
+            "maximum": 2147483647
           },
-          "coverage": {
+          "spacing": {
+            "default": 0.75,
             "type": "number",
-            "minimum": 0,
-            "maximum": 1
+            "exclusiveMinimum": 0
           },
-          "cluster": {
-            "default": 0.3,
+          "tileSize": {
+            "default": 24,
             "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "slopeMax": {
-            "default": 0.6,
-            "type": "number",
-            "minimum": 0
+            "exclusiveMinimum": 0
           },
           "elevationMin": {
             "type": "number"
           },
           "elevationMax": {
             "type": "number"
+          },
+          "slopeMax": {
+            "default": 0.9,
+            "type": "number",
+            "minimum": 0
           },
           "sizeRange": {
             "default": [
@@ -21009,152 +21512,32 @@
             "items": [
               {
                 "type": "number",
-                "exclusiveMinimum": 0
+                "minimum": 0
               },
               {
                 "type": "number",
-                "exclusiveMinimum": 0
+                "minimum": 0
               }
             ]
           },
-          "bladeHeight": {
-            "default": 0.3,
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "bladeWidth": {
-            "default": 0.045,
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "segments": {
-            "default": 3,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 8
-          },
-          "curvature": {
-            "default": 0.06,
-            "type": "number",
-            "minimum": 0
-          },
-          "windStrength": {
-            "default": 0.045,
-            "type": "number",
-            "minimum": 0
-          },
-          "windSpeed": {
-            "default": 1.1,
-            "type": "number",
-            "minimum": 0
-          },
-          "windGust": {
-            "default": 0.06,
-            "type": "number",
-            "minimum": 0
-          },
-          "windGustFreq": {
-            "default": 0.18,
-            "type": "number",
-            "minimum": 0
-          },
-          "sssStrength": {
-            "default": 0.5,
-            "type": "number",
-            "minimum": 0
-          },
-          "aoStrength": {
-            "default": 0.45,
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "groundTint": {
-            "default": 0.85,
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "maxBlades": {
-            "default": 320000,
-            "type": "integer",
-            "minimum": 1000,
-            "maximum": 9007199254740991
-          },
-          "exclusions": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "z": {
-                  "type": "number"
-                },
-                "r": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              },
-              "required": [
-                "x",
-                "z",
-                "r"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "include": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "z": {
-                  "type": "number"
-                },
-                "r": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              },
-              "required": [
-                "x",
-                "z",
-                "r"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "tags": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+          "climate": {
+            "default": "summer",
+            "type": "string",
+            "enum": [
+              "summer",
+              "autumn",
+              "dry",
+              "winter"
+            ]
           }
         },
         "required": [
-          "climate",
-          "density",
           "seed",
-          "cluster",
+          "spacing",
+          "tileSize",
           "slopeMax",
           "sizeRange",
-          "bladeHeight",
-          "bladeWidth",
-          "segments",
-          "curvature",
-          "windStrength",
-          "windSpeed",
-          "windGust",
-          "windGustFreq",
-          "sssStrength",
-          "aoStrength",
-          "groundTint",
-          "maxBlades"
+          "climate"
         ],
         "additionalProperties": false
       }
@@ -21163,14 +21546,14 @@
       "name": "vegetation.plant",
       "version": "1.0.0",
       "category": "terrain",
-      "priority": "core",
+      "priority": "standard",
       "description": "Plant a SINGLE tree of a species (spruce/pine/birch) at a point — the per-tree counterpart to vegetation.scatter. A light single entity (works where a full forest is too heavy), for composing a scene tree by tree. Deterministic + recorded.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "species": "enum(spruce|pine|birch|oak|ash|dead-oak)=\"spruce\"",
-        "assets?": "{id,weight}[]",
+        "assets?": "{id,weight,treeLod}[]",
         "position?": "[number,number,number]",
         "terrain?": "string",
         "seed": "integer>=-9007199254740991,<=9007199254740991=1",
@@ -21211,6 +21594,43 @@
                 "weight": {
                   "type": "number",
                   "exclusiveMinimum": 0
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -21279,7 +21699,7 @@
       "input": {
         "terrain?": "string",
         "species?": "enum(spruce|pine|birch|oak|ash|dead-oak)[]",
-        "assets?": "{id,weight}[]",
+        "assets?": "{id,weight,treeLod}[]",
         "density": "integer>=1,<=192=16",
         "seed": "integer>=-9007199254740991,<=9007199254740991=1337",
         "elevationMin?": "number",
@@ -21331,6 +21751,43 @@
                 "weight": {
                   "type": "number",
                   "exclusiveMinimum": 0
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -21928,7 +22385,7 @@
       "name": "village.build",
       "version": "1.0.0",
       "category": "three",
-      "priority": "core",
+      "priority": "standard",
       "description": "Lay a terrain-aware settlement onto an editable terrain layer by placing curated library GLB assets. Reads the live heightfield, runs the shared deterministic layout planner (focal on the chosen ground, cluster terraced below, edge building beyond), and invokes asset.place per building. Deterministic + replay-safe: the world log records the direction + steering + seed + PINNED asset hashes, NEVER the transforms, which replay recomputes. Returns the placed entities + computed placements.",
       "permissions": [
         "scene.write"
@@ -22046,7 +22503,6 @@
                 "additionalProperties": false
               },
               "siting": {
-                "default": {},
                 "type": "object",
                 "properties": {
                   "terrace": {
@@ -22197,6 +22653,124 @@
       }
     },
     {
+      "name": "world.addMapRivers",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Render every waterway in a validated WorldMap asset as terrain-following river ribbons without duplicating its centerline data in authoring source.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "mapAssetId": "string",
+        "mapHash?": "string",
+        "widthScale": "number>0,<=10=1",
+        "color?": "integer>=0,<=16777215",
+        "level?": "number",
+        "terrainEntity?": "string"
+      },
+      "output": {
+        "rivers": "integer>=-9007199254740991,<=9007199254740991",
+        "points": "integer>=-9007199254740991,<=9007199254740991",
+        "mapHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mapHash": {
+            "type": "string"
+          },
+          "widthScale": {
+            "default": 1,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 10
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "level": {
+            "type": "number"
+          },
+          "terrainEntity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapAssetId",
+          "widthScale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "world.addMapWater",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Mount the verified WorldMap ocean, standing WaterBodies, and waterways as one idempotent render-only water set.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "mapAssetId": "string",
+        "mapHash?": "string",
+        "widthScale": "number>0,<=10=1",
+        "color?": "integer>=0,<=16777215",
+        "level?": "number",
+        "terrainEntity?": "string"
+      },
+      "output": {
+        "ocean": "integer>=-9007199254740991,<=9007199254740991",
+        "bodies": "integer>=-9007199254740991,<=9007199254740991",
+        "rivers": "integer>=-9007199254740991,<=9007199254740991",
+        "points": "integer>=-9007199254740991,<=9007199254740991",
+        "mapHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mapHash": {
+            "type": "string"
+          },
+          "widthScale": {
+            "default": 1,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 10
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "level": {
+            "type": "number"
+          },
+          "terrainEntity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapAssetId",
+          "widthScale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "world.addRiver",
       "version": "1.0.0",
       "category": "world",
@@ -22206,8 +22780,11 @@
         "scene.write"
       ],
       "input": {
-        "points": "[number,number][]",
-        "widthM": "number>0=6",
+        "points": "[number>=-10000000,<=10000000,number>=-10000000,<=10000000][]",
+        "widthM": "number>0,<=100000=6",
+        "widths?": "number>0,<=100000[]",
+        "class": "enum(river|stream)=\"river\"",
+        "order?": "integer>=1,<=12",
         "color?": "integer>=-9007199254740991,<=9007199254740991",
         "level?": "number",
         "terrainEntity?": "string"
@@ -22223,15 +22800,20 @@
         "properties": {
           "points": {
             "minItems": 2,
+            "maxItems": 8192,
             "type": "array",
             "items": {
               "type": "array",
               "items": [
                 {
-                  "type": "number"
+                  "type": "number",
+                  "minimum": -10000000,
+                  "maximum": 10000000
                 },
                 {
-                  "type": "number"
+                  "type": "number",
+                  "minimum": -10000000,
+                  "maximum": 10000000
                 }
               ]
             }
@@ -22239,7 +22821,31 @@
           "widthM": {
             "default": 6,
             "type": "number",
-            "exclusiveMinimum": 0
+            "exclusiveMinimum": 0,
+            "maximum": 100000
+          },
+          "widths": {
+            "minItems": 2,
+            "maxItems": 8192,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 100000
+            }
+          },
+          "class": {
+            "default": "river",
+            "type": "string",
+            "enum": [
+              "river",
+              "stream"
+            ]
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
           },
           "color": {
             "type": "integer",
@@ -22255,7 +22861,8 @@
         },
         "required": [
           "points",
-          "widthM"
+          "widthM",
+          "class"
         ],
         "additionalProperties": false
       }
@@ -22637,7 +23244,7 @@
       "name": "world.populateBiome",
       "version": "1.0.0",
       "category": "world",
-      "priority": "core",
+      "priority": "standard",
       "description": "Scatter a terrain TYPE's biome content (trees/rocks/grass/cacti/palms, biome- and elevation-gated) over an ALREADY-GENERATED region (by regionId), via the deterministic asset.scatter seam. Surveys the region's relief with the hints it was generated with, resolves the type's content layers, and drives asset.scatter per layer. Deterministic + replay-safe: the world log records THIS request; the nested asset.scatter calls are recomputed on replay (no double-record). Returns the placement count + per-layer summary.",
       "permissions": [
         "scene.write"
@@ -22647,6 +23254,7 @@
         "type?": "enum(beach|mountains|forest|desert|plains|hills|islands)",
         "waterLevel?": "number",
         "waterMargin?": "number",
+        "cellSize?": "number>0",
         "seed?": "integer>=-9007199254740991,<=9007199254740991",
         "biomePack?": "object"
       },
@@ -22682,6 +23290,10 @@
           "waterMargin": {
             "type": "number"
           },
+          "cellSize": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
           "seed": {
             "type": "integer",
             "minimum": -9007199254740991,
@@ -22708,23 +23320,79 @@
                   "type": "string"
                 },
                 "embedRadius": {
-                  "type": "number"
+                  "type": "number",
+                  "minimum": 0
+                },
+                "lods": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "distance": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "hysteresis": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "distance"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
                 "id"
               ],
               "additionalProperties": false
-            },
-            "required": [
-              "conifer",
-              "broadleaf",
-              "boulder",
-              "bush",
-              "grass",
-              "cactus",
-              "palm"
-            ]
+            }
           }
         },
         "required": [
@@ -22788,14 +23456,17 @@
       "version": "1.0.0",
       "category": "world",
       "priority": "standard",
-      "description": "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset (content-hash pinned, THROWS on tamper/identity mismatch) and rebinds world.generateRegion/world.streamFollow/asset.scatter/water to a MapTerrainSource derived from it; kind 'procedural' restores the default generator. RECORDED — replay reconstructs the source from this command. Must run BEFORE any world.generateRegion (rejects once regions exist). Map tiles re-derive from the IR, so they are never export-retained (the export ships the IR asset, not tiles).",
+      "description": "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset and records its raster seed, amplitude, and optional versioned master-erosion recipe; omission preserves legacy no-erosion bytes. Replay reconstructs the same once-baked MapTerrainSource. kind 'procedural' restores the default generator. Must run BEFORE any world.generateRegion. Map tiles sample the baked master and are never export-retained.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "kind": "enum(procedural|map)",
         "mapAssetId?": "string",
-        "hash?": "string"
+        "hash?": "string",
+        "seed?": "integer>=-2147483648,<=2147483647",
+        "baseAmplitude?": "number>0",
+        "erosion?": "{schema,enabled}|{schema,enabled,rain,thermal,talus,lifetime,capacity,deposition,erosionRate}"
       },
       "output": {
         "kind": "enum(procedural|map)",
@@ -22819,6 +23490,97 @@
           },
           "hash": {
             "type": "string"
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          },
+          "baseAmplitude": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "erosion": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "limina.erosion-recipe/v1"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "const": false
+                  }
+                },
+                "required": [
+                  "schema",
+                  "enabled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "limina.erosion-recipe/v1"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "rain": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "thermal": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 32
+                  },
+                  "talus": {
+                    "type": "number",
+                    "minimum": 0.000001,
+                    "maximum": 10000
+                  },
+                  "lifetime": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64
+                  },
+                  "capacity": {
+                    "type": "number",
+                    "minimum": 0.01,
+                    "maximum": 64
+                  },
+                  "deposition": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "erosionRate": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "schema",
+                  "enabled",
+                  "rain",
+                  "thermal",
+                  "talus",
+                  "lifetime",
+                  "capacity",
+                  "deposition",
+                  "erosionRate"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": [

@@ -46,6 +46,12 @@ interface JoinOffsets {
 
 const DUPLICATE_EPSILON_M = 1e-7;
 const DEFAULT_MITER_LIMIT = 4;
+const RIVER_MIN_ALONG_SUBDIVISIONS = 1;
+const RIVER_MAX_ALONG_SUBDIVISIONS = 24;
+const RIVER_TARGET_ALONG_EDGE_M = 1;
+const RIVER_MIN_CROSS_SUBDIVISIONS = 6;
+const RIVER_MAX_CROSS_SUBDIVISIONS = 20;
+const RIVER_TARGET_CROSS_EDGE_M = 0.5;
 
 function finite(value: number, label: string): number {
   if (!Number.isFinite(value)) throw new TypeError(`${label} must be finite`);
@@ -190,6 +196,34 @@ function joins(points: CleanRiverPoint[], miterLimit: number): { joins: JoinOffs
   return { joins: result, directions };
 }
 
+/** One continuous lighting normal per centerline point. Ribbon vertices are intentionally
+ * duplicated per segment for flow attributes and bevel ownership; computeVertexNormals would
+ * therefore shade each quad as a separate panel. */
+function riverPointNormals(points: CleanRiverPoint[], offsets: readonly JoinOffsets[]): readonly (readonly [number, number, number])[] {
+  return points.map((point, index) => {
+    const previous = points[Math.max(0, index - 1)], next = points[Math.min(points.length - 1, index + 1)];
+    const tx = next.x - previous.x, ty = next.elevationM - previous.elevationM, tz = next.z - previous.z;
+    const join = offsets[index];
+    const ax = join.incoming[0] + join.outgoing[0], az = join.incoming[1] + join.outgoing[1];
+    const acrossLength = Math.hypot(ax, az) || 1;
+    const acrossX = ax / acrossLength, acrossZ = az / acrossLength;
+    let nx = -acrossZ * ty, ny = acrossZ * tx - acrossX * tz, nz = acrossX * ty;
+    if (ny < 0) { nx *= -1; ny *= -1; nz *= -1; }
+    const length = Math.hypot(nx, ny, nz) || 1;
+    return Object.freeze([nx / length, ny / length, nz / length] as [number, number, number]);
+  });
+}
+
+function riverPointFlowDirections(segmentDirections: readonly [number, number][], pointCount: number): readonly (readonly [number, number])[] {
+  return Array.from({ length: pointCount }, (_, index) => {
+    const incoming = segmentDirections[Math.max(0, index - 1)];
+    const outgoing = segmentDirections[Math.min(segmentDirections.length - 1, index)];
+    const x = incoming[0] + outgoing[0], z = incoming[1] + outgoing[1];
+    const length = Math.hypot(x, z) || 1;
+    return Object.freeze([x / length, z / length] as [number, number]);
+  });
+}
+
 /** Build a variable-width river ribbon with bounded miters and explicit bevel fallbacks. */
 export function buildVariableRiverRibbonGeometry(input: RiverRibbonGeometryInput): RiverRibbonGeometry {
   const points = cleanRiver(input);
@@ -211,21 +245,61 @@ export function buildVariableRiverRibbonGeometry(input: RiverRibbonGeometryInput
   for (let index = 1; index < points.length; index++) {
     distances[index] = distances[index - 1] + Math.hypot(points[index].x - points[index - 1].x, points[index].z - points[index - 1].z);
   }
-  const positions: number[] = [], arcDistances: number[] = [], flowDirections: number[] = [], indices: number[] = [];
-  const push = (x: number, y: number, z: number, arc: number, flow: [number, number]): number => {
+  const pointNormals = riverPointNormals(points, built.joins);
+  const pointFlows = riverPointFlowDirections(built.directions, points.length);
+  const tessellation: Array<Readonly<{ along: number; across: number }>> = [];
+  let minAlong = Infinity, maxAlong = 0, minAcross = Infinity, maxAcross = 0, quadCount = 0;
+  const positions: number[] = [], normals: number[] = [], arcDistances: number[] = [], crossDistances: number[] = [], crossRatios: number[] = [], flowDirections: number[] = [], indices: number[] = [];
+  const push = (x: number, y: number, z: number, arc: number, cross: number, crossRatio: number, flow: [number, number], normal: readonly [number, number, number]): number => {
     const index = positions.length / 3;
     positions.push(x - origin[0], y - origin[1], z - origin[2]);
-    arcDistances.push(arc); flowDirections.push(flow[0], flow[1]);
+    normals.push(normal[0], normal[1], normal[2]);
+    arcDistances.push(arc); crossDistances.push(cross); crossRatios.push(crossRatio); flowDirections.push(flow[0], flow[1]);
     return index;
   };
   for (let segment = 0; segment < points.length - 1; segment++) {
-    const start = points[segment], end = points[segment + 1], flow = built.directions[segment];
+    const start = points[segment], end = points[segment + 1];
+    const segmentLengthM = Math.hypot(end.x - start.x, end.z - start.z);
+    const alongSubdivisions = Math.max(RIVER_MIN_ALONG_SUBDIVISIONS,
+      Math.min(RIVER_MAX_ALONG_SUBDIVISIONS, Math.ceil(segmentLengthM / RIVER_TARGET_ALONG_EDGE_M)));
+    const segmentWidthM = Math.max(start.widthM, end.widthM);
+    const acrossSubdivisions = Math.max(RIVER_MIN_CROSS_SUBDIVISIONS,
+      Math.min(RIVER_MAX_CROSS_SUBDIVISIONS, Math.ceil(segmentWidthM / RIVER_TARGET_CROSS_EDGE_M)));
+    tessellation.push(Object.freeze({ along: alongSubdivisions, across: acrossSubdivisions }));
+    minAlong = Math.min(minAlong, alongSubdivisions); maxAlong = Math.max(maxAlong, alongSubdivisions);
+    minAcross = Math.min(minAcross, acrossSubdivisions); maxAcross = Math.max(maxAcross, acrossSubdivisions);
+    quadCount += alongSubdivisions * acrossSubdivisions;
+    const startFlow = pointFlows[segment], endFlow = pointFlows[segment + 1];
     const startOffset = built.joins[segment].outgoing, endOffset = built.joins[segment + 1].incoming;
-    const a = push(start.x + startOffset[0], start.elevationM, start.z + startOffset[1], distances[segment], flow);
-    const b = push(start.x - startOffset[0], start.elevationM, start.z - startOffset[1], distances[segment], flow);
-    const c = push(end.x + endOffset[0], end.elevationM, end.z + endOffset[1], distances[segment + 1], flow);
-    const d = push(end.x - endOffset[0], end.elevationM, end.z - endOffset[1], distances[segment + 1], flow);
-    indices.push(a, c, b, b, c, d);
+    const first = positions.length / 3;
+    for (let along = 0; along <= alongSubdivisions; along++) {
+      const t = along / alongSubdivisions, inverse = 1 - t;
+      const centerX = start.x * inverse + end.x * t, centerY = start.elevationM * inverse + end.elevationM * t;
+      const centerZ = start.z * inverse + end.z * t;
+      const offsetX = startOffset[0] * inverse + endOffset[0] * t;
+      const offsetZ = startOffset[1] * inverse + endOffset[1] * t;
+      let flowX = startFlow[0] * inverse + endFlow[0] * t, flowZ = startFlow[1] * inverse + endFlow[1] * t;
+      const flowLength = Math.hypot(flowX, flowZ) || 1; flowX /= flowLength; flowZ /= flowLength;
+      let normalX = pointNormals[segment][0] * inverse + pointNormals[segment + 1][0] * t;
+      let normalY = pointNormals[segment][1] * inverse + pointNormals[segment + 1][1] * t;
+      let normalZ = pointNormals[segment][2] * inverse + pointNormals[segment + 1][2] * t;
+      const normalLength = Math.hypot(normalX, normalY, normalZ) || 1;
+      normalX /= normalLength; normalY /= normalLength; normalZ /= normalLength;
+      const arc = distances[segment] * inverse + distances[segment + 1] * t;
+      const halfWidth = Math.hypot(offsetX, offsetZ);
+      for (let across = 0; across <= acrossSubdivisions; across++) {
+        const side = 1 - 2 * across / acrossSubdivisions;
+        push(centerX + offsetX * side, centerY, centerZ + offsetZ * side, arc, halfWidth * side, side,
+          [flowX, flowZ], [normalX, normalY, normalZ]);
+      }
+    }
+    const row = acrossSubdivisions + 1;
+    for (let along = 0; along < alongSubdivisions; along++) {
+      for (let across = 0; across < acrossSubdivisions; across++) {
+        const a = first + along * row + across, b = a + 1, c = a + row, d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
   }
   let bevelJoinCount = 0;
   for (let index = 1; index < points.length - 1; index++) {
@@ -233,26 +307,33 @@ export function buildVariableRiverRibbonGeometry(input: RiverRibbonGeometryInput
     if (!join.bevel || Math.abs(join.turn) <= 1e-9) continue;
     bevelJoinCount++;
     const current = points[index];
-    const flow: [number, number] = [
-      built.directions[index - 1][0] + built.directions[index][0],
-      built.directions[index - 1][1] + built.directions[index][1],
-    ];
-    const flowLength = Math.hypot(flow[0], flow[1]) || 1;
-    flow[0] /= flowLength; flow[1] /= flowLength;
+    const flow = pointFlows[index] as [number, number];
     const side = join.turn > 0 ? -1 : 1;
     const incoming = join.incoming, outgoing = join.outgoing;
-    const a = push(current.x + incoming[0] * side, current.elevationM, current.z + incoming[1] * side, distances[index], flow);
-    const b = push(current.x, current.elevationM, current.z, distances[index], flow);
-    const c = push(current.x + outgoing[0] * side, current.elevationM, current.z + outgoing[1] * side, distances[index], flow);
+    const a = push(current.x + incoming[0] * side, current.elevationM, current.z + incoming[1] * side, distances[index],
+      Math.hypot(incoming[0], incoming[1]) * side, side, flow, pointNormals[index]);
+    const b = push(current.x, current.elevationM, current.z, distances[index], 0, 0, flow, pointNormals[index]);
+    const c = push(current.x + outgoing[0] * side, current.elevationM, current.z + outgoing[1] * side, distances[index],
+      Math.hypot(outgoing[0], outgoing[1]) * side, side, flow, pointNormals[index]);
     if (join.turn > 0) indices.push(a, b, c);
     else indices.push(a, c, b);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   geometry.setAttribute("waterArcDistance", new THREE.Float32BufferAttribute(arcDistances, 1));
+  geometry.setAttribute("waterCrossDistance", new THREE.Float32BufferAttribute(crossDistances, 1));
+  geometry.setAttribute("waterCrossRatio", new THREE.Float32BufferAttribute(crossRatios, 1));
   geometry.setAttribute("waterFlowDirection", new THREE.Float32BufferAttribute(flowDirections, 2));
   geometry.setIndex(indices);
-  geometry.computeVertexNormals();
+  geometry.userData.liminaRiverTessellation = Object.freeze({
+    policy: "bounded-world-space/v1",
+    targetAlongEdgeM: RIVER_TARGET_ALONG_EDGE_M,
+    targetCrossEdgeM: RIVER_TARGET_CROSS_EDGE_M,
+    minAlong, maxAlong, minAcross, maxAcross,
+    quadCount,
+    segments: Object.freeze(tessellation),
+  });
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return {

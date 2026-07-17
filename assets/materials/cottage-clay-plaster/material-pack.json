@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-clay-plaster",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "clay_plaster",
+    "assetUrl": "https://polyhaven.com/a/clay_plaster",
+    "apiUrl": "https://api.polyhaven.com/files/clay_plaster",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:f0d4fe5fbcf277622d7eebe080b71428b1d7da30b05fb14402dc14477b73639e"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-clay-plaster/albedo.jpg",
+      "sha256": "sha256:82e43c68bddebb55a18577ae3cb0d01c02c23f086d342a854ff8a174d9f4fd73",
+      "assetHash": "sha256:da01fe2af553068162df6071ca47f2c73590383817da4ddb90803af8ced36e3e",
+      "md5": "aab6ac83dcf134a370279825de143c26",
+      "bytes": 354209,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clay_plaster/clay_plaster_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-clay-plaster/normal.jpg",
+      "sha256": "sha256:359f814292005ab16be86807678a4a51e8256a87c282ebf5f5333ce18c428fba",
+      "assetHash": "sha256:1faf60dc49343345421366474d9be979febd8c1fe59bf52fd27a01967c278252",
+      "md5": "82e9cc526a00b3b8fddf7e43c40bdb38",
+      "bytes": 784921,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clay_plaster/clay_plaster_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-clay-plaster/roughness.jpg",
+      "sha256": "sha256:e91a6238456b54a82dbf2c025e0b046851c90e7e772fe2affd26a46b243ce7b7",
+      "assetHash": "sha256:ac4a800904392817b1cb22d08913b9e64e853dc94032e7a531cafebbcd3630c0",
+      "md5": "d46fdc82c0538d0905281a761c63d9cf",
+      "bytes": 345709,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clay_plaster/clay_plaster_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-clay-plaster/occlusion.jpg",
+      "sha256": "sha256:68abd3834d30e8bdaa4b12b67f463f79e39514b5a21b0347b63cd5a520352fb2",
+      "assetHash": "sha256:e1b0e2c7dd9307c5f2c89d100ddc179747115b86d951090638401946275c9056",
+      "md5": "64bddcc6a371111e81e9e15df729ea77",
+      "bytes": 347863,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clay_plaster/clay_plaster_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-clay-plaster/displacement.jpg",
+      "sha256": "sha256:63ef77917491199b7e9a2895c29a665e192c6a8b8a10e9bcd800f9b34a91734d",
+      "assetHash": "sha256:94593d3622778786172e411182d8d173a5ab3b215fd446f82f9abb59aa6f1553",
+      "md5": "8456f3161594b47eda0828f0deefa191",
+      "bytes": 392452,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/clay_plaster/clay_plaster_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-clay-plaster",
+    "albedo": "materials/cottage-clay-plaster/albedo.jpg",
+    "normal": "materials/cottage-clay-plaster/normal.jpg",
+    "roughness": "materials/cottage-clay-plaster/roughness.jpg",
+    "occlusion": "materials/cottage-clay-plaster/occlusion.jpg",
+    "displacement": "materials/cottage-clay-plaster/displacement.jpg"
+  }
+}

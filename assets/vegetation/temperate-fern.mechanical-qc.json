@@ -1,0 +1,166 @@
+{
+  "schema": "limina.asset-qc-evidence/1",
+  "id": "limina-temperate-fern",
+  "model": {
+    "path": "vegetation/temperate-fern-lod0.glb",
+    "sha256": "sha256:8aeaf4393bd3e4de330052b6eaa86c80e21e3f5ad351ab34263e5990e0e284a4",
+    "metrics": {
+      "boundsM": [
+        2.564289,
+        0.556003,
+        2.241236
+      ],
+      "vertexCount": 4337,
+      "triangleCount": 6232,
+      "meshCount": 1,
+      "primitiveCount": 1,
+      "materialCount": 1,
+      "textureSlots": [
+        "baseColor",
+        "metallicRoughness",
+        "normal"
+      ],
+      "textures": [
+        {
+          "slot": "baseColor",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        },
+        {
+          "slot": "metallicRoughness",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        },
+        {
+          "slot": "normal",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        }
+      ]
+    }
+  },
+  "lods": [
+    {
+      "level": 1,
+      "path": "vegetation/temperate-fern-lod1.glb",
+      "sha256": "sha256:e8ae48a9c2d9c2ab74a24a7f0339e1313362a1bfc0858adf8d1085301b64cb4c",
+      "distanceM": 18,
+      "metrics": {
+        "boundsM": [
+          2.564289,
+          0.556003,
+          2.241236
+        ],
+        "vertexCount": 2196,
+        "triangleCount": 2803,
+        "meshCount": 1,
+        "primitiveCount": 1,
+        "materialCount": 1,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          }
+        ]
+      }
+    },
+    {
+      "level": 2,
+      "path": "vegetation/temperate-fern-lod2.glb",
+      "sha256": "sha256:58c8fc308614586addbcafe15e0f0386f9b64aa3430619862e0772287f9e9cce",
+      "distanceM": 42,
+      "metrics": {
+        "boundsM": [
+          2.562343,
+          0.556003,
+          2.232562
+        ],
+        "vertexCount": 1135,
+        "triangleCount": 1245,
+        "meshCount": 1,
+        "primitiveCount": 1,
+        "materialCount": 1,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          }
+        ]
+      }
+    }
+  ],
+  "contactSheet": {
+    "path": "qc/internal/temperate-groundcover-candidates.png",
+    "sha256": "sha256:07065c306780bc4a490abb38083218de7ee00bcbc33975927c52319e2eeeeba7"
+  },
+  "mechanicalFloor": {
+    "pass": true,
+    "score": 1,
+    "failures": [],
+    "measured": {
+      "readable": true,
+      "vertexCount": 4337,
+      "triangleCount": 6232,
+      "materialCount": 1,
+      "meshCount": 1,
+      "hasAlbedoMap": true,
+      "hasNormalMap": true,
+      "bboxDims": [
+        2.5642886996269225,
+        0.5560031253844501,
+        2.2412358462810515
+      ],
+      "materials": [
+        {
+          "colorHex": null,
+          "roughness01": 1,
+          "metalness01": 0,
+          "hasAlbedoTex": true,
+          "hasNormalTex": true
+        }
+      ]
+    }
+  },
+  "generator": "gltf-transform-scale-plus-meshoptimizer-LOD"
+}

@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "river-gravel",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Ground021",
+    "assetUrl": "https://ambientcg.com/a/Ground021",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Ground021_1K-JPG.zip",
+    "archiveBytes": 10754951,
+    "archiveSha256": "sha256:3ff4be9809c6778b50f84977019076a18e5a2cef0630281e0e10f8003bcb7770"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/river-gravel/albedo.jpg",
+      "sha256": "sha256:413ab5830aa484d3fea4d7e6fcdce126913169df19f31c54b086dbb164497e74",
+      "assetHash": "sha256:2eb0020bc3d9892ba0e637c93c02fa17cd0375e90efa01ac6f65e8331e2efffc",
+      "bytes": 2048273
+    },
+    "normal": {
+      "assetId": "materials/river-gravel/normal.jpg",
+      "sha256": "sha256:cbf99819f072225d3cb5c112fa68db885f75f998fcd1c10bdf9d8ada4e2f32a5",
+      "assetHash": "sha256:ff487d8335aaa8acd84eb29a3752430b9d1bfe46a8fa7e122d02e3b1d56c67a8",
+      "bytes": 2525080
+    },
+    "roughness": {
+      "assetId": "materials/river-gravel/roughness.jpg",
+      "sha256": "sha256:7c5643f3e4de1018ea4c806cce19b74efe9e2f1358d7b7583ed85290b3f1a771",
+      "assetHash": "sha256:1a465e47149d979184349897525deb1b72ad923ba9f7dc3ebce5e48ddbe85df0",
+      "bytes": 801354
+    },
+    "occlusion": {
+      "assetId": "materials/river-gravel/occlusion.jpg",
+      "sha256": "sha256:ab65edc047ad0d988b13160fa2c85fd74c98c9397e4ec96b574f88cf257fc2db",
+      "assetHash": "sha256:2e5ee0b745d343aee8d1e4c32c74e5f3b86c67548ffd30ccb61e71f89ee91a4b",
+      "bytes": 715846
+    },
+    "displacement": {
+      "assetId": "materials/river-gravel/displacement.jpg",
+      "sha256": "sha256:7bea5f7f5b5843fd43cfb3fd1b1ba3ed0f8d507ac777623469a17a57da3901bf",
+      "assetHash": "sha256:0840b052040789ded8bbbaf1644ec721cef8ee878679dd275a01ccb4042431f9",
+      "bytes": 511647
+    }
+  },
+  "materialImport": {
+    "name": "river-gravel",
+    "albedo": "materials/river-gravel/albedo.jpg",
+    "normal": "materials/river-gravel/normal.jpg",
+    "roughness": "materials/river-gravel/roughness.jpg",
+    "occlusion": "materials/river-gravel/occlusion.jpg",
+    "displacement": "materials/river-gravel/displacement.jpg"
+  }
+}

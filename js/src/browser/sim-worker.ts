@@ -401,6 +401,7 @@ function composeWorkerOps(P: WasmRapierPhysics, assets: ReadonlyMap<string, Uint
     op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
     op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
     op_physics_raycast: P.op_physics_raycast.bind(P),
+    op_physics_overlap_box: P.op_physics_overlap_box.bind(P),
     // ── render / loop / device input — no surface in a worker (input arrives via
     //    the InputRingBuffer, consumed directly in tick(), not these ops) ──
     op_create_window_context: () => ({}),

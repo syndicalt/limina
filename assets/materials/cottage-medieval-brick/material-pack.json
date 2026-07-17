@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-medieval-brick",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "medieval_red_brick",
+    "assetUrl": "https://polyhaven.com/a/medieval_red_brick",
+    "apiUrl": "https://api.polyhaven.com/files/medieval_red_brick",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:94350a1f170a6b26fe1c5e0aabd058b9969d14593315761e5038cdea5f85722b"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-medieval-brick/albedo.jpg",
+      "sha256": "sha256:72f9d1c0479ca5872b04e2c52cfb2074fa53f0e524c1a49afa7a033fee571d1d",
+      "assetHash": "sha256:6c89231f76315324e3c0ed21eb25731fd1eba498830cd8296ba4425c28d20a89",
+      "md5": "217f3e9db4fa2a89dfa49d5bf5e5bf97",
+      "bytes": 872053,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_red_brick/medieval_red_brick_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-medieval-brick/normal.jpg",
+      "sha256": "sha256:52e91425bd3fca954e492dc3b0993848df83286e1fcecfc031cba41e0a83fb1a",
+      "assetHash": "sha256:0650656fe378fd6f068c62c58a0c04f9cdc959b5e25543f8df3fbfbee12d2715",
+      "md5": "e4e1bde5cf80bd1aa9c4614d2d06ef53",
+      "bytes": 1186400,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_red_brick/medieval_red_brick_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-medieval-brick/roughness.jpg",
+      "sha256": "sha256:f281a14cf275aa4e8a56c794ef997d1b6b246a14a4c6b39dbfe8cf7320eb9a52",
+      "assetHash": "sha256:d5cbdec3e1472ea8d7e540e0c211de7f2b407a2fc8f37ed6b90f62b888cba576",
+      "md5": "5af35ac7a1933a1f08fc5c83959b4edf",
+      "bytes": 432817,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_red_brick/medieval_red_brick_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-medieval-brick/occlusion.jpg",
+      "sha256": "sha256:d08ae5a5aca6082693c7294a1ab36c859d036388ddd5e9de130757953105d77f",
+      "assetHash": "sha256:251e9a47201c519da7f30c5ba846c26662e9806599a782253ab488cf1f6bd149",
+      "md5": "48e92a14955331ed7898f0cee38eaabe",
+      "bytes": 741491,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_red_brick/medieval_red_brick_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-medieval-brick/displacement.jpg",
+      "sha256": "sha256:4c88a2a37cfdc98b36b5676f14dc0ae39bf245af3565871124a5f9da793be567",
+      "assetHash": "sha256:897bedfc74508512a82e4ec68dc3935c5239f793b4aaf1fdd4b73f6b813e282f",
+      "md5": "d8f06f72f2f19dad2e0545cd23fd1667",
+      "bytes": 485277,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_red_brick/medieval_red_brick_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-medieval-brick",
+    "albedo": "materials/cottage-medieval-brick/albedo.jpg",
+    "normal": "materials/cottage-medieval-brick/normal.jpg",
+    "roughness": "materials/cottage-medieval-brick/roughness.jpg",
+    "occlusion": "materials/cottage-medieval-brick/occlusion.jpg",
+    "displacement": "materials/cottage-medieval-brick/displacement.jpg"
+  }
+}

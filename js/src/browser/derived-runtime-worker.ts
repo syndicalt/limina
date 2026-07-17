@@ -1,4 +1,8 @@
 import {
+  derivedArtifactCompilerGraphHash,
+  parseDerivedRevisionManifest,
+} from "../world/compiler/manifest.mjs";
+import {
   DerivedRuntimeTransport,
   DerivedRuntimeTransportError,
   type DerivedArtifactDescriptor,
@@ -10,6 +14,11 @@ import {
   TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
   decodeTerrainChunkArtifact,
 } from "../world/compiler/terrain-artifact.mjs";
+import {
+  SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+  SURFACE_COMPOSITE_ARTIFACT_TYPE,
+  decodeSurfaceCompositeArtifact,
+} from "../world/compiler/surface-composite-artifact.mjs";
 import {
   HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
   HYDROLOGY_FIELD_ARTIFACT_TYPE,
@@ -32,6 +41,26 @@ import {
   decodeNavigationIndexArtifact,
 } from "../world/compiler/navigation-index-artifact.mjs";
 import {
+  BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
+  BIOME_FIELD_ARTIFACT_TYPE,
+  decodeBiomeFieldArtifact,
+} from "../world/compiler/biome-field-artifact.mjs";
+import {
+  BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
+  BIOME_POPULATION_ARTIFACT_TYPE,
+  decodeBiomePopulationArtifact,
+} from "../world/compiler/biome-population-artifact.mjs";
+import {
+  BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+  decodeBiomeContentClosureArtifact,
+} from "../world/compiler/biome-content-closure-artifact.mjs";
+import {
+  BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE,
+  BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+  decodeBiomeRuntimePackArtifact,
+} from "../world/compiler/biome-runtime-pack-artifact.mjs";
+import {
   derivedTerrainResidencyKey,
   parseDerivedTerrainResidency,
   selectDerivedTerrainChunks,
@@ -42,6 +71,8 @@ export const DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
 export const DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 export const DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1_000, 2_000, 4_000, 8_000] as const);
 export const DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15_000;
+
+type ParsedDerivedRevisionManifest = ReturnType<typeof parseDerivedRevisionManifest>;
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
@@ -323,6 +354,137 @@ function validateDescriptor(descriptor: DerivedArtifactDescriptor, artifactType:
   }
 }
 
+interface DerivedRuntimeChunkDescriptor {
+  readonly tx: number;
+  readonly tz: number;
+  readonly lod: number;
+}
+
+interface DerivedRuntimeChunkArtifactPayload {
+  readonly artifact: DerivedArtifactDescriptor;
+  readonly bytes: Uint8Array;
+}
+
+interface DerivedRuntimeChunkManifestContext {
+  readonly globalArtifacts?: ReadonlyArray<DerivedArtifactDescriptor>;
+}
+
+/**
+ * CPU-only, fail-closed staging for a manifest chunk. Terrain-only publications retain the exact
+ * legacy resource profile. Surface-enabled publications atomically expose the terrain and its
+ * content-bound composite; no partially decoded resource can escape this function.
+ */
+export function stageDerivedRuntimeChunk(input: Readonly<{
+  manifest?: DerivedRuntimeChunkManifestContext;
+  chunk: DerivedRuntimeChunkDescriptor;
+  artifacts: ReadonlyArray<DerivedRuntimeChunkArtifactPayload>;
+  signal: AbortSignal;
+}>): unknown {
+  if (input.signal.aborted) throw input.signal.reason;
+  if (input.artifacts.length < 1 || input.artifacts.length > 3) {
+    throw fatal("UNSUPPORTED_CHUNK_ARTIFACTS", "derived terrain chunk must contain terrain and at most one surface and population artifact");
+  }
+
+  const byType = new Map<string, DerivedRuntimeChunkArtifactPayload>();
+  for (const payload of input.artifacts) {
+    const artifactType = payload.artifact.artifactType;
+    if (byType.has(artifactType)) {
+      throw fatal("DUPLICATE_CHUNK_ARTIFACT", `derived terrain chunk contains duplicate artifact type '${artifactType}'`);
+    }
+    if (artifactType !== TERRAIN_CHUNK_ARTIFACT_TYPE
+        && artifactType !== SURFACE_COMPOSITE_ARTIFACT_TYPE
+        && artifactType !== BIOME_POPULATION_ARTIFACT_TYPE) {
+      throw fatal("UNSUPPORTED_CHUNK_ARTIFACT", `derived terrain chunk contains unsupported artifact '${artifactType}'`);
+    }
+    byType.set(artifactType, payload);
+  }
+
+  const terrainPayload = byType.get(TERRAIN_CHUNK_ARTIFACT_TYPE);
+  if (terrainPayload === undefined) {
+    throw fatal("MISSING_TERRAIN_ARTIFACT", "derived terrain chunk is missing its terrain artifact");
+  }
+  validateDescriptor(terrainPayload.artifact, TERRAIN_CHUNK_ARTIFACT_TYPE, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, "terrain chunk");
+  const decoded = decodeTerrainChunkArtifact(terrainPayload.bytes);
+  if (input.signal.aborted) throw input.signal.reason;
+
+  const surfacePayload = byType.get(SURFACE_COMPOSITE_ARTIFACT_TYPE);
+  const populationPayload = byType.get(BIOME_POPULATION_ARTIFACT_TYPE);
+  if (surfacePayload === undefined && populationPayload === undefined) {
+    return Object.freeze({ kind: TERRAIN_CHUNK_ARTIFACT_TYPE, decoded });
+  }
+  if (surfacePayload === undefined) {
+    throw fatal("POPULATION_BINDING_CONTEXT_MISSING", "biome population artifact requires its surface composite identity context");
+  }
+  if (input.artifacts.length !== (populationPayload === undefined ? 2 : 3)) {
+    throw fatal("UNSUPPORTED_CHUNK_ARTIFACTS", "surface-enabled terrain chunk must contain exactly two artifacts");
+  }
+  validateDescriptor(
+    surfacePayload.artifact,
+    SURFACE_COMPOSITE_ARTIFACT_TYPE,
+    SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+    "surface composite",
+  );
+  const surface = decodeSurfaceCompositeArtifact(surfacePayload.bytes, {
+    shouldCancel: () => input.signal.aborted,
+  });
+  if (input.signal.aborted) throw input.signal.reason;
+  if (surface.coord.tx !== input.chunk.tx || surface.coord.tz !== input.chunk.tz || surface.coord.lod !== input.chunk.lod) {
+    throw fatal("SURFACE_COORD_BINDING_MISMATCH", "surface composite coordinates do not match their manifest chunk");
+  }
+  if (surface.source.terrainChunkHash !== terrainPayload.artifact.contentHash) {
+    throw fatal("SURFACE_TERRAIN_BINDING_MISMATCH", "surface composite is bound to another terrain artifact");
+  }
+  if (populationPayload === undefined) {
+    return Object.freeze({
+      kind: TERRAIN_CHUNK_ARTIFACT_TYPE,
+      decoded,
+      surface,
+      artifacts: Object.freeze({ terrain: terrainPayload.artifact, surface: surfacePayload.artifact }),
+    });
+  }
+
+  validateDescriptor(
+    populationPayload.artifact,
+    BIOME_POPULATION_ARTIFACT_TYPE,
+    BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
+    "biome population plan",
+  );
+  const population = decodeBiomePopulationArtifact(populationPayload.bytes, {
+    shouldCancel: () => input.signal.aborted,
+  });
+  if (input.signal.aborted) throw input.signal.reason;
+  if (population.metadata.contentHash !== populationPayload.artifact.contentHash
+      || population.metadata.byteLength !== populationPayload.artifact.byteLength) {
+    throw fatal("POPULATION_DESCRIPTOR_BINDING_MISMATCH", "biome population bytes do not match their manifest descriptor");
+  }
+  if (population.plan.coord.tx !== input.chunk.tx || population.plan.coord.tz !== input.chunk.tz
+      || population.plan.coord.lod !== input.chunk.lod) {
+    throw fatal("POPULATION_COORD_BINDING_MISMATCH", "biome population coordinates do not match their manifest chunk");
+  }
+  const biomeFields = input.manifest?.globalArtifacts?.filter((artifact) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE) ?? [];
+  if (biomeFields.length !== 1) {
+    throw fatal("POPULATION_BINDING_CONTEXT_MISSING", "biome population artifact requires exactly one global biome field descriptor");
+  }
+  if (population.plan.identity.fieldContentHash !== biomeFields[0].contentHash
+      || population.plan.identity.fieldContentHash !== surface.source.biomeFieldHash) {
+    throw fatal("POPULATION_FIELD_BINDING_MISMATCH", "biome population artifact is bound to another biome field");
+  }
+  if (population.plan.identity.runtimePackContentHash !== surface.source.biomePackHash) {
+    throw fatal("POPULATION_PACK_BINDING_MISMATCH", "biome population artifact is bound to another runtime pack");
+  }
+  return Object.freeze({
+    kind: TERRAIN_CHUNK_ARTIFACT_TYPE,
+    decoded,
+    surface,
+    population,
+    artifacts: Object.freeze({
+      terrain: terrainPayload.artifact,
+      surface: surfacePayload.artifact,
+      population: populationPayload.artifact,
+    }),
+  });
+}
+
 function shortError(error: unknown): { code: string; classification: "transient" | "fatal"; message: string } {
   const rawMessage = error instanceof Error ? error.message : String(error);
   const message = rawMessage.length <= MAX_WORKER_ERROR_MESSAGE_LENGTH
@@ -499,11 +661,14 @@ export class DerivedRuntimeWorkerController {
         }
         return selectDerivedTerrainChunks(manifest, this.#submissionResidency);
       },
-      stageChunk: (input: { artifacts: ReadonlyArray<{ artifact: DerivedArtifactDescriptor; bytes: Uint8Array }>; signal: AbortSignal }) => (
-        this.#stageChunk(input.artifacts, input.signal)
-      ),
+      stageChunk: (input: {
+        manifest: DerivedRuntimeChunkManifestContext;
+        chunk: DerivedRuntimeChunkDescriptor;
+        artifacts: ReadonlyArray<DerivedRuntimeChunkArtifactPayload>;
+        signal: AbortSignal;
+      }) => stageDerivedRuntimeChunk(input),
       stageGlobal: (input: {
-        manifest: { compiler: { graphHash: string } };
+        manifest: ParsedDerivedRevisionManifest;
         artifact: DerivedArtifactDescriptor;
         bytes: Uint8Array;
         dependencies: ReadonlyMap<string, { artifact: DerivedArtifactDescriptor; resource: unknown }>;
@@ -604,21 +769,8 @@ export class DerivedRuntimeWorkerController {
     return result.bytes;
   }
 
-  #stageChunk(
-    artifacts: ReadonlyArray<{ artifact: DerivedArtifactDescriptor; bytes: Uint8Array }>,
-    signal: AbortSignal,
-  ): unknown {
-    if (signal.aborted) throw signal.reason;
-    if (artifacts.length !== 1) throw fatal("UNSUPPORTED_CHUNK_ARTIFACTS", "derived terrain chunk must contain exactly one artifact");
-    const payload = artifacts[0];
-    validateDescriptor(payload.artifact, TERRAIN_CHUNK_ARTIFACT_TYPE, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, "terrain chunk");
-    const decoded = decodeTerrainChunkArtifact(payload.bytes);
-    if (signal.aborted) throw signal.reason;
-    return Object.freeze({ kind: "terrain-chunk/v1", decoded });
-  }
-
   #stageGlobal(input: {
-    manifest: { compiler: { graphHash: string } };
+    manifest: ParsedDerivedRevisionManifest;
     artifact: DerivedArtifactDescriptor;
     bytes: Uint8Array;
     dependencies: ReadonlyMap<string, { artifact: DerivedArtifactDescriptor; resource: unknown }>;
@@ -636,6 +788,26 @@ export class DerivedRuntimeWorkerController {
       decodeNavigationIndexArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
       if (input.signal.aborted) throw input.signal.reason;
       return Object.freeze({ kind: NAVIGATION_INDEX_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, BIOME_FIELD_ARTIFACT_TYPE, BIOME_FIELD_ARTIFACT_MEDIA_TYPE, "biome field");
+      decodeBiomeFieldArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_FIELD_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+        BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE, "biome content closure");
+      decodeBiomeContentClosureArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_RUNTIME_PACK_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+        BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE, "biome runtime pack");
+      decodeBiomeRuntimePackArtifact(input.bytes);
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_RUNTIME_PACK_ARTIFACT_TYPE, bytes: input.bytes });
     }
     if (input.artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE) {
       validateDescriptor(input.artifact, HYDROLOGY_FIELD_ARTIFACT_TYPE, HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE, "hydrology field");
@@ -656,7 +828,7 @@ export class DerivedRuntimeWorkerController {
       if (bindings.hydrologyFieldContentHash !== field.artifact.contentHash) {
         throw fatal("WATER_FIELD_BINDING_MISMATCH", "hydrology water artifact is bound to another hydrology field");
       }
-      if (bindings.compilerGraphHash !== input.manifest.compiler.graphHash) {
+      if (bindings.compilerGraphHash !== derivedArtifactCompilerGraphHash(input.manifest, HYDROLOGY_WATER_ARTIFACT_TYPE)) {
         throw fatal("WATER_GRAPH_BINDING_MISMATCH", "hydrology water artifact is bound to another compiler graph");
       }
       const prepared = prepareGeneratedWaterFieldInput({

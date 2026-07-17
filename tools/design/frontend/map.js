@@ -27,6 +27,7 @@ import * as EL from "./map-elevation.js";
 import * as LM from "./map-paint.js";
 import { projectNavigationSubjects } from "./map-navigation-projection.js";
 import { requireCommittedMapSave } from "./map-save-freshness.js";
+import * as WA from "./map-water-authoring.js";
 
 const KIND_FILL = { civic:"#3f7d57", dwelling:"#8a6f4a", religious:"#6d5f7a", military:"#a25151", marker:"#b9772b",
   settlement:"#3f7d57", landmark:"#2f6f7a", camp:"#b9772b", ruin:"#a25151", dungeon:"#6d5f7a", wild:"#7a8a6a" };
@@ -43,7 +44,7 @@ const BIOME_BASE = { grass:"#8aa85f", forest:"#4a7a45", mountain:"#8f8d88", dese
 const SVGNS = "http://www.w3.org/2000/svg";
 
 let mapPan={x:0,z:0}, mapScale=6, mapDrag=null, mapTool="select",
-  drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, spaceDown=false, fittedMap=null;
+  drawColor="#5b7d9a", drawPts=[], activeMapId=null, selFeat=null, selWaterBody=null, spaceDown=false, fittedMap=null;
 let bridgeRequestId=0, bridgeReveal=null;
 // Camera vantage (Stage 2, session-only view state — never touches the doc): {x,z,yaw(rad)}.
 // yaw = atan2(dx,-dz) so 0 rad faces NORTH (-z) and grows clockwise (east = +x).
@@ -95,8 +96,8 @@ function commit(cmd, opts) {
 }
 // Undo/redo announce what they touched: deep undo silently crossing from raster strokes into
 // feature adds (deleting them) is how a held Ctrl+Z ate saved features.
-function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
-function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
+function doUndo() { const c = H.undo(history, resolveMap); if (c) { selFeat = null; selWaterBody=null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Undid: " + c.label); } }
+function doRedo() { const c = H.redo(history, resolveMap); if (c) { selFeat = null; selWaterBody=null; elevRev++; if(c.label==="import map layers") dropPaintCachesFor(c.mapId); reconcilePaintCaches(c.mapId); scheduleMapSave(); redrawMap(); toast("Redid: " + c.label); } }
 /** Import swaps ENTIRE rasters wholesale — clean caches would go stale either direction. */
 function dropPaintCachesFor(mapId){ EL.dropElevationCache(mapId); LM.dropLandmassCache(mapId); LM.dropBiomesCache(mapId); }
 
@@ -269,6 +270,10 @@ function activeMapBoundsPoints(){
   for(const marker of mapMarkers()) points.push([marker.x,marker.z]);
   for(const place of mapPlaces()) points.push(place.position);
   for(const stamp of map.stamps||[]) points.push([stamp.x,stamp.z]);
+  for(const body of map.waterBodies||[]){
+    points.push(...(body.footprint?.points||[]));
+    for(const hole of body.footprint?.holes||[]) points.push(...hole);
+  }
   for(const feature of map.features||[]){
     if(feature.type==="glyph") points.push([feature.x,feature.z]);
     else for(const point of feature.points||[]) points.push(point);
@@ -293,6 +298,21 @@ function glyphSVG(kind,x,y,s){
   return `<circle ${st} cx="${x}" cy="${y}" r="${s*.5}"/>`;
 }
 
+function hydrologyControlsHtml(){
+  if(mapTool!=="hydrology") return "";
+  const h=activeMap().hydrology||{};
+  const input=(id,label,value,min,max,step)=>'<label class="coord" style="margin-left:0">'+label+'</label>'
+    +'<input type="number" class="sw" id="'+id+'" value="'+value+'" min="'+min+'" max="'+max+'" step="'+step+'" style="width:92px">';
+  return input("hydro-precip","rain mm/y",h.precipitationMmPerYear??800,0,WA.HYDROLOGY_LIMITS.precipitationMmPerYear,1)
+    +input("hydro-river","river m²",h.riverMinCatchmentAreaM2??100000,0.01,WA.HYDROLOGY_LIMITS.catchmentAreaM2,1)
+    +input("hydro-basin-area","basin m²",h.basinMinAreaM2??400,0.01,WA.HYDROLOGY_LIMITS.basinAreaM2,1)
+    +input("hydro-basin-depth","basin depth",h.basinMinDepthM??1,0.01,WA.HYDROLOGY_LIMITS.basinDepthM,0.1)
+    +input("hydro-fall","fall drop",h.waterfallMinDropM??3,0.01,WA.HYDROLOGY_LIMITS.waterfallDropM,0.1)
+    +'<button class="tool" id="hydro-apply" style="width:auto;padding:0 10px">Apply</button>'
+    +(activeMap().hydrology?'<button class="tool" id="hydro-disable" style="width:auto;padding:0 10px">Disable</button>':'')
+    +'<span class="coord" id="hydro-feedback" role="status"></span>';
+}
+
 export function renderMap(){
   if(!activeMapId) activeMapId = S.state.activeMapId || primaryMapId();
   const opts=(S.state.maps||[]).map(m=>'<option value="'+esc(m.id)+'"'+(m.id===activeMapId?" selected":"")+'>'+esc(m.name||m.id)+(m.parent?" ↳":"")+'</option>').join("");
@@ -302,7 +322,7 @@ export function renderMap(){
   // the terrain palette their decorative one. Existing glyph features render read-only.
   // Road is an inline SVG — the 🛤 emoji has spotty font coverage and renders as junk glyphs.
   const ICON_ROAD='<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M7.5 21 L10 3"/><path d="M16.5 21 L14 3"/><path d="M12 4.5v2.5M12 11v3M12 18v3"/></svg>';
-  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["place","◈","Place a place (marker + gazetteer)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["river","〜","Draw river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
+  const tools=[["select","↖","Select"],["lasso","▧","Lasso select"],["place","◈","Place a place (marker + gazetteer)"],["camera","🎥","Camera vantage — click sets, drag aims"],["land","🏝","Land brush ( [ ] resizes )"],["terrain","🖌","Terrain brush ( [ ] resizes )"],["elev","⛰","Elevation brush ( [ ] resizes )"],["stamp","🏠","Place asset stamp"],["basin","◯","Draw a standing-water basin"],["hydrology","☂","Configure generated drainage, basins, rivers, and waterfalls"],["river","〜","Draw legacy river (drag)"],["road",ICON_ROAD,"Draw road (drag)"],["border","┅","Draw border (drag)"]];
   const sea=activeMap().sea!==false; // ocean by DEFAULT — a map starts as blank sea you paint land into
   const seaY=typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0;
   const rawElevMeta=EL.elevationOf(activeMapId)||(activeMap().rasters&&activeMap().rasters.elevation);
@@ -329,7 +349,7 @@ export function renderMap(){
     (vantage
       ? '<span class="coord" id="cam-facing">facing '+Math.round(((vantage.yaw*180/Math.PI)%360+360)%360)+'°</span><button class="tool" id="cam-preview" title="Render a ground-level preview from this camera" style="width:auto;padding:0 10px;gap:5px">▶ Preview</button>'
       : '<span class="coord">click to set a camera · drag to aim</span>');
-  const props = colorPick+elevControls+landControls+terrainControls+cameraControls;
+  const props = colorPick+elevControls+landControls+terrainControls+cameraControls+hydrologyControlsHtml();
   document.getElementById("center").innerHTML =
     // The svg is REBUILT on every render — it must carry the CURRENT viewBox, not a hardcoded
     // default: syncViewBox caches the container size and early-returns when unchanged, so a
@@ -379,7 +399,9 @@ function hint(){ const h=document.getElementById("map-hint"); if(!h) return;
     place:"click the map to drop a place · drag a place to move it · click a place to edit it",
     camera:"click to set a camera position · drag to aim it · use Preview to render a ground-level view",
     stamp:(stampAssetId?"click to place "+stampAssetId:"pick an asset from the catalog, then click to place")+" · select tool moves stamps · Delete removes",
-    river:"drag to draw the river's course (smoothed on release)",
+    basin:"drag a closed basin footprint · release to validate and edit kind, level, holes, and ordered depth zones",
+    hydrology:"set bounded deterministic rainfall, river catchment, basin, and waterfall thresholds · Apply is one undo step",
+    river:"drag to draw the legacy authored river course (smoothed on release)",
     road:"drag to draw the road (smoothed on release)",
     border:"drag to draw a political border (smoothed on release)",
     outline:"click to trace the coastline (land) · double-click to close · Esc to cancel"}[mapTool];
@@ -486,6 +508,12 @@ function redrawMap(){
   const lines=feats.filter(f=>f.type==="line"&&f.kind!=="border").map(fsvg).join("");
   const borders=feats.filter(f=>f.type==="line"&&f.kind==="border").map(fsvg).join("");
   const glyphs=feats.filter(f=>f.type==="glyph").map(fsvg).join("");
+  const waterBodies=(activeMap().waterBodies||[]).map(body=>{
+    const rings=[body.footprint.points,...(body.footprint.holes||[])];
+    const path=rings.map(ring=>ring.map((point,index)=>{ const [x,y]=w2s(point[0],point[1]); return (index?"L":"M")+x+" "+y; }).join(" ")+" Z").join(" ");
+    const selected=body.id===selWaterBody;
+    return '<path class="waterbody" data-bid="'+esc(body.id)+'" d="'+path+'" fill="#3f86a5" fill-opacity=".52" fill-rule="evenodd" stroke="'+(selected?'var(--accent)':'#2d6f8e')+'" stroke-width="'+(selected?3:2)+'" stroke-linejoin="round"/>';
+  }).join("");
   // Placed asset stamps (P3): each draws its QC render at TRUE world footprint (catalog
   // boundsM x scale), rotatable; a dangling assetId draws a LOUD placeholder, never nothing.
   if((activeMap().stamps||[]).length>0 && catalog===null) loadCatalog();
@@ -510,7 +538,7 @@ function redrawMap(){
   }
   // in-progress drawing
   let draw="";
-  if(drawPts.length){ const isArea=["area","outline"].includes(mapTool); const pp=poly(drawPts);
+  if(drawPts.length){ const isArea=["area","outline","basin"].includes(mapTool); const pp=poly(drawPts);
     draw=(isArea?'<polygon points="'+pp+'" fill="'+drawColor+'" fill-opacity="0.2" stroke="'+drawColor+'" stroke-dasharray="4 4" stroke-width="1.4"/>':'<polyline points="'+pp+'" fill="none" stroke="'+drawColor+'" stroke-dasharray="4 4" stroke-width="2"/>')
       +drawPts.map(p=>{const[sx,sy]=w2s(p[0],p[1]);return '<circle cx="'+sx+'" cy="'+sy+'" r="3" fill="'+drawColor+'"/>';}).join(""); }
   // markers
@@ -562,9 +590,15 @@ function redrawMap(){
   // cells to meters and auto-grows under the brush) — the whole canvas is the editor. The old
   // dashed region + handles predates invisible-unpainted rendering and auto-grow; both reasons
   // for user-managed extent are gone.
-  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + bridgeRevealLayer + compass + elevCursor + stampGhost;
+  svg.innerHTML = biomeDefs() + ocean + landLayer + terrainLayer + g + coastLayer + outlines + elevLayer + areas + waterBodies + lines + borders + glyphs + stampsLayer + draw + pins + placePins + vantageLayer + bridgeRevealLayer + compass + elevCursor + stampGhost;
   renderLayers(); syncUndoButtons();
   svg.querySelectorAll(".pin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPinDrag(e,p.dataset.id)); p.addEventListener("dblclick",(e)=>{e.stopPropagation(); const loc=mapMarkers().find(l=>l.id===p.dataset.id); if(!loc)return; if(loc.mapLink) switchMap(loc.mapLink); else void focusEditorFromAtlas("marker",loc.id,loc.name,[loc.x,loc.z],32);}); });
+  svg.querySelectorAll(".waterbody").forEach(path=>{
+    path.style.cursor="pointer";
+    path.addEventListener("mousedown",(e)=>{ if(mapTool!=="select") return; e.stopPropagation(); selWaterBody=path.dataset.bid; redrawMap(); });
+    path.addEventListener("contextmenu",(e)=>{ e.preventDefault(); e.stopPropagation(); selWaterBody=path.dataset.bid; redrawMap(); openWaterBodyInspector(path.dataset.bid,e.clientX,e.clientY); });
+    path.addEventListener("dblclick",(e)=>{ e.preventDefault(); e.stopPropagation(); openWaterBodyInspector(path.dataset.bid,e.clientX,e.clientY); });
+  });
   svg.querySelectorAll(".ppin").forEach(p=>{ p.addEventListener("mousedown",(e)=>startPlacePinDrag(e,p.dataset.placeId));
     p.addEventListener("dblclick",(e)=>{ e.stopPropagation(); const pl=mapPlaces().find(x=>x.id===p.dataset.placeId); if(!pl)return; if(pl.mapLink) switchMap(pl.mapLink); else void focusEditorFromAtlas("place",pl.id,pl.name,pl.position,pl.radiusM||32); }); });
   svg.querySelectorAll(".stampf").forEach(el=>{
@@ -779,6 +813,56 @@ function openFeatInspector(f,cx,cy){
   document.getElementById("fi-del").onclick=()=>{ el.remove(); deleteFeatById(f.id,false); };
 }
 
+function deleteWaterBodyById(id){
+  const body=(activeMap().waterBodies||[]).find(candidate=>candidate.id===id);
+  if(!body) return;
+  try{
+    const next=WA.deleteWaterBody(activeMap().waterBodies,id);
+    commit(H.cmdSetMapProp(activeMapId,"waterBodies",activeMap().waterBodies,next));
+  }catch(error){ toast("Basin delete failed: "+(error&&error.message?error.message:String(error)),6000); }
+}
+
+function openWaterBodyInspector(id,cx,cy){
+  document.getElementById("insp")?.remove();
+  const body=(activeMap().waterBodies||[]).find(candidate=>candidate.id===id);
+  if(!body){ toast("Basin no longer exists",4000); return; }
+  const el=document.createElement("div"); el.className="insp"; el.id="insp";
+  el.style.width="min(440px,calc(100vw - 24px))";
+  el.innerHTML='<h4>Basin · '+esc(body.id)+'<button class="x" id="insp-x">×</button></h4>'
+    +'<label>Kind</label><select id="wb-kind">'+WA.WATER_BODY_KINDS.map(kind=>'<option'+(kind===body.kind?' selected':'')+'>'+kind+'</option>').join("")+'</select>'
+    +'<label>Surface level (m)</label><input type="number" id="wb-level" step="0.1" min="-'+WA.WATER_LIMITS.absLevelM+'" max="'+WA.WATER_LIMITS.absLevelM+'" value="'+body.level+'">'
+    +'<label>Outer polygon · JSON [[x,z], ...] · 3–'+WA.WATER_LIMITS.ringPoints+' points</label><textarea id="wb-points" rows="4"></textarea>'
+    +'<label>Holes · JSON array of rings · max '+WA.WATER_LIMITS.holes+'</label><textarea id="wb-holes" rows="3"></textarea>'
+    +'<label>Depth zones · ordered contiguous JSON</label><textarea id="wb-zones" rows="5"></textarea>'
+    +'<div id="wb-feedback" role="alert" style="min-height:1.3em;color:var(--amber);font-size:11px"></div>'
+    +'<div class="actions"><button class="save" id="wb-save">Save</button><button class="del" id="wb-del">Delete</button></div>';
+  document.body.appendChild(el);
+  document.getElementById("wb-points").value=JSON.stringify(body.footprint.points,null,2);
+  document.getElementById("wb-holes").value=JSON.stringify(body.footprint.holes||[],null,2);
+  document.getElementById("wb-zones").value=JSON.stringify(body.depthZones,null,2);
+  const w=el.offsetWidth,h=el.offsetHeight;
+  el.style.left=Math.min((cx||200)+8,innerWidth-w-12)+"px";
+  el.style.top=Math.min(Math.max((cy||120)-10,12),Math.max(12,innerHeight-h-12))+"px";
+  el.style.right="auto";
+  document.getElementById("insp-x").onclick=()=>el.remove();
+  document.getElementById("wb-save").onclick=()=>{
+    const feedback=document.getElementById("wb-feedback");
+    try{
+      const patch=WA.waterBodyEditorPatch({
+        kind:document.getElementById("wb-kind").value,
+        level:document.getElementById("wb-level").value,
+        pointsText:document.getElementById("wb-points").value,
+        holesText:document.getElementById("wb-holes").value,
+        depthZonesText:document.getElementById("wb-zones").value,
+      });
+      const next=WA.updateWaterBody(activeMap().waterBodies,id,patch);
+      commit(H.cmdSetMapProp(activeMapId,"waterBodies",activeMap().waterBodies,next));
+      if(feedback){ feedback.style.color="var(--ok)"; feedback.textContent="Saved · compile will use this exact canonical basin"; }
+    }catch(error){ if(feedback){ feedback.style.color="var(--amber)"; feedback.textContent=error&&error.message?error.message:String(error); } }
+  };
+  document.getElementById("wb-del").onclick=()=>{ if(confirm("Delete basin '"+id+"'? (Ctrl+Z restores it)")){ el.remove(); deleteWaterBodyById(id); selWaterBody=null; } };
+}
+
 function bindMap(){
   const svg=document.getElementById("map-svg"); if(!svg) return;
   svg.addEventListener("contextmenu",(e)=>e.preventDefault());
@@ -798,6 +882,26 @@ function bindMap(){
     const m=activeMap();
     commit(H.cmdSetMapProp(activeMapId,"sea",m.sea,!(m.sea!==false)));
     renderMap(); };
+  const hydroApply=document.getElementById("hydro-apply"); if(hydroApply) hydroApply.onclick=()=>{
+    const feedback=document.getElementById("hydro-feedback");
+    try{
+      const recipe=WA.parseHydrologyRecipe({
+        precipitationMmPerYear:Number(document.getElementById("hydro-precip").value),
+        riverMinCatchmentAreaM2:Number(document.getElementById("hydro-river").value),
+        basinMinAreaM2:Number(document.getElementById("hydro-basin-area").value),
+        basinMinDepthM:Number(document.getElementById("hydro-basin-depth").value),
+        waterfallMinDropM:Number(document.getElementById("hydro-fall").value),
+      });
+      commit(H.cmdSetMapProp(activeMapId,"hydrology",activeMap().hydrology,recipe));
+      if(feedback) feedback.textContent="saved";
+      toast("Hydrology recipe updated");
+    }catch(error){ const message=error&&error.message?error.message:String(error); if(feedback) feedback.textContent=message; toast("Hydrology invalid: "+message,6000); }
+  };
+  const hydroDisable=document.getElementById("hydro-disable"); if(hydroDisable) hydroDisable.onclick=()=>{
+    commit(H.cmdSetMapProp(activeMapId,"hydrology",activeMap().hydrology,undefined));
+    toast("Generated hydrology disabled; authored sea, rivers, and basins are unchanged");
+    renderMap();
+  };
   const imp=document.getElementById("map-import"); if(imp) imp.onclick=showImportMenu;
   const pk=document.getElementById("map-peek"); if(pk) pk.onclick=doPeek;
   const cp=document.getElementById("cam-preview"); if(cp) cp.onclick=doVantagePeek;
@@ -888,12 +992,15 @@ function bindMap(){
       if(!stampAssetId){ toast("pick an asset from the catalog"); return; }
       commit(H.cmdAddStamp(activeMapId,{id:fid(),assetId:stampAssetId,x:Math.round(x),z:Math.round(z)}));
       return; }
+    if(mapTool==="basin"){
+      mapDrag={type:"basin-draw",pts:[[Math.round(x),Math.round(z)]],lastW:[x,z]};
+      drawPts=mapDrag.pts; return; }
     if(["river","road","border"].includes(mapTool)){
       // Drag-stroke drawing (P3): the line follows the drag, Chaikin-smoothed on commit.
       mapDrag={type:"draw",kind:mapTool,pts:[[Math.round(x),Math.round(z)]],lastW:[x,z]};
       drawPts=mapDrag.pts; return; }
     if(mapTool==="lasso"){ mapDrag={type:"lasso",x0:mx,y0:my,x1:mx,y1:my}; return; }
-    if(mapTool==="select"&&selFeat){ selFeat=null; redrawMap(); }
+    if(mapTool==="select"&&(selFeat||selWaterBody)){ selFeat=null; selWaterBody=null; redrawMap(); }
     mapDrag={type:"pan",mx,my,px:mapPan.x,pz:mapPan.z}; svg.classList.add("grabbing"); });
   window.addEventListener("mousemove",onMapMove); window.addEventListener("mouseup",onMapUp);
   svg.addEventListener("mousemove",(e)=>{ const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
@@ -928,9 +1035,10 @@ function mapKey(e){ if(S.activeView!=="map") return;
     syncBrushUI(); return;
   }
   if((e.key===" "||e.code==="Space")&&!typing){ if(!spaceDown){ spaceDown=true; document.getElementById("map-svg")?.classList.add("space"); } e.preventDefault(); return; }
-  if(e.key==="Escape"){ drawPts=[]; selFeat=null; selStamp=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
-  else if((e.key==="Delete"||e.key==="Backspace")&&(selFeat||selStamp)&&!typing){ e.preventDefault();
-    if(selStamp){ commit(H.cmdDeleteStamp(activeMapId, activeMap(), selStamp)); selStamp=null; }
+  if(e.key==="Escape"){ drawPts=[]; selFeat=null; selStamp=null; selWaterBody=null; document.getElementById("feat-menu")?.remove(); redrawMap(); }
+  else if((e.key==="Delete"||e.key==="Backspace")&&(selFeat||selStamp||selWaterBody)&&!typing){ e.preventDefault();
+    if(selWaterBody){ deleteWaterBodyById(selWaterBody); selWaterBody=null; }
+    else if(selStamp){ commit(H.cmdDeleteStamp(activeMapId, activeMap(), selStamp)); selStamp=null; }
     else deleteFeatById(selFeat,true); } }
 function mapKeyUp(e){ if(e.key===" "||e.code==="Space"){ spaceDown=false; document.getElementById("map-svg")?.classList.remove("space"); } }
 /** Reflect a keyboard brush-size change in the props island (slider + label) and the cursor. */
@@ -1352,7 +1460,7 @@ function onMapMove(e){ if(!mapDrag) return; const svg=document.getElementById("m
     const steps=Math.max(1,Math.ceil(dist/stepM));
     for(let k=1;k<=steps;k++) terDabAt(mapDrag.raster, lx+(wx-lx)*k/steps, lz+(wz-lz)*k/steps, mapDrag);
     mapDrag.lastW=[wx,wz]; }
-  else if(mapDrag.type==="draw"){
+  else if(mapDrag.type==="draw"||mapDrag.type==="basin-draw"){
     const [wx,wz]=s2w(mx,my); const [lx,lz]=mapDrag.lastW;
     if(Math.hypot(wx-lx,wz-lz)>=4/mapScale){
       mapDrag.pts.push([Math.round(wx),Math.round(wz)]); mapDrag.lastW=[wx,wz];
@@ -1394,6 +1502,26 @@ async function finishLasso(d){
 }
 async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementById("map-svg"); if(svg) svg.classList.remove("grabbing"); const d=mapDrag; mapDrag=null;
   if(d.type==="lasso"){ finishLasso(d); return; }
+  if(d.type==="basin-draw"){
+    drawPts=[];
+    const pts=decimatePts(d.pts,Math.max(1,3/mapScale)).map(point=>[Math.round(point[0]),Math.round(point[1])]);
+    if(pts.length<3){ toast("A basin needs at least three distinct points",5000); redrawMap(); return; }
+    const id="basin-"+crypto.randomUUID();
+    const xs=pts.map(point=>point[0]), zs=pts.map(point=>point[1]);
+    const shoreBand=Math.max(1,Math.min(25,Math.min(Math.max(...xs)-Math.min(...xs),Math.max(...zs)-Math.min(...zs))/4));
+    try{
+      const body=WA.createWaterBody({
+        id, kind:"lake", level:(typeof activeMap().seaLevel==="number"?activeMap().seaLevel:0)+2,
+        points:pts, holes:[], depthZones:[{minShoreDistanceM:0,maxShoreDistanceM:shoreBand,depthM:2}],
+      });
+      const next=WA.addWaterBody(activeMap().waterBodies,body);
+      commit(H.cmdSetMapProp(activeMapId,"waterBodies",activeMap().waterBodies,next));
+      selWaterBody=id;
+      redrawMap();
+      openWaterBodyInspector(id,e.clientX,e.clientY);
+    }catch(error){ toast("Basin invalid: "+(error&&error.message?error.message:String(error)),7000); redrawMap(); }
+    return;
+  }
   if(d.type==="draw"){
     drawPts=[];
     let pts=d.pts;
@@ -1441,7 +1569,7 @@ async function onMapUp(e){ if(!mapDrag) return; const svg=document.getElementByI
   const [mx,my]=evtVB(e,svg); const [wx,wz]=s2w(mx,my);
   try{ const j=await postJSON("/api/edit-location",{op:"move",id:d.id,x:wx,z:wz}); await S.fn.reload(); afterMarkerChange(); if(j.impacts&&j.impacts.length) S.fn.surfaceCascade(j.impacts); }catch(err){ redrawMap(); } }
 
-async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]; selFeat=null; vantage=null; await flushMapSave(); renderMap(); }
+async function switchMap(id){ activeMapId=id; S.state.activeMapId=id; drawPts=[]; selFeat=null; selWaterBody=null; vantage=null; await flushMapSave(); renderMap(); }
 async function newMap(){ const name=prompt("Name the new map (e.g. The Marches, or a city name):"); if(!name) return;
   const id=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||("map"+(S.state.maps.length+1));
   if(S.state.maps.some(m=>m.id===id)){ alert("a map with that id exists"); return; }

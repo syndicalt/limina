@@ -1,0 +1,37 @@
+{
+  "schema": "limina.workspace-transfer-policy/v1",
+  "id": "dgx-spark-portable-workspace",
+  "description": "Lossless source, asset, evidence, Git, and EventLoom transfer without laptop-architecture build caches or stale runtime locks.",
+  "manifestExcludedRootPrefixes": [
+    ".git",
+    ".eventloom/projections",
+    ".eventloom/runtime",
+    ".pytest_cache",
+    "editor/vendor",
+    "tools/preview/out",
+    "dist-alpha"
+  ],
+  "manifestExcludedDirectoryNames": [
+    "node_modules",
+    "target",
+    ".venv",
+    "dist",
+    ".astro",
+    "__pycache__"
+  ],
+  "manifestOutputPrefix": ".limina/handoff/",
+  "rsyncExcludes": [
+    "/.eventloom/projections/",
+    "/.eventloom/runtime/",
+    "/.pytest_cache/",
+    "/editor/vendor/",
+    "/tools/preview/out/",
+    "/dist-alpha/",
+    "**/node_modules/",
+    "**/target/",
+    "**/.venv/",
+    "**/dist/",
+    "**/.astro/",
+    "**/__pycache__/"
+  ]
+}

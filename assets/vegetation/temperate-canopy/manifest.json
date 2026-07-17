@@ -1,0 +1,25 @@
+{
+  "generator": "ez-tree (browser, textured, software-rasterized)",
+  "species": {
+    "spruce": [
+      "spruce-1.glb",
+      "spruce-2.glb"
+    ],
+    "pine": [
+      "pine-1.glb",
+      "pine-2.glb"
+    ],
+    "birch": [
+      "birch-1.glb",
+      "birch-2.glb"
+    ],
+    "oak": [
+      "oak-101.glb",
+      "oak-203.glb"
+    ],
+    "ash": [
+      "ash-307.glb",
+      "ash-409.glb"
+    ]
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "_comment": "INTERNAL WB-B2 integration probe only. This is not visual-floor evidence and must not be shown or released until the production/native gates pass.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    {
+      "kind": "skill",
+      "tool": "world.generateRegion",
+      "input": {
+        "seed": 4242,
+        "bounds": { "minTx": -3, "minTz": -3, "maxTx": 3, "maxTz": 3 },
+        "lod": 0,
+        "type": "islands",
+        "render": true,
+        "surface": {
+          "mode": "pbr",
+          "seaLevel": 3.465839195251465,
+          "waterline": {
+            "seaLevel": 3.465839195251465,
+            "wetBand": 0.8,
+            "foamBand": 0.18,
+            "darken": 0.52,
+            "wetRoughness": 0.28,
+            "foam": 0.35
+          }
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.scatter",
+      "input": {
+        "regionId": "rgn_4242_l0_-3_-3_3_3",
+        "config": {
+          "seed": 4101,
+          "density": 18,
+          "coverage": 0.24,
+          "cluster": 0.68,
+          "clusterFreq": 0.025,
+          "slopeMax": 0.72,
+          "elevationMin": 3.9,
+          "sizeRange": [1.35, 2.25],
+          "cellSize": 32,
+          "embedRadius": 0.8,
+          "assets": [
+            {
+              "id": "vegetation/tree-small-02-lod0.glb",
+              "weight": 1,
+              "lods": [
+                { "id": "vegetation/tree-small-02-lod1.glb", "distance": 38, "hysteresis": 0.12 },
+                { "id": "vegetation/tree-small-02-lod2.glb", "distance": 92, "hysteresis": 0.12 }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.scatter",
+      "input": {
+        "regionId": "rgn_4242_l0_-3_-3_3_3",
+        "config": {
+          "seed": 4102,
+          "density": 20,
+          "coverage": 0.18,
+          "cluster": 0.52,
+          "clusterFreq": 0.035,
+          "slopeMax": 0.78,
+          "elevationMin": 3.75,
+          "sizeRange": [1.2, 2.0],
+          "cellSize": 24,
+          "embedRadius": 0.45,
+          "assets": [
+            {
+              "id": "vegetation/fir-sapling-lod0.glb",
+              "weight": 1,
+              "lods": [
+                { "id": "vegetation/fir-sapling-lod1.glb", "distance": 28, "hysteresis": 0.12 },
+                { "id": "vegetation/fir-sapling-lod2.glb", "distance": 65, "hysteresis": 0.12 }
+              ]
+            },
+            {
+              "id": "vegetation/pine-sapling-small-lod0.glb",
+              "weight": 1,
+              "lods": [
+                { "id": "vegetation/pine-sapling-small-lod1.glb", "distance": 28, "hysteresis": 0.12 },
+                { "id": "vegetation/pine-sapling-small-lod2.glb", "distance": 65, "hysteresis": 0.12 }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.scatter",
+      "input": {
+        "regionId": "rgn_4242_l0_-3_-3_3_3",
+        "config": {
+          "seed": 4103,
+          "density": 24,
+          "coverage": 0.28,
+          "cluster": 0.42,
+          "clusterFreq": 0.055,
+          "slopeMax": 0.9,
+          "elevationMin": 3.65,
+          "sizeRange": [0.65, 1.45],
+          "cellSize": 20,
+          "embedRadius": 0.18,
+          "assets": [
+            { "id": "vegetation/fern-02-lod0.glb", "weight": 5 },
+            { "id": "vegetation/shrub-03-lod0.glb", "weight": 3 },
+            { "id": "vegetation/moss-01-lod0.glb", "weight": 4 }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.scatter",
+      "input": {
+        "regionId": "rgn_4242_l0_-3_-3_3_3",
+        "config": {
+          "seed": 4104,
+          "density": 12,
+          "coverage": 0.07,
+          "cluster": 0.35,
+          "slopeMax": 1.1,
+          "elevationMin": 3.6,
+          "sizeRange": [0.7, 1.65],
+          "cellSize": 28,
+          "embedRadius": 0.35,
+          "assets": [
+            { "id": "vegetation/rock-moss-set-01-lod0.glb", "weight": 4 },
+            { "id": "vegetation/boulder-01-lod0.glb", "weight": 1 },
+            { "id": "vegetation/tree-stump-01-lod0.glb", "weight": 2 },
+            { "id": "vegetation/dead-tree-trunk-lod0.glb", "weight": 2 }
+          ]
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "world.addWater",
+      "input": {
+        "level": 3.465839195251465,
+        "size": 420,
+        "color": 2381170,
+        "region": {
+          "seed": 4242,
+          "type": "islands",
+          "bounds": { "minTx": -3, "minTz": -3, "maxTx": 3, "maxTz": 3 },
+          "resolution": 256
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "render.enablePost",
+      "input": {
+        "ao": { "enabled": true, "intensity": 1.05, "samples": 12 },
+        "bloom": { "enabled": true, "strength": 0.08, "threshold": 1.15 },
+        "grade": { "enabled": true, "exposure": 1.02, "contrast": 1.07, "saturation": 1.04 },
+        "godrays": { "enabled": false },
+        "dof": { "enabled": false },
+        "outline": { "enabled": false }
+      }
+    }
+  ],
+  "camera": {
+    "center": [6, 4.5, -4],
+    "radius": 82,
+    "height": 24,
+    "far": 900,
+    "autoSpin": 0
+  },
+  "renderBaseline": {
+    "exposure": 1.03,
+    "sun": { "color": 16769978, "intensity": 4.2, "direction": [-34, 42, 24] },
+    "hemisphere": { "skyColor": 11916277, "groundColor": 4217393, "intensity": 1.35 },
+    "ambientIntensity": 0.38,
+    "ambientColor": 7043986,
+    "environmentIntensity": 1.2,
+    "atmosphere": { "enabled": true, "color": 11190259, "density": 0.0022 }
+  }
+}

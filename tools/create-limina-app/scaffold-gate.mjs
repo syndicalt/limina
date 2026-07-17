@@ -89,6 +89,12 @@ try {
       && readFileSync(samplePath, "utf8") === readFileSync(freshPath, "utf8")
     ));
   }
+  for (const file of ["basis_transcoder.js", "basis_transcoder.wasm"]) {
+    const engineRuntime = join(ROOT, "runtime", "basis", file);
+    const exportedRuntime = join(app, "dist", "runtime", "basis", file);
+    check(`fresh export ships exact engine Basis runtime: ${file}`, existsSync(exportedRuntime)
+      && readFileSync(exportedRuntime).equals(readFileSync(engineRuntime)));
+  }
   const sampleManifest = JSON.parse(readFileSync(join(app, "public", "island", "manifest.json"), "utf8"));
   const freshManifest = JSON.parse(readFileSync(join(app, "dist", "manifest.json"), "utf8"));
   sampleManifest.worldId = freshManifest.worldId;

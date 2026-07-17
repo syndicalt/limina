@@ -23,15 +23,18 @@ assert(balanced.pixelRatio === 1.5 && balanced.shadowMapSize === 2048 && balance
 assert(cinematic.pixelRatio === 2 && cinematic.shadowMapSize === 4096 && cinematic.post.aoSamples === 16, "cinematic tier changed");
 assert(performance.water.oceanSegments === 32 && performance.water.waveCount === 2 && performance.water.depthRasterSize === 64
   && performance.water.depthTextureBudgetPixels === 1_048_576 && performance.water.mountsPerFrame === 1
-  && performance.water.maxResidentFragments === 128 && performance.water.waterfallExtras === "none",
+  && performance.water.maxResidentFragments === 128 && performance.water.waterfallExtras === "none"
+  && performance.water.sceneOptics === "none",
 "performance water budget changed");
 assert(balanced.water.oceanSegments === 64 && balanced.water.waveCount === 4 && balanced.water.depthRasterSize === 128
   && balanced.water.depthTextureBudgetPixels === 4_194_304 && balanced.water.mountsPerFrame === 2
-  && balanced.water.maxResidentFragments === 256 && balanced.water.waterfallExtras === "foam",
+  && balanced.water.maxResidentFragments === 256 && balanced.water.waterfallExtras === "foam"
+  && balanced.water.sceneOptics === "refraction",
 "balanced water budget changed");
 assert(cinematic.water.oceanSegments === 128 && cinematic.water.depthRasterSize === 256
   && cinematic.water.depthTextureBudgetPixels === 16_777_216 && cinematic.water.mountsPerFrame === 4
-  && cinematic.water.maxResidentFragments === 512 && cinematic.water.waterfallExtras === "foam-mist",
+  && cinematic.water.maxResidentFragments === 512 && cinematic.water.waterfallExtras === "foam-mist"
+  && cinematic.water.sceneOptics === "refraction-reflection",
 "cinematic water budget changed");
 assert(resolveRenderQuality("cinematic", 1).pixelRatio === 1.25, "resolution scale was not applied before the final DPR cap");
 
@@ -43,7 +46,7 @@ const overridden = resolveRenderQuality("balanced", 3, {
   telemetryIntervalFrames: 60,
   post: { enabled: false, aoSamples: 3, aoResolutionScale: 0.75, bloom: false },
   water: { oceanSegments: 48, waveCount: 3, depthRasterSize: 32, depthTextureBudgetPixels: 262_144,
-    mountsPerFrame: 5, maxResidentFragments: 96, waterfallExtras: "foam" },
+    mountsPerFrame: 5, maxResidentFragments: 96, waterfallExtras: "foam", sceneOptics: "refraction" },
 });
 assert(overridden.pixelRatio === 2 && overridden.shadowMapSize === 512 && overridden.shadowHalfExtent === 200, "valid execution override changed");
 assert(!overridden.post.enabled && overridden.post.aoSamples === 3 && overridden.telemetryIntervalFrames === 60, "valid nested override changed");
@@ -76,6 +79,7 @@ rejects(() => resolveRenderQuality("balanced", 1, { water: { depthRasterSize: 48
 rejects(() => resolveRenderQuality("balanced", 1, { water: { depthTextureBudgetPixels: 100_000 } }), /power of two/,
   "non-power-of-two water depth budget was accepted");
 rejects(() => resolveRenderQuality("balanced", 1, { water: { waterfallExtras: "spray" } } as never), /waterfallExtras/, "unknown waterfall extras were accepted");
+rejects(() => resolveRenderQuality("balanced", 1, { water: { sceneOptics: "fake-refraction" } } as never), /sceneOptics/, "unknown scene optics were accepted");
 rejects(() => resolveRenderQuality("balanced", 1, { water: { mystery: 1 } } as never), /mystery/, "unknown water field was ignored");
 const accessor = {} as Record<string, unknown>;
 Object.defineProperty(accessor, "resolutionScale", { enumerable: true, get: () => 1 });

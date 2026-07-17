@@ -13,6 +13,8 @@ import { scatterProps } from "./scatter.ts";
 import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
 import { applyPbrMaterial, type TerrainPbrOptions } from "./material-pbr.ts";
+import { TERRAIN_PAINT_ALBEDO_HEX } from "./material-palette.ts";
+export { TERRAIN_PAINT_ALBEDO_HEX } from "./material-palette.ts";
 export type { TerrainPbrOptions } from "./material-pbr.ts";
 
 export interface TerrainMeshOptions {
@@ -240,6 +242,7 @@ export function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], 
   texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.name = "limina:terrain-climate";
   texture.needsUpdate = true;
   // Climate cell (r,c) → tile-local UV (rows→z, cols→x), the geometry's world mapping.
   const [ox, oy, oz] = tile.origin;
@@ -380,17 +383,6 @@ export interface ElevationColorRamp { seaLevel: number; amplitude: number; snowF
 
 // Surface-material palette painted by terrain.paint, keyed to the same albedo families as the
 // elevation ramp so painted patches sit naturally in the world. Index = tile.paintMat id.
-export const TERRAIN_PAINT_ALBEDO_HEX = Object.freeze([
-  null,       // 0 = unpainted
-  0xc4b68e,   // 1 sand
-  0x5f7f3c,   // 2 grass
-  0x756657,   // 3 rock
-  0x6f5334,   // 4 dirt
-  0xe2e7ec,   // 5 snow
-  0x49512e,   // 6 murk
-  0x87927a,   // 7 tundra
-] as const);
-
 const PAINT_ALBEDO: (THREE.Color | null)[] = TERRAIN_PAINT_ALBEDO_HEX.map((hex) => (
   hex === null ? null : new THREE.Color(hex)
 ));
@@ -521,10 +513,11 @@ export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTi
 
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
-  const { positions, indices, normals } = terrainTileGeometry(tile);
+  const { positions, indices, normals, uvs } = terrainTileGeometry(tile);
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  geom.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
   geom.setIndex(new THREE.BufferAttribute(indices, 1));
   geom.computeBoundingSphere();
   geom.computeBoundingBox();

@@ -20,8 +20,8 @@ export { TransformControls } from "../build/three.bundle.mjs";
 // Real asset-mount path (used by vegetation.scatter/asset.place) — exported so a repro harness
 // can exercise the EXACT editor code path (GLB parse + WebGPU texture rehome + instancing).
 export { parseGltfScene } from "./skills/three.ts";
-import { GltfSceneParseError } from "./skills/three.ts";
-import { loadVegetationPack, speciesPaletteIds, type VegetationPack } from "./skills/vegetation.ts";
+import { GltfSceneParseError, type GltfSceneCache } from "./skills/three.ts";
+import { loadVegetationPack, speciesPaletteEntries, speciesPaletteIds, type VegetationPack, type VegetationPackEntry } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
@@ -67,6 +67,7 @@ import {
 } from "./browser/live-runtime.ts";
 import { exportAssetBundle, loadExport, type LoadedExport } from "./export/package.ts";
 import { AssetRegistry } from "./asset-registry.ts";
+import type { DerivedRuntimeTransportConfig } from "./browser/derived-runtime-transport.ts";
 import { KeyframePhysics, playbackOps } from "./browser/keyframe-physics.ts";
 import { ReplayPlayer } from "./browser/player.ts";
 import {
@@ -85,7 +86,9 @@ import { ClientTerrainStream } from "./terrain/stream-client.ts";
 // Task #78 — placed-entity residency streaming (view state, like the tile stream): detach
 // far props' RETAINED meshes, re-attach on approach; ids/eids/counters untouched.
 import { createEntityResidencyWiring, EntityResidencyStream } from "./browser/entity-stream.ts";
-import { StreamedGrassManager } from "./terrain/grass-render.ts";
+import { GrassFieldStreamManager } from "./render/grass-field-render.ts";
+import { grassFieldInstanceSpacing } from "./render/grass-field-package.ts";
+import { INTERACTIVE_TEMPERATE_MEADOW_PACKAGE } from "./content/grass/interactive-temperate-meadow.ts";
 import type { TileCoord } from "./terrain/stream.ts";
 import { MapTerrainSource } from "./terrain/map-source.ts";
 import { SwappableTerrainSource } from "./terrain/swappable.ts";
@@ -101,6 +104,7 @@ import type { RenderQualityTier } from "./render/quality.ts";
 import type { RenderTelemetrySnapshot } from "./render/telemetry.ts";
 import { UnderwaterEffect } from "./render/underwater.ts";
 export { UnderwaterEffect } from "./render/underwater.ts";
+export { HdrEnvironmentCache } from "./render/environment-hdri.ts";
 import {
   DERIVED_SIM_STAGE_SCHEMA,
   type DerivedSimStageSnapshot,
@@ -109,6 +113,7 @@ import {
   DetachedDerivedRenderCandidate,
   searchTransferredDerivedNavigation,
 } from "./browser/derived-runtime-render-candidate.ts";
+import { mountTransportDerivedBiomePopulation } from "./browser/derived-biome-population-mount.ts";
 import {
   derivedTerrainResidencyKey,
   type DerivedTerrainResidency,
@@ -337,7 +342,7 @@ export async function run(opts: RunOptions): Promise<RunningPlayer> {
     // asset root. The bundle was hash-verified in loadExport.
     makeRegistry: (tracer) => {
       const r = new SkillRegistry(tracer);
-      registerCoreSkills(r, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)) });
+      registerCoreSkills(r, { assets: AssetRegistry.fromBundle(exportAssetBundle(loaded)), grassVisualPackage: INTERACTIVE_TEMPERATE_MEADOW_PACKAGE });
       return r;
     },
     tracer: LiminaTracer.ephemeral("ses_browser_player"),
@@ -559,6 +564,8 @@ export interface RunLiveOptions {
   onRenderTelemetry?: (snapshot: Readonly<RenderTelemetrySnapshot>) => void;
   /** Exact derived revision to activate before this runtime is returned to its caller. */
   initialDerivedRevision?: unknown;
+  /** Authenticated loopback capability used only by main-realm biome content activation. */
+  initialDerivedContentAccess?: DerivedRuntimeTransportConfig;
   /** @deprecated Internally-owned hosts are always released. Supply renderHost to reuse a canvas backend. */
   disposeRendererOnStop?: boolean;
 }
@@ -616,7 +623,10 @@ export interface RunningLive {
    *  Returns null only when the bounded seqlock reader cannot obtain a stable generation. */
   playerWaterState(): Readonly<SimStatusSnapshot> | null;
   /** Atomically replace the bounded derived terrain/water render and simulation revision. */
-  activateDerivedRevision(snapshot: unknown, options?: Readonly<{ signal?: AbortSignal }>): Promise<Readonly<{
+  activateDerivedRevision(snapshot: unknown, options?: Readonly<{
+    signal?: AbortSignal;
+    contentAccess?: DerivedRuntimeTransportConfig;
+  }>): Promise<Readonly<{
     manifestHash: string;
     revision: number;
     headHash: string;
@@ -670,28 +680,93 @@ const LIVE_IN_PLACE_SKILLS = new Set(["authoring.commit", "ecs.updateComponent",
 // backend (invisible mesh). A handler must NOT do its own async fetch: handlers ALSO run in the sim
 // worker, where a hanging fetch blocks the "ready" handshake and freezes the viewport (learned the
 // hard way — that is why prewarmAssets was removed).
-const LIVE_STRUCTURAL_ADD_SKILLS = new Set(["scene.createEntity", "asset.place", "asset.placeLod", "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant"]);
+const LIVE_STRUCTURAL_ADD_SKILLS = new Set([
+  "scene.createEntity", "asset.place", "asset.placeLod", "asset.scatter", "world.populateBiome",
+  "building.placeFunctional", "furniture.placeFunctional",
+  "player.spawn", "terrain.create", "vegetation.scatter", "vegetation.plant",
+]);
 
 /** An inline `assets` palette off a command's input (vegetation.plant/scatter), sanitised to ids. */
-function inlinePaletteEntries(input: Record<string, unknown>): { id: string }[] {
+function inlinePaletteEntries(input: Record<string, unknown>): VegetationPackEntry[] {
   return (Array.isArray(input.assets) ? input.assets : [])
-    .map((a) => (a && typeof (a as { id?: unknown }).id === "string" ? { id: (a as { id: string }).id } : { id: "" }))
+    .map((a) => {
+      if (!a || typeof (a as { id?: unknown }).id !== "string") return { id: "" };
+      const candidate = a as VegetationPackEntry;
+      return { id: candidate.id, ...(candidate.weight !== undefined ? { weight: candidate.weight } : {}), ...(candidate.treeLod !== undefined ? { treeLod: candidate.treeLod } : {}) };
+    })
     .filter((e) => e.id.length > 0);
+}
+
+function vegetationAssetIds(species: string[], input: Record<string, unknown>, pack: VegetationPack): string[] {
+  const ids: string[] = [];
+  for (const entry of speciesPaletteEntries(species, inlinePaletteEntries(input), pack)) {
+    ids.push(entry.id);
+    if (entry.treeLod !== undefined) ids.push(entry.treeLod.reducedId, entry.treeLod.impostorId);
+  }
+  return ids;
 }
 
 /** The GLB asset ids a command will MOUNT — used to pre-warm the parse cache before renderer.init().
  *  Vegetation commands name no baked ids: their archetypes come from the command's inline `assets`
  *  palette or the project VEGETATION PACK (tree-pack.json), so the pack is threaded in. */
-function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack = {}): string[] {
+export function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack = {}): string[] {
   if (cmd.kind !== "skill") return [];
   const input = (cmd.input ?? {}) as Record<string, unknown>;
-  if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF") {
+  if (cmd.tool === "asset.place" || cmd.tool === "three.loadGLTF" || cmd.tool === "building.placeFunctional" || cmd.tool === "furniture.placeFunctional") {
     return typeof input.assetId === "string" ? [input.assetId] : [];
   }
   // asset.placeLod mounts a GLB PER LEVEL — pre-warm every level's parse cache before init().
   if (cmd.tool === "asset.placeLod") {
     const lods = Array.isArray(input.lods) ? input.lods : [];
     return lods.map((l) => (l && typeof (l as { assetId?: unknown }).assetId === "string" ? (l as { assetId: string }).assetId : "")).filter((s) => s.length > 0);
+  }
+  // asset.scatter can mount every base palette asset and every declared population LOD.
+  // All ids must be parsed before acquireWorld(): a cache miss during the active render
+  // session is rejected deliberately to prevent asynchronous GLTFLoader work corrupting WebGL.
+  if (cmd.tool === "asset.scatter") {
+    const config = input.config as { assets?: unknown } | undefined;
+    const assets = Array.isArray(config?.assets) ? config.assets : [];
+    const ids: string[] = [];
+    for (const candidate of assets) {
+      if (candidate === null || typeof candidate !== "object") continue;
+      const asset = candidate as { id?: unknown; lods?: unknown; treeLod?: unknown };
+      if (typeof asset.id === "string" && asset.id.length > 0) ids.push(asset.id);
+      if (asset.treeLod !== null && typeof asset.treeLod === "object") {
+        const tree = asset.treeLod as { reducedId?: unknown; impostorId?: unknown };
+        if (typeof tree.reducedId === "string" && tree.reducedId.length > 0) ids.push(tree.reducedId);
+        if (typeof tree.impostorId === "string" && tree.impostorId.length > 0) ids.push(tree.impostorId);
+      }
+      if (!Array.isArray(asset.lods)) continue;
+      for (const candidateLod of asset.lods) {
+        const lod = candidateLod as { id?: unknown } | null;
+        if (lod !== null && typeof lod === "object" && typeof lod.id === "string" && lod.id.length > 0) ids.push(lod.id);
+      }
+    }
+    return ids;
+  }
+  // world.populateBiome drives nested asset.scatter calls from its inline semantic role pack.
+  // The nested calls are intentionally not separate author commands, so the top-level command
+  // is the only place boot/live prewarm can discover these GLBs.
+  if (cmd.tool === "world.populateBiome") {
+    const biomePack = input.biomePack;
+    if (biomePack === null || typeof biomePack !== "object" || Array.isArray(biomePack)) return [];
+    const ids: string[] = [];
+    for (const candidate of Object.values(biomePack as Record<string, unknown>)) {
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      const asset = candidate as { id?: unknown; lods?: unknown; treeLod?: unknown };
+      if (typeof asset.id === "string" && asset.id.length > 0) ids.push(asset.id);
+      if (asset.treeLod !== null && typeof asset.treeLod === "object") {
+        const tree = asset.treeLod as { reducedId?: unknown; impostorId?: unknown };
+        if (typeof tree.reducedId === "string" && tree.reducedId.length > 0) ids.push(tree.reducedId);
+        if (typeof tree.impostorId === "string" && tree.impostorId.length > 0) ids.push(tree.impostorId);
+      }
+      if (!Array.isArray(asset.lods)) continue;
+      for (const candidateLod of asset.lods) {
+        const lod = candidateLod as { id?: unknown } | null;
+        if (lod !== null && typeof lod === "object" && typeof lod.id === "string" && lod.id.length > 0) ids.push(lod.id);
+      }
+    }
+    return ids;
   }
   // village.build mounts a GLB per building (via nested asset.place); its ids live in
   // steering.buildings[].assetId, so pre-warm each one's parse cache before init().
@@ -712,7 +787,7 @@ function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack = {}): 
   }
   if (cmd.tool === "vegetation.scatter") {
     const species = Array.isArray(input.species) ? (input.species as string[]) : ["spruce", "pine", "birch"];
-    return speciesPaletteIds(species, inlinePaletteEntries(input), pack);
+    return vegetationAssetIds(species, input, pack);
   }
   return [];
 }
@@ -742,7 +817,7 @@ function mapAssetIdsForCommand(cmd: AuthorCommand): string[] {
 // viewport reboot. The skill runs on the render-thread world (teardownEntity removes the
 // mesh) and is forwarded to the sim worker (which tears down the body + eid); the removed
 // eid is dropped from the interpolation ring so its stale transform is never re-applied.
-const LIVE_REMOVE_SKILLS = new Set(["scene.destroyEntity"]);
+const LIVE_REMOVE_SKILLS = new Set(["scene.destroyEntity", "building.destroyFunctional", "furniture.destroyFunctional"]);
 // Render-scene mutations (lights) apply on the RENDER thread only: they add/remove three.js
 // lights on the real scene via applyOne, so they must NOT force a full reboot, and must NOT be
 // forwarded to the sim worker (whose scene is a headless stub with no lighting). Without this a
@@ -847,7 +922,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let cleanupWorld: WorldContext | undefined;
   let cleanupTerrainStream: ClientTerrainStream | undefined;
   let cleanupTerrainMaterialPool: TerrainMaterialPool | undefined;
-  let cleanupGrassStream: StreamedGrassManager | undefined;
+  let cleanupGrassStream: GrassFieldStreamManager | undefined;
   let cleanupEntityStream: EntityResidencyStream | undefined;
   let cleanupDerivedTerrainResidency: (() => void) | undefined;
   let cleanupInput: LivePlayerInput | undefined;
@@ -1238,7 +1313,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const underwaterEffect = new UnderwaterEffect(scene);
   cleanupUnderwater = underwaterEffect;
   const registry = new SkillRegistry(LiminaTracer.ephemeral("ses_browser_live"));
-  const core = registerCoreSkills(registry, { assets: liveAssets });
+  const core = registerCoreSkills(registry, { assets: liveAssets, grassVisualPackage: INTERACTIVE_TEMPERATE_MEADOW_PACKAGE });
   core.water.setQuality(renderSession.quality().water);
   cleanupWater = core.water;
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
@@ -1319,7 +1394,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // p_stream_client.ts. Mounts run inside frame() below — synchronous math only, so the
   // forceWebGL init-collapse window (no macrotask between init() and first render) is untouched.
   let terrainStream: ClientTerrainStream | undefined;
-  let grassStream: StreamedGrassManager | undefined;
+  let grassStream: GrassFieldStreamManager | undefined;
   {
     const holder = core.terrain.source;
     const mapSource = holder instanceof SwappableTerrainSource && holder.current instanceof MapTerrainSource
@@ -1377,15 +1452,27 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // PAINT-DRIVEN STREAMED GRASS (view state, like the tile stream itself): real instanced
       // blades on the near tiles wherever the map's paint channel says grass (density ∝ paintW;
       // none on sand/rock/underwater). Tiles register on mount and the manager grows/drops grass
-      // around the camera (≤1 tile-grass build per frame, radius 2 + hysteresis 1) inside frame()
-      // below — synchronous math + GPU upload only, no fetch/macrotask, ZERO entity slots. The
+      // around the camera (one transactional async tile build in flight, radius 2 + hysteresis 1)
+      // inside frame() below. Native WebGPU concatenates canonical pages into one compute+draw per
+      // terrain tile; forceWebGL uses the deterministic CPU source. No fetch/macrotask and ZERO entity slots. The
       // 60→110 m camera fade in the TSL material shrinks far blades into the painted ground tint,
       // so the grass edge never pops at the grow radius.
       // Grass is eye-level detail; an overview peek skips it (see RunLiveOptions.peek) — the painted
       // ground tint already reads the grassy areas from that distance.
-      grassStream = opts.peek === true ? undefined : new StreamedGrassManager(scene, {
+      grassStream = opts.peek === true ? undefined : new GrassFieldStreamManager(scene, {
         tileSize: TILE_SIZE,
-        source: () => ({ seed: 1337, elevationMin: mapSource.seaLevelM + 0.05, spacing: 0.34 }),
+        // Preserve the package's near-field density and bound AREA through camera-local 16 m
+        // residency cells. A sparse full-tile lattice recreates the rejected wispy silhouette.
+        cellSize: TILE_SIZE / 3,
+        renderer,
+        visualPackage: INTERACTIVE_TEMPERATE_MEADOW_PACKAGE,
+        quality: renderSession.quality().tier,
+        source: () => ({
+          seed: 1337,
+          elevationMin: mapSource.seaLevelM + 0.05,
+          spacing: grassFieldInstanceSpacing(INTERACTIVE_TEMPERATE_MEADOW_PACKAGE, renderSession.quality().tier, 0),
+        }),
+        onError: (error) => console.error("streamed grass field build failed", error),
       });
       cleanupGrassStream = grassStream;
       const grassStreamRef = grassStream;
@@ -1483,7 +1570,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     for (const bodyId of currentBodies) suppressedAuthoredTerrainBodies.add(bodyId);
     terrainStream?.clear();
     terrainStream = undefined;
-    grassStream?.clear();
+    void grassStream?.clear().catch((error) => console.error("streamed grass field cleanup failed", error));
     grassStream = undefined;
   };
 
@@ -1842,14 +1929,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       if (readSimStatusInto(statusView, frameStatus)) underwaterEffect.update(frameStatus.submerged);
       // Map Phase 3.3: editor navigation streams every view subsystem from its mode-aware anchor
       // (orbit target or fly camera); gameplay and legacy views retain the active camera position. Budgeted pure
-      // math + synchronous mounts only (no fetch/macrotask — the map IR was resolved at boot),
+      // math + budgeted async grass compute only (no fetch/macrotask — the map IR was resolved at boot),
       // so the forceWebGL init-collapse window stays untouched.
       if (terrainStream !== undefined || entityStream !== undefined) {
         const camPos = (camera as unknown as { position: { x: number; z: number } }).position;
         const streamX = editorNavigation === undefined ? camPos.x : navigationAnchor.x;
         const streamZ = editorNavigation === undefined ? camPos.z : navigationAnchor.z;
         terrainStream?.update(streamX, streamZ);
-        // Grass follows the same camera anchor, one budgeted tile-grass build per frame.
+        // Grass follows the same camera anchor, with at most one unpublished build in flight.
         grassStream?.update(streamX, streamZ);
         // Task #78: placed-entity residency follows the same anchor — ≤4 detach/attach ops of
         // RETAINED objects per frame (no fetch/parse/macrotask; the meshes already exist).
@@ -1953,7 +2040,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
   const activateDerivedRevision = (
     snapshot: unknown,
-    options: Readonly<{ signal?: AbortSignal }> = {},
+    options: Readonly<{
+      signal?: AbortSignal;
+      contentAccess?: DerivedRuntimeTransportConfig;
+    }> = {},
   ): Promise<Readonly<{ manifestHash: string; revision: number; headHash: string }>> => {
     const work = async (): Promise<Readonly<{ manifestHash: string; revision: number; headHash: string }>> => {
       if (stopped) throw new Error("live runtime is stopped");
@@ -1974,42 +2064,6 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         return activeDerivedRevision.identity;
       }
       stagingDerivedCandidate = candidate;
-      const transfer: Transferable[] = [];
-      const terrainWindow = candidate.terrainWindow().map((entry) => {
-        const heights = entry.tile.heights.slice();
-        transfer.push(heights.buffer);
-        return {
-          key: entry.key,
-          tx: entry.tx,
-          tz: entry.tz,
-          tile: {
-            nrows: entry.tile.nrows,
-            ncols: entry.tile.ncols,
-            origin: [entry.tile.origin[0], entry.tile.origin[1], entry.tile.origin[2]] as [number, number, number],
-            scale: [entry.tile.scale[0], entry.tile.scale[1], entry.tile.scale[2]] as [number, number, number],
-            heights,
-          },
-        };
-      });
-      const generated = candidate.snapshot.generatedWater;
-      const generatedBytes = generated?.bytes.slice();
-      if (generatedBytes !== undefined) transfer.push(generatedBytes.buffer);
-      const stageSnapshot: DerivedSimStageSnapshot = {
-        schema: DERIVED_SIM_STAGE_SCHEMA,
-        projectId: candidate.snapshot.projectId,
-        branchId: candidate.snapshot.branchId,
-        source: candidate.snapshot.source,
-        manifestHash: identity.manifestHash,
-        grid: candidate.snapshot.manifest.grid,
-        terrainWindow,
-        ...(generated === null ? {} : {
-          generatedWater: {
-            artifact: generated.artifact,
-            bytes: generatedBytes!,
-            bindings: generated.bindings,
-          },
-        }),
-      };
       let stagedRequestId: string | undefined;
       let candidateBodies: number[] = [];
       let candidateAttached = false;
@@ -2017,8 +2071,69 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       let commitDispatched = false;
       let failClosed = false;
       let releaseActivationPause: (() => Promise<void>) | undefined;
+      // GLTF parsing and texture decode can yield macrotasks. Gate frame work before any population
+      // fetch/parse begins so neither backend can render through the known WebGL corruption window.
       derivedActivationInProgress = true;
       try {
+        if (candidate.snapshot.populationPlan !== null) {
+          if (options.contentAccess === undefined) {
+            throw new Error("derived biome population activation requires authenticated main-realm content access");
+          }
+          await candidate.stagePopulation(({ plan, content, root, terrainWindow, biomeField, runtimePack, waterCoverageAt }) => mountTransportDerivedBiomePopulation({
+            plan,
+            content,
+            root,
+            terrainWindow,
+            biomeField,
+            runtimePack,
+            waterCoverageAt,
+            manifestHash: identity.manifestHash,
+            contentAccess: options.contentAccess!,
+            signal,
+            world,
+            camera,
+            quality: renderSession.quality().tier,
+            gltfCache: renderHost.gltfCache,
+            ops,
+          }));
+          cancelled();
+        }
+        const transfer: Transferable[] = [];
+        const terrainWindow = candidate.terrainWindow().map((entry) => {
+          const heights = entry.tile.heights.slice();
+          transfer.push(heights.buffer);
+          return {
+            key: entry.key,
+            tx: entry.tx,
+            tz: entry.tz,
+            tile: {
+              nrows: entry.tile.nrows,
+              ncols: entry.tile.ncols,
+              origin: [entry.tile.origin[0], entry.tile.origin[1], entry.tile.origin[2]] as [number, number, number],
+              scale: [entry.tile.scale[0], entry.tile.scale[1], entry.tile.scale[2]] as [number, number, number],
+              heights,
+            },
+          };
+        });
+        const generated = candidate.snapshot.generatedWater;
+        const generatedBytes = generated?.bytes.slice();
+        if (generatedBytes !== undefined) transfer.push(generatedBytes.buffer);
+        const stageSnapshot: DerivedSimStageSnapshot = {
+          schema: DERIVED_SIM_STAGE_SCHEMA,
+          projectId: candidate.snapshot.projectId,
+          branchId: candidate.snapshot.branchId,
+          source: candidate.snapshot.source,
+          manifestHash: identity.manifestHash,
+          grid: candidate.snapshot.manifest.grid,
+          terrainWindow,
+          ...(generated === null ? {} : {
+            generatedWater: {
+              artifact: generated.artifact,
+              bytes: generatedBytes!,
+              bindings: generated.bindings,
+            },
+          }),
+        };
         releaseActivationPause = await acquireActivationPause();
         cancelled();
         const staged = await requestDerivedWorker("stageDerivedRevision", identity.manifestHash, { snapshot: stageSnapshot }, transfer);
@@ -2188,18 +2303,29 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
           ? new Set(entities.ids())
           : undefined;
-        // A removal frees its entity from the render-thread table, so resolve the eid
-        // BEFORE applying so the interpolation ring + suppressed set can be cleaned after.
-        const removedEid = cmd.kind === "skill" && LIVE_REMOVE_SKILLS.has(cmd.tool)
-          ? entities.resolve(String((cmd.input as { entity?: unknown })?.entity ?? ""))?.eid
-          : undefined;
-        // Task #78: untrack a to-be-destroyed entity BEFORE the skill runs. unregister
-        // re-materializes a dormant mesh first, so teardownEntity's scene.remove path is
-        // byte-identical to the never-streamed world.
-        if (removedEid !== undefined && entityStream !== undefined && cmd.kind === "skill") {
-          const removedId = String((cmd.input as { entity?: unknown })?.entity ?? "");
-          entityStream.unregister(removedId);
-          entityStreamProtected.delete(removedId);
+        // A functional removal can free a complete root-owned subtree (door/collider or
+        // furniture compound-collider entities), not only the command's named root. Capture
+        // exact ids/eids before applying so the interpolation ring cannot retain stale slots.
+        const pendingRemoval = new Map<string, number>();
+        if (cmd.kind === "skill" && LIVE_REMOVE_SKILLS.has(cmd.tool)) {
+          const input = cmd.input as { entity?: unknown; root?: unknown };
+          const rootId = String((cmd.tool === "scene.destroyEntity" ? input.entity : input.root) ?? "");
+          const stack = rootId ? [rootId] : [];
+          while (stack.length > 0) {
+            const id = stack.pop()!;
+            if (pendingRemoval.has(id)) continue;
+            const entry = entities.resolve(id);
+            if (entry === undefined) continue;
+            pendingRemoval.set(id, entry.eid);
+            stack.push(...entities.childrenOf(id));
+          }
+          // Task #78: untrack every to-be-destroyed entity BEFORE the skill runs.
+          // unregister re-materializes a dormant mesh first, so teardown's scene.remove
+          // path is byte-identical to the never-streamed world.
+          if (entityStream !== undefined) for (const id of pendingRemoval.keys()) {
+            entityStream.unregister(id);
+            entityStreamProtected.delete(id);
+          }
         }
         const res = await applyOne(cmd);
         if (!res.success) {
@@ -2210,7 +2336,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // now-region-owned tiles back (and re-queue any released ones) so the camera window and
         // the authoritative window never double-mount the same ground.
         if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") terrainStream?.reconcileExternal();
-        if (removedEid !== undefined) removedEids.push(removedEid);
+        for (const [id, eid] of pendingRemoval) if (entities.resolve(id) === undefined && !removedEids.includes(eid)) removedEids.push(eid);
         if (beforeIds !== undefined) {
           const newEids = captureNewEids(beforeIds, res.result);
           if (newEids.length === 0) {
@@ -2336,7 +2462,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     ),
     stop: stopLive,
   };
-  if (opts.initialDerivedRevision !== undefined) await runningLive.activateDerivedRevision(opts.initialDerivedRevision);
+  if (opts.initialDerivedRevision !== undefined) {
+    await runningLive.activateDerivedRevision(opts.initialDerivedRevision, {
+      ...(opts.initialDerivedContentAccess === undefined ? {} : { contentAccess: opts.initialDerivedContentAccess }),
+    });
+  }
   return runningLive;
   } catch (error) {
     try { await teardown("live runtime failed during startup"); }

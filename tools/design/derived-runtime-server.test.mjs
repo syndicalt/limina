@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { createTerrainGridSpec, terrainChunkId } from "../../js/src/terrain/grid.mjs";
 import {
@@ -21,6 +21,13 @@ import {
   createDerivedRevisionManifest,
   derivedArtifactContentHash,
 } from "../../js/src/world/compiler/index.mjs";
+import {
+  BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+  encodeBiomeContentClosureArtifact,
+} from "../../js/src/world/compiler/biome-content-closure-artifact.mjs";
+import { BIOME_CONTENT_BUNDLE_SCHEMA, deriveBiomeContentBundleClosureHash } from "../../js/src/world/biome-content-bundle.mjs";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
 import { publishDerivedRevision } from "./derived-publisher.mjs";
 import {
   DERIVED_RUNTIME_CURRENT_RATE_CAPACITY,
@@ -91,9 +98,43 @@ async function publish(root, fixture, jobId, readHead) {
     jobId,
     manifest: fixture.manifest,
     snapshot: fixture.snapshot,
-    artifacts: [{ contentHash: fixture.contentHash, bytes: fixture.bytes }],
+    artifacts: fixture.artifacts ?? [{ contentHash: fixture.contentHash, bytes: fixture.bytes }],
+    ...(fixture.contentEntries === undefined ? {} : { contentEntries: fixture.contentEntries }),
     readHead,
   });
+}
+
+function contentRevisionFixture(tag, source, contentBytes = randomBytes(1024 * 1024 + 73), status = "candidate") {
+  const base = revisionFixture(tag, source);
+  const bytes = new Uint8Array(contentBytes);
+  const engineHash = portableAssetContentHash(bytes);
+  const entry = {
+    assetId: `models/${tag}.glb`, contentHash: engineHash, kind: "model-source", byteLength: bytes.byteLength,
+    provenance: { licenseSpdx: "CC0-1.0", sourceUri: `limina://test/${tag}` },
+  };
+  const draft = {
+    schema: BIOME_CONTENT_BUNDLE_SCHEMA, id: `test-${tag}`, version: "1.0.0", status,
+    runtimePack: { assetId: `biomes/${tag}.json`, contentHash: hash(`runtime-pack:${tag}`) },
+    entries: [entry],
+  };
+  const bundle = { ...draft, closureHash: deriveBiomeContentBundleClosureHash(draft) };
+  const closureBytes = encodeBiomeContentClosureArtifact(bundle);
+  const closureContentHash = derivedArtifactContentHash(closureBytes);
+  const { manifestHash: _oldHash, ...core } = base.manifest;
+  const manifest = createDerivedRevisionManifest({ ...core, globalArtifacts: [{
+    artifactType: BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+    contentHash: closureContentHash,
+    byteLength: closureBytes.byteLength,
+    mediaType: BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  }] });
+  return {
+    ...base, manifest, engineHash, contentBytes: bytes, closureBytes, closureContentHash,
+    artifacts: [
+      { contentHash: base.contentHash, bytes: base.bytes },
+      { contentHash: closureContentHash, bytes: closureBytes },
+    ],
+    contentEntries: [{ id: entry.assetId, path: `assets/${entry.assetId}`, hash: engineHash, bytes }],
+  };
 }
 
 function artifactPath(root, contentHash) {
@@ -154,6 +195,14 @@ function http(owner, path, options = {}) {
 
 function artifactUrl(fixture, contentHash = fixture.contentHash) {
   return `/v1/derived/manifests/${fixture.manifest.manifestHash.slice(7)}/artifacts/${contentHash.slice(7)}`;
+}
+
+function contentUrl(fixture, engineHash = fixture.engineHash) {
+  return `/v1/derived/manifests/${fixture.manifest.manifestHash.slice(7)}/content/${engineHash.slice(7)}`;
+}
+
+function contentPath(root, engineHash) {
+  return join(root, ".limina", "derived", "main", "content", `${engineHash.slice(7)}.bin`);
 }
 
 function openPausedArtifact(running, fixture) {
@@ -346,6 +395,128 @@ test("artifact endpoint streams referenced multi-megabyte bytes exactly and reje
     assert.equal((await http(running.owner, artifactUrl(fixture, unknown))).status, 404);
     assert.equal((await http(running.owner, `/v1/derived/manifests/${"e".repeat(64)}/artifacts/${fixture.contentHash.slice(7)}`)).status, 412);
     assert.equal((await http(running.owner, `/v1/derived/manifests/../../artifacts/${fixture.contentHash.slice(7)}`)).status, 404);
+  } finally { await running?.server.stop(); fx.cleanup(); }
+});
+
+for (const status of ["candidate", "accepted"]) {
+  test(`content endpoint serves only the exact current ${status} closure`, async () => {
+    const fx = projectFixture();
+    const source = { revision: 40, headHash: hash(`head:content-${status}`) };
+    const fixture = contentRevisionFixture(`content-${status}`, source, randomBytes(2 * 1024 * 1024 + 91), status);
+    const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+    let running;
+    try {
+      await publish(fx.root, fixture, `job-content-${status}`, authority);
+      running = await startServer(fx.root, authority);
+      const path = contentUrl(fixture);
+      assert.equal((await http(running.owner, path, { auth: false })).status, 401);
+      assert.equal((await http(running.owner, path, { origin: "http://evil.invalid" })).status, 403);
+      const preflight = await http(running.owner, path, { method: "OPTIONS", auth: false,
+        headers: { "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization, if-none-match" } });
+      assert.equal(preflight.status, 204);
+
+      const response = await http(running.owner, path);
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body, Buffer.from(fixture.contentBytes));
+      assert.equal(response.headers["content-type"], "application/octet-stream");
+      assert.equal(response.headers["content-length"], String(fixture.contentBytes.byteLength));
+      assert.equal(response.headers["x-limina-content-hash"], fixture.engineHash);
+      assert.equal(response.headers["x-limina-manifest-hash"], fixture.manifest.manifestHash);
+      assert.equal(response.headers["cache-control"], "private, max-age=31536000, immutable");
+
+      const unchanged = await http(running.owner, path, { headers: { "If-None-Match": response.headers.etag } });
+      assert.equal(unchanged.status, 304);
+      assert.equal(unchanged.body.byteLength, 0);
+      assert.equal((await http(running.owner, path, { method: "HEAD" })).status, 405);
+      assert.equal((await http(running.owner, path, { headers: { Range: "bytes=0-9" } })).status, 416);
+      assert.equal((await http(running.owner,
+        `/v1/derived/manifests/${"e".repeat(64)}/content/${fixture.engineHash.slice(7)}`)).status, 412);
+    } finally { await running?.server.stop(); fx.cleanup(); }
+  });
+}
+
+test("content endpoint rejects an installed but closure-unreferenced engine hash with a fixed 404", async () => {
+  const fx = projectFixture();
+  const source = { revision: 41, headHash: hash("head:content-unreferenced") };
+  const fixture = contentRevisionFixture("content-unreferenced", source);
+  const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+  let running;
+  try {
+    await publish(fx.root, fixture, "job-content-unreferenced", authority);
+    const arbitraryBytes = new Uint8Array(Buffer.from("installed but not closure authorized"));
+    const arbitraryHash = portableAssetContentHash(arbitraryBytes);
+    writeFileSync(contentPath(fx.root, arbitraryHash), arbitraryBytes);
+    running = await startServer(fx.root, authority);
+    const response = await http(running.owner, contentUrl(fixture, arbitraryHash));
+    assert.equal(response.status, 404);
+    assert.equal(errorCode(response), "NOT_FOUND");
+    assert.deepEqual(JSON.parse(response.body.toString("utf8")), {
+      schema: "limina.derived-runtime-error/v1", code: "NOT_FOUND", message: "derived runtime resource was not found",
+    });
+  } finally { await running?.server.stop(); fx.cleanup(); }
+});
+
+test("content endpoint rejects tampered installed bytes and never falls back to the live asset root", async () => {
+  const fx = projectFixture();
+  const source = { revision: 42, headHash: hash("head:content-tamper") };
+  const fixture = contentRevisionFixture("content-tamper", source, randomBytes(1024 * 1024 + 17));
+  const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+  let running;
+  try {
+    await publish(fx.root, fixture, "job-content-tamper", authority);
+    running = await startServer(fx.root, authority);
+    assert.equal((await http(running.owner, contentUrl(fixture))).status, 200, "warm current content did not serve");
+    const liveAsset = join(fx.root, "assets", fixture.contentEntries[0].id);
+    mkdirSync(dirname(liveAsset), { recursive: true });
+    writeFileSync(liveAsset, fixture.contentBytes);
+    const corrupt = Buffer.from(fixture.contentBytes); corrupt[corrupt.length >>> 1] ^= 0xff;
+    writeFileSync(contentPath(fx.root, fixture.engineHash), corrupt);
+    const response = await http(running.owner, contentUrl(fixture));
+    assert.equal(response.status, 503);
+    assert.ok(["ARTIFACT_INVALID", "PUBLICATION_UNAVAILABLE"].includes(errorCode(response)),
+      "tampered installed content did not fail through an integrity-closed fixed error");
+    assert.equal(response.body.toString("utf8").includes(fx.root), false);
+  } finally { await running?.server.stop(); fx.cleanup(); }
+});
+
+test("content endpoint fails closed when current generation changes during authorization", async () => {
+  const fx = projectFixture();
+  const source = { revision: 43, headHash: hash("head:content-race") };
+  const first = contentRevisionFixture("content-race-a", source, randomBytes(1024 * 1024 + 5));
+  const second = contentRevisionFixture("content-race-b", source, randomBytes(1024 * 1024 + 7));
+  const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+  let running;
+  try {
+    await publish(fx.root, first, "job-content-race-a", authority);
+    let reads = 0;
+    running = await startServer(fx.root, async () => {
+      reads++;
+      if (reads === 2) await publish(fx.root, second, "job-content-race-b", authority);
+      return authority();
+    });
+    const response = await http(running.owner, contentUrl(first));
+    assert.ok(response.status === 409 || response.status === 412);
+    assert.equal(errorCode(response), "CURRENT_CHANGED");
+  } finally { await running?.server.stop(); fx.cleanup(); }
+});
+
+test("retained content serves again when an older manifest is republished as exact current", async () => {
+  const fx = projectFixture();
+  const source = { revision: 44, headHash: hash("head:content-retained") };
+  const first = contentRevisionFixture("content-retained-a", source, randomBytes(4097));
+  const second = contentRevisionFixture("content-retained-b", source, randomBytes(4099));
+  const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+  let running;
+  try {
+    await publish(fx.root, first, "job-content-retained-a", authority);
+    await publish(fx.root, second, "job-content-retained-b", authority);
+    await publish(fx.root, first, "job-content-retained-a-again", authority);
+    running = await startServer(fx.root, authority);
+    const response = await http(running.owner, contentUrl(first));
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, Buffer.from(first.contentBytes));
+    assert.equal((await http(running.owner, contentUrl(second))).status, 412,
+      "previous-manifest content was served without that manifest becoming exact current");
   } finally { await running?.server.stop(); fx.cleanup(); }
 });
 

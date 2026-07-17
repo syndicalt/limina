@@ -5,6 +5,7 @@
 //   LIMINA_GPU_POWER_PREFERENCE=high-performance ./target/release/limina --window --frames 30 js/test/p_gpu_surface_probe.ts
 
 import * as THREE from "../build/three.bundle.mjs";
+import { isSoftwareAdapter } from "../src/render/fidelity-benchmark.ts";
 
 type PowerPreference = "low-power" | "high-performance";
 
@@ -47,6 +48,9 @@ const adapterInfo = Object.freeze({
   description: adapter.info?.description ?? "",
 });
 ops.op_log(`GPU probe: adapter ${JSON.stringify(adapterInfo)}; features ${JSON.stringify([...adapter.features].sort())}`);
+if (isSoftwareAdapter(adapterInfo)) {
+  throw new Error(`GPU probe: refusing software adapter "${adapterInfo.description || adapterInfo.device || "unknown"}" — a GPU surface probe must run on real hardware`);
+}
 
 const device = await adapter.requestDevice();
 ops.op_log("GPU probe: device created without optional features");

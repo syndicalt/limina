@@ -218,7 +218,11 @@ function clearRegionRenderDisposables(region: RegionState): void {
   const disposables = region.renderDisposables;
   if (disposables === undefined || disposables.length === 0) return;
   region.renderDisposables = [];
-  for (const dispose of disposables) dispose();
+  const errors: unknown[] = [];
+  for (const dispose of disposables) {
+    try { dispose(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, `region render disposal failed in ${errors.length} operation(s)`);
 }
 
 /** Register the terrain.* / world.* skills bound to a source + cache. The default
@@ -672,6 +676,15 @@ export function registerTerrainSkills(
           distance: z.number().positive(),
           hysteresis: z.number().min(0).max(1).optional(),
         })).min(1).optional(),
+        treeLod: z.object({
+          reducedId: z.string().min(1),
+          reducedDistance: z.number().positive(),
+          impostorId: z.string().min(1),
+          impostorDistance: z.number().positive(),
+          cullDistance: z.number().positive(),
+          hysteresis: z.number().min(0).max(1).optional(),
+        }).refine((value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+          { message: "treeLod distances must be strictly increasing" }).optional(),
       }),
     ).optional(),
   });

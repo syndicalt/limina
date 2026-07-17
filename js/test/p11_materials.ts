@@ -7,7 +7,7 @@
 //      default sets NONE of those nodes (byte-identical to before) — proven by control asserts.
 //
 //   B. TEXTURE-PACK IMPORT (material.import). Imports a CC0 image set (albedo + normal +
-//      roughness) BY content-addressed id as a NAMED material usable by createEntity/setMaterial.
+//      roughness + ambient occlusion) BY content-addressed id as a NAMED material usable by createEntity/setMaterial.
 //      Proves the REAL portability contract (mirrors asset.place): content-addressed + stable
 //      hash; the recorder COMMITS the hashes into the log; the bytes ride assets.jsonl; a REAL
 //      round-trip replays the import from the SERIALIZED package (guarded vs the native asset
@@ -16,6 +16,7 @@
 // Run: limina js/test/p11_materials.ts   (exit 0 = pass)
 
 import { EntityTable, ops, type EngineOps, type SceneObject } from "../src/engine.ts";
+import * as THREE from "../build/three.bundle.mjs";
 import { createEcsWorld } from "../src/ecs/world.ts";
 import { createTransformStorage } from "../src/ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
@@ -150,11 +151,14 @@ assert(flatMat.color.getHex() === 0x9b9890, "flat createEntity lost the stone pr
 const ALBEDO = "limina-hero.png";
 const NORMAL = "limina-x-header.png";
 const ROUGH = "limina-hero.png"; // reuse a real PNG for the roughness slot
+const OCCLUSION = "limina-x-header.png"; // distinct content-addressed linear map slot
+const DISPLACEMENT = "materials/forest-ground/displacement.jpg";
 
 // (B1) Content-addressed images: stable, byte-sensitive hashes.
 const reg = new AssetRegistry();
 const aHash = reg.resolve(ALBEDO).hash;
 const nHash = reg.resolve(NORMAL).hash;
+const dHash = reg.resolve(DISPLACEMENT).hash;
 assert(aHash.startsWith("sha256:") && aHash.length > "sha256:".length, `albedo not a real sha256: ${aHash}`);
 assert(aHash === reg.resolve(ALBEDO).hash, "albedo resolve not content-addressed (two resolves differ)");
 assert(nHash.startsWith("sha256:") && nHash !== aHash, "distinct images must content-address differently");
@@ -162,18 +166,28 @@ assert(nHash.startsWith("sha256:") && nHash !== aHash, "distinct images must con
 // (B2) Author a material.import: resolves + decodes the pack → a NAMED material; returns pinned hashes.
 const PACK = "herostone";
 const importRes = ok(await authReg.invoke("material.import", {
-  name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH,
+  name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, occlusion: OCCLUSION,
+  displacement: DISPLACEMENT, occlusionStrength: 0.65,
 }, authCtx));
 assert(importRes.name === PACK, "material.import returned the wrong name");
 const importedHashes = importRes.hashes as Record<string, string>;
 assert(importedHashes[ALBEDO] === aHash && importedHashes[NORMAL] === nHash, "material.import did not pin the resolved image hashes");
+assert(importedHashes[DISPLACEMENT] === dHash, "material.import did not pin the displacement image hash");
+const recipeHash = authCore.materials.contentHashOf(PACK);
+const surfaceSource = authCore.materials.surfaceOf(PACK);
+assert(/^sha256:[0-9a-f]{64}$/.test(recipeHash) && surfaceSource.contentHash === recipeHash,
+  "imported material did not publish one canonical recipe identity");
+assert(surfaceSource.hashes[ALBEDO] === aHash && surfaceSource.textures.albedo !== null,
+  "shared biome material source lost its registry-owned albedo/hash");
 
 // The built material carries the decoded maps (UV mode → map/normalMap/roughnessMap).
 // deno-lint-ignore no-explicit-any
 const built = authCore.materials.build(PACK) as any;
 assert(isSet(built.map) && isSet(built.map.image) && built.map.image.data instanceof Uint8Array,
   "imported material has no decoded albedo map (texture-pack import failed to decode)");
-assert(isSet(built.normalMap) && isSet(built.roughnessMap), "imported material missing the normal/roughness maps");
+assert(isSet(built.normalMap) && isSet(built.roughnessMap) && isSet(built.aoMap), "imported material missing the normal/roughness/AO maps");
+assert(built.aoMap.colorSpace === THREE.NoColorSpace && built.aoMapIntensity === 0.65,
+  "imported UV AO map lost linear colorspace or authored strength");
 assert(built.map.image.width > 0 && built.map.image.data.length === built.map.image.width * built.map.image.height * 4,
   "imported albedo decoded to a malformed RGBA buffer");
 
@@ -185,10 +199,12 @@ assert(isSet(packMat?.map) && isSet(packMat?.map?.image), "createEntity({materia
 
 // (B4) A TRIPLANAR import builds node-based color/normal/roughness (no UVs needed).
 const TPACK = "herostone_tri";
-ok(await authReg.invoke("material.import", { name: TPACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, triplanar: true, scale: 0.4 }, authCtx));
+ok(await authReg.invoke("material.import", { name: TPACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, occlusion: OCCLUSION, occlusionStrength: 0.65, triplanar: true, scale: 0.4 }, authCtx));
 // deno-lint-ignore no-explicit-any
 const triMat = authCore.materials.build(TPACK) as any;
 assert(isSet(triMat.colorNode) && isSet(triMat.normalNode) && isSet(triMat.roughnessNode), "triplanar import must set colorNode/normalNode/roughnessNode");
+assert(isSet(triMat.aoNode), "triplanar import must set an AO node from the decoded occlusion map");
+assert(texWidths(triMat.aoNode).some((w) => w > 0), "triplanar AO node does not reference the decoded occlusion texture");
 // The imported triplanar normal must ALSO be a real VIEW-SPACE detail normal referencing the
 // decoded normal-map texture, NOT the inverted transformDirection form (same trap as the terrain).
 const triNormalTex = texWidths(triMat.normalNode);
@@ -214,7 +230,7 @@ const files = assembleExport({
 });
 assert(files["assets.jsonl"].length > 0, "assets.jsonl is empty (image bytes did not ride the export)");
 const assetIds = files["assets.jsonl"].split("\n").filter((l) => l.length > 0).map((l) => (JSON.parse(l) as { id: string }).id);
-assert(assetIds.includes(ALBEDO) && assetIds.includes(NORMAL), "export assets.jsonl missing the imported pack images");
+assert(assetIds.includes(ALBEDO) && assetIds.includes(NORMAL) && assetIds.includes(OCCLUSION) && assetIds.includes(DISPLACEMENT), "export assets.jsonl missing the imported pack images");
 
 // (B7) REAL round-trip: reload from the SERIALIZED package and replay the import from it — NOT
 // the native asset root (a guard host throws on op_read_asset, so success proves package origin).
@@ -249,6 +265,7 @@ const replayedMat = replayCore.materials.build(PACK) as any;
 assert(isSet(replayedMat.map) && isSet(replayedMat.map.image) && replayedMat.map.image.data instanceof Uint8Array,
   "replayed imported material has no decoded albedo map (did not load from package bytes)");
 assert(replayCore.materials.hashesOf(PACK)[ALBEDO] === aHash, "replayed imported material lost the pinned albedo hash");
+assert(replayCore.materials.hashesOf(PACK)[DISPLACEMENT] === dHash, "replayed imported material lost the pinned displacement hash");
 
 // (B8) Pin enforcement: a WRONG committed hash is REJECTED on replay (FALSIFIABLE — drop the
 // handler's hash check and this loads a swapped texture).
@@ -256,7 +273,7 @@ const pkgReg2 = AssetRegistry.fromBundle(exportAssetBundle(loaded), guardOps);
 const pinReg = new SkillRegistry(new LiminaTracer("ses_p11_mat_pin"));
 registerCoreSkills(pinReg, { assets: pkgReg2 });
 const pinCtx = { agentId: "a", sessionId: "s", permissions: BUILDER, tick: 0, world: makeWorld(guardOps) };
-const pinOk = await pinReg.invoke("material.import", { name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, hashes: { [ALBEDO]: aHash, [NORMAL]: nHash } }, pinCtx);
+const pinOk = await pinReg.invoke("material.import", { name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, occlusion: OCCLUSION, displacement: DISPLACEMENT, hashes: { [ALBEDO]: aHash, [NORMAL]: nHash, [DISPLACEMENT]: dHash } }, pinCtx);
 assert(pinOk.success, `pinned import with the correct hashes should load: ${JSON.stringify(pinOk.error)}`);
 const pinBad = await pinReg.invoke("material.import", { name: PACK, albedo: ALBEDO, normal: NORMAL, roughness: ROUGH, hashes: { [ALBEDO]: nHash } }, pinCtx);
 assert(!pinBad.success && JSON.stringify(pinBad.error).includes("content hash mismatch"),

@@ -91,6 +91,37 @@ assert(phys !== null, "rapier-compat could not be instantiated in this binary â€
   assert(p.op_physics_add_character(0, 2, 0, 0.5, 0.3) === 2, "character should consume id 2");
 }
 
+// Oriented overlap parity: validation is fail-closed even with an empty output,
+// results are stable-id sorted, exclusion works, and caller capacity retains the
+// deterministic lowest ids rather than whichever collider Rapier visits first.
+{
+  const p = phys;
+  p.op_physics_create_world(0);
+  const id0 = p.op_physics_add_static_box(-0.75, 0, 0, .2, .2, .2, .5, 0);
+  const id1 = p.op_physics_add_static_box(.75, 0, 0, .2, .2, .2, .5, 0);
+  const id2 = p.op_physics_add_static_box(0, 0, 1.4, .2, .2, .2, .5, 0);
+  p.op_physics_step(); // publish inserted colliders to Rapier's query pipeline
+  const out = new Uint32Array(8);
+  let count = p.op_physics_overlap_box(0, 0, 0, 1.1, .5, .35, 0, 0, 0, 1, -1, out);
+  assert(JSON.stringify([...out.slice(0, count)]) === JSON.stringify([id0, id1]), "overlap ids must be sorted");
+  count = p.op_physics_overlap_box(0, 0, 0, 1.1, .5, .35, 0, 0, 0, 1, id0, out);
+  assert(count === 1 && out[0] === id1, "overlap exclusion failed");
+  const half = Math.PI / 4;
+  count = p.op_physics_overlap_box(0, 0, 0, 1.8, .5, .35, 0, Math.sin(half), 0, Math.cos(half), -1, out);
+  assert(count === 1 && out[0] === id2, "oriented overlap failed");
+  const one = new Uint32Array(1);
+  count = p.op_physics_overlap_box(0, 0, 0, 1.1, .5, .35, 0, 0, 0, 1, -1, one);
+  assert(count === 1 && one[0] === id0, "bounded overlap must retain the lowest stable id");
+  for (const invoke of [
+    () => p.op_physics_overlap_box(NaN, 0, 0, 1, 1, 1, 0, 0, 0, 1, -1, new Uint32Array(0)),
+    () => p.op_physics_overlap_box(0, 0, 0, 0, 1, 1, 0, 0, 0, 1, -1, new Uint32Array(0)),
+    () => p.op_physics_overlap_box(0, 0, 0, 1, 1, 1, 0, 0, 0, 0, -1, new Uint32Array(0)),
+  ]) {
+    let threw = false; try { invoke(); } catch { threw = true; }
+    assert(threw, "invalid overlap input must fail before empty-buffer return");
+  }
+}
+
 {
   const p = await WasmRapierPhysics.create(RAPIER);
   p.op_physics_create_world(-9.81);

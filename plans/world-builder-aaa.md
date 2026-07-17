@@ -185,6 +185,10 @@ materials and vegetation; it does not silently recarve rivers.
 - Grey Field fixed-camera evidence records editor/browser/native images, CPU/GPU p50/p95, hitches,
   draw calls, triangles, texture memory, shader warm-up, startup, and editor latency. M0 records the
   baseline; numeric visual budgets lock only after the first controlled capture is reviewed.
+- The hard [`visual-fidelity-release-contract.md`](./visual-fidelity-release-contract.md) rejects diagnostics,
+  fixtures, fallback renderers, and incomplete production content before a frame is eligible for human review.
+  Human comparison against the locked Project Gorgon reference set is the final visual release gate; pixel
+  activity and subsystem correctness can never substitute for that judgment.
 - Grey Field navigation UAT crosses the 3.6 km map through fly controls, Atlas-to-3D focus, coordinate
   jump, selection framing, and a saved bookmark/return cycle. Every route must land on the requested
   world-space target with a nonblank bounded-residency frame, clear progress/error feedback, no stale
@@ -581,3 +585,188 @@ near-vertical cliffs before the SDF layer exists.
   can pass, Limina needs a source-controlled reference scene with close-range PBR architecture, vegetation,
   terrain layering, water, lighting, shadows, and atmosphere, evaluated at fixed camera paths against declared
   frame-time, hitch, draw-call, triangle, texture-memory, and visual-regression budgets on target laptop hardware.
+- **2026-07-11 — WB-W1 generated-water acceptance harness shipped.** A source-controlled u16 bowl and
+  canonical hydrology recipe now compile twice to the same manifest and artifact bytes, then pass the emitted
+  LOD0 terrain window and generated-water topology through the production `SimWorkerController` stage/commit
+  boundary. Real Rapier proves dry → wading → swimming, a bounded 600-tick float, horizontal swim,
+  submerged → surfaced behavior, and bit-exact physics plus character continuation after snapshot restore.
+  The companion self-contained browser gate provisions a fresh `create-limina-app` project, compiles the
+  matching Atlas fixture, binds its exact WorldMap authority, reboots to prove replay ordering, and activates
+  the same hydrology globals through Edit and isolated Play. Performance mounted 10 owned fragments; a
+  focused visible/hidden comparison measured 123,312 water-changed pixels, while a fixed-camera 250 ms
+  comparison measured 52,996 animated pixels; Cinematic rebuilt resources and Stop removed every mount.
+  The browser run used headless SwiftShader/WebGL, so native target-laptop WebGPU capture remains open before
+  the full P3 visual signoff.
+- **2026-07-11 — WB-W1 Atlas basin and hydrology authoring shipped.** Atlas now provides deterministic
+  water-body and drainage authoring through the canonical MapDoc command, paint, save, and server path,
+  including browser coverage against the real workspace. The focused water-authoring suite, MapDoc water
+  tests, and the full Map Studio gate pass. This closes the WB-W1 authoring slice; it does not close the
+  visual slice. Scene-depth refraction, coherent shore/surf transitions, caustics, waterfall foam and mist,
+  safe native target-laptop capture, and explicit human comparison against the locked visual references
+  remain required.
+- **2026-07-12 — WB-W1 flow/shore/waterfall presentation slice mechanically shipped.** Generated
+  reaches retain terrain-derived depth/coverage while animating along canonical arc distance and authored
+  flow direction; basin/reach materials derive shallow caustics and coherent foam bands from verified
+  water-column depth. Waterfalls now use a vertical-sheet material and honor the quality contract:
+  curtain-only on Performance, owned base foam on Balanced, and foam plus crossed-quad mist on Cinematic.
+  Quality rebuild and disposal recursively transfer and retire child resources. Focused CPU gates prove
+  semantic wiring and lifecycle, not visual acceptance. Scene-depth refraction/reflection, guarded native
+  capture, and explicit Project Gorgon human comparison remain open.
+- **2026-07-12 — WB-W1 scene optics mechanically shipped.** Balanced and Cinematic water now sample
+  the renderer-managed opaque viewport colour through `viewportSafeUV`, which performs a real viewport
+  depth comparison before accepting normal-distorted refraction coordinates and therefore avoids both
+  foreground bleed and attachment read/write feedback. Cinematic standing water additionally owns a
+  bounded planar `reflector()` target; rivers use depth-safe refraction without allocating an invalid
+  curved-plane reflector. Performance remains the explicit no-optics fallback. Quality replacement and
+  world teardown dispose reflector nodes/targets exactly once. A forced SwiftShader/WebGL browser gate
+  compiled the production TSL graph and measured 30,532 refraction-changed pixels plus 313 additional
+  reflection-changed pixels. Native NVIDIA/WebGPU validation and human reference-floor approval remain open.
+- **2026-07-11 — WB-B2 biome data foundation shipped; population proof remains open.** A strict,
+  versioned registry now carries 40 metadata-only biome definitions. A deterministic blended spatial field,
+  portable compiler artifact codec, and optional worker-to-main runtime transfer all have focused tests and
+  type/build coverage. Compiler profile 1.3 subsequently closed authored WorldMap generation; splat/PBR
+  material publication, biome-rule evaluation, runtime vegetation population, and a representative
+  production nature scene remain the next WB-B2 slices.
+- **2026-07-11 — WB-B2 compiler profile 1.3 biome publication shipped.** Hydrology-enabled WorldMaps now
+  compile a deterministic, content-hashed top-four biome field over the exact master grid from the stable
+  pre-edit globally eroded terrain authority. Temperature/moisture/slope, ocean/basin/reach masks, exact
+  distance transform, transition feathers, modifiers, cancellation, size caps, manifest publication, cache
+  reuse, worker transfer, and runtime sampling are covered by focused compiler/service/type tests. Maps
+  without hydrology remain byte-compatible on profile 1.0, and explicit hydrology profile 1.2 compatibility
+  remains available.
+- **2026-07-11 — WB-B2 scattered-content batch invariant diagnosed and enforced.** An internal-only 49-tile
+  PBR ecosystem stress fixture isolated the apparent GPU-memory runaway to spatial cells multiplied by
+  multi-node vegetation assets: undergrowth alone previously expanded into thousands of `InstancedMesh`
+  draws. Asset scatter now deterministically coarsens cells to a hard 64-batch-per-asset ceiling while
+  preserving every placement, and rejects assets whose mesh-node count cannot satisfy the ceiling. The
+  adversarial test covers a 17-node, 400-cell fixture. After the fix, the full internal fixture completed in
+  25.9 s with 398 instanced batches, about 1.11 GiB reported GPU allocation and 1.92 GiB renderer memory;
+  the undergrowth slice completed in 13.7 s with 193 batches and about 739 MiB reported GPU allocation.
+  These are bounded diagnostic results, not target-hardware performance evidence or a reviewable visual.
+  Lossless bake-time node flattening, decoded-asset/material lifecycle, texture compression, post-buffer
+  budgets, and the full visual-fidelity contract remain open.
+- **2026-07-11 — WB-B2 lossless vegetation flattening and entity resource teardown shipped.** Five CC0
+  Poly Haven ground-cover candidates that previously contained 12, 17, 4, 4, and 6 independently drawn
+  mesh nodes now publish one runtime mesh each. The deterministic atomic build tool fails closed unless
+  vertex/triangle counts, primitive-to-material assignments, PBR factors and slots, samplers, texture
+  coordinates, material extensions, embedded texture payload bytes, and bounds within `1e-5 m` are
+  preserved; an unused-vertex fixture proves topology-changing join compaction is rejected. Separately,
+  canonical entity deletion now disposes entity-owned geometry, mutable placement-material clones, and
+  textures exactly once while preserving host-cache-owned glTF geometry/textures until cache teardown.
+  Cleanup continues across injected detach/disposer failures and aggregates them afterward. Asset, scatter,
+  glTF-cache, lifecycle, playability, entity-stream, interaction, type, and manifest gates pass. All eleven
+  imported assets remain candidates with explicit LOD/optimization/human-QC debt and zero accepted assets.
+  The decoded glTF cache now also enforces a conservative resident-byte budget and rejects over-budget
+  decodes with tested accounting. Texture compression, post-buffer budgets, biome-driven content
+  publication, and visual acceptance remain open.
+- **2026-07-11 — native B1 camera-resident grass compute shipped.** `vegetation.grassField@1.0.0`
+  now has deterministic signed-grid PCG placement, terrain-mask density in native compute, fixed
+  canonical ≤1024-slot pages, feature-local large-world storage, and record/replay parity. The live
+  streamed-world path uses one async residency authority for native WebGPU and forceWebGL: one
+  in-flight build, stale-generation rejection, atomic fine/coarse replacement, 1×/4× distance LOD,
+  hysteresis, and all-attempted teardown. Canonical pages concatenate into one 2D signed-coordinate
+  upload/kernel/storage pair/`InstancedMesh` per 48m terrain tile, reducing the full radius-two window
+  from the rejected 289 page programs/draws to 25 tile programs/draws while holding 202,212 active
+  slots and active-plus-largest-pending below 230,400. Native WebGPU camera relocation and real
+  forceWebGL Chromium rendering pass with no NVIDIA Xid. This closes the grass-system slice, not the
+  representative-biome or Project Gorgon visual release gate.
+- **2026-07-11 — native B2 large-world tree system shipped.** Backend inspection and a falsification
+  render proved that Three `BatchedMesh` does not preserve a population-constant submission count
+  when multi-draw is unavailable, so the proposed Three.ez-derived architecture was rejected.
+  Production now uses five true `InstancedMesh` batches per species across full, reduced, and
+  impostor rungs, capped at 12 species/60 draws, 24,576 active trees, 30,720 active-plus-pending,
+  and 192 MiB total resident memory. Signed 48m pages, feature-local coordinates, hysteresis,
+  one-pending scheduling, stale rejection, atomic replacement, cleanup, and browser prewarm are
+  shared by `asset.scatter` and editable `vegetation.scatter`. The offline Blender 5.1.2 Cycles-CPU
+  builder publishes a self-contained, content-hash-chained v2 rotated-diamond upper-hemi-octa atlas
+  only from accepted source/reduced vegetation, with silhouette/depth QC and evidence-last atomic
+  publication. Pure-TSL leaf backscatter and four-frame impostor blending compile and render under
+  native WebGPU (1,152 mixed-rung trees/five draws) and SwiftShader forceWebGL (two angles); no NVIDIA
+  Xid occurred. This closes the B2 renderer/tool/runtime slice, not biome-content publication or the
+  locked visual-fidelity release gate; generated integration atlases remain internal test artifacts.
+- **2026-07-11 — WB-B2/B3 runtime biome bridge foundation shipped.** A separate strict
+  `limina.biome-runtime-pack/v1` now binds the existing 40-biome metadata authority to bounded,
+  provenance-bearing, content-addressed surface and vegetation rules; it rejects missing declared
+  roles, false fulfillment, metadata-hash drift, malformed envelopes, and unbounded inputs. An
+  immutable publication verifies compiler `biome-field/v1` bytes plus both content hashes before
+  exposing top-four samples, exact 65535-normalized bound weights, and explicit unfulfilled roles
+  with no fallback. The first pure population planner keeps the heightfield authoritative and uses
+  signed canonical cells with order-independent hash-priority variable-radius thinning. Focused
+  gates prove cross-page minimum spacing, negative coordinates, caps, deterministic identity, and
+  million-metre feature-local equivalence. A bounded surface plan resolves the same publication
+  into exact-weight 16-slot cells over a sorted ≤32-role table and refuses unfulfilled content. The
+  16 roles never reach the fragment shader: a deterministic CPU derived build blends them in linear
+  albedo space with normalized OpenGL normals, multiplicative AO, squared/perceptual roughness, and
+  linear metalness into one albedo/normal/ORM triplet per 48m tile. Shared-border hashes match across
+  signed tiles and million-metre translations. The one shared pure-TSL terrain graph samples exactly
+  those three maps and passes native WebGPU plus forceWebGL with one draw per tile. This rejects the
+  stale MeshSurfaceSampler/new-Whittaker/external-Poisson and runtime-array assumptions. Compiler/
+  stream publication, live B1/B2 consumption, replay integration, fulfilled production content,
+  and visual acceptance remain open.
+- **2026-07-12 — WB-B2/B3 complete-world production publication shipped.** The rejected 36-chunk
+  capture subset no longer masquerades as a publication of the 640m WorldMap. One reproducible
+  3.9MB compiler biome field now covers the complete authority; the fulfilled runtime pack closes
+  every reachable biome (`canyon`, `deep-ocean`, `grassland`, `river`, and temperate deciduous
+  forest). The deterministic builder emits all 256 compiler chunks, each with exact terrain,
+  policy-v2 albedo/normal/ORM surface, and halo-partitioned population artifacts, plus 54,822
+  ecological anchors and a closure-authorized content set. The production sidecar loads the
+  bundle's exact base compiler config, rejects coverage/source/config drift, cold-compiles the real
+  1.4 profile, atomically installs all artifacts/content, and serves current/closure/content only
+  through the authenticated runtime capability. Real compiler→publisher→server E2E, accepted-asset
+  tree/population integration, type gates, and deterministic no-write regeneration pass. This
+  closes the B3 mechanical publication/consumption path, not texture compression, post-buffer
+  budgets, the WB-W1 water visual slice, or human Project Gorgon visual approval.
+- **2026-07-13 — WB-W1/WB-B2 fixed-camera nature candidate received explicit owner approval.** The
+  exact reviewed artifact is `assets/qc/internal/temperate-river-leading-line-aaa-grass-v13.png`
+  (`sha256:460423dd45d50a961bda82e978a0a4fb42da07f9ce955e3a0f465ae040f2e797`) from manifest
+  `sha256:3728ab6b8a12009e0911ebb55673c18468d5266ab852655f168e66be23e1baaa`. The capture uses the
+  production scene/population path and Intel ANGLE hardware, with 10,865 placements, 255 canopy
+  instances, 59 grass tiles, and 886,649 honestly counted blades. The owner approved the composition,
+  foliage, water baseline, and sky against the locked Project Gorgon floor. This is a human-approved
+  candidate, not a formal release pass: native-backend, fixed-camera regression, repeated lifecycle,
+  and target-hardware performance evidence remain false in the release contract.
+- **2026-07-13 — Candidate construction hardening cut the measured browser path from 402.1s to
+  46.0s (8.74×).** Exact geometric slot estimation replaced a discarded full terrain preparation;
+  slope gradients stopped re-running biome density; continuous packages now preserve their authored
+  paint policy through CPU and native adapters; river exclusion is evaluated once per candidate; and
+  the capture fetches only its authenticated 25-chunk residency window. The optimized run retained the
+  same manifest, camera, placement/canopy/tile/blade counts, and passed private visual comparison. No
+  NVIDIA Xid was observed. This is Intel browser-path evidence only and does not close the native or
+  target-hardware release facets.
+- **2026-07-13 — Nature-scene tuning formally closed on DGX Spark.** The owner accepted the native
+  GB10 policy-v8 turf candidate as the fixed-camera nature baseline and explicitly directed the
+  program not to get bogged down in further scene tuning. The exact 1920x1080 artifact is
+  `assets/qc/internal/temperate-river-leading-line-dgx-spark-gb10-continuous-turf-v4-candidate-2026-07-13.png`
+  (`sha256:e4da7f053d222cc16ff0b53f4a95a3b2ff503549e9537656ecb8fdc6881bedd0`). Its guarded
+  native-WebGPU trace records NVIDIA GB10, no Xid, no timestamp queries, 16 render passes, 245 draws,
+  65,760,242 triangles, and 11 ms CPU encode time; the production lifecycle gate and exact no-write
+  publication rebuild pass. This closes the nature visual/content lane and repins the mechanical
+  regression authority. Portable compression, multi-profile memory budgets, and sustained performance
+  remain cross-cutting engine work rather than reasons to reopen this scene. Next program: functional
+  enterable buildings.
+- **2026-07-13 — FB-1 functional-building mechanical slice shipped.** The first Blender-generated
+  cottage is no longer trusted because it looks like a building: its GLB carries the strict
+  `limina.functional-building/v1` worker-readable semantic contract, seven decomposed shell bodies,
+  a real doorway/room/portal, and a separate hinged leaf with a canonical open clip. The dedicated
+  placement path rejects decorative or whole-AABB fakes before mutation. Real native Rapier proves
+  the production capsule is blocked when closed, enters when open, and repeats the result after a
+  90-degree placement rotation. Absolute door state survives worldlog replay and snapshot restore;
+  teardown removes all nine owned entities/bodies and is idempotent. A second Blender build is
+  byte-identical to the pinned 16,792-byte GLB. This is a mechanical closure only, not a Project
+  Gorgon visual pass. FB-2 is the production cottage exterior/interior art pass and guarded DGX
+  Spark review.
+- **2026-07-16 — FB-2 production cottage formally closed.** The approved R1 production package is
+  `production/functional-hall-house-v4/r1`, with unchanged production content hash
+  `sha256:20063648f0c7aa7331b348e66bb714b419e2b8a1fa215045fb775d6c0ee3fb99`. The exact five-view
+  guarded native-WebGPU capture ran on NVIDIA GB10 with timestamp queries disabled and no Xid; the
+  owner approved the bound evidence set. `art-direction/functional-hall-house-v4-r1-closure.json`
+  fixes the package, authority, capture, and decision as the regression fixture. FB-3 occupancy and
+  gameplay interaction is next; behavior-only work does not reopen the accepted visual package.
+- **2026-07-16 — FB-3 behavior closed; FB-4 additive topology started.** The R1 fixture now proves
+  deterministic occupied-close refusal, generic proximity interaction, persistent optional keys,
+  positional door SFX, dynamic nav portals/path invalidation, arbitrary-yaw/large-coordinate parity,
+  snapshot reconciliation, and exact approved-byte replay without changing reviewed content. FB-4
+  deliberately introduces `limina.functional-building/v2`: bounded rooms/storeys, explicit portal
+  endpoints, construction-valid stair links, contained typed spawn anchors, acoustic propagation, and
+  visibility/residency cells. The old plural v1 ID inventories are not treated as a room graph. CPU
+  closure precedes a new guarded engine artifact and exact owner review.

@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "basalt-rock",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Rock048",
+    "assetUrl": "https://ambientcg.com/a/Rock048",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Rock048_1K-JPG.zip",
+    "archiveBytes": 9016554,
+    "archiveSha256": "sha256:921e4775d92cc70fae6e624751cbb4183423fc76aaca8c7df9bbac58dc0246df"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/basalt-rock/albedo.jpg",
+      "sha256": "sha256:e5978528e041e22565c82cc1ec354ab6f281b481317c4c070908553922730dab",
+      "assetHash": "sha256:ab504b74d4c6cf09a1af3370c8aede75dc1bb5c44522eb1e17eac7b0c4240c7b",
+      "bytes": 1535918
+    },
+    "normal": {
+      "assetId": "materials/basalt-rock/normal.jpg",
+      "sha256": "sha256:7ac94ae456a85810139fa7e5e4052a8182f5e0da99bba44deb82aa3ae6b80d93",
+      "assetHash": "sha256:544542176c31e250d34faa098c7321a050f09791024a9bdac06d61e4c53140d4",
+      "bytes": 2267684
+    },
+    "roughness": {
+      "assetId": "materials/basalt-rock/roughness.jpg",
+      "sha256": "sha256:8ce4cef3ab63afbef56ff8b9f6f6b23a87942c7d03fcda9041730108e9b1eae0",
+      "assetHash": "sha256:bf4ee7be10de31ee2b1e13e054a25e430e62c84001fc27531370cfc179280de4",
+      "bytes": 495321
+    },
+    "occlusion": {
+      "assetId": "materials/basalt-rock/occlusion.jpg",
+      "sha256": "sha256:ceb5e80faca2a4f9eee746e0b4dc07118f69880e66171a4da66a3b61ef63b879",
+      "assetHash": "sha256:da8e15a3b40b0dde234453c4ae7ca4eadd343358e543010c70777844f2882805",
+      "bytes": 616667
+    },
+    "displacement": {
+      "assetId": "materials/basalt-rock/displacement.jpg",
+      "sha256": "sha256:436bf34828fbbb05b6cab456be8e02a706294008aa37455ff304efcc67482c03",
+      "assetHash": "sha256:a2f1e70520e6f43e60e0b252e2e90a9fcdc59ada5468c4d2eca057222978a561",
+      "bytes": 303015
+    }
+  },
+  "materialImport": {
+    "name": "basalt-rock",
+    "albedo": "materials/basalt-rock/albedo.jpg",
+    "normal": "materials/basalt-rock/normal.jpg",
+    "roughness": "materials/basalt-rock/roughness.jpg",
+    "occlusion": "materials/basalt-rock/occlusion.jpg",
+    "displacement": "materials/basalt-rock/displacement.jpg"
+  }
+}

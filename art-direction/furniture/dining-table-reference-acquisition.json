@@ -1,0 +1,45 @@
+{
+  "schema": "limina.visual-reference-acquisition/v1",
+  "id": "furniture/dining-table/v1",
+  "subjectKind": "furniture",
+  "sources": [
+    {
+      "id": "met/table-468074",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/468074",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/md/original/sf43-35-1.jpg",
+      "creator": "Unknown Italian maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/trestle-table-8810",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/8810",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/85W_ACF3138R6.jpg",
+      "creator": "Unknown Massachusetts maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT185.jpg",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ]
+}

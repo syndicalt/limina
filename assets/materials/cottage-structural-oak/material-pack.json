@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-structural-oak",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "rough_wood",
+    "assetUrl": "https://polyhaven.com/a/rough_wood",
+    "apiUrl": "https://api.polyhaven.com/files/rough_wood",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:33d4cd8061a14864c35efbc73a5bc1d165130e6f1ff928b098f9bb1c877c07a2"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-structural-oak/albedo.jpg",
+      "sha256": "sha256:abc46d8e3163d911220f4ec3a4043b68d2b0c6d750513f80871211acfefb2a98",
+      "assetHash": "sha256:5911dc7c649762ffe73d7c37e6bb49ac602d4677a38e8dc8528ae78fc57ab7c6",
+      "md5": "92d4b3dd46bab95248f5a7680b7882e7",
+      "bytes": 567074,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rough_wood/rough_wood_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-structural-oak/normal.jpg",
+      "sha256": "sha256:3d1c6f098b66d93e52071b41834dd14a424d8cd2f7c4130c62dc062acfa65011",
+      "assetHash": "sha256:bdba9c838dff1a715eab48b6753c7a5a1a494edbb1e554643add61f32f008396",
+      "md5": "1c9829c9023f74c74eaeba28e56e5144",
+      "bytes": 790334,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rough_wood/rough_wood_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-structural-oak/roughness.jpg",
+      "sha256": "sha256:4e9ea9962a7e8b69057937e6723c4b0134b949c1ee5cdb5f3687a54113027b09",
+      "assetHash": "sha256:834e21491291a61104848ab0b7ffa55b054df7abe59d67047c011d13a0af96a5",
+      "md5": "ef62954e4ea0e9cd78757ce79e6eeb58",
+      "bytes": 195056,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rough_wood/rough_wood_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-structural-oak/occlusion.jpg",
+      "sha256": "sha256:52c7b7fc1f9024f740598f4368520b933e674bee4187d1b37e67248935b9bb28",
+      "assetHash": "sha256:af2fe818ce4f64a8c66c88591e190cb2b0ece84ad8952c4f79c29473cbc0c39b",
+      "md5": "fdb7dcb187ae535d6a5331fb91b9342f",
+      "bytes": 392089,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rough_wood/rough_wood_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-structural-oak/displacement.jpg",
+      "sha256": "sha256:054517a8996fc361cbc390250af27d3b45941213738b18462db16ae23c7649f7",
+      "assetHash": "sha256:ca400cb2fd8ef09b34ed34b21805f742b12fb3341ea5664b4b7dd713f4e60866",
+      "md5": "761ebb34418e43b3a91ede31461c1ffc",
+      "bytes": 134691,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rough_wood/rough_wood_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-structural-oak",
+    "albedo": "materials/cottage-structural-oak/albedo.jpg",
+    "normal": "materials/cottage-structural-oak/normal.jpg",
+    "roughness": "materials/cottage-structural-oak/roughness.jpg",
+    "occlusion": "materials/cottage-structural-oak/occlusion.jpg",
+    "displacement": "materials/cottage-structural-oak/displacement.jpg"
+  }
+}

@@ -1,0 +1,931 @@
+{
+  "schema": "limina.architecture-spec/v1",
+  "id": "hall-house/temperate/architecture-v2",
+  "functional": {
+    "buildingId": "hall-house/temperate/v4",
+    "roomId": "room/main",
+    "portalId": "portal/exterior",
+    "entryAnchor": [
+      -0.72,
+      0,
+      -4.18
+    ],
+    "site": {
+      "footprintCenter": [
+        0,
+        -0.7
+      ],
+      "footprintHalfExtents": [
+        5.1,
+        4.6
+      ],
+      "finishedFloorY": 0.09,
+      "terrainClearance": 0.12,
+      "vegetationClearance": 0.8,
+      "maximumTerrainRelief": 1.4
+    },
+    "clearAisle": {
+      "from": [
+        -0.72,
+        0.1,
+        -4.1
+      ],
+      "to": [
+        -0.72,
+        0.1,
+        2.55
+      ],
+      "halfWidth": 0.5,
+      "minClearHeight": 2.2
+    },
+    "lod": {
+      "identity": "hall-house/temperate/v4",
+      "triangleBudget": 90000,
+      "drawBudget": 640,
+      "lod1TriangleBudget": 32000,
+      "lod2TriangleBudget": 8000
+    }
+  },
+  "foundations": [
+    {
+      "id": "main-core",
+      "center": [
+        0,
+        0
+      ],
+      "halfExtents": [
+        4.8,
+        3.6
+      ],
+      "topY": 0,
+      "depth": 1.6
+    },
+    {
+      "id": "service-core",
+      "center": [
+        2.62,
+        -4.22
+      ],
+      "halfExtents": [
+        1.6,
+        1
+      ],
+      "topY": 0,
+      "depth": 1.6
+    }
+  ],
+  "volumes": [
+    {
+      "id": "main-hall",
+      "footprint": [
+        [
+          -4.8,
+          -3.42
+        ],
+        [
+          4.8,
+          -3.42
+        ],
+        [
+          4.8,
+          3.42
+        ],
+        [
+          -4.8,
+          3.42
+        ]
+      ],
+      "floorY": 0.09,
+      "eaveY": 3.55,
+      "wallThickness": 0.36,
+      "floorThickness": 0.09,
+      "ceilingThickness": 0.12,
+      "foundationId": "main-core",
+      "openings": [
+        {
+          "id": "window/south-west",
+          "kind": "window",
+          "edgeIndex": 0,
+          "offset": -2.9,
+          "width": 1.44,
+          "sillY": 0.96,
+          "height": 1.48
+        },
+        {
+          "id": "portal/exterior",
+          "kind": "door",
+          "edgeIndex": 0,
+          "offset": -0.72,
+          "width": 1.44,
+          "sillY": 0.09,
+          "height": 2.48
+        },
+        {
+          "id": "passage/service-bay",
+          "kind": "passage",
+          "edgeIndex": 0,
+          "offset": 1.9,
+          "width": 1.6,
+          "sillY": 0.09,
+          "height": 3.46
+        },
+        {
+          "id": "window/east",
+          "kind": "window",
+          "edgeIndex": 1,
+          "offset": 0.65,
+          "width": 1.44,
+          "sillY": 0.96,
+          "height": 1.48
+        },
+        {
+          "id": "window/north-west",
+          "kind": "window",
+          "edgeIndex": 2,
+          "offset": 2.65,
+          "width": 1.44,
+          "sillY": 0.96,
+          "height": 1.48
+        },
+        {
+          "id": "window/west",
+          "kind": "window",
+          "edgeIndex": 3,
+          "offset": 0.55,
+          "width": 1.44,
+          "sillY": 0.96,
+          "height": 1.48
+        }
+      ]
+    },
+    {
+      "id": "service-bay",
+      "footprint": [
+        [
+          1.1,
+          -5.02
+        ],
+        [
+          4.14,
+          -5.02
+        ],
+        [
+          4.14,
+          -3.42
+        ],
+        [
+          1.1,
+          -3.42
+        ]
+      ],
+      "floorY": 0.09,
+      "eaveY": 3.7,
+      "wallThickness": 0.3,
+      "floorThickness": 0.16,
+      "ceilingThickness": 0.12,
+      "foundationId": "service-core",
+      "openings": [
+        {
+          "id": "window/cross-gable",
+          "kind": "window",
+          "edgeIndex": 0,
+          "offset": 0,
+          "width": 1.5,
+          "sillY": 1.13,
+          "height": 1.34
+        },
+        {
+          "id": "passage/main-hall",
+          "kind": "passage",
+          "edgeIndex": 2,
+          "offset": 0,
+          "width": 3.04,
+          "sillY": 0.09,
+          "height": 3.61
+        }
+      ]
+    }
+  ],
+  "entrances": [
+    {
+      "id": "front-entry",
+      "wallId": "main-hall/edge-0",
+      "openingId": "portal/exterior",
+      "exteriorSide": -1,
+      "exteriorGradeY": -0.31,
+      "landingDepth": 0.64,
+      "stepCount": 2,
+      "treadDepth": 0.38,
+      "width": 1.72
+    }
+  ],
+  "doors": [
+    {
+      "id": "door/front",
+      "wallId": "main-hall/edge-0",
+      "openingId": "portal/exterior",
+      "hingeSide": "start",
+      "leafThickness": 0.11,
+      "openYawDegrees": -95
+    }
+  ],
+  "roofSystems": [
+    {
+      "id": "main-roof",
+      "kind": "gable",
+      "volumeId": "main-hall",
+      "ridgeAxis": "x",
+      "pitchDegrees": 44.5,
+      "eaveOverhang": 0.55,
+      "ridgeEndOverhang": [
+        0.28,
+        0.28
+      ],
+      "thickness": 0.18
+    },
+    {
+      "id": "service-roof",
+      "kind": "gable",
+      "volumeId": "service-bay",
+      "ridgeAxis": "z",
+      "pitchDegrees": 54,
+      "eaveOverhang": 0.18,
+      "ridgeEndOverhang": [
+        0.51,
+        2.57
+      ],
+      "thickness": 0.15
+    }
+  ],
+  "roofJunctions": [
+    {
+      "id": "main-service-valley",
+      "kind": "valley",
+      "systemIds": [
+        "main-roof",
+        "service-roof"
+      ],
+      "trimSystemId": "service-roof",
+      "flashingWidth": 0.22,
+      "endInset": [
+        0.18,
+        0.18
+      ]
+    }
+  ],
+  "dormers": [
+    {
+      "id": "dormer/south",
+      "hostPlaneId": "main-roof/south",
+      "alongCenter": -0.2,
+      "width": 1.8,
+      "downslopeRange": [
+        2.03,
+        3.44
+      ],
+      "wallBaseY": 4.305,
+      "eaveY": 5.92,
+      "roofPitchDegrees": 35,
+      "roofThickness": 0.14,
+      "wallThickness": 0.24,
+      "eaveOverhang": 0.2,
+      "rakeOverhang": 0.2,
+      "curbHeight": 0.16,
+      "flashingWidth": 0.22,
+      "flashingThickness": 0.025,
+      "windowId": "window/dormer",
+      "windowWidth": 1.05,
+      "windowHeight": 0.94,
+      "windowSillY": 4.82,
+      "hostConnection": "intersecting-gable"
+    }
+  ],
+  "roofPenetrations": [
+    {
+      "id": "chimney/hall",
+      "fireplaceId": "hall-hearth",
+      "roofPlaneId": "main-roof/north",
+      "center": [
+        2.95,
+        2.65
+      ],
+      "shaftSize": [
+        1.05,
+        0.92
+      ],
+      "shaftBottomY": 2.4,
+      "topY": 7.3,
+      "clearance": 0.04,
+      "minimumRoofProjection": 0.9,
+      "curbWidth": 0.12,
+      "curbHeight": 0.18,
+      "flashingWidth": 0.22,
+      "apronDepth": 0.3,
+      "backpanDepth": 0.3,
+      "flashingThickness": 0.025,
+      "capOverhang": 0.115,
+      "capThickness": 0.22,
+      "cricketDepth": 0.42,
+      "cricketRise": 0.18
+    }
+  ],
+  "fireplaces": [
+    {
+      "id": "hall-hearth",
+      "center": [
+        2.95,
+        1.08,
+        2.7
+      ],
+      "apertureHalfExtents": [
+        0.7,
+        0.72,
+        0.7
+      ],
+      "chimneyTopY": 7.3,
+      "roofPlaneId": "main-roof/north",
+      "lightId": "interior/light-hearth"
+    }
+  ],
+  "practicalLights": [
+    {
+      "id": "interior/light-hearth",
+      "position": [
+        2.95,
+        0.82,
+        2.32
+      ],
+      "color": [
+        0.75,
+        0.3,
+        0.1
+      ],
+      "intensityCandela": 6,
+      "range": 2
+    },
+    {
+      "id": "interior/light-table",
+      "position": [
+        -2.55,
+        2.25,
+        0.3
+      ],
+      "color": [
+        1,
+        0.46,
+        0.18
+      ],
+      "intensityCandela": 14.9,
+      "range": 3.6
+    },
+    {
+      "id": "interior/light-entry",
+      "position": [
+        -0.72,
+        2.05,
+        -2.75
+      ],
+      "color": [
+        1,
+        0.46,
+        0.18
+      ],
+      "intensityCandela": 7.5,
+      "range": 2.8
+    }
+  ],
+  "furnishings": [
+    {
+      "id": "hall-table",
+      "kind": "table",
+      "center": [
+        -2.55,
+        0.09,
+        0.3
+      ],
+      "yawRadians": 0.08
+    },
+    {
+      "id": "hall-bench-north",
+      "kind": "bench",
+      "center": [
+        -2.55,
+        0.09,
+        1.18
+      ],
+      "yawRadians": 0.08
+    },
+    {
+      "id": "hall-bench-south",
+      "kind": "bench",
+      "center": [
+        -2.55,
+        0.09,
+        -0.6
+      ],
+      "yawRadians": 0.08
+    },
+    {
+      "id": "hall-cupboard",
+      "kind": "cupboard",
+      "center": [
+        3.7,
+        0.09,
+        -2.95
+      ],
+      "yawRadians": 3.141592653589793
+    },
+    {
+      "id": "hall-shelf",
+      "kind": "shelf",
+      "center": [
+        -4.35,
+        0.09,
+        -2.35
+      ],
+      "yawRadians": -1.5707963267948966
+    },
+    {
+      "id": "hall-hearth-bench",
+      "kind": "hearth-settle",
+      "center": [
+        1.15,
+        0.09,
+        1.1
+      ],
+      "yawRadians": -2.15
+    },
+    {
+      "id": "hall-chest",
+      "kind": "chest",
+      "center": [
+        3.95,
+        0.09,
+        -1.75
+      ],
+      "yawRadians": 1.5707963267948966
+    },
+    {
+      "id": "hall-log-rack",
+      "kind": "log-rack",
+      "center": [
+        4.15,
+        0.09,
+        2.6
+      ],
+      "yawRadians": 1.5707963267948966
+    }
+  ],
+  "interiorStructure": [
+    {
+      "id": "wall-plate-south",
+      "kind": "wall-plate",
+      "center": [
+        0,
+        3.27,
+        -3.2
+      ],
+      "halfExtents": [
+        4.5,
+        0.14,
+        0.12
+      ]
+    },
+    {
+      "id": "wall-plate-north",
+      "kind": "wall-plate",
+      "center": [
+        0,
+        3.27,
+        3.2
+      ],
+      "halfExtents": [
+        4.5,
+        0.14,
+        0.12
+      ]
+    },
+    {
+      "id": "tie-beam-west-0",
+      "kind": "tie-beam",
+      "center": [
+        -4,
+        3.25,
+        0
+      ],
+      "halfExtents": [
+        0.13,
+        0.17,
+        3.2
+      ]
+    },
+    {
+      "id": "tie-beam-west-1",
+      "kind": "tie-beam",
+      "center": [
+        -2.4,
+        3.25,
+        0
+      ],
+      "halfExtents": [
+        0.13,
+        0.17,
+        3.2
+      ]
+    },
+    {
+      "id": "tie-beam-west-2",
+      "kind": "tie-beam",
+      "center": [
+        -0.8,
+        3.25,
+        0
+      ],
+      "halfExtents": [
+        0.13,
+        0.17,
+        3.2
+      ]
+    },
+    {
+      "id": "tie-beam-east-0",
+      "kind": "tie-beam",
+      "center": [
+        0.8,
+        3.25,
+        0
+      ],
+      "halfExtents": [
+        0.13,
+        0.17,
+        3.2
+      ]
+    },
+    {
+      "id": "tie-beam-east-1",
+      "kind": "tie-beam",
+      "center": [
+        4.05,
+        3.25,
+        0
+      ],
+      "halfExtents": [
+        0.13,
+        0.17,
+        3.2
+      ]
+    },
+    {
+      "id": "brace-west-0-south",
+      "kind": "knee-brace",
+      "from": [
+        -4,
+        2.68,
+        -3.08
+      ],
+      "to": [
+        -4,
+        3.1,
+        -2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-west-0-north",
+      "kind": "knee-brace",
+      "from": [
+        -4,
+        2.68,
+        3.08
+      ],
+      "to": [
+        -4,
+        3.1,
+        2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-west-1-south",
+      "kind": "knee-brace",
+      "from": [
+        -2.4,
+        2.68,
+        -3.08
+      ],
+      "to": [
+        -2.4,
+        3.1,
+        -2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-west-1-north",
+      "kind": "knee-brace",
+      "from": [
+        -2.4,
+        2.68,
+        3.08
+      ],
+      "to": [
+        -2.4,
+        3.1,
+        2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-west-2-south",
+      "kind": "knee-brace",
+      "from": [
+        -0.8,
+        2.68,
+        -3.08
+      ],
+      "to": [
+        -0.8,
+        3.1,
+        -2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-west-2-north",
+      "kind": "knee-brace",
+      "from": [
+        -0.8,
+        2.68,
+        3.08
+      ],
+      "to": [
+        -0.8,
+        3.1,
+        2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-east-0-south",
+      "kind": "knee-brace",
+      "from": [
+        0.8,
+        2.68,
+        -3.08
+      ],
+      "to": [
+        0.8,
+        3.1,
+        -2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-east-0-north",
+      "kind": "knee-brace",
+      "from": [
+        0.8,
+        2.68,
+        3.08
+      ],
+      "to": [
+        0.8,
+        3.1,
+        2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-east-1-south",
+      "kind": "knee-brace",
+      "from": [
+        4.05,
+        2.68,
+        -3.08
+      ],
+      "to": [
+        4.05,
+        3.1,
+        -2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "brace-east-1-north",
+      "kind": "knee-brace",
+      "from": [
+        4.05,
+        2.68,
+        3.08
+      ],
+      "to": [
+        4.05,
+        3.1,
+        2.66
+      ],
+      "width": 0.13,
+      "depth": 0.13
+    },
+    {
+      "id": "hearth-mantel",
+      "kind": "mantel",
+      "center": [
+        2.95,
+        2.2,
+        1.936
+      ],
+      "halfExtents": [
+        1.04,
+        0.1,
+        0.24
+      ],
+      "fireplaceId": "hall-hearth",
+      "placementPolicy": "fireplace-clearance"
+    }
+  ],
+  "domesticProps": [
+    {
+      "id": "table-bowl",
+      "kind": "bowl",
+      "center": [
+        -2.72,
+        0.905,
+        0.28
+      ],
+      "supportY": 0.905
+    },
+    {
+      "id": "table-mug-west",
+      "kind": "mug",
+      "center": [
+        -2.2,
+        0.905,
+        0.08
+      ],
+      "supportY": 0.905
+    },
+    {
+      "id": "table-mug-east",
+      "kind": "mug",
+      "center": [
+        -2.98,
+        0.905,
+        0.62
+      ],
+      "supportY": 0.905
+    },
+    {
+      "id": "table-jug",
+      "kind": "jug",
+      "center": [
+        -2.36,
+        0.905,
+        0.52
+      ],
+      "supportY": 0.905
+    },
+    {
+      "id": "table-candle",
+      "kind": "candle",
+      "center": [
+        -2.62,
+        0.905,
+        -0.05
+      ],
+      "supportY": 0.905
+    },
+    {
+      "id": "shelf-jug-low",
+      "kind": "jug",
+      "center": [
+        -4.3,
+        0.595,
+        -2.8
+      ],
+      "supportY": 0.595
+    },
+    {
+      "id": "shelf-mug-low",
+      "kind": "mug",
+      "center": [
+        -4.3,
+        0.595,
+        -2.35
+      ],
+      "supportY": 0.595
+    },
+    {
+      "id": "shelf-bowl-low",
+      "kind": "bowl",
+      "center": [
+        -4.3,
+        0.595,
+        -1.9
+      ],
+      "supportY": 0.595
+    },
+    {
+      "id": "shelf-textile-mid",
+      "kind": "folded-textile",
+      "center": [
+        -4.3,
+        1.195,
+        -2.65
+      ],
+      "supportY": 1.195
+    },
+    {
+      "id": "shelf-bowl-mid-a",
+      "kind": "bowl",
+      "center": [
+        -4.3,
+        1.195,
+        -2.15
+      ],
+      "supportY": 1.195
+    },
+    {
+      "id": "shelf-bowl-mid-b",
+      "kind": "bowl",
+      "center": [
+        -4.3,
+        1.195,
+        -1.9
+      ],
+      "supportY": 1.195
+    },
+    {
+      "id": "shelf-candle-high",
+      "kind": "candle",
+      "center": [
+        -4.3,
+        1.795,
+        -1.78
+      ],
+      "supportY": 1.795
+    },
+    {
+      "id": "mantel-candle",
+      "kind": "candle",
+      "center": [
+        2.55,
+        2.3,
+        1.936
+      ],
+      "supportY": 2.3,
+      "supportStructureId": "hearth-mantel"
+    },
+    {
+      "id": "mantel-jug",
+      "kind": "jug",
+      "center": [
+        3.28,
+        2.3,
+        1.936
+      ],
+      "supportY": 2.3,
+      "supportStructureId": "hearth-mantel"
+    },
+    {
+      "id": "hearth-poker",
+      "kind": "fire-tool",
+      "center": [
+        1.65,
+        0.09,
+        2.3
+      ],
+      "supportY": 0.09,
+      "yawRadians": 0.08
+    },
+    {
+      "id": "hearth-tongs",
+      "kind": "fire-tool",
+      "center": [
+        1.45,
+        0.09,
+        2.38
+      ],
+      "supportY": 0.09,
+      "yawRadians": -0.1
+    },
+    {
+      "id": "chest-textile",
+      "kind": "folded-textile",
+      "center": [
+        3.95,
+        1.035,
+        -1.75
+      ],
+      "supportY": 1.035
+    }
+  ]
+}

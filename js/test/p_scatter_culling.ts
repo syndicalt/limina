@@ -19,11 +19,20 @@
 
 import * as THREE from "../build/three.bundle.mjs";
 import { ops } from "../src/engine.ts";
-import { buildAssetInstancedMeshes } from "../src/terrain/asset-scatter-render.ts";
+import {
+  MAX_ASSET_SCATTER_DRAW_BATCHES,
+  buildAssetInstancedMeshes,
+} from "../src/terrain/asset-scatter-render.ts";
 import type { AssetInstance } from "../src/terrain/asset-scatter.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p_scatter_culling FAIL: " + msg);
+}
+
+function rejects(fn: () => unknown, pattern: RegExp, msg: string): void {
+  let error: unknown;
+  try { fn(); } catch (caught) { error = caught; }
+  assert(error instanceof Error && pattern.test(error.message), `${msg}: ${error instanceof Error ? error.message : "did not throw"}`);
 }
 
 // A single-mesh "clean" asset (base at Y=0 already, mirrors p11_asset_scatter's clean-asset case) —
@@ -96,7 +105,36 @@ for (const [mesh, group] of [[nearMesh!, near], [farMesh!, far]] as const) {
   }
 }
 
-// ── 3. THE PAYOFF — a real camera frustum culls the far chunk while keeping the near one.
+// ── 3. MULTI-NODE × MULTI-CELL BUDGET ────────────────────────────────────────
+// A production ground-cover GLB can contain many mesh nodes. The old Cartesian product emitted
+// one InstancedMesh per node per 20m cell: 17 nodes × 400 occupied cells = 6,800 draws/objects for
+// this bounded fixture. The renderer must coarsen cells before crossing the hard per-asset budget,
+// without losing any node/instance placement.
+{
+  const multi = new THREE.Group();
+  const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5).translate(0, 0.25, 0);
+  for (let node = 0; node < 17; node++) multi.add(new THREE.Mesh(geometry, mat));
+  const field: AssetInstance[] = [];
+  for (let z = 0; z < 20; z++) for (let x = 0; x < 20; x++) {
+    field.push({ assetId: "multi", x: x * 20 + 1, y: 0, z: z * 20 + 1, yaw: 0, scale: 1 });
+  }
+  const bounded = buildAssetInstancedMeshes(multi, field, { chunkSize: 20 });
+  assert(bounded.length <= MAX_ASSET_SCATTER_DRAW_BATCHES && bounded.length >= 17,
+    `multi-node scatter emitted ${bounded.length} meshes outside [17, ${MAX_ASSET_SCATTER_DRAW_BATCHES}]`);
+  assert(bounded.length % 17 === 0,
+    `adaptive batching did not preserve equal spatial buckets for all 17 mesh nodes (${bounded.length})`);
+  assert(bounded.reduce((sum, mesh) => sum + mesh.count, 0) === field.length * 17,
+    "adaptive batching dropped or duplicated a mesh-node instance placement");
+
+  const overNodeBudget = new THREE.Group();
+  for (let node = 0; node <= MAX_ASSET_SCATTER_DRAW_BATCHES; node++) {
+    overNodeBudget.add(new THREE.Mesh(geometry, mat));
+  }
+  rejects(() => buildAssetInstancedMeshes(overNodeBudget, field.slice(0, 1), { chunkSize: 20 }),
+    /mesh nodes.*budget/, "an asset whose node count alone exceeds the draw budget was admitted");
+}
+
+// ── 4. THE PAYOFF — a real camera frustum culls the far chunk while keeping the near one.
 //    A camera looking at the near cluster's spread with a SHORT far plane (200 m) that does not
 //    reach the far cluster (2000 m away). Pure three.js Frustum/Camera math — no renderer.
 {
@@ -115,7 +153,5 @@ for (const [mesh, group] of [[nearMesh!, near], [farMesh!, far]] as const) {
   assert(farVisible === false, "frustum test: the FAR chunk (2000 m away, past the 200 m far plane) was NOT culled — chunking gave no culling granularity");
 }
 
-ops.op_log("[js] p_scatter_culling OK: buildAssetInstancedMeshes computes a REAL per-instance bounding " +
-  "sphere (frustumCulled defaults true, no more force-disabled origin-sphere bug) and opts.chunkSize " +
-  "buckets a map-spanning scatter into per-area InstancedMeshes with tight spheres — a real camera " +
-  "frustum culls a far chunk while keeping a near one.");
+ops.op_log("[js] p_scatter_culling OK: real per-instance bounds and spatial culling remain exact while " +
+  "multi-node × multi-cell scatters coarsen deterministically under a hard 64-draw per-asset budget.");

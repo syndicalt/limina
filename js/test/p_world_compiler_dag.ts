@@ -2,6 +2,7 @@ import { ops } from "../src/engine.ts";
 import { terrainChunkId } from "../src/terrain/grid.mjs";
 import {
   COMPILER_STAGE_SCHEMA,
+  BIOME_WORLD_COMPILER_STAGE_DEFINITIONS,
   INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS,
   MAX_ALL_STAGE_CONFIG_BYTES,
   MAX_COMPILER_STAGES,
@@ -9,6 +10,7 @@ import {
   compilerContentHash,
   compilerStageKey,
   createCompilerGraph,
+  createBiomeWorldCompilerGraph,
   createInitialWorldCompilerGraph,
   planCompilerInvalidation,
 } from "../src/world/compiler/index.mjs";
@@ -111,6 +113,17 @@ assert(graph.graphHash === shuffled.graphHash, "definition input order changed g
 assert(graph.topologicalOrder.join(",") === "navigation-index,worldmap,base-height,erosion,edit-layers,collision,render", "stable topological order is wrong");
 for (const stageId of ["navigation-index", "worldmap", "base-height", "erosion"]) assert(graph.definitions.find((stage) => stage.stageId === stageId)?.scope === "global", `${stageId} must model a canonical global build`);
 assert(graph.definitions.find((stage) => stage.stageId === "erosion")?.footprint.haloChunks === 0, "production erosion must not claim a chunk halo");
+const biomeGraph = createBiomeWorldCompilerGraph();
+const reversedBiomeGraph = createCompilerGraph([...BIOME_WORLD_COMPILER_STAGE_DEFINITIONS].reverse());
+assert(biomeGraph.graphHash === reversedBiomeGraph.graphHash, "biome graph identity depends on definition insertion order");
+assert(biomeGraph.definitions.find((stage) => stage.stageId === "biome-field")?.scope === "global"
+  && biomeGraph.definitions.find((stage) => stage.stageId === "biome-field")?.dependencies.join(",") === "river-channel-carve"
+  && biomeGraph.definitions.find((stage) => stage.stageId === "biome-field")?.sourceInputs.length === 0,
+"biome field graph does not declare its exact channel-carved terrain authority");
+assert(biomeGraph.reverseDependencies["hydrology-water-topology"].join(",") === "river-channel-carve"
+  && biomeGraph.reverseDependencies["river-channel-carve"].join(",") === "biome-field,edit-layers"
+  && biomeGraph.reverseDependencies["biome-field"].length === 0,
+"biome field and terrain do not share the generated channel authority");
 rejects(() => (graph.definitions[0].dependencies as string[]).push("render"), /read only|extensible|frozen|object/i, "nested graph definitions are mutable");
 rejects(() => createCompilerGraph([stageDefinition("a", ["missing"])]), /missing dependency/, "missing dependency accepted");
 rejects(() => createCompilerGraph([stageDefinition("a", ["b"]), stageDefinition("b", ["a"])]), /cycle/, "cycle accepted");
@@ -161,6 +174,44 @@ const repeated = planCompilerInvalidation({ ...reorderedInput, previous: initial
 assert(canonicalCompilerSnapshot(initial.snapshot) === canonicalCompilerSnapshot(repeated.snapshot), "identical plan was not byte-deterministic");
 assert(repeated.invalidation.changedInstances === 0, "identical plan reported changed instances");
 assert(repeated.invalidation.cacheHits === 4 + baseInput.chunks.length * 3, "identical plan missed global/chunk cache hits");
+
+const biomeBaseInput = fixture(0);
+const biomePlannerInput = {
+  ...biomeBaseInput,
+  graph: biomeGraph,
+  configs: {
+    ...biomeBaseInput.configs,
+    "hydrology-field": { topologyVersion: 1 },
+    "hydrology-water-topology": { extractionVersion: 1 },
+    "river-channel-carve": { policyVersion: 1 },
+    "biome-field": { policy: "pinned-v1", packHash: hash("biome-pack") },
+  },
+  globalSourceHashes: {
+    ...biomeBaseInput.globalSourceHashes,
+    "hydrology.precipitation": hash("hydrology-precipitation"),
+    "hydrology.thresholds": hash("hydrology-thresholds"),
+  },
+};
+const biomeInitial = planCompilerInvalidation(biomePlannerInput);
+const biomePolicyChanged = planCompilerInvalidation({
+  ...biomePlannerInput,
+  configs: { ...biomePlannerInput.configs, "biome-field": { policy: "pinned-v2", packHash: hash("biome-pack") } },
+  previous: biomeInitial.snapshot,
+});
+assert(biomePolicyChanged.invalidation.changedInstances === 1
+  && biomePolicyChanged.invalidation.changedByStage["biome-field"].join(",") === "@global",
+"biome-only policy change invalidated upstream hydrology or terrain stages");
+const waterSourceChanged = planCompilerInvalidation({
+  ...biomePlannerInput,
+  globalSourceHashes: { ...biomePlannerInput.globalSourceHashes, "hydrology.thresholds": hash("hydrology-thresholds-v2") },
+  previous: biomeInitial.snapshot,
+});
+assert(waterSourceChanged.invalidation.changedByStage["hydrology-water-topology"].join(",") === "@global"
+  && waterSourceChanged.invalidation.changedByStage["river-channel-carve"].join(",") === "@global"
+  && waterSourceChanged.invalidation.changedByStage["biome-field"].join(",") === "@global"
+  && waterSourceChanged.invalidation.changedByStage["hydrology-field"].length === 0
+  && waterSourceChanged.invalidation.changedByStage.render.length === biomeBaseInput.chunks.length,
+"generated-water source change did not invalidate its channel-carved terrain consumers");
 
 // Planner halo capability remains explicit through a synthetic local algorithm graph. The
 // production graph above intentionally does not claim canonical erosion is chunk-local.

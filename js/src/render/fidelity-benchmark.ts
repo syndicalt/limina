@@ -1,6 +1,10 @@
 import type { RenderQualityTier } from "./quality.ts";
+import {
+  THREE_GPU_TIMESTAMP_CAPTURE_FRAMES,
+  type ThreeGpuTimestampCaptureReport,
+} from "./three-gpu-timestamp-capture.ts";
 
-export const FIDELITY_BENCHMARK_SCHEMA = "limina.fidelity-benchmark/v1";
+export const FIDELITY_BENCHMARK_SCHEMA = "limina.fidelity-benchmark/v2";
 export const FIDELITY_BENCHMARK_MAX_SAMPLES = 36_000;
 
 export const FIDELITY_VISUAL_FLAGS = Object.freeze({
@@ -10,6 +14,30 @@ export const FIDELITY_VISUAL_FLAGS = Object.freeze({
   exposureClipping: 1 << 3,
   shaderCompilationAfterReady: 1 << 4,
 } as const);
+
+/** Identity of the WebGPU adapter the benchmark ran on (mirrors `engine.gpuAdapter`). */
+export interface FidelityAdapterInfo {
+  vendor: string;
+  architecture: string;
+  device: string;
+  description: string;
+}
+
+/**
+ * Substrings that mark a software rasterizer. A fidelity verdict is a pixel judgment, and this repo's
+ * cardinal rule is that software rendering (SwiftShader/llvmpipe/lavapipe) disagrees with real hardware
+ * — no shadows, capped instancing, false signals — so it can never certify visual fidelity. This list is
+ * ONLY consulted for the fidelity benchmark/probe; software adapters remain valid for logic/export gates.
+ */
+export const FIDELITY_ADAPTER_SOFTWARE_PATTERNS: readonly RegExp[] = Object.freeze([
+  /swiftshader/, /llvmpipe/, /lavapipe/, /software/, /basic render/, /microsoft basic/, /warp/,
+]);
+
+/** True when the adapter identity names a software rasterizer rather than real GPU hardware. */
+export function isSoftwareAdapter(info: Readonly<FidelityAdapterInfo>): boolean {
+  const haystack = `${info.vendor} ${info.architecture} ${info.device} ${info.description}`.toLowerCase();
+  return FIDELITY_ADAPTER_SOFTWARE_PATTERNS.some((pattern) => pattern.test(haystack));
+}
 
 export interface FidelityBudget {
   frameP95Ms: number;
@@ -54,6 +82,23 @@ export const FIDELITY_CAMERA_ROUTE: readonly Readonly<FidelityCameraKeyframe>[] 
   Object.freeze({ segment: "water-look", position: xyz(-28, 8, 10), target: xyz(-8, 0, -28), durationFrames: 180 }),
   Object.freeze({ segment: "lod-transition", position: xyz(-54, 22, 58), target: xyz(0, 2, 0), durationFrames: 300 }),
 ]);
+
+/** Eight deterministic observations from each route segment for the bounded GPU-only pass. */
+export const FIDELITY_GPU_CAPTURE_ROUTE_FRAMES: readonly number[] = Object.freeze((() => {
+  const frames: number[] = [];
+  let segmentStart = 0;
+  for (const segment of FIDELITY_CAMERA_ROUTE) {
+    for (let sample = 0; sample < THREE_GPU_TIMESTAMP_CAPTURE_FRAMES / FIDELITY_CAMERA_ROUTE.length; sample++) {
+      frames.push(segmentStart + Math.floor(((sample + 0.5) * segment.durationFrames)
+        / (THREE_GPU_TIMESTAMP_CAPTURE_FRAMES / FIDELITY_CAMERA_ROUTE.length)));
+    }
+    segmentStart += segment.durationFrames;
+  }
+  if (frames.length !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES || new Set(frames).size !== frames.length) {
+    throw new Error("fidelity GPU capture route must contain 32 unique frames");
+  }
+  return frames;
+})());
 
 export interface FidelityCameraPose {
   segment: FidelityCameraKeyframe["segment"];
@@ -101,7 +146,10 @@ export interface FidelityBenchmarkReport {
   schema: typeof FIDELITY_BENCHMARK_SCHEMA;
   tier: RenderQualityTier;
   samples: number;
+  gpuSamples: number;
   gpuTimingAvailable: boolean;
+  gpuTiming: Readonly<ThreeGpuTimestampCaptureReport> | null;
+  adapter: Readonly<FidelityAdapterInfo> | null;
   metrics: Readonly<Record<string, number | null>>;
   violations: readonly string[];
   passed: boolean;
@@ -122,6 +170,8 @@ export class FidelityBenchmarkRecorder {
   readonly #tier: RenderQualityTier;
   readonly #budget: Readonly<FidelityBudget>;
   readonly #requireGpuTiming: boolean;
+  readonly #requireHardwareAdapter: boolean;
+  #adapter: Readonly<FidelityAdapterInfo> | null = null;
   readonly #frameMs: Float64Array;
   readonly #submitMs: Float64Array;
   readonly #presentMs: Float64Array;
@@ -129,12 +179,13 @@ export class FidelityBenchmarkRecorder {
   readonly #streamingMs: Float64Array;
   #count = 0;
   #gpuSamples = 0;
+  #gpuCapture: Readonly<ThreeGpuTimestampCaptureReport> | null = null;
   #maxDrawCalls = 0;
   #maxTriangles = 0;
   #maxGpuResourceBytes = 0;
   #visualFlags = 0;
 
-  constructor(tier: RenderQualityTier, capacity: number, requireGpuTiming = true) {
+  constructor(tier: RenderQualityTier, capacity: number, requireGpuTiming = true, requireHardwareAdapter = false) {
     const budget = FIDELITY_BUDGETS[tier];
     if (budget === undefined) throw new TypeError("fidelity benchmark tier is unsupported");
     if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > FIDELITY_BENCHMARK_MAX_SAMPLES) {
@@ -143,6 +194,7 @@ export class FidelityBenchmarkRecorder {
     this.#tier = tier;
     this.#budget = budget;
     this.#requireGpuTiming = requireGpuTiming;
+    this.#requireHardwareAdapter = requireHardwareAdapter;
     this.#frameMs = new Float64Array(capacity);
     this.#submitMs = new Float64Array(capacity);
     this.#presentMs = new Float64Array(capacity);
@@ -153,6 +205,21 @@ export class FidelityBenchmarkRecorder {
   get size(): number { return this.#count; }
   get capacity(): number { return this.#frameMs.length; }
 
+  /**
+   * Pin the GPU adapter this run rendered on. Recorded once; a software rasterizer becomes a hard
+   * violation in report() (see isSoftwareAdapter). Real GPU-realness is thereby enforced, not merely
+   * embedded in the artifact as metadata.
+   */
+  recordAdapter(info: Readonly<FidelityAdapterInfo>): void {
+    if (this.#adapter !== null) throw new Error("fidelity benchmark adapter identity can only be recorded once");
+    for (const key of ["vendor", "architecture", "device", "description"] as const) {
+      if (typeof info[key] !== "string") throw new TypeError(`fidelity adapter ${key} must be a string`);
+    }
+    this.#adapter = Object.freeze({
+      vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description,
+    });
+  }
+
   record(sample: Readonly<FidelityFrameSample>): void {
     if (this.#count >= this.capacity) throw new RangeError("fidelity benchmark sample capacity exceeded");
     const index = this.#count++;
@@ -161,6 +228,7 @@ export class FidelityBenchmarkRecorder {
     this.#presentMs[index] = finite(sample.presentMs, "fidelity presentMs");
     this.#streamingMs[index] = finite(sample.streamingMs, "fidelity streamingMs");
     if (sample.gpuMs !== null) {
+      if (this.#gpuCapture !== null) throw new Error("fidelity GPU timing cannot mix inline and bounded capture samples");
       this.#gpuMs[this.#gpuSamples++] = finite(sample.gpuMs, "fidelity gpuMs");
     }
     for (const [value, label] of [[sample.drawCalls, "drawCalls"], [sample.triangles, "triangles"], [sample.gpuResourceBytes, "gpuResourceBytes"]] as const) {
@@ -173,6 +241,26 @@ export class FidelityBenchmarkRecorder {
     this.#maxTriangles = Math.max(this.#maxTriangles, sample.triangles);
     this.#maxGpuResourceBytes = Math.max(this.#maxGpuResourceBytes, sample.gpuResourceBytes);
     this.#visualFlags |= sample.visualFlags;
+  }
+
+  recordGpuCapture(capture: Readonly<ThreeGpuTimestampCaptureReport>): void {
+    if (this.#count !== this.capacity) throw new Error("fidelity GPU capture requires the complete CPU sample population");
+    if (this.#gpuCapture !== null || this.#gpuSamples !== 0) throw new Error("fidelity GPU capture can only be attached once");
+    if (capture.status !== "available" || capture.attemptedFrames !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES
+      || capture.validFrames !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES || capture.coverage !== 1
+      || capture.sampleMs.length !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES
+      || capture.routeFrames.length !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES
+      || capture.threeFrameIds.length !== THREE_GPU_TIMESTAMP_CAPTURE_FRAMES
+      || capture.routeFrames.some((frame, index) => frame !== FIDELITY_GPU_CAPTURE_ROUTE_FRAMES[index])
+      || capture.threeFrameIds.some((frame, index) => frame !== capture.routeFrames[index])) {
+      throw new Error(`fidelity GPU capture must provide ${THREE_GPU_TIMESTAMP_CAPTURE_FRAMES}/${THREE_GPU_TIMESTAMP_CAPTURE_FRAMES} immutable samples`);
+    }
+    if (!Object.isFrozen(capture) || !Object.isFrozen(capture.sampleMs)
+      || !Object.isFrozen(capture.routeFrames) || !Object.isFrozen(capture.threeFrameIds)) {
+      throw new Error("fidelity GPU capture must be immutable");
+    }
+    for (const value of capture.sampleMs) this.#gpuMs[this.#gpuSamples++] = finite(value, "fidelity GPU capture sample");
+    this.#gpuCapture = capture;
   }
 
   report(): Readonly<FidelityBenchmarkReport> {
@@ -196,11 +284,19 @@ export class FidelityBenchmarkRecorder {
       if (this.#requireGpuTiming) violations.push("GPU timing is unavailable");
     } else over("GPU p95 ms", gpuP95Ms, this.#budget.gpuP95Ms);
     if (this.#visualFlags !== 0) violations.push(`visual floor flags 0x${this.#visualFlags.toString(16)}`);
+    if (this.#adapter === null) {
+      if (this.#requireHardwareAdapter) violations.push("GPU adapter identity was not recorded");
+    } else if (isSoftwareAdapter(this.#adapter)) {
+      violations.push(`software GPU adapter "${this.#adapter.description || this.#adapter.device || "unknown"}" cannot certify visual fidelity`);
+    }
     return Object.freeze({
       schema: FIDELITY_BENCHMARK_SCHEMA,
       tier: this.#tier,
       samples: this.#count,
+      gpuSamples: this.#gpuSamples,
       gpuTimingAvailable: gpuP95Ms !== null,
+      gpuTiming: this.#gpuCapture,
+      adapter: this.#adapter,
       metrics: Object.freeze({ frameP95Ms, hitchP99Ms, submitP95Ms, presentP95Ms, gpuP95Ms, streamingP99Ms, maxDrawCalls: this.#maxDrawCalls, maxTriangles: this.#maxTriangles, maxGpuResourceBytes: this.#maxGpuResourceBytes, visualFlags: this.#visualFlags }),
       violations: Object.freeze(violations),
       passed: violations.length === 0,

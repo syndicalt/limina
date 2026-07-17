@@ -117,6 +117,20 @@ pub fn op_create_window_context<'s>(
     });
 
     let canvas_obj = v8::Object::new(scope);
+    // Preserve the compositor-returned PHYSICAL inner size on the canvas object. A Wayland
+    // compositor may round a requested physical dimension (for example 1920 -> 1921 under
+    // fractional scaling); JS must configure its renderer/camera and capture contract from the
+    // actual surface rather than silently stretching caller-requested dimensions over it.
+    for (name, value) in [("width", width), ("height", height)] {
+        let key = v8::String::new(scope, name)
+            .ok_or_else(|| JsErrorBox::generic("failed to allocate window canvas dimension key"))?;
+        let number = v8::Integer::new_from_unsigned(scope, value);
+        if canvas_obj.set(scope, key.into(), number.into()) != Some(true) {
+            return Err(JsErrorBox::generic(format!(
+                "failed to publish window canvas {name}"
+            )));
+        }
+    }
     let canvas_global = v8::Global::new(scope, canvas_obj);
     let options: v8::Local<v8::Value> = v8::undefined(scope).into();
     canvas::create(

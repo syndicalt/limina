@@ -1,6 +1,6 @@
 // Phase 9.1 / workstream B (headless) — proves prop GEOMETRY and the per-instance
-// RENDER TRANSFORMS as PURE/CPU data. No GPU: the in-tab WebGPU draw of trees/rocks/
-// grass is UAT, but the geometry MATH (finite, expected counts, unit normals,
+// RENDER TRANSFORMS as PURE/CPU data. No GPU: the in-tab WebGPU draw of trees/rocks
+// is UAT, but the geometry MATH (finite, expected counts, unit normals,
 // deterministic) and — crucially — that the InstancedMesh matrices REPRODUCE the
 // scatter (each instance translate==(x,y,z), uniform scale==scale, Y-rotation==yaw)
 // are fully provable here. THREE runs headlessly; the matrices are CPU data.
@@ -20,7 +20,7 @@ const close = (a: number, b: number, eps = 1e-5): boolean => Math.abs(a - b) <= 
 const hexRGB = (hex: number): [number, number, number] => [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];
 
 // Per-part colors the geometry must carry (from props.ts).
-const TRUNK = 0x5b4636, FOLIAGE = 0x2f6d39, ROCKCOL = 0x6f6f6a, GRASSCOL = 0x4f8a3f;
+const TRUNK = 0x5b4636, FOLIAGE = 0x2f6d39, ROCKCOL = 0x6f6f6a;
 
 // ---------------------------------------------------------------------------
 // 1. GEOMETRY: each kind is finite, has the expected vertex/triangle counts,
@@ -35,10 +35,9 @@ const EXPECT: Record<number, {
   // hex-cone tiers (6 tris each = 18 tris, verts 24..77, green).
   [PropKind.Tree]: { verts: 78, tris: 26, label: "tree (open trunk tube 8 + 3 hex cone tiers 18)", color: (v) => (v < 24 ? TRUNK : FOLIAGE) },
   [PropKind.Rock]: { verts: 24, tris: 8, label: "rock (flattened octahedron)", color: () => ROCKCOL },
-  [PropKind.Grass]: { verts: 24, tris: 8, label: "grass (4 tapered blades)", color: () => GRASSCOL },
 };
 
-for (const kind of [PropKind.Tree, PropKind.Rock, PropKind.Grass]) {
+for (const kind of [PropKind.Tree, PropKind.Rock]) {
   const e = EXPECT[kind];
   const g = propGeometry(kind);
 
@@ -94,6 +93,16 @@ for (const kind of [PropKind.Tree, PropKind.Rock, PropKind.Grass]) {
   for (let i = 0; i < g.indices.length; i++) assert(Object.is(g.indices[i], g2.indices[i]), `${e.label}: indices non-deterministic at ${i}`);
 }
 
+// The retired numeric grass kind must fail closed rather than silently rendering a
+// rock fallback or resurrecting the old four-plane blade geometry.
+let rejectedLegacyGrass = false;
+try {
+  propGeometry(2);
+} catch (err) {
+  rejectedLegacyGrass = err instanceof Error && err.message.includes("unknown PropKind 2");
+}
+assert(rejectedLegacyGrass, "retired legacy grass kind 2 must be rejected");
+
 // Tree really is multi-colored (brown trunk + green canopy), not monochrome.
 {
   const tg = propGeometry(PropKind.Tree);
@@ -141,12 +150,10 @@ for (const [kind, list] of byKind) {
   kindsSeen.push(kind);
 
   // Material drives per-part color from the vertex-color attribute (not a flat color),
-  // and the geometry actually carries that attribute. Grass is double-sided (thin
-  // blades) — that, not winding, is what keeps grass from going black from one side.
-  const mat = mesh.material as { vertexColors?: boolean; side?: number };
+  // and the geometry actually carries that attribute.
+  const mat = mesh.material as { vertexColors?: boolean };
   assert(mat.vertexColors === true, `kind ${kind} material must use vertexColors`);
   assert((mesh.geometry as THREE.BufferGeometry).getAttribute("color") !== undefined, `kind ${kind} geometry missing color attribute`);
-  if (kind === PropKind.Grass) assert(mat.side === THREE.DoubleSide, "grass material must be DoubleSide");
 
   for (let i = 0; i < list.length; i++) {
     const p = list[i];
@@ -183,9 +190,9 @@ for (const tm of tileMeshes) totalInstances += tm.count;
 assert(totalInstances === props.length, `tile prop meshes cover ${totalInstances} instances, expected ${props.length}`);
 
 ops.op_log(
-  `p9_props OK: geometry tree=78v/26t rock=24v/8t grass=24v/8t (finite, unit + OUTWARD normals, ` +
-  `per-part vertex colors brown-trunk/green-canopy/grey-rock/green-grass, deterministic); ` +
-  `materials vertexColors + grass DoubleSide; render matches scatter — ${verified} instances across ` +
+  `p9_props OK: geometry tree=78v/26t rock=24v/8t (finite, unit + OUTWARD normals, ` +
+  `per-part vertex colors brown-trunk/green-canopy/grey-rock, deterministic); ` +
+  `materials vertexColors; render matches scatter — ${verified} instances across ` +
   `kinds [${kindsSeen.sort().join(",")}] decompose to translate==(x,y,z), uniform scale==prop.scale, ` +
   `pure +Y rotation==prop.yaw; buildTilePropMeshes -> ${tileMeshes.length} meshes / ${totalInstances} instances.`,
 );

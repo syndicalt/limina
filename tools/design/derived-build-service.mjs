@@ -4,7 +4,18 @@ import { pathToFileURL } from "node:url";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
-import { derivedGlobalArtifacts } from "../../js/src/world/compiler/manifest.mjs";
+import {
+  DERIVED_REVISION_MANIFEST_SCHEMA_V3,
+  derivedArtifactCompilerGraphHash,
+  derivedArtifactContentHash,
+  derivedGlobalArtifacts,
+  parseDerivedRevisionManifest,
+} from "../../js/src/world/compiler/manifest.mjs";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
+import { BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE, decodeBiomeContentClosureArtifact } from "../../js/src/world/compiler/biome-content-closure-artifact.mjs";
+import { BIOME_RUNTIME_PACK_ARTIFACT_TYPE, decodeBiomeRuntimePackArtifact } from "../../js/src/world/compiler/biome-runtime-pack-artifact.mjs";
+import { SURFACE_COMPOSITE_ARTIFACT_TYPE } from "../../js/src/world/compiler/surface-composite-artifact.mjs";
+import { BIOME_POPULATION_ARTIFACT_TYPE } from "../../js/src/world/compiler/biome-population-artifact.mjs";
 import { DerivedBuildCoordinator } from "./derived-build-coordinator.mjs";
 import { DerivedRuntimeServer } from "./derived-runtime-server.mjs";
 import {
@@ -19,6 +30,10 @@ import { parseTerrainEditLayer } from "../../js/src/terrain/edit-layer.mjs";
 import { canonicalMapDocText } from "../../js/src/world/mapdoc-canonical.mjs";
 import { persistMapDocSource, validateAuthoringProjectStateCommit } from "./atlas-source-bridge.mjs";
 import { compileWorldTerrainInWorker } from "./world-compiler-worker.mjs";
+import {
+  WORLD_PUBLISHED_BIOME_COMPILER_VERSION,
+  validateBiomePublicationContentEntries,
+} from "../../js/src/world/compiler/biome-publication-compile.mjs";
 
 export const DERIVED_BUILD_SERVICE_STATUS_SCHEMA = "limina.derived-build-service-status/v1";
 export const DEFAULT_DERIVED_BUILD_POLL_MS = 500;
@@ -424,6 +439,189 @@ function readSeedMapDoc(projectRootInput, seedPathInput) {
   } finally { closeSync(descriptor); }
 }
 
+function readGeneratedAsset(assetRootInput, assetId, expectedLength, label) {
+  if (typeof assetId !== "string" || assetId.length < 1 || assetId.startsWith("/") || assetId.includes("\\")
+      || assetId.split("/").some((segment) => segment === "." || segment === ".." || !ASSET_SEGMENT.test(segment))) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} has an invalid assetId`);
+  }
+  const root = realpathSync(resolve(assetRootInput));
+  const parts = assetId.split("/");
+  let current = root;
+  for (let index = 0; index < parts.length - 1; index++) {
+    current = join(current, parts[index]);
+    const leaf = lstatSync(current);
+    if (leaf.isSymbolicLink() || !leaf.isDirectory()) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} has a symlink or non-directory parent`);
+    }
+    current = realpathSync(current);
+    if (!within(root, current)) throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} escapes the asset root`);
+  }
+  const path = join(current, parts.at(-1));
+  let descriptor;
+  try { descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)); }
+  catch (error) { throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} cannot be opened safely`, { cause: error }); }
+  try {
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile() || opened.nlink < 1 || opened.size < 1 || opened.size > 256 * 1024 * 1024
+        || (expectedLength !== undefined && opened.size !== expectedLength)) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} has an invalid byte length`);
+    }
+    let openedPath;
+    try { openedPath = realpathSync(`/proc/self/fd/${descriptor}`); }
+    catch {
+      openedPath = realpathSync(path);
+      const candidate = statSync(openedPath);
+      if (candidate.dev !== opened.dev || candidate.ino !== opened.ino) {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} changed while opening`);
+      }
+    }
+    if (!within(root, openedPath) || openedPath === root) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} descriptor escapes the asset root`);
+    }
+    const bytes = new Uint8Array(readFileSync(descriptor));
+    const after = fstatSync(descriptor);
+    if (after.dev !== opened.dev || after.ino !== opened.ino || after.nlink < 1 || after.size !== bytes.byteLength) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} changed while reading`);
+    }
+    return bytes;
+  } finally { closeSync(descriptor); }
+}
+
+/** Load the source-controlled frozen fidelity publication once at service startup. The returned
+ * provider only matches the exact locked WorldMap; all other maps remain on their normal compiler
+ * profiles. Every byte is safe-opened and re-hashed before it can enter a compiler job. */
+export function loadFrozenBiomePublicationBundle({ assetRoot, bundleAssetId, worldMapAssetId }) {
+  const bundleBytes = readGeneratedAsset(assetRoot, bundleAssetId, undefined, "frozen biome runtime bundle");
+  let bundle;
+  try { bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bundleBytes)); }
+  catch (error) { throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome runtime bundle is invalid JSON", { cause: error }); }
+  if (bundle?.schema !== "limina.temperate-fidelity-runtime-bundle/v3" || !Array.isArray(bundle.artifactIndex)
+      || !Array.isArray(bundle.contentIndex) || bundle.runtimePack === null || typeof bundle.runtimePack !== "object"
+      || bundle.baseCompiler === null || typeof bundle.baseCompiler !== "object"
+      || bundle.coverage === null || typeof bundle.coverage !== "object") {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome runtime bundle shape is invalid");
+  }
+  const manifest = parseDerivedRevisionManifest(bundle.manifest);
+  const baseCompiler = bundle.baseCompiler;
+  if (baseCompiler.version !== "1.3.0" || baseCompiler.config === null || Array.isArray(baseCompiler.config)
+      || typeof baseCompiler.config !== "object" || Object.getPrototypeOf(baseCompiler.config) !== Object.prototype
+      || compilerContentHash(baseCompiler.config) !== baseCompiler.configHash
+      || typeof baseCompiler.graphHash !== "string" || !HASH.test(baseCompiler.graphHash)
+      || manifest.compiler.version !== WORLD_PUBLISHED_BIOME_COMPILER_VERSION
+      || manifest.compiler.configHash !== baseCompiler.configHash
+      || manifest.schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome compiler authority is inconsistent");
+  }
+  const carriedArtifactTypes = new Set([
+    ...manifest.globalArtifacts.map((entry) => entry.artifactType),
+    ...manifest.chunks.flatMap((chunk) => chunk.artifacts.map((entry) => entry.artifactType)),
+  ]);
+  carriedArtifactTypes.delete(BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE);
+  carriedArtifactTypes.delete(BIOME_RUNTIME_PACK_ARTIFACT_TYPE);
+  carriedArtifactTypes.delete(SURFACE_COMPOSITE_ARTIFACT_TYPE);
+  carriedArtifactTypes.delete(BIOME_POPULATION_ARTIFACT_TYPE);
+  if ([...carriedArtifactTypes].some((artifactType) => (
+    derivedArtifactCompilerGraphHash(manifest, artifactType) !== baseCompiler.graphHash
+  ))) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome carried-artifact authority is inconsistent");
+  }
+  const presentationArtifactTypes = [BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE, BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+    SURFACE_COMPOSITE_ARTIFACT_TYPE, BIOME_POPULATION_ARTIFACT_TYPE];
+  if (presentationArtifactTypes.some((artifactType) => (
+    derivedArtifactCompilerGraphHash(manifest, artifactType) !== manifest.compiler.graphHash
+  ))) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome presentation-artifact authority is inconsistent");
+  }
+  if (bundle.coverage.kind !== "complete-world" || bundle.coverage.chunks !== manifest.chunks.length
+      || bundle.coverage.bounds === null || typeof bundle.coverage.bounds !== "object") {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome coverage is incomplete");
+  }
+  const expectedCoverage = {
+    minX: Math.min(...manifest.chunks.map((chunk) => manifest.grid.origin[0] + chunk.tx * manifest.grid.chunkSizeM)),
+    minZ: Math.min(...manifest.chunks.map((chunk) => manifest.grid.origin[1] + chunk.tz * manifest.grid.chunkSizeM)),
+    maxX: Math.max(...manifest.chunks.map((chunk) => manifest.grid.origin[0] + (chunk.tx + 1) * manifest.grid.chunkSizeM)),
+    maxZ: Math.max(...manifest.chunks.map((chunk) => manifest.grid.origin[1] + (chunk.tz + 1) * manifest.grid.chunkSizeM)),
+  };
+  if (compilerContentHash(bundle.coverage.bounds) !== compilerContentHash(expectedCoverage)) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome coverage bounds do not match its chunks");
+  }
+  const artifactIndex = new Map(bundle.artifactIndex.map((entry) => [entry.contentHash, entry]));
+  const readArtifact = (descriptor, label) => {
+    const entry = artifactIndex.get(descriptor.contentHash);
+    if (entry === undefined || entry.artifactType !== descriptor.artifactType || entry.mediaType !== descriptor.mediaType
+        || entry.byteLength !== descriptor.byteLength) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} is absent from the frozen artifact index`);
+    }
+    const bytes = readGeneratedAsset(assetRoot, entry.assetId, descriptor.byteLength, label);
+    if (derivedArtifactContentHash(bytes) !== descriptor.contentHash) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `${label} content hash mismatch`);
+    }
+    return bytes;
+  };
+  const closureDescriptor = manifest.globalArtifacts.find((entry) => entry.artifactType === BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE);
+  const runtimeDescriptor = manifest.globalArtifacts.find((entry) => entry.artifactType === BIOME_RUNTIME_PACK_ARTIFACT_TYPE);
+  if (closureDescriptor === undefined || runtimeDescriptor === undefined) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome globals are incomplete");
+  }
+  const contentBundle = decodeBiomeContentClosureArtifact(readArtifact(closureDescriptor, "frozen biome content closure")).bundle;
+  const runtimePackBytes = readArtifact(runtimeDescriptor, "frozen biome runtime pack");
+  const decodedRuntimePack = decodeBiomeRuntimePackArtifact(runtimePackBytes);
+  if (decodedRuntimePack.semanticContentHash !== contentBundle.runtimePack.contentHash
+      || bundle.runtimePack.contentHash !== decodedRuntimePack.semanticContentHash
+      || bundle.runtimePack.byteContentHash !== portableAssetContentHash(runtimePackBytes)
+      || bundle.runtimePack.byteLength !== runtimePackBytes.byteLength) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome runtime-pack identity mismatch");
+  }
+  const chunks = manifest.chunks.map((chunk) => {
+    const surface = chunk.artifacts.find((entry) => entry.artifactType === SURFACE_COMPOSITE_ARTIFACT_TYPE);
+    const population = chunk.artifacts.find((entry) => entry.artifactType === BIOME_POPULATION_ARTIFACT_TYPE);
+    if (surface === undefined || population === undefined) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `frozen biome chunk '${chunk.chunkId}' is incomplete`);
+    }
+    return Object.freeze({ chunkId: chunk.chunkId,
+      surfaceBytes: readArtifact(surface, `frozen biome surface '${chunk.chunkId}'`),
+      populationBytes: readArtifact(population, `frozen biome population '${chunk.chunkId}'`) });
+  });
+  const contentEntries = bundle.contentIndex.map((entry, index) => {
+    const bytes = readGeneratedAsset(assetRoot, entry.assetId, entry.byteLength, `frozen biome content ${index}`);
+    if (portableAssetContentHash(bytes) !== entry.contentHash) {
+      throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `frozen biome content ${index} hash mismatch`);
+    }
+    return Object.freeze({ id: entry.sourceAssetId, path: `assets/${entry.sourceAssetId}`, hash: entry.contentHash, bytes });
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const lockedWorldMapBytes = readGeneratedAsset(assetRoot, worldMapAssetId, undefined, "locked fidelity WorldMap");
+  let lockedWorldMap;
+  try { lockedWorldMap = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(lockedWorldMapBytes)); }
+  catch (error) { throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "locked fidelity WorldMap is invalid JSON", { cause: error }); }
+  const worldMapHash = compilerContentHash(lockedWorldMap);
+  const worldMapRef = manifest.source.contentRefs.find((entry) => entry.refType === "world-map/v1");
+  if (worldMapRef?.contentHash !== `sha256:${lockedWorldMap?.provenance?.contentHash}`
+      || !manifest.source.contentRefs.some((entry) => entry.refType === "design-source/v1"
+        && entry.contentHash === `sha256:${lockedWorldMap?.provenance?.sourceHash}`)) {
+    throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome manifest is not bound to the locked WorldMap source");
+  }
+  const input = Object.freeze({
+    schema: "limina.biome-publication-compile-input/v1",
+    runtimePack: Object.freeze({ assetId: contentBundle.runtimePack.assetId,
+      contentHash: decodedRuntimePack.semanticContentHash, byteContentHash: portableAssetContentHash(runtimePackBytes),
+      byteLength: runtimePackBytes.byteLength, bytes: runtimePackBytes }),
+    contentBundle,
+    chunks: Object.freeze(chunks),
+  });
+  const envelope = Object.freeze({ input, contentEntries: Object.freeze(contentEntries) });
+  return Object.freeze({
+    compilerConfig: immutable(baseCompiler.config),
+    compilerGraphHash: manifest.compiler.graphHash,
+    matches: (worldMap) => compilerContentHash(worldMap) === worldMapHash,
+    prepare: ({ worldMap }) => {
+      if (compilerContentHash(worldMap) !== worldMapHash) {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "frozen biome publication does not match this WorldMap");
+      }
+      return envelope;
+    },
+  });
+}
+
 function sameRef(left, right) {
   return left?.assetId === right.assetId && left?.hash === right.hash;
 }
@@ -508,6 +706,7 @@ export class DerivedBuildService {
   #compileWorldTerrain;
   #compiler;
   #compilerForWorldMap;
+  #biomePublicationForWorldMap;
   #coordinator;
   #pollMs;
   #logger;
@@ -548,6 +747,10 @@ export class DerivedBuildService {
       throw new DerivedBuildServiceError("INVALID_OPTIONS", "derived build service compilerForWorldMap must be a function");
     }
     this.#compilerForWorldMap = options.compilerForWorldMap;
+    if (options.biomePublicationForWorldMap !== undefined && typeof options.biomePublicationForWorldMap !== "function") {
+      throw new DerivedBuildServiceError("INVALID_OPTIONS", "derived build service biomePublicationForWorldMap must be a function");
+    }
+    this.#biomePublicationForWorldMap = options.biomePublicationForWorldMap;
     this.#pollMs = boundedPollMs(options.pollMs);
     this.#logger = options.logger ?? console;
     this.#setTimer = options.setTimer ?? setTimeout;
@@ -559,27 +762,33 @@ export class DerivedBuildService {
     this.#bootstrapMapDoc = options.bootstrapMapDoc;
 
     const coordinatorFactory = options.coordinatorFactory ?? ((input) => new DerivedBuildCoordinator(input));
-    const publish = options.publish ?? (async ({ buildId, manifest, artifacts, reusedArtifacts, readHead, signal }) => {
+    const publish = async ({ buildId, manifest, artifacts, reusedArtifacts, readHead, signal }) => {
       const metadata = this.#compileMetadata.get(manifest.manifestHash);
       if (metadata === undefined) throw new DerivedBuildServiceError("MISSING_COMPILE_METADATA", "compiler snapshot was not retained for publication");
       try {
-        const result = await publishDerivedRevision({
+        const publicationInput = {
           projectRoot: this.#projectRoot,
           jobId: buildId,
           manifest,
           artifacts,
           reusedArtifacts,
           snapshot: metadata.snapshot,
+          ...(metadata.contentEntries === undefined ? {} : { contentEntries: metadata.contentEntries }),
           readHead,
           shouldCancel: () => signal.aborted,
-        });
-        this.#previous = { manifest: result.manifest, snapshot: result.snapshot };
-        this.#previousLoaded = true;
-        return { published: result.published, manifestHash: result.manifest.manifestHash };
+        };
+        const result = options.publish === undefined
+          ? await publishDerivedRevision(publicationInput)
+          : await options.publish({ ...publicationInput, buildId, signal });
+        if (options.publish === undefined) {
+          this.#previous = { manifest: result.manifest, snapshot: result.snapshot };
+          this.#previousLoaded = true;
+        }
+        return { published: result.published, manifestHash: result.manifest?.manifestHash ?? result.manifestHash };
       } finally {
         this.#compileMetadata.delete(manifest.manifestHash);
       }
-    });
+    };
     const reuseVerifier = options.verifyReusableArtifacts ?? (({ manifest, reusedArtifacts, signal }) => verifyPublishedDerivedArtifacts({
       projectRoot: this.#projectRoot,
       branchId: manifest.branchId,
@@ -774,7 +983,30 @@ export class DerivedBuildService {
         throw new DerivedBuildServiceError("COMPILER_SELECTION_FAILED", `world compiler profile selection returned an invalid bundle: ${error?.message ?? error}`, { cause: error });
       }
     }
-    return Object.freeze({ authority, compiledMap, compiler });
+    let biomePublication;
+    if (compiler.version === WORLD_PUBLISHED_BIOME_COMPILER_VERSION) {
+      if (this.#biomePublicationForWorldMap === undefined) {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_MISSING", "published biome compiler requires biomePublicationForWorldMap");
+      }
+      let selected;
+      try {
+        selected = this.#biomePublicationForWorldMap({ worldMap: compiledMap.worldMap, authority, assetStore: this.#assetStore });
+      } catch (error) {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `biome publication preparation failed: ${error?.message ?? error}`, { cause: error });
+      }
+      if (selected === null || Array.isArray(selected) || typeof selected !== "object"
+          || Object.getPrototypeOf(selected) !== Object.prototype
+          || Object.getOwnPropertyNames(selected).sort().join() !== "contentEntries,input") {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", "biome publication preparation returned an invalid envelope");
+      }
+      let contentEntries;
+      try { contentEntries = validateBiomePublicationContentEntries(selected.input, selected.contentEntries); }
+      catch (error) {
+        throw new DerivedBuildServiceError("BIOME_PUBLICATION_INVALID", `biome publication content closure failed: ${error?.message ?? error}`, { cause: error });
+      }
+      biomePublication = Object.freeze({ input: selected.input, contentEntries });
+    }
+    return Object.freeze({ authority, compiledMap, compiler, ...(biomePublication === undefined ? {} : { biomePublication }) });
   }
 
   async #compile(request) {
@@ -814,6 +1046,7 @@ export class DerivedBuildService {
 
     const previous = this.#previous?.snapshot && this.#previous?.manifest ? this.#previous : undefined;
     const prior = previous !== undefined && sameCompilerIdentity(previous.manifest.compiler, prepared.compiler.identity)
+      && prepared.compiler.version !== WORLD_PUBLISHED_BIOME_COMPILER_VERSION
       ? previous
       : undefined;
     const output = await this.#compileWorldTerrain({
@@ -836,6 +1069,7 @@ export class DerivedBuildService {
       terrainEditLayers,
       terrainEditLayerRefs,
       compiler: { version: prepared.compiler.version, config: prepared.compiler.config },
+      ...(prepared.biomePublication === undefined ? {} : { biomePublication: prepared.biomePublication.input }),
       previousSnapshot: prior?.snapshot ?? null,
       ...(prior === undefined ? {} : {
         previousManifest: prior.manifest,
@@ -851,6 +1085,7 @@ export class DerivedBuildService {
       snapshot: output.snapshot,
       invalidation: output.invalidation,
       diagnostics: output.diagnostics,
+      ...(prepared.biomePublication === undefined ? {} : { contentEntries: prepared.biomePublication.contentEntries }),
     });
     this.#compileMetadataByHead.set(request.headHash, output.manifest.manifestHash);
     while (this.#compileMetadata.size > MAX_RETAINED_COMPILE_METADATA) {
@@ -879,10 +1114,37 @@ async function main() {
   if (!compilerBundlePath) throw new Error("LIMINA_WORLD_COMPILER_BUNDLE is required");
   const compilerModule = await import(pathToFileURL(resolve(compilerBundlePath)).href);
   const compiler = compilerModule.createDefaultWorldTerrainCompiler(projectConfig.projectId);
-  if (typeof compilerModule.createHydrologyWorldTerrainCompiler !== "function") {
-    throw new Error("world compiler bundle does not export createHydrologyWorldTerrainCompiler");
+  if (typeof compilerModule.createBiomeWorldTerrainCompiler !== "function") {
+    throw new Error("world compiler bundle does not export createBiomeWorldTerrainCompiler");
   }
-  const hydrologyCompiler = compilerModule.createHydrologyWorldTerrainCompiler(projectConfig.projectId);
+  const biomeCompiler = compilerModule.createBiomeWorldTerrainCompiler(projectConfig.projectId);
+  const frozenBundleAssetId = "derived/temperate-fidelity/runtime/bundle.json";
+  const frozenWorldMapAssetId = "maps/temperate-fidelity-primary.worldmap.json";
+  let publishedBiomeCompiler;
+  let frozenBiomePublication;
+  if (existsSync(join(assetRoot, frozenBundleAssetId))) {
+    if (typeof compilerModule.createPublishedBiomeWorldTerrainCompiler !== "function") {
+      throw new Error("world compiler bundle does not export createPublishedBiomeWorldTerrainCompiler");
+    }
+    frozenBiomePublication = loadFrozenBiomePublicationBundle({
+      assetRoot,
+      bundleAssetId: frozenBundleAssetId,
+      worldMapAssetId: frozenWorldMapAssetId,
+    });
+    const template = compilerModule.createPublishedBiomeWorldTerrainCompiler(projectConfig.projectId);
+    if (template.identity.graphHash !== frozenBiomePublication.compilerGraphHash) {
+      throw new Error("frozen biome publication compiler graph does not match the installed world compiler");
+    }
+    publishedBiomeCompiler = Object.freeze({
+      ...template,
+      config: frozenBiomePublication.compilerConfig,
+      identity: Object.freeze({
+        version: template.version,
+        configHash: compilerContentHash(frozenBiomePublication.compilerConfig),
+        graphHash: template.identity.graphHash,
+      }),
+    });
+  }
   const authoringClient = new EditorBridgeClient(editorClientConfigFromEnvironment(process.env, {
     agentId: "limina-derived-build-service",
     sessionId: `derived-build-${process.pid}`,
@@ -908,7 +1170,9 @@ async function main() {
       signal,
     }),
     compiler,
-    compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
+    compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler
+      : frozenBiomePublication?.matches(worldMap) === true ? publishedBiomeCompiler : biomeCompiler,
+    ...(frozenBiomePublication === undefined ? {} : { biomePublicationForWorldMap: frozenBiomePublication.prepare }),
     bootstrapMapDoc: existsSync(join(projectConfig.projectRoot, "design", "maps.json"))
       ? () => bootstrapAuthoritativeMapDoc({
         projectId: projectConfig.projectId,

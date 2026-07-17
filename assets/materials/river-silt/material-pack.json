@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "river-silt",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Ground083",
+    "assetUrl": "https://ambientcg.com/a/Ground083",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Ground083_1K-JPG.zip",
+    "archiveBytes": 9275069,
+    "archiveSha256": "sha256:229ca99b1463a97d6fb884bfa7e04dd9261469edc944dd2265a912a1ddd31adf"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/river-silt/albedo.jpg",
+      "sha256": "sha256:903492720166100e9c67bf973ccc9de5485f280329003563e21a1288e7b7a7da",
+      "assetHash": "sha256:aef7dbf5db5bb16013346a7e53a1e4dc05c9cc0b36dabf7847fd826263aec0ff",
+      "bytes": 1550896
+    },
+    "normal": {
+      "assetId": "materials/river-silt/normal.jpg",
+      "sha256": "sha256:7be856c33fc4b5f142a5307f8554f846eb1893001d33eba45348f548fc04ed38",
+      "assetHash": "sha256:b85c7251a86f68d6919e8d48a4649848a00d229079f59a1e229abc904d31af4c",
+      "bytes": 2070563
+    },
+    "roughness": {
+      "assetId": "materials/river-silt/roughness.jpg",
+      "sha256": "sha256:f79c62409916e074d364d962fb8e312fb60fbc154192955be33449b91b48eeaa",
+      "assetHash": "sha256:613f32ed01535d1349b4c7e57dcda2e641c10f0c8207a724a32fc3cfb30d1221",
+      "bytes": 777496
+    },
+    "occlusion": {
+      "assetId": "materials/river-silt/occlusion.jpg",
+      "sha256": "sha256:1e408ea69b438887dcf459a5f1824485925442ad37407fb66853a544cef3c89f",
+      "assetHash": "sha256:5af22362299560adb64bd2971e5a83b8477f97d089a32941fa7ba540daa48a8a",
+      "bytes": 715549
+    },
+    "displacement": {
+      "assetId": "materials/river-silt/displacement.jpg",
+      "sha256": "sha256:f11abec1d874f0e00c233ef2d9865f7708d3f17fc87ba935a9467964140dfae4",
+      "assetHash": "sha256:3b391d48339f96e410ae9cce114f71be54d7be45b0f13f914a8f984b63c49949",
+      "bytes": 484511
+    }
+  },
+  "materialImport": {
+    "name": "river-silt",
+    "albedo": "materials/river-silt/albedo.jpg",
+    "normal": "materials/river-silt/normal.jpg",
+    "roughness": "materials/river-silt/roughness.jpg",
+    "occlusion": "materials/river-silt/occlusion.jpg",
+    "displacement": "materials/river-silt/displacement.jpg"
+  }
+}

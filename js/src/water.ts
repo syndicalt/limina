@@ -25,28 +25,23 @@
 //     byte-identical across authoring (analytic, bake-resolution) and replay (the cache's
 //     sub-tile bilinear read) — only the cosmetic shading shifts imperceptibly.
 //
-//     WHY NOT a real scene-depth texture: it is feasible at the WebGPU primitive level
-//     here (deno_webgpu 0.218 / wgpu-core 29 accept depth formats with TEXTURE_BINDING,
-//     and three's WebGPU backend already allocates its depth textures sampleable), BUT
-//     sampling scene depth from the water pass means restructuring the forward render
-//     into a depth pre-pass / MRT (you cannot sample the depth attachment the current
-//     transparent pass is writing). That is an unproven render-pipeline lift, whereas the
-//     terrain heightfield gives the IDENTICAL "true water-column depth" with zero pipeline
-//     risk and full determinism — so we take the terrain path. (If no terrain is supplied,
-//     e.g. a bare lake, we fall back to the legacy VIEW-DISTANCE proxy below.)
+//   - REAL SCENE OPTICS by quality: Balanced samples the renderer's opaque viewport colour
+//     through `viewportSafeUV`, whose depth comparison rejects foreground pixels before applying
+//     normal-driven distortion. Cinematic additionally owns a planar reflector for standing water.
+//     These renderer-managed snapshots avoid sampling the attachment currently being written;
+//     Performance retains the deterministic terrain-depth-only fallback.
 //   - ANIMATED WAVE NORMALS: a summed field of four crossing directional waves drives
 //     a true bump `normalNode` (+ a matching vertex displacement), so the surface
 //     visibly undulates and the sky-IBL reflection breaks up and travels across it.
 //     Cellular (no single direction) → no candy-cane stripes. Plus a faint roughness
 //     shimmer. All animation is driven by the TSL `time` node — it lives ENTIRELY in
 //     the render graph (a per-frame GPU uniform), never in the sim/world-log, so
-//     determinism and replay parity are untouched. Refraction/caustics + a true
-//     scene-depth read remain a later upgrade (a backend depth-texture path); the
-//     shoreline wet-edge/foam is rendered ground-truth on the sand (terrain/render.ts).
+//     determinism and replay parity are untouched.
 
 import * as THREE from "../build/three.bundle.mjs";
 import { buildVariableRiverRibbonGeometry, buildWaterFootprintGeometry, type WaterPoint2 } from "./render/water/geometry.ts";
-import { createWaterMaterial, type WaterDepthTextureBinding } from "./render/water/material.ts";
+import { attachWaterMaterialAuxiliaries, createWaterMaterial, type WaterDepthTextureBinding } from "./render/water/material.ts";
+import type { WaterSceneOptics } from "./render/quality.ts";
 
 /** Terrain-heightfield coupling for TRUE water-column-depth shading. The caller
  *  supplies a height query + the world-XZ rectangle it is valid over; the water
@@ -90,6 +85,7 @@ export interface WaterOptions {
   segments?: number;
   /** Execution-quality wave count in [0,4]. Omission preserves the four-wave look. */
   waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
 }
 
 /** A large plane so an ocean reads as endless within the default camera far (200). */
@@ -115,6 +111,8 @@ export interface BakedDepth {
   texture: THREE.DataTexture;
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
   coverageChannel?: boolean;
+  /** Normalisation divisor in metres (1.0 in the texture = this depth). */
+  maxDepthM?: number;
 }
 
 /** Bake the terrain heightfield into a normalised water-column-depth texture by sampling
@@ -162,7 +160,7 @@ export function bakeWaterDepth(depth: WaterDepthOptions, seaLevel: number): Bake
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.needsUpdate = true;
-  return { texture, bounds: depth.bounds };
+  return { texture, bounds: depth.bounds, maxDepthM: range };
 }
 
 /** Build a render-only water surface mesh at sea-level `level`. The returned mesh is
@@ -189,8 +187,10 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
       depth: baked === undefined ? undefined : { ...baked, outsideAsDeep: true },
       peek: opts.peek,
       waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics,
     });
     const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
+    attachWaterMaterialAuxiliaries(mesh as unknown as THREE.Mesh);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(opts.center?.[0] ?? 0, opts.level, opts.center?.[1] ?? 0);
     mesh.castShadow = false;
@@ -217,6 +217,7 @@ export interface WaterBodySurfaceOptions {
   color?: number;
   depth?: WaterDepthTextureBinding;
   waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
 }
 
 /** Build one authored standing-water polygon. Geometry is feature-local for large-world precision. */
@@ -231,8 +232,10 @@ export function buildWaterBodySurface(options: WaterBodySurfaceOptions): THREE.M
       orientation: "xz",
       depth: options.depth,
       waveCount: options.waveCount,
+      sceneOptics: options.sceneOptics,
     });
     const mesh = new THREE.Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.position.set(built.origin[0], options.level, built.origin[1]);
     mesh.castShadow = false;
     mesh.receiveShadow = false;
@@ -268,6 +271,7 @@ export interface RiverOptions {
   /** Sea plane Y. Near/below it the ribbon drops to just above the plane (no lip at the mouth). */
   seaLevel: number;
   waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
   class?: "river" | "stream";
   order?: number;
 }
@@ -294,8 +298,10 @@ export function buildRiverRibbon(opts: RiverOptions): WaterMesh {
       kind: "river",
       orientation: "xz",
       waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics,
     });
     const mesh = new THREE.Mesh(built.geometry, material) as unknown as WaterMesh;
+    attachWaterMaterialAuxiliaries(mesh as unknown as THREE.Mesh);
     mesh.position.set(built.origin[0], built.origin[1], built.origin[2]);
     mesh.castShadow = false;
     mesh.receiveShadow = false;

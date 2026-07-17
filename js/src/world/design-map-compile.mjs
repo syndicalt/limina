@@ -708,7 +708,9 @@ function compileMap({ mapsJsonText, worldBibleText, mapId, placesText, atlasSour
       if (waterwayPointCount > WATER_LIMITS.totalWaterwayPoints) waterError(`waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points`);
       waterways.push(waterway);
     } else if (f.type === "line" && f.kind === "road") {
-      routes.push({ points: toPoints(coordinateFrame, f.points), class: "road" });
+      // Preserve the already-validated Atlas feature id. Route-addressing consumers (settlement
+      // entry connectors, quests, navigation publication) must not invent an array-index id.
+      routes.push({ id: f.id, points: toPoints(coordinateFrame, f.points), class: "road" });
     } else if (f.type === "line" && f.kind === "border") {
       warnings.push(`skipped border feature "${f.id}" (political borders are out of scope for v1)`);
     } else if (f.type === "glyph" && (f.glyph === "mountain" || f.glyph === "peak" || f.glyph === "hills")) {

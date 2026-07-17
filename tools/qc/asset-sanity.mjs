@@ -11,8 +11,9 @@
 // architect-run.mjs) can measure + classify a single GLB's world bbox without re-deriving this
 // transform-aware walk — the CLI below is unchanged (same output, same exit codes).
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readAssetManifest, runAssetManifestGate } from "./asset-manifest.mjs";
 
 export const CAP_M = 60;        // nothing in the library should exceed ~60m in any axis (a big keep is ~20m)
 export const DEGEN_M = 0.02;    // any axis under 2cm ⇒ effectively empty
@@ -99,10 +100,22 @@ function isMain() {
   return resolve(process.argv[1] || "") === fileURLToPath(import.meta.url);
 }
 
+function recursiveGlbs(root, directory = root, output = []) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) recursiveGlbs(root, path, output);
+    else if (entry.isFile() && entry.name.endsWith(".glb")) output.push(relative(root, path));
+  }
+  return output.sort();
+}
+
 if (isMain()) {
   const DIR = process.argv[2] || "assets";
   if (!existsSync(DIR)) { console.error("no dir:", DIR); process.exit(2); }
-  const glbs = readdirSync(DIR).filter((f) => f.endsWith(".glb")).sort();
+  const manifestPath = join(DIR, "manifest.json");
+  const manifest = existsSync(manifestPath) ? readAssetManifest(manifestPath) : null;
+  const acceptedPaths = new Set((manifest?.entries ?? []).map((entry) => entry?.model?.path).filter(Boolean));
+  const glbs = recursiveGlbs(DIR);
   const rows = [];
   for (const f of glbs) {
     let bb; try { bb = glbBbox(readFileSync(join(DIR, f))); } catch (e) { rows.push({ f, flag: "PARSE-ERR", note: String(e).slice(0, 60) }); continue; }
@@ -113,7 +126,21 @@ if (isMain()) {
     rows.push({ f, flag: flags.join(" ") || "ok", note: size + " m" });
   }
   const bad = rows.filter((r) => r.flag !== "ok");
-  for (const r of rows) if (r.flag !== "ok") console.log(`  ✗ ${r.flag.padEnd(22)} ${r.f}  [${r.note}]`);
-  console.log(`\n${glbs.length} GLBs scanned — ${bad.length} flagged, ${glbs.length - bad.length} clean.`);
-  process.exit(bad.some((r) => /DEGENERATE|OVERSIZE|PARSE-ERR/.test(r.flag)) ? 1 : 0);
+  const acceptedBad = bad.filter((r) => acceptedPaths.has(r.f));
+  for (const r of bad) {
+    const accepted = acceptedPaths.has(r.f);
+    console.log(`  ${accepted ? "✗" : "!"} ${(accepted ? r.flag : `EXCLUDED ${r.flag}`).padEnd(31)} ${r.f}  [${r.note}]`);
+  }
+  console.log(`\n${glbs.length} GLBs recursively scanned — ${acceptedBad.length} accepted failures, ${bad.length - acceptedBad.length} excluded warnings.`);
+  let manifestFailed = false;
+  if (manifest === null) {
+    console.log("  ✗ MANIFEST-MISSING accepted assets have no canonical provenance boundary");
+    manifestFailed = true;
+  } else {
+    const verdict = runAssetManifestGate(manifest, { assetRoot: DIR });
+    for (const failure of verdict.failures) console.log(`  ✗ MANIFEST ${failure.assetId} ${failure.gate}: ${failure.detail}`);
+    console.log(`Asset manifest — accepted=${verdict.acceptedEntries}, candidates=${verdict.candidates}, mechanical=${verdict.mechanicalPass ? "pass" : "FAIL"}, human-visual=${verdict.humanVisualPass ? "pass" : "FAIL"}.`);
+    manifestFailed = !verdict.pass;
+  }
+  process.exit(manifestFailed || acceptedBad.some((r) => /DEGENERATE|OVERSIZE|PARSE-ERR/.test(r.flag)) ? 1 : 0);
 }

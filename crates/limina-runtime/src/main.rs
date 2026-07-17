@@ -7,7 +7,8 @@
 //!
 //! Usage:
 //!   limina <module.ts>                     headless: run the module to completion
-//!   limina --window [--frames N] [--fullscreen] <mod.ts>  windowed: native window + frame loop
+//!   limina --window [--frames N] [--width W --height H] [--fullscreen] <mod.ts>
+//!                                                windowed: native window + frame loop
 //!   limina --mcp-stdio                     stdio JSON-RPC MCP server
 //!   limina --mcp-ws [--port N]             WebSocket JSON-RPC MCP server (localhost)
 
@@ -31,7 +32,20 @@ struct CliOptions {
     mcp_ws: bool,
     port: u16,
     max_frames: Option<u64>,
+    window_width: u32,
+    window_height: u32,
     module: String,
+}
+
+fn parse_window_dimension(flag: &str, raw: &str) -> anyhow::Result<u32> {
+    const MAX_WINDOW_DIMENSION: u32 = 16_384;
+    let value = raw.parse::<u32>().map_err(|_| {
+        anyhow::anyhow!("{flag} requires an integer in [1, {MAX_WINDOW_DIMENSION}], got '{raw}'")
+    })?;
+    if value == 0 || value > MAX_WINDOW_DIMENSION {
+        bail!("{flag} requires an integer in [1, {MAX_WINDOW_DIMENSION}], got '{raw}'");
+    }
+    Ok(value)
 }
 
 fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
@@ -41,6 +55,8 @@ fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
     let mut mcp_ws = false;
     let mut port: u16 = 8787;
     let mut max_frames: Option<u64> = None;
+    let mut window_width: Option<u32> = None;
+    let mut window_height: Option<u32> = None;
     let mut module: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -67,6 +83,19 @@ fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
                     anyhow::anyhow!("--frames requires a non-negative integer, got '{raw}'")
                 })?);
             }
+            "--width" | "--height" => {
+                let flag = args[i].clone();
+                i += 1;
+                let raw = args
+                    .get(i)
+                    .ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))?;
+                let value = parse_window_dimension(&flag, raw)?;
+                if flag == "--width" {
+                    window_width = Some(value);
+                } else {
+                    window_height = Some(value);
+                }
+            }
             other if other.starts_with("--") => bail!("unknown option '{other}'"),
             other => {
                 if module.replace(other.to_string()).is_some() {
@@ -85,6 +114,12 @@ fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
             "js/src/bootstrap.ts".to_string()
         }
     });
+    if !windowed && (window_width.is_some() || window_height.is_some()) {
+        bail!("--width and --height require --window");
+    }
+    if window_width.is_some() != window_height.is_some() {
+        bail!("--width and --height must be supplied together");
+    }
     Ok(CliOptions {
         windowed,
         fullscreen,
@@ -92,6 +127,8 @@ fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
         mcp_ws,
         port,
         max_frames,
+        window_width: window_width.unwrap_or(960),
+        window_height: window_height.unwrap_or(640),
         module,
     })
 }
@@ -101,7 +138,13 @@ fn main() -> anyhow::Result<()> {
     let opts = parse_cli_args(&args)?;
 
     if opts.windowed {
-        windowed::run_windowed(&opts.module, opts.max_frames, opts.fullscreen)
+        windowed::run_windowed(
+            &opts.module,
+            opts.max_frames,
+            opts.fullscreen,
+            opts.window_width,
+            opts.window_height,
+        )
     } else if opts.mcp_stdio {
         run_mcp_stdio(&opts.module)
     } else if opts.mcp_ws {
@@ -267,6 +310,8 @@ mod tests {
     fn cli_rejects_missing_flag_values() {
         assert!(parse_cli_args(&args(&["--port"])).is_err());
         assert!(parse_cli_args(&args(&["--frames"])).is_err());
+        assert!(parse_cli_args(&args(&["--window", "--width"])).is_err());
+        assert!(parse_cli_args(&args(&["--window", "--height"])).is_err());
     }
 
     #[test]
@@ -287,7 +332,31 @@ mod tests {
             .expect("valid window args");
         assert!(opts.windowed);
         assert_eq!(opts.max_frames, Some(12));
+        assert_eq!(opts.window_width, 960);
+        assert_eq!(opts.window_height, 640);
         assert_eq!(opts.module, "demo.ts");
+
+        let opts = parse_cli_args(&args(&[
+            "--window",
+            "--width",
+            "1600",
+            "--height",
+            "900",
+            "capture.ts",
+        ]))
+        .expect("valid fixed-size window args");
+        assert_eq!(opts.window_width, 1600);
+        assert_eq!(opts.window_height, 900);
+        assert_eq!(opts.module, "capture.ts");
+    }
+
+    #[test]
+    fn cli_rejects_invalid_or_headless_window_dimensions() {
+        assert!(parse_cli_args(&args(&["--window", "--width", "0", "demo.ts"])).is_err());
+        assert!(parse_cli_args(&args(&["--window", "--height", "16385", "demo.ts"])).is_err());
+        assert!(parse_cli_args(&args(&["--width", "1600", "demo.ts"])).is_err());
+        assert!(parse_cli_args(&args(&["--window", "--width", "1600", "demo.ts"])).is_err());
+        assert!(parse_cli_args(&args(&["--window", "--height", "900", "demo.ts"])).is_err());
     }
 
     #[test]

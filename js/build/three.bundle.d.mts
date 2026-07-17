@@ -1,6 +1,7 @@
 export * from "three/webgpu";
 export * as TSL from "three/tsl";
 export { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+export { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 export { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 export { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 export { ao } from "three/examples/jsm/tsl/display/GTAONode.js";

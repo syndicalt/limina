@@ -4,6 +4,7 @@ import {
   derivedGlobalArtifacts,
   parseDerivedRevisionManifest,
 } from "../world/compiler/manifest.mjs";
+import { portableAssetContentHash } from "../world/asset-content-hash.mjs";
 
 export const DERIVED_RUNTIME_CURRENT_SCHEMA = "limina.derived-runtime-current/v1";
 export const DERIVED_RUNTIME_ERROR_SCHEMA = "limina.derived-runtime-error/v1";
@@ -28,6 +29,7 @@ export type DerivedRuntimeTransportErrorCode =
   | "SERVER_STOPPING"
   | "UNAUTHORIZED"
   | "FORBIDDEN"
+  | "NOT_FOUND"
   | "PROTOCOL_ERROR"
   | "INTEGRITY_ERROR";
 
@@ -62,6 +64,16 @@ export interface DerivedArtifactDescriptor {
   readonly contentHash: string;
   readonly byteLength: number;
   readonly mediaType: string;
+}
+
+export interface DerivedRuntimeContentDescriptor {
+  readonly contentHash: string;
+  readonly byteLength: number;
+}
+
+export interface DerivedRuntimeContentResult {
+  readonly contentHash: string;
+  readonly bytes: Uint8Array;
 }
 
 export interface DerivedRuntimeCurrent {
@@ -398,6 +410,60 @@ export class DerivedRuntimeTransport {
     return Object.freeze({ status: "artifact", contentHash: descriptor.contentHash, bytes });
   }
 
+  /**
+   * Fetch one closure-authorized engine asset directly into the main realm. Unlike derived
+   * artifacts, these bytes are intentionally never transferred through the worker. The server
+   * binds authorization to `manifestHash`; the caller must source the descriptor from that
+   * manifest's independently verified biome-content closure.
+   */
+  async fetchContent(
+    manifestHashInput: string,
+    descriptorInput: DerivedRuntimeContentDescriptor,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<Readonly<DerivedRuntimeContentResult>> {
+    const manifestHash = requireHash(manifestHashInput, "derived content manifestHash");
+    const descriptor = plainObject(descriptorInput, "derived content descriptor");
+    exactKeys(descriptor, ["contentHash", "byteLength"], "derived content descriptor");
+    const contentHash = requireHash(descriptor.contentHash, "derived content descriptor.contentHash");
+    if (!Number.isSafeInteger(descriptor.byteLength) || (descriptor.byteLength as number) < 1
+        || (descriptor.byteLength as number) > MAX_DERIVED_ARTIFACT_BYTES) {
+      throw fatal("PROTOCOL_ERROR", "derived content descriptor.byteLength exceeds the server cap");
+    }
+    const response = await this.#request(
+      `${this.#config.baseUrl}/v1/derived/manifests/${manifestHash.slice(7)}/content/${contentHash.slice(7)}`,
+      { signal: options.signal },
+    );
+    if (response.status !== 200) await this.#throwResponseError(response, options.signal);
+    try {
+      exactHeader(response.headers, "etag", contentEtag(contentHash), "derived content");
+      exactHeader(response.headers, "x-limina-content-hash", contentHash, "derived content");
+      exactHeader(response.headers, "x-limina-manifest-hash", manifestHash, "derived content");
+      exactHeader(response.headers, "content-type", "application/octet-stream", "derived content");
+      if (parseLength(response.headers, MAX_DERIVED_ARTIFACT_BYTES, "derived content") !== descriptor.byteLength) {
+        throw fatal("PROTOCOL_ERROR", "derived content Content-Length does not match its closure entry");
+      }
+      const generation = response.headers.get("x-limina-generation");
+      if (generation === null || !/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation))) {
+        throw fatal("PROTOCOL_ERROR", "derived content X-Limina-Generation is invalid");
+      }
+    } catch (error) {
+      await cancelResponseBody(response);
+      throw error;
+    }
+    const bytes = await readBounded(
+      response,
+      descriptor.byteLength as number,
+      MAX_DERIVED_ARTIFACT_BYTES,
+      options.signal,
+    );
+    throwIfAborted(options.signal);
+    if (portableAssetContentHash(bytes) !== contentHash) {
+      throw fatal("INTEGRITY_ERROR", "derived content portable engine hash does not match its closure entry");
+    }
+    throwIfAborted(options.signal);
+    return Object.freeze({ contentHash, bytes });
+  }
+
   async #request(url: string, options: { signal?: AbortSignal; headers?: Record<string, string> }): Promise<Response> {
     throwIfAborted(options.signal);
     const headers = { Authorization: `Bearer ${this.#config.token}`, ...options.headers };
@@ -459,6 +525,7 @@ export class DerivedRuntimeTransport {
     }
     const expectedStatus: Readonly<Record<string, number>> = {
       UNAUTHORIZED: 401, FORBIDDEN_HOST: 403, FORBIDDEN_ORIGIN: 403, NO_PUBLICATION: 404,
+      NOT_FOUND: 404,
       NOT_CURRENT: 409, RATE_LIMITED: 429, STREAM_LIMIT: 429,
       PUBLICATION_UNAVAILABLE: 503, ARTIFACT_INVALID: 503, SERVER_STOPPING: 503,
     };
@@ -474,6 +541,7 @@ export class DerivedRuntimeTransport {
     if (body.code === "PUBLICATION_UNAVAILABLE") throw transient("PUBLICATION_UNAVAILABLE", body.message);
     if (body.code === "SERVER_STOPPING") throw transient("SERVER_STOPPING", body.message);
     if (body.code === "UNAUTHORIZED") throw fatal("UNAUTHORIZED", body.message);
+    if (body.code === "NOT_FOUND") throw fatal("NOT_FOUND", body.message);
     if (body.code === "FORBIDDEN_HOST" || body.code === "FORBIDDEN_ORIGIN") throw fatal("FORBIDDEN", body.message);
     if (body.code === "ARTIFACT_INVALID") throw fatal("INTEGRITY_ERROR", body.message);
     throw fatal("PROTOCOL_ERROR", "derived runtime returned an unsupported error code");

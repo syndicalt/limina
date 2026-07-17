@@ -1,6 +1,6 @@
 import * as THREE from "../../../build/three.bundle.mjs";
 import type { WaterRenderQuality } from "../quality.ts";
-import { WATER_OWNED_TEXTURES_KEY } from "./material.ts";
+import { WATER_OWNED_NODES_KEY, WATER_OWNED_TEXTURES_KEY } from "./material.ts";
 
 export type VisibleWaterKind = "ocean" | "basin" | "river";
 
@@ -32,20 +32,37 @@ function disposeEntry(scene: VisibleWaterScene, entry: VisibleWaterEntry): unkno
 function disposeMeshResources(mesh: THREE.Mesh): unknown[] {
   const errors: unknown[] = [];
   const textures = new Set<{ dispose?(): void }>();
-  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const material of materials) {
-    const owned = (material.userData as Record<string, unknown>)[WATER_OWNED_TEXTURES_KEY];
-    if (Array.isArray(owned)) for (const texture of owned) {
-      if (texture && typeof texture === "object") textures.add(texture as { dispose?(): void });
+  const nodes = new Set<{ dispose?(): void }>();
+  const materials = new Set<THREE.Material>();
+  const geometries = new Set<THREE.BufferGeometry>();
+  mesh.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    geometries.add(object.geometry);
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      materials.add(material);
+      const owned = (material.userData as Record<string, unknown>)[WATER_OWNED_TEXTURES_KEY];
+      if (Array.isArray(owned)) for (const texture of owned) {
+        if (texture && typeof texture === "object") textures.add(texture as { dispose?(): void });
+      }
+      const ownedNodes = (material.userData as Record<string, unknown>)[WATER_OWNED_NODES_KEY];
+      if (Array.isArray(ownedNodes)) for (const node of ownedNodes) {
+        if (node && typeof node === "object") nodes.add(node as { dispose?(): void });
+      }
     }
-  }
+  });
   for (const texture of textures) {
     try { texture.dispose?.(); } catch (error) { errors.push(error); }
   }
-  for (const material of new Set(materials)) {
+  for (const node of nodes) {
+    try { node.dispose?.(); } catch (error) { errors.push(error); }
+  }
+  for (const material of materials) {
     try { material.dispose(); } catch (error) { errors.push(error); }
   }
-  try { mesh.geometry.dispose(); } catch (error) { errors.push(error); }
+  for (const geometry of geometries) {
+    try { geometry.dispose(); } catch (error) { errors.push(error); }
+  }
+  mesh.clear();
   return errors;
 }
 
@@ -102,6 +119,10 @@ export class VisibleWaterManager {
       mesh.receiveShadow = replacement.receiveShadow;
       mesh.name = replacement.name;
       mesh.userData = replacement.userData;
+      const oldChildren = [...mesh.children];
+      mesh.clear();
+      for (const child of [...replacement.children]) mesh.add(child);
+      for (const child of oldChildren) replacement.add(child);
       replacement.geometry = oldGeometry;
       replacement.material = oldMaterial;
       cleanupErrors.push(...disposeMeshResources(replacement));

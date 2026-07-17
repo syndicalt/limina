@@ -1,0 +1,21 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "temperate-oak-canopy",
+  "version": "1.0.0",
+  "role": "flora/oak",
+  "backend": "tree-population",
+  "sourceAssetId": "vegetation/temperate-canopy/oak-101.glb",
+  "sourceContentHash": "sha256:1ef6d42be8519f1a51a7253ec7754b1ba3bc9c37b128c6b406e83c2a33f8bd0b",
+  "reducedAssetId": "vegetation/temperate-canopy/oak-101-lod2.glb",
+  "reducedContentHash": "sha256:796c10f1dfa268dc12092d3ba1f86afe1c38c1dd5c14eafcfdd6ef2749890a48",
+  "impostorAssetId": "vegetation/temperate-canopy/oak-101-impostor.glb",
+  "impostorContentHash": "sha256:8524ba19bdb9624d218263c492a5cd3b615f86b9a0cec2a0830d81605beff5f5",
+  "reducedDistance": 80,
+  "impostorDistance": 220,
+  "cullDistance": 360,
+  "hysteresis": 0.15,
+  "provenance": {
+    "licenseId": "MIT",
+    "sourceUri": "https://github.com/dgreenheck/ez-tree"
+  }
+}

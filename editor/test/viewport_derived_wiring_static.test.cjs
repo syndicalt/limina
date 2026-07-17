@@ -39,6 +39,11 @@ test("viewport discovers the capability only through its authenticated readonly 
   assert.match(source, /let derivedRuntimeDiscovery;/);
   assert.doesNotMatch(source, /(?:textContent|dataset|localStorage|sessionStorage|console\.[a-z]+)\s*\([^)]*derivedRuntimeDiscovery/);
   assert.doesNotMatch(source, /JSON\.stringify\s*\(\s*derivedRuntimeDiscovery/);
+  const contentAccess = functionBody("derivedMainRealmContentAccess");
+  assert.match(contentAccess, /baseUrl: discovery\.baseUrl/);
+  assert.match(contentAccess, /token: discovery\.token/);
+  assert.match(contentAccess, /projectId: discovery\.projectId/);
+  assert.match(contentAccess, /branchId: discovery\.branchId/);
 });
 
 test("Edit activation is runtime-specific, epoch guarded, retained, and reboot-safe", () => {
@@ -46,7 +51,7 @@ test("Edit activation is runtime-specific, epoch guarded, retained, and reboot-s
   ordered(activate, [
     "const runtime = state.running",
     "const epoch = state.editRuntimeEpoch",
-    "runtime.activateDerivedRevision(snapshot, { signal })",
+    "runtime.activateDerivedRevision(snapshot, { signal, contentAccess: derivedMainRealmContentAccess() })",
     "assertRuntimeDerivedRevision(runtime, snapshot)",
     "epoch !== state.editRuntimeEpoch",
     "state.running !== runtime",
@@ -104,7 +109,7 @@ test("Play uses a separate exact pin and cannot declare Playing before activatio
   assert.match(pinned, /const activeManifestHash = runtime\.derivedRevision\(\)\?\.manifestHash/);
   assert.match(pinned, /manifestHash: activeManifestHash/);
   assert.match(pinned, /residency: runtime\.derivedTerrainResidency\(\)/);
-  assert.match(pinned, /runtime\.activateDerivedRevision\(snapshot, \{ signal \}\)/);
+  assert.match(pinned, /runtime\.activateDerivedRevision\(snapshot, \{ signal, contentAccess: derivedMainRealmContentAccess\(\) \}\)/);
   ordered(pinned, [
     "client.start(discovery",
     "subscribeDerivedResidency(",

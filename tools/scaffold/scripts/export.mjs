@@ -22,7 +22,7 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, copyFileSync, readFileSync, writeFileSync, rmSync, renameSync,
+  existsSync, mkdirSync, mkdtempSync, copyFileSync, cpSync, readFileSync, writeFileSync, rmSync, renameSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -281,6 +281,11 @@ async function main() {
     if (!existsSync(playerSrc)) fail(`selected LIMINA_HOME has no current player bundle: ${playerSrc}`);
     copyFileSync(playerSrc, join(stageDir, "limina-player.js"));
     written.push("limina-player.js");
+
+    const basisSrc = join(home, "runtime", "basis");
+    if (!existsSync(basisSrc)) fail(`selected LIMINA_HOME has no packaged Basis runtime: ${basisSrc}`);
+    cpSync(basisSrc, join(stageDir, "runtime", "basis"), { recursive: true });
+    written.push("runtime/basis/basis_transcoder.js", "runtime/basis/basis_transcoder.wasm");
 
     writeFileSync(join(stageDir, "index.html"), distIndexHtml());
     written.push("index.html");

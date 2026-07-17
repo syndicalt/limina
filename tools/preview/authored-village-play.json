@@ -23,14 +23,11 @@
       "sizeRange": [0.45, 0.8]
     } },
 
-    { "kind": "skill", "tool": "vegetation.grass", "input": {
+    { "kind": "skill", "tool": "vegetation.grassField", "input": {
       "climate": "summer",
-      "seed": 6, "density": 1024, "maxBlades": 460000,
+      "seed": 6, "spacing": 0.25, "tileSize": 24,
       "elevationMin": 4.0, "elevationMax": 15,
-      "slopeMax": 0.6, "coverage": 0.95, "cluster": 0.1,
-      "bladeHeight": 0.3, "bladeWidth": 0.045, "segments": 4, "curvature": 0.08,
-      "windStrength": 0.045, "windSpeed": 1.1, "windGust": 0.06, "windGustFreq": 0.18,
-      "sssStrength": 0.5, "aoStrength": 0.45,
+      "slopeMax": 0.6,
       "sizeRange": [0.75, 1.25]
     } },
 

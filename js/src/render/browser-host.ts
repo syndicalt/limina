@@ -9,6 +9,8 @@ import {
 import { resolveRenderQuality, type RenderQualityOverride, type RenderQualityProfile, type RenderQualityTier } from "./quality.ts";
 import { RenderTelemetryRing, type RenderTelemetrySnapshot, type RendererInfoLike } from "./telemetry.ts";
 import { GltfSceneCache, type GltfSceneCacheOptions } from "../skills/three.ts";
+import { HdrEnvironmentCache, type HdrEnvironmentCacheOptions } from "./environment-hdri.ts";
+import { WATER_OWNED_NODES_KEY } from "./water/material.ts";
 
 export const RENDER_RESOURCE_HOST_LIFETIME = "host";
 
@@ -19,6 +21,7 @@ export interface BrowserRenderHostOptions {
   devicePixelRatio?: number;
   qualityOverride?: RenderQualityOverride;
   gltfCache?: GltfSceneCacheOptions;
+  hdrEnvironmentCache?: Omit<HdrEnvironmentCacheOptions, "decode" | "buildPmrem">;
   onTelemetry?: (snapshot: Readonly<RenderTelemetrySnapshot>) => void;
   now?: () => number;
 }
@@ -27,6 +30,9 @@ export interface AcquireRenderWorldOptions {
   width: number;
   height: number;
   baseline: RenderBaselineOverride | false;
+  /** Verified content-addressed HDR bytes. The renderer-host cache decodes and
+   *  PMREM-prefilters them once, then the baseline owns a world lease. */
+  environment?: { assetId: string; hash: string; bytes: Uint8Array };
   onTelemetry?: (snapshot: Readonly<RenderTelemetrySnapshot>) => void;
 }
 
@@ -47,6 +53,7 @@ export interface BrowserRenderWorldSession {
 export interface BrowserRenderHost {
   readonly canvas: HTMLCanvasElement;
   readonly gltfCache: GltfSceneCache;
+  environmentCache(): HdrEnvironmentCache | undefined;
   acquireWorld(options: AcquireRenderWorldOptions): Promise<BrowserRenderWorldSession>;
   rendererIdentity(): THREE.WebGPURenderer | undefined;
   dispose(): Promise<void>;
@@ -189,6 +196,7 @@ export function disposeRenderWorldScene(scene: { traverse(visitor: (object: unkn
   const geometries = new Set<{ dispose?(): void }>();
   const materials = new Set<{ dispose?(): void }>();
   const textures = new Set<{ dispose?(): void }>();
+  const nodes = new Set<{ dispose?(): void }>();
   const sceneResources = new Set<{ dispose?(): void }>();
   scene.traverse((object) => {
     if (!object || typeof object !== "object") return;
@@ -202,6 +210,10 @@ export function disposeRenderWorldScene(scene: { traverse(visitor: (object: unkn
       if (!material || typeof material !== "object" || isHostLifetime(material)) continue;
       materials.add(material as { dispose?(): void });
       collectMaterialTextures(material, textures);
+      const ownedNodes = (material as { userData?: Record<string, unknown> }).userData?.[WATER_OWNED_NODES_KEY];
+      if (Array.isArray(ownedNodes)) for (const node of ownedNodes) {
+        if (node && typeof node === "object") nodes.add(node as { dispose?(): void });
+      }
     }
   });
   const sceneState = scene as unknown as { background?: unknown; environment?: unknown; overrideMaterial?: unknown };
@@ -220,6 +232,7 @@ export function disposeRenderWorldScene(scene: { traverse(visitor: (object: unkn
   };
   for (const resource of sceneResources) dispose(resource);
   for (const texture of textures) dispose(texture);
+  for (const node of nodes) dispose(node);
   for (const material of materials) dispose(material);
   for (const geometry of geometries) dispose(geometry);
   try { scene.clear?.(); } catch (error) { try { onError(error); } catch { /* reporting cannot stop cleanup */ } }
@@ -246,7 +259,8 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
   let surfaceWidth: number | undefined;
   let surfaceHeight: number | undefined;
   let surfacePixelRatio: number | undefined;
-  const gltfCache = new GltfSceneCache(options.gltfCache);
+  const gltfCache = new GltfSceneCache({ ktx2TranscoderPath: "/runtime/basis/", ...options.gltfCache });
+  let hdrEnvironmentCache: HdrEnvironmentCache | undefined;
 
   const configureSurface = (
     liveRenderer: THREE.WebGPURenderer,
@@ -275,6 +289,7 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
         await created.dispose();
         throw new Error("browser render host was disposed during renderer initialization");
       }
+      gltfCache.configureKtx2(created);
       renderer = created;
       rendererDefaults = captureRendererDefaults(created);
       return created;
@@ -286,6 +301,7 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
   return {
     canvas,
     gltfCache,
+    environmentCache: () => hdrEnvironmentCache,
     rendererIdentity: () => renderer,
     async acquireWorld(input): Promise<BrowserRenderWorldSession> {
       if (disposed) throw new Error("browser render host is disposed");
@@ -296,13 +312,16 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
         throw new TypeError("render world onTelemetry must be a function");
       }
       acquiring = true;
-      gltfCache.beginWorld();
+      let cacheWorldStarted = false;
       let liveRenderer: THREE.WebGPURenderer | undefined;
       let scene: THREE.Scene | undefined;
       let baseline: AppliedRenderBaseline | undefined;
+      let pendingEnvironmentLease: ReturnType<HdrEnvironmentCache["acquire"]> | undefined;
       try {
         const acquiredRenderer = await acquireRenderer();
         liveRenderer = acquiredRenderer;
+        gltfCache.beginWorld();
+        cacheWorldStarted = true;
         if (disposed) throw new Error("browser render host was disposed during world acquisition");
         if (rendererDefaults === undefined) throw new Error("browser render host renderer defaults are unavailable");
         let profile = resolveRenderQuality(tier, dpr, options.qualityOverride);
@@ -314,10 +333,25 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
         hostCamera = camera;
         resetRendererSession(acquiredRenderer, rendererDefaults);
         resetWorldState(worldScene, camera, width, height);
+        if (input.environment !== undefined) {
+          hdrEnvironmentCache ??= new HdrEnvironmentCache(acquiredRenderer, options.hdrEnvironmentCache);
+          pendingEnvironmentLease = hdrEnvironmentCache.acquire(
+            input.environment.assetId,
+            input.environment.hash,
+            input.environment.bytes,
+          );
+        }
         if (input.baseline !== false && hostBackground === undefined) hostBackground = createRenderBaselineBackground();
         baseline = input.baseline === false
           ? undefined
-          : applyRenderBaseline({ scene: worldScene, renderer: acquiredRenderer as never, camera }, input.baseline, hostBackground);
+          : applyRenderBaseline(
+            { scene: worldScene, renderer: acquiredRenderer as never, camera },
+            input.baseline,
+            hostBackground,
+            pendingEnvironmentLease,
+          );
+        if (baseline !== undefined) pendingEnvironmentLease = undefined; // baseline owns the lease
+        else pendingEnvironmentLease?.release();
         baseline?.setQuality(profile);
         const telemetry = new RenderTelemetryRing();
         let frameCount = 0;
@@ -396,8 +430,9 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
         return session;
       } catch (error) {
         try { baseline?.dispose(); } catch { /* acquisition error remains primary */ }
+        try { pendingEnvironmentLease?.release(); } catch { /* acquisition error remains primary */ }
         if (scene !== undefined) disposeRenderWorldScene(scene);
-        gltfCache.endWorld();
+        if (cacheWorldStarted) gltfCache.endWorld();
         acquiring = false;
         throw error;
       }
@@ -417,6 +452,8 @@ export function createBrowserRenderHost(options: BrowserRenderHostOptions): Brow
       try { hostBackground?.dispose(); } catch (error) { errors.push(error); }
       hostBackground = undefined;
       try { await gltfCache.dispose(); } catch (error) { errors.push(error); }
+      try { hdrEnvironmentCache?.dispose(); } catch (error) { errors.push(error); }
+      hdrEnvironmentCache = undefined;
       if (liveRenderer !== undefined) {
         try { await liveRenderer.dispose(); } catch (error) { errors.push(error); }
       }

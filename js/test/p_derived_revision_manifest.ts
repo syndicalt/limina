@@ -4,6 +4,7 @@ import {
   DERIVED_REVISION_MANIFEST_SCHEMA,
   DERIVED_REVISION_MANIFEST_SCHEMA_V1,
   DERIVED_REVISION_MANIFEST_SCHEMA_V2,
+  DERIVED_REVISION_MANIFEST_SCHEMA_V3,
   MAX_DERIVED_ARTIFACT_BYTES,
   MAX_DERIVED_CHUNKS,
   MAX_GLOBAL_DERIVED_ARTIFACTS,
@@ -12,6 +13,7 @@ import {
   compilerContentHash,
   createDerivedRevisionManifest,
   derivedGlobalArtifacts,
+  derivedArtifactCompilerGraphHash,
   derivedArtifactContentHash,
   parseDerivedRevisionManifest,
 } from "../src/world/compiler/index.mjs";
@@ -120,6 +122,27 @@ const populatedGlobals = derivedGlobalArtifacts(populatedV2);
 assert(populatedGlobals.length === 2 && populatedGlobals[0].artifactType === "hydrology-field/v1", "populated v2 globals did not round-trip");
 assert(Object.isFrozen(populatedGlobals) && Object.isFrozen(populatedGlobals[0]), "populated v2 globals are not deeply frozen");
 assert(parseDerivedRevisionManifest(clone(populatedV2)).manifestHash === populatedV2.manifestHash, "populated v2 manifest did not round-trip");
+
+const ancestorGraphHash = hash("compiler-graph:ancestor");
+const populatedV3 = createDerivedRevisionManifest({ ...v2Input([hydrology, navigation]),
+  schema: DERIVED_REVISION_MANIFEST_SCHEMA_V3,
+  artifactAuthorities: [{ artifactType: hydrology.artifactType, compilerGraphHash: ancestorGraphHash }],
+});
+assert(populatedV3.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V3
+  && populatedV3.artifactAuthorities.length === 1
+  && derivedArtifactCompilerGraphHash(populatedV3, hydrology.artifactType) === ancestorGraphHash
+  && derivedArtifactCompilerGraphHash(populatedV3, navigation.artifactType) === populatedV3.compiler.graphHash,
+"v3 did not preserve explicit carried-artifact compiler authority with current-graph fallback");
+assert(parseDerivedRevisionManifest(clone(populatedV3)).manifestHash === populatedV3.manifestHash,
+  "populated v3 manifest did not round-trip");
+rejects(() => createDerivedRevisionManifest({ ...v2Input([hydrology]), schema: DERIVED_REVISION_MANIFEST_SCHEMA_V3,
+  artifactAuthorities: [{ artifactType: "missing-artifact/v1", compilerGraphHash: ancestorGraphHash }] }),
+/has no published artifact/, "v3 accepted authority for an absent artifact type");
+rejects(() => createDerivedRevisionManifest({ ...v2Input([hydrology]), schema: DERIVED_REVISION_MANIFEST_SCHEMA_V3,
+  artifactAuthorities: [
+    { artifactType: hydrology.artifactType, compilerGraphHash: ancestorGraphHash },
+    { artifactType: hydrology.artifactType, compilerGraphHash: ancestorGraphHash },
+  ] }), /strictly ordered/, "v3 accepted duplicate artifact compiler authorities");
 
 const changedGlobal = v2Input([{ ...hydrology, contentHash: hash("changed-hydrology") }, navigation]);
 assert(createDerivedRevisionManifest(changedGlobal).manifestHash !== populatedV2.manifestHash, "global artifact field change did not change manifestHash");
@@ -235,5 +258,5 @@ assert(derivedArtifactContentHash(new Uint8Array([1, 2, 3])) === derivedArtifact
 rejects(() => derivedArtifactContentHash("not bytes" as any), /Uint8Array/, "non-byte artifact was accepted");
 
 ops.op_log(
-  "p_derived_revision_manifest OK: locked v1 canonical compatibility plus strict v2 global artifacts; immutable manifests bind exact source assets, compiler/grid/chunk dependencies and typed artifacts; tampering, unsafe object shapes, malformed hashes, and aggregate resource exhaustion are rejected.",
+  "p_derived_revision_manifest OK: locked v1 compatibility, strict v2 globals, and v3 per-artifact compiler authority; immutable manifests bind exact source, compiler, grid, chunk, and artifact identities; tampering and resource exhaustion are rejected.",
 );

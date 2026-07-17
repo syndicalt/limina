@@ -13,6 +13,7 @@ import { encodeRasterCells, decodeRasterCells } from "/shared/raster-codec.mjs";
 import { maskToLandPolygons } from "/shared/marching-squares.mjs";
 import * as EL from "./map-elevation.js";
 import { createWorldMapToMapDocTransform } from "./map-coordinate-conversion.js";
+import * as WA from "./map-water-authoring.js";
 
 export const LAND_SIZE = 512; // cells per side — ~5m cells on a 2.6km map (locked decision)
 const LAND_FILL = "#dccfa6"; // matches the legacy traced-outline land fill
@@ -476,6 +477,10 @@ export function importWorldMapIntoLayers(worldMap, targetUnits = { kind: "m", un
   const eat = (x, z) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; };
   for (const l of worldMap.land || []) for (const p of l.points) { const q=toTarget(p); eat(q[0], q[1]); }
   for (const b of worldMap.biomes || []) for (const p of b.points) { const q=toTarget(p); eat(q[0], q[1]); }
+  for (const body of worldMap.waterBodies || []) {
+    for (const p of body.footprint.points) { const q=toTarget(p); eat(q[0],q[1]); }
+    for (const hole of body.footprint.holes || []) for (const p of hole) { const q=toTarget(p); eat(q[0],q[1]); }
+  }
   const g = worldMap.reliefGrid;
   const targetGridRect = g ? rectToTarget(g.rect) : undefined;
   if (targetGridRect) { eat(targetGridRect.x0, targetGridRect.z0); eat(targetGridRect.x0 + targetGridRect.w, targetGridRect.z0 + targetGridRect.h); }
@@ -539,10 +544,12 @@ export function importWorldMapIntoLayers(worldMap, targetUnits = { kind: "m", un
     ...(worldMap.waterways || []).map((w2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "river", points: w2.points.map((p) => toTarget(p).map(Math.round)) })),
     ...(worldMap.routes || []).map((r2) => ({ id: "f-imp-" + crypto.randomUUID(), type: "line", kind: "road", points: r2.points.map((p) => toTarget(p).map(Math.round)) })),
   ];
+  const water = WA.importWorldMapWater(worldMap, toTarget);
   return {
     rasters,
     ...(stamps.length ? { stamps } : {}),
     ...(featuresAppend.length ? { featuresAppend } : {}),
+    ...water,
     seaLevel: typeof worldMap.seaLevel === "number" ? worldMap.seaLevel : 0,
     rect,
     _upm: targetScale,

@@ -14,6 +14,7 @@ const EMPTY_GLOBAL_DEPENDENCIES = Object.freeze([]);
 const GLOBAL_DEPENDENCY_REGISTRY = Object.freeze({
   "world-overview-terrain/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "navigation-index/v1": EMPTY_GLOBAL_DEPENDENCIES,
+  "biome-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-water-topology/v1": Object.freeze(["hydrology-field/v1"]),
 });

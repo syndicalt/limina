@@ -25,18 +25,21 @@ import { registerTerrainEditSkills, type EditableTerrain } from "../src/skills/t
 import { registerBuildingSkills } from "../src/skills/building/skill.ts";
 import { registerVillageSkills } from "../src/skills/village.ts";
 import { generateHeightfield } from "../src/world/pipeline/terrain-heightfield.mjs";
+import { INTERACTIVE_TEMPERATE_MEADOW_PACKAGE } from "../src/content/grass/interactive-temperate-meadow.ts";
+import type { GrassFieldVisualPackage } from "../src/render/grass-field-package.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p78_village_kit_buildings FAIL: " + msg);
 }
 
-function makeHeadlessWorld(): WorldContext {
+function makeHeadlessWorld(renderGrass = false): WorldContext {
   const ecs = createEcsWorld();
   const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
   const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
   return {
     ecs, transforms: createTransformStorage(ecs), spatial: new UniformGridSpatialIndex(),
     entities: new EntityTable(), tags: new Map(), scene, camera, ops, mode: "headless",
+    ...(renderGrass ? { renderer: {} } : {}),
   };
 }
 
@@ -67,13 +70,13 @@ const radiusOfRole = (role: string): number => (role === "hall" ? kitRadius(HALL
 type Placement = { assetId: string; role: string; style: string; x: number; y: number; z: number; yaw: number };
 interface RunResult { placements: Placement[]; roots: string[]; world: WorldContext; }
 
-async function buildVillage(session: string): Promise<RunResult> {
-  const world = makeHeadlessWorld();
+async function buildVillage(session: string, grassVisualPackage?: GrassFieldVisualPackage): Promise<RunResult> {
+  const world = makeHeadlessWorld(grassVisualPackage !== undefined);
   const layers = new Map<string, EditableTerrain>();
   const registry = new SkillRegistry(new LiminaTracer(session));
   registerTerrainEditSkills(registry, layers);
   registerBuildingSkills(registry);          // architecture.building — the kit backer
-  registerVillageSkills(registry, layers, stubAssets);
+  registerVillageSkills(registry, layers, stubAssets, new Map(), new Map(), grassVisualPackage);
   const at = (t: number) => ({ agentId: "agt_p78", sessionId: session, permissions: perms, tick: t, world });
 
   const rc = await registry.invoke("terrain.create", { size: SIZE, resolution: RES, color: 5926970, generate: GEN }, at(1));
@@ -168,4 +171,29 @@ for (let k = 0; k < run1.placements.length; k++) {
   );
 }
 
-ops.op_log(`[js] p78_village_kit_buildings OK: village.build raised 7 KIT half-timber buildings (1 hall + 6 cottages) through its layout+terracing pipeline — every building is a real building-root, grounded on its terraced pad (max Δ${maxGroundErr.toFixed(3)} m), spaced (min margin ${minSpaceMargin.toFixed(1)} m > 0), and byte-identical across two independent runs.`);
+// A rendering host must supply presentation. The lawn must use that package and must never fall
+// back to engine-owned single-blade geometry.
+let lawnGeometryBuilds = 0;
+const trackedPackage: GrassFieldVisualPackage = Object.freeze({
+  ...INTERACTIVE_TEMPERATE_MEADOW_PACKAGE,
+  createGeometry(context) { lawnGeometryBuilds++; return INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.createGeometry(context); },
+});
+await buildVillage("ses_p78_lawn_package", trackedPackage);
+assert(lawnGeometryBuilds === 1, `village lawn did not build exactly one injected package geometry (got ${lawnGeometryBuilds})`);
+
+const missingWorld = makeHeadlessWorld(true);
+const missingLayers = new Map<string, EditableTerrain>();
+const missingRegistry = new SkillRegistry(new LiminaTracer("ses_p78_missing_lawn_package"));
+registerTerrainEditSkills(missingRegistry, missingLayers);
+registerBuildingSkills(missingRegistry);
+registerVillageSkills(missingRegistry, missingLayers, stubAssets);
+const missingAt = (tick: number) => ({ agentId: "agt_p78", sessionId: "ses_p78_missing_lawn_package", permissions: perms, tick, world: missingWorld });
+const missingTerrain = await missingRegistry.invoke("terrain.create", { size: SIZE, resolution: RES, color: 5926970, generate: GEN }, missingAt(1));
+assert(missingTerrain.success, "missing-package fixture could not create terrain");
+const entitiesBefore = missingWorld.entities.ids().length;
+const missingLawn = await missingRegistry.invoke("village.build", { direction, steering, seed: SEED,
+  terrainEntity: (missingTerrain.result as { entity: string }).entity }, missingAt(2));
+assert(!missingLawn.success && missingWorld.entities.ids().length === entitiesBefore,
+  "village lawn did not fail closed before publishing buildings when its visual package was absent");
+
+ops.op_log(`[js] p78_village_kit_buildings OK: village.build raised 7 KIT half-timber buildings, remained deterministic, used the injected multi-blade lawn package, and failed closed before publication without it.`);

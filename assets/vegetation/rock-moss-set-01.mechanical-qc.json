@@ -1,0 +1,15 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-rock-moss-set-01",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/rock_moss_set_01", "licenseSpdx": "CC0-1.0", "attribution": "rock_moss_set_01 by Poly Haven (CC0 1.0)" },
+  "models": [{ "level": 0, "path": "vegetation/rock-moss-set-01-lod0.glb", "sha256": "sha256:5cc02e69a72a2f190c17860f243f0f54e95126352f2c476f11f5be3769379e68", "boundsM": [8.004604, 1.76832, 6.948765], "vertexCount": 33988, "triangleCount": 63127, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }],
+  "checks": { "glbReadable": true, "selfContained": true, "textureResolutionPreserved": true, "texturePayloadsPreserved": true, "materialContractsPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "optimization": { "schema": "limina.vegetation-flatten/1", "tool": "tools/asset/flatten-vegetation-glb.mjs", "meshCountBefore": 6, "meshCountAfter": 1, "vertexCountPreserved": true, "triangleCountPreserved": true, "maxBoundsDeltaM": 0 },
+  "lodChain": [],
+  "lodStatus": "not-generated",
+  "optimizationStatus": "mesh-consolidated-losslessly",
+  "internalContactSheet": { "path": "qc/internal/polyhaven-ecosystem-candidates.png", "sha256": "sha256:3bf0695bf0a493f957e849d5468406f21ed7142ca57a527106bfd9573a337690" },
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

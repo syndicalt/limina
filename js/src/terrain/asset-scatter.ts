@@ -80,6 +80,9 @@ export interface ScatterAsset {
   /** Optional lower-detail assets for population rendering. The base `id` is always
    *  level 0 at distance 0; these levels must use strictly increasing distances. */
   lods?: ScatterAssetLod[];
+  /** Production B2 tree chain. Kept separate from generic `lods`: the far artifact is a
+   * self-contained octahedral atlas, not an ordinary geometry level. */
+  treeLod?: ScatterTreeLod;
   /** OPT-IN footprint radius (world units at scale 1, the XZ half-extent of the
    *  asset's flat base). 0 (default) → no change, byte-identical. >0 enables CURVATURE-AWARE
    *  placement: on a convex ridge the instance seats at the lowest point of its footprint
@@ -88,6 +91,15 @@ export interface ScatterAsset {
    *  into the floor). See the curvature-aware block in scatterAssets.
    *  Per-asset; overrides the layer-default ScatterConfig.embedRadius. */
   embedRadius?: number;
+}
+
+export interface ScatterTreeLod {
+  reducedId: string;
+  reducedDistance: number;
+  impostorId: string;
+  impostorDistance: number;
+  cullDistance: number;
+  hysteresis?: number;
 }
 
 export interface ScatterAssetLod {

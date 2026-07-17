@@ -6,7 +6,8 @@ import * as THREE from "../build/three.bundle.mjs";
 import { createTransformStorage, type TransformStorage } from "./ecs/facade.ts";
 import { createEcsWorld, type Transformable } from "./ecs/world.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
-import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import { applyRenderBaseline, type AppliedRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import { HdrEnvironmentCache, type HdrEnvironmentCacheOptions } from "./render/environment-hdri.ts";
 import type { BehaviorSpec } from "./behavior/behavior-spec.ts";
 
 // ---- Typed op surface (provider-agnostic; no `any`) ----------------------
@@ -87,6 +88,15 @@ export interface EngineOps {
     dx: number, dy: number, dz: number,
     maxToi: number, out: Float32Array,
   ): void;
+  /** Write sorted, unique stable body ids intersecting an oriented box into `out`.
+   *  Returns the number written; `ignoreBodyId=-1` ignores none. Native results are
+   *  bounded to 4096 even when a larger output buffer is supplied. */
+  op_physics_overlap_box(
+    x: number, y: number, z: number,
+    hx: number, hy: number, hz: number,
+    qx: number, qy: number, qz: number, qw: number,
+    ignoreBodyId: number, out: Uint32Array,
+  ): number;
   // host services
   op_log(msg: string): void;
   op_http_post(url: string, body: string): Promise<string>;
@@ -164,7 +174,7 @@ export type PhysicsOps = Pick<
   | "op_physics_add_heightfield" | "op_physics_add_character" | "op_physics_move_character"
   | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
   | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
-  | "op_physics_body_transform" | "op_physics_set_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"
+  | "op_physics_body_transform" | "op_physics_set_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast" | "op_physics_overlap_box"
 >;
 /** Durable world-log I/O. INVARIANT: a trace is seed + the command stream +
  *  content hashes — NEVER raw runtime bytes; snapshots are caches, not the
@@ -200,6 +210,19 @@ export interface RendererLike {
   init(): Promise<unknown>;
   setSize(w: number, h: number, updateStyle?: boolean): void;
   render(scene: unknown, camera: unknown): void;
+  backend?: {
+    trackTimestamp: boolean;
+    device?: {
+      queue: { onSubmittedWorkDone(): Promise<void> };
+      pushErrorScope?(filter: "validation"): void;
+      popErrorScope?(): Promise<{ message?: string } | null>;
+    };
+    /** Three configures the default GPUCanvasContext lazily when this getter is read. */
+    readonly context?: unknown;
+    timestampQueryPool?: { render?: { frames?: readonly number[]; timestamps?: ReadonlyMap<string, number> } | null };
+  };
+  resolveTimestampsAsync?(type?: "render" | "compute"): Promise<number | undefined>;
+  hasFeature?(name: string): boolean;
   /** Real-time shadow-map config (WebGPU path). `type` is one of THREE's
    *  PCFShadowMap / PCFSoftShadowMap / VSMShadowMap constants. */
   shadowMap: { enabled: boolean; type: number };
@@ -207,6 +230,45 @@ export interface RendererLike {
   toneMapping: number;
   toneMappingExposure: number;
   domElement?: unknown;
+}
+
+/** Configure Three's native default surface while a validation scope can still expose the
+ * backend's real rejection. Deno reports GPUCanvasContext.configure failures through the device
+ * error handler instead of throwing them synchronously; without this gate the first render only
+ * produces the secondary and much less useful "surface is not configured" failure. */
+export async function configureNativeRendererSurface(renderer: RendererLike): Promise<void> {
+  const backend = renderer.backend;
+  const device = backend?.device;
+  if (!backend || !device || typeof device.pushErrorScope !== "function" || typeof device.popErrorScope !== "function") {
+    throw new Error("engine: native surface validation scopes are unavailable");
+  }
+
+  device.pushErrorScope("validation");
+  let accessFailure: unknown;
+  try {
+    void backend.context;
+  } catch (error) {
+    accessFailure = error;
+  }
+
+  let validationFailure: { message?: string } | null = null;
+  let scopeFailure: unknown;
+  try {
+    validationFailure = await device.popErrorScope();
+  } catch (error) {
+    scopeFailure = error;
+  }
+
+  if (accessFailure !== undefined || scopeFailure !== undefined) {
+    const failures = [accessFailure, scopeFailure].filter((error) => error !== undefined);
+    throw new AggregateError(failures, "engine: native surface configuration diagnostics failed");
+  }
+  if (validationFailure !== null) {
+    const detail = typeof validationFailure.message === "string" && validationFailure.message.trim() !== ""
+      ? validationFailure.message.trim()
+      : "unknown WebGPU validation error";
+    throw new Error(`engine: native surface configuration failed: ${detail}`);
+  }
 }
 export interface MaterialLike {
   color: { set(value: number): void };
@@ -295,9 +357,12 @@ export interface EntityEntry {
    *  wander/script), as data. Written by behavior.set; carried by a self-sufficient snapshot so a
    *  saved scene reloads with its behaviour. B1 is the FORMAT + threading; runtime execution is B2. */
   behavior?: BehaviorSpec;
+  /** Runtime-only teardown hook for entity-owned resources that are not reachable from `mesh`
+   * (compute kernels, direct scene mounts, controllers, registry callbacks). Never serialized. */
+  runtimeDispose?: () => void;
 }
 
-/** The serializable identity slice of one entity-table entry. The mesh/resource
+/** The serializable identity slice of one entity-table entry. The mesh/resource/runtime-disposer
  *  bindings are runtime-only objects (rebound on re-creation), so a snapshot
  *  carries only the stable identity fields. */
 export interface EntityEntrySnapshot {
@@ -476,6 +541,8 @@ export interface Engine {
   device: unknown;
   /** Adapter metadata exposed by WebGPU. Empty strings mean the backend did not expose a field. */
   gpuAdapter: Readonly<{ vendor: string; architecture: string; device: string; description: string }>;
+  /** The device owns timestamp-query, but Three tracking remains off until an explicit capture. */
+  gpuTimingAvailable: boolean;
   context: unknown;
   renderer: RendererLike;
   scene: SceneLike;
@@ -490,6 +557,11 @@ export interface Engine {
   /** The render-only post-processing pipeline built by `render.enablePost` (opt-in,
    *  static/cinematic). A PostPipeline from render/post.ts; never sim/log state. */
   post?: unknown;
+  /** Native renderer-owned baseline and HDR cache. Exposed for deterministic teardown. */
+  renderBaselineState?: AppliedRenderBaseline;
+  hdrEnvironmentCache?: HdrEnvironmentCache;
+  /** Release baseline lights/textures, the active HDR lease, and cached PMREM resources. Idempotent. */
+  disposeRenderBaseline(): void;
   /** Screen-distance and population-residency controllers driven by the render loop's
    *  per-frame `lod.update(camera)` pass. Render-only (rebuilt from the log on replay); never sim state. */
   lods?: unknown[];
@@ -504,15 +576,27 @@ export interface Engine {
 export async function createEngine(opts: {
   width: number;
   height: number;
+  /** Benchmark-only timestamp capability. Tracking remains disabled until a bounded capture. */
+  gpuTimestampMode?: "disabled" | "required";
+  /** Optional safe texture-compression capability for production KTX2 assets. */
+  gpuTextureCompression?: "disabled" | "bc-required";
   /** Phase 11 render baseline. Omit for the tasteful default (lit + IBL +
    *  tonemapped sky). Pass a partial to tweak, or `false` to opt out entirely
    *  (a bare scene — the pre-Phase-11 void). */
   renderBaseline?: RenderBaselineOverride | false;
+  /** Verified, content-addressed HDR bytes. createEngine builds the renderer-scoped
+   *  decode/PMREM cache after renderer initialization and leases this entry to the baseline. */
+  renderEnvironment?: { assetId: string; hash: string; bytes: Uint8Array };
+  hdrEnvironmentCache?: Omit<HdrEnvironmentCacheOptions, "decode" | "buildPmrem">;
 }): Promise<Engine> {
+  if (opts.renderBaseline === false && opts.renderEnvironment !== undefined) {
+    throw new TypeError("engine: renderEnvironment requires the render baseline");
+  }
   type GpuPowerPreference = "low-power" | "high-performance";
   interface GpuAdapterLike {
+    features: { has(name: string): boolean };
     info?: Partial<{ vendor: string; architecture: string; device: string; description: string }>;
-    requestDevice(): Promise<unknown>;
+    requestDevice(descriptor?: { requiredFeatures?: string[] }): Promise<unknown>;
   }
   const configuredPreference = ops.op_read_env("LIMINA_GPU_POWER_PREFERENCE");
   if (configuredPreference !== "" && configuredPreference !== "low-power" && configuredPreference !== "high-performance") {
@@ -523,7 +607,22 @@ export async function createEngine(opts: {
     gpu: { requestAdapter(options?: { powerPreference?: GpuPowerPreference }): Promise<GpuAdapterLike | null> };
   }).gpu.requestAdapter({ powerPreference });
   if (!adapter) throw new Error("engine: no WebGPU adapter");
-  const device = await adapter.requestDevice();
+  const gpuTimestampMode = opts.gpuTimestampMode ?? "disabled";
+  const gpuTimingAvailable = gpuTimestampMode === "required";
+  if (gpuTimingAvailable && !adapter.features.has("timestamp-query")) {
+    throw new Error("engine: required timestamp-query feature is unavailable");
+  }
+  const gpuTextureCompression = opts.gpuTextureCompression ?? "disabled";
+  if (gpuTextureCompression !== "disabled" && gpuTextureCompression !== "bc-required") {
+    throw new Error("engine: gpuTextureCompression must be 'disabled' or 'bc-required'");
+  }
+  if (gpuTextureCompression === "bc-required" && !adapter.features.has("texture-compression-bc")) {
+    throw new Error("engine: required texture-compression-bc feature is unavailable");
+  }
+  const requiredFeatures: string[] = [];
+  if (gpuTimingAvailable) requiredFeatures.push("timestamp-query");
+  if (gpuTextureCompression === "bc-required") requiredFeatures.push("texture-compression-bc");
+  const device = await adapter.requestDevice(requiredFeatures.length > 0 ? { requiredFeatures } : undefined);
   const gpuAdapter = Object.freeze({
     vendor: adapter.info?.vendor ?? "",
     architecture: adapter.info?.architecture ?? "",
@@ -532,15 +631,37 @@ export async function createEngine(opts: {
   });
   const context = ops.op_create_window_context();
 
-  const canvas = { width: opts.width, height: opts.height, style: {} };
+  const contextCanvas = (context as { canvas?: { width?: unknown; height?: unknown } }).canvas;
+  const actualWidth = typeof contextCanvas?.width === "number" && Number.isSafeInteger(contextCanvas.width)
+      && contextCanvas.width > 0
+    ? contextCanvas.width
+    : opts.width;
+  const actualHeight = typeof contextCanvas?.height === "number" && Number.isSafeInteger(contextCanvas.height)
+      && contextCanvas.height > 0
+    ? contextCanvas.height
+    : opts.height;
+
+  const canvas = { width: actualWidth, height: actualHeight, style: {} };
   const renderer = new THREE.WebGPURenderer({
     device,
     context,
     canvas: canvas as unknown as HTMLCanvasElement,
     antialias: true,
+    // Native window surfaces are presentation targets, not composited transparent canvases. Keep
+    // the swapchain opaque so backends such as NVIDIA/X11 that expose only Opaque alpha configure
+    // successfully; the engine already renders an explicit opaque scene background.
+    alpha: false,
+    // Device capability and active query writes are intentionally separate. A bounded benchmark
+    // capture toggles the pinned backend only after warmup and CPU sampling are complete.
+    trackTimestamp: false,
   } as never) as unknown as RendererLike;
   await renderer.init();
-  renderer.setSize(opts.width, opts.height, false);
+  if (renderer.backend?.trackTimestamp !== false) throw new Error("engine: timestamp tracking escaped enabled during initialization");
+  if (gpuTimingAvailable && renderer.hasFeature?.("timestamp-query") !== true) {
+    throw new Error("engine: renderer did not expose the required timestamp-query feature");
+  }
+  renderer.setSize(actualWidth, actualHeight, false);
+  await configureNativeRendererSurface(renderer);
   // Real-time fidelity: PCF-soft shadow maps, ACES Filmic tone mapping, and MSAA
   // (antialias above). These are the WebGPU-path renderer properties three reads
   // each frame; entities opt into shadows via the three.* skills.
@@ -551,16 +672,26 @@ export async function createEngine(opts: {
 
   const scene: SceneLike = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0e14);
-  const camera: CameraLike = new THREE.PerspectiveCamera(60, opts.width / opts.height, 0.1, 200);
+  const camera: CameraLike = new THREE.PerspectiveCamera(60, actualWidth / actualHeight, 0.1, 200);
 
   const world = createEcsWorld();
   const transforms = createTransformStorage(world);
   const spatial = new UniformGridSpatialIndex();
 
+  let baselineState: AppliedRenderBaseline | undefined;
+  let hdrEnvironmentCache: HdrEnvironmentCache | undefined;
   const engine: Engine = {
-    device, gpuAdapter, context, renderer, scene, camera, world,
+    device, gpuAdapter, gpuTimingAvailable, context, renderer, scene, camera, world,
     transforms, spatial,
-    entities: new EntityTable(), tags: new Map(), ops, width: opts.width, height: opts.height, mode: "windowed",
+    entities: new EntityTable(), tags: new Map(), ops, width: actualWidth, height: actualHeight, mode: "windowed",
+    disposeRenderBaseline(): void {
+      baselineState?.dispose();
+      baselineState = undefined;
+      engine.renderBaselineState = undefined;
+      hdrEnvironmentCache?.dispose();
+      hdrEnvironmentCache = undefined;
+      engine.hdrEnvironmentCache = undefined;
+    },
   };
 
   // Default windowed resize handling. The compositor sends a resize on first
@@ -583,7 +714,25 @@ export async function createEngine(opts: {
   // ground + framing) unless the caller opts out with `renderBaseline: false`.
   // The renderer is live (init() awaited above), so PMREM IBL runs here.
   if (opts.renderBaseline !== false) {
-    applyRenderBaseline(engine, opts.renderBaseline);
+    let environmentLease;
+    try {
+      if (opts.renderEnvironment !== undefined) {
+        hdrEnvironmentCache = new HdrEnvironmentCache(renderer, opts.hdrEnvironmentCache);
+        engine.hdrEnvironmentCache = hdrEnvironmentCache;
+        environmentLease = hdrEnvironmentCache.acquire(
+          opts.renderEnvironment.assetId,
+          opts.renderEnvironment.hash,
+          opts.renderEnvironment.bytes,
+        );
+      }
+      baselineState = applyRenderBaseline(engine, opts.renderBaseline, undefined, environmentLease);
+      engine.renderBaselineState = baselineState;
+    } catch (error) {
+      environmentLease?.release();
+      hdrEnvironmentCache?.dispose();
+      engine.hdrEnvironmentCache = undefined;
+      throw error;
+    }
   }
 
   return engine;

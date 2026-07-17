@@ -154,10 +154,12 @@ export function buildPopulationLodBatches(
     dispose(scene?: { remove?(object: unknown): void }): void {
       if (disposed) return;
       disposed = true;
+      const errors: unknown[] = [];
       for (const mesh of meshes) {
-        scene?.remove?.(mesh);
-        disposeAssetInstancedMesh(mesh);
+        try { scene?.remove?.(mesh); } catch (error) { errors.push(error); }
+        try { disposeAssetInstancedMesh(mesh); } catch (error) { errors.push(error); }
       }
+      if (errors.length > 0) throw new AggregateError(errors, `population LOD disposal failed in ${errors.length} operation(s)`);
     },
   });
 }

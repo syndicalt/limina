@@ -1,7 +1,7 @@
 // P79 — climate-aware instanced ground grass is DETERMINISTIC and honours the SAME
 // footprint-exclusion seam trees do.
 //
-// vegetation.grass carpets the buildable terrain by handing planGrassBlades (a thin wrapper over
+// Grass-field placement carpets the buildable terrain by handing planGrassBlades (a thin wrapper over
 // scatterAssets, see grass-plan.ts) the settlement keep-out discs. For the record/replay spine to
 // hold, the grass placement must be byte-identical on replay, and the discs must be a PURE post-RNG
 // filter — grass blades are simply skipped inside a disc, never perturbing the RNG stream, so no

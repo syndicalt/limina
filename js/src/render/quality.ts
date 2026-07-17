@@ -8,6 +8,7 @@ export interface RenderPostQuality {
 }
 
 export type WaterfallRenderExtras = "none" | "foam" | "foam-mist";
+export type WaterSceneOptics = "none" | "refraction" | "refraction-reflection";
 
 export interface WaterRenderQuality {
   oceanSegments: number;
@@ -17,6 +18,7 @@ export interface WaterRenderQuality {
   mountsPerFrame: number;
   maxResidentFragments: number;
   waterfallExtras: WaterfallRenderExtras;
+  sceneOptics: WaterSceneOptics;
 }
 
 export interface RenderQualityProfile {
@@ -46,7 +48,7 @@ interface TierDefaults extends Omit<RenderQualityProfile, "tier" | "pixelRatio">
 const QUALITY_TIERS = new Set<RenderQualityTier>(["performance", "balanced", "cinematic"]);
 const OVERRIDE_KEYS = new Set(["resolutionScale", "maxPixelRatio", "shadowMapSize", "shadowHalfExtent", "post", "water", "telemetryIntervalFrames"]);
 const POST_KEYS = new Set(["enabled", "aoSamples", "aoResolutionScale", "bloom"]);
-const WATER_KEYS = new Set(["oceanSegments", "waveCount", "depthRasterSize", "depthTextureBudgetPixels", "mountsPerFrame", "maxResidentFragments", "waterfallExtras"]);
+const WATER_KEYS = new Set(["oceanSegments", "waveCount", "depthRasterSize", "depthTextureBudgetPixels", "mountsPerFrame", "maxResidentFragments", "waterfallExtras", "sceneOptics"]);
 
 const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Object.freeze({
   performance: Object.freeze({
@@ -55,7 +57,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 1024,
     shadowHalfExtent: 128,
     post: Object.freeze({ enabled: false, aoSamples: 4, aoResolutionScale: 0.5, bloom: false }),
-    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1_048_576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none" }),
+    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1_048_576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none", sceneOptics: "none" }),
     telemetryIntervalFrames: 30,
   }),
   balanced: Object.freeze({
@@ -64,7 +66,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 2048,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 8, aoResolutionScale: 0.5, bloom: true }),
-    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4_194_304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam" }),
+    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4_194_304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam", sceneOptics: "refraction" }),
     telemetryIntervalFrames: 30,
   }),
   cinematic: Object.freeze({
@@ -73,7 +75,7 @@ const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Ob
     shadowMapSize: 4096,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 16, aoResolutionScale: 1, bloom: true }),
-    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16_777_216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist" }),
+    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16_777_216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist", sceneOptics: "refraction-reflection" }),
     telemetryIntervalFrames: 30,
   }),
 });
@@ -117,6 +119,13 @@ function boolean(value: unknown, label: string): boolean {
 function waterfallExtras(value: unknown): WaterfallRenderExtras {
   if (value !== "none" && value !== "foam" && value !== "foam-mist") {
     throw new TypeError("render quality water.waterfallExtras is unsupported");
+  }
+  return value;
+}
+
+function sceneOptics(value: unknown): WaterSceneOptics {
+  if (value !== "none" && value !== "refraction" && value !== "refraction-reflection") {
+    throw new TypeError("render quality water.sceneOptics is unsupported");
   }
   return value;
 }
@@ -203,6 +212,9 @@ export function resolveRenderQuality(
     waterfallExtras: waterSource.waterfallExtras === undefined
       ? defaults.water.waterfallExtras
       : waterfallExtras(waterSource.waterfallExtras),
+    sceneOptics: waterSource.sceneOptics === undefined
+      ? defaults.water.sceneOptics
+      : sceneOptics(waterSource.sceneOptics),
   });
   return Object.freeze({
     tier,

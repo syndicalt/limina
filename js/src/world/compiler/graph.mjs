@@ -236,8 +236,14 @@ export function createInitialWorldCompilerGraph() {
   return createCompilerGraph(INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS);
 }
 
+const HYDROLOGY_TERRAIN_STAGE_DEFINITIONS = INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS.map((stage) => stage.stageId === "edit-layers" ? {
+  ...stage,
+  stageVersion: "2.0.0",
+  dependencies: ["river-channel-carve"],
+} : stage);
+
 export const HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
-  ...INITIAL_WORLD_COMPILER_STAGE_DEFINITIONS,
+  ...HYDROLOGY_TERRAIN_STAGE_DEFINITIONS,
   {
     schema: COMPILER_STAGE_SCHEMA,
     stageId: "hydrology-field",
@@ -256,8 +262,86 @@ export const HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
     sourceInputs: [{ inputId: "hydrology.thresholds", scope: "global" }],
     footprint: { haloChunks: 0 },
   },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "river-channel-carve",
+    stageVersion: "1.0.0",
+    scope: "global",
+    dependencies: ["erosion", "hydrology-water-topology"],
+    sourceInputs: [],
+    footprint: { haloChunks: 0 },
+  },
 ]);
 
 export function createHydrologyWorldCompilerGraph() {
   return createCompilerGraph(HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS);
+}
+
+export const BIOME_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
+  ...HYDROLOGY_WORLD_COMPILER_STAGE_DEFINITIONS,
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "biome-field",
+    stageVersion: "3.0.0",
+    scope: "global",
+    dependencies: ["river-channel-carve"],
+    sourceInputs: [],
+    footprint: { haloChunks: 0 },
+  },
+]);
+
+export function createBiomeWorldCompilerGraph() {
+  return createCompilerGraph(BIOME_WORLD_COMPILER_STAGE_DEFINITIONS);
+}
+
+// 1.4 is deliberately a composition graph over the already-pinned 1.3 terrain/biome
+// compiler. Its source fence is the complete base snapshot plus the immutable runtime
+// content closure and the exact per-chunk presentation artifacts. This lets a reviewed,
+// reproducible biome snapshot enter production without changing the byte identity of the
+// older terrain profiles.
+export const PUBLISHED_BIOME_WORLD_COMPILER_STAGE_DEFINITIONS = deepFreezeJson([
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "base-biome-world",
+    stageVersion: "1.3.0",
+    scope: "global",
+    dependencies: [],
+    sourceInputs: [{ inputId: "base.snapshot", scope: "global" }],
+    footprint: { haloChunks: 0 },
+  },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "biome-content-closure",
+    stageVersion: "1.0.0",
+    scope: "global",
+    dependencies: ["base-biome-world"],
+    sourceInputs: [
+      { inputId: "biome.content-closure", scope: "global" },
+      { inputId: "biome.runtime-pack", scope: "global" },
+      { inputId: "biome.runtime-pack.bytes", scope: "global" },
+    ],
+    footprint: { haloChunks: 0 },
+  },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "surface-composite",
+    stageVersion: "1.0.0",
+    scope: "chunk",
+    dependencies: ["base-biome-world", "biome-content-closure"],
+    sourceInputs: [{ inputId: "biome.surface-artifact", scope: "chunk" }],
+    footprint: { haloChunks: 0 },
+  },
+  {
+    schema: COMPILER_STAGE_SCHEMA,
+    stageId: "biome-population",
+    stageVersion: "1.0.0",
+    scope: "chunk",
+    dependencies: ["base-biome-world", "biome-content-closure"],
+    sourceInputs: [{ inputId: "biome.population-artifact", scope: "chunk" }],
+    footprint: { haloChunks: 0 },
+  },
+]);
+
+export function createPublishedBiomeWorldCompilerGraph() {
+  return createCompilerGraph(PUBLISHED_BIOME_WORLD_COMPILER_STAGE_DEFINITIONS);
 }

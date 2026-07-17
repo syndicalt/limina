@@ -14,7 +14,14 @@ import {
   derivedArtifactContentHash,
 } from "../../js/src/world/compiler/index.mjs";
 import { ProjectAssetStore, projectAssetHash } from "../project-asset-store.mjs";
-import { readPublishedDerivedRevision } from "./derived-publisher.mjs";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
+import { BIOME_LIBRARY_V1 } from "../../js/src/world/biome-library-v1.mjs";
+import { biomePackContentHash } from "../../js/src/world/biome-ir.mjs";
+import { BIOME_RUNTIME_PACK_LIMITS, BIOME_RUNTIME_PACK_SCHEMA,
+  biomeRuntimePackContentHash } from "../../js/src/world/biome-runtime-pack.mjs";
+import { BIOME_CONTENT_BUNDLE_SCHEMA, deriveBiomeContentBundleClosureHash } from "../../js/src/world/biome-content-bundle.mjs";
+import { BIOME_PUBLICATION_INPUT_SCHEMA, WORLD_PUBLISHED_BIOME_COMPILER_VERSION } from "../../js/src/world/compiler/biome-publication-compile.mjs";
+import { readPublishedDerivedRevision, resolveCurrentPublishedDerivedArtifact } from "./derived-publisher.mjs";
 import {
   DerivedBuildService,
   DerivedBuildServiceError,
@@ -351,6 +358,7 @@ function service(fx, overrides = {}) {
     assetStore: overrides.assetStore ?? fx.assetStore,
     compiler,
     compilerForWorldMap: overrides.compilerForWorldMap,
+    biomePublicationForWorldMap: overrides.biomePublicationForWorldMap,
     compileAtlasMapDoc: overrides.compileAtlasMapDoc ?? (({ mapsJsonText }) => {
       assert.equal(mapsJsonText, fx.bytes.toString("utf8"));
       return { worldMap: { fixture: "world-map" }, warnings: [] };
@@ -643,7 +651,7 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
   const fx = fixture();
   try {
     const legacy = compilerProfile("1.0.0", "legacy");
-    const hydrology = compilerProfile("1.2.0", "hydrology");
+    const biome = compilerProfile("1.3.0", "biome");
     let assetReads = 0;
     let atlasCompiles = 0;
     let selectorCalls = 0;
@@ -664,18 +672,18 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
       compilerForWorldMap(worldMap) {
         selectorCalls++;
         assert.equal(Object.isFrozen(worldMap), true);
-        return worldMap.hydrology === undefined ? legacy : hydrology;
+        return worldMap.hydrology === undefined ? legacy : biome;
       },
       compileWorldTerrain(input) {
         terrainCompiles++;
-        assert.equal(input.compiler.version, "1.2.0");
-        assert.strictEqual(input.compiler.config, hydrology.config);
+        assert.equal(input.compiler.version, "1.3.0");
+        assert.strictEqual(input.compiler.config, biome.config);
         return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
       },
       publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
     });
     const result = await created.instance.reconcileOnce({ waitForBuild: true });
-    assert.deepEqual(result.compiler, hydrology.identity);
+    assert.deepEqual(result.compiler, biome.identity);
     assert.equal(assetReads, 1);
     assert.equal(atlasCompiles, 1);
     assert.equal(selectorCalls, 1);
@@ -686,19 +694,93 @@ test("prepares the exact MapDoc once and submits the selected compiler profile",
   } finally { fx.cleanup(); }
 });
 
+test("opt-in published biome profile source-fences its closure and forwards exact CAS content to publication", async () => {
+  const fx = fixture();
+  try {
+    const published = compilerProfile(WORLD_PUBLISHED_BIOME_COMPILER_VERSION, "published-biome");
+    const bytes = new TextEncoder().encode("verified population descriptor\n");
+    const contentHash = portableAssetContentHash(bytes);
+    const runtimePackDocument = { schema: BIOME_RUNTIME_PACK_SCHEMA, id: "build-service-runtime", version: "1.0.0",
+      metadataPackContentHash: biomePackContentHash(BIOME_LIBRARY_V1), status: "metadata-only",
+      biomes: BIOME_LIBRARY_V1.definitions.map((definition) => ({ biomeId: definition.id, status: "metadata-only",
+        surfaceRules: definition.surfaceMaterials.slice(0, BIOME_RUNTIME_PACK_LIMITS.surfaceRules)
+          .map(({ role }) => ({ role, weight: 1, tileScaleM: 4 })).sort((left, right) => left.role.localeCompare(right.role)),
+        vegetationRules: definition.vegetationPalette.slice(0, BIOME_RUNTIME_PACK_LIMITS.vegetationRules)
+          .map(({ role, weight }) => ({ role, weight, radiusM: 1.5, density01: 0.5, scale: [0.8, 1.2],
+            tintSrgb: [255, 255, 255] })).sort((left, right) => left.role.localeCompare(right.role)), bindings: [] })) };
+    const runtimePackBytes = new TextEncoder().encode(`${JSON.stringify(runtimePackDocument)}\n`);
+    const runtimePackByteHash = portableAssetContentHash(runtimePackBytes);
+    const runtimePackHash = biomeRuntimePackContentHash(runtimePackDocument, BIOME_LIBRARY_V1);
+    const draft = {
+      schema: BIOME_CONTENT_BUNDLE_SCHEMA,
+      id: "published-biome-test",
+      version: "1.0.0",
+      status: "candidate",
+      runtimePack: { assetId: "biomes/runtime.json", contentHash: runtimePackHash },
+      entries: [{
+        assetId: "content/fixture.bin",
+        contentHash,
+        kind: "model-lod",
+        byteLength: bytes.byteLength,
+        provenance: { licenseSpdx: "CC0-1.0", sourceUri: "limina://test/fixture" },
+      }],
+    };
+    const contentBundle = { ...draft, closureHash: deriveBiomeContentBundleClosureHash(draft) };
+    const biomePublication = {
+      schema: BIOME_PUBLICATION_INPUT_SCHEMA,
+      runtimePack: { ...contentBundle.runtimePack, byteContentHash: runtimePackByteHash,
+        byteLength: runtimePackBytes.byteLength, bytes: runtimePackBytes },
+      contentBundle,
+      chunks: [],
+    };
+    const manifestHash = compilerContentHash({ manifest: "published-biome" });
+    let preparedCalls = 0;
+    let publicationInput;
+    const created = service(fx, {
+      compiler: published,
+      compileAtlasMapDoc: () => ({ worldMap: { hydrology: {} }, warnings: [] }),
+      biomePublicationForWorldMap({ worldMap, authority, assetStore }) {
+        preparedCalls++;
+        assert.equal(worldMap.hydrology !== undefined, true);
+        assert.equal(authority.head.headHash, fx.snapshot.head.headHash);
+        assert.ok(assetStore);
+        return { input: biomePublication, contentEntries: [{ id: "content/fixture.bin", path: "assets/content/fixture.bin", hash: contentHash, bytes }] };
+      },
+      compileWorldTerrain(input) {
+        assert.strictEqual(input.biomePublication, biomePublication);
+        assert.equal(input.previousSnapshot, null, "published biome compilation was not forced cold");
+        return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
+      },
+      async publish(input) {
+        publicationInput = input;
+        assert.deepEqual(input.contentEntries.map((entry) => ({ id: entry.id, path: entry.path, hash: entry.hash })),
+          [{ id: "content/fixture.bin", path: "assets/content/fixture.bin", hash: contentHash }]);
+        assert.strictEqual(input.contentEntries[0].bytes, bytes);
+        await input.readHead();
+        return { published: true, manifestHash };
+      },
+    });
+    const result = await created.instance.reconcileOnce({ waitForBuild: true });
+    assert.equal(result.manifestHash, manifestHash);
+    assert.equal(preparedCalls, 1);
+    assert.ok(publicationInput, "content-aware publication was not invoked");
+    await created.instance.stop();
+  } finally { fx.cleanup(); }
+});
+
 test("selected profile controls already-published and warm-versus-cold cache decisions", async (t) => {
   const legacy = compilerProfile("1.0.0", "legacy");
-  const hydrology = compilerProfile("1.2.0", "hydrology");
+  const biome = compilerProfile("1.3.0", "biome");
   await t.test("already published selected profile", async () => {
     const fx = fixture();
     try {
       const artifactHash = compilerContentHash({ prior: "selected-artifact" });
       const snapshotHash = compilerContentHash({ prior: "selected-snapshot" });
-      const manifest = previousManifest(fx.projectId, artifactHash, snapshotHash, undefined, { compiler: hydrology.identity });
+      const manifest = previousManifest(fx.projectId, artifactHash, snapshotHash, undefined, { compiler: biome.identity });
       let atlasCompiles = 0;
       const created = service(fx, {
         compiler: legacy,
-        compilerForWorldMap: () => hydrology,
+        compilerForWorldMap: () => biome,
         compileAtlasMapDoc() { atlasCompiles++; return { worldMap: { hydrology: {} }, warnings: [] }; },
         compileWorldTerrain() { throw new Error("already-published selected profile must not compile terrain"); },
         loadPrevious: async () => ({ manifest, snapshot: { snapshotHash } }),
@@ -713,7 +795,7 @@ test("selected profile controls already-published and warm-versus-cold cache dec
   });
 
   for (const [name, priorCompiler, expectWarm] of [
-    ["matching profile remains sparse", hydrology.identity, true],
+    ["matching profile remains sparse", biome.identity, true],
     ["different profile transitions cold", legacy.identity, false],
   ]) await t.test(name, async () => {
     const fx = fixture();
@@ -726,13 +808,13 @@ test("selected profile controls already-published and warm-versus-cold cache dec
       const manifestHash = compilerContentHash({ next: name });
       const created = service(fx, {
         compiler: legacy,
-        compilerForWorldMap: () => hydrology,
+        compilerForWorldMap: () => biome,
         compileAtlasMapDoc: () => ({ worldMap: { hydrology: {} }, warnings: [] }),
         loadPrevious: async () => ({ manifest, snapshot: { snapshotHash } }),
         compileWorldTerrain(input) {
           sawWarm = input.previousSnapshot !== null;
           assert.equal(Object.hasOwn(input, "previousManifest"), expectWarm);
-          assert.equal(input.compiler.version, "1.2.0");
+          assert.equal(input.compiler.version, "1.3.0");
           return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
         },
         publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
@@ -918,7 +1000,7 @@ test("start is idempotent and stop cancels the owned timer and coordinator", asy
   } finally { fx.cleanup(); }
 });
 
-test("real coordinator and publisher preserve selected hydrology artifacts across cold, threshold, and precipitation builds", async () => {
+test("real coordinator and publisher preserve selected biome globals across cold, sparse, and precipitation builds", async () => {
   const fx = fixture();
   try {
     mkdirSync(join(fx.projectRoot, ".limina"));
@@ -942,7 +1024,7 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
         graphHash: compilerContentHash({ graph: "real-integration" }),
       },
     };
-    const hydrologyCompiler = compilerProfile("1.2.0", "real-hydrology");
+    const biomeCompiler = compilerProfile("1.3.0", "real-biome");
     const grid = createTerrainGridSpec({ gridId: `${fx.projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
     const chunkId = terrainChunkId(grid.gridId, 0, 0, 0);
     const bytes = Uint8Array.from(Buffer.from("real-service-artifact"));
@@ -951,6 +1033,10 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
     const globalContentHash = derivedArtifactContentHash(globalBytes);
     const wetterGlobalBytes = Uint8Array.from(Buffer.from("real-service-global-hydrology-wetter"));
     const wetterGlobalContentHash = derivedArtifactContentHash(wetterGlobalBytes);
+    const biomeBytes = Uint8Array.from(Buffer.from("real-service-global-biome"));
+    const biomeContentHash = derivedArtifactContentHash(biomeBytes);
+    const wetterBiomeBytes = Uint8Array.from(Buffer.from("real-service-global-biome-wetter"));
+    const wetterBiomeContentHash = derivedArtifactContentHash(wetterBiomeBytes);
     let compileCount = 0;
     const instance = new DerivedBuildService({
       projectId: fx.projectId,
@@ -958,24 +1044,28 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
       authoringClient: authority,
       assetStore: fx.assetStore,
       compiler,
-      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
+      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : biomeCompiler,
       compileAtlasMapDoc: () => ({ worldMap: { fixture: true, hydrology: {} }, warnings: [] }),
       compileWorldTerrain(input) {
         compileCount++;
-        assert.equal(input.compiler.version, "1.2.0", "recipe build did not select the hydrology compiler profile");
+        assert.equal(input.compiler.version, "1.3.0", "recipe build did not select the biome compiler profile");
         if (input.previousSnapshot !== null) {
-          assert.deepEqual(input.availableArtifactHashes, [contentHash, globalContentHash].sort(), "restart/sparse compile lost global artifact availability");
+          assert.deepEqual(input.availableArtifactHashes, [contentHash, globalContentHash, biomeContentHash].sort(),
+            "restart/sparse compile lost hydrology or biome global availability");
         }
         const precipitationChanged = input.request.revision >= 3;
         const selectedGlobalBytes = precipitationChanged ? wetterGlobalBytes : globalBytes;
         const selectedGlobalContentHash = precipitationChanged ? wetterGlobalContentHash : globalContentHash;
+        const selectedBiomeBytes = precipitationChanged ? wetterBiomeBytes : biomeBytes;
+        const selectedBiomeContentHash = precipitationChanged ? wetterBiomeContentHash : biomeContentHash;
         const snapshotCore = {
           schema: COMPILER_SNAPSHOT_SCHEMA,
-          graphHash: hydrologyCompiler.identity.graphHash,
+          graphHash: biomeCompiler.identity.graphHash,
           chunks: [{ chunkId, gridId: grid.gridId, lod: 0, tx: 0, tz: 0, chunkTopologyHash: compilerContentHash({ topology: 1 }) }],
           stageKeys: {
             render: { [chunkId]: compilerContentHash({ render: 1 }) },
             "hydrology-field": { "@global": compilerContentHash({ precipitation: precipitationChanged ? 2 : 1 }) },
+            "biome-field": { "@global": compilerContentHash({ biome: precipitationChanged ? 2 : 1 }) },
           },
         };
         const snapshot = { ...snapshotCore, snapshotHash: compilerContentHash(snapshotCore) };
@@ -994,14 +1084,22 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
               contentHash: fx.mapRef.hash,
             }],
           },
-          compiler: { ...hydrologyCompiler.identity, snapshotHash: snapshot.snapshotHash },
+          compiler: { ...biomeCompiler.identity, snapshotHash: snapshot.snapshotHash },
           grid,
-          globalArtifacts: [{
-            artifactType: "hydrology-field/v1",
-            contentHash: selectedGlobalContentHash,
-            byteLength: selectedGlobalBytes.byteLength,
-            mediaType: "application/vnd.limina.hydrology-field",
-          }],
+          globalArtifacts: [
+            {
+              artifactType: "biome-field/v1",
+              contentHash: selectedBiomeContentHash,
+              byteLength: selectedBiomeBytes.byteLength,
+              mediaType: "application/vnd.limina.biome-field-v1",
+            },
+            {
+              artifactType: "hydrology-field/v1",
+              contentHash: selectedGlobalContentHash,
+              byteLength: selectedGlobalBytes.byteLength,
+              mediaType: "application/vnd.limina.hydrology-field",
+            },
+          ],
           chunks: [{
             chunkId,
             gridId: grid.gridId,
@@ -1015,15 +1113,23 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
         });
         const descriptor = { scope: "chunk", chunkId, artifactType: "terrain-chunk/v1", mediaType: "application/vnd.limina.terrain-chunk", contentHash, byteLength: bytes.byteLength };
         const globalDescriptor = { scope: "global", artifactType: "hydrology-field/v1", mediaType: "application/vnd.limina.hydrology-field", contentHash: selectedGlobalContentHash, byteLength: selectedGlobalBytes.byteLength };
+        const biomeDescriptor = { scope: "global", artifactType: "biome-field/v1", mediaType: "application/vnd.limina.biome-field-v1", contentHash: selectedBiomeContentHash, byteLength: selectedBiomeBytes.byteLength };
         const cold = input.previousSnapshot === null;
         return {
           manifest,
           artifacts: cold
-            ? [{ ...descriptor, bytes }, { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes }]
+            ? [
+              { ...descriptor, bytes },
+              { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes },
+              { scope: "global", artifactType: biomeDescriptor.artifactType, mediaType: biomeDescriptor.mediaType, contentHash: selectedBiomeContentHash, bytes: selectedBiomeBytes },
+            ]
             : precipitationChanged
-              ? [{ scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes }]
+              ? [
+                { scope: "global", artifactType: globalDescriptor.artifactType, mediaType: globalDescriptor.mediaType, contentHash: selectedGlobalContentHash, bytes: selectedGlobalBytes },
+                { scope: "global", artifactType: biomeDescriptor.artifactType, mediaType: biomeDescriptor.mediaType, contentHash: selectedBiomeContentHash, bytes: selectedBiomeBytes },
+              ]
               : [],
-          reusedArtifacts: cold ? [] : [descriptor, ...(precipitationChanged ? [] : [globalDescriptor])].sort((a, b) => {
+          reusedArtifacts: cold ? [] : [descriptor, ...(precipitationChanged ? [] : [globalDescriptor, biomeDescriptor])].sort((a, b) => {
             const ak = a.scope === "global" ? `global\u0000${a.artifactType}` : `chunk\u0000${a.chunkId}\u0000${a.artifactType}`;
             const bk = b.scope === "global" ? `global\u0000${b.artifactType}` : `chunk\u0000${b.chunkId}\u0000${b.artifactType}`;
             return ak < bk ? -1 : ak > bk ? 1 : 0;
@@ -1054,7 +1160,19 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
     assert.equal(current.pointer.generation, 3);
     assert.equal(current.snapshot.snapshotHash, current.manifest.compiler.snapshotHash);
     assert.equal(current.manifest.chunks[0].artifacts[0].contentHash, contentHash);
-    assert.equal(current.manifest.globalArtifacts[0].contentHash, wetterGlobalContentHash);
+    const publishedBiome = current.manifest.globalArtifacts.find((artifact) => artifact.artifactType === "biome-field/v1");
+    const publishedHydrology = current.manifest.globalArtifacts.find((artifact) => artifact.artifactType === "hydrology-field/v1");
+    assert.equal(publishedHydrology.contentHash, wetterGlobalContentHash);
+    assert.equal(publishedBiome.contentHash, wetterBiomeContentHash);
+    const carriedBiome = resolveCurrentPublishedDerivedArtifact({
+      projectRoot: fx.projectRoot,
+      branchId: "main",
+      manifestHash: current.manifest.manifestHash,
+      contentHash: wetterBiomeContentHash,
+    });
+    assert.equal(carriedBiome.descriptor.artifactType, "biome-field/v1");
+    assert.deepEqual(new Uint8Array(readFileSync(carriedBiome.path)), wetterBiomeBytes,
+      "published biome global bytes were not carried through real build-service/runtime resolution");
     await instance.stop();
     assert.equal(authority.closed, true);
 
@@ -1068,7 +1186,7 @@ test("real coordinator and publisher preserve selected hydrology artifacts acros
       authoringClient: restartedAuthority,
       assetStore: fx.assetStore,
       compiler,
-      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : hydrologyCompiler,
+      compilerForWorldMap: (worldMap) => worldMap.hydrology === undefined ? compiler : biomeCompiler,
       compileAtlasMapDoc: () => ({ worldMap: { fixture: true, hydrology: {} }, warnings: [] }),
       compileWorldTerrain() { throw new Error("already-published source must not compile"); },
       loadPrevious: () => readPublishedDerivedRevision({

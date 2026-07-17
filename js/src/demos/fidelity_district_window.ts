@@ -2,6 +2,9 @@
 //
 // Run:
 //   ./target/release/limina --window --frames 1020 js/src/demos/fidelity_district_window.ts
+// Timestamp capture (32 bounded frames plus a no-render settle/resolve phase):
+//   timeout 180s env LIMINA_GPU_TIMING=bounded LIMINA_GPU_EXPECTED_ADAPTER_SUBSTRING=Iris \
+//     ./target/release/limina --window --frames 1100 js/src/demos/fidelity_district_window.ts
 //
 // This is the fixed visual/performance baseline for the HermesWorld-HD-class fidelity work. It
 // uses only tracked assets and ordinary agent-facing skills. The first version is expected to expose
@@ -16,10 +19,19 @@ import { surveyRegionRelief } from "../terrain/biome-content.ts";
 import { MATERIALS } from "../materials/palette.ts";
 import {
   FIDELITY_CAMERA_ROUTE,
+  FIDELITY_GPU_CAPTURE_ROUTE_FRAMES,
   FIDELITY_VISUAL_FLAGS,
   FidelityBenchmarkRecorder,
   fidelityCameraPose,
 } from "../render/fidelity-benchmark.ts";
+import {
+  assertGpuTimestampAdapter,
+  assertGpuTimestampRiskAccepted,
+} from "../render/gpu-timestamp-diagnostic.ts";
+import {
+  ThreeGpuTimestampCapture,
+  assertThreeGpuTimestampCapturePlatform,
+} from "../render/three-gpu-timestamp-capture.ts";
 
 const SEED = 0x5e7;
 const BOUNDS = { minTx: 0, minTz: 0, maxTx: 3, maxTz: 3 } as const;
@@ -27,6 +39,11 @@ const SHAPE = { amp: 1.15, erode: 1 };
 const HINTS = { ...terrainTypeHints("forest", BOUNDS), ...SHAPE };
 const WARMUP_FRAMES = 120;
 const SAMPLE_FRAMES = FIDELITY_CAMERA_ROUTE.reduce((sum, keyframe) => sum + keyframe.durationFrames, 0);
+const gpuTimingMode = ops.op_read_env("LIMINA_GPU_TIMING");
+if (gpuTimingMode !== "" && gpuTimingMode !== "bounded") {
+  throw new Error("fidelity district: LIMINA_GPU_TIMING must be empty or 'bounded'");
+}
+const gpuTimingRequested = gpuTimingMode === "bounded";
 
 const ctx = await createWindowedContext({
   width: 1920,
@@ -37,8 +54,19 @@ const ctx = await createWindowedContext({
   },
   session: "ses_fidelity_district",
   agentId: "agt_fidelity_district",
+  gpuTimestampMode: gpuTimingRequested ? "required" : "disabled",
 });
 const engine = ctx.engine!;
+if (gpuTimingRequested) {
+  const adapterIdentity = JSON.stringify(engine.gpuAdapter);
+  assertGpuTimestampAdapter(adapterIdentity, ops.op_read_env("LIMINA_GPU_EXPECTED_ADAPTER_SUBSTRING"));
+  // A clean-boot, one-frame RTX 3050 probe completed the real queue fence but its delayed
+  // Three r184 resolve/map still timed out. Do not let a known-hanging benchmark path run for
+  // 900 CPU frames before failing. The raw diagnostic remains available for explicitly guarded
+  // fault localization; production benchmark capture stays disabled on NVIDIA.
+  assertThreeGpuTimestampCapturePlatform(adapterIdentity);
+  assertGpuTimestampRiskAccepted(adapterIdentity, ops.op_read_env("LIMINA_GPU_TIMESTAMP_RISK_ACK"));
+}
 const registry = ctx.registry;
 const core = ctx.core;
 const base = ctx.base;
@@ -133,16 +161,46 @@ engine.camera.near = 0.2;
 engine.camera.far = span * 8;
 engine.camera.updateProjectionMatrix();
 
-const recorder = new FidelityBenchmarkRecorder("balanced", SAMPLE_FRAMES, true);
+const recorder = new FidelityBenchmarkRecorder("balanced", SAMPLE_FRAMES, true, true);
+recorder.recordAdapter(engine.gpuAdapter);
+const gpuCapture = gpuTimingRequested
+  ? new ThreeGpuTimestampCapture(engine.renderer, engine.gpuTimingAvailable)
+  : null;
 let frame = 0;
 let lastFrameAt: number | undefined;
 let reportWritten = false;
 
+function writeReport(gpuTimingFailure?: unknown): void {
+  if (reportWritten) return;
+  reportWritten = true;
+  const report = recorder.report();
+  const artifact = Object.freeze({
+    ...report,
+    adapter: engine.gpuAdapter,
+    ...(gpuTimingFailure === undefined ? {} : { gpuTimingFailure: String(gpuTimingFailure) }),
+  });
+  ops.op_write_trace("fidelity-district-report.json", `${JSON.stringify(artifact, null, 2)}\n`);
+  ops.op_log(`fidelity district benchmark: ${JSON.stringify(artifact)}`);
+}
+
 function render(): void {
+  if (reportWritten || gpuCapture?.phase === "settling" || gpuCapture?.phase === "resolving"
+    || gpuCapture?.phase === "complete" || gpuCapture?.phase === "failed") return;
+
+  const cpuSamplingComplete = recorder.size === recorder.capacity;
+  if (cpuSamplingComplete && gpuCapture === null) {
+    writeReport();
+    return;
+  }
+  if (cpuSamplingComplete && gpuCapture?.phase === "idle") gpuCapture.start();
+
   const now = performance.now();
   const frameMs = lastFrameAt === undefined ? 0 : now - lastFrameAt;
   lastFrameAt = now;
-  const routeFrame = Math.max(0, frame - WARMUP_FRAMES);
+  const routeFrame = gpuCapture?.phase === "capturing"
+    ? FIDELITY_GPU_CAPTURE_ROUTE_FRAMES[gpuCapture.capturedFrames]!
+    : Math.max(0, frame - WARMUP_FRAMES);
+  if (gpuCapture?.phase === "capturing") gpuCapture.beforeRendered(routeFrame);
   const pose = fidelityCameraPose(routeFrame, [centerX, centerY, centerZ]);
   engine.camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
   engine.camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
@@ -157,7 +215,7 @@ function render(): void {
   ops.op_surface_present(engine.context);
   const presentMs = performance.now() - presentStartedAt;
 
-  if (frame >= WARMUP_FRAMES && recorder.size < recorder.capacity) {
+  if (gpuCapture?.phase !== "capturing" && frame >= WARMUP_FRAMES && recorder.size < recorder.capacity) {
     const info = engine.renderer.info as unknown as {
       render?: { drawCalls?: number; triangles?: number };
       memory?: { total?: number };
@@ -174,17 +232,21 @@ function render(): void {
       visualFlags,
     });
   }
-  if (!reportWritten && recorder.size === recorder.capacity) {
-    reportWritten = true;
-    const report = recorder.report();
-    const artifact = Object.freeze({ ...report, adapter: engine.gpuAdapter });
-    ops.op_write_trace("fidelity-district-report.json", `${JSON.stringify(artifact, null, 2)}\n`);
-    ops.op_log(`fidelity district benchmark: ${JSON.stringify(artifact)}`);
+  if (gpuCapture?.phase === "capturing" && gpuCapture.afterRendered()) {
+    void gpuCapture.settleAndResolve((milliseconds) => ops.op_sleep_ms(milliseconds))
+      .then((capture) => {
+        recorder.recordGpuCapture(capture);
+        writeReport();
+      })
+      .catch((error) => writeReport(error));
+  } else if (gpuCapture === null && recorder.size === recorder.capacity) {
+    writeReport();
   }
   frame++;
 }
 
 function onResize(width: number, height: number): void {
+  if (gpuCapture?.phase === "capturing" || gpuCapture?.phase === "settling" || gpuCapture?.phase === "resolving") return;
   ops.op_surface_resize(width, height);
   engine.renderer.setSize(width, height, false);
   engine.camera.aspect = width / height;
@@ -194,4 +256,4 @@ function onResize(width: number, height: number): void {
 render();
 ops.op_set_frame_callback(render);
 ops.op_set_resize_callback(onResize);
-ops.op_log(`fidelity district ready: ${span}m forest, ${biomeInstances} biome instances, tracked PBR cottage/bridge/fence/campfire, ${WARMUP_FRAMES} warm-up + ${SAMPLE_FRAMES} measured frames at 1920x1080; GPU timing unavailable; adapter ${JSON.stringify(engine.gpuAdapter)}.`);
+ops.op_log(`fidelity district ready: ${span}m forest, ${biomeInstances} biome instances, tracked PBR cottage/bridge/fence/campfire, ${WARMUP_FRAMES} warm-up + ${SAMPLE_FRAMES} measured frames at 1920x1080; GPU timing ${gpuTimingRequested ? "bounded 32-frame capture requested" : "unavailable"}; adapter ${JSON.stringify(engine.gpuAdapter)}.`);

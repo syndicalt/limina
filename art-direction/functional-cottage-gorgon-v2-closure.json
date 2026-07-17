@@ -1,0 +1,47 @@
+{
+  "schema": "limina.functional-building-mechanical-closure/v1",
+  "asset": {
+    "assetId": "buildings/functional-cottage-gorgon-v2.glb",
+    "sha256": "7f57c3164617fb36a659cb980995a3d4fb4695516ae348acdc2aac6a240248b5",
+    "assetHash": "sha256:23979d6088916bcb7c372dcfd984b6f60da5a49c6d309c798deaa5ee27b1b53e",
+    "byteLength": 874800,
+    "contract": "limina.functional-building/v1",
+    "buildingId": "cottage/gorgon-one-room/v2"
+  },
+  "generator": {
+    "path": "tools/blender/functional-cottage-gorgon.py",
+    "sha256": "bfeddd4460701f91c88490d50b92df9f273e1363e4eafc344b9b132671f0dd39",
+    "blenderVersion": "4.0.2",
+    "byteReproducible": true
+  },
+  "authoredContent": {
+    "materials": 11,
+    "embeddedImages": 33,
+    "baseColorMappedMaterials": 11,
+    "roughnessMappedMaterials": 11,
+    "normalMappedMaterials": 11,
+    "doorClip": "door/front/open",
+    "interior": true
+  },
+  "mechanicalGates": {
+    "pureByteContract": true,
+    "stableSemanticIds": true,
+    "decomposedShellCollision": true,
+    "ceilingCollision": true,
+    "authoredRuntimeDoorSubtree": true,
+    "closedDoorBlocksCharacter": true,
+    "openDoorPermitsEntry": true,
+    "rotatedPlacement": true,
+    "worldlogReplay": true,
+    "snapshotRestoreThenToggle": true,
+    "completeLifecycleTeardown": true,
+    "deterministicRebuild": true
+  },
+  "visual": {
+    "engineCaptureRequired": true,
+    "projectGorgonFloorPassed": false,
+    "humanApproved": false,
+    "reviewArtifact": null
+  },
+  "next": "Guarded native engine capture and human review"
+}

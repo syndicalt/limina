@@ -217,6 +217,10 @@ export interface ReloadResult {
 }
 
 export class SkillRegistry {
+  private readonly worldReconcilers = new Set<(world: WorldContext) => void>();
+  /** Register idempotent derived-state recovery run before every skill handler.
+   *  Snapshot-persisted entity origins remain authority; closure managers are rebuilt here. */
+  registerWorldReconciler(reconciler: (world: WorldContext) => void): void { this.worldReconcilers.add(reconciler); }
   private readonly skills = new Map<string, SkillDefinition>();
   /** Memoized `list()` output — z.toJSONSchema per skill is ~ms-expensive and
    *  identical until the skill set changes. Invalidated in register/unregister/replace. */
@@ -518,6 +522,7 @@ export class SkillRegistry {
     applyTick?: number,
   ): Promise<MCPResponse> {
     try {
+      for (const reconcile of this.worldReconcilers) reconcile(base.world);
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
       const result = await skill.handler(input, ctx);
       const parsedResult = skill.output.safeParse(result);

@@ -16,6 +16,8 @@
 //   js/src/ + js/build/   the engine TS layer the host binary transpiles + loads at
 //                         runtime (editor_host + the serve-design harnesses). The
 //                         binary's module loader is file://-only, so no node_modules.
+//   runtime/basis/        the exact Basis transcoder paired with the pinned Three
+//                         package, so KTX2 assets work without a machine-global tool.
 //   tools/serve.mjs       the scaffold static server, COPIED IN because of its quirk:
 //                         it resolves /assets/** as a SIBLING of the served dir
 //                         (resolve(ROOT, "..", "assets")) — which is exactly why
@@ -75,6 +77,8 @@ copy("assets", "assets", (src) => !ASSET_SKIP.has(src.split("/").pop()));
 // ── 4. the engine TS layer the binary loads (file:// modules only) ──────────
 copy("js/src", "js/src");
 copy("js/build", "js/build");
+copy("runtime/basis", "runtime/basis");
+copy("runtime/basis", "editor/runtime/basis");
 
 // ── 5. tools: static server (the /assets-sibling quirk), design + map tools ─
 mkdirSync(join(OUT, "tools/design"), { recursive: true });

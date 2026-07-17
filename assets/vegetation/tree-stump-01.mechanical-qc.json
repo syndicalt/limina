@@ -1,0 +1,14 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-tree-stump-01",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/tree_stump_01", "licenseSpdx": "CC0-1.0", "attribution": "tree_stump_01 by Poly Haven (CC0 1.0)" },
+  "models": [
+    { "level": 0, "path": "vegetation/tree-stump-01-lod0.glb", "sha256": "sha256:0c9fc6195e3e94e26e7bafc3a92b019cdfd0656ee66c35e978445ec5144c9f9f", "boundsM": [1.425527, 0.572499, 1.590149], "vertexCount": 11885, "triangleCount": 20523, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }
+  ],
+  "checks": { "allGlbReadable": true, "allSelfContained": true, "materialsPreserved": true, "textureSlotsPreserved": true, "textureResolutionPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "lodChain": [],
+  "lodStatus": "not-generated",
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

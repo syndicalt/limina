@@ -15,6 +15,7 @@ import {
   canonicalDerivedRevisionManifest,
   compilerContentHash,
   createDerivedRevisionManifest,
+  createBiomeWorldCompilerGraph,
   createHydrologyWorldCompilerGraph,
   createInitialWorldCompilerGraph,
   decodeTerrainChunkArtifact,
@@ -23,9 +24,16 @@ import {
 } from "../src/world/compiler/index.mjs";
 import {
   compileWorldTerrain,
+  WORLD_BIOME_TERRAIN_COMPILER_VERSION,
   WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION,
   WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
 } from "../src/world/compiler/terrain-compile.ts";
+import {
+  BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
+  BIOME_FIELD_ARTIFACT_TYPE,
+  decodeBiomeFieldArtifact,
+} from "../src/world/compiler/biome-field-artifact.mjs";
+import { WORLD_BIOME_FIELD_POLICY } from "../src/world/compiler/world-biome-field.mjs";
 import {
   WORLD_OVERVIEW_ARTIFACT_TYPE,
   decodeWorldOverviewArtifact,
@@ -35,7 +43,7 @@ import {
   decodeNavigationIndexArtifact,
   searchNavigationIndexPrefix,
 } from "../src/world/compiler/navigation-index-artifact.mjs";
-import { createDefaultWorldTerrainCompiler, createHydrologyWorldTerrainCompiler } from "../src/world/compiler/node-entry.ts";
+import { createBiomeWorldTerrainCompiler, createDefaultWorldTerrainCompiler, createHydrologyWorldTerrainCompiler } from "../src/world/compiler/node-entry.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`p_world_terrain_compile FAIL: ${message}`);
@@ -375,6 +383,12 @@ function hydrologyInput(mapValue: WorldMap, layers: any[] = [], refs: any[] = []
     ...extra,
   };
 }
+function biomeInput(mapValue: WorldMap, layers: any[] = [], refs: any[] = [], extra: Record<string, unknown> = {}) {
+  return hydrologyInput(mapValue, layers, refs, {
+    compiler: { version: WORLD_BIOME_TERRAIN_COMPILER_VERSION, config: config() },
+    ...extra,
+  });
+}
 function availableManifestHashes(output: any): string[] {
   return [...new Set([
     ...derivedGlobalArtifacts(output.manifest).map((artifact: any) => artifact.contentHash),
@@ -384,6 +398,7 @@ function availableManifestHashes(output: any): string[] {
 
 const initialGraph = createInitialWorldCompilerGraph();
 const hydrologyGraph = createHydrologyWorldCompilerGraph();
+const biomeGraph = createBiomeWorldCompilerGraph();
 assert(initialGraph.graphHash === base.manifest.compiler.graphHash, "legacy graph hash changed when hydrology graph was added");
 assert(hydrologyGraph.graphHash !== initialGraph.graphHash, "hydrology profile did not receive a distinct graph identity");
 assert(hydrologyGraph.definitions.find((stage: any) => stage.stageId === "hydrology-field")?.dependencies.join(",") === "erosion", "hydrology stage is not terminal over erosion");
@@ -391,14 +406,28 @@ assert(hydrologyGraph.reverseDependencies["hydrology-field"].join(",") === "hydr
   "hydrology field does not invalidate only generated water topology");
 assert(hydrologyGraph.definitions.find((stage: any) => stage.stageId === "hydrology-water-topology")?.dependencies.join(",") === "hydrology-field",
   "generated water topology is not terminal over the hydrology field");
-assert(hydrologyGraph.reverseDependencies["hydrology-water-topology"].length === 0,
-  "generated water topology incorrectly invalidates terrain chunks");
+assert(hydrologyGraph.reverseDependencies["hydrology-water-topology"].join(",") === "river-channel-carve"
+  && hydrologyGraph.reverseDependencies["river-channel-carve"].join(",") === "edit-layers",
+  "generated water topology does not invalidate its canonical channel-carved terrain");
+assert(biomeGraph.graphHash !== initialGraph.graphHash && biomeGraph.graphHash !== hydrologyGraph.graphHash,
+  "biome profile did not receive a distinct graph identity");
+assert(biomeGraph.definitions.find((stage: any) => stage.stageId === "biome-field")?.dependencies.join(",") === "river-channel-carve",
+  "biome field is not source-fenced to channel-carved terrain");
+assert(biomeGraph.reverseDependencies["biome-field"].length === 0
+  && biomeGraph.reverseDependencies["river-channel-carve"].join(",") === "biome-field,edit-layers",
+  "biome field graph invalidation is not terminal and hydrology-bound");
 assert(createDefaultWorldTerrainCompiler("terrain-compile").identity.graphHash === initialGraph.graphHash, "default compiler profile no longer uses the exact legacy graph");
 assert(createHydrologyWorldTerrainCompiler("terrain-compile").identity.graphHash === hydrologyGraph.graphHash, "hydrology compiler profile identity does not match its graph");
+assert(createBiomeWorldTerrainCompiler("terrain-compile").identity.graphHash === biomeGraph.graphHash,
+  "biome compiler profile identity does not match its graph");
 
 const hydrologyMap = fixtureHydrologyMap();
 rejects(() => compileWorldTerrain({ ...input(), compiler: { version: WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION, config: config() } }), /requires a WorldMap hydrology recipe/, "hydrology profile accepted a map without a recipe");
 rejects(() => compileWorldTerrain({ ...hydrologyInput(hydrologyMap), compiler: { version: "1.0.0", config: config() } }), /requires compiler version/, "legacy profile silently ignored a hydrology recipe");
+rejects(() => compileWorldTerrain({ ...input(), compiler: { version: WORLD_BIOME_TERRAIN_COMPILER_VERSION, config: config() } }), /requires a WorldMap hydrology recipe/,
+  "biome profile accepted a map without hydrology authority");
+rejects(() => compileWorldTerrain({ ...input(), compiler: { version: "9.9.9", config: config() } }), /unsupported/,
+  "unknown compiler version silently selected a legacy graph");
 
 const hydrologyCold = compileWorldTerrain(hydrologyInput(hydrologyMap));
 assert(hydrologyCold.manifest.schema === "limina.derived-revision-manifest/v2", "recipe compile did not emit manifest v2");
@@ -420,12 +449,145 @@ const decodedWater = decodeHydrologyWaterArtifact(hydrologyWaterGlobal.bytes, {
   erosionStageKey: hydrologyCold.snapshot.stageKeys.erosion["@global"],
   compilerGraphHash: hydrologyGraph.graphHash,
 });
+const sampleCompiledTerrain = (compiled: any, x: number, z: number): number => {
+  const compiledTerrainTiles = compiled.artifacts.filter((artifact: any) => artifact.scope === "chunk")
+    .map((artifact: any) => decodeTerrainChunkArtifact(artifact.bytes).tile);
+  const tile = compiledTerrainTiles.find((candidate: any) => x >= candidate.origin[0] - candidate.scale[0] / 2
+    && x <= candidate.origin[0] + candidate.scale[0] / 2 && z >= candidate.origin[2] - candidate.scale[2] / 2
+    && z <= candidate.origin[2] + candidate.scale[2] / 2);
+  if (tile === undefined) throw new Error(`no compiled terrain tile contains generated reach point ${x},${z}`);
+  const u = (x - (tile.origin[0] - tile.scale[0] / 2)) / tile.scale[0] * (tile.ncols - 1);
+  const v = (z - (tile.origin[2] - tile.scale[2] / 2)) / tile.scale[2] * (tile.nrows - 1);
+  const x0 = Math.floor(u), x1 = Math.min(tile.ncols - 1, x0 + 1), tx = u - x0;
+  const z0 = Math.floor(v), z1 = Math.min(tile.nrows - 1, z0 + 1), tz = v - z0;
+  const top = tile.heights[z0 * tile.ncols + x0] + (tile.heights[z0 * tile.ncols + x1] - tile.heights[z0 * tile.ncols + x0]) * tx;
+  const bottom = tile.heights[z1 * tile.ncols + x0] + (tile.heights[z1 * tile.ncols + x1] - tile.heights[z1 * tile.ncols + x0]) * tx;
+  return tile.origin[1] + (top + (bottom - top) * tz) * tile.scale[1];
+};
 const hydrologyField = createMapTerrainField({ worldMap: hydrologyMap, seed: 7, baseAmplitude: 12, erosionRecipe: NO_EROSION_RECIPE, gridId: GRID_ID });
 assert(decodedHydrology.topology.rows === hydrologyField.masterRes && decodedHydrology.topology.cols === hydrologyField.masterRes, "hydrology artifact dimensions do not match the eroded master field");
 assert(decodedHydrology.placement.originX === hydrologyField.bounds.minX && decodedHydrology.placement.originZ === hydrologyField.bounds.minZ, "hydrology artifact placement does not match the master field origin");
 assert(decodedHydrology.topology.cellSizeM === hydrologyField.masterStep, "hydrology artifact cell size does not match the master field");
 assert(decodedWater.topology.rows === hydrologyField.masterRes && decodedWater.topology.cols === hydrologyField.masterRes,
   "generated water topology dimensions do not match the master field");
+
+const channelMap = fixtureHydrologyMap({ riverMinCatchmentAreaM2: 1 });
+const channelCompile = compileWorldTerrain(hydrologyInput(channelMap));
+const channelHydrology = channelCompile.artifacts.find((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE);
+const channelWaterArtifact = channelCompile.artifacts.find((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE);
+const channelWater = decodeHydrologyWaterArtifact(channelWaterArtifact.bytes, {
+  hydrologyFieldContentHash: channelHydrology.contentHash,
+  recipeHash: compilerContentHash(channelMap.hydrology),
+  erosionStageKey: channelCompile.snapshot.stageKeys.erosion["@global"],
+  compilerGraphHash: hydrologyGraph.graphHash,
+});
+assert(channelWater.topology.reaches.length > 0, "channel fixture produced no generated reach to verify carved terrain");
+for (const reach of channelWater.topology.reaches) for (let point = 0; point < reach.points.length; point++) {
+  const terrainHeight = sampleCompiledTerrain(channelCompile, reach.points[point][0], reach.points[point][1]);
+  assert(reach.surfaceElevationsM[point] - terrainHeight >= 0.25,
+    `generated reach '${reach.id}' point ${point} is still a terrain veneer (${reach.surfaceElevationsM[point] - terrainHeight}m column)`);
+}
+assert(channelCompile.diagnostics[0].details.riverChannelCarve.carvedSamples > 0
+  && channelCompile.diagnostics[0].details.riverChannelCarve.bankSamples > 0,
+"compiler did not report an applied generated-reach bed and bank carve");
+
+const biomeCold = compileWorldTerrain(biomeInput(hydrologyMap));
+const biomeGlobals = derivedGlobalArtifacts(biomeCold.manifest);
+assert(biomeGlobals.length === 5, "biome profile did not publish five global artifact descriptors");
+assert(biomeGlobals.map((artifact: any) => artifact.artifactType).join(",")
+  === `${BIOME_FIELD_ARTIFACT_TYPE},${HYDROLOGY_FIELD_ARTIFACT_TYPE},${HYDROLOGY_WATER_ARTIFACT_TYPE},${NAVIGATION_INDEX_ARTIFACT_TYPE},${WORLD_OVERVIEW_ARTIFACT_TYPE}`,
+"biome profile global descriptors are not canonically artifact-type sorted");
+const biomeDescriptor = biomeGlobals.find((artifact: any) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE);
+const biomeBytes = biomeCold.artifacts.find((artifact: any) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE);
+assert(biomeDescriptor?.mediaType === BIOME_FIELD_ARTIFACT_MEDIA_TYPE && biomeBytes?.scope === "global"
+  && biomeDescriptor.contentHash === biomeBytes.contentHash && biomeDescriptor.byteLength === biomeBytes.bytes.byteLength,
+"biome field descriptor is not media/hash/length-bound to emitted bytes");
+const decodedBiome = decodeBiomeFieldArtifact(biomeBytes.bytes);
+assert(decodedBiome.field.grid.rows === hydrologyField.masterRes && decodedBiome.field.grid.cols === hydrologyField.masterRes
+  && decodedBiome.field.grid.origin[0] === hydrologyField.bounds.minX && decodedBiome.field.grid.origin[1] === hydrologyField.bounds.minZ
+  && decodedBiome.field.grid.cellSizeM === hydrologyField.masterStep,
+"biome field is not on the exact pre-edit globally eroded master grid");
+assert(decodedBiome.field.pack.id === "limina-biomes-core" && decodedBiome.field.pack.version === "1.0.0"
+  && decodedBiome.field.topN === 4 && decodedBiome.field.diagnostics.influences === 0 && decodedBiome.field.diagnostics.modifiers === 4,
+"biome field did not publish the pinned library/rank/policy metadata");
+assert(WORLD_BIOME_FIELD_POLICY.modifiers.map((modifier: any) => modifier.targetBiomeId).join(",") === "alpine,canyon,deep-ocean,river",
+  "biome profile environmental modifier targets changed");
+const repeatedBiome = compileWorldTerrain(Object.fromEntries(Object.entries(biomeInput(hydrologyMap)).reverse()));
+const repeatedBiomeBytes = repeatedBiome.artifacts.find((artifact: any) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE);
+assert(canonicalDerivedRevisionManifest(biomeCold.manifest) === canonicalDerivedRevisionManifest(repeatedBiome.manifest)
+  && canonicalCompilerSnapshot(biomeCold.snapshot) === canonicalCompilerSnapshot(repeatedBiome.snapshot)
+  && bytesEqual(biomeBytes.bytes, repeatedBiomeBytes.bytes),
+"repeat/reordered biome compile changed canonical snapshot, manifest, or artifact bytes");
+
+const biomeAvailable = availableManifestHashes(biomeCold);
+const biomeWarm = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  previousSnapshot: biomeCold.snapshot,
+  previousManifest: biomeCold.manifest,
+  availableArtifactHashes: biomeAvailable,
+}));
+assert(biomeWarm.artifacts.length === 0 && biomeWarm.reusedArtifacts.length === biomeCold.manifest.chunks.length + 5,
+  "warm biome compile did not reuse every chunk and global artifact");
+const missingBiome = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  previousSnapshot: biomeCold.snapshot,
+  previousManifest: biomeCold.manifest,
+  availableArtifactHashes: biomeAvailable.filter((hash) => hash !== biomeDescriptor.contentHash),
+}));
+assert(missingBiome.artifacts.length === 1 && missingBiome.artifacts[0].artifactType === BIOME_FIELD_ARTIFACT_TYPE
+  && missingBiome.reusedArtifacts.length === biomeCold.manifest.chunks.length + 4,
+"missing biome cache availability rebuilt unrelated artifacts");
+const wrongBiomeMediaManifest = clone(biomeCold.manifest);
+delete wrongBiomeMediaManifest.manifestHash;
+wrongBiomeMediaManifest.globalArtifacts.find((artifact: any) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE).mediaType = "application/octet-stream";
+const resealedWrongBiomeMedia = createDerivedRevisionManifest(wrongBiomeMediaManifest);
+const wrongBiomeMedia = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  previousSnapshot: biomeCold.snapshot,
+  previousManifest: resealedWrongBiomeMedia,
+  availableArtifactHashes: availableManifestHashes({ manifest: resealedWrongBiomeMedia }),
+}));
+assert(wrongBiomeMedia.artifacts.length === 1 && wrongBiomeMedia.artifacts[0].artifactType === BIOME_FIELD_ARTIFACT_TYPE,
+  "wrong biome media type did not rebuild only the biome field");
+const biomeThresholdMap = fixtureHydrologyMap({ riverMinCatchmentAreaM2: 40_000, waterfallMinDropM: 5 });
+const biomeThresholds = compileWorldTerrain(biomeInput(biomeThresholdMap, [], [], {
+  previousSnapshot: biomeCold.snapshot,
+  previousManifest: biomeCold.manifest,
+  availableArtifactHashes: biomeAvailable,
+}));
+assert(biomeThresholds.artifacts.length === biomeCold.manifest.chunks.length + 3
+  && biomeThresholds.artifacts.some((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE)
+  && biomeThresholds.artifacts.some((artifact: any) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE)
+  && biomeThresholds.artifacts.some((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE)
+  && biomeThresholds.reusedArtifacts.length === 2,
+"generated-water threshold change did not rebuild its channel terrain, overview, and biome consumers");
+
+const hydrologyToBiome = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  previousSnapshot: hydrologyCold.snapshot,
+  previousManifest: hydrologyCold.manifest,
+  availableArtifactHashes: availableManifestHashes(hydrologyCold),
+}));
+assert(hydrologyToBiome.artifacts.length === hydrologyCold.manifest.chunks.length + 5 && hydrologyToBiome.reusedArtifacts.length === 0,
+  "hydrology-to-biome profile transition was not cold");
+const biomeToHydrology = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
+  previousSnapshot: biomeCold.snapshot,
+  previousManifest: biomeCold.manifest,
+  availableArtifactHashes: biomeAvailable,
+}));
+assert(biomeToHydrology.manifest.manifestHash === hydrologyCold.manifest.manifestHash
+  && biomeToHydrology.snapshot.snapshotHash === hydrologyCold.snapshot.snapshotHash
+  && biomeToHydrology.artifacts.every((artifact: any, index: number) => bytesEqual(artifact.bytes, hydrologyCold.artifacts[index].bytes)),
+"biome-to-hydrology transition did not restore exact 1.2 snapshot, manifest, and artifact bytes");
+
+let biomePolls = 0;
+compileWorldTerrain(biomeInput(hydrologyMap, [], [], { cancellation: { shouldCancel: () => { biomePolls++; return false; } } }));
+let cancelledBiomePolls = 0;
+rejects(() => compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  cancellation: { shouldCancel: () => ++cancelledBiomePolls > Math.floor(biomePolls * 0.8) },
+})), /world terrain compile cancelled/, "biome field/compiler cancellation was not translated at the compiler boundary");
+const biomeArtifactBytes = biomeCold.diagnostics[0].details.artifactBytes;
+rejects(() => compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
+  compiler: { version: WORLD_BIOME_TERRAIN_COMPILER_VERSION, config: config({ limits: {
+    maxChunks: 4096, maxMasterSamples: 1_050_625, maxArtifactBytes: biomeArtifactBytes - biomeBytes.bytes.byteLength,
+  } }) },
+})), /artifact bytes exceed cap/, "biome bytes were omitted from the compiler artifact cap");
 
 const hydrologyAvailable = availableManifestHashes(hydrologyCold);
 const hydrologyWarm = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
@@ -510,10 +672,13 @@ const wetter = compileWorldTerrain(hydrologyInput(wetterMap, [], [], {
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(wetter.artifacts.length === 2 && wetter.artifacts.every((artifact: any) => artifact.scope === "global"),
-  "precipitation edit did not emit exactly both hydrology globals");
-assert(wetter.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 2, "precipitation edit did not reuse all terrain chunks, navigation, and overview");
-assert(wetter.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId] === hydrologyCold.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId], "precipitation leaked into terrain source identity");
+assert(wetter.artifacts.length === hydrologyCold.manifest.chunks.length + 3
+  && wetter.artifacts.some((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE)
+  && wetter.artifacts.some((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE)
+  && wetter.artifacts.some((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE),
+  "precipitation edit did not rebuild hydrology and its channel-carved terrain");
+assert(wetter.reusedArtifacts.length === 1, "precipitation edit did not isolate reuse to navigation");
+assert(wetter.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId] !== hydrologyCold.snapshot.stageKeys.render[hydrologyCold.manifest.chunks[0].chunkId], "precipitation failed to invalidate channel terrain identity");
 
 const thresholdMap = fixtureHydrologyMap({ riverMinCatchmentAreaM2: 40_000, waterfallMinDropM: 5 });
 const thresholds = compileWorldTerrain(hydrologyInput(thresholdMap, [], [], {
@@ -521,10 +686,12 @@ const thresholds = compileWorldTerrain(hydrologyInput(thresholdMap, [], [], {
   previousManifest: hydrologyCold.manifest,
   availableArtifactHashes: hydrologyAvailable,
 }));
-assert(thresholds.artifacts.length === 1 && thresholds.artifacts[0].artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
-  "threshold edit did not rebuild only generated water topology");
-assert(thresholds.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 3,
-  "threshold edit failed to reuse all chunks and the raw hydrology field");
+assert(thresholds.artifacts.length === hydrologyCold.manifest.chunks.length + 2
+  && thresholds.artifacts.some((artifact: any) => artifact.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE)
+  && thresholds.artifacts.some((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE),
+  "threshold edit did not rebuild generated water and its channel-carved terrain");
+assert(thresholds.reusedArtifacts.length === 2,
+  "threshold edit failed to reuse only navigation and the raw hydrology field");
 assert(thresholds.snapshot.stageKeys["hydrology-field"]["@global"] === hydrologyCold.snapshot.stageKeys["hydrology-field"]["@global"],
   "raw-field-irrelevant thresholds changed the hydrology field stage key");
 assert(thresholds.snapshot.snapshotHash !== hydrologyCold.snapshot.snapshotHash, "threshold edit did not change generated-water compiler identity");

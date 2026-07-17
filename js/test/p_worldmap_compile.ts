@@ -62,6 +62,7 @@ assert(parsed.land.length >= 1, "compiled map must have at least one land polygo
 assert(parsed.biomes.length === 3, `expected 3 biome regions (mountain/swamp/grass), got ${parsed.biomes.length}`);
 assert(parsed.waterways.length === 3, `expected 3 waterway features, got ${parsed.waterways.length}`);
 assert(parsed.routes.length === 2, `expected 2 route features, got ${parsed.routes.length}`);
+assert(parsed.routes[0].id === "f17000001" && parsed.routes[1].id === "f17000002", "Atlas road feature ids must survive WorldMap compilation in input order");
 
 const goodVerify = verifyWorldMap(worldMapA);
 assert(goodVerify.ok, `verifyWorldMap must report ok:true for an untampered compile (expected ${goodVerify.expected}, actual ${goodVerify.actual})`);

@@ -70,7 +70,19 @@ export interface NavAgent {
   /** Cell key of the active target, so a re-issued moveTo to the SAME cell keeps walking
    *  the cached path instead of replanning. Empty when there is no active target. */
   targetKey: string;
+  /** Navigation revision that produced `path`. Dynamic portal changes invalidate it. */
+  pathRevision: number;
 }
+
+export interface NavPortal {
+  /** Stable semantic identity supplied by the owning gameplay system. */
+  id: string;
+  /** World-XZ footprint whose overlapping grid cells are unavailable while closed. */
+  bounds: AABB2D;
+  open: boolean;
+}
+
+interface NavPortalRecord extends NavPortal { cells: number[]; }
 
 /** A world-XZ axis-aligned bounding box (blocked region / region bounds). */
 export interface AABB2D {
@@ -176,6 +188,84 @@ function aabbOverlap(a: AABB2D, b: AABB2D): boolean {
 export class NavmeshManager {
   private grid: NavGrid | null = null;
   private readonly agents = new Map<string, NavAgent>();
+  private readonly portals = new Map<string, NavPortalRecord>();
+  private closedPortalCounts = new Uint32Array(0);
+  private navRevision = 0;
+
+  /** Monotonic invalidation revision for base-grid rebuilds and effective portal changes. */
+  getRevision(): number { return this.navRevision; }
+
+  registerPortal(id: string, bounds: AABB2D, open = true): boolean {
+    if (id.trim().length === 0 || this.portals.has(id) || !this.validBounds(bounds)) return false;
+    const portal: NavPortalRecord = { id, bounds: { ...bounds }, open, cells: this.portalCells(bounds) };
+    this.portals.set(id, portal);
+    if (!open) this.adjustClosedCounts(portal.cells, 1);
+    this.navRevision++;
+    return true;
+  }
+
+  setPortalOpen(id: string, open: boolean): boolean {
+    const portal = this.portals.get(id);
+    if (portal === undefined) return false;
+    if (portal.open !== open) {
+      this.adjustClosedCounts(portal.cells, open ? -1 : 1);
+      portal.open = open;
+      this.navRevision++;
+    }
+    return true;
+  }
+
+  isPortalOpen(id: string): boolean | undefined { return this.portals.get(id)?.open; }
+
+  unregisterPortal(id: string): boolean {
+    const portal = this.portals.get(id);
+    if (portal === undefined) return false;
+    if (!portal.open) this.adjustClosedCounts(portal.cells, -1);
+    this.portals.delete(id);
+    this.navRevision++;
+    return true;
+  }
+
+  private validBounds(bounds: AABB2D): boolean {
+    return Number.isFinite(bounds.minX) && Number.isFinite(bounds.minZ)
+      && Number.isFinite(bounds.maxX) && Number.isFinite(bounds.maxZ)
+      && bounds.maxX > bounds.minX && bounds.maxZ > bounds.minZ;
+  }
+
+  private portalCells(bounds: AABB2D): number[] {
+    const g = this.grid;
+    if (g === null) return [];
+    const cells: number[] = [];
+    const minCol = Math.max(0, Math.floor((bounds.minX - g.originX) / g.cellSize));
+    const maxCol = Math.min(g.cols - 1, Math.ceil((bounds.maxX - g.originX) / g.cellSize) - 1);
+    const minRow = Math.max(0, Math.floor((bounds.minZ - g.originZ) / g.cellSize));
+    const maxRow = Math.min(g.rows - 1, Math.ceil((bounds.maxZ - g.originZ) / g.cellSize) - 1);
+    for (let row = minRow; row <= maxRow; row++) for (let col = minCol; col <= maxCol; col++) {
+      const cell = {
+        minX: g.originX + col * g.cellSize, minZ: g.originZ + row * g.cellSize,
+        maxX: g.originX + (col + 1) * g.cellSize, maxZ: g.originZ + (row + 1) * g.cellSize,
+      };
+      if (aabbOverlap(cell, bounds)) cells.push(row * g.cols + col);
+    }
+    return cells;
+  }
+
+  private adjustClosedCounts(cells: readonly number[], delta: 1 | -1): void {
+    for (const idx of cells) {
+      const next = this.closedPortalCounts[idx] + delta;
+      if (next < 0) throw new Error("navmesh portal overlay refcount underflow");
+      this.closedPortalCounts[idx] = next;
+    }
+  }
+
+  private rebuildPortalOverlay(): void {
+    const size = this.grid === null ? 0 : this.grid.cols * this.grid.rows;
+    this.closedPortalCounts = new Uint32Array(size);
+    for (const portal of this.portals.values()) {
+      portal.cells = this.portalCells(portal.bounds);
+      if (!portal.open) this.adjustClosedCounts(portal.cells, 1);
+    }
+  }
 
   /** Build a walkable grid over a world-XZ region. Returns the grid dimensions and the
    *  walkable/blocked cell counts. Replaces any existing grid (and leaves agents, whose
@@ -184,6 +274,8 @@ export class NavmeshManager {
     const { bounds, cellSize } = opts;
     if (!(cellSize > 0) || bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) {
       this.grid = null;
+      this.rebuildPortalOverlay();
+      this.navRevision++;
       return { ok: false, cols: 0, rows: 0, walkable: 0, blocked: 0 };
     }
     const cols = Math.max(1, Math.ceil((bounds.maxX - bounds.minX) / cellSize));
@@ -258,6 +350,8 @@ export class NavmeshManager {
     let blocked = 0;
     for (let i = 0; i < walkable.length; i++) if (walkable[i] === 0) blocked++;
     this.grid = { originX: bounds.minX, originZ: bounds.minZ, cellSize, cols, rows, walkable, heights, diagonal };
+    this.rebuildPortalOverlay();
+    this.navRevision++;
     return { ok: true, cols, rows, walkable: walkable.length - blocked, blocked };
   }
 
@@ -303,12 +397,17 @@ export class NavmeshManager {
     return dc + dr;
   }
 
+  private isCellWalkable(idx: number): boolean {
+    const g = this.grid!;
+    return g.walkable[idx] !== 0 && this.closedPortalCounts[idx] === 0;
+  }
+
   /** Deterministic A* over the grid. Returns the list of cell indices (start..goal) or
    *  null when no path exists. Fixed neighbour order + (f,idx) heap ordering ⇒ identical
    *  result every run. Diagonal moves never cut blocked corners. */
   private aStar(startIdx: number, goalIdx: number): number[] | null {
     const g = this.grid!;
-    if (g.walkable[startIdx] === 0 || g.walkable[goalIdx] === 0) return null;
+    if (!this.isCellWalkable(startIdx) || !this.isCellWalkable(goalIdx)) return null;
     if (startIdx === goalIdx) return [startIdx];
 
     const n = g.cols * g.rows;
@@ -341,10 +440,10 @@ export class NavmeshManager {
         const nc = cc + dc, nr = cr + dr;
         if (nc < 0 || nc >= g.cols || nr < 0 || nr >= g.rows) continue;
         const ni = nr * g.cols + nc;
-        if (g.walkable[ni] === 0 || closed[ni] === 1) continue;
+        if (!this.isCellWalkable(ni) || closed[ni] === 1) continue;
         // No corner-cutting: a diagonal step needs both shared orthogonal cells open.
         if (dc !== 0 && dr !== 0) {
-          if (g.walkable[cr * g.cols + nc] === 0 || g.walkable[nr * g.cols + cc] === 0) continue;
+          if (!this.isCellWalkable(cr * g.cols + nc) || !this.isCellWalkable(nr * g.cols + cc)) continue;
         }
         const tentative = gScore[cur.idx] + cost;
         if (tentative < gScore[ni]) {
@@ -367,7 +466,7 @@ export class NavmeshManager {
     const gc = this.worldToCell(to[0], to[2]);
     const si = sc.row * g.cols + sc.col;
     const gi = gc.row * g.cols + gc.col;
-    if (g.walkable[si] === 0 || g.walkable[gi] === 0) return [];
+    if (!this.isCellWalkable(si) || !this.isCellWalkable(gi)) return [];
     const cells = this.aStar(si, gi);
     if (cells === null) return [];
     if (cells.length === 1) {
@@ -388,7 +487,7 @@ export class NavmeshManager {
     const gc = this.worldToCell(to[0], to[2]);
     const si = sc.row * g.cols + sc.col;
     const gi = gc.row * g.cols + gc.col;
-    if (g.walkable[si] === 0 || g.walkable[gi] === 0) return false;
+    if (!this.isCellWalkable(si) || !this.isCellWalkable(gi)) return false;
     return this.aStar(si, gi) !== null;
   }
 
@@ -397,7 +496,7 @@ export class NavmeshManager {
   private ensureAgent(entity: string): NavAgent {
     let a = this.agents.get(entity);
     if (a === undefined) {
-      a = { entity, speed: DEFAULT_SPEED, pos: [0, 0, 0], posInit: false, path: [], pathIndex: 0, targetKey: "" };
+      a = { entity, speed: DEFAULT_SPEED, pos: [0, 0, 0], posInit: false, path: [], pathIndex: 0, targetKey: "", pathRevision: -1 };
       this.agents.set(entity, a);
     }
     return a;
@@ -432,15 +531,16 @@ export class NavmeshManager {
   planPath(entity: string, from: [number, number, number], target: [number, number, number], speed?: number): boolean {
     const a = this.ensureAgent(entity);
     if (speed !== undefined && speed > 0) a.speed = speed;
-    if (this.grid === null) { a.path = []; a.pathIndex = 0; a.targetKey = ""; return false; }
+    if (this.grid === null) { a.path = []; a.pathIndex = 0; a.targetKey = ""; a.pathRevision = this.navRevision; return false; }
     const tc = this.worldToCell(target[0], target[2]);
     const key = `${tc.col}_${tc.row}`;
-    if (a.targetKey === key && a.path.length > 0) return true;
+    if (a.targetKey === key && a.path.length > 0 && a.pathRevision === this.navRevision) return true;
     const path = this.findPath(from, target);
-    if (path.length === 0) { a.path = []; a.pathIndex = 0; a.targetKey = ""; return false; }
+    if (path.length === 0) { a.path = []; a.pathIndex = 0; a.targetKey = ""; a.pathRevision = this.navRevision; return false; }
     a.path = path;
     a.pathIndex = 0;
     a.targetKey = key;
+    a.pathRevision = this.navRevision;
     return true;
   }
 

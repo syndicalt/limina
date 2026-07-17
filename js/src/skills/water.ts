@@ -384,8 +384,9 @@ export function registerWaterSkills(
         }
       }
       const key = `legacy:surface:${legacySequence++}`;
-      const mounted = managerFor(ctx.world.scene).mount(key, "ocean", () => (
-        buildWaterSurface({ level, size: input.size, color: input.color, depth, peek: ctx.world.peek === true }) as THREE.Mesh
+      const mounted = managerFor(ctx.world.scene).mount(key, "ocean", (waterQuality) => (
+        buildWaterSurface({ level, size: input.size, color: input.color, depth, peek: ctx.world.peek === true,
+          waveCount: waterQuality.waveCount, sceneOptics: waterQuality.sceneOptics }) as THREE.Mesh
       ), { source: "legacy-skill" });
       const surface: WaterSurfaceState = { level, size: input.size, color: input.color, mesh: mounted.entry.mesh, key, kind: "ocean" };
       surfaces.push(surface);
@@ -448,6 +449,7 @@ export function registerWaterSkills(
       surfaceElevationsM,
       seaLevel: level,
       waveCount: input.mapDerived === true ? waterQuality.waveCount : undefined,
+      sceneOptics: waterQuality.sceneOptics,
       class: input.class,
       order: input.order,
     }) as THREE.Mesh, { class: input.class, ...(input.order === undefined ? {} : { order: input.order }) }, input.identity ?? key);
@@ -584,6 +586,7 @@ export function registerWaterSkills(
         color: input.color,
         segments: waterQuality.oceanSegments,
         waveCount: waterQuality.waveCount,
+        sceneOptics: waterQuality.sceneOptics,
         depth: terrainSource === undefined ? undefined : {
           bounds: { minX, minZ, maxX, maxZ },
           resolution: waterQuality.depthRasterSize,
@@ -626,6 +629,7 @@ export function registerWaterSkills(
             footprint: { points, ...(holes === undefined ? {} : { holes }) },
             color: input.color,
             waveCount: waterQuality.waveCount,
+            sceneOptics: waterQuality.sceneOptics,
             depth: { texture, bounds, coverageChannel: true },
           });
         }, { mapHash: hash, bodyId: body.id, bodyKind: body.kind }, semanticIdentity("authored-body", hash, body.id, input.color ?? null));

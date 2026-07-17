@@ -1,0 +1,89 @@
+import { canonicalStringify } from "../authoring/canonical.ts";
+import { sha256 } from "../world/sha256.mjs";
+
+const HASH = /^sha256:[0-9a-f]{64}$/;
+const ID = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
+const CUE_KINDS = ["dimensions", "adjacency", "alignment", "construction-logic", "silhouette", "material"] as const;
+const CHECKPOINTS = ["reference-lock", "massing", "structure", "junctions", "materials", "integration"] as const;
+const MAX_TEXT = 8_192;
+
+export type ReferenceCueKind = typeof CUE_KINDS[number];
+export type ReferenceCheckpoint = typeof CHECKPOINTS[number];
+export interface ReferenceFirstSource { readonly id:string; readonly sourceUrl:string; readonly creator:string; readonly license:string; readonly retrievedAt:string; readonly localPath:string; readonly sha256:string; readonly roles:readonly string[] }
+export interface ExtractedReferenceCue { readonly id:string; readonly kind:ReferenceCueKind; readonly statement:string; readonly sourceIds:readonly string[]; readonly measurement:{readonly name:string;readonly unit:"m"|"deg"|"ratio"|"count"|"boolean";readonly minimum?:number;readonly target?:number;readonly maximum?:number}; readonly confidence:"direct"|"derived"; readonly derivation?:string }
+export interface ReferenceDecisionClass { readonly id:string; readonly question:string; readonly sourceIds:readonly string[]; readonly cues:readonly ExtractedReferenceCue[]; readonly chosenPattern:{readonly id:string;readonly rationale:string;readonly cueIds:readonly string[]}; readonly rejectedAlternatives:readonly {readonly id:string;readonly rationale:string;readonly cueIds:readonly string[]}[] }
+export interface ReferenceFirstContract {
+  readonly schema:"limina.reference-first-modeling/v1";
+  readonly id:string;
+  readonly subjectKind:"building"|"building-subsystem"|"furniture"|"prop"|"material";
+  readonly referenceBoard:{readonly path:string;readonly sha256:string;readonly id:string};
+  readonly acquisitionPolicy:{readonly maximumSources:number;readonly maximumAgeDays:number;readonly runtimeNetwork:"forbidden";readonly sourceUse:"reference-only";readonly automaticProductionImport:"forbidden"};
+  readonly sources:readonly ReferenceFirstSource[];
+  readonly decisionClasses:readonly ReferenceDecisionClass[];
+  readonly geometryDecisions:readonly {readonly id:string;readonly decisionClassId:string;readonly cueIds:readonly string[];readonly compilerConstraintIds:readonly string[]}[];
+  readonly compilerConstraints:readonly {readonly id:string;readonly cueIds:readonly string[];readonly assertion:string;readonly verification:"compiler"|"blender"}[];
+  readonly evidenceCameras:readonly {readonly id:string;readonly cueIds:readonly string[];readonly view:string;readonly framing:string;readonly acceptance:string}[];
+  readonly checkpoints:readonly {readonly id:ReferenceCheckpoint;readonly cueIds:readonly string[];readonly evidenceCameraIds:readonly string[];readonly status:"pending"|"approved"|"rejected";readonly hitlDecisionHash?:string}[];
+  readonly referenceLock?:{readonly decision:"approve-exact-reference-set";readonly reviewer:string;readonly decidedAt:string;readonly authorityHash:string;readonly hitlDecisionHash:string};
+  readonly status:"draft"|"reference-approved";
+}
+
+type Plain = Record<string, unknown>;
+function fail(message:string):never { throw new Error(message); }
+function object(value:unknown, allowed:readonly string[], label:string):Plain {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail(`${label} must be a plain object`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.getOwnPropertySymbols(value).length) fail(`${label} must not contain symbol fields`);
+  for (const key of Object.keys(descriptors)) {
+    if (!allowed.includes(key)) fail(`${label} has unknown field '${key}'`);
+    const d = descriptors[key]!;
+    if (!("value" in d) || d.get !== undefined || d.set !== undefined) fail(`${label}.${key} must not be accessor-backed`);
+  }
+  return value as Plain;
+}
+function array(value:unknown, minimum:number, maximum:number, label:string):unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum) fail(`${label} must contain ${minimum} through ${maximum} items`);
+  if (Object.getOwnPropertySymbols(value).length) fail(`${label} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (let i=0;i<value.length;i++) {
+    const d=descriptors[String(i)];
+    if (!d || !("value" in d) || d.get !== undefined || d.set !== undefined) fail(`${label} must not be sparse or accessor-backed`);
+  }
+  for (const key of Object.keys(descriptors)) if (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key)) fail(`${label} has an unknown array property`);
+  return value;
+}
+function text(value:unknown,label:string):string { if(typeof value!=="string"||!value.trim()||value.length>MAX_TEXT)fail(`${label} is required and bounded`);return value; }
+function id(value:unknown,label:string):string { const out=text(value,label);if(!ID.test(out))fail(`${label} must be a stable lowercase id`);return out; }
+function hash(value:unknown,label:string):string { if(typeof value!=="string"||!HASH.test(value))fail(`${label} is invalid`);return value; }
+function finite(value:unknown,label:string):number { if(typeof value!=="number"||!Number.isFinite(value))fail(`${label} must be finite`);return value; }
+function local(value:unknown,label:string):string { const p=text(value,label);if(p.startsWith("/")||p.split("/").includes(".."))fail(`${label} must be repository-relative`);return p; }
+function timestamp(value:unknown,label:string):number { const t=Date.parse(text(value,label));if(!Number.isFinite(t))fail(`${label} is invalid`);return t; }
+function exactStrings(value:unknown,known:Set<string>,label:string,minimum=1,maximum=64):string[] { const a=array(value,minimum,maximum,label).map((v,i)=>id(v,`${label}[${i}]`));if(new Set(a).size!==a.length)fail(`${label} must be unique`);if(a.some(v=>!known.has(v)))fail(`${label} cites an unknown id`);return a; }
+function stringList(value:unknown,label:string,minimum=1,maximum=64):string[] { const a=array(value,minimum,maximum,label).map((v,i)=>text(v,`${label}[${i}]`));if(new Set(a).size!==a.length)fail(`${label} must be unique`);return a; }
+function authorityPayload(c:ReferenceFirstContract):unknown { return {referenceBoard:c.referenceBoard,sources:c.sources,decisionClasses:c.decisionClasses}; }
+export function referenceFirstAuthorityHash(value:ReferenceFirstContract):string { return `sha256:${sha256(canonicalStringify(authorityPayload(value)))}`; }
+
+/**
+ * Experimental authoring aid retained for compatibility with the reference-search spike.
+ * It is intentionally not exported by the architecture barrel and is not a prerequisite
+ * for BuildingProgram synthesis, compilation, engine review, or production packaging.
+ */
+export function validateReferenceFirstContract(value:unknown,nowMs=Date.now()):ReferenceFirstContract {
+  const root=object(value,["schema","id","subjectKind","referenceBoard","acquisitionPolicy","sources","decisionClasses","geometryDecisions","compilerConstraints","evidenceCameras","checkpoints","referenceLock","status"],"reference-first contract");
+  if(root.schema!=="limina.reference-first-modeling/v1")fail("unsupported reference-first contract");id(root.id,"contract id");
+  if(!["building","building-subsystem","furniture","prop","material"].includes(root.subjectKind as string))fail("unsupported reference-first subject");
+  const board=object(root.referenceBoard,["path","sha256","id"],"referenceBoard");local(board.path,"reference board path");hash(board.sha256,"reference board hash");id(board.id,"reference board id");
+  const policy=object(root.acquisitionPolicy,["maximumSources","maximumAgeDays","runtimeNetwork","sourceUse","automaticProductionImport"],"acquisitionPolicy");const maxSources=finite(policy.maximumSources,"maximumSources");if(!Number.isSafeInteger(maxSources)||maxSources<2||maxSources>8)fail("maximumSources must be an integer from 2 through 8");const maxAge=finite(policy.maximumAgeDays,"maximumAgeDays");if(!Number.isSafeInteger(maxAge)||maxAge<1||maxAge>3650)fail("maximumAgeDays must be an integer from 1 through 3650");if(policy.runtimeNetwork!=="forbidden")fail("runtime reference network access must be forbidden");if(policy.sourceUse!=="reference-only"||policy.automaticProductionImport!=="forbidden")fail("searched sources are reference-only and may not be imported automatically");
+  const sourceValues=array(root.sources,2,maxSources,"sources");const sourceIds=new Set<string>(),sourceUrls=new Set<string>(),sourceHashes=new Set<string>();for(const [i,v] of sourceValues.entries()){const s=object(v,["id","sourceUrl","creator","license","retrievedAt","localPath","sha256","roles"],`sources[${i}]`);const sourceId=id(s.id,"source id");if(sourceIds.has(sourceId))fail("source ids must be unique");sourceIds.add(sourceId);let url:URL;try{url=new URL(text(s.sourceUrl,"source URL"));}catch{fail("source URL is invalid");}if(url!.protocol!=="https:")fail("sources require HTTPS provenance");if(sourceUrls.has(url!.href))fail("sources must have independent URLs");sourceUrls.add(url!.href);text(s.creator,"source creator");if(text(s.license,"source license").toLowerCase()==="unknown")fail("source license may not be unknown");const t=timestamp(s.retrievedAt,"source retrieval timestamp");if(t>nowMs+86_400_000||nowMs-t>maxAge*86_400_000)fail("source is stale or has an invalid retrieval date");local(s.localPath,"source localPath");const sourceHash=hash(s.sha256,"source hash");if(sourceHashes.has(sourceHash))fail("sources must pin independent cached bytes");sourceHashes.add(sourceHash);stringList(s.roles,"source roles",1,16);}
+  const classes=array(root.decisionClasses,1,32,"decisionClasses");const classIds=new Set<string>(),cueIds=new Set<string>(),cueOwner=new Map<string,string>(),usedSources=new Set<string>();for(const [di,v] of classes.entries()){const d=object(v,["id","question","sourceIds","cues","chosenPattern","rejectedAlternatives"],`decisionClasses[${di}]`);const classId=id(d.id,"decision class id");if(classIds.has(classId))fail("decision class ids must be unique");classIds.add(classId);text(d.question,"decision question");const decisionSources=exactStrings(d.sourceIds,sourceIds,"decision sourceIds",2,8);const localCueIds=new Set<string>(),locallyCited=new Set<string>();for(const [ci,cv] of array(d.cues,2,32,"decision cues").entries()){const cue=object(cv,["id","kind","statement","sourceIds","measurement","confidence","derivation"],`cues[${ci}]`);const cueId=id(cue.id,"cue id");if(cueIds.has(cueId))fail("cue ids must be globally unique");cueIds.add(cueId);localCueIds.add(cueId);cueOwner.set(cueId,classId);if(!CUE_KINDS.includes(cue.kind as ReferenceCueKind))fail("unsupported cue kind");text(cue.statement,"cue statement");const cited=exactStrings(cue.sourceIds,new Set(decisionSources),"cue sourceIds");cited.forEach(s=>{usedSources.add(s);locallyCited.add(s)});const m=object(cue.measurement,["name","unit","minimum","target","maximum"],"cue measurement");text(m.name,"measurement name");if(!["m","deg","ratio","count","boolean"].includes(m.unit as string))fail("unsupported cue measurement unit");const nums=[m.minimum,m.target,m.maximum].filter(x=>x!==undefined);if(!nums.length)fail("cue requires a measurable bound or target");nums.forEach((x,i)=>finite(x,`measurement[${i}]`));if(m.minimum!==undefined&&m.maximum!==undefined&&finite(m.minimum,"minimum")>finite(m.maximum,"maximum"))fail("cue measurement bounds are inverted");if(cue.confidence==="derived")text(cue.derivation,"derived cue derivation");else if(cue.confidence!=="direct"||cue.derivation!==undefined)fail("cue confidence/derivation is inconsistent");}
+    if(decisionSources.some(s=>!locallyCited.has(s)))fail("every decision source must yield a measurable cue for that decision");const chosen=object(d.chosenPattern,["id","rationale","cueIds"],"chosenPattern");const chosenId=id(chosen.id,"chosen pattern id");text(chosen.rationale,"chosen pattern rationale");exactStrings(chosen.cueIds,localCueIds,"chosen pattern cueIds");const patternIds=new Set([chosenId]);for(const [ai,av] of array(d.rejectedAlternatives,1,16,"rejectedAlternatives").entries()){const alt=object(av,["id","rationale","cueIds"],`rejectedAlternatives[${ai}]`);const alternativeId=id(alt.id,"alternative id");if(patternIds.has(alternativeId))fail("chosen and rejected pattern ids must be unique");patternIds.add(alternativeId);text(alt.rationale,"alternative rationale");exactStrings(alt.cueIds,localCueIds,"alternative cueIds");}}
+  if(usedSources.size!==sourceIds.size)fail("unrelated image-only evidence is forbidden: every pinned source must yield a measurable cue");
+  const constraints=array(root.compilerConstraints,1,128,"compilerConstraints"),constraintIds=new Set<string>(),constraintCueIds=new Set<string>();for(const [i,v] of constraints.entries()){const x=object(v,["id","cueIds","assertion","verification"],`compilerConstraints[${i}]`);const xid=id(x.id,"constraint id");if(constraintIds.has(xid))fail("constraint ids must be unique");constraintIds.add(xid);exactStrings(x.cueIds,cueIds,"constraint cueIds").forEach(c=>constraintCueIds.add(c));text(x.assertion,"constraint assertion");if(!["compiler","blender"].includes(x.verification as string))fail("invalid constraint verification");}
+  const cameras=array(root.evidenceCameras,1,64,"evidenceCameras"),cameraIds=new Set<string>(),cameraCueIds=new Set<string>();for(const [i,v] of cameras.entries()){const camera=object(v,["id","cueIds","view","framing","acceptance"],`evidenceCameras[${i}]`);const cid=id(camera.id,"camera id");if(cameraIds.has(cid))fail("camera ids must be unique");cameraIds.add(cid);exactStrings(camera.cueIds,cueIds,"camera cueIds").forEach(c=>cameraCueIds.add(c));text(camera.view,"camera view");text(camera.framing,"camera framing");text(camera.acceptance,"camera acceptance");}
+  const geometry=array(root.geometryDecisions,1,128,"geometryDecisions"),geometryIds=new Set<string>(),geometryClasses=new Set<string>(),geometryCueIds=new Set<string>();for(const [i,v] of geometry.entries()){const g=object(v,["id","decisionClassId","cueIds","compilerConstraintIds"],`geometryDecisions[${i}]`);const geometryId=id(g.id,"geometry decision id");if(geometryIds.has(geometryId))fail("geometry decision ids must be unique");geometryIds.add(geometryId);const classId=id(g.decisionClassId,"geometry decision class");if(!classIds.has(classId))fail("geometry decision cites unknown decision class");geometryClasses.add(classId);const cues=exactStrings(g.cueIds,cueIds,"geometry decision cueIds");if(cues.some(c=>cueOwner.get(c)!==classId))fail("geometry decision may only use cues from its decision class");cues.forEach(c=>geometryCueIds.add(c));const mapped=exactStrings(g.compilerConstraintIds,constraintIds,"geometry decision constraintIds");for(const c of cues)if(!mapped.some(mid=>{const mv=constraints.find(x=>(x as Plain).id===mid) as Plain;return (mv.cueIds as string[]).includes(c)}))fail("every geometry cue must map through a cited compiler constraint");}
+  if([...classIds].some(c=>!geometryClasses.has(c)))fail("every architectural decision class requires an explicit geometry decision");if([...cueIds].some(c=>!geometryCueIds.has(c)||!constraintCueIds.has(c)||!cameraCueIds.has(c)))fail("every extracted cue must control geometry, a constraint, and an evidence camera");
+  const checkpoints=array(root.checkpoints,CHECKPOINTS.length,CHECKPOINTS.length,"checkpoints");let sequenceOpen=false;for(const [i,v] of checkpoints.entries()){const p=object(v,["id","cueIds","evidenceCameraIds","status","hitlDecisionHash"],`checkpoints[${i}]`);if(p.id!==CHECKPOINTS[i])fail("checkpoints must contain the ordered reference-lock through integration protocol");exactStrings(p.cueIds,cueIds,"checkpoint cueIds");exactStrings(p.evidenceCameraIds,cameraIds,"checkpoint cameraIds");if(!["pending","approved","rejected"].includes(p.status as string))fail("invalid checkpoint status");if(p.status==="approved"){if(sequenceOpen)fail("checkpoints must be approved in order");hash(p.hitlDecisionHash,"HITL decision hash");}else {sequenceOpen=true;if(p.hitlDecisionHash!==undefined)fail("only approved checkpoints may bind HITL decisions");if(p.status==="rejected"&&checkpoints.slice(i+1).some(x=>(x as Plain).status!=="pending"))fail("checkpoints after a rejection must remain pending");}}
+  const c=root as unknown as ReferenceFirstContract;if(c.status==="reference-approved"){const lock=object(root.referenceLock,["decision","reviewer","decidedAt","authorityHash","hitlDecisionHash"],"referenceLock");if(lock.decision!=="approve-exact-reference-set")fail("reference lock decision must approve the exact reference set");text(lock.reviewer,"reference lock reviewer");timestamp(lock.decidedAt,"reference lock decidedAt");const authority=hash(lock.authorityHash,"reference authority hash");const decisionHash=hash(lock.hitlDecisionHash,"reference lock HITL hash");if(authority!==referenceFirstAuthorityHash(c))fail("reference lock does not bind the exact source/query/cue authority");const checkpoint=checkpoints[0] as Plain;if(checkpoint.status!=="approved"||checkpoint.hitlDecisionHash!==decisionHash)fail("reference-approved status requires the same exact HITL reference-lock decision");}else if(c.status!=="draft")fail("invalid reference-first status");else if(root.referenceLock!==undefined)fail("draft contracts may not carry a reference lock");
+  return Object.freeze(c);
+}
+export function referenceFirstContractHash(value:unknown,nowMs=Date.now()):string { return `sha256:${sha256(canonicalStringify(validateReferenceFirstContract(value,nowMs)))}`; }

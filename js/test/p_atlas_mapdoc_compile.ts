@@ -71,14 +71,14 @@ const duplicateFeature = clone(doc) as any; duplicateFeature.maps[1].features[1]
 rejects(() => compileAtlasMapDoc({ mapsJsonText: canonicalMapDocText(duplicateFeature) }), /duplicated/, "duplicate active feature id was compiled");
 
 // Pin the aggregate compiler's current durable-provenance bytes, not merely repeatability. Adding
-// designRef/designIndex intentionally changes a fresh compile while stored ref-free WorldMaps stay
-// backward-compatible at the schema/hash boundary.
+// designRef/designIndex and stable Atlas route ids intentionally change a fresh compile while
+// stored routes without ids stay backward-compatible at the schema/hash boundary.
 const read = (assetId: string) => new TextDecoder().decode(ops.op_read_asset(assetId));
 const legacy = compileDesignMap({
   mapsJsonText: read("maps/_fixtures/eastern-watch/maps.json"),
   worldBibleText: read("maps/_fixtures/eastern-watch/world-bible.md"),
 }).worldMap as WorldMap;
-assert(legacy.provenance.contentHash === "ce9d2417e74fc2b06df86848188c086005234d671a630e0de7a740b2d08e5e38", "aggregate contentHash changed");
-assert(sha256(stableStringifyWorldMap(legacy)) === "40ec79cd79a5dac669be64557b904f6fed3ed3e94e5f2e5d8eea95c1ffe5ffa7", "aggregate canonical WorldMap bytes changed");
+assert(legacy.provenance.contentHash === "d8ac428c16f7018376452b4345ad49ef0fd1e9cc2eaab9cf95bc113ed94f13df", "aggregate contentHash changed");
+assert(sha256(stableStringifyWorldMap(legacy)) === "365fe3673c94de9cff67df644316e510de59a550f0035011878b884be79ff890", "aggregate canonical WorldMap bytes changed");
 
 ops.op_log("p_atlas_mapdoc_compile OK: active-only canonical Atlas compilation binds exact MapDoc bytes; hostile/noncanonical documents fail closed; aggregate WorldMap provenance bytes remain pinned.");

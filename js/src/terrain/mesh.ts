@@ -1,7 +1,7 @@
 // Phase 9 / workstream D — tile heightfield -> render mesh GEOMETRY.
 //
 // PURE math, no THREE, no DOM: `terrainTileGeometry` turns a `TerrainTile` into
-// flat typed arrays (positions / indices / normals). It is the visual twin of the
+// flat typed arrays (positions / indices / normals / UVs). It is the visual twin of the
 // native `op_physics_add_heightfield` collider — the vertices sit on the SAME world
 // surface the collider reads (heights*scaleY at the tile origin, rows->z cols->x),
 // so the rendered ground and the thing an agent stands on are the same surface
@@ -20,6 +20,8 @@ export interface TerrainGeometry {
   indices: Uint32Array;
   /** Per-vertex unit normals, length = nrows*ncols*3. */
   normals: Float32Array;
+  /** Canonical X/Z tile parameterization, length = nrows*ncols*2. */
+  uvs: Float32Array;
 }
 
 /**
@@ -55,6 +57,7 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
   const vertCount = nrows * ncols;
   const positions = new Float32Array(vertCount * 3);
   const normals = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
 
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
@@ -63,6 +66,8 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
       positions[o] = x0 + c * dxStep;
       positions[o + 1] = oy + heights[v] * scaleY;
       positions[o + 2] = z0 + r * dzStep;
+      uvs[v * 2] = c / (ncols - 1);
+      uvs[v * 2 + 1] = r / (nrows - 1);
     }
   }
 
@@ -109,5 +114,5 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
     }
   }
 
-  return { positions, indices, normals };
+  return { positions, indices, normals, uvs };
 }

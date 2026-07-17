@@ -1,0 +1,44 @@
+{
+  "schema": "limina.functional-building-production-closure/v1",
+  "milestone": "FB-2",
+  "status": "approved-closed",
+  "buildingId": "functional-hall-house-v4",
+  "productionPackage": {
+    "artifactId": "production/functional-hall-house-v4/r1",
+    "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/package-artifact-approved-v6.json",
+    "sha256": "sha256:1d5199c0bcb7360db4ad7074339f92587fd1d4e02d814f1b3c91356655b2d486",
+    "contentHash": "sha256:20063648f0c7aa7331b348e66bb714b419e2b8a1fa215045fb775d6c0ee3fb99",
+    "contractHash": "sha256:9c28cc3568d84caea0c04594d3c9273ff3b0205315b9e31a629a122c255bfb9f"
+  },
+  "review": {
+    "candidate": {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/package-artifact-candidate-reviewed-v5.json",
+      "sha256": "sha256:63a3b9d14f8c98b4ad003d02fb36c0133470413d9d05f9ea330a20d77fb0f293"
+    },
+    "decision": {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+      "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310",
+      "decisionId": "production/functional-hall-house-v4/r1/approve-user-r1",
+      "reviewer": "user"
+    },
+    "authority": {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+      "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+    },
+    "capture": {
+      "path": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "sha256": "sha256:fe28b7121598838007539dd88132b1bf42e2b3919e8416ea0f5369f76ad3ab76",
+      "backend": "native-webgpu",
+      "adapter": "NVIDIA GB10",
+      "timestampQueriesEnabled": false,
+      "xidObserved": false
+    }
+  },
+  "regressionAuthority": {
+    "fixed": true,
+    "verifier": "tools/architecture/production-r1-final-closure.test.mjs",
+    "fixtureFor": "FB-3",
+    "renderedChangesRequireNewHitlApproval": true
+  },
+  "next": "FB-3 occupancy and interaction"
+}

@@ -56,6 +56,7 @@ export interface BiomePackEntry {
   id: string;
   embedRadius?: number;
   lods?: { id: string; distance: number; hysteresis?: number }[];
+  treeLod?: { reducedId: string; reducedDistance: number; impostorId: string; impostorDistance: number; cullDistance: number; hysteresis?: number };
 }
 
 /** A project-supplied binding of roles → assets. Partial: any unmapped role is scattered as nothing
@@ -248,6 +249,7 @@ export function resolveLayer(layer: BiomeLayer, pack: BiomePack, survey: ReliefS
       ...(weight !== undefined ? { weight } : {}),
       ...(bound.embedRadius !== undefined ? { embedRadius: bound.embedRadius } : {}),
       ...(bound.lods !== undefined ? { lods: bound.lods } : {}),
+      ...(bound.treeLod !== undefined ? { treeLod: bound.treeLod } : {}),
     });
   }
   const config: ScatterConfig = { seed: layer.seed, assets: palette };

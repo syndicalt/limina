@@ -89,7 +89,7 @@ function hydrologyRecipe(h) {
 }
 
 function route(r) {
-  return { points: points(r.points), class: r.class };
+  return { ...(r.id !== undefined ? { id: r.id } : {}), points: points(r.points), class: r.class };
 }
 
 function designRef(ref) {

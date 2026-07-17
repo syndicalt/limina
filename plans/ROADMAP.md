@@ -41,10 +41,14 @@ Phases 6–12 are **done** (host seams, authoring surface, browser export-playba
 | **Capstone game = Beacon Quest** | ✅ First integrated proof complete — functional/design/export/package/render dogfood gate green; retained as a regression world | `games/beacon-quest/` · `plans/phase-12-playable-game-skills.md` |
 | **Phase 8 Mode B** (live wasm-Rapier browser authoring) | ✅ First cut shipped — sim-worker/SAB live authoring path and policy boundary are present and gated | `plans/phase-8-run-anywhere-plan.md` · `plans/kernel-plan.md` |
 | **On-Ramp** (`create-limina-app`, one-command outsider start) | ✅ First cut shipped — project-scoped editor persistence, self-contained scaffold, deterministic export, and scaffold gate | `tools/create-limina-app/` · `tools/scaffold/` |
-| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🟡 Active in **WB-F0 Slice 0.4** using the existing canonical erosion pipeline | `plans/world-builder-aaa.md` |
+| **Worldgen W2** (hydraulic + thermal erosion bake pass) | ✅ Shipped in **WB-F0 Slice 0.4** using the existing canonical erosion pipeline | `plans/world-builder-aaa.md` |
 | **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 **Re-scoped 2026-07-07** — the authored-map path is superseded by the Map Painter; only the pure-procedural hint API remains | `plans/worldgen-roadmap.md` |
 | **Worldgen W5** (native wgpu model port) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🟡 Sequenced in **WB-W1** after the Studio/terrain foundation | `plans/world-builder-aaa.md` |
+| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🟡 **WB-W1 mechanically complete; human-approved candidate recorded; formal release open** — generated topology/render/contact/swim, Atlas authoring, terrain-depth colour/coverage, downstream flow, bank foam/caustics, waterfall foam/mist, depth-safe viewport refraction, and owned planar reflection are shipped. The owner approved the fixed-camera v13 production-scene result against the locked visual floor; flow-driven foam and local turbulence are deferred polish. Native-backend, regression, lifecycle, and target-hardware evidence remain mandatory. | `plans/world-builder-aaa.md` |
+| **Biomes & production surface content** | 🟡 **WB-B2 runtime/content path shipped; human-approved candidate recorded; formal release open** — strict 40-biome metadata registry, deterministic full-world blended field, exact runtime pack, 256-chunk PBR surface/population publication, bounded camera-resident grass/tree systems, closure-gated content, compiler/runtime activation, and accepted-asset integration are green. The representative nature scene now has explicit owner approval at the Project Gorgon floor. Browser construction was reduced from 402.1s to 46.0s without changing scene counts; native regression, lifecycle, target-hardware evidence, texture compression, and post-buffer budgets remain. | `plans/world-builder-aaa.md` |
+| **Native asset-generation pipeline** | 🟡 **Chunk A + B1/B2 + B3 mechanical path complete; human-approved candidate recorded; formal release open** — the exact locked WorldMap deterministically rebuilds a complete 256-chunk 1.4 revision with one compiler-owned biome field, albedo/normal/ORM surface composites, 54,822 ecological anchors, package-selected dense grass, tree LODs, closure-authorized content, atomic publication, and authenticated runtime retrieval. Compiler→publisher→server E2E and no-write regeneration pass, and the v13 reference-floor production-scene candidate is owner-approved. The bundle remains `candidate` until native-backend, regression, lifecycle, target-hardware, compression, and buffer-budget evidence closes. | `plans/native-asset-generation-pipeline.md` |
+| **Hero asset build pipeline** | 🔲 **Planned** — a specialized profile over the native asset compiler for focal-point castles, sacred trees, monoliths, temples, and landmarks. Adds visual thesis, narrative construction, site/approach authority, bespoke interactions, silhouette-preserving LOD review, expanded guarded engine captures, and exact-artifact human approval without creating a second asset ecosystem. | `plans/hero-asset-pipeline.md` |
+| **Functional buildings** | 🟡 **FB-2 closed; FB-3 complete; FB-4 mechanically closed / visual HITL pending** — the approved R1 cottage remains the immutable v1 visual regression fixture. Strict v2 layered topology, room-aware acoustics/residency/spawns, structural multi-room compilation, Blender semantic round-trip, and real native capsule traversal across every portal/stair are CPU-verified. A new guarded engine artifact and exact owner approval remain required before FB-4 closes; FB-5 catalog and settlement publication authority are proceeding without bypassing that gate. | `plans/functional-buildings.md` |
 | **bmap pipeline** (real-world geo → limina world) | 🔲 Parked — un-park via its S0 | `plans/bmap-pipeline-spike.md` |
 
 The active execution sequence is the approved **Limina Studio Foundation + World Builder** program:
@@ -53,6 +57,49 @@ water/swim → WB-B2 biomes/surface → separate underground, aerial, scale, con
 The source-controlled execution detail is [`plans/world-builder-aaa.md`](./world-builder-aaa.md), with
 interactive review plan `plan-6c5cbc419f824a8d`. Older adoption and implementation plans remain
 historical evidence for the already-shipped Capstone, On-Ramp, and Live Authoring work.
+
+The hard visual release floor is [`plans/visual-fidelity-release-contract.md`](./visual-fidelity-release-contract.md).
+Diagnostic fixtures and headless pixel checks are engineering evidence only; they cannot be presented or
+accepted as visual results. Production captures become reviewable only after every automated facet passes,
+and release still requires explicit human comparison against the locked nine-frame reference set.
+
+### Backlog: agent-quality runtime and world-building guardrails
+
+Limina must make the reliable, performant path the default for agent-authored games and worlds. A
+generated feature is not complete because a demo runs: it must remain deterministic where simulation
+requires it, bounded, observable, testable, and responsive on declared target hardware and world scale.
+
+- Provide narrow domain APIs for gameplay and world authoring so agents do not invent competing update
+  loops, streaming systems, resource managers, or persistence paths.
+- Keep authoritative simulation fixed-step and replay-verifiable; isolate nondeterministic presentation,
+  networking, model inference, and wall-clock effects behind explicit recorded boundaries.
+- Require atomic authoring transactions, cancellation, rollback, and source-fenced derived artifacts so a
+  failed agent operation cannot leave a partially updated world.
+- Enforce per-frame CPU, GPU, allocation, draw-call, triangle, texture-memory, streaming, startup, and hitch
+  budgets in generated-project release gates, with target-hardware profiles rather than one desktop score.
+- Add static and runtime checks for unbounded loops, full-world scans, N+1 work, per-frame allocation,
+  blocking frame-loop I/O, resource leaks, unsafe low-level access, and nondeterministic state mutation.
+- Make compiled artifacts, instancing, LOD, pooling, culling, and bounded residency the standard APIs for
+  terrain, vegetation, POIs, navigation, and other high-cardinality world content.
+- Validate asset complexity, mesh LOD coverage, texture dimensions/compression, material count, animation
+  cost, collision complexity, and memory footprint during import and before publication.
+- Ship adversarial generated-project tests covering malformed assets, large worlds, rapid edits,
+  cancellation, concurrency, repeated Edit/Play cycles, save/load, replay equivalence, and constrained
+  hardware profiles.
+- Maintain representative fidelity and performance benchmark worlds with reproducible captures and
+  regression thresholds; visual improvement does not justify an unexplained frame-time or memory regression.
+- Expose actionable agent-facing diagnostics that identify the violated invariant, responsible artifact or
+  system, measured value, budget, and supported remediation rather than returning generic failures.
+- Add quality-scored generation gates covering correctness, determinism, boundedness, lifecycle ownership,
+  test depth, and measured performance before generated code or content can be accepted.
+- Permit low-level escape hatches only through explicit capabilities with tighter budgets, focused tests,
+  traceability, and human review.
+- Extend `create-limina-app` scaffold gates so every generated game inherits these protections and cannot
+  silently delete, disable, or bypass them.
+
+**Exit criterion:** an adversarial agent-generated reference game and world pass deterministic replay for
+authoritative state, save/load equivalence, lifecycle stress, bounded streaming, malformed-input rejection,
+and target-hardware frame-time/memory gates without project-specific reliability patches.
 
 ## The arc
 

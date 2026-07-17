@@ -38,7 +38,7 @@ Environment facts:
 These were each earned through a serious failure. Violating them is the worst thing you can do here.
 
 1. **Everything through the engine — never hardcode around a system.** If the engine has a system that does X (`village.build`, `terrain.create/deform`, `vegetation.scatter`, the layout planner, `asset.place`), you author THROUGH it. Never replace a working system with hand-typed one-off calls or hardcoded coordinates. If the system lacks a capability, **extend the system** — that is in scope; sidestepping it is not.
-2. **Agents author assets; the engine consumes them.** The engine must never become a modeler (no parameterized building generators — that shipped broken walls for every input). A build agent authors each asset as a whole bespoke artifact (Blender bpy script or bespoke Three.js) → bakes ONE GLB → the engine consumes it via `asset.place`.
+2. **Agents author assets; the engine consumes them.** Runtime/placement code must never model or assemble buildings. The offline engine-owned architectural compiler may resolve typed architectural constraints into one whole GLB; Blender only realizes that solved IR. The runtime consumes the complete artifact via `asset.place`.
 3. **Build → bake → QC → import. Never assemble at placement.** Every asset is a standalone GLB *before* it enters any world, so it can be inspected and rejected as a discrete deliverable. Live assembly at placement time is how broken cottages slipped into worlds.
 4. **Verify with eyes on the real GPU.** Visual claims require reading an actual render made with hardware GL (`--use-gl=angle`). SwiftShader is forbidden for pixel judgment — it cannot render shadows, caps instancing, and disagrees with the GPU. Never claim "verified" from a cropped or flattering angle; that lie has been told here twice and it destroyed trust.
 5. **Every mutation goes through `SkillRegistry.invoke`** (directly or via an `AuthorCommand`). The recorder patches exactly that method; a bypass is an unrecorded, unreplayable mutation — a determinism bug by construction.
@@ -122,7 +122,7 @@ Each of these has actually happened here. Check this list before acting; if what
 **#1 The hand-placed village.** Replacing `village.build` with hand-typed `architecture.building` calls on a flattened disc → overlapping identical boxes, user furious.
 *Rule: author through the system. If it lacks a capability, extend the system; never route around it.*
 
-**#2 The engine-as-modeler.** Building a parameterized generator inside the engine to model buildings → broken walls for every input.
+**#2 The runtime-as-modeler.** Building or assembling architecture inside runtime/placement code → broken walls and inconsistent joints. Constrained offline compilation to one complete GLB is the authoring boundary.
 *Rule: a build agent authors each asset whole (bpy/Three.js → one GLB); the engine only consumes.*
 
 **#3 The cropped hero shot.** Claiming "verified" from a flattering angle or a proxy metric (vertex counts), hiding see-through walls.

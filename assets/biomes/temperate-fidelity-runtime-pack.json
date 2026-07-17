@@ -1,0 +1,103 @@
+{
+  "schema": "limina.biome-runtime-pack/v1",
+  "id": "temperate-fidelity-candidate-runtime",
+  "version": "1.1.7",
+  "metadataPackContentHash": "sha256:866158ef46124b417f9cabd07a43fe28e48ea6e3896554beddd886ebaeffba10",
+  "status": "fulfilled",
+  "biomes": [
+    {
+      "biomeId": "canyon",
+      "status": "fulfilled",
+      "surfaceRules": [
+        { "role": "ground/scree", "weight": 2, "tileScaleM": 2.5 },
+        { "role": "rock/canyon-sandstone", "weight": 3, "tileScaleM": 4 }
+      ],
+      "vegetationRules": [
+        { "role": "flora/riparian-shrub", "weight": 1, "radiusM": 3, "density01": 0.18, "scale": [0.7, 1.2], "slope01": [0, 0.48], "moisture01": [0.25, 0.8], "waterDistanceM": [0, 30], "tintSrgb": [172, 184, 137] }
+      ],
+      "bindings": [
+        { "kind": "surface", "role": "ground/scree", "assetId": "materials/river-gravel/material-pack.json", "contentHash": "sha256:77886275805864fd5c509a8e43c077d96939f6741826703b34d50ecd684927ca", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground021" },
+        { "kind": "surface", "role": "rock/canyon-sandstone", "assetId": "materials/basalt-rock/material-pack.json", "contentHash": "sha256:711bf0ccfab38cd5123745c39cf71ae726f0db21bbba0ce844ab324dd769d033", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Rock048" },
+        { "kind": "vegetation", "role": "flora/riparian-shrub", "assetId": "population/canyon-riparian-shrub.json", "contentHash": "sha256:42644ccc58be23367f7b0b64be9cf64f5ffd1e7196007513b870c71170124969", "licenseId": "CC0-1.0", "sourceUri": "https://polyhaven.com/a/shrub_03" }
+      ]
+    },
+    {
+      "biomeId": "deep-ocean",
+      "status": "fulfilled",
+      "surfaceRules": [
+        { "role": "ground/abyssal-silt", "weight": 4, "tileScaleM": 3, "calibration": { "albedoLinearGain": [0.45, 0.52, 0.55], "normalStrength": 1.25, "displacementScaleM": 0.04 } },
+        { "role": "rock/basalt", "weight": 1, "tileScaleM": 5, "calibration": { "albedoLinearGain": [0.75, 0.78, 0.82], "normalStrength": 1.5, "displacementScaleM": 0.1 }, "environment": { "overlayWeight": 1.8, "slope01": [0.28, 1, 0.18] } }
+      ],
+      "vegetationRules": [
+        { "role": "flora/deep-kelp", "weight": 1, "radiusM": 2.5, "density01": 0, "scale": [0.8, 1.3], "elevationM": [-1000, -8], "moisture01": [1, 1], "tintSrgb": [62, 104, 72] }
+      ],
+      "bindings": [
+        { "kind": "surface", "role": "ground/abyssal-silt", "assetId": "materials/abyssal-silt/material-pack.json", "contentHash": "sha256:9c303d7a3c77203ae2492cd100ebe29777f93538dcdac3c8af632893cf8cf321", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground026" },
+        { "kind": "surface", "role": "rock/basalt", "assetId": "materials/basalt-rock/material-pack.json", "contentHash": "sha256:711bf0ccfab38cd5123745c39cf71ae726f0db21bbba0ce844ab324dd769d033", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Rock048" },
+        { "kind": "vegetation", "role": "flora/deep-kelp", "assetId": "population/deep-ocean-kelp.json", "contentHash": "sha256:bb3c3d94ea6cd9ffa27265e282df4e31f1c7b5bad8ce65c7601c25315a5daef4", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/grass-field/deep-kelp" }
+      ]
+    },
+    {
+      "biomeId": "grassland",
+      "status": "fulfilled",
+      "surfaceRules": [
+        { "role": "ground/grass-turf", "weight": 3, "tileScaleM": 3, "calibration": { "albedoLinearGain": [1, 1, 1], "normalStrength": 0.55, "displacementScaleM": 0 } },
+        { "role": "ground/loam", "weight": 2, "tileScaleM": 4, "calibration": { "albedoLinearGain": [1, 1, 1], "normalStrength": 1.4, "displacementScaleM": 0.06 } }
+      ],
+      "vegetationRules": [
+        { "role": "flora/meadow-grass", "weight": 5, "radiusM": 0.2, "density01": 0.48, "scale": [0.7, 1.25], "slope01": [0, 0.58], "moisture01": [0.25, 0.85], "waterDistanceM": [0, 100000], "tintSrgb": [177, 203, 129] },
+        { "role": "flora/wildflower", "weight": 1, "radiusM": 1.2, "density01": 0.12, "scale": [0.65, 1.1], "slope01": [0, 0.45], "moisture01": [0.35, 0.85], "waterDistanceM": [2, 100000], "tintSrgb": [219, 211, 173] }
+      ],
+      "bindings": [
+        { "kind": "surface", "role": "ground/grass-turf", "assetId": "materials/temperate-grass-turf/material-pack.json", "contentHash": "sha256:2317a73ebdba480a3da702e52632dc7d5b8ee73b1cf0fae3485f2065688b2cf6", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Grass001" },
+        { "kind": "surface", "role": "ground/loam", "assetId": "materials/forest-ground/material-pack.json", "contentHash": "sha256:b1dccb8426620abb342f5cf20cc63601620c333284beaf76eb29df56854401e0", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground037" },
+        { "kind": "vegetation", "role": "flora/meadow-grass", "assetId": "population/grassland-meadow-grass.json", "contentHash": "sha256:a1fcb142e84aa79ce5cf2fff4d5552b31cecc188f16e01d8a578214e32eca476", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/continuous-grass-field/interactive-temperate-meadow" },
+        { "kind": "vegetation", "role": "flora/wildflower", "assetId": "population/grassland-wildflower.json", "contentHash": "sha256:d95dede8d606b574be50bc5e009a8d86df8e2a67678a2363d09036515548ba7f", "licenseId": "CC0-1.0", "sourceUri": "https://polyhaven.com/a/fern_02" }
+      ]
+    },
+    {
+      "biomeId": "river",
+      "status": "fulfilled",
+      "surfaceRules": [
+        { "role": "ground/river-gravel", "weight": 3, "tileScaleM": 2, "calibration": { "albedoLinearGain": [0.85, 0.88, 0.9], "normalStrength": 1.45, "displacementScaleM": 0.055 }, "environment": { "overlayWeight": 0.65, "waterDistanceM": [0, 6, 6] } },
+        { "role": "ground/river-silt", "weight": 2, "tileScaleM": 3, "calibration": { "albedoLinearGain": [0.82, 0.85, 0.78], "normalStrength": 1.3, "displacementScaleM": 0.04 }, "environment": { "overlayWeight": 0.3, "waterDistanceM": [0, 3, 4] } }
+      ],
+      "vegetationRules": [
+        { "role": "flora/forest-grass", "weight": 4, "radiusM": 0.2, "density01": 0.65, "scale": [0.65, 1.2], "slope01": [0, 0.5], "moisture01": [0.5, 1], "waterDistanceM": [0.2, 24], "tintSrgb": [112, 139, 73] },
+        { "role": "flora/riparian-reed", "weight": 2, "radiusM": 0.65, "density01": 0.35, "scale": [0.7, 1.35], "slope01": [0, 0.25], "moisture01": [0.7, 1], "waterDistanceM": [0, 12], "tintSrgb": [112, 139, 73] },
+        { "role": "flora/waterweed", "weight": 1, "radiusM": 0.8, "density01": 0, "scale": [0.7, 1.4], "slope01": [0, 0.35], "moisture01": [0.9, 1], "waterDistanceM": [0, 4], "tintSrgb": [52, 112, 72] }
+      ],
+      "bindings": [
+        { "kind": "surface", "role": "ground/river-gravel", "assetId": "materials/river-gravel/material-pack.json", "contentHash": "sha256:77886275805864fd5c509a8e43c077d96939f6741826703b34d50ecd684927ca", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground021" },
+        { "kind": "surface", "role": "ground/river-silt", "assetId": "materials/river-silt/material-pack.json", "contentHash": "sha256:ee6d86d049caba26f6981850d1f99c7b9211a5b02938b6bb6072c35a5d7b6a83", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground083" },
+        { "kind": "vegetation", "role": "flora/forest-grass", "assetId": "population/temperate-forest-grass.json", "contentHash": "sha256:2b34556c8d2e9182cfc2d310104658d6f8018b1df6637d02484825d79284b381", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/continuous-grass-field/interactive-temperate-meadow" },
+        { "kind": "vegetation", "role": "flora/riparian-reed", "assetId": "population/river-riparian-reed.json", "contentHash": "sha256:350ec88433e7ee0296bf4f9cb0a5f32c8ed69a334097c8d7facd0b810cf58032", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/grass-field/riparian-reed" },
+        { "kind": "vegetation", "role": "flora/waterweed", "assetId": "population/river-waterweed.json", "contentHash": "sha256:c5d9f72e110e12d3f74928261cac5314469a997f149c36f1c9e707bec2e6ad83", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/grass-field/waterweed" }
+      ]
+    },
+    {
+      "biomeId": "temperate-deciduous-forest",
+      "status": "fulfilled",
+      "surfaceRules": [
+        { "role": "ground/forest-loam", "weight": 2, "tileScaleM": 3.5, "calibration": { "albedoLinearGain": [1, 1, 1], "normalStrength": 1.5, "displacementScaleM": 0.065 } },
+        { "role": "ground/leaf-litter", "weight": 3, "tileScaleM": 2.5, "calibration": { "albedoLinearGain": [1, 1, 1], "normalStrength": 1.3, "displacementScaleM": 0.04 } }
+      ],
+      "vegetationRules": [
+        { "role": "flora/ash", "weight": 5, "radiusM": 7, "density01": 0.7, "scale": [0.82, 1.12], "slope01": [0, 0.55], "moisture01": [0.4, 0.9], "waterDistanceM": [4, 100000], "tintSrgb": [223, 231, 205] },
+        { "role": "flora/fern", "weight": 2, "radiusM": 1.1, "density01": 0.35, "scale": [0.65, 1.15], "slope01": [0, 0.5], "moisture01": [0.55, 1], "waterDistanceM": [0, 100000], "tintSrgb": [176, 205, 160] },
+        { "role": "flora/forest-grass", "weight": 1, "radiusM": 0.22, "density01": 0.35, "scale": [0.7, 1.2], "slope01": [0, 0.62], "moisture01": [0.4, 0.9], "waterDistanceM": [0, 100000], "tintSrgb": [174, 197, 134] },
+        { "role": "flora/oak", "weight": 8, "radiusM": 7.5, "density01": 0.8, "scale": [0.85, 1.18], "slope01": [0, 0.58], "moisture01": [0.4, 0.9], "waterDistanceM": [4, 100000], "tintSrgb": [229, 231, 198] },
+        { "role": "flora/shrub", "weight": 1, "radiusM": 2.5, "density01": 0.25, "scale": [0.7, 1.25], "slope01": [0, 0.5], "moisture01": [0.45, 0.95], "waterDistanceM": [0, 100000], "tintSrgb": [187, 204, 155] }
+      ],
+      "bindings": [
+        { "kind": "surface", "role": "ground/forest-loam", "assetId": "materials/forest-ground/material-pack.json", "contentHash": "sha256:b1dccb8426620abb342f5cf20cc63601620c333284beaf76eb29df56854401e0", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground037" },
+        { "kind": "surface", "role": "ground/leaf-litter", "assetId": "materials/forest-ground/material-pack.json", "contentHash": "sha256:b1dccb8426620abb342f5cf20cc63601620c333284beaf76eb29df56854401e0", "licenseId": "CC0-1.0", "sourceUri": "https://ambientcg.com/a/Ground037" },
+        { "kind": "vegetation", "role": "flora/ash", "assetId": "population/temperate-ash.json", "contentHash": "sha256:cc851c53b33619706cb2f911244d465cce94d4ac69e3aaf591fcc30e7030ad4b", "licenseId": "MIT", "sourceUri": "https://github.com/dgreenheck/ez-tree" },
+        { "kind": "vegetation", "role": "flora/fern", "assetId": "population/temperate-fern.json", "contentHash": "sha256:64aa5a8c6d9d6b34506499d1920f86eb80106d594e080719c27da5002a30d4e5", "licenseId": "CC0-1.0", "sourceUri": "https://polyhaven.com/a/fern_02" },
+        { "kind": "vegetation", "role": "flora/forest-grass", "assetId": "population/temperate-forest-grass.json", "contentHash": "sha256:2b34556c8d2e9182cfc2d310104658d6f8018b1df6637d02484825d79284b381", "licenseId": "CC0-1.0", "sourceUri": "limina://procedural/continuous-grass-field/interactive-temperate-meadow" },
+        { "kind": "vegetation", "role": "flora/oak", "assetId": "population/temperate-oak.json", "contentHash": "sha256:f3011ed2f55f4570296ee705f4a24f510ed3ba53485e0414479c8bb3fa812c94", "licenseId": "MIT", "sourceUri": "https://github.com/dgreenheck/ez-tree" },
+        { "kind": "vegetation", "role": "flora/shrub", "assetId": "population/temperate-shrub.json", "contentHash": "sha256:a739d90cfb11041549084fe7d95551767f9224c616451e084d1f36fb36f96e8d", "licenseId": "CC0-1.0", "sourceUri": "https://polyhaven.com/a/shrub_03" }
+      ]
+    }
+  ]
+}

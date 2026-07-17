@@ -13,12 +13,15 @@ use deno_error::JsErrorBox;
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::geometry::Array2;
 use rapier3d::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const MAX_HEIGHTFIELD_SAMPLES: usize = 1_048_576;
 const MAX_PENDING_COLLISION_EVENTS: usize = 4_096;
+/// Hard ceiling for one scene-overlap result. Callers may provide a smaller output
+/// buffer, but can never make the native query allocate or return an unbounded set.
+const MAX_BOX_OVERLAP_HITS: usize = 4_096;
 const MAX_PHYSICS_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const PHYSICS_SNAPSHOT_MAGIC: &[u8; 6] = b"LMPHYS";
 const PHYSICS_SNAPSHOT_VERSION: u16 = 1;
@@ -790,7 +793,10 @@ pub fn op_physics_move_character(
             min_slope_slide_angle: 45.0_f32.to_radians(),
             autostep: Some(CharacterAutostep {
                 max_height: CharacterLength::Absolute(0.4),
-                min_width: CharacterLength::Absolute(0.3),
+                // The architecture contract admits construction-valid 0.25 m treads. Keep the
+                // controller's required landing width below that locked floor so a human capsule
+                // can actually traverse every compiler-approved stair without relaxing collision.
+                min_width: CharacterLength::Absolute(0.2),
                 include_dynamic_bodies: true,
             }),
             snap_to_ground: Some(CharacterLength::Absolute(0.5)),
@@ -1127,6 +1133,88 @@ pub fn op_physics_raycast(
     Ok(())
 }
 
+/// Write stable body ids whose colliders intersect an oriented box into `out`.
+/// Results are sorted by body id, deduplicated (a body may own multiple colliders),
+/// and bounded by both the caller's buffer and `MAX_BOX_OVERLAP_HITS`. The optional
+/// ignored body uses `-1` for none, which keeps the JS/native ABI scalar-only.
+#[op2(fast)]
+#[allow(clippy::too_many_arguments)]
+pub fn op_physics_overlap_box(
+    state: &mut OpState,
+    x: f32,
+    y: f32,
+    z: f32,
+    hx: f32,
+    hy: f32,
+    hz: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+    ignore_body_id: i32,
+    #[buffer] out: &mut [u32],
+) -> Result<u32, JsErrorBox> {
+    physics_overlap_box_impl(
+        state, x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore_body_id, out,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn physics_overlap_box_impl(
+    state: &mut OpState,
+    x: f32,
+    y: f32,
+    z: f32,
+    hx: f32,
+    hy: f32,
+    hz: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    qw: f32,
+    ignore_body_id: i32,
+    out: &mut [u32],
+) -> Result<u32, JsErrorBox> {
+    validate_finite("box overlap pose", &[x, y, z, qx, qy, qz, qw])?;
+    validate_positive("box overlap half extents", &[hx, hy, hz])?;
+    let rotation = rapier3d::na::UnitQuaternion::try_new(
+        rapier3d::na::Quaternion::new(qw, qx, qy, qz),
+        f32::EPSILON,
+    )
+    .ok_or_else(|| JsErrorBox::generic("box overlap rotation quaternion must be non-zero"))?;
+    if out.is_empty() {
+        return Ok(0);
+    }
+
+    let world = state.borrow::<PhysicsWorld>();
+    let query = world.broad_phase.as_query_pipeline(
+        world.narrow_phase.query_dispatcher(),
+        &world.bodies,
+        &world.colliders,
+        QueryFilter::default(),
+    );
+    let pose = Pose::from_parts(Vector::new(x, y, z).into(), rotation.into());
+    let shape = Cuboid::new(Vector::new(hx, hy, hz));
+    let ignored = u32::try_from(ignore_body_id).ok();
+    let capacity = out.len().min(MAX_BOX_OVERLAP_HITS);
+    let mut hits = BTreeSet::<u32>::new();
+    for (collider, _) in query.intersect_shape(pose, &shape) {
+        let Some(id) = world.body_id_for_collider(collider) else { continue };
+        if Some(id) == ignored || hits.contains(&id) { continue; }
+        if hits.len() < capacity {
+            hits.insert(id);
+        } else if let Some(current_max) = hits.last().copied() {
+            if id < current_max {
+                hits.pop_last();
+                hits.insert(id);
+            }
+        }
+    }
+    let count = hits.len();
+    for (slot, id) in out.iter_mut().zip(hits) { *slot = id; }
+    Ok(count as u32)
+}
+
 /// Gravity for the default world installed at extension load, before JS calls
 /// `op_physics_create_world`. Immaterial to behavior: this world holds no bodies,
 /// and `op_physics_create_world`/`op_physics_restore` replace it wholesale.
@@ -1283,6 +1371,7 @@ extension!(
         op_physics_drain_collisions,
         op_physics_take_collision_overflow_count,
         op_physics_raycast,
+        op_physics_overlap_box,
         op_physics_new_world,
         op_physics_activate_world,
         op_physics_active_world,
@@ -1296,7 +1385,7 @@ extension!(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_snapshot, init_physics_state, physics_restore_impl, physics_set_body_transform_impl,
+        decode_snapshot, init_physics_state, physics_overlap_box_impl, physics_restore_impl, physics_set_body_transform_impl,
         physics_snapshot_impl, physics_take_collision_overflow_count_impl, registry_activate,
         registry_drop, registry_new_world, registry_new_world_validated, snapshot_options,
         validate_heightfield, BoundedCollisionEvents, PhysicsRegistry, PhysicsSnapshot,
@@ -1599,6 +1688,78 @@ mod tests {
                 ));
         }
         assert_eq!(physics_take_collision_overflow_count_impl(&mut state), 1);
+    }
+
+    #[test]
+    fn box_overlap_is_oriented_sorted_bounded_and_can_ignore_one_body() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        let (id0, id1, id2) = {
+            let world = state.borrow_mut::<PhysicsWorld>();
+            let id0 = world.insert_body(
+                RigidBodyBuilder::fixed().translation(Vector::new(-0.75, 0.0, 0.0)).build(),
+                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+            );
+            let id1 = world.insert_body(
+                RigidBodyBuilder::fixed().translation(Vector::new(0.75, 0.0, 0.0)).build(),
+                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+            );
+            let id2 = world.insert_body(
+                RigidBodyBuilder::fixed().translation(Vector::new(0.0, 0.0, 1.4)).build(),
+                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+            );
+            world.step();
+            (id0, id1, id2)
+        };
+
+        let mut out = [u32::MAX; 8];
+        let count = physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
+            0.0, 0.0, 0.0, 1.0, -1, &mut out,
+        ).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(&out[..2], &[id0, id1], "results must be stable-id sorted");
+
+        let count = physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
+            0.0, 0.0, 0.0, 1.0, id0 as i32, &mut out,
+        ).unwrap();
+        assert_eq!(&out[..count as usize], &[id1]);
+
+        // Rotate the long axis from X to Z: the first pair leaves and id2 enters.
+        let half = std::f32::consts::FRAC_PI_4;
+        let count = physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 1.8, 0.5, 0.35,
+            0.0, half.sin(), 0.0, half.cos(), -1, &mut out,
+        ).unwrap();
+        assert_eq!(&out[..count as usize], &[id2]);
+
+        let mut one = [u32::MAX; 1];
+        let count = physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
+            0.0, 0.0, 0.0, 1.0, -1, &mut one,
+        ).unwrap();
+        assert_eq!(count, 1, "caller buffer must bound the result");
+        assert_eq!(one[0], id0, "truncation must retain deterministic lowest ids");
+    }
+
+    #[test]
+    fn box_overlap_rejects_invalid_geometry_and_rotation() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        let mut out = [0; 1];
+        assert!(physics_overlap_box_impl(
+            &mut state, f32::NAN, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, -1, &mut out,
+        ).is_err());
+        assert!(physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, -1, &mut out,
+        ).is_err());
+        assert!(physics_overlap_box_impl(
+            &mut state, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, -1, &mut out,
+        ).is_err());
     }
 
     #[test]

@@ -34,6 +34,13 @@ import {
   parseCompilerSnapshot,
 } from "../../js/src/world/compiler/planner.mjs";
 import { canonicalCompilerJson, validateCompilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
+import {
+  BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+  MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES,
+  decodeBiomeContentClosureArtifact,
+} from "../../js/src/world/compiler/biome-content-closure-artifact.mjs";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 
 export const DERIVED_PUBLICATION_POINTER_SCHEMA_V1 = "limina.derived-publication-pointer/v1";
@@ -42,10 +49,13 @@ export const DERIVED_PUBLICATION_LOCK_SCHEMA = "limina.derived-publication-lock/
 export const DERIVED_PUBLICATION_STAGE_SCHEMA = "limina.derived-publication-stage/v1";
 export const PUBLICATION_FAULT_POINTS = Object.freeze([
   "after-artifact-stage",
+  "after-content-stage",
   "after-manifest-stage",
   "after-snapshot-stage",
   "before-artifact-install",
   "after-artifact-install",
+  "before-content-install",
+  "after-content-install",
   "after-manifest-install",
   "after-snapshot-install",
   "before-pointer-write",
@@ -179,6 +189,7 @@ function publicationPaths(projectRoot, branchId, fs) {
     stateRoot,
     branchRoot,
     artifacts: ensureDirectory(fs, stateRoot, join(branchRoot, "artifacts")),
+    content: ensureDirectory(fs, stateRoot, join(branchRoot, "content")),
     manifests: ensureDirectory(fs, stateRoot, join(branchRoot, "manifests")),
     snapshots: ensureDirectory(fs, stateRoot, join(branchRoot, "snapshots")),
     staging: ensureDirectory(fs, stateRoot, join(branchRoot, "staging")),
@@ -188,6 +199,7 @@ function publicationPaths(projectRoot, branchId, fs) {
 }
 
 function artifactPath(paths, hash) { return join(paths.artifacts, `${validateCompilerContentHash(hash).slice(7)}.bin`); }
+function contentPath(paths, hash) { return join(paths.content, `${validateCompilerContentHash(hash).slice(7)}.bin`); }
 function manifestPath(paths, hash) { return join(paths.manifests, `${validateCompilerContentHash(hash).slice(7)}.json`); }
 function snapshotPath(paths, hash) { return join(paths.snapshots, `${validateCompilerContentHash(hash).slice(7)}.json`); }
 
@@ -535,6 +547,167 @@ function validateArtifactInputs(manifest, inputs, reusedInputs) {
   return { supplied, reused: new Set(reused.keys()) };
 }
 
+function contentClosureDescriptor(manifest) {
+  const descriptor = derivedGlobalArtifacts(manifest)
+    .find((artifact) => artifact.artifactType === BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE);
+  if (descriptor !== undefined && (descriptor.mediaType !== BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE
+      || descriptor.byteLength > MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES)) {
+    throw new Error("biome content closure artifact descriptor is unsupported");
+  }
+  return descriptor;
+}
+
+function readInstalledExactBytes(fs, path, expectedBytes, maximumBytes, label, shouldCancel) {
+  const stat = safeLstat(fs, path);
+  if (stat === undefined || stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${label} is missing or not regular`);
+  if (stat.size !== expectedBytes || stat.size > maximumBytes) throw new Error(`${label} byteLength mismatch`);
+  const descriptor = fs.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.size !== stat.size || opened.dev !== stat.dev || opened.ino !== stat.ino) {
+      throw new Error(`${label} changed while it was being opened`);
+    }
+    const bytes = new Uint8Array(opened.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      maybeCancel(shouldCancel);
+      const count = fs.readSync(descriptor, bytes, offset, Math.min(1024 * 1024, bytes.byteLength - offset), null);
+      if (count === 0) throw new Error(`${label} was truncated during read`);
+      offset += count;
+    }
+    return bytes;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function decodeContentAuthorization(bytes, descriptor) {
+  if (bytes.byteLength !== descriptor.byteLength || nodeArtifactContentHash(bytes) !== descriptor.contentHash) {
+    throw new Error(`biome content closure artifact ${descriptor.contentHash} does not match its manifest descriptor`);
+  }
+  let decoded;
+  try { decoded = decodeBiomeContentClosureArtifact(bytes); }
+  catch (error) { throw new Error(`biome content closure artifact ${descriptor.contentHash} is invalid: ${error.message}`); }
+  if (decoded.metadata.contentHash !== descriptor.contentHash
+      || decoded.metadata.mediaType !== descriptor.mediaType
+      || decoded.metadata.byteLength !== descriptor.byteLength) {
+    throw new Error(`biome content closure artifact ${descriptor.contentHash} identity mismatch`);
+  }
+  const entries = Object.freeze(decoded.bundle.entries.map((entry) => Object.freeze({
+    id: entry.assetId,
+    path: `assets/${entry.assetId}`,
+    hash: entry.contentHash,
+    byteLength: entry.byteLength,
+  })));
+  return Object.freeze({
+    closureHash: decoded.bundle.closureHash,
+    status: decoded.bundle.status,
+    runtimePack: decoded.bundle.runtimePack,
+    entries,
+  });
+}
+
+function readInstalledContentAuthorization(fs, paths, manifest, shouldCancel) {
+  const descriptor = contentClosureDescriptor(manifest);
+  if (descriptor === undefined) return null;
+  const bytes = readInstalledExactBytes(
+    fs,
+    artifactPath(paths, descriptor.contentHash),
+    descriptor.byteLength,
+    MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES,
+    `biome content closure artifact ${descriptor.contentHash}`,
+    shouldCancel,
+  );
+  return decodeContentAuthorization(bytes, descriptor);
+}
+
+function validateContentInputs(fs, paths, manifest, suppliedArtifacts, contentInputs, shouldCancel) {
+  const descriptor = contentClosureDescriptor(manifest);
+  if (contentInputs !== undefined && !Array.isArray(contentInputs)) {
+    throw new Error("publication contentEntries must be an array when provided");
+  }
+  const inputs = contentInputs ?? [];
+  if (Object.getPrototypeOf(inputs) !== Array.prototype || Object.getOwnPropertySymbols(inputs).length !== 0
+      || Object.getOwnPropertyNames(inputs).length !== inputs.length + 1) {
+    throw new Error("publication contentEntries must be a dense field-free standard array");
+  }
+  if (descriptor === undefined) {
+    if (inputs.length !== 0) throw new Error("publication contentEntries require a manifest biome content closure artifact");
+    return Object.freeze({ authorization: null, supplied: new Map() });
+  }
+  const closureBytes = suppliedArtifacts.get(descriptor.contentHash)
+    ?? readInstalledExactBytes(
+      fs,
+      artifactPath(paths, descriptor.contentHash),
+      descriptor.byteLength,
+      MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES,
+      `biome content closure artifact ${descriptor.contentHash}`,
+      shouldCancel,
+    );
+  const authorization = decodeContentAuthorization(closureBytes, descriptor);
+  if (contentInputs === undefined) {
+    validateAuthorizedContentFiles(fs, paths, authorization, shouldCancel);
+    return Object.freeze({ authorization, supplied: new Map() });
+  }
+  if (inputs.length !== authorization.entries.length) {
+    throw new Error(`publication contentEntries must contain exactly ${authorization.entries.length} closure-authorized entries`);
+  }
+  const supplied = new Map();
+  let totalBytes = 0;
+  for (let index = 0; index < inputs.length; index++) {
+    maybeCancel(shouldCancel);
+    const input = exactDataObject(inputs[index], ["id", "path", "hash", "bytes"], `publication content entry ${index}`);
+    const expected = authorization.entries[index];
+    if (input.id !== expected.id || input.path !== expected.path || input.hash !== expected.hash) {
+      throw new Error(`publication content entry ${index} does not match the closure authorization`);
+    }
+    if (!(input.bytes instanceof Uint8Array) || !(input.bytes.buffer instanceof ArrayBuffer)
+        || input.bytes.byteOffset !== 0 || input.bytes.byteLength !== input.bytes.buffer.byteLength) {
+      throw new Error(`publication content entry ${index} bytes must be an owned complete Uint8Array`);
+    }
+    if (input.bytes.byteLength !== expected.byteLength) {
+      throw new Error(`publication content entry '${input.id}' byteLength mismatch`);
+    }
+    if (portableAssetContentHash(input.bytes) !== expected.hash) {
+      throw new Error(`publication content entry '${input.id}' content hash mismatch`);
+    }
+    totalBytes += input.bytes.byteLength;
+    if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_DERIVED_TOTAL_ARTIFACT_BYTES) {
+      throw new Error("publication content bytes exceed the total resource bound");
+    }
+    const existing = supplied.get(expected.hash);
+    if (existing === undefined) supplied.set(expected.hash, input.bytes);
+    else if (existing.byteLength !== input.bytes.byteLength) {
+      throw new Error(`publication content hash ${expected.hash} has inconsistent byte lengths`);
+    }
+  }
+  return Object.freeze({ authorization, supplied });
+}
+
+function validateAuthorizedContentFiles(fs, paths, authorization, shouldCancel) {
+  const verified = new Set();
+  for (const entry of authorization.entries) {
+    if (verified.has(entry.hash)) continue;
+    const bytes = readInstalledExactBytes(
+      fs,
+      contentPath(paths, entry.hash),
+      entry.byteLength,
+      MAX_DERIVED_ARTIFACT_BYTES,
+      `derived biome content ${entry.hash}`,
+      shouldCancel,
+    );
+    if (portableAssetContentHash(bytes) !== entry.hash) throw new Error(`derived biome content ${entry.hash} hash mismatch`);
+    verified.add(entry.hash);
+  }
+}
+
+function validateInstalledContent(fs, paths, manifest, shouldCancel) {
+  const authorization = readInstalledContentAuthorization(fs, paths, manifest, shouldCancel);
+  if (authorization === null) return null;
+  validateAuthorizedContentFiles(fs, paths, authorization, shouldCancel);
+  return authorization;
+}
+
 function validateInstalledArtifact(fs, path, descriptor, shouldCancel) {
   const stat = safeLstat(fs, path);
   if (stat === undefined || stat.isSymbolicLink() || !stat.isFile()) throw new Error(`derived artifact ${descriptor.contentHash} is missing or not regular`);
@@ -627,7 +800,9 @@ function validateInstalledRevision(fs, paths, ref, shouldCancel, artifactHashes)
   if (snapshot !== null && manifest.compiler.snapshotHash !== snapshot.snapshotHash) {
     throw new Error(`derived manifest ${manifest.manifestHash} does not bind compiler snapshot ${snapshot.snapshotHash}`);
   }
-  return { manifest, snapshot };
+  const content = validateInstalledContent(fs, paths, manifest, shouldCancel);
+  maybeCancel(shouldCancel);
+  return { manifest, snapshot, content };
 }
 
 function maybeCancel(shouldCancel) {
@@ -692,6 +867,14 @@ export async function publishDerivedRevision(options) {
   const snapshotInput = legacyManifestOnly ? undefined : validateSnapshotInput(options.snapshot, manifest);
   const reusedInputs = options.reusedArtifacts === undefined ? [] : options.reusedArtifacts;
   const { supplied: artifacts, reused } = validateArtifactInputs(manifest, options.artifacts, reusedInputs);
+  const contentInput = validateContentInputs(
+    fs,
+    paths,
+    manifest,
+    artifacts,
+    options.contentEntries,
+    options.shouldCancel,
+  );
   if (legacyManifestOnly && reused.size > 0) throw new Error("legacy manifest-only publication cannot reuse installed artifacts");
   const baseline = readPointer(fs, paths);
   if (legacyManifestOnly && baseline.pointer !== undefined && baseline.pointer.schema !== DERIVED_PUBLICATION_POINTER_SCHEMA_V1) {
@@ -701,6 +884,7 @@ export async function publishDerivedRevision(options) {
   if (safeLstat(fs, stageRoot) !== undefined) throw new Error(`derived publication job '${jobId}' already exists`);
   fs.mkdirSync(stageRoot);
   let stageArtifacts;
+  let stageContent;
   const stageManifest = join(stageRoot, "manifest.json");
   const stageSnapshot = join(stageRoot, "snapshot.json");
   const pointerTemp = join(paths.branchRoot, `published.json.tmp-${jobId}`);
@@ -711,6 +895,7 @@ export async function publishDerivedRevision(options) {
     writeExclusive(fs, join(stageRoot, "active.json"), `${canonicalCompilerJson(stageOwner)}\n`);
     fsyncDirectory(fs, stageRoot);
     stageArtifacts = ensureDirectory(fs, paths.stateRoot, join(stageRoot, "artifacts"));
+    stageContent = ensureDirectory(fs, paths.stateRoot, join(stageRoot, "content"));
     cleanedStages = cleanupOldStages(fs, paths.staging, jobId, nowMs, isProcessAlive);
     maybeCancel(options.shouldCancel);
     for (const [hash, bytes] of [...artifacts.entries()].sort(([a], [b]) => codeUnitCompare(a, b))) {
@@ -719,6 +904,15 @@ export async function publishDerivedRevision(options) {
     }
     fsyncDirectory(fs, stageArtifacts);
     faultAt(options.fault, "after-artifact-stage", { manifestHash: manifest.manifestHash });
+    for (const [hash, bytes] of [...contentInput.supplied.entries()].sort(([a], [b]) => codeUnitCompare(a, b))) {
+      writeExclusive(fs, join(stageContent, `${hash.slice(7)}.bin`), bytes);
+      maybeCancel(options.shouldCancel);
+    }
+    fsyncDirectory(fs, stageContent);
+    faultAt(options.fault, "after-content-stage", {
+      closureHash: contentInput.authorization?.closureHash ?? null,
+      status: contentInput.authorization?.status ?? null,
+    });
     writeExclusive(fs, stageManifest, `${canonicalDerivedRevisionManifest(manifest)}\n`);
     fsyncDirectory(fs, stageRoot);
     faultAt(options.fault, "after-manifest-stage", { manifestHash: manifest.manifestHash });
@@ -741,6 +935,31 @@ export async function publishDerivedRevision(options) {
     }
     fsyncDirectory(fs, paths.artifacts);
     faultAt(options.fault, "after-artifact-install", {});
+
+    faultAt(options.fault, "before-content-install", {});
+    for (const [hash] of [...contentInput.supplied.entries()].sort(([a], [b]) => codeUnitCompare(a, b))) {
+      const staged = join(stageContent, `${hash.slice(7)}.bin`);
+      const final = contentPath(paths, hash);
+      if (safeLstat(fs, final) === undefined) fs.renameSync(staged, final);
+      else {
+        const expected = contentInput.authorization.entries.find((entry) => entry.hash === hash);
+        const installed = readInstalledExactBytes(
+          fs,
+          final,
+          expected.byteLength,
+          MAX_DERIVED_ARTIFACT_BYTES,
+          `derived biome content ${hash}`,
+          options.shouldCancel,
+        );
+        if (portableAssetContentHash(installed) !== hash) throw new Error(`derived biome content ${hash} hash mismatch`);
+        fs.unlinkSync(staged);
+      }
+    }
+    fsyncDirectory(fs, paths.content);
+    faultAt(options.fault, "after-content-install", {
+      closureHash: contentInput.authorization?.closureHash ?? null,
+      status: contentInput.authorization?.status ?? null,
+    });
 
     if (snapshotInput !== undefined) {
       const finalSnapshot = snapshotPath(paths, snapshotInput.snapshot.snapshotHash);
@@ -807,7 +1026,14 @@ export async function publishDerivedRevision(options) {
       maybeCancel(options.shouldCancel);
       fs.renameSync(pointerTemp, paths.pointer);
       fsyncDirectory(fs, paths.branchRoot);
-      return { published: true, manifest, snapshot: snapshotInput?.snapshot ?? null, pointer, cleanedStages };
+      return {
+        published: true,
+        manifest,
+        snapshot: snapshotInput?.snapshot ?? null,
+        content: contentInput.authorization,
+        pointer,
+        cleanedStages,
+      };
     } finally {
       if (lockOwner !== undefined) releasePublicationLock(fs, paths, lockOwner);
       lockOwner = undefined;
@@ -842,7 +1068,7 @@ export async function readPublishedDerivedRevision(options) {
       );
     }
   }
-  const { manifest, snapshot } = revision;
+  const { manifest, snapshot, content } = revision;
   const head = validateHeadShape(await options.readHead());
   const sourceMatches = !usedFallback
     && head.projectId === manifest.projectId
@@ -853,6 +1079,7 @@ export async function readPublishedDerivedRevision(options) {
     status: usedFallback ? "fallback" : sourceMatches ? "current" : "stale",
     manifest,
     snapshot,
+    content,
     pointer,
     diagnostics: {
       usedFallback,
@@ -887,7 +1114,11 @@ export async function readAuthoritativePublishedDerivedRevision(options) {
     && installedRevisionSignaturesMatch(fs, paths, baseline.pointer.current, cached);
   try {
     if (cacheMatches) {
-      revision = { manifest: cached.manifest, snapshot: cached.snapshot };
+      revision = {
+        manifest: cached.manifest,
+        snapshot: cached.snapshot,
+        content: validateInstalledContent(fs, paths, cached.manifest, options?.shouldCancel),
+      };
       installedSignatures = runtimeInstalledSignatures.get(cached);
     } else {
       const before = installedRevisionSignatures(fs, paths, baseline.pointer.current);
@@ -922,6 +1153,14 @@ export async function readAuthoritativePublishedDerivedRevision(options) {
   if (!sameInstalledRevisionSignatures(confirmedSignatures, installedSignatures)) {
     throw new PublicationRuntimeAccessError("CURRENT_CHANGED", "current derived manifest or snapshot changed during authority validation");
   }
+  let confirmedContent;
+  try { confirmedContent = validateInstalledContent(fs, paths, revision.manifest, options?.shouldCancel); }
+  catch (error) {
+    throw new PublicationRuntimeAccessError(
+      "CURRENT_UNUSABLE",
+      `current derived biome content changed during authority validation: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const { manifest, snapshot } = revision;
   if (head.projectId !== manifest.projectId || head.branchId !== manifest.branchId
       || head.revision !== manifest.source.revision || head.headHash !== manifest.source.headHash) {
@@ -931,6 +1170,7 @@ export async function readAuthoritativePublishedDerivedRevision(options) {
     generation: baseline.pointer.generation,
     manifest,
     snapshot,
+    content: confirmedContent,
     source: Object.freeze({ revision: head.revision, headHash: head.headHash }),
   });
   runtimeRevisionViews.add(view);
@@ -963,7 +1203,11 @@ export function resolveCurrentPublishedDerivedArtifact(options) {
     && installedRevisionSignaturesMatch(fs, paths, pointer.current, cached);
   try {
     revision = cacheMatches
-      ? { manifest: cached.manifest, snapshot: cached.snapshot }
+      ? {
+        manifest: cached.manifest,
+        snapshot: cached.snapshot,
+        content: validateInstalledContent(fs, paths, cached.manifest),
+      }
       : validateInstalledRevision(fs, paths, pointer.current, undefined, new Set());
   } catch (error) {
     throw new PublicationRuntimeAccessError(

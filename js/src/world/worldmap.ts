@@ -209,6 +209,9 @@ const HydrologyRecipeSchema = z.preprocess((value) => {
 }).strict());
 
 const RouteSchema = z.object({
+  // Additive Atlas identity. Legacy WorldMaps omitted it; any consumer that needs to bind a
+  // route (rather than merely draw it) must require this field explicitly.
+  id: z.string().min(1).max(128).optional(),
   points: PointsSchema.min(2),
   class: z.enum(ROUTE_CLASSES),
 }).strict();

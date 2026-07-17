@@ -36,7 +36,8 @@ import { archetypeBrief, type BuildingBrief } from "../game/building-brief.ts";
 // Grass builders — reused DIRECTLY (not via a nested skill invoke) so village.build can lay a tended
 // LAWN on each yard with no registry coupling; render-guarded like the ground pads (headless = no-op).
 import { planGrassBlades, GRASS_CLIMATES } from "./grass-plan.ts";
-import { buildGrassInstancedMesh, buildGrassGroundTint } from "./grass.ts";
+import { buildGrassInstancedMesh, buildGrassGroundTint } from "../render/grass-placement-mesh.ts";
+import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
 // Lawn decoration: scatter wildflower/tuft GLBs confined to the lawn (the inclusion primitive), instanced
 // exactly like asset.scatter. Render-guarded + graceful (missing curated GLBs are skipped).
 import { scatterAssets, type ScatterConfig, type AssetInstance } from "../terrain/asset-scatter.ts";
@@ -228,6 +229,7 @@ export function registerVillageSkills(
    *  scene even though vegetation ran earlier in the command list. Empty when no veg preceded (the
    *  legacy veg-after-village order, where the exclusion is already applied at veg mount time). */
   vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
+  grassVisualPackage?: GrassFieldVisualPackage,
 ): void {
   const build: SkillDefinition<z.infer<typeof buildInput>, z.infer<typeof buildOutput>> = {
     name: "village.build",
@@ -254,6 +256,12 @@ export function registerVillageSkills(
       }
       const tile = layer.tile;
       const siting = input.steering.siting; // terrace/yard/lane treatment — spec-driven, defaults natural.
+      const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
+      const canRender = scene !== undefined && typeof scene.add === "function";
+      const canRenderGrass = canRender && (ctx.world.mode !== "headless" || ctx.world.renderer !== undefined);
+      if (siting.yard === "lawn" && canRenderGrass && grassVisualPackage === undefined) {
+        throw new Error("village.build: lawn rendering requires an injected GrassFieldVisualPackage");
+      }
 
       // -- Build the sampler over the live heightfield. World<->grid mapping matches
       //    terrain/mesh.ts exactly: x = ox - sizeX/2 + col*(sizeX/(ncols-1)), rows->z,
@@ -521,8 +529,6 @@ export function registerVillageSkills(
         groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 16, 0.2), kind: "earth" });
         if (siting.yard === "cobble-courtyard") groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p.x, p.z, r + 4, 0.32), kind: "cobble" });
       }
-      const scene = ctx.world.scene as { add?: (m: unknown) => void } | undefined;
-      const canRender = scene !== undefined && typeof scene.add === "function";
       // The SHARED procedural earth/cobble materials (canvas2d textures) — only minted in a render
       // context; headless authoring records the ground entities without meshes. Seeded from the
       // recorded request so the ground look is deterministic (render-only; not part of the log).
@@ -553,26 +559,32 @@ export function registerVillageSkills(
       //    the lawn covers even a graded knoll (the focal), where the wild carpet thins out. Render-only
       //    (like the ground pads above): deterministic from the footprints, recomputed on replay, logs no
       //    vertices; headless authoring/tests have no scene, so it is skipped.
-      if (siting.yard === "lawn" && canRender) { // canRender (scene.add), NOT mode — runLive re-authors village.build with mode "headless" but a real scene (same as the ground pads above).
+      if (siting.yard === "lawn" && canRenderGrass) {
         // The yard blankets the whole settled area (terrace + graded shoulder), so it covers the bare
         // knoll the wild carpet leaves grey. Excludes only the building's own footprint (no blades in the
         // walls). slopeMax is effectively off so even a steep graded knoll gets turf.
         const lawnIncl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] + 12 }));
         const lawnExcl = placements.map((p) => ({ x: p.x, z: p.z, r: radii[p.index] * 0.6 }));
         const elevMin = sampler.seaLevel - 5, elevMax = oy + hi + 12;
-        const lawnPlacements = planGrassBlades(tile, {
-          seed: (villageSeed ^ 0x1a2b3c4d) >>> 0,
-          density: 300, coverage: 0.97, cluster: 0.12, slopeMax: 4.0,
-          sizeRange: [0.7, 1.1], elevationMin: elevMin, elevationMax: elevMax,
-          exclusions: lawnExcl, inclusions: lawnIncl,
-        });
         const lawnMeshes: unknown[] = [];
-        const lawnMesh = buildGrassInstancedMesh(lawnPlacements, {
-          climate: "summer", bladeHeight: 0.22, bladeWidth: 0.05, segments: 3, curvature: 0.05,
-          windStrength: 0.03, windSpeed: 1.0, windGust: 0.04, windGustFreq: 0.18,
-          sssStrength: 0.5, aoStrength: 0.5, maxBlades: 90000,
-        });
-        if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
+        // Build one bounded dense field per yard, sharing the package's 60k performance budget
+        // across the settlement. A single globally thinned placement list made every lawn wispy.
+        const lawnBladeBudget = Math.max(3, Math.floor(
+          grassVisualPackage!.profile("performance").maxResidentBlades / Math.max(1, placements.length),
+        ));
+        for (let lawnIndex = 0; lawnIndex < placements.length; lawnIndex++) {
+          const p = placements[lawnIndex];
+          const lawnPlacements = planGrassBlades(tile, {
+            seed: ((villageSeed ^ 0x1a2b3c4d) + lawnIndex * 0x9e3779b1) >>> 0,
+            density: 300, coverage: 0.97, cluster: 0.12, slopeMax: 4.0,
+            sizeRange: [0.7, 1.1], elevationMin: elevMin, elevationMax: elevMax,
+            exclusions: [lawnExcl[lawnIndex]], inclusions: [lawnIncl[lawnIndex]],
+          });
+          const lawnMesh = buildGrassInstancedMesh(lawnPlacements,
+            { maxBlades: lawnBladeBudget, featureOrigin: [p.x, 0, p.z] },
+            { visualPackage: grassVisualPackage!, quality: "performance", lod: 1, variant: "summer" });
+          if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
+        }
         const lawnTint = buildGrassGroundTint(tile, {
           baseColor: GRASS_CLIMATES.summer.base, elevationMin: elevMin, elevationMax: elevMax,
           slopeMax: 4.0, exclusions: lawnExcl, inclusions: lawnIncl, opacity: 1.0,

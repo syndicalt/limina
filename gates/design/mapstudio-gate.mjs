@@ -621,33 +621,40 @@ console.log("biome raster (painter P2):");
   check(`compile: grass polygon area within 6% of the painted disc (got ${(shoelace(byKind("grass")[0].points) / wantGrass * 100).toFixed(1)}%)`, Math.abs(shoelace(byKind("grass")[0].points) - wantGrass) / wantGrass < 0.06);
   check("compile: recomputed content hash verifies", worldMapContentHash(bm) === bm.provenance.contentHash);
 
-  // MAP-MATCH through the REAL rasterizer: the painted tundra disc must produce SNOW paint
-  // (id 5) — a palette chip that compiles to nothing is a silent UI lie.
+  // MAP-MATCH through the REAL rasterizer: tundra is distinct cold ground (id 7), not
+  // explicit authored snow (id 5). A palette chip that compiles to nothing is a silent UI lie,
+  // while aliasing all tundra to snow destroys the WB-F0-N visual-floor correction.
   const { heights: _h, cfg, paintMat } = rasterizeWorldMap(bm, { size: 800, resolution: 201, seed: 7 });
-  let snow = 0, grassPaint = 0;
+  let tundraPaint = 0, snow = 0, grassPaint = 0;
   if (paintMat) {
-    for (const v of paintMat) { if (v === 5) snow++; if (v === 2) grassPaint++; }
+    for (const v of paintMat) {
+      if (v === 7) tundraPaint++;
+      if (v === 5) snow++;
+      if (v === 2) grassPaint++;
+    }
   }
-  check(`terrain: painted tundra rasterizes as SNOW paint (${snow} cells)`, snow > 50);
+  check(`terrain: painted tundra rasterizes as distinct TUNDRA paint (${tundraPaint} cells)`, tundraPaint > 50);
+  check(`terrain: painted tundra does not silently become explicit SNOW (${snow} cells)`, snow === 0);
   check(`terrain: painted grass rasterizes as grass paint (${grassPaint} cells)`, grassPaint > 100);
   // Swamp must rasterize as its OWN murk paint (id 6) — aliased to dirt it was invisible as
   // wetland (the P5 UAT bug). The gate is also the .ts/.mjs sync point for the new id.
   let murk = 0;
   if (paintMat) for (const v of paintMat) { if (v === 6) murk++; }
   check(`terrain: painted swamp rasterizes as MURK paint (${murk} cells)`, murk > 50);
-  const renderSrc = readFileSync(join(ROOT, "js/src/terrain/render.ts"), "utf8");
+  const paletteSrc = readFileSync(join(ROOT, "js/src/terrain/material-palette.ts"), "utf8");
   const editSrc = readFileSync(join(ROOT, "js/src/skills/terrain-edit.ts"), "utf8");
-  check("sync: PAINT_ALBEDO has a 6-indexed murk entry (render.ts)", /\/\/ 6 murk/.test(renderSrc));
+  check("sync: canonical paint palette has a 6-indexed murk entry", /\/\/ 6 murk/.test(paletteSrc));
+  check("sync: canonical paint palette has a 7-indexed tundra entry", /\/\/ 7 tundra/.test(paletteSrc));
   check("sync: PAINT_MATERIALS maps murk: 6 (terrain-edit.ts)", /murk: 6/.test(editSrc));
-  // Falsifiability: an all-grass raster must produce ZERO snow at the same sampler.
+  // Falsifiability: an all-grass raster must produce ZERO tundra at the same sampler.
   const flatCells = new Uint8Array(BW * BW).fill(BIOME_CLASSES.indexOf("grass") + 1);
   const { worldMap: gm } = compileDesignMap({
     mapsJsonText: JSON.stringify({ version: 2, activeMapId: "m", maps: [{ id: "m", name: "m", scope: "site", parent: null, seaLevel: 0, units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] }, rasters: { biomes: { w: BW, h: BW, rect, ...encodeRasterCells(flatCells) } }, features: [{ id: "land-sq", type: "area", kind: "outline", points: [[-380, -380], [380, -380], [380, 380], [-380, 380]] }] }] }),
     worldBibleText: WB_BIG,
   });
   const { paintMat: gp } = rasterizeWorldMap(gm, { size: 800, resolution: 201, seed: 7 });
-  let snow2 = 0; if (gp) for (const v of gp) { if (v === 5) snow2++; }
-  check("(falsifiability) un-painting tundra removes ALL snow at the same probe", snow2 === 0);
+  let tundra2 = 0; if (gp) for (const v of gp) { if (v === 7) tundra2++; }
+  check("(falsifiability) un-painting tundra removes ALL tundra at the same probe", tundra2 === 0);
 }
 
 // ---- 6a. River width scales with the zone span --------------------------------------------------

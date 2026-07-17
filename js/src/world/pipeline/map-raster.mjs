@@ -465,6 +465,8 @@ export function rasterizeWorldMap(worldMap, opts) {
   const heights = new Float32Array(n * n);
   const paintMat = new Uint8Array(n * n);
   const paintW = new Float32Array(n * n);
+  const channelTerrainPaintMat = new Uint8Array(n * n);
+  const channelTerrainPaintW = new Float32Array(n * n);
   // Per-cell caesura mask (0 clean .. 1 corrupt). Blight is an OVERLAY biome — it drains the color of
   // whatever's painted beneath it rather than being a paint material of its own (see the biome loop).
   const blight = new Float32Array(n * n);
@@ -587,6 +589,7 @@ export function rasterizeWorldMap(worldMap, opts) {
         const sandW = 0.8 * (1 - smoothstep01(coastD / coastalBand));
         if (sandW > matW) { matId = 1; matW = sandW; }
       }
+      let channelMatId = matId, channelMatW = matW;
 
       // River banks: sand along each waterway's channel + bank falloff (peaking at the
       // channel/bank edge — the same halfWidth/bankBand geometry the carve pass uses below —
@@ -614,10 +617,13 @@ export function rasterizeWorldMap(worldMap, opts) {
         const seabedId = 1; // sand, uniform across shallows, deep open sea AND painted lake floors
         const seabedW = coastD < coastalBand ? 0.85 : 0.55;
         if (seabedW > matW) { matId = seabedId; matW = seabedW; }
+        if (seabedW > channelMatW) { channelMatId = seabedId; channelMatW = seabedW; }
       }
 
       paintMat[i] = matId;
       paintW[i] = matW;
+      channelTerrainPaintMat[i] = channelMatId;
+      channelTerrainPaintW[i] = channelMatW;
     }
   }
 
@@ -633,6 +639,9 @@ export function rasterizeWorldMap(worldMap, opts) {
     recipe: opts.erosion ?? NO_EROSION_RECIPE,
   }, { shouldCancel: opts.shouldCancel });
   if (erosionBake.erosionPasses === 1) heights.set(erosionBake.heights);
+  // Final generated channels are cut later from exact hydrology reaches. Preserve the eroded,
+  // pre-guide terrain so the authored polyline can steer drainage without surviving as a dry ditch.
+  const channelTerrainHeights = heights.slice();
 
   // ── 5. Waterway carve (second pass: pulls the surface DOWN toward a shallow channel floor
   //    along each polyline so rivers read as WATER CHANNELS the water plane visibly fills, not
@@ -699,6 +708,7 @@ export function rasterizeWorldMap(worldMap, opts) {
         if (pool > 0.12) {
           const t = smoothstep01((pool - 0.12) / 0.18);
           heights[i] = Math.min(heights[i], lerp(heights[i], poolFloor, t));
+          channelTerrainHeights[i] = Math.min(channelTerrainHeights[i], lerp(channelTerrainHeights[i], poolFloor, t));
         }
       }
     }
@@ -706,8 +716,11 @@ export function rasterizeWorldMap(worldMap, opts) {
 
   return {
     heights,
+    channelTerrainHeights,
     paintMat,
     paintW,
+    channelTerrainPaintMat,
+    channelTerrainPaintW,
     blight,
     seaLevelM: seaLevel,
     erosion: erosionBake.recipe,

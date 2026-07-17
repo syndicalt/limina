@@ -16,7 +16,7 @@ import { MAX_ENTITIES, Position, despawnRenderable, spawnRenderable } from "../e
 import { inertTransform } from "./_util.ts";
 import { teardownEntity } from "./entity-teardown.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
-import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import type { ExecutionContext, SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 import type { InventoryManager } from "./inventory.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -35,14 +35,17 @@ export interface InteractableDef {
 
 export class InteractionManager {
   private readonly interactables = new Map<string, InteractableDef>();
+  private readonly handlers = new Map<string, (actorEntity: string, ctx: ExecutionContext) => Record<string, unknown>>();
 
   register(def: InteractableDef): void {
     this.interactables.set(def.entity, def);
   }
 
   unregister(entity: string): boolean {
+    this.handlers.delete(entity);
     return this.interactables.delete(entity);
   }
+  registerHandler(entity: string, handler: (actorEntity: string, ctx: ExecutionContext) => Record<string, unknown>): void { this.handlers.set(entity, handler); }
 
   get(entity: string): InteractableDef | undefined {
     return this.interactables.get(entity);
@@ -55,11 +58,18 @@ export class InteractionManager {
 
   /** DETERMINISTIC interact: `tick` is `ctx.tick` (NEVER Date.now()) so the stored +
    *  returned `lastInteractTick` recomputes bit-identically on replay. */
-  interact(entity: string, actorEntity: string, tick: number): { ok: boolean; result?: Record<string, unknown> } {
+  interact(entity: string, actorEntity: string, tickOrCtx: number | ExecutionContext): { ok: boolean; result?: Record<string, unknown> } {
     const def = this.interactables.get(entity);
     if (def === undefined) return { ok: false };
+    if (typeof tickOrCtx !== "number") {
+      const handler = this.handlers.get(entity);
+      if (handler !== undefined) {
+        const result = handler(actorEntity, tickOrCtx);
+        return { ok: result.ok !== false, result };
+      }
+    }
     def.state.lastInteractedBy = actorEntity;
-    def.state.lastInteractTick = tick;
+    def.state.lastInteractTick = typeof tickOrCtx === "number" ? tickOrCtx : tickOrCtx.tick;
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
 }
@@ -74,9 +84,9 @@ function entityPosition(world: WorldContext, entity: string): [number, number, n
 
 export function registerInteractionSkills(
   registry: SkillRegistry,
-  opts?: { inventoryManager?: InventoryManager },
+  opts?: { inventoryManager?: InventoryManager; interactionManager?: InteractionManager },
 ): { interactionManager: InteractionManager } {
-  const mgr = new InteractionManager();
+  const mgr = opts?.interactionManager ?? new InteractionManager();
   const inv = opts?.inventoryManager;
 
   // ---- interaction.register ------------------------------------------------
@@ -161,7 +171,7 @@ export function registerInteractionSkills(
     input: interactInput,
     output: z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional() }),
     handler: (input, ctx) => {
-      const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx.tick);
+      const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx);
       ctx.emit("interaction.performed", { entity: input.entity, actor: input.actorEntity ?? ctx.agentId, data: input.data, ...input.meta });
       return result;
     },

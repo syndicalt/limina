@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use deno_core::{resolve_path, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -57,6 +57,8 @@ struct App {
     keys: HashSet<KeyCode>,
     close: bool,
     fullscreen: bool,
+    width: u32,
+    height: u32,
     /// Mouse-look delta accumulated across winit events since the last frame's
     /// drain; only accumulated while the cursor is grabbed.
     look_dx: f32,
@@ -114,7 +116,7 @@ impl ApplicationHandler for App {
         if self.window.is_none() {
             let mut attrs = Window::default_attributes()
                 .with_title("limina")
-                .with_inner_size(LogicalSize::new(960.0, 640.0));
+                .with_inner_size(PhysicalSize::new(self.width, self.height));
             if self.fullscreen {
                 attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
             }
@@ -174,11 +176,15 @@ pub fn run_windowed(
     main_path: &str,
     max_frames: Option<u64>,
     fullscreen: bool,
+    width: u32,
+    height: u32,
 ) -> anyhow::Result<()> {
     let mut event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
         fullscreen,
+        width,
+        height,
         ..Default::default()
     };
 
@@ -186,7 +192,30 @@ pub fn run_windowed(
         event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
     }
     let window = app.window.clone().unwrap();
-    let size = window.inner_size();
+    // X11 can return a requested inner size as soon as create_window succeeds while the native
+    // surface is not presentable until the compositor's post-create ConfigureNotify is pumped.
+    // Setup modules such as the guarded fidelity capture render during module evaluation, before
+    // the normal host loop below gets a chance to drain that event. Settle one bounded initial
+    // configure boundary here and publish its compositor-confirmed physical size to WebGPU.
+    let mut configured_size = app.resized.take();
+    for _ in 0..2_000 {
+        let status = event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        if matches!(status, PumpStatus::Exit(_)) || app.close {
+            anyhow::bail!("window closed before its initial surface configuration completed");
+        }
+        if let Some(size) = app.resized.take() {
+            configured_size = Some(size);
+        }
+        if configured_size.is_some_and(|(configured_width, configured_height)| {
+            !fullscreen || (configured_width >= width && configured_height >= height)
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (configured_width, configured_height) = configured_size
+        .ok_or_else(|| anyhow::anyhow!("window did not report an initial surface configuration"))?;
+    let size = PhysicalSize::new(configured_width.max(1), configured_height.max(1));
     let window_handle = window.window_handle()?.as_raw();
     let display_handle = window.display_handle()?.as_raw();
 

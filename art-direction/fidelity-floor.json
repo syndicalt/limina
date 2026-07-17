@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "_rationale": "MONOTONIC graphical-fidelity floor for the asset QC gate (gates/design/asset-qc-gate.mjs). Every field is a MINIMUM a baked asset GLB must meet BEFORE it is imported into a world; the floor only ever RATCHETS UP (via ratchetFloor/raiseFloor), never down, climbing toward the Project Gorgon ceiling. Seed values were measured from a real, good, textured kit building (assets/kit-building.glb) then set with headroom below it so that building passes while a degenerate box (single flat-colour material, ~a dozen tris, no albedo map, speck bbox) hard-fails.",
-  "ceilingTarget": "project-gorgon",
+  "_rationale": "Legacy monotonic MECHANICAL import floor for gates/design/asset-qc-gate.mjs. It rejects degenerate geometry and missing texture slots, but it is not a visual-quality verdict and cannot satisfy the Project Gorgon release floor. Final acceptance is governed by plans/visual-fidelity-release-contract.md and explicit human review.",
+  "ceilingTarget": "plans/visual-fidelity-release-contract.md",
   "default": {
     "minVertexCount": 100,
     "minTriangleCount": 40,
@@ -12,7 +12,7 @@
   },
   "class": {
     "building": {
-      "_note": "Buildings are the biggest fidelity gap vs the ceiling. Floor sits below the measured reference (verts 4686, tris 894, mats 3, bbox 9x6.15x7.3) with margin so the reference passes; a flat-box cottage fails on verts+tris+materials+albedo+bbox at once.",
+      "_note": "Mechanical minimum only. It rejects a flat-box cottage but does not establish production visual fidelity, material richness, draw-call fitness, provenance, LOD coverage, composition, or reference quality.",
       "minVertexCount": 500,
       "minTriangleCount": 200,
       "minMaterialCount": 2,
@@ -22,7 +22,8 @@
     }
   },
   "provenance": {
-    "measuredFrom": "assets/kit-building.glb",
+    "measuredFrom": "historical untracked assets/kit-building.glb (not valid current evidence)",
+    "evidenceStatus": "invalidated; source asset is absent from the repository",
     "measured": {
       "vertexCount": 4686,
       "triangleCount": 894,
@@ -32,9 +33,10 @@
       "bboxDims": [9.0, 6.15, 7.3]
     },
     "ratchetTargets": [
-      "requiresNormalMap: true — the #1 raise. The current reference bakes NO normal map, so requiring one now would reject the very asset the floor is seeded from. raiseFloor() flips this true the moment a normal-mapped building passes; the gate already enforces it when true.",
-      "minTriangleCount / minVertexCount climb toward PG as denser kits land.",
-      "class-specific colour palette conformance strengthens once baked textures can be sampled (see gate's documented approximation)."
+      "requiresNormalMap: true remains a required ratchet — the #1 mechanical raise. The gate already enforces requiresNormalMap when true; flip it the moment a normal-mapped reference asset passes. This mechanical minimum is not dropped by the release-contract reframing: it may only be SUPERSEDED by a stronger requirement (e.g. verified PBR normal-detail evidence in the final material pipeline), never removed outright.",
+      "Replace the historical seed with a tracked, provenance-complete, optimized asset and measured QC evidence.",
+      "Add mesh/draw-call, texture-resolution, LOD, provenance, and stale-hash gates; raw triangle or vertex count is not a quality proxy.",
+      "Keep this mechanical floor orthogonal to the visual release contract and human reference review."
     ]
   }
 }

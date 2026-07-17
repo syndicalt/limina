@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "abyssal-silt",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Ground026",
+    "assetUrl": "https://ambientcg.com/a/Ground026",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Ground026_1K-JPG.zip",
+    "archiveBytes": 9456906,
+    "archiveSha256": "sha256:f7567e19018205518a758496224239b9b9995d2a12525a288bc83a5fc4aa98ac"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/abyssal-silt/albedo.jpg",
+      "sha256": "sha256:d0ee1c3e0a9cb1eb477a733f3ec3e207637343b823729aaa8b6b7709566ac02d",
+      "assetHash": "sha256:4ab304520068a130a903678fd7c80f46f2d79d55f7ace9dc5ebfba903785e9b8",
+      "bytes": 1580118
+    },
+    "normal": {
+      "assetId": "materials/abyssal-silt/normal.jpg",
+      "sha256": "sha256:228fce1c0cfa99755df6cd9c50eb5b6407cd571c99c6ae0941160c0a690b050d",
+      "assetHash": "sha256:8c0e366da66a518e0503e33e889c946f9b86f0cf309b81d97724c300c0e54cf6",
+      "bytes": 2377362
+    },
+    "roughness": {
+      "assetId": "materials/abyssal-silt/roughness.jpg",
+      "sha256": "sha256:a90ba82aa1eb6058c424361554debe2864ebea317ce3fff04ff44e0d0bd3d6c4",
+      "assetHash": "sha256:b98676e2eeecda35733540a90ff8f9920811ff4b080e508befba7c077ff085dd",
+      "bytes": 610552
+    },
+    "occlusion": {
+      "assetId": "materials/abyssal-silt/occlusion.jpg",
+      "sha256": "sha256:d03e98d84b1e681ee0af47b1e5e159d210d754e0ca015ba32c2a9f17dce32a71",
+      "assetHash": "sha256:ebdc21ff75e7564f5f38f55f034080ef515acc4cd2107e5b38c5ea96e7dce8ae",
+      "bytes": 532768
+    },
+    "displacement": {
+      "assetId": "materials/abyssal-silt/displacement.jpg",
+      "sha256": "sha256:9922d8645641cafdb5400d3f0bc06d6204e761fdba10b4cfd5debb4504d64543",
+      "assetHash": "sha256:75c2c69b6a8fe12253ec63a68282fa93c72a79597c86b31cb15367330b6b462e",
+      "bytes": 397458
+    }
+  },
+  "materialImport": {
+    "name": "abyssal-silt",
+    "albedo": "materials/abyssal-silt/albedo.jpg",
+    "normal": "materials/abyssal-silt/normal.jpg",
+    "roughness": "materials/abyssal-silt/roughness.jpg",
+    "occlusion": "materials/abyssal-silt/occlusion.jpg",
+    "displacement": "materials/abyssal-silt/displacement.jpg"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema": "limina.visual-reference-board/v1",
+  "id": "furniture/dining-table/v1",
+  "subjectKind": "furniture",
+  "acquisitionManifest": "art-direction/furniture/dining-table-reference-acquisition.json",
+  "sources": [
+    {
+      "id": "met/table-468074",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/468074",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/md/original/sf43-35-1.jpg",
+      "creator": "Unknown Italian maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:11.773Z",
+      "localPath": "art-direction/reference-cache/met/table-468074.jpg",
+      "sha256": "sha256:e28586b4816f95762a91c704d29c8473b641dab7d99ea1d5d7fb5595e49ef2ec",
+      "bytes": 36122,
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/trestle-table-8810",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/8810",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/85W_ACF3138R6.jpg",
+      "creator": "Unknown Massachusetts maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.462Z",
+      "localPath": "art-direction/reference-cache/met/trestle-table-8810.jpg",
+      "sha256": "sha256:be664e9589ad7e8f5f1cce84415254109b87403cb081ed994cbb320656e51c5b",
+      "bytes": 494465,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT185.jpg",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.802Z",
+      "localPath": "art-direction/reference-cache/met/library-table-14282.jpg",
+      "sha256": "sha256:88e2a242e1aebb71d080aa21b353553e4a00523fc52d5aaad12d81c3b902b273",
+      "bytes": 1925563,
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ]
+}

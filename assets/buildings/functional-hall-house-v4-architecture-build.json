@@ -1,0 +1,224 @@
+{
+  "schema": "limina.architecture-build-evidence/v1",
+  "specPath": "/home/cheapseatsecon/Projects/Personal/limina/assets/buildings/functional-hall-house-architecture-v1.json",
+  "specHash": "sha256:d82c874b82745c63461181045cffd9ae91eef6d9e7b31bd0df88913a8596440b",
+  "irHash": "sha256:dea862311b4b31f703ccfefb762e69c475b13a04cff3eebc4ca91dd565ebbc78",
+  "compilerSchema": "limina.architecture-compile/v1",
+  "blender": {
+    "binary": "blender",
+    "version": "4.0.2",
+    "platform": "linux",
+    "arch": "arm64"
+  },
+  "adapterSha256": "f696cc2940a3b3d8f9b9543de4d97c99cca0be6ea2b95e0c240870dc14281f0d",
+  "assetSha256": "90b66c071be6b5fcfcffc24acde3fc6abc22c9c1fb7201c90ecb175682b03c43",
+  "lod": {
+    "outputPath": "/home/cheapseatsecon/Projects/Personal/limina/assets/buildings/functional-hall-house-v4-lod.glb",
+    "sha256": "8fcb0c7df015d7681d078f3ec6619411f7ec368c87705f5bf963fbb528865493",
+    "bytes": 19139272,
+    "sourceSha256": "90b66c071be6b5fcfcffc24acde3fc6abc22c9c1fb7201c90ecb175682b03c43",
+    "measurements": [
+      {
+        "level": 0,
+        "triangles": 31572,
+        "draws": 19,
+        "sourcePrimitiveCount": 484
+      },
+      {
+        "level": 1,
+        "triangles": 5060,
+        "draws": 9,
+        "sourcePrimitiveCount": 280
+      },
+      {
+        "level": 2,
+        "triangles": 2756,
+        "draws": 9,
+        "sourcePrimitiveCount": 232
+      }
+    ]
+  },
+  "functional": {
+    "buildingId": "hall-house/temperate/v4",
+    "rooms": 1,
+    "portals": 1,
+    "colliders": 37,
+    "doors": 1
+  },
+  "visual": {
+    "openings": 7,
+    "materialRoles": 20,
+    "furnishings": 161,
+    "lodIdentity": "hall-house/temperate/v4"
+  },
+  "review": {
+    "schema": "limina.architecture-review/v1",
+    "specHash": "sha256:d82c874b82745c63461181045cffd9ae91eef6d9e7b31bd0df88913a8596440b",
+    "irHash": "sha256:dea862311b4b31f703ccfefb762e69c475b13a04cff3eebc4ca91dd565ebbc78",
+    "stages": [
+      {
+        "id": "massing",
+        "requiredOwners": [
+          "main-core",
+          "service-core"
+        ],
+        "checks": [
+          "finite-datum",
+          "foundation-support"
+        ],
+        "cameraIds": [
+          "massing-hero",
+          "foundation-support"
+        ]
+      },
+      {
+        "id": "envelope",
+        "prerequisiteHash": "sha256:efadc11edc299da3f14f65787ed54a97b0954ec6099162096f61810ece37551e",
+        "requiredOwners": [
+          "main-hall/edge-0",
+          "main-hall/edge-1",
+          "main-hall/edge-2",
+          "main-hall/edge-3",
+          "service-bay/edge-0",
+          "service-bay/edge-1",
+          "service-bay/edge-2",
+          "service-bay/edge-3",
+          "dormer/south/front"
+        ],
+        "checks": [
+          "wall-closure",
+          "floor-support",
+          "opening-subtraction"
+        ],
+        "cameraIds": [
+          "envelope-exterior",
+          "envelope-interior"
+        ]
+      },
+      {
+        "id": "roof-junctions",
+        "prerequisiteHash": "sha256:b01b0d4d07c268f8b5bb8a7eafb9024505868285d58f333e5e318fb27b3fcc76",
+        "requiredOwners": [
+          "main-roof/south",
+          "main-roof/north",
+          "service-roof/west",
+          "service-roof/east"
+        ],
+        "checks": [
+          "plane-closure",
+          "dual-substrate-seams",
+          "gable-clearance",
+          "penetration-void-closure",
+          "chimney-flashing-continuity",
+          "penetration-seam-clearance"
+        ],
+        "cameraIds": [
+          "roof-hero",
+          "roof-seams"
+        ]
+      },
+      {
+        "id": "openings-circulation",
+        "prerequisiteHash": "sha256:faeb7e54f0db874e2dbdaab1d8df52bd73705edbb295bcc7f76756c5b18f2c0c",
+        "requiredOwners": [
+          "front-entry",
+          "door/front",
+          "window/south-west",
+          "window/east",
+          "window/north-west",
+          "window/west",
+          "window/cross-gable",
+          "window/dormer",
+          "dormer/south"
+        ],
+        "checks": [
+          "threshold-continuity",
+          "monotonic-stairs",
+          "door-sweep"
+        ],
+        "cameraIds": [
+          "threshold-detail",
+          "portal-sweep"
+        ]
+      },
+      {
+        "id": "interior-fireplace",
+        "prerequisiteHash": "sha256:e585cfb8304a792eabf768e84921a9568803403caaec673217adf3141da9d986",
+        "requiredOwners": [
+          "hall-hearth",
+          "chimney/hall"
+        ],
+        "checks": [
+          "firebox-completeness",
+          "fuel-containment",
+          "chimney-clearance",
+          "continuous-flue-authority"
+        ],
+        "cameraIds": [
+          "interior-open",
+          "hearth-detail"
+        ]
+      },
+      {
+        "id": "materials-uv",
+        "prerequisiteHash": "sha256:fe9a32f59552a93c802014add476744e77c4988b461f75e9e0c78ce32875468e",
+        "requiredOwners": [
+          "main-hall/edge-0",
+          "main-hall/edge-1",
+          "main-hall/edge-2",
+          "main-hall/edge-3",
+          "service-bay/edge-0",
+          "service-bay/edge-1",
+          "service-bay/edge-2",
+          "service-bay/edge-3",
+          "dormer/south/front",
+          "main-roof/south",
+          "main-roof/north",
+          "service-roof/west",
+          "service-roof/east"
+        ],
+        "checks": [
+          "material-role-closure",
+          "uv-phase-continuity"
+        ],
+        "cameraIds": [
+          "materials-exterior",
+          "materials-interior"
+        ]
+      },
+      {
+        "id": "lod-final",
+        "prerequisiteHash": "sha256:770c3f1e069007a0c2aaab24e7e13f843c8f46cf8d6fc221223248636c77234a",
+        "requiredOwners": [
+          "main-core",
+          "service-core",
+          "main-hall/edge-0",
+          "main-hall/edge-1",
+          "main-hall/edge-2",
+          "main-hall/edge-3",
+          "service-bay/edge-0",
+          "service-bay/edge-1",
+          "service-bay/edge-2",
+          "service-bay/edge-3",
+          "dormer/south/front",
+          "main-roof/south",
+          "main-roof/north",
+          "service-roof/west",
+          "service-roof/east"
+        ],
+        "checks": [
+          "semantic-lod-preservation",
+          "runtime-contract",
+          "lifecycle-return"
+        ],
+        "cameraIds": [
+          "exterior-closed",
+          "exterior-open",
+          "threshold-detail",
+          "interior-open",
+          "lod-25m"
+        ]
+      }
+    ]
+  }
+}

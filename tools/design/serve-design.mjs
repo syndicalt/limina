@@ -54,6 +54,10 @@ const FRONTEND_DIR = join(__dirname, "frontend");
 const SHARED_MODULES = {
   "/shared/marching-squares.mjs": join(LIMINA_HOME, "js/src/world/pipeline/marching-squares.mjs"),
   "/shared/raster-codec.mjs": join(LIMINA_HOME, "js/src/world/pipeline/raster-codec.mjs"),
+  // Atlas WB-W1 authoring imports the exact engine validators. Explicit allow-list only:
+  // no generic js/src mount and therefore no path traversal or accidental internal exposure.
+  "/js/src/world/water-ir.mjs": join(LIMINA_HOME, "js/src/world/water-ir.mjs"),
+  "/js/src/world/hydrology-ir.mjs": join(LIMINA_HOME, "js/src/world/hydrology-ir.mjs"),
 };
 const MIME = {
   ".html": "text/html; charset=utf-8",

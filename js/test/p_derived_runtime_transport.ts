@@ -11,6 +11,7 @@ import {
   derivedArtifactContentHash,
 } from "../src/world/compiler/index.mjs";
 import { sha256 as portableSha256 } from "../src/world/sha256.mjs";
+import { portableAssetContentHash } from "../src/world/asset-content-hash.mjs";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`p_derived_runtime_transport FAIL: ${message}`);
@@ -57,6 +58,8 @@ const manifest = createDerivedRevisionManifest({
   }],
 });
 const descriptor = manifest.chunks[0].artifacts[0];
+const contentBytes = new Uint8Array([255, 17, 0, 92, 31, 128]);
+const engineHash = portableAssetContentHash(contentBytes);
 
 function responseWithReader(
   status: number,
@@ -111,6 +114,18 @@ function artifactHeaders(length: number): Record<string, string> {
     ETag: `"${descriptor.contentHash}"`,
     "X-Limina-Content-Hash": descriptor.contentHash,
     "X-Limina-Manifest-Hash": manifest.manifestHash,
+  };
+}
+
+function contentHeaders(length: number, overrides: Record<string, string> = {}): Record<string, string> {
+  return {
+    "Content-Type": "application/octet-stream",
+    "Content-Length": String(length),
+    ETag: `"${engineHash}"`,
+    "X-Limina-Content-Hash": engineHash,
+    "X-Limina-Manifest-Hash": manifest.manifestHash,
+    "X-Limina-Generation": "3",
+    ...overrides,
   };
 }
 
@@ -245,6 +260,41 @@ const artifact304 = await artifact304Harness.transport.fetchArtifact(
 assert(artifact304.status === "not-modified" && artifact304.contentHash === contentHash, "artifact 304 changed cache identity");
 assert(new Headers(artifact304Harness.requests[1].init.headers).get("if-none-match") === `"${contentHash}"`, "artifact conditional ETag changed");
 
+const contentHarness = harness([bytesResponse(200, contentBytes, contentHeaders(contentBytes.byteLength))]);
+const contentResult = await contentHarness.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash,
+  byteLength: contentBytes.byteLength,
+});
+assert(contentResult.contentHash === engineHash
+  && contentResult.bytes.every((byte, index) => byte === contentBytes[index]), "derived content bytes changed");
+assert(contentHarness.requests[0].url === `${baseConfig.baseUrl}/v1/derived/manifests/${manifest.manifestHash.slice(7)}/content/${engineHash.slice(7)}`,
+  "content URL was not bound to manifest and portable engine hashes");
+assert(new Headers(contentHarness.requests[0].init.headers).get("authorization") === `Bearer ${token}`,
+  "content request omitted bearer authentication");
+
+const badContentHash = harness([bytesResponse(200, new Uint8Array([255, 17, 0, 92, 31, 129]), contentHeaders(contentBytes.byteLength))]);
+await rejected(badContentHash.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash, byteLength: contentBytes.byteLength,
+}), "INTEGRITY_ERROR", "fatal", "portable engine content hash mismatch accepted");
+const badContentManifest = harness([bytesResponse(200, contentBytes,
+  contentHeaders(contentBytes.byteLength, { "X-Limina-Manifest-Hash": hash("wrong-content-manifest") }))]);
+await rejected(badContentManifest.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash, byteLength: contentBytes.byteLength,
+}), "PROTOCOL_ERROR", "fatal", "content response escaped exact manifest binding");
+const badContentLength = harness([bytesResponse(200, contentBytes, contentHeaders(contentBytes.byteLength - 1))]);
+await rejected(badContentLength.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash, byteLength: contentBytes.byteLength,
+}), "PROTOCOL_ERROR", "fatal", "content response escaped exact closure byteLength binding");
+const badContentGeneration = harness([bytesResponse(200, contentBytes,
+  contentHeaders(contentBytes.byteLength, { "X-Limina-Generation": "03" }))]);
+await rejected(badContentGeneration.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash, byteLength: contentBytes.byteLength,
+}), "PROTOCOL_ERROR", "fatal", "non-canonical content generation accepted");
+const missingContent = harness([errorResponse(404, "NOT_FOUND")]);
+await rejected(missingContent.transport.fetchContent(manifest.manifestHash, {
+  contentHash: engineHash, byteLength: contentBytes.byteLength,
+}), "NOT_FOUND", "fatal", "closure-unavailable content did not fail closed");
+
 const badHashHarness = harness([currentResponse(), bytesResponse(200, new Uint8Array([9, 8, 7, 6, 5]), artifactHeaders(5))]);
 const badHashCurrent = (await badHashHarness.transport.fetchCurrent()).current;
 await rejected(badHashHarness.transport.fetchArtifact(badHashCurrent, badHashCurrent.manifest.chunks[0].artifacts[0]),
@@ -298,4 +348,4 @@ const abortedSignal = { aborted: true } as AbortSignal;
 await rejected(aborted.transport.fetchCurrent({ signal: abortedSignal }), "ABORTED", "transient", "pre-aborted signal performed I/O");
 assert(aborted.requests.length === 0, "pre-aborted request reached fetch");
 
-console.log("[js] p_derived_runtime_transport OK: strict loopback/token/config, capability-bound descriptor URLs, exact current/artifact headers and 304s, bounded bodies, WebCrypto SHA-256, abort, and stable transient/fatal errors proven");
+console.log("[js] p_derived_runtime_transport OK: strict loopback/token/config, capability-bound artifact/content URLs, exact headers/lengths, raw artifact + portable engine hashes, bounded bodies, abort, and stable transient/fatal errors proven");

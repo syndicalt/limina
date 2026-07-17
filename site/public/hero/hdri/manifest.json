@@ -1,0 +1,37 @@
+{
+  "schema": "limina.hdri-pack/1",
+  "license": "CC0-1.0",
+  "author": "Poly Haven",
+  "entries": [
+    {
+      "id": "builder",
+      "path": "/hero/hdri/builder.hdr",
+      "source": "https://polyhaven.com/a/studio_small_03",
+      "sha256": "30933d55e45f0795daf49f3cbefbe0e5ebcb821ee04fb0a2818c02ffc3938817"
+    },
+    {
+      "id": "fantasy",
+      "path": "/hero/hdri/fantasy.hdr",
+      "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+      "sha256": "fd94c84997b8a3c353b62c2125a9b44e19509956986a126e472684432a02d798"
+    },
+    {
+      "id": "western",
+      "path": "/hero/hdri/western.hdr",
+      "source": "https://polyhaven.com/a/qwantani_dusk_2_puresky",
+      "sha256": "56dc9cb681f2641c08377e20e83fa5e4865fd900bcce26a15a1883580139b5e2"
+    },
+    {
+      "id": "scifi",
+      "path": "/hero/hdri/scifi.hdr",
+      "source": "https://polyhaven.com/a/dikhololo_night",
+      "sha256": "6861489f983cdc0c22435b781a3487171bd25f25f9cc52c46ac402d48e08249e"
+    },
+    {
+      "id": "sim",
+      "path": "/hero/hdri/sim.hdr",
+      "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy",
+      "sha256": "5477b7dbb2aea4a6947cb36b96339c119f90bf36a03b039af3254b5e6a22896d"
+    }
+  ]
+}

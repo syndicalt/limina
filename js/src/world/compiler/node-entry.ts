@@ -1,17 +1,22 @@
 import { compileAtlasMapDoc } from "../design-map-compile.mjs";
 import { DEFAULT_MAP_EROSION_RECIPE } from "../pipeline/erosion.mjs";
 import { compilerContentHash } from "./canonical.mjs";
-import { createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph } from "./graph.mjs";
+import { createBiomeWorldCompilerGraph, createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph, createPublishedBiomeWorldCompilerGraph } from "./graph.mjs";
 import {
-  compileWorldTerrain,
+  compileWorldTerrain as compileBaseWorldTerrain,
   MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES,
   MAX_WORLD_TERRAIN_COMPILE_CHUNKS,
   MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES,
   WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
   WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION,
+  WORLD_BIOME_TERRAIN_COMPILER_VERSION,
 } from "./terrain-compile.ts";
+import {
+  WORLD_PUBLISHED_BIOME_COMPILER_VERSION,
+  publishBiomeTerrainCompilation,
+} from "./biome-publication-compile.mjs";
 
-export { compileAtlasMapDoc, compileWorldTerrain };
+export { compileAtlasMapDoc };
 
 export const WORLD_COMPILER_BUNDLE_SCHEMA = "limina.world-compiler-bundle/v1";
 export const WORLD_TERRAIN_COMPILER_VERSION = "1.0.0";
@@ -63,4 +68,42 @@ export function createHydrologyWorldTerrainCompiler(projectId: string) {
     WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION,
     createHydrologyWorldCompilerGraph(),
   );
+}
+
+/** Build the pinned compiler profile for deterministic biome snapshots over hydrology maps. */
+export function createBiomeWorldTerrainCompiler(projectId: string) {
+  return createWorldTerrainCompilerBundle(
+    projectId,
+    WORLD_BIOME_TERRAIN_COMPILER_VERSION,
+    createBiomeWorldCompilerGraph(),
+  );
+}
+
+/** Opt-in production profile that atomically publishes reviewed B3 surfaces and population. */
+export function createPublishedBiomeWorldTerrainCompiler(projectId: string) {
+  return createWorldTerrainCompilerBundle(
+    projectId,
+    WORLD_PUBLISHED_BIOME_COMPILER_VERSION,
+    createPublishedBiomeWorldCompilerGraph(),
+  );
+}
+
+/** Bundle entrypoint used by the worker. Older profiles preserve their existing compiler path. */
+export function compileWorldTerrain(input: any) {
+  if (input?.compiler?.version !== WORLD_PUBLISHED_BIOME_COMPILER_VERSION) return compileBaseWorldTerrain(input);
+  if (input.previousSnapshot !== null || Object.hasOwn(input, "previousManifest") || Object.hasOwn(input, "availableArtifactHashes")) {
+    throw new Error("published biome compiler currently requires a cold base compilation");
+  }
+  if (!Object.hasOwn(input, "biomePublication")) throw new Error("published biome compiler requires biomePublication input");
+  const { biomePublication, ...baseInput } = input;
+  const baseCompilation = compileBaseWorldTerrain({
+    ...baseInput,
+    compiler: { version: WORLD_BIOME_TERRAIN_COMPILER_VERSION, config: input.compiler.config },
+  });
+  return publishBiomeTerrainCompilation({
+    baseCompilation,
+    publication: biomePublication,
+    compiler: { version: WORLD_PUBLISHED_BIOME_COMPILER_VERSION, configHash: compilerContentHash(input.compiler.config) },
+    cancellation: input.cancellation,
+  });
 }

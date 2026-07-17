@@ -18,6 +18,9 @@ import type { AssetInstance } from "./asset-scatter.ts";
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const disposedScatterResources = new WeakSet<object>();
 const INSTANCE_LOCAL_MATRIX = "liminaPopulationLocalMatrix";
+/** Hard per-asset draw-batch ceiling. Spatial culling cells coarsen deterministically before
+ * crossing it, so multi-node ground-cover GLBs cannot multiply into thousands of draws. */
+export const MAX_ASSET_SCATTER_DRAW_BATCHES = 64;
 
 function isHostLifetime(resource: unknown): boolean {
   return !!resource && typeof resource === "object"
@@ -50,6 +53,10 @@ export function buildAssetInstancedMeshes(
      *  sphere is correct. Omit (the default) for scatters that are already spatially bounded (per-region
      *  props, per-building dressing) — one bucket, byte-identical mesh count/order to no chunking. */
     chunkSize?: number;
+    /** Maximum InstancedMeshes emitted for this asset. Defaults to the production ceiling of 64.
+     * When mesh-node count × spatial cells would exceed it, cells are deterministically coarsened;
+     * the asset is rejected only when its mesh-node count alone exceeds the ceiling. */
+    maxMeshes?: number;
     /** DEAD (blighted) variant: render a bare, colour-drained tree — drop the leaf-card nodes
      *  (alphaTest MASK foliage) entirely and grey the surviving bark. Used by vegetation.scatter for
      *  instances that fall inside a painted caesura, so the canopy dies with the ground. */
@@ -74,6 +81,17 @@ export function buildAssetInstancedMeshes(
   if (typeof r.traverse === "function") r.traverse(collect);
   else { const walk = (node: unknown): void => { collect(node); const c = (node as { children?: unknown[] }).children; if (Array.isArray(c)) for (const ch of c) walk(ch); }; walk(root); }
   if (nodes.length === 0) return [];
+  const activeNodeCount = opts?.dead === true
+    ? nodes.filter(({ material }) => ((material as unknown as { alphaTest?: number }).alphaTest ?? 0) <= 0.1).length
+    : nodes.length;
+  if (activeNodeCount === 0) return [];
+  const maxMeshes = opts?.maxMeshes ?? MAX_ASSET_SCATTER_DRAW_BATCHES;
+  if (!Number.isSafeInteger(maxMeshes) || maxMeshes < 1 || maxMeshes > MAX_ASSET_SCATTER_DRAW_BATCHES) {
+    throw new RangeError(`asset scatter maxMeshes must be an integer in [1, ${MAX_ASSET_SCATTER_DRAW_BATCHES}]`);
+  }
+  if (activeNodeCount > maxMeshes) {
+    throw new RangeError(`asset has ${activeNodeCount} renderable mesh nodes, exceeding scatter draw-batch budget ${maxMeshes}`);
+  }
 
   // ── GLB ORIGIN NORMALIZATION (WHOLE ASSET) ──────────────────────────────────
   // Curated GLBs are not consistently based at Y=0 or centred at XZ=(0,0). Compute ONE combined
@@ -124,6 +142,37 @@ export function buildAssetInstancedMeshes(
       list.push(inst);
     }
     buckets.push(...cells.values());
+    const maxBuckets = Math.max(1, Math.floor(maxMeshes / activeNodeCount));
+    if (buckets.length > maxBuckets) {
+      // Preserve the existing exact global cell grid while it fits. Only an over-budget scatter
+      // switches to a placement-bounds-anchored grid whose cell size doubles until the complete
+      // mesh-node × bucket product is admitted. This keeps nearby placements spatially coherent,
+      // deterministic, and cullable without allocating an unbounded draw/object live set.
+      let minX = Infinity, minZ = Infinity;
+      for (const instance of instances) {
+        minX = Math.min(minX, instance.x);
+        minZ = Math.min(minZ, instance.z);
+      }
+      const anchorX = Math.floor(minX / cellSize) * cellSize;
+      const anchorZ = Math.floor(minZ / cellSize) * cellSize;
+      let adaptiveSize = cellSize;
+      for (let attempt = 0; attempt < 32; attempt++) {
+        adaptiveSize *= 2;
+        const adaptive = new Map<string, AssetInstance[]>();
+        for (const instance of instances) {
+          const key = `${Math.floor((instance.x - anchorX) / adaptiveSize)}:${Math.floor((instance.z - anchorZ) / adaptiveSize)}`;
+          let list = adaptive.get(key);
+          if (list === undefined) { list = []; adaptive.set(key, list); }
+          list.push(instance);
+        }
+        if (adaptive.size <= maxBuckets) {
+          buckets.length = 0;
+          buckets.push(...adaptive.values());
+          break;
+        }
+      }
+      if (buckets.length > maxBuckets) throw new Error("asset scatter could not satisfy its draw-batch budget");
+    }
   }
 
   // One InstancedMesh per (mesh node × cell bucket), all sharing the asset-level corrective offset

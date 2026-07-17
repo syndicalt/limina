@@ -4,6 +4,7 @@ target/
 
 # --- Node / web build artifacts ---
 node_modules/
+js/.tools/
 dist/
 .astro/
 # Type contracts for the generated dependency bundles are source inputs to the
@@ -58,6 +59,7 @@ editor/test/archetype_quest.png
 
 # host-side asset-fetch disk cache (tools/asset-fetch.ts — generated/retrieved glb bytes)
 .asset-cache/
+.firecrawl/
 tools/node_modules/
 tools/.ez-core.mjs
 js/.ez-core.mjs
@@ -71,12 +73,21 @@ tools/preview/out/
 /quarantine/*
 !/quarantine/README.md
 /fable-findings.md
+# Local visual-fidelity retrospective. Keep candid process notes out of releases.
+/plans/visual-fidelity-lessons-learned.md
 
 # --- Reference imagery + parked subsystems (never commit — CLAUDE.md §3 Filing) ---
 art-direction/library/
 art-direction/kit-evidence/
 art-direction/pg-progress/
+art-direction/references/
+art-direction/reference-cache/
 .parked-*/
+
+# --- Regenerable asset evidence + authoring intermediates (deliverable GLBs/cards stay tracked) ---
+assets/qc/internal/
+assets/derived/
+assets/buildings/authoring/
 
 # Alpha packaging output (tools/package/make-alpha.mjs)
 dist-alpha/

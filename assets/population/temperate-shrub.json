@@ -1,0 +1,13 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "temperate-forest-shrub-cluster",
+  "version": "1.0.0",
+  "role": "flora/shrub",
+  "backend": "instanced-asset",
+  "assetId": "vegetation/temperate-shrub-cluster-lod0.glb",
+  "contentHash": "sha256:f63e0316778b7043fdb4da438f4731495b59400112a5ced9895b4ac233dcc819",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "https://polyhaven.com/a/shrub_03"
+  }
+}

@@ -360,8 +360,11 @@ export function createMapTerrainField(options) {
     minimumHeightM: minimum,
     maximumHeightM: maximum,
     heightsM: raster.heights,
+    channelTerrainHeightsM: raster.channelTerrainHeights,
     paintMat: raster.paintMat,
     paintW: raster.paintW,
+    channelTerrainPaintMat: raster.channelTerrainPaintMat,
+    channelTerrainPaintW: raster.channelTerrainPaintW,
     biomeCell,
     biomeKinds,
   });

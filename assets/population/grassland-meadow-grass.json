@@ -1,0 +1,16 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "grassland-meadow-grass",
+  "version": "4.0.1",
+  "role": "flora/meadow-grass",
+  "backend": "continuous-grass-field",
+  "visualPackageId": "limina.grass.interactive-temperate-meadow",
+  "visualPackageVersion": "4.0.1",
+  "densityScale": 9,
+  "bladeScale": [0.7, 1.25],
+  "climate": "summer",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "limina://procedural/continuous-grass-field/interactive-temperate-meadow"
+  }
+}

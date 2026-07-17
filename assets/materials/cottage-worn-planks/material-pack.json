@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-worn-planks",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "medieval_wood",
+    "assetUrl": "https://polyhaven.com/a/medieval_wood",
+    "apiUrl": "https://api.polyhaven.com/files/medieval_wood",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:1ac69bd20d952d2969818e6760c6acfc14f9a4094e36019b8b7bdf17568dceaf"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-worn-planks/albedo.jpg",
+      "sha256": "sha256:66a36635dc3f2db696dbb6939b1d4f86c0b666c898c1b55c6b5d6d9f1896b43e",
+      "assetHash": "sha256:0e376a4f12c30ff981e07f49a5cbd4a1db07a461a586cde6f1199a4cce30ad87",
+      "md5": "6c464ccb8e5dc5b1ab1b93c05dcc4a8c",
+      "bytes": 747216,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_wood/medieval_wood_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-worn-planks/normal.jpg",
+      "sha256": "sha256:90b0ce551282d55830497397edad9b0c3ea690728483de45b7df13eb0850df01",
+      "assetHash": "sha256:867ebad24446a41daf6b236ea138bc9e8c1277935812571375a93e8bc2576d4c",
+      "md5": "f392a90a1e5155b0cfdc0c9534275594",
+      "bytes": 827061,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_wood/medieval_wood_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-worn-planks/roughness.jpg",
+      "sha256": "sha256:e2fd3ab5e76a418bffceb88ce3837939e1039f94c432a3913c539b0d440ee7a5",
+      "assetHash": "sha256:9cbc1846ba7aad0e5ef21146dc7cb7e4a857e7fad40e287f370d06d2081c6eed",
+      "md5": "ee1e5705fcd50448260e994cb09675cd",
+      "bytes": 321025,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_wood/medieval_wood_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-worn-planks/occlusion.jpg",
+      "sha256": "sha256:ec35e1242c4a5ff762b0c4c9593efd96ee393426bcebc190ea813526bfa7ab9e",
+      "assetHash": "sha256:e8edc549a4e72beb9203b49e65059a6aa1b7cd02bfc0b2eadbf501c99ed7b9f2",
+      "md5": "8293f93f52b529dadedf234062c38ef6",
+      "bytes": 363919,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_wood/medieval_wood_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-worn-planks/displacement.jpg",
+      "sha256": "sha256:24d256850a860f3e7d95b26e250687f847be41a70a446cdfd9a49f65e81ded5f",
+      "assetHash": "sha256:3dbce1af448e9100aae971db686d04849789c3a43bdab00008cd54c4d3f9f9fe",
+      "md5": "8418a74968b546c3d9022b27c77f9563",
+      "bytes": 158906,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/medieval_wood/medieval_wood_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-worn-planks",
+    "albedo": "materials/cottage-worn-planks/albedo.jpg",
+    "normal": "materials/cottage-worn-planks/normal.jpg",
+    "roughness": "materials/cottage-worn-planks/roughness.jpg",
+    "occlusion": "materials/cottage-worn-planks/occlusion.jpg",
+    "displacement": "materials/cottage-worn-planks/displacement.jpg"
+  }
+}

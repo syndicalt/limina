@@ -1389,6 +1389,17 @@ async function requireDerivedDiscovery() {
   return discovery;
 }
 
+function derivedMainRealmContentAccess() {
+  const discovery = derivedRuntimeDiscovery;
+  if (discovery === undefined) throw new Error("DERIVED_DISCOVERY_UNAVAILABLE");
+  return Object.freeze({
+    baseUrl: discovery.baseUrl,
+    token: discovery.token,
+    projectId: discovery.projectId,
+    branchId: discovery.branchId,
+  });
+}
+
 function activateEditDerivedRevision(snapshot, { signal } = {}) {
   const runtime = state.running;
   const epoch = state.editRuntimeEpoch;
@@ -1398,7 +1409,7 @@ function activateEditDerivedRevision(snapshot, { signal } = {}) {
   }
   let activation;
   activation = (async () => {
-    await runtime.activateDerivedRevision(snapshot, { signal });
+    await runtime.activateDerivedRevision(snapshot, { signal, contentAccess: derivedMainRealmContentAccess() });
     assertRuntimeDerivedRevision(runtime, snapshot);
     if (signal?.aborted || epoch !== state.editRuntimeEpoch || state.running !== runtime ||
         state.scrubLimit !== undefined || state.rebooting || playLifecycle.isAuthoringLocked()) {
@@ -1492,7 +1503,7 @@ function startPinnedDerivedClient(runtime, source, token) {
     activate: async (snapshot, { signal } = {}) => {
       if (!playLifecycle.is(token, "starting") || state.playRuntime !== runtime ||
           !sameDerivedSource(snapshot, source)) throw new Error("Pinned Play runtime is no longer current");
-      await runtime.activateDerivedRevision(snapshot, { signal });
+      await runtime.activateDerivedRevision(snapshot, { signal, contentAccess: derivedMainRealmContentAccess() });
       assertRuntimeDerivedRevision(runtime, snapshot);
       if (signal?.aborted || !playLifecycle.is(token, "starting") || state.playRuntime !== runtime) {
         throw new Error("Pinned Play runtime changed during derived activation");
@@ -2571,7 +2582,10 @@ async function startPlay() {
           forceWebGL: true,
           quality: graphicsSettings.tier,
           disposeRendererOnStop: true,
-          ...(initialDerivedRevision === undefined ? {} : { initialDerivedRevision }),
+          ...(initialDerivedRevision === undefined ? {} : {
+            initialDerivedRevision,
+            initialDerivedContentAccess: derivedMainRealmContentAccess(),
+          }),
         });
         if (runtime && initialDerivedRevision !== undefined) assertRuntimeDerivedRevision(runtime, initialDerivedRevision);
       } catch (error) {
@@ -2727,7 +2741,10 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
             ? "DERIVED_EDIT_INITIAL_ACTIVATION_FAILED"
             : detail,
         ),
-        ...(initialDerivedRevision === undefined ? {} : { initialDerivedRevision }),
+        ...(initialDerivedRevision === undefined ? {} : {
+          initialDerivedRevision,
+          initialDerivedContentAccess: derivedMainRealmContentAccess(),
+        }),
         orbitControls: true,
         editorNavigation: {
           mode: state.editMode ? "orbit" : navigationPreferences.mode,

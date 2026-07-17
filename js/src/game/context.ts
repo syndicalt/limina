@@ -81,6 +81,8 @@ export interface HeadlessContextOptions extends CommonContextOptions {
 export interface WindowedContextOptions extends CommonContextOptions {
   width: number;
   height: number;
+  /** Benchmark-only timestamp device capability; ordinary games leave this disabled. */
+  gpuTimestampMode?: Parameters<typeof createEngine>[0]["gpuTimestampMode"];
   /** Phase 11 render baseline (see createEngine). Omit for the lit default. */
   renderBaseline?: Parameters<typeof createEngine>[0]["renderBaseline"];
 }
@@ -224,6 +226,7 @@ export async function createWindowedContext(opts: WindowedContextOptions): Promi
   const engine = await createEngine({
     width: opts.width,
     height: opts.height,
+    gpuTimestampMode: opts.gpuTimestampMode,
     renderBaseline: opts.renderBaseline,
   });
   return assemble({

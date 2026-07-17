@@ -436,6 +436,36 @@ export class WasmRapierPhysics {
     out[5] = id === undefined ? -1 : id;
   }
 
+  op_physics_overlap_box(x: number, y: number, z: number, hx: number, hy: number, hz: number,
+    qx: number, qy: number, qz: number, qw: number, ignoreBodyId: number, out: Uint32Array): number {
+    if (![x, y, z, qx, qy, qz, qw].every(Number.isFinite)) throw new Error("box overlap pose values must be finite");
+    if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) throw new Error("box overlap half extents values must be positive");
+    const quaternionNormSquared = qx * qx + qy * qy + qz * qz + qw * qw;
+    if (!Number.isFinite(quaternionNormSquared) || quaternionNormSquared <= Number.EPSILON * Number.EPSILON) {
+      throw new Error("box overlap rotation quaternion must be non-zero");
+    }
+    const w = this.world;
+    if (w === null || out.length === 0) return 0;
+    const capacity = Math.min(out.length, 4096);
+    const hits = new Set<number>();
+    const shape = new this.R.Cuboid(hx, hy, hz);
+    w.intersectionsWithShape({ x, y, z }, { x: qx, y: qy, z: qz, w: qw }, shape, (collider) => {
+      const parent = collider.parent();
+      const id = parent ? this.handleToId.get(parent.handle) : undefined;
+      if (id === undefined || id === ignoreBodyId || hits.has(id)) return true;
+      if (hits.size < capacity) hits.add(id);
+      else {
+        let currentMax = -1;
+        for (const hit of hits) currentMax = Math.max(currentMax, hit);
+        if (id < currentMax) { hits.delete(currentMax); hits.add(id); }
+      }
+      return true;
+    });
+    const sorted = [...hits].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) out[i] = sorted[i]!;
+    return sorted.length;
+  }
+
   op_physics_snapshot(): Uint8Array {
     const w = this.requireWorld();
     const rapierBytes = w.takeSnapshot();

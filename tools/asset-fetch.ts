@@ -38,6 +38,7 @@ import { AssetResolver } from "../js/src/asset/resolver.ts";
 import type { AssetRequest, AssetResult, AssetSource } from "../js/src/asset/types.ts";
 import { objArchiveToGlb } from "./obj-archive-to-glb.ts";
 import { curateResolve, DEFAULT_MAX_ATTEMPTS } from "./curate.ts";
+import { inspectGlbAsset, sha256, upsertAssetCandidate } from "./qc/asset-manifest.mjs";
 
 const LIBRARY_NAME = "library:polypizza";
 const GENERATIVE_NAME = "generative:3daistudio";
@@ -337,6 +338,27 @@ async function main(): Promise<void> {
   const assetId = `${args.kind}-${slug(args.prompt)}-${args.seed}.${result.format}`;
   writeFileSync(join(assetsDir, assetId), result.bytes);
 
+  // Retrieval persists provenance into the canonical manifest immediately, but NEVER self-approves.
+  // A candidate becomes an accepted `entry` only after hash-pinned QC evidence and separate human
+  // reference review are supplied. Unknown generator licenses remain explicit "unknown" and fail closed.
+  const candidate = {
+    id: assetId,
+    status: "candidate-awaiting-qc",
+    class: args.kind,
+    model: { path: assetId, sha256: sha256(result.bytes) },
+    provenance: {
+      source: result.meta.source,
+      sourceUrl: result.meta.sourceUrl ?? null,
+      licenseSpdx: result.meta.license ?? "unknown",
+      attribution: result.meta.attribution ?? null,
+    },
+    metrics: result.format === "glb" ? inspectGlbAsset(result.bytes) : null,
+    lods: [],
+    qc: null,
+    request: { prompt: args.prompt, requestedSeed: args.seed, selectedSeed: usedSeed, referenceImage: args.reference ?? null },
+  };
+  upsertAssetCandidate(join(assetsDir, "manifest.json"), candidate);
+
   // One machine-readable JSON line (bytes = the glb byte length; the raw bytes live on disk). `seed` is the
   // CURATED seed actually used (== requested seed unless curation re-rolled); bounds/aspect are the
   // footprint the curator measured (null when --no-curate).
@@ -351,6 +373,8 @@ async function main(): Promise<void> {
       license: result.meta.license ?? null,
       attribution: result.meta.attribution ?? null,
       sourceUrl: result.meta.sourceUrl ?? null,
+      manifest: "assets/manifest.json",
+      status: candidate.status,
       cached,
     }),
   );

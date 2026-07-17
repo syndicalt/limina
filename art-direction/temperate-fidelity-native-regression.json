@@ -1,0 +1,23 @@
+{
+  "schema": "limina.fixed-camera-regression-authority/v1",
+  "lane": "nature",
+  "referenceSetId": "project-gorgon-floor-20260711",
+  "cameraRoute": "river-leading-line",
+  "candidateBaseline": {
+    "assetId": "qc/internal/temperate-river-leading-line-dgx-spark-gb10-continuous-turf-v4-candidate-2026-07-13.png",
+    "sha256": "e4da7f053d222cc16ff0b53f4a95a3b2ff503549e9537656ecb8fdc6881bedd0",
+    "byteLength": 3686760,
+    "width": 1920,
+    "height": 1080
+  },
+  "policy": {
+    "schema": "limina.fixed-camera-regression/v1",
+    "largeDelta": 8,
+    "tileGrid": [16, 9],
+    "maxMeanAbsoluteError": 1.5,
+    "maxRootMeanSquareError": 7,
+    "maxLargeChannelFraction": 0.04,
+    "maxTileMeanAbsoluteError": 7
+  },
+  "interpretation": "Mechanical drift guard only. This candidate baseline and its thresholds cannot establish visual quality. Project Gorgon reference comparison and explicit human approval remain mandatory."
+}

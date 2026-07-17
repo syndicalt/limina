@@ -69,6 +69,94 @@ if (typeof globalThis.URL === "function") {
     __liminaObjectUrls.delete(String(url));
   };
 }
+
+// The embedded host intentionally has no general Web Worker capability, but
+// Three's KTX2Loader runs the project-owned Basis transcoder in a Worker made
+// from a blob URL. Provide the smallest compatible surface for those in-memory
+// workers only. Source must come from the object-URL registry above; external
+// URLs, files, and network workers remain forbidden. Jobs execute as ordered
+// microtasks in this isolate, retaining deterministic loader ownership without
+// broadening host authority.
+if (typeof globalThis.Worker === "undefined") {
+  class LiminaBlobWorker {
+    constructor(url) {
+      this.url = String(url);
+      this.terminated = false;
+      this.mainListeners = new Map();
+      this.workerListeners = new Map();
+      const blob = __liminaObjectUrls.get(this.url);
+      if (blob === undefined) throw new Error(`Worker requires a Limina-owned object URL: ${this.url}`);
+      this.ready = blob.text().then((source) => {
+        if (this.terminated) return;
+        const scope = {
+          location: { href: this.url },
+          addEventListener: (type, listener) => {
+            if (typeof listener !== "function") return;
+            const key = String(type);
+            const listeners = this.workerListeners.get(key) ?? new Set();
+            listeners.add(listener);
+            this.workerListeners.set(key, listeners);
+          },
+          removeEventListener: (type, listener) => this.workerListeners.get(String(type))?.delete(listener),
+          postMessage: (data) => queueMicrotask(() => this.dispatchMain("message", { data })),
+          close: () => this.terminate(),
+        };
+        // The source is generated locally by KTX2Loader from the byte-pinned
+        // Basis runtime. Keeping `self` explicit isolates worker event state.
+        // Emscripten's Basis wrapper selects its worker runtime by probing the
+        // lexical `importScripts` binding, even though the byte-pinned module
+        // receives its WASM binary directly and never imports another script.
+        const workerWebAssembly = Object.create(WebAssembly);
+        workerWebAssembly.instantiate = (input, imports) => {
+          try {
+            if (input instanceof WebAssembly.Module) {
+              return Promise.resolve(new WebAssembly.Instance(input, imports));
+            }
+            const module = new WebAssembly.Module(input);
+            const instance = new WebAssembly.Instance(module, imports);
+            return Promise.resolve({ module, instance });
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        };
+        Function("self", "importScripts", "WebAssembly", `"use strict";\n${source}\n//# sourceURL=${this.url}`)(scope, () => {
+          throw new Error("Limina local workers cannot import additional scripts");
+        }, workerWebAssembly);
+      });
+    }
+    addEventListener(type, listener) {
+      if (typeof listener !== "function") return;
+      const key = String(type);
+      const listeners = this.mainListeners.get(key) ?? new Set();
+      listeners.add(listener);
+      this.mainListeners.set(key, listeners);
+    }
+    removeEventListener(type, listener) {
+      this.mainListeners.get(String(type))?.delete(listener);
+    }
+    dispatchMain(type, event) {
+      if (this.terminated) return;
+      for (const listener of this.mainListeners.get(type) ?? []) listener.call(this, event);
+      const property = this[`on${type}`];
+      if (typeof property === "function") property.call(this, event);
+    }
+    postMessage(data) {
+      this.ready.then(() => {
+        if (this.terminated) return;
+        queueMicrotask(() => {
+          if (this.terminated) return;
+          for (const listener of this.workerListeners.get("message") ?? []) listener({ data });
+        });
+      }).catch((error) => this.dispatchMain("error", { error, message: String(error?.message ?? error) }));
+    }
+    terminate() {
+      this.terminated = true;
+      this.mainListeners.clear();
+      this.workerListeners.clear();
+    }
+  }
+  globalThis.Worker = LiminaBlobWorker;
+}
 if (typeof globalThis.createImageBitmap === "undefined" && webImage.createImageBitmap !== undefined) {
   globalThis.createImageBitmap = webImage.createImageBitmap;
   globalThis.ImageBitmap = webImage.ImageBitmap;

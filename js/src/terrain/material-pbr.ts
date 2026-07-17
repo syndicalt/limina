@@ -34,12 +34,31 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import type { TerrainTile } from "./types.ts";
 import { sharedDetailTexture, triplanarLayer } from "../materials/triplanar-noise.ts";
-import { bakeTileClimate, RAMP_DEFAULT_COLORS, shorelineBandMasks, trackMaterialTexture, type TerrainPaletteOptions } from "./render.ts";
+import {
+  bakeTileClimate,
+  RAMP_DEFAULT_COLORS,
+  shorelineBandMasks,
+  trackMaterialTexture,
+  type TerrainPaletteOptions,
+} from "./render.ts";
+import { TERRAIN_PAINT_ALBEDO_HEX } from "./material-palette.ts";
 
 // TSL handle (loosely typed — the fluent node API is dynamic; the graph is validated by the
 // live WebGPU shader compile / in-tab UAT, and its CONSTRUCTION by js/test/p11_terrain_pbr.ts).
 // deno-lint-ignore no-explicit-any
 const T = (THREE as any).TSL;
+
+const TERRAIN_PAINT_ALBEDO_BYTES: readonly (readonly [number, number, number] | null)[] = Object.freeze(
+  TERRAIN_PAINT_ALBEDO_HEX.map((hex) => {
+    if (hex === null) return null;
+    const color = new THREE.Color(hex);
+    return Object.freeze([
+      Math.round(color.r * 255),
+      Math.round(color.g * 255),
+      Math.round(color.b * 255),
+    ] as const);
+  }),
+);
 
 /**
  * OPT-IN procedural-PBR surface recipe (via `TerrainMeshOptions.pbr`). Extends the flat ramp's
@@ -47,6 +66,10 @@ const T = (THREE as any).TSL;
  * the bands — and adds the per-layer surface-detail knobs. Only `seaLevel` is required.
  */
 export interface TerrainPbrOptions extends TerrainPaletteOptions {
+  /** Internal render adapter for feature-local geometry. The mesh is translated to this world
+   * origin on the CPU, while the material projects from local coordinates plus wrapped texture
+   * phases. This keeps large-world coordinates out of f32 shader math without creating seams. */
+  featureLocalOrigin?: readonly [number, number, number];
   /** Per-layer surface-detail tuning. All optional; defaults are tuned to Grounded Stylized
    *  Realism (crisp detail normals, controlled albedo mottling, honest roughness). */
   detail?: {
@@ -121,6 +144,10 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   const sharp = d.triplanarSharpness ?? 4;
   const mottle = d.mottle ?? 0.28;
   const tex = sharedDetailTexture();
+  const featureLocal = pbr.featureLocalOrigin !== undefined;
+  const projection = featureLocal
+    ? { position: T.positionLocal, origin: pbr.featureLocalOrigin }
+    : undefined;
   // The four surface layers: each its own tiling + detail-normal strength (the look knobs).
   // CUT-1 PERF LIMITATION: 4 band layers + 1 shared micro layer × 3 triplanar planes (~15 detail
   // fetches) + 1 climate fetch are evaluated UNCONDITIONALLY per fragment — the band masks blend
@@ -128,15 +155,15 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   // at km-scale tile counts (e.g. model_terrain_window), so `pbr` is intentionally NOT enabled on
   // the model demo yet. PHASE-4 OPTIMIZATION: reduce to a shared fine/coarse pair or branch-gate
   // layers whose mask is ~0, and/or drop to a single triplanar pass with per-layer reprojection.
-  const rockL = triplanarLayer(tex, d.rockScale ?? 0.14, d.rockNormal ?? 1.15, sharp);
-  const grassL = triplanarLayer(tex, d.grassScale ?? 0.45, d.grassNormal ?? 0.7, sharp);
-  const snowL = triplanarLayer(tex, d.snowScale ?? 0.10, d.snowNormal ?? 0.30, sharp);
-  const sandL = triplanarLayer(tex, d.sandScale ?? 0.55, d.sandNormal ?? 0.70, sharp);
+  const rockL = triplanarLayer(tex, d.rockScale ?? 0.14, d.rockNormal ?? 1.15, sharp, projection);
+  const grassL = triplanarLayer(tex, d.grassScale ?? 0.45, d.grassNormal ?? 0.7, sharp, projection);
+  const snowL = triplanarLayer(tex, d.snowScale ?? 0.10, d.snowNormal ?? 0.30, sharp, projection);
+  const sandL = triplanarLayer(tex, d.sandScale ?? 0.55, d.sandNormal ?? 0.70, sharp, projection);
   // A shared FINE micro-grain layered over EVERY band. The coarse per-band crags (above) read at
   // DISTANCE; this reads at EYE-LEVEL/underfoot, so a big slope catches light with real relief
   // instead of flat plastic. Only its detail NORMAL is used (deviation from the geometric normal
   // added to the band normal below) — its albedo is left to the band layers' mottle.
-  const microL = triplanarLayer(tex, d.microScale ?? 1.3, d.microNormal ?? 0.4, sharp);
+  const microL = triplanarLayer(tex, d.microScale ?? 1.3, d.microNormal ?? 0.4, sharp, projection);
 
   // Per-layer albedo = base band colour modulated by its own mottle (controlled, not noisy).
   // deno-lint-ignore no-explicit-any
@@ -159,13 +186,14 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   const baked = bakeTileClimate(tile, tempRange, precipMax);
   trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
-  const u = T.positionWorld.x.sub(minX).div(maxX - minX);
-  const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);
+  const surfacePosition = featureLocal ? T.positionLocal : T.positionWorld;
+  const u = surfacePosition.x.sub(minX).div(maxX - minX);
+  const v = surfacePosition.z.sub(minZ).div(maxZ - minZ);
   const clim = T.texture(baked.texture, T.vec2(u, v));
   const tempC = clim.r.mul(tSpan).add(tMin);
   const precip = clim.g.mul(precipMax);
 
-  const y = T.positionWorld.y;
+  const y = surfacePosition.y;
   const r = T.clamp(y.sub(sea).div(aboveSpan), 0, 1);
   const steep = T.clamp(T.oneMinus(T.normalWorld.y), 0, 1);
   const wet = T.smoothstep(precipDry, precipWet, precip);
@@ -203,6 +231,47 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   col = T.mix(col, rockAlbedo, cliff);
   col = T.mix(col, sandAlbedo, coastMask);
   col = T.mix(col, subAlbedo, subMask);
+
+  // Canonical terrain.paint semantics survive the derived-artifact path. Paint is a separate
+  // nearest semantic grid baked into a linearly filtered RGBA texture: RGB is the selected
+  // material albedo, A is its authored blend weight. It is sampled in the same feature-local UV
+  // frame as climate, so large world translations cannot disturb either channel.
+  if (tile.paintMat !== undefined && tile.paintW !== undefined) {
+    const paintData = new Uint8Array(tile.nrows * tile.ncols * 4);
+    for (let index = 0; index < tile.paintMat.length; index++) {
+      const color = TERRAIN_PAINT_ALBEDO_BYTES[tile.paintMat[index]] ?? null;
+      const offset = index * 4;
+      paintData[offset] = color?.[0] ?? 0;
+      paintData[offset + 1] = color?.[1] ?? 0;
+      paintData[offset + 2] = color?.[2] ?? 0;
+      paintData[offset + 3] = color === null
+        ? 0
+        : Math.round(Math.min(1, Math.max(0, tile.paintW[index])) * 255);
+    }
+    const paintTexture = new THREE.DataTexture(
+      paintData,
+      tile.ncols,
+      tile.nrows,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    paintTexture.minFilter = THREE.LinearFilter;
+    paintTexture.magFilter = THREE.LinearFilter;
+    paintTexture.wrapS = THREE.ClampToEdgeWrapping;
+    paintTexture.wrapT = THREE.ClampToEdgeWrapping;
+    paintTexture.name = "limina:terrain-paint";
+    paintTexture.needsUpdate = true;
+    trackMaterialTexture(material, paintTexture);
+    const paint = T.texture(paintTexture, T.vec2(u, v));
+    col = T.mix(col, paint.rgb, paint.a);
+  }
+
+  // Climate alpha carries the canonical blight mask. Preserve the established living-ground to
+  // dark ash transition and its dry/matte roughness response on the PBR path as well.
+  const blightAmt = T.smoothstep(0.15, 0.85, clim.a);
+  const lum = col.r.mul(0.299).add(col.g.mul(0.587)).add(col.b.mul(0.114));
+  const ash = T.vec3(lum, lum, lum).mul(0.5).add(T.vec3(0.035, 0.030, 0.024));
+  col = T.mix(col, ash, blightAmt);
   material.colorNode = col;
 
   // ── Detail NORMAL: blend the LAYER detail normals by the same masks, then world→view ──
@@ -235,6 +304,7 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
   rough = T.mix(rough, T.float(lr.rock ?? 0.92), cliff);
   rough = T.mix(rough, T.float(lr.sand ?? 0.95), coastMask);
   rough = T.mix(rough, T.float(lr.subSea ?? 0.5), subMask);
+  rough = T.mix(rough, T.float(0.97), blightAmt);
 
   // ── OPT-IN WET-SHORE BAND: texture-terminate the waterline ──────────────────────────────
   // Wherever the terrain meets the water (cliff OR beach), darken the band colour already there
@@ -258,4 +328,9 @@ export function applyPbrMaterial(material: THREE.MeshStandardNodeMaterial, tile:
     rough = T.mix(rough, T.float(wl.wetRoughness ?? 0.32), wetMask);
   }
   material.roughnessNode = T.clamp(rough, 0, 1);
+  if (pbr.featureLocalOrigin !== undefined) {
+    (material.userData as Record<string, unknown>).liminaTerrainFeatureOrigin = Object.freeze([
+      pbr.featureLocalOrigin[0], pbr.featureLocalOrigin[1], pbr.featureLocalOrigin[2],
+    ]);
+  }
 }

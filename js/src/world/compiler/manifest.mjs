@@ -9,12 +9,14 @@ import {
 
 export const DERIVED_REVISION_MANIFEST_SCHEMA_V1 = "limina.derived-revision-manifest/v1";
 export const DERIVED_REVISION_MANIFEST_SCHEMA_V2 = "limina.derived-revision-manifest/v2";
+export const DERIVED_REVISION_MANIFEST_SCHEMA_V3 = "limina.derived-revision-manifest/v3";
 export const DERIVED_REVISION_MANIFEST_SCHEMA = DERIVED_REVISION_MANIFEST_SCHEMA_V2;
 export const MAX_DERIVED_MANIFEST_BYTES = 32 * 1024 * 1024;
 export const MAX_DERIVED_CHUNKS = 16_384;
 export const MAX_SOURCE_CONTENT_REFS = 64;
 export const MAX_ARTIFACTS_PER_CHUNK = 16;
 export const MAX_GLOBAL_DERIVED_ARTIFACTS = 64;
+export const MAX_DERIVED_ARTIFACT_AUTHORITIES = 64;
 export const MAX_DERIVED_ARTIFACTS = 131_072;
 export const MAX_DERIVED_ARTIFACT_BYTES = 256 * 1024 * 1024;
 export const MAX_DERIVED_TOTAL_ARTIFACT_BYTES = 1024 * 1024 * 1024;
@@ -179,6 +181,28 @@ function parseGlobalArtifacts(input, budget) {
   return artifacts;
 }
 
+function parseArtifactAuthorities(input, artifactTypes) {
+  if (!Array.isArray(input) || input.length > MAX_DERIVED_ARTIFACT_AUTHORITIES) {
+    throw new Error(`derived manifest artifactAuthorities must contain at most ${MAX_DERIVED_ARTIFACT_AUTHORITIES} entries`);
+  }
+  // Authority is intentionally stage/type-wide: one manifest cannot claim two compiler graphs for
+  // the same artifact type. Publications that need mixed provenance must introduce distinct typed
+  // artifact schemas rather than hiding incompatible producers behind one type string.
+  const authorities = input.map((entry, index) => {
+    const authority = plainObject(entry, `derived manifest artifact authority ${index}`);
+    exactKeys(authority, new Set(["artifactType", "compilerGraphHash"]), `derived manifest artifact authority ${index}`);
+    const artifactType = identifier(authority.artifactType, TYPED_ID, `derived manifest artifact authority ${index} type`);
+    if (!artifactTypes.has(artifactType)) throw new Error(`derived manifest artifact authority '${artifactType}' has no published artifact`);
+    return {
+      artifactType,
+      compilerGraphHash: validateCompilerContentHash(authority.compilerGraphHash,
+        `derived manifest artifact authority '${artifactType}' compiler graph hash`),
+    };
+  });
+  orderedUnique(authorities, (authority) => authority.artifactType, "derived manifest artifact authorities");
+  return authorities;
+}
+
 function parseChunks(input, grid, sourceRefs, budget) {
   if (!Array.isArray(input) || input.length < 1 || input.length > MAX_DERIVED_CHUNKS) {
     throw new Error(`derived manifest chunks must contain 1-${MAX_DERIVED_CHUNKS} entries`);
@@ -234,14 +258,17 @@ function parseCore(input, includeHash) {
     throw new Error("derived revision manifest.schema must be an enumerable data field");
   }
   const schema = schemaDescriptor.value;
-  if (schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V1 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V2) {
+  if (schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V1 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V2
+      && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) {
     throw new Error(
-      `derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA_V1}' or '${DERIVED_REVISION_MANIFEST_SCHEMA_V2}'`,
+      `derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA_V1}', '${DERIVED_REVISION_MANIFEST_SCHEMA_V2}', or '${DERIVED_REVISION_MANIFEST_SCHEMA_V3}'`,
     );
   }
   const isV2 = schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2;
+  const isV3 = schema === DERIVED_REVISION_MANIFEST_SCHEMA_V3;
   const keys = new Set(["schema", "projectId", "branchId", "source", "compiler", "grid", "chunks"]);
-  if (isV2) keys.add("globalArtifacts");
+  if (isV2 || isV3) keys.add("globalArtifacts");
+  if (isV3) keys.add("artifactAuthorities");
   if (includeHash) keys.add("manifestHash");
   exactKeys(value, keys, "derived revision manifest");
   const projectId = identifier(value.projectId, PROJECT_ID, "derived manifest projectId");
@@ -250,8 +277,17 @@ function parseCore(input, includeHash) {
   const compiler = parseCompiler(value.compiler);
   const grid = parseGrid(value.grid);
   const budget = { artifactCount: 0, totalArtifactBytes: 0 };
-  const globalArtifacts = isV2 ? parseGlobalArtifacts(value.globalArtifacts, budget) : undefined;
+  const globalArtifacts = isV2 || isV3 ? parseGlobalArtifacts(value.globalArtifacts, budget) : undefined;
   const chunks = parseChunks(value.chunks, grid, source.contentRefs, budget);
+  if (isV3) {
+    const artifactTypes = new Set([
+      ...globalArtifacts.map((artifact) => artifact.artifactType),
+      ...chunks.flatMap((chunk) => chunk.artifacts.map((artifact) => artifact.artifactType)),
+    ]);
+    const artifactAuthorities = parseArtifactAuthorities(value.artifactAuthorities, artifactTypes);
+    return { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V3, projectId, branchId, source, compiler, grid,
+      artifactAuthorities, globalArtifacts, chunks };
+  }
   return isV2
     ? { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2, projectId, branchId, source, compiler, grid, globalArtifacts, chunks }
     : { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1, projectId, branchId, source, compiler, grid, chunks };
@@ -286,9 +322,22 @@ export function derivedGlobalArtifacts(manifest) {
   if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
     throw new TypeError("derivedGlobalArtifacts requires a verified derived revision manifest");
   }
-  return manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2
+  return manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2 || manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V3
     ? manifest.globalArtifacts
     : EMPTY_GLOBAL_DERIVED_ARTIFACTS;
+}
+
+/** Resolve the exact compiler graph authorized to produce one artifact type. V1/V2 and unmapped V3
+ * artifacts are produced by the manifest's current graph; V3 can explicitly preserve carried
+ * artifacts from a verified ancestor compilation without pretending the outer graph produced them. */
+export function derivedArtifactCompilerGraphHash(manifest, artifactType) {
+  if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
+    throw new TypeError("derivedArtifactCompilerGraphHash requires a verified derived revision manifest");
+  }
+  identifier(artifactType, TYPED_ID, "derived artifact authority type");
+  if (manifest.schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) return manifest.compiler.graphHash;
+  return manifest.artifactAuthorities.find((authority) => authority.artifactType === artifactType)?.compilerGraphHash
+    ?? manifest.compiler.graphHash;
 }
 
 export function derivedArtifactContentHash(bytes) {

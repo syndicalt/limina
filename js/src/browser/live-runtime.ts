@@ -83,6 +83,7 @@ export function composeAuthoringOps(P: WasmRapierPhysics, readAsset: (id: string
     op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
     op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
     op_physics_raycast: P.op_physics_raycast.bind(P),
+    op_physics_overlap_box: P.op_physics_overlap_box.bind(P),
     // ── render / loop / device input — the render-main renderer is built directly
     //    via THREE.WebGPURenderer (buildRenderTarget), not through these ops; input
     //    is pumped into the SAB ring, not these device hooks ──

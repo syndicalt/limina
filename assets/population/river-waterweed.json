@@ -1,0 +1,16 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "river-waterweed",
+  "version": "1.0.0",
+  "role": "flora/waterweed",
+  "backend": "grass-field",
+  "visualPackageId": "limina.grass.waterweed",
+  "visualPackageVersion": "1.0.0",
+  "densityScale": 0.6,
+  "bladeScale": [0.8, 1.8],
+  "climate": "summer",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "limina://procedural/grass-field/waterweed"
+  }
+}

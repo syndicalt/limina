@@ -1,15 +1,15 @@
 # Limina capability catalog
 
-Engine version: 0.1.0+8cf2ed8
-Generated: 2026-07-09T14:59:36.069Z
+Engine version: 0.1.0+769bc2d
+Generated: 2026-07-12T07:26:47.772Z
 Generated from: the live skill registry (`js/src/skills/*` via `tools/dump-skills.ts`) — this file cannot drift from the engine because it is built from the same registry the binary boots.
 Regenerate: `node tools/dump-skills.mjs` (requires `cargo build --release` first).
 
-232 skills across 31 categories. Each skill is a typed, permissioned, recorded mutation invoked via `SkillRegistry.invoke` and maps 1:1 to an MCP tool of the same name. Full JSON Schema (draft-07) for every input/output lives in the sibling `skills.json`.
+235 skills across 31 categories. Each skill is a typed, permissioned, recorded mutation invoked via `SkillRegistry.invoke` and maps 1:1 to an MCP tool of the same name. Full JSON Schema (draft-07) for every input/output lives in the sibling `skills.json`.
 
 Permission profiles:
 
-- `builder.readWrite`: `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `agent.read` `agent.write` `ui.write` `audio.play` `terrain.read` `terrain.generate` `player.read` `player.write` `player.configure` `camera.write` `animation.read` `animation.write` `interaction.read` `interaction.write` `interaction.configure` `inventory.read` `inventory.write` `inventory.configure` `item.configure` `game.write` `game.configure` `trigger.configure` `event.read` `event.write` `quest.read` `quest.write` `quest.configure` `stats.read` `stats.write` `stats.configure` `damage.write` `status.read` `status.write` `combat.write` `behavior.read` `behavior.write` `behavior.configure` `dialogue.read` `dialogue.write` `dialogue.configure` `nav.read` `nav.write` `nav.configure` `vfx.write` `checkpoint.read` `checkpoint.write` `save.write` `progression.read` `progression.write` `progression.configure` `world.read` `world.write` `design.read` `design.write` `catalog.read`
+- `builder.readWrite`: `authoring.read` `authoring.write` `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `agent.read` `agent.write` `ui.write` `audio.play` `terrain.read` `terrain.generate` `player.read` `player.write` `player.configure` `camera.write` `animation.read` `animation.write` `interaction.read` `interaction.write` `interaction.configure` `inventory.read` `inventory.write` `inventory.configure` `item.configure` `game.write` `game.configure` `trigger.configure` `event.read` `event.write` `quest.read` `quest.write` `quest.configure` `stats.read` `stats.write` `stats.configure` `damage.write` `status.read` `status.write` `combat.write` `behavior.read` `behavior.write` `behavior.configure` `dialogue.read` `dialogue.write` `dialogue.configure` `nav.read` `nav.write` `nav.configure` `vfx.write` `checkpoint.read` `checkpoint.write` `save.write` `progression.read` `progression.write` `progression.configure` `world.read` `world.write` `design.read` `design.write` `catalog.read`
 - `player.full`: `scene.read` `ecs.read` `physics.read` `physics.write` `agent.read` `terrain.read` `player.read` `player.write` `player.configure` `camera.write` `animation.read` `interaction.read` `interaction.write` `inventory.read` `dialogue.read`
 - `player.limited`: `scene.read` `ecs.read` `physics.read` `physics.write` `agent.read` `agent.write` `terrain.read` `player.read` `player.write` `camera.write` `interaction.read` `interaction.write` `inventory.read` `inventory.write` `game.write` `quest.read` `stats.read` `status.read` `behavior.read` `dialogue.read` `dialogue.write` `nav.read` `nav.write` `checkpoint.read` `checkpoint.write` `progression.read` `world.read`
 - `npc.agent`: `scene.read` `ecs.read` `physics.read` `agent.read` `agent.write` `social.act` `audio.play` `behavior.read` `behavior.write` `dialogue.read` `dialogue.write` `dialogue.configure` `nav.read` `nav.write` `stats.read` `stats.write` `stats.configure` `damage.write` `status.read` `status.write` `combat.write` `animation.read` `animation.write` `inventory.read` `interaction.read`
@@ -17,11 +17,13 @@ Permission profiles:
 - `combat.writer`: `combat.write` `damage.write` `status.read` `status.write` `stats.read` `stats.write` `scene.read` `ecs.read` `physics.read`
 - `vfx.writer`: `vfx.write` `animation.write` `scene.read` `ecs.read`
 - `world.author`: `world.write` `checkpoint.read` `checkpoint.write` `design.read` `design.write` `save.write` `scene.read` `ecs.read` `physics.read`
-- `terrain.author`: `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `terrain.read` `terrain.generate`
+- `terrain.author`: `authoring.read` `authoring.write` `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `terrain.read` `terrain.generate`
 - `social.actor`: `scene.read` `ecs.read` `physics.read` `agent.read` `agent.write` `social.act` `audio.play`
-- `system.readonly`: `scene.read` `ecs.read` `physics.read` `agent.read` `trace.read` `design.read`
-- `builder.review`: `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `agent.read` `agent.write` `ui.write` `audio.play` `design.read` `design.write` `catalog.read`
-- `reviewer`: `scene.read` `ecs.read` `physics.read` `agent.read` `approval.review` `trace.read` `design.read` `catalog.read`
+- `system.readonly`: `scene.read` `ecs.read` `physics.read` `agent.read` `trace.read` `design.read` `runtime.derived.read`
+- `system.admin`: `system.admin` `scene.read` `ecs.read` `physics.read` `agent.read` `trace.read` `design.read`
+- `system.derived-build`: `authoring.read` `authoring.write`
+- `builder.review`: `authoring.read` `authoring.write` `scene.read` `scene.write` `ecs.read` `ecs.modify` `physics.read` `physics.write` `agent.read` `agent.write` `ui.write` `audio.play` `design.read` `design.write` `catalog.read`
+- `reviewer`: `authoring.read` `scene.read` `ecs.read` `physics.read` `agent.read` `approval.review` `trace.read` `design.read` `catalog.read` `runtime.derived.read`
 - `reviewer.coordinator`: `orchestrate` `approval.review` `scene.read` `ecs.read` `physics.read` `agent.read` `trace.read`
 
 ---
@@ -836,7 +838,7 @@ Perform an interaction with a target entity. Triggers the entity's registered in
 - Permissions: `interaction.write`
 - Priority: `core`
 - Input: `entity: string`, `actorEntity?: string`, `data?: object`, `meta?: object`
-- Output: `ok: boolean`, `result?: any`
+- Output: `ok: boolean`, `result?: object`
 
 ### `interaction.open` (v1.0.0)
 
@@ -861,7 +863,7 @@ Pick up an item entity into an inventory slot. Destroys the world item entity. R
 Query interactable entities within range of a position (or the actor entity), sorted by distance. Uses the world spatial index over real entity transforms. Pure read — emits nothing.
 
 - Permissions: `interaction.read`
-- Priority: `core`
+- Priority: `standard`
 - Input: `position?: [number,number,number]`, `actorEntity?: string`, `maxRange: number>0=5`, `meta?: object`
 - Output: `interactables: {entity,prompt,type,distance}[]`
 
@@ -890,7 +892,7 @@ Use/consume an item from inventory (eat food, drink potion, use key on door). Co
 - Permissions: `interaction.write`
 - Priority: `standard`
 - Input: `actorEntity: string`, `itemId: string`, `targetEntity?: string`, `quantity: integer>=1,<=9007199254740991=1`, `data?: object`, `meta?: object`
-- Output: `ok: boolean`, `result?: any`, `reason?: string`
+- Output: `ok: boolean`, `result?: object`, `reason?: string`
 
 
 ## inventory (10)
@@ -1070,7 +1072,7 @@ Drain physics collision start/stop events, mapped to entity ids where available.
 - Permissions: `physics.read`
 - Priority: `standard`
 - Input: _none_
-- Output: `events: {started,bodyA,bodyB,entityA,entityB,point,normal}[]`
+- Output: `events: {started,bodyA,bodyB,entityA,entityB,point,normal}[]`, `dropped: integer>=0,<=9007199254740991`
 
 ### `physics.raycast` (v1.0.0)
 
@@ -1131,21 +1133,21 @@ Toggle crouch for a player entity. While on, player.move scales the move input d
 
 ### `player.jump` (v1.0.0)
 
-Trigger a jump on the player's character controller — only takes effect when grounded. Sets the controller's upward velocity (fed through move_character + gravity), NOT a force impulse (a kinematic body ignores impulses). Advances one fixed step; returns whether it jumped + the new position.
+Apply the player's vertical action for one fixed step: jump when grounded or accelerate toward the surface while swimming. Uses controller velocity, not a force impulse (kinematic bodies ignore impulses).
 
 - Permissions: `player.write`
 - Priority: `core`
 - Input: `entity: string`, `meta?: object`
-- Output: `jumped: boolean`, `grounded: boolean`, `newPosition: [number,number,number]`
+- Output: `jumped: boolean`, `grounded: boolean`, `newPosition: [number,number,number]`, `swimming: boolean`, `submerged: boolean`, `waterMode: enum(dry|wading|swimming)`
 
 ### `player.move` (v1.0.0)
 
-Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving collisions, slopes, autostep, snap-to-ground, and gravity. Sprint (player.sprint) raises the speed; crouch (player.crouch) lowers it. Returns the corrected position + grounded.
+Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving ground or swim movement. Sprint raises ground speed but is ignored while swimming; crouch lowers horizontal input. Returns position, grounded, and water state.
 
 - Permissions: `player.write`
 - Priority: `core`
 - Input: `entity: string`, `forward: number>=-1,<=1=0`, `strafe: number>=-1,<=1=0`, `yaw: number=0`, `run: boolean=false`, `jump: boolean=false`, `meta?: object`
-- Output: `moved: boolean`, `grounded: boolean`, `newPosition: [number,number,number]`
+- Output: `moved: boolean`, `grounded: boolean`, `newPosition: [number,number,number]`, `swimming: boolean`, `submerged: boolean`, `waterMode: enum(dry|wading|swimming)`
 
 ### `player.spawn` (v1.0.0)
 
@@ -1153,12 +1155,12 @@ Spawn a kinematic character-controller capsule (Rapier: grounded detection, slop
 
 - Permissions: `player.write`
 - Priority: `standard`
-- Input: `position: [number,number,number]`, `halfHeight: number>0=0.6`, `radius: number>0=0.3`, `walkSpeed: number>0=3`, `runSpeed: number>0=6`, `gravity: number>0=22`, `jumpSpeed: number>0=8`, `crouchSpeedScale: number>0,<=1=0.5`, `meta?: object`
-- Output: `entity: string`, `bodyId: number`, `position: [number,number,number]`, `grounded: boolean`
+- Input: `position: [number,number,number]`, `halfHeight: number>0=0.6`, `radius: number>0=0.3`, `walkSpeed: number>0=3`, `runSpeed: number>0=6`, `gravity: number>0=22`, `jumpSpeed: number>0=8`, `swimSpeed: number=3`, `buoyancyGain: number=18`, `waterDrag: number=6`, `maxSwimVerticalSpeed: number=4`, `crouchSpeedScale: number>0,<=1=0.5`, `meta?: object`
+- Output: `entity: string`, `bodyId: number`, `position: [number,number,number]`, `grounded: boolean`, `swimming: boolean`, `submerged: boolean`, `waterMode: enum(dry|wading|swimming)`
 
 ### `player.sprint` (v1.0.0)
 
-Toggle sprint for a player entity. While on, player.move runs the controller at run speed (a real, faster move) instead of walk speed.
+Toggle sprint for a player entity. While on, ground movement uses run speed instead of walk speed; swimming deliberately ignores it.
 
 - Permissions: `player.write`
 - Priority: `standard`
@@ -1479,7 +1481,7 @@ Move / re-orient / rescale an EXISTING entity: set its position [x,y,z] (absolut
 List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances.
 
 - Permissions: `scene.read`
-- Priority: `core`
+- Priority: `standard`
 - Input: `near?: [number,number,number]`, `radius?: number>0`, `tag?: string`
 - Output: `entities: {entity,position,distance}[]`
 
@@ -1643,7 +1645,7 @@ Resource usage from recorded decisions: allowed/denied call counts per session+c
 
 Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.
 
-- Permissions: `scene.read`
+- Permissions: `system.admin`
 - Priority: `standard`
 - Input: `target: enum(skill|scene|data)`, `name?: string`, `reason?: string`
 - Output: `ok: boolean`, `target: enum(skill|scene|data)`, `invalidated: string[]`, `reason?: string`
@@ -1654,8 +1656,8 @@ Return a bounded, paginated snapshot of world, entities, agents, skills, permiss
 
 - Permissions: `scene.read` `ecs.read` `physics.read` `agent.read`
 - Priority: `standard`
-- Input: `afterEntity?: string`, `limit: integer>=0,<=500=100`, `includeResources: boolean=true`, `includeSkills: boolean=true`
-- Output: `page: {limit,totalEntities,nextAfterEntity}`, `world: any`, `entities: {entity,eid,generation,transform,tags,physics,resource,origin,material}[]`, `agents: any[]`, `skills: {name,version,category,permissions}[]`, `permissions: {caller,profiles}`, `resources: {counts,loaded}`, `trace: {threadId,eventCount,actors,recent}`
+- Input: `afterEntity?: string`, `entityVersion?: integer>=0,<=9007199254740991`, `limit: integer>=0,<=500=100`, `includeResources: boolean=true`, `includeSkills: boolean=true`
+- Output: `page: {limit,totalEntities,nextAfterEntity,entityVersion}`, `world: any`, `entities: {entity,eid,generation,parent,transform,tags,physics,resource,origin,material}[]`, `agents: any[]`, `skills: {name,version,category,permissions}[]`, `permissions: {caller,profiles}`, `resources: {counts,loaded}`, `trace: {threadId,eventCount,actors,recent}`
 
 ### `package.list` (v1.0.0)
 
@@ -1689,7 +1691,7 @@ Browse the AUTHORIZED skills in a specific category — progressive discovery of
 Describe a skill: version, category, and JSON-Schema input.
 
 - Permissions: _none_
-- Priority: `core`
+- Priority: `standard`
 - Input: `name: string`
 - Output: `name: string`, `version: string`, `category: string`, `description: string`, `input_schema: any`
 
@@ -1698,7 +1700,7 @@ Describe a skill: version, category, and JSON-Schema input.
 List the skills the caller is authorized to invoke (names + descriptions). `mode:"bootstrap"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:"full"` (default) lists everything authorized.
 
 - Permissions: _none_
-- Priority: `core`
+- Priority: `standard`
 - Input: `mode?: enum(bootstrap|full)`
 - Output: `tools: {name,description,category,priority}[]`
 
@@ -1755,7 +1757,7 @@ Create an editable heightfield terrain layer — a flat, deformable/paintable gr
 Reshape an editable terrain layer with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Deterministic + recorded, so hand-sculpted terrain replays and is editable.
 
 - Permissions: `scene.write`
-- Priority: `core`
+- Priority: `standard`
 - Input: `entity?: string`, `center: [number,number]`, `radius: number>0`, `delta: number=1`, `mode: enum(raise|lower|smooth|flatten|noise)="raise"`, `falloff: enum(smooth|linear|constant)="smooth"`
 - Output: `ok: boolean`
 
@@ -1765,7 +1767,7 @@ Paint a surface material (sand/grass/rock/dirt) onto an editable terrain layer w
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `entity?: string`, `center: [number,number]`, `radius: number>0`, `strength: number>=0,<=1=0.5`, `falloff: enum(smooth|linear|constant)="smooth"`, `material: enum(sand|grass|rock|dirt|snow|murk)="grass"`, `erase: boolean=false`
+- Input: `entity?: string`, `center: [number,number]`, `radius: number>0`, `strength: number>=0,<=1=0.5`, `falloff: enum(smooth|linear|constant)="smooth"`, `material: enum(sand|grass|rock|dirt|snow|murk|tundra)="grass"`, `erase: boolean=false`
 - Output: `ok: boolean`
 
 ### `terrain.sampleClimate` (v1.0.0)
@@ -1786,22 +1788,22 @@ O(1) deterministic surface-elevation query at a world (x,z) for a seed/lod (snap
 - Input: `seed: integer>=-9007199254740991,<=9007199254740991`, `x: number`, `z: number`, `lod: integer>=0,<=4=0`
 - Output: `y: number`
 
-### `vegetation.grass` (v1.0.0)
+### `vegetation.grassField` (v1.0.0)
 
-Carpet an editable terrain layer in climate-aware instanced ground grass, gated by slope + elevation (above water / below the snow line) and the SAME settlement footprints trees honor (so grass stops at the building pads / courtyard / lane). One InstancedMesh of curved, tapered bezier blades with a WebGPU-native TSL material (climate colour, three-layer coherent wind, subsurface-scattering backlight). Deterministic + recorded: the log carries the config, never the per-blade transforms. Returns the grass entity + blade count.
+Create a deterministic, bounded, paint-driven grass field using native WebGPU compute when available and the canonical CPU field plan otherwise.
 
 - Permissions: `scene.write`
-- Priority: `core`
-- Input: `terrain?: string`, `climate: enum(summer|autumn|dry|winter)="summer"`, `density: integer>=1,<=1024=360`, `seed: integer>=-9007199254740991,<=9007199254740991=1337`, `coverage?: number>=0,<=1`, `cluster: number>=0,<=1=0.3`, `slopeMax: number>=0=0.6`, `elevationMin?: number`, `elevationMax?: number`, `sizeRange: [number>0,number>0]=[0.7,1.3]`, `bladeHeight: number>0=0.3`, `bladeWidth: number>0=0.045`, `segments: integer>=1,<=8=3`, `curvature: number>=0=0.06`, `windStrength: number>=0=0.045`, `windSpeed: number>=0=1.1`, `windGust: number>=0=0.06`, `windGustFreq: number>=0=0.18`, `sssStrength: number>=0=0.5`, `aoStrength: number>=0,<=1=0.45`, `groundTint: number>=0,<=1=0.85`, `maxBlades: integer>=1000,<=9007199254740991=320000`, `exclusions?: {x,z,r}[]`, `include?: {x,z,r}[]`, `tags?: string[]`
-- Output: `entity: string`, `blades: integer>=-9007199254740991,<=9007199254740991`, `exclusions: integer>=-9007199254740991,<=9007199254740991`
+- Priority: `standard`
+- Input: `terrain?: string`, `seed: integer>=-2147483648,<=2147483647=1337`, `spacing: number>0=0.75`, `tileSize: number>0=24`, `elevationMin?: number`, `elevationMax?: number`, `slopeMax: number>=0=0.9`, `sizeRange: [number>=0,number>=0]=[0.7,1.3]`, `climate: enum(summer|autumn|dry|winter)="summer"`
+- Output: `entity: string`, `gridTiles: integer>=-9007199254740991,<=9007199254740991`, `candidateSlots: integer>=-9007199254740991,<=9007199254740991`, `planHash: string`
 
 ### `vegetation.plant` (v1.0.0)
 
 Plant a SINGLE tree of a species (spruce/pine/birch) at a point — the per-tree counterpart to vegetation.scatter. A light single entity (works where a full forest is too heavy), for composing a scene tree by tree. Deterministic + recorded.
 
 - Permissions: `scene.write`
-- Priority: `core`
-- Input: `species: enum(spruce|pine|birch|oak|ash|dead-oak)="spruce"`, `assets?: {id,weight}[]`, `position?: [number,number,number]`, `terrain?: string`, `seed: integer>=-9007199254740991,<=9007199254740991=1`, `scale: number>0=1`, `yaw: number=0`, `tags?: string[]`
+- Priority: `standard`
+- Input: `species: enum(spruce|pine|birch|oak|ash|dead-oak)="spruce"`, `assets?: {id,weight,treeLod}[]`, `position?: [number,number,number]`, `terrain?: string`, `seed: integer>=-9007199254740991,<=9007199254740991=1`, `scale: number>0=1`, `yaw: number=0`, `tags?: string[]`
 - Output: `entity: string`, `assetId: string`, `assetHash: string`
 
 ### `vegetation.scatter` (v1.0.0)
@@ -1810,11 +1812,11 @@ Scatter a forest of tree archetypes across an editable terrain layer, gated by s
 
 - Permissions: `scene.write`
 - Priority: `core`
-- Input: `terrain?: string`, `species?: enum(spruce|pine|birch|oak|ash|dead-oak)[]`, `assets?: {id,weight}[]`, `density: integer>=1,<=192=16`, `seed: integer>=-9007199254740991,<=9007199254740991=1337`, `elevationMin?: number`, `elevationMax?: number`, `slopeMax: number>=0=0.85`, `sizeRange: [number>0,number>0]=[0.7,1.35]`, `coverage: number>=0,<=1=0.9`, `cluster: number>=0,<=1=0.45`, `exclusions?: {x,z,r}[]`, `inclusions?: {x,z,r}[]`, `tags?: string[]`
+- Input: `terrain?: string`, `species?: enum(spruce|pine|birch|oak|ash|dead-oak)[]`, `assets?: {id,weight,treeLod}[]`, `density: integer>=1,<=192=16`, `seed: integer>=-9007199254740991,<=9007199254740991=1337`, `elevationMin?: number`, `elevationMax?: number`, `slopeMax: number>=0=0.85`, `sizeRange: [number>0,number>0]=[0.7,1.35]`, `coverage: number>=0,<=1=0.9`, `cluster: number>=0,<=1=0.45`, `exclusions?: {x,z,r}[]`, `inclusions?: {x,z,r}[]`, `tags?: string[]`
 - Output: `entity: string`, `instances: integer>=-9007199254740991,<=9007199254740991`, `assetHashes: object`, `placements: any[]`
 
 
-## three (10)
+## three (11)
 
 ### `asset.place` (v1.0.0)
 
@@ -1822,25 +1824,34 @@ Place a curated glTF asset BY ID at a transform. Resolves the id through the con
 
 - Permissions: `scene.write`
 - Priority: `core`
-- Input: `assetId: string`, `position: [number,number,number]=[0,0,0]`, `rotation?: [number,number,number]`, `scale?: [number,number,number]`, `ground: boolean=true`, `normalizeHeight?: number>0,<=500`, `material?: {color,roughness,metalness}`, `hash?: string`, `qcRender?: string`, `qcChecks?: object`
+- Input: `assetId: string`, `position: [number,number,number]=[0,0,0]`, `rotation?: [number,number,number]`, `scale?: [number,number,number]`, `ground: boolean=true`, `normalizeHeight?: number>0,<=500`, `material?: {color,roughness,metalness}`, `hash?: string`, `designRef?: {schema,mapId,kind,id}`, `qcRender?: string`, `qcChecks?: object`
 - Output: `entity: string`, `hash: string`, `resource: {kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}`, `bounds: [number,number,number]`
+
+### `asset.placeLod` (v1.0.0)
+
+Place a curated glTF asset as a screen-distance LOD: multiple resolution levels that the renderer swaps by camera distance for draw-call control. Level 0 is the nearest/highest-detail mesh and defines the collider + committed identity. Same transform/ground/normalize semantics as asset.place; records the REQUEST (ordered level ids + distances + level-0 hash).
+
+- Permissions: `scene.write`
+- Priority: `standard`
+- Input: `lods: {assetId,distance}[]`, `position: [number,number,number]=[0,0,0]`, `rotation?: [number,number,number]`, `scale?: [number,number,number]`, `ground: boolean=true`, `normalizeHeight?: number>0,<=500`, `hash?: string`
+- Output: `entity: string`, `hash: string`, `levels: integer>=-9007199254740991,<=9007199254740991`, `resource: {kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}`, `bounds: [number,number,number]`
 
 ### `asset.scatter` (v1.0.0)
 
-Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.
+Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Optional LOD levels use cell-classified, draw-bounded aggregate instance batches. Returns the placement count + pinned hashes.
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `regionId: string`, `config: {seed,density,assets,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,biomes,tempMin,tempMax,exclusions}`, `assetHashes?: object`
+- Input: `regionId: string`, `config: {seed,density,assets,cellSize,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,embedRadius,biomes,tempMin,tempMax,exclusions,inclusions}`, `assetHashes?: object`
 - Output: `regionId: string`, `instances: integer>=-9007199254740991,<=9007199254740991`, `mounted: integer>=-9007199254740991,<=9007199254740991`, `assetHashes: object`, `placements: {assetId,x,y,z,yaw,scale}[]`
 
-### `material.import` (v1.0.0)
+### `material.import` (v1.2.0)
 
-Import a CC0 texture pack (albedo + optional normal + roughness images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.
+Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `name: string`, `albedo: string`, `normal?: string`, `roughness?: string`, `triplanar: boolean=false`, `scale: number>0=0.5`, `normalStrength: number>=0=1`, `sharpness: number>0=4`, `metalness: number>=0,<=1=0`, `baseRoughness: number>=0,<=1=0.85`, `color?: integer>=0,<=16777215`, `hashes?: object`
+- Input: `name: string`, `albedo: string`, `normal?: string`, `roughness?: string`, `occlusion?: string`, `displacement?: string`, `occlusionStrength: number>=0,<=1=1`, `triplanar: boolean=false`, `scale: number>0=0.5`, `normalStrength: number>=0=1`, `sharpness: number>0=4`, `metalness: number>=0,<=1=0`, `baseRoughness: number>=0,<=1=0.85`, `color?: integer>=0,<=16777215`, `antiTiling: boolean=false`, `parallax?: {heightScale,minLayers,maxLayers,fadeStart,fadeEnd}`, `hashes?: object`
 - Output: `name: string`, `maps: string[]`, `hashes: object`
 
 ### `three.addLight` (v1.0.0)
@@ -1902,7 +1913,7 @@ Set an entity's position, rotation (Euler radians), and/or scale.
 Lay a terrain-aware settlement onto an editable terrain layer by placing curated library GLB assets. Reads the live heightfield, runs the shared deterministic layout planner (focal on the chosen ground, cluster terraced below, edge building beyond), and invokes asset.place per building. Deterministic + replay-safe: the world log records the direction + steering + seed + PINNED asset hashes, NEVER the transforms, which replay recomputes. Returns the placed entities + computed placements.
 
 - Permissions: `scene.write`
-- Priority: `core`
+- Priority: `standard`
 - Input: `direction: {palette,mood,setting,artStyle}={}`, `steering: {buildings,layout,siting,anchors}`, `seed?: integer>=-9007199254740991,<=9007199254740991`, `terrainEntity?: string`, `assetHashes?: object`
 - Output: `terrainEntity: string`, `placed: integer>=-9007199254740991,<=9007199254740991`, `assetHashes: object`, `entities: string[]`, `placements: {assetId,role,style,x,y,z,yaw,anchorId}[]`
 
@@ -2096,16 +2107,34 @@ Stop emitting; existing particles age out (a natural fade) instead of vanishing.
 - Output: `ok: boolean`
 
 
-## world (12)
+## world (14)
 
 ### `render.enablePost` (v1.0.0)
 
-Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). Returns the resolved preset + which stages are wired. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation). Render-only: never touches the sim/log/replay.
+Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset and materialization status.
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `ao?: {enabled,radius,scale,distanceExponent,thickness,samples,resolutionScale,intensity}`, `bloom?: {enabled,strength,radius,threshold}`, `grade?: {enabled,exposure,contrast,saturation}`
-- Output: `enabled: boolean`, `ao: boolean`, `bloom: boolean`, `grade: boolean`, `depth: boolean`, `normal: boolean`, `preset: any`
+- Input: `ao?: {enabled,radius,scale,distanceExponent,thickness,samples,resolutionScale,intensity}`, `bloom?: {enabled,strength,radius,threshold}`, `grade?: {enabled,exposure,contrast,saturation}`, `godrays?: {enabled,density,maxDensity,distanceAttenuation,raymarchSteps,intensity}`, `dof?: {enabled,focusDistance,focalLength,bokehScale}`, `outline?: {enabled,strength}`
+- Output: `enabled: boolean`, `deferred: boolean`, `ao: boolean`, `bloom: boolean`, `grade: boolean`, `depth: boolean`, `normal: boolean`, `godrays: boolean`, `dof: boolean`, `outline: boolean`, `preset: any`
+
+### `world.addMapRivers` (v1.0.0)
+
+Render every waterway in a validated WorldMap asset as terrain-following river ribbons without duplicating its centerline data in authoring source.
+
+- Permissions: `scene.write`
+- Priority: `standard`
+- Input: `mapAssetId: string`, `mapHash?: string`, `widthScale: number>0,<=10=1`, `color?: integer>=0,<=16777215`, `level?: number`, `terrainEntity?: string`
+- Output: `rivers: integer>=-9007199254740991,<=9007199254740991`, `points: integer>=-9007199254740991,<=9007199254740991`, `mapHash: string`
+
+### `world.addMapWater` (v1.0.0)
+
+Mount the verified WorldMap ocean, standing WaterBodies, and waterways as one idempotent render-only water set.
+
+- Permissions: `scene.write`
+- Priority: `standard`
+- Input: `mapAssetId: string`, `mapHash?: string`, `widthScale: number>0,<=10=1`, `color?: integer>=0,<=16777215`, `level?: number`, `terrainEntity?: string`
+- Output: `ocean: integer>=-9007199254740991,<=9007199254740991`, `bodies: integer>=-9007199254740991,<=9007199254740991`, `rivers: integer>=-9007199254740991,<=9007199254740991`, `points: integer>=-9007199254740991,<=9007199254740991`, `mapHash: string`
 
 ### `world.addRiver` (v1.0.0)
 
@@ -2113,7 +2142,7 @@ Add a RENDER-ONLY river: a water ribbon draped along a carved channel polyline, 
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `points: [number,number][]`, `widthM: number>0=6`, `color?: integer>=-9007199254740991,<=9007199254740991`, `level?: number`, `terrainEntity?: string`
+- Input: `points: [number>=-10000000,<=10000000,number>=-10000000,<=10000000][]`, `widthM: number>0,<=100000=6`, `widths?: number>0,<=100000[]`, `class: enum(river|stream)="river"`, `order?: integer>=1,<=12`, `color?: integer>=-9007199254740991,<=9007199254740991`, `level?: number`, `terrainEntity?: string`
 - Output: `points: integer>=-9007199254740991,<=9007199254740991`, `widthM: number`, `level: number`
 
 ### `world.addWater` (v1.0.0)
@@ -2148,8 +2177,8 @@ Get the default spawn position for players.
 Scatter a terrain TYPE's biome content (trees/rocks/grass/cacti/palms, biome- and elevation-gated) over an ALREADY-GENERATED region (by regionId), via the deterministic asset.scatter seam. Surveys the region's relief with the hints it was generated with, resolves the type's content layers, and drives asset.scatter per layer. Deterministic + replay-safe: the world log records THIS request; the nested asset.scatter calls are recomputed on replay (no double-record). Returns the placement count + per-layer summary.
 
 - Permissions: `scene.write`
-- Priority: `core`
-- Input: `regionId: string`, `type?: enum(beach|mountains|forest|desert|plains|hills|islands)`, `waterLevel?: number`, `waterMargin?: number`, `seed?: integer>=-9007199254740991,<=9007199254740991`, `biomePack?: object`
+- Priority: `standard`
+- Input: `regionId: string`, `type?: enum(beach|mountains|forest|desert|plains|hills|islands)`, `waterLevel?: number`, `waterMargin?: number`, `cellSize?: number>0`, `seed?: integer>=-9007199254740991,<=9007199254740991`, `biomePack?: object`
 - Output: `regionId: string`, `type: string`, `instances: integer>=-9007199254740991,<=9007199254740991`, `relief: {minY,maxY}`, `layers: {instances,mounted}[]`
 
 ### `world.setSpawn` (v1.0.0)
@@ -2163,11 +2192,11 @@ Set the default spawn position for players.
 
 ### `world.setTerrainSource` (v1.0.0)
 
-Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset (content-hash pinned, THROWS on tamper/identity mismatch) and rebinds world.generateRegion/world.streamFollow/asset.scatter/water to a MapTerrainSource derived from it; kind 'procedural' restores the default generator. RECORDED — replay reconstructs the source from this command. Must run BEFORE any world.generateRegion (rejects once regions exist). Map tiles re-derive from the IR, so they are never export-retained (the export ships the IR asset, not tiles).
+Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset and records its raster seed, amplitude, and optional versioned master-erosion recipe; omission preserves legacy no-erosion bytes. Replay reconstructs the same once-baked MapTerrainSource. kind 'procedural' restores the default generator. Must run BEFORE any world.generateRegion. Map tiles sample the baked master and are never export-retained.
 
 - Permissions: `scene.write`
 - Priority: `standard`
-- Input: `kind: enum(procedural|map)`, `mapAssetId?: string`, `hash?: string`
+- Input: `kind: enum(procedural|map)`, `mapAssetId?: string`, `hash?: string`, `seed?: integer>=-2147483648,<=2147483647`, `baseAmplitude?: number>0`, `erosion?: {schema,enabled}|{schema,enabled,rain,thermal,talus,lifetime,capacity,deposition,erosionRate}`
 - Output: `kind: enum(procedural|map)`, `source: string`, `hash?: string`
 
 ### `world.setTime` (v1.0.0)

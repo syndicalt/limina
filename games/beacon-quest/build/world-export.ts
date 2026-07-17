@@ -53,7 +53,7 @@ recOps.op_physics_create_world(-9.81);
 // The committed WorldMap, and the GPU-verified peek scene built from it — the SAME command set
 // the Atlas peek renders, so the export ships exactly the look already read with eyes.
 const worldMap: WorldMap = WorldMapSchema.parse(JSON.parse(new TextDecoder().decode(ops.op_read_asset(MAP_ASSET))));
-const { scene: peek } = buildPeekScene(worldMap, { project: "beacon-quest", mapFile: "beacon-quest-primary.worldmap.json" }) as { scene: { commands: { kind: string; op?: string; tool?: string; args?: unknown[]; input?: Record<string, unknown> }[] } };
+const { scene: peek } = buildPeekScene(worldMap, { project: "beacon-quest", mapAssetId: MAP_ASSET }) as { scene: { commands: { kind: string; op?: string; tool?: string; args?: unknown[]; input?: Record<string, unknown> }[] } };
 
 let placed = 0, skills = 0;
 for (const cmd of peek.commands) {

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "id": "temperate-fidelity-primary",
+  "unitsPerMeter": 1,
+  "origin": [0, 0],
+  "extent": { "w": 640, "h": 640 },
+  "seaLevel": 0,
+  "land": [{
+    "points": [[-246, -286], [-82, -306], [102, -294], [252, -246], [294, -88], [282, 86], [236, 252], [76, 294], [-106, 282], [-256, 228], [-292, 58], [-278, -142]]
+  }],
+  "relief": [],
+  "reliefGrid": {
+    "w": 33,
+    "h": 33,
+    "rect": { "x0": -320, "z0": -320, "w": 640, "h": 640 },
+    "minY": -2,
+    "maxY": 28,
+    "encoding": "u16",
+    "data": "/////2P6BvXB8FPtcerH5wHlzOHl3RXZOtPgy9++tZ3FaINWLXYRj7ORW458jGqNe5HcmJSjhbFswuXVb+v/////uvmx8jHtBuno5YHjcuFY39fcmtlf1fvPU8mxwBqwDYg7VLlOL3EThAKEw4Cuf6GB2oZwj1KbSar9u/jPquV1/P//S+w05rThgd493ILa49j41l/UytAAzOLFW74btGGe9G6NQVdLfW3Refl3ZHVydaZ4JX/siNKViqWrt7DLA+EI9///3uCU29jXS9WC0wvSdNBSzkvLGceTwau6PbLGpSuJNlTEM5pLrGlJcOdtfWzzbY5yVnowhduS+6IXtaXIEd3F8f//dte90nLPKs1wy87J1McdxVzBWrwAtlGu8qRclb1w7TpPLGJNEGXlZxZmN2ZAaUtvRnj8gxySOaLWs2rGatlR7Kn++8+By0bI1cW5w37Bvb4gu2m2d7BIqemgg5bOgqVWKCYjKphO9l8rYbhgnGJIZ7Rusnj6hCuT06J0s5DErNVe5kv2O8qjxQvCAL8SvNe4+bQ0sGGqd6OJm6OSHYe7bm09PRefKldONVuEXN9dnWHfZ4BwO3u5h4+VTKR7s6/ChdGy3//s9sXWwHK8Xrg2tKOvYqpKpE2deZX2jMODLnePWm4nSg1SK/RMnlchWntdCWO6ak50b3+8i8iYKqZ+s23Atcwt2MXi2MLGvCu3qbHvq72l655rl0mProbTfaV0c2cfSOMVQAbtKkJLuFUHWmBflmZ0b6Z5y4R8kFWc+acbs4S9FMfIz7nXisAgue2xqKoYoxebm5KxiYSAVHdubq5lylgDOfgIQQAVKfVJt1UOXENj4GuXdQaAxop1lbqfUKkFssW5lsCcxhPMsr6WtX2sNaOhmbmPjoVNeztxtGcTXzxX40s0LowAAADHJVlJjFf0X8NocHKdfOCG1pAnmo2i3qkJsB+1S7nXvCTA/Lznsa+mP5uVj8WD/HeDbLxhG1gRUJpJ/kDvJwAAAADoIDxJ8FpYZWtvwnn7g62NfJYjnnakaKkNrZmvXrHFsk20IrvkrXCgz5IZhXl3N2qzXWxS8kjHQQw9/je2JQAAAABSGu9Ial/Ha7x2ToEpi+qTR5sQoTil0qcWqVqpEKnAqP+o7rh0qcmZDYpyejdrtVxkT91DyDq7NPUxsTB0Jp0FAABRElVHPmS/cjB+kIiokSiZ3J6vorKkG6VCpJ2iuKAyn6+eQraapNmSO4EDcH9fFFBKQtA2Yy6pKfAoMivpKJERAAB6CjVDYWipeUeFC48LlxCd/qDfouSiYaHMnrSbu5iMltCVGrNxn+CLt3hJZu1UDkU7Ny4stCR7IcsiCChcLCsg0QH1BQk8cWrUf4iLWZT/mmWfjaGfoeif2pwBmf+UgpE6j82OjK8tmi2F73DOXSZMYTwNL+IkrR4UHVIg6yfkMAcvThVDCAEzDmlohISQKJhKnQqgiKAKn/Wb05c/k+aOeYujiQGKxKsYlSN/V2oYV8BFsTZuKp8h+xwSHQYiVysSN8c8bCvJEhwrpmNzhtiTRZrUnQOfEZ5Zm1qXqZLsjdCJAYcehrGHBqiJkCl6Y2WcUitCZzS7Ka0i0h+PIeYnSTJCP0tJbUBtI24nM1tFhSuVmZqnnHWcYprelnaSxI1wiSCGcITshAaIpqTijKd2dWKyUKtBpTXtLN8n2iYSKmIxMDxESfNUO1L2NeYo71HxgE2ULJnqmZ+Y0JX7kbGNjokuhiiEBYQ0hg2LAqKIiv5042GUUVREUTq0M6kwVDG2NYY9HkhzVPFfZWCIRsUt8kmLemaRKJbjldyTxJAejXqJaoZ6hCuE54UEiraQgKDciYR17GNkVR1KK0KUPVQ8WT5yQztLDFX/XyFqO2v2UhkzIESycwiN4JHykJmOr4u4iDmGsoSZhFCGJIpIkNGYgaA2i354vGgrXOVS5EwMSi9KD01YUpBZGWIuaz1zHnOCWm42U0DqbQ2IyoyIi02JCYc3hUyEr4S3hqiKrJDTmBejX6Lejh1+ZnDbZX1eKVqmWKhZ0ly3YdlnqG6CdQd7RnghXZk2Qj4wakCDbIclhnaERYMAgwCEkYboiiaRU5lfoyqvY6YFlXiG5npTcqZspGn8aEtqJ20acat1YXq8flyBuHr7Ws4zLj7naBp/R4JJgYuAzoBlgo2FcoolkaOZ1qORr5y8wqzGnYqRF4hVgQ999HqlerZ7tX01gM2CH4XJhiuGQHpkVI0v30Daab970H1xffx9+3+jgxKJUJBLmeKj3q/+vPnKl7UaqS+fu5eKklCPrY05jYeNL47Rjh+P2461jV6JfXY6SmMs9UZLbC95d3oOeyd9EIHhhpSOEJglo5GvCL03y8rZ4cDhtiavdqmDpe+iU6FEoF6fSZ6/nJCan5eTk72KHm95Pi0tGFBPb4p3p3iBelF+N4QojP+Vg6FnrlO86MrJ2aHogc7cxhTB17zBuWi3ZLVRs9ywwq3cqRulg591mO6JdmReNKsz1Fpaci53xXgTfKqBf4lpkyefYqy5usHJE9lM6Bv3P9602IvUXdG5zjHMYcn0xavBYrwRts2uraZhnLqGKlhfL2s/fWWTdZZ4H3v1f0OH3ZB/nM6pXri9x3nXJedk9v//ye/96w3pgebi48fg1dzN14rRBspcwcO3TK1hn4eBHE1hMS1OQm+reTB86X87hhSPL5owp6i1HsUX1R7ly/T//////////xX+uvu5+LL0Xu+V6E7gptbWyzDAnrO5ocV7PEa7OY9deHhof0aCN4fcjv2YP6U0s2LCStJv4mHy//////////////////////////8f+OvtUeKq1VvI/LklpKV3DUURRlNsDoJZh/OKAJG3mcakxbE8wKnPkd9+7wn/////////"
+  },
+  "biomes": [{
+    "biome": "forest",
+    "points": [[-306, -306], [306, -306], [306, 306], [-306, 306]]
+  }],
+  "waterways": [{
+    "points": [[-18, -258], [-8, -188], [-24, -112], [4, -30], [12, 52], [34, 132], [8, 228], [18, 278]],
+    "widthM": 12,
+    "class": "river",
+    "order": 3,
+    "widths": [8, 9, 10, 11, 12, 13, 15, 17]
+  }],
+  "hydrology": {
+    "schema": "limina.hydrology-recipe/v1",
+    "precipitationMmPerYear": 1100,
+    "riverMinCatchmentAreaM2": 12000,
+    "basinMinAreaM2": 1000000,
+    "basinMinDepthM": 0.8,
+    "waterfallMinDropM": 2.5
+  },
+  "routes": [],
+  "anchors": [],
+  "provenance": {
+    "tool": "design-space",
+    "sourceHash": "7012b86d12c1bee707c7e3caaa23b641835b01e6c33c74c4a8ad0382f92d51ab",
+    "contentHash": "204a908f931966ec588cb4fcd3bc23af83f30489b66e32dc53ae4b93a3981d01"
+  }
+}

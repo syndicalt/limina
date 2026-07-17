@@ -344,8 +344,8 @@ function canonicalCompilerJson(value, limits = {}) {
     }
   };
   const canonical = visit(value, "$", 0);
-  const byteLength = compilerUtf8ByteLength(canonical);
-  if (byteLength > maxBytes) throw new Error(`compiler canonical value is ${byteLength} bytes; maximum is ${maxBytes}`);
+  const byteLength2 = compilerUtf8ByteLength(canonical);
+  if (byteLength2 > maxBytes) throw new Error(`compiler canonical value is ${byteLength2} bytes; maximum is ${maxBytes}`);
   return canonical;
 }
 function compilerContentHash(value, limits = {}) {
@@ -364,11 +364,13 @@ function cloneCanonicalCompilerJson(value, limits = {}) {
 // src/world/compiler/manifest.mjs
 var DERIVED_REVISION_MANIFEST_SCHEMA_V1 = "limina.derived-revision-manifest/v1";
 var DERIVED_REVISION_MANIFEST_SCHEMA_V2 = "limina.derived-revision-manifest/v2";
+var DERIVED_REVISION_MANIFEST_SCHEMA_V3 = "limina.derived-revision-manifest/v3";
 var MAX_DERIVED_MANIFEST_BYTES = 32 * 1024 * 1024;
 var MAX_DERIVED_CHUNKS = 16384;
 var MAX_SOURCE_CONTENT_REFS = 64;
 var MAX_ARTIFACTS_PER_CHUNK = 16;
 var MAX_GLOBAL_DERIVED_ARTIFACTS = 64;
+var MAX_DERIVED_ARTIFACT_AUTHORITIES = 64;
 var MAX_DERIVED_ARTIFACTS = 131072;
 var MAX_DERIVED_ARTIFACT_BYTES = 256 * 1024 * 1024;
 var MAX_DERIVED_TOTAL_ARTIFACT_BYTES = 1024 * 1024 * 1024;
@@ -519,6 +521,26 @@ function parseGlobalArtifacts(input, budget) {
   orderedUnique(artifacts, (artifact) => artifact.artifactType, "derived manifest global artifacts");
   return artifacts;
 }
+function parseArtifactAuthorities(input, artifactTypes) {
+  if (!Array.isArray(input) || input.length > MAX_DERIVED_ARTIFACT_AUTHORITIES) {
+    throw new Error(`derived manifest artifactAuthorities must contain at most ${MAX_DERIVED_ARTIFACT_AUTHORITIES} entries`);
+  }
+  const authorities = input.map((entry, index) => {
+    const authority = plainObject(entry, `derived manifest artifact authority ${index}`);
+    exactKeys(authority, /* @__PURE__ */ new Set(["artifactType", "compilerGraphHash"]), `derived manifest artifact authority ${index}`);
+    const artifactType = identifier(authority.artifactType, TYPED_ID, `derived manifest artifact authority ${index} type`);
+    if (!artifactTypes.has(artifactType)) throw new Error(`derived manifest artifact authority '${artifactType}' has no published artifact`);
+    return {
+      artifactType,
+      compilerGraphHash: validateCompilerContentHash(
+        authority.compilerGraphHash,
+        `derived manifest artifact authority '${artifactType}' compiler graph hash`
+      )
+    };
+  });
+  orderedUnique(authorities, (authority) => authority.artifactType, "derived manifest artifact authorities");
+  return authorities;
+}
 function parseChunks(input, grid, sourceRefs, budget) {
   if (!Array.isArray(input) || input.length < 1 || input.length > MAX_DERIVED_CHUNKS) {
     throw new Error(`derived manifest chunks must contain 1-${MAX_DERIVED_CHUNKS} entries`);
@@ -571,14 +593,16 @@ function parseCore(input, includeHash) {
     throw new Error("derived revision manifest.schema must be an enumerable data field");
   }
   const schema = schemaDescriptor.value;
-  if (schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V1 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V2) {
+  if (schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V1 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V2 && schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) {
     throw new Error(
-      `derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA_V1}' or '${DERIVED_REVISION_MANIFEST_SCHEMA_V2}'`
+      `derived revision manifest schema must be '${DERIVED_REVISION_MANIFEST_SCHEMA_V1}', '${DERIVED_REVISION_MANIFEST_SCHEMA_V2}', or '${DERIVED_REVISION_MANIFEST_SCHEMA_V3}'`
     );
   }
   const isV2 = schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2;
+  const isV3 = schema === DERIVED_REVISION_MANIFEST_SCHEMA_V3;
   const keys = /* @__PURE__ */ new Set(["schema", "projectId", "branchId", "source", "compiler", "grid", "chunks"]);
-  if (isV2) keys.add("globalArtifacts");
+  if (isV2 || isV3) keys.add("globalArtifacts");
+  if (isV3) keys.add("artifactAuthorities");
   if (includeHash) keys.add("manifestHash");
   exactKeys(value, keys, "derived revision manifest");
   const projectId = identifier(value.projectId, PROJECT_ID, "derived manifest projectId");
@@ -587,8 +611,26 @@ function parseCore(input, includeHash) {
   const compiler = parseCompiler(value.compiler);
   const grid = parseGrid(value.grid);
   const budget = { artifactCount: 0, totalArtifactBytes: 0 };
-  const globalArtifacts = isV2 ? parseGlobalArtifacts(value.globalArtifacts, budget) : void 0;
+  const globalArtifacts = isV2 || isV3 ? parseGlobalArtifacts(value.globalArtifacts, budget) : void 0;
   const chunks = parseChunks(value.chunks, grid, source.contentRefs, budget);
+  if (isV3) {
+    const artifactTypes = /* @__PURE__ */ new Set([
+      ...globalArtifacts.map((artifact) => artifact.artifactType),
+      ...chunks.flatMap((chunk) => chunk.artifacts.map((artifact) => artifact.artifactType))
+    ]);
+    const artifactAuthorities = parseArtifactAuthorities(value.artifactAuthorities, artifactTypes);
+    return {
+      schema: DERIVED_REVISION_MANIFEST_SCHEMA_V3,
+      projectId,
+      branchId,
+      source,
+      compiler,
+      grid,
+      artifactAuthorities,
+      globalArtifacts,
+      chunks
+    };
+  }
   return isV2 ? { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V2, projectId, branchId, source, compiler, grid, globalArtifacts, chunks } : { schema: DERIVED_REVISION_MANIFEST_SCHEMA_V1, projectId, branchId, source, compiler, grid, chunks };
 }
 function parseDerivedRevisionManifest(input) {
@@ -605,12 +647,35 @@ function derivedGlobalArtifacts(manifest) {
   if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
     throw new TypeError("derivedGlobalArtifacts requires a verified derived revision manifest");
   }
-  return manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2 ? manifest.globalArtifacts : EMPTY_GLOBAL_DERIVED_ARTIFACTS;
+  return manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V2 || manifest.schema === DERIVED_REVISION_MANIFEST_SCHEMA_V3 ? manifest.globalArtifacts : EMPTY_GLOBAL_DERIVED_ARTIFACTS;
+}
+function derivedArtifactCompilerGraphHash(manifest, artifactType) {
+  if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
+    throw new TypeError("derivedArtifactCompilerGraphHash requires a verified derived revision manifest");
+  }
+  identifier(artifactType, TYPED_ID, "derived artifact authority type");
+  if (manifest.schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) return manifest.compiler.graphHash;
+  return manifest.artifactAuthorities.find((authority) => authority.artifactType === artifactType)?.compilerGraphHash ?? manifest.compiler.graphHash;
 }
 function derivedArtifactContentHash(bytes) {
   if (!(bytes instanceof Uint8Array)) throw new TypeError("derived artifact bytes must be Uint8Array");
   if (bytes.byteLength > MAX_DERIVED_ARTIFACT_BYTES) throw new Error(`derived artifact exceeds ${MAX_DERIVED_ARTIFACT_BYTES} bytes`);
   return `sha256:${sha256(bytes)}`;
+}
+
+// src/world/asset-content-hash.mjs
+var HEX = Object.freeze(Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, "0")));
+function portableAssetContentHash(bytes) {
+  if (!(bytes instanceof Uint8Array)) throw new TypeError("asset content hash requires Uint8Array bytes");
+  let encoded = "";
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 16384) {
+    const end = Math.min(bytes.length, offset + 16384);
+    encoded = "";
+    for (let index = offset; index < end; index++) encoded += HEX[bytes[index]];
+    chunks.push(encoded);
+  }
+  return `sha256:${sha256(chunks.join(""))}`;
 }
 
 // src/browser/derived-runtime-transport.ts
@@ -771,14 +836,14 @@ async function readBounded(response, expectedLength, maximum, signal) {
   return bytes;
 }
 function decodeJson(bytes, label) {
-  let text;
+  let text4;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text4 = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     throw fatal("PROTOCOL_ERROR", `${label} is not valid UTF-8`);
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(text4);
   } catch {
     throw fatal("PROTOCOL_ERROR", `${label} is not valid JSON`);
   }
@@ -805,8 +870,8 @@ function descriptorSet(manifest) {
   for (const chunk of manifest.chunks) for (const descriptor2 of chunk.artifacts) descriptors.add(descriptorKey(descriptor2));
   return descriptors;
 }
-function contentEtag(contentHash) {
-  return `"${contentHash}"`;
+function contentEtag(contentHash2) {
+  return `"${contentHash2}"`;
 }
 function currentPublicationEtag(generation, manifestHash) {
   return `"g${generation}-${manifestHash}"`;
@@ -931,6 +996,54 @@ var DerivedRuntimeTransport = class {
     if (actualHash !== descriptor2.contentHash) throw fatal("INTEGRITY_ERROR", "derived artifact SHA-256 does not match its descriptor");
     return Object.freeze({ status: "artifact", contentHash: descriptor2.contentHash, bytes });
   }
+  /**
+   * Fetch one closure-authorized engine asset directly into the main realm. Unlike derived
+   * artifacts, these bytes are intentionally never transferred through the worker. The server
+   * binds authorization to `manifestHash`; the caller must source the descriptor from that
+   * manifest's independently verified biome-content closure.
+   */
+  async fetchContent(manifestHashInput, descriptorInput, options = {}) {
+    const manifestHash = requireHash(manifestHashInput, "derived content manifestHash");
+    const descriptor2 = plainObject2(descriptorInput, "derived content descriptor");
+    exactKeys2(descriptor2, ["contentHash", "byteLength"], "derived content descriptor");
+    const contentHash2 = requireHash(descriptor2.contentHash, "derived content descriptor.contentHash");
+    if (!Number.isSafeInteger(descriptor2.byteLength) || descriptor2.byteLength < 1 || descriptor2.byteLength > MAX_DERIVED_ARTIFACT_BYTES) {
+      throw fatal("PROTOCOL_ERROR", "derived content descriptor.byteLength exceeds the server cap");
+    }
+    const response = await this.#request(
+      `${this.#config.baseUrl}/v1/derived/manifests/${manifestHash.slice(7)}/content/${contentHash2.slice(7)}`,
+      { signal: options.signal }
+    );
+    if (response.status !== 200) await this.#throwResponseError(response, options.signal);
+    try {
+      exactHeader(response.headers, "etag", contentEtag(contentHash2), "derived content");
+      exactHeader(response.headers, "x-limina-content-hash", contentHash2, "derived content");
+      exactHeader(response.headers, "x-limina-manifest-hash", manifestHash, "derived content");
+      exactHeader(response.headers, "content-type", "application/octet-stream", "derived content");
+      if (parseLength(response.headers, MAX_DERIVED_ARTIFACT_BYTES, "derived content") !== descriptor2.byteLength) {
+        throw fatal("PROTOCOL_ERROR", "derived content Content-Length does not match its closure entry");
+      }
+      const generation = response.headers.get("x-limina-generation");
+      if (generation === null || !/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation))) {
+        throw fatal("PROTOCOL_ERROR", "derived content X-Limina-Generation is invalid");
+      }
+    } catch (error) {
+      await cancelResponseBody(response);
+      throw error;
+    }
+    const bytes = await readBounded(
+      response,
+      descriptor2.byteLength,
+      MAX_DERIVED_ARTIFACT_BYTES,
+      options.signal
+    );
+    throwIfAborted(options.signal);
+    if (portableAssetContentHash(bytes) !== contentHash2) {
+      throw fatal("INTEGRITY_ERROR", "derived content portable engine hash does not match its closure entry");
+    }
+    throwIfAborted(options.signal);
+    return Object.freeze({ contentHash: contentHash2, bytes });
+  }
   async #request(url, options) {
     throwIfAborted(options.signal);
     const headers = { Authorization: `Bearer ${this.#config.token}`, ...options.headers };
@@ -989,6 +1102,7 @@ var DerivedRuntimeTransport = class {
       FORBIDDEN_HOST: 403,
       FORBIDDEN_ORIGIN: 403,
       NO_PUBLICATION: 404,
+      NOT_FOUND: 404,
       NOT_CURRENT: 409,
       RATE_LIMITED: 429,
       STREAM_LIMIT: 429,
@@ -1006,6 +1120,7 @@ var DerivedRuntimeTransport = class {
     if (body.code === "PUBLICATION_UNAVAILABLE") throw transient("PUBLICATION_UNAVAILABLE", body.message);
     if (body.code === "SERVER_STOPPING") throw transient("SERVER_STOPPING", body.message);
     if (body.code === "UNAUTHORIZED") throw fatal("UNAUTHORIZED", body.message);
+    if (body.code === "NOT_FOUND") throw fatal("NOT_FOUND", body.message);
     if (body.code === "FORBIDDEN_HOST" || body.code === "FORBIDDEN_ORIGIN") throw fatal("FORBIDDEN", body.message);
     if (body.code === "ARTIFACT_INVALID") throw fatal("INTEGRITY_ERROR", body.message);
     throw fatal("PROTOCOL_ERROR", "derived runtime returned an unsupported error code");
@@ -1025,6 +1140,7 @@ var EMPTY_GLOBAL_DEPENDENCIES = Object.freeze([]);
 var GLOBAL_DEPENDENCY_REGISTRY = Object.freeze({
   "world-overview-terrain/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "navigation-index/v1": EMPTY_GLOBAL_DEPENDENCIES,
+  "biome-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-field/v1": EMPTY_GLOBAL_DEPENDENCIES,
   "hydrology-water-topology/v1": Object.freeze(["hydrology-field/v1"])
 });
@@ -1865,7 +1981,7 @@ var REQUIRED_FIELDS = Object.freeze(["nrows", "ncols", "origin", "scale", "heigh
 var ALLOWED_FIELDS = /* @__PURE__ */ new Set([...REQUIRED_FIELDS, "paintMat", "paintW", "climate", "climateChannels", "blight"]);
 var BIOME_MIN = 0;
 var BIOME_MAX = 6;
-var PAINT_MATERIAL_MAX = 6;
+var PAINT_MATERIAL_MAX = 7;
 function bufferIsShared(buffer) {
   return Object.prototype.toString.call(buffer) === "[object SharedArrayBuffer]";
 }
@@ -2082,6 +2198,288 @@ function decodeTerrainChunkArtifact(bytesInputValue) {
   return Object.freeze({ metadata, tile });
 }
 
+// src/world/biome-surface-plan.mjs
+var BIOME_SURFACE_PLAN_LIMITS = Object.freeze({ rows: 1025, cols: 1025, cells: 1050625, roles: 32, slots: 16, bytes: 64 * 1024 * 1024 });
+
+// src/world/surface-composite-tile.mjs
+var SURFACE_COMPOSITE_TILE_SCHEMA = "limina.surface-composite-tile/v1";
+var SURFACE_COMPOSITE_POLICY_VERSION = 3;
+var SURFACE_COMPOSITE_LIMITS = Object.freeze({ interior: 256, gutter: 4, roles: 32, sourceDimension: 4096, outputBytes: 4 * 1024 * 1024 });
+
+// src/world/compiler/surface-composite-artifact.mjs
+var SURFACE_COMPOSITE_ARTIFACT_TYPE = "surface-composite-tile/v1";
+var SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.surface-composite-qoi-v1";
+var SURFACE_COMPOSITE_ARTIFACT_VERSION = 1;
+var MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES = 4 * 1024 * 1024;
+var MAX_SURFACE_COMPOSITE_DECODED_BYTES = 4 * 1024 * 1024;
+var MAGIC2 = Object.freeze([76, 77, 83, 85, 82, 70, 1, 0]);
+var HEADER_BYTES = 32;
+var MAX_METADATA_BYTES = 16 * 1024;
+var HASH3 = /^sha256:[0-9a-f]{64}$/;
+var textEncoder = new TextEncoder();
+var textDecoder = new TextDecoder("utf-8", { fatal: true });
+function checkpoint(control, index = 0) {
+  if ((index & 4095) === 0 && control?.shouldCancel?.() === true) {
+    const error = new Error("surface composite artifact operation cancelled");
+    error.name = "AbortError";
+    throw error;
+  }
+}
+function plain(value, label) {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError(`${label} must be a plain object`);
+  }
+  return value;
+}
+function exact(value, keys, label) {
+  const names = Object.getOwnPropertyNames(value), expected = new Set(keys);
+  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
+    throw new TypeError(`${label} fields are invalid`);
+  }
+  for (const name of names) {
+    const descriptor2 = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor2?.enumerable !== true || descriptor2.get !== void 0 || descriptor2.set !== void 0) {
+      throw new TypeError(`${label}.${name} must be an enumerable data field`);
+    }
+  }
+  return value;
+}
+function integer(value, minimum, maximum, label) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(`${label} is out of bounds`);
+  return value;
+}
+function finite2(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0)) throw new RangeError(`${label} must be a canonical finite number`);
+  return value;
+}
+function hash(value, label) {
+  if (typeof value !== "string" || !HASH3.test(value)) throw new TypeError(`${label} must be a canonical content hash`);
+  return value;
+}
+function tuple2(value, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 2) throw new TypeError(`${label} must be a two-number array`);
+  return Object.freeze([finite2(value[0], `${label}[0]`), finite2(value[1], `${label}[1]`)]);
+}
+function canonicalMetadata(input, verifyPixels = true) {
+  const root = exact(plain(input, "surface composite"), ["schema", "source", "coord", "placement", "resolution", "maps", "edgeHashes", "diagnostics"], "surface composite");
+  if (root.schema !== SURFACE_COMPOSITE_TILE_SCHEMA) throw new TypeError("surface composite schema is unsupported");
+  const sourceInput = plain(root.source, "surface composite source");
+  const source = exact(sourceInput, Object.hasOwn(sourceInput, "environmentHash") ? ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "environmentHash", "policyVersion"] : ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "policyVersion"], "surface composite source");
+  const coord = exact(plain(root.coord, "surface composite coord"), ["tx", "tz", "lod"], "surface composite coord");
+  const placement = exact(plain(root.placement, "surface composite placement"), ["origin", "sizeM", "featureOrigin"], "surface composite placement");
+  const resolution = exact(plain(root.resolution, "surface composite resolution"), ["interior", "gutter", "total"], "surface composite resolution");
+  const maps = exact(plain(root.maps, "surface composite maps"), ["albedo", "normal", "orm"], "surface composite maps");
+  const edges = exact(plain(root.edgeHashes, "surface composite edge hashes"), ["north", "east", "south", "west"], "surface composite edge hashes");
+  const diagnostics = exact(plain(root.diagnostics, "surface composite diagnostics"), ["roles", "runtimeTextureSamples", "outputBytes"], "surface composite diagnostics");
+  const interior = integer(resolution.interior, 2, 256, "surface composite interior");
+  const gutter = integer(resolution.gutter, 0, 4, "surface composite gutter");
+  const total = integer(resolution.total, 2, 264, "surface composite total");
+  if (total !== interior + gutter * 2) throw new Error("surface composite resolution is inconsistent");
+  const decodedMapBytes = total * total * 4;
+  if (decodedMapBytes * 3 > MAX_SURFACE_COMPOSITE_DECODED_BYTES) throw new RangeError("surface composite decoded maps exceed budget");
+  const mapMeta = {};
+  for (const name of ["albedo", "normal", "orm"]) {
+    const entry = plain(maps[name], `surface composite ${name}`);
+    const required = name === "albedo" ? ["data", "contentHash", "colorSpace"] : name === "normal" ? ["data", "contentHash", "colorSpace", "convention"] : ["data", "contentHash", "colorSpace", "channels"];
+    exact(entry, required, `surface composite ${name}`);
+    if (!(entry.data instanceof Uint8Array) || !(entry.data.buffer instanceof ArrayBuffer) || entry.data.length !== decodedMapBytes || entry.data.byteOffset !== 0 || entry.data.byteLength !== entry.data.buffer.byteLength) {
+      throw new TypeError(`surface composite ${name} must be owned exact RGBA8 data`);
+    }
+    const contentHash2 = hash(entry.contentHash, `surface composite ${name} hash`);
+    if (verifyPixels && `sha256:${sha256(entry.data)}` !== contentHash2) throw new Error(`surface composite ${name} content hash mismatch`);
+    if (entry.colorSpace !== (name === "albedo" ? "srgb" : "none")) throw new Error(`surface composite ${name} color space is invalid`);
+    if (name === "normal" && entry.convention !== "opengl-y-plus") throw new Error("surface composite normal convention is invalid");
+    if (name === "orm" && entry.channels !== "ao-roughness-metalness") throw new Error("surface composite ORM channels are invalid");
+    mapMeta[name] = Object.freeze({
+      contentHash: contentHash2,
+      colorSpace: entry.colorSpace,
+      ...name === "normal" ? { convention: entry.convention } : {},
+      ...name === "orm" ? { channels: entry.channels } : {}
+    });
+  }
+  const outputBytes = integer(diagnostics.outputBytes, 1, MAX_SURFACE_COMPOSITE_DECODED_BYTES, "surface composite output bytes");
+  if (outputBytes !== decodedMapBytes * 3 || diagnostics.runtimeTextureSamples !== 3) throw new Error("surface composite diagnostics are inconsistent");
+  return Object.freeze({
+    schema: SURFACE_COMPOSITE_TILE_SCHEMA,
+    source: Object.freeze({
+      biomeFieldHash: hash(source.biomeFieldHash, "surface composite biome field hash"),
+      biomePackHash: hash(source.biomePackHash, "surface composite biome pack hash"),
+      terrainChunkHash: hash(source.terrainChunkHash, "surface composite terrain chunk hash"),
+      environmentHash: hash(source.environmentHash ?? source.terrainChunkHash, "surface composite environment hash"),
+      policyVersion: integer(source.policyVersion, SURFACE_COMPOSITE_POLICY_VERSION, SURFACE_COMPOSITE_POLICY_VERSION, "surface composite policy version")
+    }),
+    coord: Object.freeze({ tx: integer(coord.tx, -1e6, 1e6, "surface composite tx"), tz: integer(coord.tz, -1e6, 1e6, "surface composite tz"), lod: integer(coord.lod, 0, 16, "surface composite lod") }),
+    placement: Object.freeze({ origin: tuple2(placement.origin, "surface composite origin"), sizeM: (() => {
+      const size = finite2(placement.sizeM, "surface composite size");
+      if (!(size > 0) || size > 1e6) throw new RangeError("surface composite size is out of bounds");
+      return size;
+    })(), featureOrigin: tuple2(placement.featureOrigin, "surface composite feature origin") }),
+    resolution: Object.freeze({ interior, gutter, total }),
+    maps: Object.freeze(mapMeta),
+    edgeHashes: Object.freeze({ north: hash(edges.north, "surface composite north edge"), east: hash(edges.east, "surface composite east edge"), south: hash(edges.south, "surface composite south edge"), west: hash(edges.west, "surface composite west edge") }),
+    diagnostics: Object.freeze({ roles: integer(diagnostics.roles, 1, 32, "surface composite roles"), runtimeTextureSamples: 3, outputBytes }),
+    codec: "qoi-rgba-v1"
+  });
+}
+function pixelHash(r, g, b, a) {
+  return r * 3 + g * 5 + b * 7 + a * 11 & 63;
+}
+function qoiEncode(data, control) {
+  const output = [], index = new Uint8Array(64 * 4);
+  let pr = 0, pg = 0, pb = 0, pa = 255, run = 0;
+  const flush = () => {
+    if (run > 0) {
+      output.push(192 | run - 1);
+      run = 0;
+    }
+  };
+  for (let offset = 0, pixel = 0; offset < data.length; offset += 4, pixel++) {
+    checkpoint(control, pixel);
+    const r = data[offset], g = data[offset + 1], b = data[offset + 2], a = data[offset + 3];
+    if (r === pr && g === pg && b === pb && a === pa) {
+      run++;
+      if (run === 62 || offset + 4 === data.length) flush();
+      continue;
+    }
+    flush();
+    const slot = pixelHash(r, g, b, a) * 4;
+    if (index[slot] === r && index[slot + 1] === g && index[slot + 2] === b && index[slot + 3] === a) output.push(slot / 4);
+    else {
+      index[slot] = r;
+      index[slot + 1] = g;
+      index[slot + 2] = b;
+      index[slot + 3] = a;
+      const dr = r - pr, dg = g - pg, db = b - pb;
+      if (a === pa && dr >= -2 && dr <= 1 && dg >= -2 && dg <= 1 && db >= -2 && db <= 1) output.push(64 | dr + 2 << 4 | dg + 2 << 2 | db + 2);
+      else if (a === pa && dg >= -32 && dg <= 31 && dr - dg >= -8 && dr - dg <= 7 && db - dg >= -8 && db - dg <= 7) output.push(128 | dg + 32, dr - dg + 8 << 4 | db - dg + 8);
+      else if (a === pa) output.push(254, r, g, b);
+      else output.push(255, r, g, b, a);
+    }
+    pr = r;
+    pg = g;
+    pb = b;
+    pa = a;
+  }
+  return Uint8Array.from(output);
+}
+function qoiDecode(bytes, pixels, control) {
+  const output = new Uint8Array(pixels * 4), index = new Uint8Array(64 * 4);
+  let at = 0, out = 0, pr = 0, pg = 0, pb = 0, pa = 255;
+  while (out < output.length) {
+    checkpoint(control, out >>> 2);
+    if (at >= bytes.length) throw new Error("surface composite QOI stream is truncated");
+    const tag = bytes[at++];
+    let run = 1, updateIndex = true;
+    if (tag === 254) {
+      if (at + 3 > bytes.length) throw new Error("surface composite QOI RGB is truncated");
+      pr = bytes[at++];
+      pg = bytes[at++];
+      pb = bytes[at++];
+    } else if (tag === 255) {
+      if (at + 4 > bytes.length) throw new Error("surface composite QOI RGBA is truncated");
+      pr = bytes[at++];
+      pg = bytes[at++];
+      pb = bytes[at++];
+      pa = bytes[at++];
+    } else if ((tag & 192) === 0) {
+      const slot = (tag & 63) * 4;
+      pr = index[slot];
+      pg = index[slot + 1];
+      pb = index[slot + 2];
+      pa = index[slot + 3];
+    } else if ((tag & 192) === 64) {
+      pr = pr + ((tag >> 4 & 3) - 2) & 255;
+      pg = pg + ((tag >> 2 & 3) - 2) & 255;
+      pb = pb + ((tag & 3) - 2) & 255;
+    } else if ((tag & 192) === 128) {
+      if (at >= bytes.length) throw new Error("surface composite QOI luma is truncated");
+      const next = bytes[at++], dg = (tag & 63) - 32;
+      pr = pr + dg + (next >> 4) - 8 & 255;
+      pg = pg + dg & 255;
+      pb = pb + dg + (next & 15) - 8 & 255;
+    } else {
+      run = (tag & 63) + 1;
+      updateIndex = false;
+    }
+    if (out + run * 4 > output.length) throw new Error("surface composite QOI run exceeds decoded size");
+    if (updateIndex) {
+      const slot = pixelHash(pr, pg, pb, pa) * 4;
+      index[slot] = pr;
+      index[slot + 1] = pg;
+      index[slot + 2] = pb;
+      index[slot + 3] = pa;
+    }
+    for (let count = 0; count < run; count++) {
+      output[out++] = pr;
+      output[out++] = pg;
+      output[out++] = pb;
+      output[out++] = pa;
+    }
+  }
+  if (at !== bytes.length) throw new Error("surface composite QOI stream has trailing bytes");
+  return output;
+}
+function parseEnvelope(bytes) {
+  if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer) || bytes.byteLength < HEADER_BYTES || bytes.byteLength > MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES) throw new TypeError("surface composite artifact bytes are invalid");
+  for (let index = 0; index < MAGIC2.length; index++) if (bytes[index] !== MAGIC2[index]) throw new Error("surface composite artifact magic is invalid");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint16(8, true) !== SURFACE_COMPOSITE_ARTIFACT_VERSION || view.getUint16(10, true) !== HEADER_BYTES || view.getUint32(12, true) !== bytes.byteLength) throw new Error("surface composite artifact header is invalid");
+  const metadataLength = view.getUint32(16, true), lengths = [view.getUint32(20, true), view.getUint32(24, true), view.getUint32(28, true)];
+  if (metadataLength < 2 || metadataLength > MAX_METADATA_BYTES || HEADER_BYTES + metadataLength + lengths.reduce((a, b) => a + b, 0) !== bytes.byteLength || lengths.some((length) => length < 1)) throw new Error("surface composite artifact lengths are invalid");
+  const metadataBytes = bytes.subarray(HEADER_BYTES, HEADER_BYTES + metadataLength);
+  let parsed;
+  try {
+    parsed = JSON.parse(textDecoder.decode(metadataBytes));
+  } catch (error) {
+    throw new Error("surface composite artifact metadata is invalid", { cause: error });
+  }
+  const metadata = canonicalMetadataForDecode(parsed);
+  const canonical = textEncoder.encode(JSON.stringify(metadata));
+  if (canonical.length !== metadataBytes.length || !canonical.every((byte, index) => byte === metadataBytes[index])) throw new Error("surface composite artifact metadata is not canonical");
+  let offset = HEADER_BYTES + metadataLength;
+  const streams = lengths.map((length) => {
+    const stream = bytes.subarray(offset, offset + length);
+    offset += length;
+    return stream;
+  });
+  return { metadata, streams };
+}
+function canonicalMetadataForDecode(input) {
+  const root = exact(plain(input, "surface composite metadata"), ["schema", "source", "coord", "placement", "resolution", "maps", "edgeHashes", "diagnostics", "codec"], "surface composite metadata");
+  if (root.codec !== "qoi-rgba-v1") throw new Error("surface composite artifact codec is unsupported");
+  const total = root.resolution?.total;
+  if (!Number.isSafeInteger(total) || total < 2 || total > 264) throw new RangeError("surface composite metadata total is out of bounds");
+  const mapBytes = total * total * 4;
+  const dummy = new Uint8Array(mapBytes);
+  const maps = Object.fromEntries(["albedo", "normal", "orm"].map((name) => [name, { ...root.maps[name], data: dummy }]));
+  const { codec: _codec, ...withoutCodec } = root;
+  const validated = canonicalMetadata({ ...withoutCodec, maps }, false);
+  return Object.freeze({ ...validated, maps: validated.maps, codec: "qoi-rgba-v1" });
+}
+function decodeSurfaceCompositeArtifact(bytes, control = {}) {
+  checkpoint(control);
+  const { metadata, streams } = parseEnvelope(bytes), pixels = metadata.resolution.total ** 2;
+  const decoded = streams.map((stream) => qoiDecode(stream, pixels, control));
+  for (let index = 0; index < decoded.length; index++) {
+    const name = ["albedo", "normal", "orm"][index], actual = `sha256:${sha256(decoded[index])}`;
+    if (actual !== metadata.maps[name].contentHash) throw new Error(`surface composite decoded ${name} map hash mismatch (${actual})`);
+    const canonical = qoiEncode(decoded[index], control);
+    if (canonical.length !== streams[index].length || !canonical.every((byte, offset) => byte === streams[index][offset])) {
+      throw new Error(`surface composite ${name} QOI stream is not canonical`);
+    }
+  }
+  return Object.freeze({
+    schema: metadata.schema,
+    source: metadata.source,
+    coord: metadata.coord,
+    placement: metadata.placement,
+    resolution: metadata.resolution,
+    maps: Object.freeze({ albedo: Object.freeze({ ...metadata.maps.albedo, data: decoded[0] }), normal: Object.freeze({ ...metadata.maps.normal, data: decoded[1] }), orm: Object.freeze({ ...metadata.maps.orm, data: decoded[2] }) }),
+    edgeHashes: metadata.edgeHashes,
+    diagnostics: metadata.diagnostics
+  });
+}
+
 // src/world/hydrology-ir.mjs
 var HYDROLOGY_LIMITS = Object.freeze({
   precipitationMmPerYear: 1e5,
@@ -2105,7 +2503,7 @@ var HYDROLOGY_FIELD_ARTIFACT_TYPE = "hydrology-field/v1";
 var HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.hydrology-field";
 var HYDROLOGY_FIELD_ARTIFACT_VERSION = 1;
 var HYDROLOGY_FIELD_ARTIFACT_HEADER_BYTES = 112;
-var MAGIC2 = new Uint8Array([76, 72, 89, 68, 70, 76, 68, 49]);
+var MAGIC3 = new Uint8Array([76, 72, 89, 68, 70, 76, 68, 49]);
 var CONTROL_KEYS = /* @__PURE__ */ new Set(["shouldCancel"]);
 var MAX_ORIGIN_M = 1e12;
 var align = (value, alignment) => Math.ceil(value / alignment) * alignment;
@@ -2289,7 +2687,7 @@ function readArtifact(input, controlInput, includeTopology) {
   const meter = createMeter(shouldCancel, MAX_HYDROLOGY_CELLS * 48 + 4096);
   meter.check();
   const view = new DataView(bytes.buffer);
-  for (let index = 0; index < MAGIC2.length; index++) if (view.getUint8(index) !== MAGIC2[index]) fail("hydrology artifact magic mismatch");
+  for (let index = 0; index < MAGIC3.length; index++) if (view.getUint8(index) !== MAGIC3[index]) fail("hydrology artifact magic mismatch");
   if (view.getUint16(8, true) !== HYDROLOGY_FIELD_ARTIFACT_VERSION) fail("hydrology artifact version is unsupported");
   if (view.getUint16(10, true) !== 0) fail("hydrology artifact flags must be zero");
   if (view.getUint16(12, true) !== HYDROLOGY_FIELD_ARTIFACT_HEADER_BYTES) fail("hydrology artifact header length mismatch");
@@ -2546,7 +2944,7 @@ var HYDROLOGY_WATER_ARTIFACT_TYPE = "hydrology-water-topology/v1";
 var HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.hydrology-water-topology";
 var HYDROLOGY_WATER_ARTIFACT_VERSION = 1;
 var HYDROLOGY_WATER_ARTIFACT_HEADER_BYTES = 256;
-var MAGIC3 = new Uint8Array([76, 72, 89, 87, 65, 84, 49, 0]);
+var MAGIC4 = new Uint8Array([76, 72, 89, 87, 65, 84, 49, 0]);
 var ROOT_KEYS = /* @__PURE__ */ new Set(["schema", "version", "placement", "rows", "cols", "cellSizeM", "basins", "reaches", "diagnostics"]);
 var PLACEMENT_KEYS = /* @__PURE__ */ new Set(["originX", "originZ"]);
 var BASIN_KEYS = /* @__PURE__ */ new Set([
@@ -2679,7 +3077,7 @@ function canonicalNumber2(value, label, minimum, maximum, positive2 = false) {
   }
   return value;
 }
-function integer(value, minimum, maximum, label) {
+function integer2(value, minimum, maximum, label) {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) fail3(`${label} must be an integer in [${minimum}, ${maximum}]`);
   return value;
 }
@@ -2708,9 +3106,9 @@ function parseBindings(value, label = "hydrology water artifact bindings") {
   const descriptors = exactRecord2(value, BINDING_KEY_SET, label, seen);
   const parsed = {};
   for (const key of BINDING_KEYS) {
-    const hash = descriptors[key].value;
-    if (typeof hash !== "string" || !HASH_RE.test(hash)) fail3(`${label}.${key} must be a lowercase sha256 content hash`);
-    parsed[key] = hash;
+    const hash2 = descriptors[key].value;
+    if (typeof hash2 !== "string" || !HASH_RE.test(hash2)) fail3(`${label}.${key} must be a lowercase sha256 content hash`);
+    parsed[key] = hash2;
   }
   return Object.freeze(parsed);
 }
@@ -2782,8 +3180,8 @@ function parseTopology(value) {
   const seen = /* @__PURE__ */ new Set();
   const descriptors = exactRecord2(value, ROOT_KEYS, "hydrology water topology", seen);
   if (descriptors.schema.value !== HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA || descriptors.version.value !== HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION) fail3("hydrology water topology schema/version is unsupported");
-  const rows = integer(descriptors.rows.value, 2, MAX_HYDROLOGY_DIMENSION, "hydrology water topology rows");
-  const cols = integer(descriptors.cols.value, 2, MAX_HYDROLOGY_DIMENSION, "hydrology water topology cols");
+  const rows = integer2(descriptors.rows.value, 2, MAX_HYDROLOGY_DIMENSION, "hydrology water topology rows");
+  const cols = integer2(descriptors.cols.value, 2, MAX_HYDROLOGY_DIMENSION, "hydrology water topology cols");
   const cells = rows * cols;
   if (cells > MAX_HYDROLOGY_CELLS) fail3("hydrology water topology grid exceeds supported cells");
   const cellSizeM = canonicalNumber2(descriptors.cellSizeM.value, "hydrology water topology cellSizeM", 0, 1e6, true);
@@ -2794,17 +3192,17 @@ function parseTopology(value) {
   let totalBasinPoints = 0, totalRings = 0, priorBasinId = "";
   const basins = basinSource.map((candidate, basinIndex) => {
     const path = `hydrology water topology basins[${basinIndex}]`;
-    const record = exactRecord2(candidate, BASIN_KEYS, path, seen);
-    const seedCell = integer(record.seedCell.value, 0, cells - 1, `${path}.seedCell`);
-    const spillOutsideCell = integer(record.spillOutsideCell.value, 0, cells - 1, `${path}.spillOutsideCell`);
+    const record4 = exactRecord2(candidate, BASIN_KEYS, path, seen);
+    const seedCell = integer2(record4.seedCell.value, 0, cells - 1, `${path}.seedCell`);
+    const spillOutsideCell = integer2(record4.spillOutsideCell.value, 0, cells - 1, `${path}.spillOutsideCell`);
     const id = `gen-b-${spillOutsideCell.toString(36)}-${seedCell.toString(36)}`;
-    if (record.id.value !== id) fail3(`${path}.id must equal '${id}'`);
+    if (record4.id.value !== id) fail3(`${path}.id must equal '${id}'`);
     if (basinIds.has(id)) fail3(`hydrology water topology has duplicate basin id '${id}'`);
     if (basinIndex > 0 && id <= priorBasinId) fail3("hydrology water topology basins must be strictly ordered by id");
     priorBasinId = id;
     basinIds.add(id);
-    if (record.kind.value !== "lake") fail3(`${path}.kind must be 'lake'`);
-    const footprintRecord = exactRecord2(record.footprint.value, FOOTPRINT_KEYS, `${path}.footprint`, seen, /* @__PURE__ */ new Set(["holes"]));
+    if (record4.kind.value !== "lake") fail3(`${path}.kind must be 'lake'`);
+    const footprintRecord = exactRecord2(record4.footprint.value, FOOTPRINT_KEYS, `${path}.footprint`, seen, /* @__PURE__ */ new Set(["holes"]));
     const points = parseRing(footprintRecord.points.value, `${path}.footprint.points`, seen);
     const holes = footprintRecord.holes === void 0 ? [] : denseArray(footprintRecord.holes.value, 0, WATER_LIMITS.holes, `${path}.footprint.holes`, seen).map((ring, index) => parseRing(ring, `${path}.footprint.holes[${index}]`, seen));
     if (!(twiceArea(points) > 0)) fail3(`${path}.footprint.points must be counter-clockwise`);
@@ -2818,14 +3216,14 @@ function parseTopology(value) {
     return Object.freeze({
       id,
       kind: "lake",
-      spillLevelM: canonicalNumber2(record.spillLevelM.value, `${path}.spillLevelM`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
-      maxDepthM: canonicalNumber2(record.maxDepthM.value, `${path}.maxDepthM`, 0, WATER_LIMITS.depthM, true),
-      areaM2: canonicalNumber2(record.areaM2.value, `${path}.areaM2`, 0, 1e12, true),
-      cellCount: integer(record.cellCount.value, 1, cells, `${path}.cellCount`),
+      spillLevelM: canonicalNumber2(record4.spillLevelM.value, `${path}.spillLevelM`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
+      maxDepthM: canonicalNumber2(record4.maxDepthM.value, `${path}.maxDepthM`, 0, WATER_LIMITS.depthM, true),
+      areaM2: canonicalNumber2(record4.areaM2.value, `${path}.areaM2`, 0, 1e12, true),
+      cellCount: integer2(record4.cellCount.value, 1, cells, `${path}.cellCount`),
       seedCell,
-      spillInsideCell: integer(record.spillInsideCell.value, 0, cells - 1, `${path}.spillInsideCell`),
+      spillInsideCell: integer2(record4.spillInsideCell.value, 0, cells - 1, `${path}.spillInsideCell`),
       spillOutsideCell,
-      spillOutsideDrainageRank: integer(record.spillOutsideDrainageRank.value, 0, cells - 1, `${path}.spillOutsideDrainageRank`),
+      spillOutsideDrainageRank: integer2(record4.spillOutsideDrainageRank.value, 0, cells - 1, `${path}.spillOutsideDrainageRank`),
       footprint: Object.freeze({ points, ...holes.length > 0 ? { holes: Object.freeze(holes) } : {} })
     });
   });
@@ -2836,22 +3234,22 @@ function parseTopology(value) {
   let totalReachPoints = 0, totalWaterfalls = 0, priorReachStart = -1;
   const reaches = reachSource.map((candidate, reachIndex) => {
     const path = `hydrology water topology reaches[${reachIndex}]`;
-    const record = exactRecord2(candidate, REACH_KEYS, path, seen);
-    const startCell = integer(record.startCell.value, 0, cells - 1, `${path}.startCell`);
-    const endCell = integer(record.endCell.value, 0, cells - 1, `${path}.endCell`);
+    const record4 = exactRecord2(candidate, REACH_KEYS, path, seen);
+    const startCell = integer2(record4.startCell.value, 0, cells - 1, `${path}.startCell`);
+    const endCell = integer2(record4.endCell.value, 0, cells - 1, `${path}.endCell`);
     const id = `gen-r-${startCell.toString(36)}-${endCell.toString(36)}`;
-    if (record.id.value !== id) fail3(`${path}.id must equal '${id}'`);
+    if (record4.id.value !== id) fail3(`${path}.id must equal '${id}'`);
     if (reachIds.has(id)) fail3(`hydrology water topology has duplicate reach id '${id}'`);
     if (startCell <= priorReachStart) fail3("hydrology water topology reaches must be strictly ordered by startCell");
     priorReachStart = startCell;
     reachIds.add(id);
-    const order = integer(record.order.value, 1, WATER_LIMITS.streamOrder, `${path}.order`);
+    const order = integer2(record4.order.value, 1, WATER_LIMITS.streamOrder, `${path}.order`);
     const className = order <= 2 ? "stream" : "river";
-    if (record.class.value !== className) fail3(`${path}.class is inconsistent with order`);
-    const points = Object.freeze(denseArray(record.points.value, 2, WATER_LIMITS.waterwayPoints, `${path}.points`, seen).map((point, index) => parsePoint(point, `${path}.points[${index}]`, seen)));
-    const widthsSource = denseArray(record.widths.value, points.length, points.length, `${path}.widths`, seen);
-    const terrainSource = denseArray(record.terrainElevationsM.value, points.length, points.length, `${path}.terrainElevationsM`, seen);
-    const surfaceSource = denseArray(record.surfaceElevationsM.value, points.length, points.length, `${path}.surfaceElevationsM`, seen);
+    if (record4.class.value !== className) fail3(`${path}.class is inconsistent with order`);
+    const points = Object.freeze(denseArray(record4.points.value, 2, WATER_LIMITS.waterwayPoints, `${path}.points`, seen).map((point, index) => parsePoint(point, `${path}.points[${index}]`, seen)));
+    const widthsSource = denseArray(record4.widths.value, points.length, points.length, `${path}.widths`, seen);
+    const terrainSource = denseArray(record4.terrainElevationsM.value, points.length, points.length, `${path}.terrainElevationsM`, seen);
+    const surfaceSource = denseArray(record4.surfaceElevationsM.value, points.length, points.length, `${path}.surfaceElevationsM`, seen);
     const widths = Object.freeze(widthsSource.map((entry, index) => canonicalNumber2(entry, `${path}.widths[${index}]`, 0, WATER_LIMITS.widthM, true)));
     const terrainElevationsM = Object.freeze(terrainSource.map((entry, index) => canonicalNumber2(entry, `${path}.terrainElevationsM[${index}]`, -MAX_HYDROLOGY_ABS_HEIGHT_M, MAX_HYDROLOGY_ABS_HEIGHT_M)));
     const surfaceElevationsM = Object.freeze(surfaceSource.map((entry, index) => canonicalNumber2(entry, `${path}.surfaceElevationsM[${index}]`, -MAX_HYDROLOGY_ABS_HEIGHT_M, MAX_HYDROLOGY_ABS_HEIGHT_M)));
@@ -2868,13 +3266,13 @@ function parseTopology(value) {
     }
     totalReachPoints += points.length;
     if (totalReachPoints > WATER_LIMITS.totalWaterwayPoints) fail3("hydrology water topology reach points exceed aggregate limits");
-    const waterfallSource = denseArray(record.waterfalls.value, 0, points.length - 1, `${path}.waterfalls`, seen);
+    const waterfallSource = denseArray(record4.waterfalls.value, 0, points.length - 1, `${path}.waterfalls`, seen);
     let priorEnd = 0;
     const waterfalls = waterfallSource.map((candidateSpan, waterfallIndex) => {
       const spanPath = `${path}.waterfalls[${waterfallIndex}]`;
       const span = exactRecord2(candidateSpan, WATERFALL_KEYS, spanPath, seen);
-      const startSegment = integer(span.startSegment.value, 0, points.length - 2, `${spanPath}.startSegment`);
-      const endSegmentExclusive = integer(span.endSegmentExclusive.value, startSegment + 1, points.length - 1, `${spanPath}.endSegmentExclusive`);
+      const startSegment = integer2(span.startSegment.value, 0, points.length - 2, `${spanPath}.startSegment`);
+      const endSegmentExclusive = integer2(span.endSegmentExclusive.value, startSegment + 1, points.length - 1, `${spanPath}.endSegmentExclusive`);
       if (startSegment < priorEnd) fail3(`${path}.waterfalls must be ordered and non-overlapping`);
       priorEnd = endSegmentExclusive;
       let totalDropM = 0, maxEdgeDropM = 0;
@@ -2955,23 +3353,23 @@ function verifyZero(bytes, start, end, label) {
 }
 function inspectHeader(bytes) {
   const view = new DataView(bytes.buffer);
-  for (let index = 0; index < MAGIC3.length; index++) if (view.getUint8(index) !== MAGIC3[index]) fail3("hydrology water artifact magic mismatch");
+  for (let index = 0; index < MAGIC4.length; index++) if (view.getUint8(index) !== MAGIC4[index]) fail3("hydrology water artifact magic mismatch");
   if (view.getUint16(8, true) !== HYDROLOGY_WATER_ARTIFACT_VERSION) fail3("hydrology water artifact version is unsupported");
   if (view.getUint16(10, true) !== 0) fail3("hydrology water artifact flags must be zero");
   if (view.getUint16(12, true) !== HYDROLOGY_WATER_ARTIFACT_HEADER_BYTES) fail3("hydrology water artifact header length mismatch");
   if (view.getUint16(14, true) !== 0 || view.getUint32(52, true) !== 0 || view.getUint32(108, true) !== 0) fail3("hydrology water artifact reserved header fields must be zero");
   verifyZero(bytes, 240, 256, "hydrology water artifact reserved header bytes");
-  const rows = integer(view.getUint32(20, true), 2, MAX_HYDROLOGY_DIMENSION, "hydrology water artifact rows");
-  const cols = integer(view.getUint32(24, true), 2, MAX_HYDROLOGY_DIMENSION, "hydrology water artifact cols");
+  const rows = integer2(view.getUint32(20, true), 2, MAX_HYDROLOGY_DIMENSION, "hydrology water artifact rows");
+  const cols = integer2(view.getUint32(24, true), 2, MAX_HYDROLOGY_DIMENSION, "hydrology water artifact cols");
   const cells = rows * cols;
   if (cells > MAX_HYDROLOGY_CELLS) fail3("hydrology water artifact grid exceeds supported cells");
   const counts = Object.freeze({
-    basins: integer(view.getUint32(28, true), 0, WATER_LIMITS.bodies, "hydrology water artifact basin count"),
-    rings: integer(view.getUint32(32, true), 0, MAX_RING_COUNT, "hydrology water artifact ring count"),
-    basinPoints: integer(view.getUint32(36, true), 0, WATER_LIMITS.totalBodyPoints, "hydrology water artifact basin point count"),
-    reaches: integer(view.getUint32(40, true), 0, WATER_LIMITS.waterways, "hydrology water artifact reach count"),
-    reachPoints: integer(view.getUint32(44, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact reach point count"),
-    waterfalls: integer(view.getUint32(48, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact waterfall count")
+    basins: integer2(view.getUint32(28, true), 0, WATER_LIMITS.bodies, "hydrology water artifact basin count"),
+    rings: integer2(view.getUint32(32, true), 0, MAX_RING_COUNT, "hydrology water artifact ring count"),
+    basinPoints: integer2(view.getUint32(36, true), 0, WATER_LIMITS.totalBodyPoints, "hydrology water artifact basin point count"),
+    reaches: integer2(view.getUint32(40, true), 0, WATER_LIMITS.waterways, "hydrology water artifact reach count"),
+    reachPoints: integer2(view.getUint32(44, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact reach point count"),
+    waterfalls: integer2(view.getUint32(48, true), 0, WATER_LIMITS.totalWaterwayPoints, "hydrology water artifact waterfall count")
   });
   if (counts.basins === 0 !== (counts.rings === 0 && counts.basinPoints === 0)) fail3("hydrology water artifact basin section counts are inconsistent");
   if (counts.reaches === 0 !== (counts.reachPoints === 0 && counts.waterfalls === 0)) fail3("hydrology water artifact reach section counts are inconsistent");
@@ -3054,10 +3452,10 @@ function decodeHydrologyWaterArtifact(bytesInput2, expectedBindingsInput = void 
     let pointCount = 0;
     const rings = [];
     for (let ring = ringStart; ring < ringStart + ringCount; ring++) {
-      const record = ringRecords[ring];
-      if (record.basinIndex !== index || record.role !== (ring === ringStart ? 0 : 1)) fail3(`hydrology water artifact basin ${index} ring ownership/role is inconsistent`);
-      rings.push(Object.freeze(allBasinPoints.slice(record.pointStart, record.pointStart + record.pointCount)));
-      pointCount += record.pointCount;
+      const record4 = ringRecords[ring];
+      if (record4.basinIndex !== index || record4.role !== (ring === ringStart ? 0 : 1)) fail3(`hydrology water artifact basin ${index} ring ownership/role is inconsistent`);
+      rings.push(Object.freeze(allBasinPoints.slice(record4.pointStart, record4.pointStart + record4.pointCount)));
+      pointCount += record4.pointCount;
     }
     if (view.getUint32(offset + 24, true) !== pointCount) fail3(`hydrology water artifact basin ${index} point count is inconsistent`);
     const seedCell = view.getUint32(offset, true), spillOutsideCell = view.getUint32(offset + 8, true);
@@ -3232,9 +3630,9 @@ function parseBindingHashes(value, label) {
   const descriptors = exactDataRecord(value, GENERATED_BINDING_KEYS, label);
   const parsed = {};
   for (const key of GENERATED_BINDING_KEYS) {
-    const hash = descriptors[key].value;
-    if (typeof hash !== "string" || !DERIVED_CONTENT_HASH_RE.test(hash)) fail4(`${label}.${key} must be a lowercase sha256 content hash`);
-    parsed[key] = hash;
+    const hash2 = descriptors[key].value;
+    if (typeof hash2 !== "string" || !DERIVED_CONTENT_HASH_RE.test(hash2)) fail4(`${label}.${key} must be a lowercase sha256 content hash`);
+    parsed[key] = hash2;
   }
   return Object.freeze(parsed);
 }
@@ -3246,10 +3644,10 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
   const descriptor2 = exactDataRecord(descriptors.descriptor.value, GENERATED_DESCRIPTOR_KEYS, "generated water artifact descriptor");
   if (descriptor2.artifactType.value !== HYDROLOGY_WATER_ARTIFACT_TYPE) fail4(`generated water artifact type must be '${HYDROLOGY_WATER_ARTIFACT_TYPE}'`);
   if (descriptor2.mediaType.value !== HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE) fail4(`generated water artifact media type must be '${HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE}'`);
-  const contentHash = descriptor2.contentHash.value;
-  if (typeof contentHash !== "string" || !DERIVED_CONTENT_HASH_RE.test(contentHash)) fail4("generated water artifact contentHash must be a lowercase sha256 content hash");
-  const byteLength = descriptor2.byteLength.value;
-  if (!Number.isSafeInteger(byteLength) || byteLength < 256 || byteLength > MAX_HYDROLOGY_WATER_ARTIFACT_BYTES) {
+  const contentHash2 = descriptor2.contentHash.value;
+  if (typeof contentHash2 !== "string" || !DERIVED_CONTENT_HASH_RE.test(contentHash2)) fail4("generated water artifact contentHash must be a lowercase sha256 content hash");
+  const byteLength2 = descriptor2.byteLength.value;
+  if (!Number.isSafeInteger(byteLength2) || byteLength2 < 256 || byteLength2 > MAX_HYDROLOGY_WATER_ARTIFACT_BYTES) {
     fail4(`generated water artifact byteLength must be an integer in [256, ${MAX_HYDROLOGY_WATER_ARTIFACT_BYTES}]`);
   }
   const expectedBindings = parseBindingHashes(descriptors.expectedBindings.value, "expected generated water bindings");
@@ -3259,9 +3657,9 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
     if (!ArrayBuffer.isView(bytes) || Object.getPrototypeOf(bytes) !== Uint8Array.prototype || !(bytes.buffer instanceof ArrayBuffer) || bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength) {
       fail4("generated water artifact bytes must own a complete non-shared Uint8Array");
     }
-    if (bytes.byteLength !== byteLength) fail4(`generated water artifact byteLength mismatch: descriptor ${byteLength}, actual ${bytes.byteLength}`);
+    if (bytes.byteLength !== byteLength2) fail4(`generated water artifact byteLength mismatch: descriptor ${byteLength2}, actual ${bytes.byteLength}`);
     const actualHash = `sha256:${sha256(bytes)}`;
-    if (actualHash !== contentHash) fail4(`generated water artifact content hash mismatch: expected ${contentHash}, actual ${actualHash}`);
+    if (actualHash !== contentHash2) fail4(`generated water artifact content hash mismatch: expected ${contentHash2}, actual ${actualHash}`);
     decoded = decodeHydrologyWaterArtifact(
       bytes,
       expectedBindings,
@@ -3273,7 +3671,7 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
     fail4(`generated water artifact verification failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   const prepared = Object.freeze({
-    artifactContentHash: contentHash,
+    artifactContentHash: contentHash2,
     bindings: decoded.bindings,
     topology: decoded.topology
   });
@@ -3292,8 +3690,9 @@ var WORLD_OVERVIEW_MAX_CELLS = WORLD_OVERVIEW_MAX_DIMENSION ** 2;
 var WORLD_OVERVIEW_MAX_ORIGIN_ABS_M = 1e7;
 var WORLD_OVERVIEW_MAX_STEP_M = 1e6;
 var WORLD_OVERVIEW_MAX_HEIGHT_ABS_M = 1e5;
+var WORLD_OVERVIEW_MAX_PAINT_MATERIAL = 7;
 var WORLD_OVERVIEW_MAX_ARTIFACT_BYTES = WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES + WORLD_OVERVIEW_MAX_CELLS * 6;
-var MAGIC4 = Object.freeze([76, 77, 87, 79, 86, 82, 49, 0]);
+var MAGIC5 = Object.freeze([76, 77, 87, 79, 86, 82, 49, 0]);
 var GRID_KEYS = /* @__PURE__ */ new Set(["rows", "cols", "origin", "stepM", "heights", "paintMaterial", "paintWeight"]);
 var CONTROL_KEYS3 = /* @__PURE__ */ new Set(["shouldCancel"]);
 var WorldOverviewArtifactValidationError = class extends Error {
@@ -3409,6 +3808,9 @@ function parseGrid2(input, meter) {
     if (!Number.isFinite(height) || Object.is(height, -0) || Math.abs(height) > WORLD_OVERVIEW_MAX_HEIGHT_ABS_M) {
       fail5(`world overview heights[${index}] must be finite canonical metres within the supported range`);
     }
+    if (paintMaterial[index] > WORLD_OVERVIEW_MAX_PAINT_MATERIAL) {
+      fail5(`world overview paintMaterial[${index}] exceeds ${WORLD_OVERVIEW_MAX_PAINT_MATERIAL}`);
+    }
   }
   return Object.freeze({ rows, cols, cells, origin, stepM, heights, paintMaterial, paintWeight });
 }
@@ -3426,7 +3828,7 @@ function decodeWorldOverviewArtifact(input, controlInput) {
   const meter = createMeter3(parseControl3(controlInput), WORLD_OVERVIEW_MAX_CELLS * 2 + 4096);
   meter.start();
   const view = new DataView(bytes.buffer);
-  for (let index = 0; index < MAGIC4.length; index++) if (view.getUint8(index) !== MAGIC4[index]) fail5("world overview artifact magic mismatch");
+  for (let index = 0; index < MAGIC5.length; index++) if (view.getUint8(index) !== MAGIC5[index]) fail5("world overview artifact magic mismatch");
   if (view.getUint16(8, true) !== WORLD_OVERVIEW_ARTIFACT_VERSION) fail5("world overview artifact version is unsupported");
   if (view.getUint16(10, true) !== WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES) fail5("world overview artifact header length mismatch");
   const rows = dimension3(view.getUint16(16, true), "world overview rows");
@@ -3477,8 +3879,8 @@ var MAX_NAVIGATION_INDEX_SEARCH_KEYS_PER_ENTRY = 16;
 var MAX_NAVIGATION_INDEX_SEARCH_KEYS = MAX_NAVIGATION_INDEX_ENTRIES * 4;
 var MAX_NAVIGATION_INDEX_STRING_CHARS = 256;
 var MAX_NAVIGATION_INDEX_ARTIFACT_BYTES = 12 * 1024 * 1024;
-var MAGIC5 = Uint8Array.of(76, 78, 65, 86, 73, 68, 88, 49);
-var HEADER_BYTES = 96;
+var MAGIC6 = Uint8Array.of(76, 78, 65, 86, 73, 68, 88, 49);
+var HEADER_BYTES2 = 96;
 var ENTRY_BYTES = 56;
 var KEY_BYTES = 8;
 var STRING_DESCRIPTOR_BYTES = 8;
@@ -3582,22 +3984,22 @@ function checkedSectionEnd(offset, count, stride, label) {
   return end;
 }
 function hasMagic(bytes) {
-  for (let index = 0; index < MAGIC5.length; index++) if (bytes[index] !== MAGIC5[index]) return false;
+  for (let index = 0; index < MAGIC6.length; index++) if (bytes[index] !== MAGIC6[index]) return false;
   return true;
 }
 function readHeader(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_BYTES || bytes.byteLength > MAX_NAVIGATION_INDEX_ARTIFACT_BYTES) {
-    fail6(`navigation index artifact must contain ${HEADER_BYTES}-${MAX_NAVIGATION_INDEX_ARTIFACT_BYTES} bytes`);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_BYTES2 || bytes.byteLength > MAX_NAVIGATION_INDEX_ARTIFACT_BYTES) {
+    fail6(`navigation index artifact must contain ${HEADER_BYTES2}-${MAX_NAVIGATION_INDEX_ARTIFACT_BYTES} bytes`);
   }
-  const ownedBytes2 = Uint8Array.from(bytes);
-  if (!hasMagic(ownedBytes2)) fail6("navigation index artifact magic is invalid");
-  const view = new DataView(ownedBytes2.buffer);
-  if (view.getUint16(8, true) !== NAVIGATION_INDEX_ARTIFACT_VERSION || view.getUint16(10, true) !== HEADER_BYTES) fail6("navigation index artifact version is unsupported");
+  const ownedBytes3 = Uint8Array.from(bytes);
+  if (!hasMagic(ownedBytes3)) fail6("navigation index artifact magic is invalid");
+  const view = new DataView(ownedBytes3.buffer);
+  if (view.getUint16(8, true) !== NAVIGATION_INDEX_ARTIFACT_VERSION || view.getUint16(10, true) !== HEADER_BYTES2) fail6("navigation index artifact version is unsupported");
   if (view.getUint32(12, true) !== 0 || view.getUint32(28, true) !== 0 || view.getUint32(88, true) !== 0 || view.getUint32(92, true) !== 0) {
     fail6("navigation index artifact reserved header fields must be zero");
   }
   const header = {
-    ownedBytes: ownedBytes2,
+    ownedBytes: ownedBytes3,
     view,
     entryCount: view.getUint32(16, true),
     keyCount: view.getUint32(20, true),
@@ -3612,11 +4014,11 @@ function readHeader(bytes) {
   if (header.entryCount > MAX_NAVIGATION_INDEX_ENTRIES || header.keyCount > MAX_NAVIGATION_INDEX_SEARCH_KEYS || header.stringCount > header.entryCount * 5 + header.keyCount) {
     fail6("navigation index artifact counts exceed their production budgets");
   }
-  const expectedKeyOffset = checkedSectionEnd(HEADER_BYTES, header.entryCount, ENTRY_BYTES, "navigation entry table");
+  const expectedKeyOffset = checkedSectionEnd(HEADER_BYTES2, header.entryCount, ENTRY_BYTES, "navigation entry table");
   const expectedOrderOffset = checkedSectionEnd(expectedKeyOffset, header.keyCount, KEY_BYTES, "navigation key table");
   const expectedDescriptorOffset = checkedSectionEnd(expectedOrderOffset, header.keyCount, 4, "navigation key order");
   const expectedBlobOffset = checkedSectionEnd(expectedDescriptorOffset, header.stringCount, STRING_DESCRIPTOR_BYTES, "navigation string table");
-  if (header.entryOffset !== HEADER_BYTES || header.keyOffset !== expectedKeyOffset || header.orderOffset !== expectedOrderOffset || header.descriptorOffset !== expectedDescriptorOffset || header.blobOffset !== expectedBlobOffset || header.totalBytes !== ownedBytes2.byteLength) {
+  if (header.entryOffset !== HEADER_BYTES2 || header.keyOffset !== expectedKeyOffset || header.orderOffset !== expectedOrderOffset || header.descriptorOffset !== expectedDescriptorOffset || header.blobOffset !== expectedBlobOffset || header.totalBytes !== ownedBytes3.byteLength) {
     fail6("navigation index artifact section layout is invalid");
   }
   return header;
@@ -3856,17 +4258,1511 @@ function decodeNavigationIndexArtifact(bytes, options = {}) {
   return artifact;
 }
 
+// src/world/biome-ir.mjs
+var BIOME_DEF_SCHEMA = "limina.biome-def/v1";
+var BIOME_PACK_SCHEMA = "limina.biome-pack/v1";
+var BIOME_CATEGORIES = Object.freeze(["terrestrial", "aquatic", "wetland", "geological", "fantasy", "sci-fi"]);
+var BIOME_BINDING_KINDS = Object.freeze(["surface-material", "vegetation", "resource-table", "spawn-table", "ambient-audio"]);
+var BIOME_FULFILLMENT_STATES = Object.freeze(["metadata-only", "partial", "fulfilled"]);
+var LEGACY_BIOME_KINDS = Object.freeze(["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"]);
+var BIOME_LIMITS = Object.freeze({
+  definitions: 64,
+  tags: 16,
+  surfaceMaterials: 16,
+  vegetationRoles: 32,
+  tableRefs: 32,
+  ambientAudioRefs: 16,
+  bindings: 128,
+  legacyAliases: 8,
+  idChars: 64,
+  labelChars: 96,
+  refChars: 160,
+  uriChars: 512
+});
+var ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+var REF = /^[a-z][a-z0-9._/-]*$/;
+var SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
+var HASH4 = /^sha256:[0-9a-f]{64}$/;
+var BiomeIrValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomeIrValidationError";
+  }
+};
+function fail7(message) {
+  throw new BiomeIrValidationError(message);
+}
+function record(value, keys, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail7(`${label} must be a plain object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) fail7(`${label} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail7(`${label} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor2] of Object.entries(descriptors)) {
+    if (!keys.has(key)) fail7(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor2) || descriptor2.enumerable !== true) fail7(`${label}.${key} must be an enumerable data field`);
+  }
+  for (const key of keys) if (!Object.hasOwn(value, key)) fail7(`${label} is missing '${key}'`);
+  return descriptors;
+}
+function dense(value, maximum, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum) {
+    fail7(`${label} must be a standard array with at most ${maximum} entries`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail7(`${label} must be dense and field-free`);
+  }
+  return value;
+}
+function string(value, pattern, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || !pattern.test(value)) fail7(`${label} is invalid`);
+  return value;
+}
+function text(value, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) fail7(`${label} is invalid`);
+  return value;
+}
+function number(value, minimum, maximum, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail7(`${label} must be a canonical number in [${minimum}, ${maximum}]`);
+  return value;
+}
+function integer3(value, minimum, maximum, label) {
+  const parsed = number(value, minimum, maximum, label);
+  if (!Number.isSafeInteger(parsed)) fail7(`${label} must be an integer`);
+  return parsed;
+}
+function sortedUniqueStrings(value, maximum, label) {
+  const source = dense(value, maximum, label);
+  const result = source.map((entry, index) => string(entry, REF, BIOME_LIMITS.refChars, `${label}[${index}]`));
+  for (let index = 1; index < result.length; index++) if (result[index - 1] >= result[index]) fail7(`${label} must be strictly sorted and unique`);
+  return Object.freeze(result);
+}
+function provenance(value, label) {
+  const d = record(value, /* @__PURE__ */ new Set(["sourceUri", "licenseId", "authoredBy"]), label);
+  return Object.freeze({
+    sourceUri: text(d.sourceUri.value, BIOME_LIMITS.uriChars, `${label}.sourceUri`),
+    licenseId: text(d.licenseId.value, BIOME_LIMITS.labelChars, `${label}.licenseId`),
+    authoredBy: text(d.authoredBy.value, BIOME_LIMITS.labelChars, `${label}.authoredBy`)
+  });
+}
+function band(value, minimum, maximum, label) {
+  const d = record(value, /* @__PURE__ */ new Set(["min", "max"]), label);
+  const min = number(d.min.value, minimum, maximum, `${label}.min`);
+  const max = number(d.max.value, minimum, maximum, `${label}.max`);
+  if (max < min) fail7(`${label}.max must be at least min`);
+  return Object.freeze({ min, max });
+}
+function parseDefinition(value, label) {
+  const d = record(value, /* @__PURE__ */ new Set([
+    "schema",
+    "id",
+    "version",
+    "displayName",
+    "taxonomy",
+    "climate",
+    "surfaceMaterials",
+    "vegetationPalette",
+    "resourceTableRefs",
+    "spawnTableRefs",
+    "waterTintSrgb",
+    "ambientAudioRefs",
+    "fulfillment",
+    "provenance"
+  ]), label);
+  if (d.schema.value !== BIOME_DEF_SCHEMA) fail7(`${label}.schema must be '${BIOME_DEF_SCHEMA}'`);
+  const id = string(d.id.value, ID, BIOME_LIMITS.idChars, `${label}.id`);
+  const version = string(d.version.value, SEMVER, 64, `${label}.version`);
+  const taxonomyInput = record(d.taxonomy.value, /* @__PURE__ */ new Set(["category", "tags"]), `${label}.taxonomy`);
+  if (!BIOME_CATEGORIES.includes(taxonomyInput.category.value)) fail7(`${label}.taxonomy.category is unsupported`);
+  const tags = sortedUniqueStrings(taxonomyInput.tags.value, BIOME_LIMITS.tags, `${label}.taxonomy.tags`);
+  const climateInput = record(d.climate.value, /* @__PURE__ */ new Set(["temperatureC", "moisture01"]), `${label}.climate`);
+  const climate = Object.freeze({
+    temperatureC: band(climateInput.temperatureC.value, -100, 100, `${label}.climate.temperatureC`),
+    moisture01: band(climateInput.moisture01.value, 0, 1, `${label}.climate.moisture01`)
+  });
+  const surfaceInput = dense(d.surfaceMaterials.value, BIOME_LIMITS.surfaceMaterials, `${label}.surfaceMaterials`);
+  if (surfaceInput.length < 1) fail7(`${label}.surfaceMaterials must not be empty`);
+  const surfaceSeen = /* @__PURE__ */ new Set();
+  const surfaceMaterials = Object.freeze(surfaceInput.map((entry, index) => {
+    const e = record(entry, /* @__PURE__ */ new Set(["role"]), `${label}.surfaceMaterials[${index}]`);
+    const role = string(e.role.value, REF, BIOME_LIMITS.refChars, `${label}.surfaceMaterials[${index}].role`);
+    if (surfaceSeen.has(role)) fail7(`${label}.surfaceMaterials duplicates role '${role}'`);
+    surfaceSeen.add(role);
+    return Object.freeze({ role });
+  }));
+  const vegetationInput = dense(d.vegetationPalette.value, BIOME_LIMITS.vegetationRoles, `${label}.vegetationPalette`);
+  const vegetationPalette = Object.freeze(vegetationInput.map((entry, index) => {
+    const e = record(entry, /* @__PURE__ */ new Set(["role", "weight"]), `${label}.vegetationPalette[${index}]`);
+    return Object.freeze({
+      role: string(e.role.value, REF, BIOME_LIMITS.refChars, `${label}.vegetationPalette[${index}].role`),
+      weight: number(e.weight.value, Number.MIN_VALUE, 1e6, `${label}.vegetationPalette[${index}].weight`)
+    });
+  }));
+  for (let index = 1; index < vegetationPalette.length; index++) if (vegetationPalette[index - 1].role >= vegetationPalette[index].role) fail7(`${label}.vegetationPalette must be strictly role-sorted and unique`);
+  const resourceTableRefs = sortedUniqueStrings(d.resourceTableRefs.value, BIOME_LIMITS.tableRefs, `${label}.resourceTableRefs`);
+  const spawnTableRefs = sortedUniqueStrings(d.spawnTableRefs.value, BIOME_LIMITS.tableRefs, `${label}.spawnTableRefs`);
+  const ambientAudioRefs = sortedUniqueStrings(d.ambientAudioRefs.value, BIOME_LIMITS.ambientAudioRefs, `${label}.ambientAudioRefs`);
+  const tintInput = dense(d.waterTintSrgb.value, 3, `${label}.waterTintSrgb`);
+  if (tintInput.length !== 3) fail7(`${label}.waterTintSrgb must contain exactly 3 channels`);
+  const waterTintSrgb = Object.freeze(tintInput.map((entry, index) => integer3(entry, 0, 255, `${label}.waterTintSrgb[${index}]`)));
+  const fulfillmentInput = record(d.fulfillment.value, /* @__PURE__ */ new Set(["status", "bindings"]), `${label}.fulfillment`);
+  if (!BIOME_FULFILLMENT_STATES.includes(fulfillmentInput.status.value)) fail7(`${label}.fulfillment.status is unsupported`);
+  const declared = /* @__PURE__ */ new Set([
+    ...surfaceMaterials.map((entry) => `surface-material:${entry.role}`),
+    ...vegetationPalette.map((entry) => `vegetation:${entry.role}`),
+    ...resourceTableRefs.map((ref) => `resource-table:${ref}`),
+    ...spawnTableRefs.map((ref) => `spawn-table:${ref}`),
+    ...ambientAudioRefs.map((ref) => `ambient-audio:${ref}`)
+  ]);
+  const bindingsInput = dense(fulfillmentInput.bindings.value, BIOME_LIMITS.bindings, `${label}.fulfillment.bindings`);
+  const bindingKeys = /* @__PURE__ */ new Set();
+  const bindings = Object.freeze(bindingsInput.map((entry, index) => {
+    const e = record(entry, /* @__PURE__ */ new Set(["kind", "ref", "assetId", "contentHash", "licenseId", "sourceUri"]), `${label}.fulfillment.bindings[${index}]`);
+    if (!BIOME_BINDING_KINDS.includes(e.kind.value)) fail7(`${label}.fulfillment.bindings[${index}].kind is unsupported`);
+    const ref = string(e.ref.value, REF, BIOME_LIMITS.refChars, `${label}.fulfillment.bindings[${index}].ref`);
+    const key = `${e.kind.value}:${ref}`;
+    if (!declared.has(key)) fail7(`${label}.fulfillment binding '${key}' is not declared by the definition`);
+    if (bindingKeys.has(key)) fail7(`${label}.fulfillment duplicates binding '${key}'`);
+    bindingKeys.add(key);
+    return Object.freeze({
+      kind: e.kind.value,
+      ref,
+      assetId: string(e.assetId.value, REF, BIOME_LIMITS.refChars, `${label}.fulfillment.bindings[${index}].assetId`),
+      contentHash: string(e.contentHash.value, HASH4, 71, `${label}.fulfillment.bindings[${index}].contentHash`),
+      licenseId: text(e.licenseId.value, BIOME_LIMITS.labelChars, `${label}.fulfillment.bindings[${index}].licenseId`),
+      sourceUri: text(e.sourceUri.value, BIOME_LIMITS.uriChars, `${label}.fulfillment.bindings[${index}].sourceUri`)
+    });
+  }));
+  for (let index = 1; index < bindings.length; index++) {
+    const prior = `${bindings[index - 1].kind}:${bindings[index - 1].ref}`, current = `${bindings[index].kind}:${bindings[index].ref}`;
+    if (prior >= current) fail7(`${label}.fulfillment.bindings must be strictly kind/ref-sorted`);
+  }
+  const expectedStatus = bindings.length === 0 ? "metadata-only" : bindings.length === declared.size ? "fulfilled" : "partial";
+  if (fulfillmentInput.status.value !== expectedStatus) fail7(`${label}.fulfillment.status must be '${expectedStatus}' for its declared bindings`);
+  return Object.freeze({
+    schema: BIOME_DEF_SCHEMA,
+    id,
+    version,
+    displayName: text(d.displayName.value, BIOME_LIMITS.labelChars, `${label}.displayName`),
+    taxonomy: Object.freeze({ category: taxonomyInput.category.value, tags }),
+    climate,
+    surfaceMaterials,
+    vegetationPalette,
+    resourceTableRefs,
+    spawnTableRefs,
+    waterTintSrgb,
+    ambientAudioRefs,
+    fulfillment: Object.freeze({ status: expectedStatus, bindings }),
+    provenance: provenance(d.provenance.value, `${label}.provenance`)
+  });
+}
+function parseBiomePack(value) {
+  const d = record(value, /* @__PURE__ */ new Set(["schema", "id", "version", "definitions", "legacyAliases", "provenance"]), "biome pack");
+  if (d.schema.value !== BIOME_PACK_SCHEMA) fail7(`biome pack.schema must be '${BIOME_PACK_SCHEMA}'`);
+  const definitionsInput = dense(d.definitions.value, BIOME_LIMITS.definitions, "biome pack.definitions");
+  if (definitionsInput.length < 1) fail7("biome pack.definitions must not be empty");
+  const definitions2 = Object.freeze(definitionsInput.map((entry, index) => parseDefinition(entry, `biome pack.definitions[${index}]`)));
+  for (let index = 1; index < definitions2.length; index++) if (definitions2[index - 1].id >= definitions2[index].id) fail7("biome pack.definitions must be strictly id-sorted and unique");
+  const ids = new Set(definitions2.map((definition2) => definition2.id));
+  const aliasesInput = dense(d.legacyAliases.value, BIOME_LIMITS.legacyAliases, "biome pack.legacyAliases");
+  const legacyAliases = Object.freeze(aliasesInput.map((entry, index) => {
+    const e = record(entry, /* @__PURE__ */ new Set(["legacyKind", "biomeId"]), `biome pack.legacyAliases[${index}]`);
+    if (!LEGACY_BIOME_KINDS.includes(e.legacyKind.value)) fail7(`biome pack.legacyAliases[${index}].legacyKind is unsupported`);
+    const biomeId = string(e.biomeId.value, ID, BIOME_LIMITS.idChars, `biome pack.legacyAliases[${index}].biomeId`);
+    if (!ids.has(biomeId)) fail7(`biome pack legacy alias targets unknown biome '${biomeId}'`);
+    return Object.freeze({ legacyKind: e.legacyKind.value, biomeId });
+  }));
+  for (let index = 1; index < legacyAliases.length; index++) if (legacyAliases[index - 1].legacyKind >= legacyAliases[index].legacyKind) fail7("biome pack.legacyAliases must be strictly legacyKind-sorted and unique");
+  return Object.freeze({
+    schema: BIOME_PACK_SCHEMA,
+    id: string(d.id.value, ID, BIOME_LIMITS.idChars, "biome pack.id"),
+    version: string(d.version.value, SEMVER, 64, "biome pack.version"),
+    definitions: definitions2,
+    legacyAliases,
+    provenance: provenance(d.provenance.value, "biome pack.provenance")
+  });
+}
+function stableStringifyBiomePack(value) {
+  return JSON.stringify(parseBiomePack(value));
+}
+function biomePackContentHash(value) {
+  return `sha256:${sha256(stableStringifyBiomePack(value))}`;
+}
+
+// src/world/biome-field.mjs
+var BIOME_FIELD_SCHEMA = "limina.biome-field/v1";
+var BIOME_FIELD_VERSION = 1;
+var BIOME_FIELD_NONE = 65535;
+var BIOME_FIELD_WEIGHT_TOTAL = 65535;
+var BIOME_FIELD_LIMITS = Object.freeze({
+  rows: 1025,
+  cols: 1025,
+  cells: 1050625,
+  topN: 8,
+  influences: 128,
+  polygonPoints: 256,
+  totalPolygonPoints: 4096,
+  modifiers: 256,
+  workUnits: 5e7,
+  outputBytes: 64 * 1024 * 1024,
+  idChars: 64
+});
+
+// src/world/compiler/biome-field-artifact.mjs
+var BIOME_FIELD_ARTIFACT_SCHEMA = "limina.biome-field-artifact/v1";
+var BIOME_FIELD_ARTIFACT_VERSION = 1;
+var BIOME_FIELD_ARTIFACT_TYPE = "biome-field/v1";
+var BIOME_FIELD_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.biome-field-v1";
+var BIOME_FIELD_ARTIFACT_HEADER_BYTES = 112;
+var BIOME_FIELD_ARTIFACT_MAX_BYTES = BIOME_FIELD_LIMITS.outputBytes + 64 * 1024;
+var MAGIC7 = Object.freeze([76, 77, 66, 73, 79, 77, 69, 0]);
+var ID2 = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+var SEMVER2 = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
+var FIELD_KEYS = /* @__PURE__ */ new Set(["schema", "version", "pack", "grid", "topN", "biomeIds", "indices", "weights", "diagnostics"]);
+var PACK_KEYS = /* @__PURE__ */ new Set(["id", "version"]);
+var GRID_KEYS2 = /* @__PURE__ */ new Set(["origin", "rows", "cols", "cellSizeM"]);
+var DIAGNOSTIC_KEYS = /* @__PURE__ */ new Set(["cells", "workUnits", "outputBytes", "influences", "modifiers"]);
+var CONTROL_KEYS4 = /* @__PURE__ */ new Set(["shouldCancel"]);
+var encoder2 = new TextEncoder();
+var decoder2 = new TextDecoder("utf-8", { fatal: true });
+var BiomeFieldArtifactValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomeFieldArtifactValidationError";
+    this.code = "biome_field_artifact_invalid";
+  }
+};
+var BiomeFieldArtifactCancelledError = class extends Error {
+  constructor() {
+    super("biome field artifact operation cancelled");
+    this.name = "BiomeFieldArtifactCancelledError";
+    this.code = "biome_field_artifact_cancelled";
+  }
+};
+function fail8(message) {
+  throw new BiomeFieldArtifactValidationError(message);
+}
+function exactRecord5(value, keys, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail8(`${label} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail8(`${label} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor2] of Object.entries(descriptors)) {
+    if (!keys.has(key)) fail8(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor2) || descriptor2.enumerable !== true) fail8(`${label}.${key} must be an enumerable data field`);
+  }
+  for (const key of keys) if (!Object.hasOwn(value, key)) fail8(`${label} is missing '${key}'`);
+  return descriptors;
+}
+function parseControl4(value) {
+  if (value === void 0) return null;
+  const d = exactRecord5(value, CONTROL_KEYS4, "biome field artifact control");
+  if (typeof d.shouldCancel.value !== "function") fail8("biome field artifact control.shouldCancel must be a function");
+  return d.shouldCancel.value;
+}
+function createMeter4(shouldCancel, limit) {
+  let work = 0;
+  const check = () => {
+    if (shouldCancel?.()) throw new BiomeFieldArtifactCancelledError();
+  };
+  return Object.freeze({
+    start: check,
+    work() {
+      if (++work > limit) fail8(`biome field artifact exceeded bounded validation work ${limit}`);
+      if ((work & 1023) === 0) check();
+    },
+    finish: check
+  });
+}
+function canonicalNumber3(value, minimum, maximum, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail8(`${label} must be a canonical number in [${minimum}, ${maximum}]`);
+  return value;
+}
+function integer4(value, minimum, maximum, label) {
+  const result = canonicalNumber3(value, minimum, maximum, label);
+  if (!Number.isSafeInteger(result)) fail8(`${label} must be an integer`);
+  return result;
+}
+function string2(value, pattern, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || !pattern.test(value)) fail8(`${label} is invalid`);
+  return value;
+}
+function denseStrings(value, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < 2 || value.length > 64 || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail8(`${label} must be a dense standard array with 2-64 entries`);
+  }
+  const result = value.map((entry, index) => string2(entry, ID2, 64, `${label}[${index}]`));
+  for (let index = 1; index < result.length; index++) if (result[index - 1] >= result[index]) fail8(`${label} must be strictly sorted and unique`);
+  return Object.freeze(result);
+}
+function originTuple2(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 2 || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== 3) fail8("biome field grid.origin must be a dense tuple");
+  return Object.freeze([
+    canonicalNumber3(value[0], -1e7, 1e7, "biome field grid.origin[0]"),
+    canonicalNumber3(value[1], -1e7, 1e7, "biome field grid.origin[1]")
+  ]);
+}
+function isShared2(buffer) {
+  return Object.prototype.toString.call(buffer) === "[object SharedArrayBuffer]";
+}
+function ownedUint16(value, length, label) {
+  if (!ArrayBuffer.isView(value) || Object.getPrototypeOf(value) !== Uint16Array.prototype || !(value.buffer instanceof ArrayBuffer) || isShared2(value.buffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength || value.length !== length) {
+    fail8(`${label} must own a complete non-shared Uint16Array of length ${length}`);
+  }
+  return value;
+}
+function parseField(input, meter) {
+  const d = exactRecord5(input, FIELD_KEYS, "biome field");
+  if (d.schema.value !== BIOME_FIELD_SCHEMA || d.version.value !== BIOME_FIELD_VERSION) fail8("biome field schema/version is unsupported");
+  const packInput = exactRecord5(d.pack.value, PACK_KEYS, "biome field pack");
+  const pack = Object.freeze({
+    id: string2(packInput.id.value, ID2, 64, "biome field pack.id"),
+    version: string2(packInput.version.value, SEMVER2, 64, "biome field pack.version")
+  });
+  const gridInput = exactRecord5(d.grid.value, GRID_KEYS2, "biome field grid");
+  const rows = integer4(gridInput.rows.value, 1, BIOME_FIELD_LIMITS.rows, "biome field grid.rows");
+  const cols = integer4(gridInput.cols.value, 1, BIOME_FIELD_LIMITS.cols, "biome field grid.cols");
+  const cells = rows * cols;
+  if (!Number.isSafeInteger(cells) || cells > BIOME_FIELD_LIMITS.cells) fail8("biome field cell count exceeds the supported limit");
+  const grid = Object.freeze({
+    origin: originTuple2(gridInput.origin.value),
+    rows,
+    cols,
+    cellSizeM: canonicalNumber3(gridInput.cellSizeM.value, 0.01, 1e6, "biome field grid.cellSizeM")
+  });
+  const biomeIds = denseStrings(d.biomeIds.value, "biome field biomeIds");
+  const topN = integer4(d.topN.value, 2, Math.min(BIOME_FIELD_LIMITS.topN, biomeIds.length), "biome field topN");
+  const length = cells * topN;
+  const indices = ownedUint16(d.indices.value, length, "biome field indices");
+  const weights = ownedUint16(d.weights.value, length, "biome field weights");
+  const diagnosticInput = exactRecord5(d.diagnostics.value, DIAGNOSTIC_KEYS, "biome field diagnostics");
+  const outputBytes = cells * topN * 4;
+  const diagnostics = Object.freeze({
+    cells: integer4(diagnosticInput.cells.value, cells, cells, "biome field diagnostics.cells"),
+    workUnits: integer4(diagnosticInput.workUnits.value, 0, BIOME_FIELD_LIMITS.workUnits, "biome field diagnostics.workUnits"),
+    outputBytes: integer4(diagnosticInput.outputBytes.value, outputBytes, outputBytes, "biome field diagnostics.outputBytes"),
+    influences: integer4(diagnosticInput.influences.value, 0, BIOME_FIELD_LIMITS.influences, "biome field diagnostics.influences"),
+    modifiers: integer4(diagnosticInput.modifiers.value, 0, BIOME_FIELD_LIMITS.modifiers, "biome field diagnostics.modifiers")
+  });
+  for (let cell = 0; cell < cells; cell++) {
+    let sum = 0;
+    let priorWeight = Infinity;
+    let empty = false;
+    const seen = /* @__PURE__ */ new Set();
+    for (let rank = 0; rank < topN; rank++) {
+      meter.work();
+      const offset = cell * topN + rank;
+      const index = indices[offset], weight = weights[offset];
+      if (index === BIOME_FIELD_NONE) {
+        if (weight !== 0) fail8(`biome field cell ${cell} empty rank has nonzero weight`);
+        empty = true;
+        continue;
+      }
+      if (empty || index >= biomeIds.length || weight === 0 || weight > priorWeight || seen.has(index)) fail8(`biome field cell ${cell} rank ${rank} is non-canonical`);
+      seen.add(index);
+      priorWeight = weight;
+      sum += weight;
+    }
+    if (sum !== BIOME_FIELD_WEIGHT_TOTAL) fail8(`biome field cell ${cell} weights do not normalize exactly`);
+  }
+  return Object.freeze({ schema: BIOME_FIELD_SCHEMA, version: BIOME_FIELD_VERSION, pack, grid, topN, biomeIds, indices, weights, diagnostics });
+}
+function align42(value) {
+  return value + 3 & ~3;
+}
+function artifactBytes2(input) {
+  if (!ArrayBuffer.isView(input) || Object.getPrototypeOf(input) !== Uint8Array.prototype || !(input.buffer instanceof ArrayBuffer) || isShared2(input.buffer) || input.byteOffset !== 0 || input.byteLength !== input.buffer.byteLength) fail8("biome field artifact bytes must be an owned Uint8Array over a non-shared ArrayBuffer");
+  if (input.byteLength < BIOME_FIELD_ARTIFACT_HEADER_BYTES || input.byteLength > BIOME_FIELD_ARTIFACT_MAX_BYTES) fail8("biome field artifact byte length is outside the supported range");
+  return input;
+}
+function decodeString2(bytes, start, length, label) {
+  try {
+    const value = decoder2.decode(bytes.subarray(start, start + length));
+    if (encoder2.encode(value).length !== length) fail8(`${label} is not canonical UTF-8`);
+    return value;
+  } catch (error) {
+    if (error instanceof BiomeFieldArtifactValidationError) throw error;
+    fail8(`${label} is invalid UTF-8`);
+  }
+}
+function decodeBiomeFieldArtifact(input, controlInput) {
+  const bytes = artifactBytes2(input);
+  const meter = createMeter4(parseControl4(controlInput), BIOME_FIELD_LIMITS.cells * BIOME_FIELD_LIMITS.topN * 4 + 8192);
+  meter.start();
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < MAGIC7.length; index++) if (view.getUint8(index) !== MAGIC7[index]) fail8("biome field artifact magic mismatch");
+  if (view.getUint16(8, true) !== BIOME_FIELD_ARTIFACT_VERSION) fail8("biome field artifact version is unsupported");
+  if (view.getUint16(10, true) !== BIOME_FIELD_ARTIFACT_HEADER_BYTES) fail8("biome field artifact header length mismatch");
+  if (view.getUint32(12, true) !== bytes.byteLength) fail8("biome field artifact byte length is non-canonical");
+  for (let offset = 84; offset < BIOME_FIELD_ARTIFACT_HEADER_BYTES; offset++) if (bytes[offset] !== 0) fail8("biome field artifact reserved header bytes must be zero");
+  const rows = view.getUint32(16, true), cols = view.getUint32(20, true), cells = rows * cols;
+  if (!Number.isSafeInteger(cells) || cells !== view.getUint32(24, true) || cells < 1 || cells > BIOME_FIELD_LIMITS.cells) fail8("biome field artifact cell count is invalid");
+  const topN = view.getUint16(28, true), biomeCount = view.getUint16(30, true);
+  if (biomeCount < 2 || biomeCount > 64 || topN < 2 || topN > Math.min(BIOME_FIELD_LIMITS.topN, biomeCount)) fail8("biome field artifact rank/biome count is invalid");
+  const packIdLength = view.getUint16(56, true), packVersionLength = view.getUint16(58, true), stringTableBytes = view.getUint32(60, true);
+  let cursor = BIOME_FIELD_ARTIFACT_HEADER_BYTES;
+  if (cursor + stringTableBytes > bytes.byteLength || stringTableBytes < packIdLength + packVersionLength + biomeCount * 3) fail8("biome field artifact string table is invalid");
+  const packId = decodeString2(bytes, cursor, packIdLength, "biome field pack id");
+  cursor += packIdLength;
+  const packVersion = decodeString2(bytes, cursor, packVersionLength, "biome field pack version");
+  cursor += packVersionLength;
+  const biomeIds = [];
+  for (let index = 0; index < biomeCount; index++) {
+    if (cursor + 2 > BIOME_FIELD_ARTIFACT_HEADER_BYTES + stringTableBytes) fail8("biome field artifact biome string descriptor is truncated");
+    const length = view.getUint16(cursor, true);
+    cursor += 2;
+    if (length < 1 || cursor + length > BIOME_FIELD_ARTIFACT_HEADER_BYTES + stringTableBytes) fail8("biome field artifact biome string is truncated");
+    biomeIds.push(decodeString2(bytes, cursor, length, `biome field id ${index}`));
+    cursor += length;
+  }
+  if (cursor !== BIOME_FIELD_ARTIFACT_HEADER_BYTES + stringTableBytes) fail8("biome field artifact string table has trailing bytes");
+  const shell = {
+    indices: { byteLength: cells * topN * 2 },
+    weights: { byteLength: cells * topN * 2 }
+  };
+  const expectedIndices = align42(BIOME_FIELD_ARTIFACT_HEADER_BYTES + stringTableBytes);
+  const expectedWeights = expectedIndices + shell.indices.byteLength;
+  const expectedLength = expectedWeights + shell.weights.byteLength;
+  if (view.getUint32(64, true) !== expectedIndices || view.getUint32(68, true) !== expectedWeights || bytes.byteLength !== expectedLength) fail8("biome field artifact channel layout is non-canonical");
+  for (let offset = BIOME_FIELD_ARTIFACT_HEADER_BYTES + stringTableBytes; offset < expectedIndices; offset++) if (bytes[offset] !== 0) fail8("biome field artifact alignment padding must be zero");
+  const indices = new Uint16Array(cells * topN);
+  const weights = new Uint16Array(cells * topN);
+  for (let index = 0; index < indices.length; index++) {
+    meter.work();
+    indices[index] = view.getUint16(expectedIndices + index * 2, true);
+  }
+  for (let index = 0; index < weights.length; index++) {
+    meter.work();
+    weights[index] = view.getUint16(expectedWeights + index * 2, true);
+  }
+  const field = {
+    schema: BIOME_FIELD_SCHEMA,
+    version: BIOME_FIELD_VERSION,
+    pack: { id: packId, version: packVersion },
+    grid: { origin: [view.getFloat64(32, true), view.getFloat64(40, true)], rows, cols, cellSizeM: view.getFloat64(48, true) },
+    topN,
+    biomeIds,
+    indices,
+    weights,
+    diagnostics: {
+      cells,
+      workUnits: view.getUint32(72, true),
+      outputBytes: view.getUint32(76, true),
+      influences: view.getUint16(80, true),
+      modifiers: view.getUint16(82, true)
+    }
+  };
+  const parsed = parseField(field, meter);
+  meter.finish();
+  return Object.freeze({
+    field: parsed,
+    metadata: Object.freeze({
+      schema: BIOME_FIELD_ARTIFACT_SCHEMA,
+      artifactType: BIOME_FIELD_ARTIFACT_TYPE,
+      mediaType: BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
+      version: BIOME_FIELD_ARTIFACT_VERSION,
+      byteLength: bytes.byteLength,
+      contentHash: `sha256:${sha256(bytes)}`,
+      storage: "owned-transferable-channel-copies"
+    })
+  });
+}
+
+// src/world/biome-population-asset.mjs
+var BIOME_POPULATION_ASSET_BACKENDS = Object.freeze([
+  "continuous-grass-field",
+  "grass-field",
+  "tree-population",
+  "instanced-asset"
+]);
+var BIOME_POPULATION_CLIMATES = Object.freeze(["summer", "autumn", "winter", "dry"]);
+var BIOME_POPULATION_TREE_CAPS = Object.freeze({
+  species: 12,
+  active: 24576,
+  activeAndPending: 30720,
+  hysteresisMaximum: 0.49
+});
+var BIOME_POPULATION_ASSET_LIMITS = Object.freeze({
+  idChars: 64,
+  refChars: 160,
+  versionChars: 64,
+  labelChars: 96,
+  uriChars: 512,
+  densityScale: 100,
+  bladeScale: 100,
+  distance: 1e6
+});
+
+// src/world/compiler/biome-population-artifact.mjs
+var BIOME_POPULATION_ARTIFACT_SCHEMA = "limina.biome-population-artifact/v1";
+var BIOME_POPULATION_ARTIFACT_TYPE = "biome-population-plan/v1";
+var BIOME_POPULATION_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.biome-population-plan-v1";
+var BIOME_POPULATION_ARTIFACT_VERSION = 1;
+var BIOME_POPULATION_ARTIFACT_HEADER_BYTES = 160;
+var BIOME_POPULATION_ARTIFACT_PLACEMENT_BYTES = 56;
+var MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS = 24576;
+var MAX_BIOME_POPULATION_ARTIFACT_BYTES = 12 * 1024 * 1024;
+var MAGIC8 = Object.freeze([76, 77, 80, 79, 80, 85, 76, 0]);
+var HASH5 = /^sha256:[0-9a-f]{64}$/;
+var REF2 = /^[a-z][a-z0-9._/-]*$/;
+var ROOT_KEYS2 = /* @__PURE__ */ new Set(["schema", "coord", "identity", "placements"]);
+var COORD_KEYS = /* @__PURE__ */ new Set(["tx", "tz", "lod"]);
+var IDENTITY_KEYS = /* @__PURE__ */ new Set(["fieldContentHash", "runtimePackContentHash"]);
+var PLACEMENT_KEYS2 = /* @__PURE__ */ new Set(["role", "assetId", "contentHash", "x", "y", "z", "yaw", "scale", "pageX", "pageZ"]);
+var CONTROL_KEYS5 = /* @__PURE__ */ new Set(["shouldCancel"]);
+var encoder3 = new TextEncoder();
+var decoder3 = new TextDecoder("utf-8", { fatal: true });
+var MAX_COORD = 1e6;
+var MAX_WORLD_METRES = 1e7;
+var MAX_SCALE = 100;
+var BiomePopulationArtifactValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomePopulationArtifactValidationError";
+    this.code = "biome_population_artifact_invalid";
+  }
+};
+var BiomePopulationArtifactCancelledError = class extends Error {
+  constructor() {
+    super("biome population artifact operation cancelled");
+    this.name = "BiomePopulationArtifactCancelledError";
+    this.code = "biome_population_artifact_cancelled";
+  }
+};
+function fail9(message) {
+  throw new BiomePopulationArtifactValidationError(message);
+}
+function isShared3(buffer) {
+  return Object.prototype.toString.call(buffer) === "[object SharedArrayBuffer]";
+}
+function align82(value) {
+  return value + 7 & ~7;
+}
+function exactRecord6(value, keys, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    fail9(`${label} must be a plain object`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail9(`${label} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor2] of Object.entries(descriptors)) {
+    if (!keys.has(key)) fail9(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor2) || descriptor2.enumerable !== true) fail9(`${label}.${key} must be an enumerable data field`);
+  }
+  for (const key of keys) if (!Object.hasOwn(value, key)) fail9(`${label} is missing '${key}'`);
+  return descriptors;
+}
+function denseArray2(value, maximum, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail9(`${label} must be a dense standard array with at most ${maximum} entries`);
+  }
+  return value;
+}
+function parseControl5(value) {
+  if (value === void 0) return null;
+  const d = exactRecord6(value, CONTROL_KEYS5, "biome population artifact control");
+  if (typeof d.shouldCancel.value !== "function") fail9("biome population artifact control.shouldCancel must be a function");
+  return d.shouldCancel.value;
+}
+function createMeter5(shouldCancel) {
+  let work = 0;
+  const check = () => {
+    if (shouldCancel?.() === true) throw new BiomePopulationArtifactCancelledError();
+  };
+  return Object.freeze({
+    start: check,
+    work() {
+      work++;
+      if (work > MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS * 8 + 65536) fail9("biome population artifact validation work exceeded its bound");
+      if ((work & 1023) === 0) check();
+    },
+    finish: check
+  });
+}
+function canonicalNumber4(value, minimum, maximum, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) {
+    fail9(`${label} must be a canonical number in [${minimum}, ${maximum}]`);
+  }
+  return value;
+}
+function integer5(value, minimum, maximum, label) {
+  const result = canonicalNumber4(value, minimum, maximum, label);
+  if (!Number.isSafeInteger(result)) fail9(`${label} must be an integer`);
+  return result;
+}
+function reference(value, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > BIOME_POPULATION_ASSET_LIMITS.refChars || !REF2.test(value)) {
+    fail9(`${label} is invalid`);
+  }
+  const bytes = encoder3.encode(value);
+  if (bytes.length > BIOME_POPULATION_ASSET_LIMITS.refChars) fail9(`${label} UTF-8 encoding is too long`);
+  return Object.freeze({ value, bytes });
+}
+function contentHash(value, label) {
+  if (typeof value !== "string" || !HASH5.test(value)) fail9(`${label} must be a canonical content hash`);
+  return value;
+}
+function readHex(bytes, offset) {
+  let result = "";
+  for (let index = 0; index < 32; index++) result += bytes[offset + index].toString(16).padStart(2, "0");
+  return result;
+}
+function descriptorKey2(role, assetId2, hash2) {
+  return `${role}\0${assetId2}\0${hash2}`;
+}
+function parsePlan(input, meter) {
+  const root = exactRecord6(input, ROOT_KEYS2, "biome population artifact plan");
+  if (root.schema.value !== BIOME_POPULATION_ARTIFACT_SCHEMA) fail9("biome population artifact plan schema is unsupported");
+  const coordInput = exactRecord6(root.coord.value, COORD_KEYS, "biome population artifact coord");
+  const coord = Object.freeze({
+    tx: integer5(coordInput.tx.value, -MAX_COORD, MAX_COORD, "biome population artifact coord.tx"),
+    tz: integer5(coordInput.tz.value, -MAX_COORD, MAX_COORD, "biome population artifact coord.tz"),
+    lod: integer5(coordInput.lod.value, 0, 16, "biome population artifact coord.lod")
+  });
+  const identityInput = exactRecord6(root.identity.value, IDENTITY_KEYS, "biome population artifact identity");
+  const identity = Object.freeze({
+    fieldContentHash: contentHash(identityInput.fieldContentHash.value, "biome population artifact identity.fieldContentHash"),
+    runtimePackContentHash: contentHash(identityInput.runtimePackContentHash.value, "biome population artifact identity.runtimePackContentHash")
+  });
+  const source = denseArray2(root.placements.value, MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS, "biome population artifact placements");
+  const placements = new Array(source.length);
+  for (let index = 0; index < source.length; index++) {
+    meter.work();
+    const d = exactRecord6(source[index], PLACEMENT_KEYS2, `biome population artifact placements[${index}]`);
+    const role = reference(d.role.value, `biome population artifact placements[${index}].role`).value;
+    const assetId2 = reference(d.assetId.value, `biome population artifact placements[${index}].assetId`).value;
+    const hash2 = contentHash(d.contentHash.value, `biome population artifact placements[${index}].contentHash`);
+    const scale = canonicalNumber4(d.scale.value, Number.MIN_VALUE, MAX_SCALE, `biome population artifact placements[${index}].scale`);
+    if (scale === 0) fail9(`biome population artifact placements[${index}].scale must be positive`);
+    placements[index] = Object.freeze({
+      role,
+      assetId: assetId2,
+      contentHash: hash2,
+      x: canonicalNumber4(d.x.value, -MAX_WORLD_METRES, MAX_WORLD_METRES, `biome population artifact placements[${index}].x`),
+      y: canonicalNumber4(d.y.value, -MAX_WORLD_METRES, MAX_WORLD_METRES, `biome population artifact placements[${index}].y`),
+      z: canonicalNumber4(d.z.value, -MAX_WORLD_METRES, MAX_WORLD_METRES, `biome population artifact placements[${index}].z`),
+      yaw: canonicalNumber4(d.yaw.value, -Math.PI * 2, Math.PI * 2, `biome population artifact placements[${index}].yaw`),
+      scale,
+      pageX: integer5(d.pageX.value, -MAX_COORD, MAX_COORD, `biome population artifact placements[${index}].pageX`),
+      pageZ: integer5(d.pageZ.value, -MAX_COORD, MAX_COORD, `biome population artifact placements[${index}].pageZ`)
+    });
+  }
+  return Object.freeze({ schema: BIOME_POPULATION_ARTIFACT_SCHEMA, coord, identity, placements: Object.freeze(placements) });
+}
+function integrityBytes(bytes) {
+  const material = new Uint8Array(bytes);
+  material.fill(0, 112, 144);
+  return material;
+}
+function artifactBytes3(input) {
+  if (!ArrayBuffer.isView(input) || Object.getPrototypeOf(input) !== Uint8Array.prototype || !(input.buffer instanceof ArrayBuffer) || isShared3(input.buffer) || input.byteOffset !== 0 || input.byteLength !== input.buffer.byteLength) {
+    fail9("biome population artifact bytes must be an owned Uint8Array over a non-shared ArrayBuffer");
+  }
+  if (input.length < BIOME_POPULATION_ARTIFACT_HEADER_BYTES || input.length > MAX_BIOME_POPULATION_ARTIFACT_BYTES) {
+    fail9("biome population artifact byte length is outside the supported range");
+  }
+  return input;
+}
+function decodeString3(bytes, start, length, label) {
+  try {
+    const value = decoder3.decode(bytes.subarray(start, start + length));
+    if (encoder3.encode(value).length !== length) fail9(`${label} is not canonical UTF-8`);
+    return value;
+  } catch (error) {
+    if (error instanceof BiomePopulationArtifactValidationError) throw error;
+    fail9(`${label} is invalid UTF-8`);
+  }
+}
+function decodeBiomePopulationArtifact(input, controlInput) {
+  const bytes = artifactBytes3(input);
+  const meter = createMeter5(parseControl5(controlInput));
+  meter.start();
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < MAGIC8.length; index++) if (bytes[index] !== MAGIC8[index]) fail9("biome population artifact magic mismatch");
+  if (view.getUint16(8, true) !== BIOME_POPULATION_ARTIFACT_VERSION) fail9("biome population artifact version is unsupported");
+  if (view.getUint16(10, true) !== BIOME_POPULATION_ARTIFACT_HEADER_BYTES) fail9("biome population artifact header length mismatch");
+  if (view.getUint32(12, true) !== bytes.length) fail9("biome population artifact byte length is non-canonical");
+  if (view.getUint16(26, true) !== 0) fail9("biome population artifact reserved header bytes must be zero");
+  for (let offset = 144; offset < BIOME_POPULATION_ARTIFACT_HEADER_BYTES; offset++) if (bytes[offset] !== 0) fail9("biome population artifact reserved header bytes must be zero");
+  const expectedIntegrity = readHex(bytes, 112), actualIntegrity = sha256(integrityBytes(bytes));
+  meter.finish();
+  if (expectedIntegrity !== actualIntegrity) fail9("biome population artifact integrity hash mismatch");
+  const placementCount = view.getUint32(28, true), descriptorCount = view.getUint32(32, true);
+  if (placementCount > MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS || descriptorCount > placementCount) fail9("biome population artifact count is out of bounds");
+  const descriptorOffset = view.getUint32(36, true), descriptorBytes = view.getUint32(40, true), placementOffset = view.getUint32(44, true);
+  const expectedPlacementOffset = align82(BIOME_POPULATION_ARTIFACT_HEADER_BYTES + descriptorBytes);
+  const expectedLength = expectedPlacementOffset + placementCount * BIOME_POPULATION_ARTIFACT_PLACEMENT_BYTES;
+  if (descriptorOffset !== BIOME_POPULATION_ARTIFACT_HEADER_BYTES || placementOffset !== expectedPlacementOffset || expectedLength !== bytes.length) {
+    fail9("biome population artifact table layout is non-canonical");
+  }
+  for (let offset = descriptorOffset + descriptorBytes; offset < placementOffset; offset++) if (bytes[offset] !== 0) fail9("biome population artifact alignment padding must be zero");
+  const descriptors = new Array(descriptorCount);
+  let cursor = descriptorOffset, priorKey = null;
+  for (let index = 0; index < descriptorCount; index++) {
+    meter.work();
+    if (cursor + 36 > descriptorOffset + descriptorBytes) fail9("biome population artifact descriptor is truncated");
+    const roleLength = view.getUint16(cursor, true), assetIdLength = view.getUint16(cursor + 2, true);
+    if (roleLength < 1 || assetIdLength < 1 || roleLength > BIOME_POPULATION_ASSET_LIMITS.refChars || assetIdLength > BIOME_POPULATION_ASSET_LIMITS.refChars || cursor + 36 + roleLength + assetIdLength > descriptorOffset + descriptorBytes) {
+      fail9("biome population artifact descriptor string length is invalid");
+    }
+    const hash2 = `sha256:${readHex(bytes, cursor + 4)}`;
+    cursor += 36;
+    const role = decodeString3(bytes, cursor, roleLength, `biome population artifact descriptor ${index} role`);
+    cursor += roleLength;
+    const assetId2 = decodeString3(bytes, cursor, assetIdLength, `biome population artifact descriptor ${index} assetId`);
+    cursor += assetIdLength;
+    const checkedRole = reference(role, `biome population artifact descriptor ${index} role`).value;
+    const checkedAssetId = reference(assetId2, `biome population artifact descriptor ${index} assetId`).value;
+    contentHash(hash2, `biome population artifact descriptor ${index} hash`);
+    const key = descriptorKey2(checkedRole, checkedAssetId, hash2);
+    if (priorKey !== null && priorKey >= key) fail9("biome population artifact descriptors are not strictly sorted and unique");
+    priorKey = key;
+    descriptors[index] = Object.freeze({ role: checkedRole, assetId: checkedAssetId, contentHash: hash2 });
+  }
+  if (cursor !== descriptorOffset + descriptorBytes) fail9("biome population artifact descriptor table has trailing bytes");
+  const placements = new Array(placementCount);
+  for (let index = 0; index < placementCount; index++) {
+    meter.work();
+    const offset = placementOffset + index * BIOME_POPULATION_ARTIFACT_PLACEMENT_BYTES;
+    const descriptorIndex = view.getUint32(offset, true);
+    if (descriptorIndex >= descriptors.length) fail9(`biome population artifact placement ${index} descriptor index is invalid`);
+    if (view.getUint32(offset + 12, true) !== 0) fail9(`biome population artifact placement ${index} reserved bytes must be zero`);
+    const descriptor2 = descriptors[descriptorIndex];
+    placements[index] = {
+      ...descriptor2,
+      x: view.getFloat64(offset + 16, true),
+      y: view.getFloat64(offset + 24, true),
+      z: view.getFloat64(offset + 32, true),
+      yaw: view.getFloat64(offset + 40, true),
+      scale: view.getFloat64(offset + 48, true),
+      pageX: view.getInt32(offset + 4, true),
+      pageZ: view.getInt32(offset + 8, true)
+    };
+  }
+  const shell = {
+    schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+    coord: { tx: view.getInt32(16, true), tz: view.getInt32(20, true), lod: view.getUint16(24, true) },
+    identity: { fieldContentHash: `sha256:${readHex(bytes, 48)}`, runtimePackContentHash: `sha256:${readHex(bytes, 80)}` },
+    placements
+  };
+  const plan = parsePlan(shell, meter);
+  meter.finish();
+  return Object.freeze({
+    plan,
+    metadata: Object.freeze({
+      schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+      artifactType: BIOME_POPULATION_ARTIFACT_TYPE,
+      mediaType: BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
+      version: BIOME_POPULATION_ARTIFACT_VERSION,
+      byteLength: bytes.length,
+      contentHash: `sha256:${sha256(bytes)}`,
+      storage: "owned-object-and-array-copies"
+    })
+  });
+}
+
+// src/world/biome-content-bundle.mjs
+var BIOME_CONTENT_BUNDLE_SCHEMA = "limina.biome-content-bundle/v1";
+var BIOME_CONTENT_BUNDLE_STATUSES = Object.freeze(["candidate", "accepted"]);
+var BIOME_CONTENT_BUNDLE_KINDS = Object.freeze([
+  "surface-wrapper",
+  "authoring-recipe",
+  "material-pack",
+  "texture",
+  "population-descriptor",
+  "model-source",
+  "model-lod",
+  "impostor",
+  "mechanical-evidence",
+  "human-visual-evidence"
+]);
+var BIOME_CONTENT_BUNDLE_LICENSES = Object.freeze({
+  tierA: Object.freeze(["CC0-1.0", "MIT", "Apache-2.0"]),
+  tierB: Object.freeze(["CC-BY-3.0", "CC-BY-4.0"])
+});
+var BIOME_CONTENT_BUNDLE_LIMITS = Object.freeze({
+  entries: 4096,
+  idChars: 160,
+  versionChars: 64,
+  labelChars: 256,
+  uriChars: 1024,
+  entryBytes: 512 * 1024 * 1024,
+  totalBytes: 8 * 1024 * 1024 * 1024,
+  canonicalBytes: 4 * 1024 * 1024
+});
+var ID3 = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+var REF3 = /^[A-Za-z0-9._/-]+$/;
+var SEMVER3 = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
+var HASH6 = /^sha256:[0-9a-f]{64}$/;
+var HTTPS = /^https:\/\/[^\s]+$/;
+var PRODUCTION_WRAPPER_KINDS = /* @__PURE__ */ new Set(["surface-wrapper", "population-descriptor"]);
+var BiomeContentBundleValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomeContentBundleValidationError";
+  }
+};
+function fail10(message) {
+  throw new BiomeContentBundleValidationError(message);
+}
+function record2(value, required, optional, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail10(`${label} must be a plain object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) fail10(`${label} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail10(`${label} must not contain symbol fields`);
+  const allowed = /* @__PURE__ */ new Set([...required, ...optional]);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor2] of Object.entries(descriptors)) {
+    if (!allowed.has(key)) fail10(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor2) || descriptor2.enumerable !== true) {
+      fail10(`${label}.${key} must be an enumerable data field`);
+    }
+  }
+  for (const key of required) if (!Object.hasOwn(value, key)) fail10(`${label} is missing '${key}'`);
+  return descriptors;
+}
+function dense2(value, maximum, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail10(`${label} must be a dense, field-free standard array with at most ${maximum} entries`);
+  }
+  return value;
+}
+function string3(value, pattern, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || !pattern.test(value)) {
+    fail10(`${label} is invalid`);
+  }
+  return value;
+}
+function text2(value, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) fail10(`${label} is invalid`);
+  return value;
+}
+function assetId(value, label) {
+  const parsed = string3(value, REF3, BIOME_CONTENT_BUNDLE_LIMITS.idChars, label);
+  if (parsed.startsWith("/") || parsed.includes("\\") || parsed.split("/").some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
+    fail10(`${label} contains an unsafe path segment`);
+  }
+  return parsed;
+}
+function https(value, label) {
+  return string3(value, HTTPS, BIOME_CONTENT_BUNDLE_LIMITS.uriChars, label);
+}
+function byteLength(value, label) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || Object.is(value, -0) || value < 1 || value > BIOME_CONTENT_BUNDLE_LIMITS.entryBytes) {
+    fail10(`${label} must be a positive canonical integer no greater than ${BIOME_CONTENT_BUNDLE_LIMITS.entryBytes}`);
+  }
+  return value;
+}
+function parseIdentity(value, label) {
+  const d = record2(value, /* @__PURE__ */ new Set(["assetId", "contentHash"]), /* @__PURE__ */ new Set(), label);
+  return Object.freeze({
+    assetId: assetId(d.assetId.value, `${label}.assetId`),
+    contentHash: string3(d.contentHash.value, HASH6, 71, `${label}.contentHash`)
+  });
+}
+function parseAttribution(value, label) {
+  const d = record2(value, /* @__PURE__ */ new Set(["author", "title", "sourceUrl", "licenseUrl", "modified"]), /* @__PURE__ */ new Set(), label);
+  if (typeof d.modified.value !== "boolean") fail10(`${label}.modified must be a boolean`);
+  return Object.freeze({
+    author: text2(d.author.value, BIOME_CONTENT_BUNDLE_LIMITS.labelChars, `${label}.author`),
+    title: text2(d.title.value, BIOME_CONTENT_BUNDLE_LIMITS.labelChars, `${label}.title`),
+    sourceUrl: https(d.sourceUrl.value, `${label}.sourceUrl`),
+    licenseUrl: https(d.licenseUrl.value, `${label}.licenseUrl`),
+    modified: d.modified.value
+  });
+}
+function parseProvenance(value, label) {
+  const d = record2(value, /* @__PURE__ */ new Set(["licenseSpdx", "sourceUri"]), /* @__PURE__ */ new Set(["attribution"]), label);
+  const licenseSpdx = text2(d.licenseSpdx.value, 32, `${label}.licenseSpdx`);
+  const tierA = BIOME_CONTENT_BUNDLE_LICENSES.tierA.includes(licenseSpdx);
+  const tierB = BIOME_CONTENT_BUNDLE_LICENSES.tierB.includes(licenseSpdx);
+  if (!tierA && !tierB) fail10(`${label}.licenseSpdx '${licenseSpdx}' is not an allowed Tier A or Tier B license`);
+  if (tierB && d.attribution === void 0) fail10(`${label}.attribution is required for ${licenseSpdx}`);
+  const attribution = d.attribution === void 0 ? void 0 : parseAttribution(d.attribution.value, `${label}.attribution`);
+  return Object.freeze({
+    licenseSpdx,
+    sourceUri: text2(d.sourceUri.value, BIOME_CONTENT_BUNDLE_LIMITS.uriChars, `${label}.sourceUri`),
+    ...attribution === void 0 ? {} : { attribution }
+  });
+}
+function parseAcceptance(value, status, label) {
+  const d = record2(value, /* @__PURE__ */ new Set(["mechanicalEvidence"]), /* @__PURE__ */ new Set(["humanVisualEvidence"]), label);
+  if (status === "accepted" && d.humanVisualEvidence === void 0) {
+    fail10(`${label}.humanVisualEvidence is required for an accepted bundle`);
+  }
+  if (status === "candidate" && d.humanVisualEvidence !== void 0) {
+    fail10(`${label}.humanVisualEvidence cannot be claimed by a candidate bundle`);
+  }
+  return Object.freeze({
+    mechanicalEvidence: parseIdentity(d.mechanicalEvidence.value, `${label}.mechanicalEvidence`),
+    ...d.humanVisualEvidence === void 0 ? {} : {
+      humanVisualEvidence: parseIdentity(d.humanVisualEvidence.value, `${label}.humanVisualEvidence`)
+    }
+  });
+}
+function parseEntry(value, index, status) {
+  const label = `biome content bundle.entries[${index}]`;
+  const d = record2(
+    value,
+    /* @__PURE__ */ new Set(["assetId", "contentHash", "kind", "byteLength", "provenance"]),
+    /* @__PURE__ */ new Set(["acceptance"]),
+    label
+  );
+  if (!BIOME_CONTENT_BUNDLE_KINDS.includes(d.kind.value)) fail10(`${label}.kind is unsupported`);
+  const productionRequired = PRODUCTION_WRAPPER_KINDS.has(d.kind.value);
+  if (productionRequired && d.acceptance === void 0) fail10(`${label}.acceptance is required for production wrapper kind '${d.kind.value}'`);
+  if (!productionRequired && d.acceptance !== void 0) fail10(`${label}.acceptance is only valid on production wrapper entries`);
+  return Object.freeze({
+    assetId: assetId(d.assetId.value, `${label}.assetId`),
+    contentHash: string3(d.contentHash.value, HASH6, 71, `${label}.contentHash`),
+    kind: d.kind.value,
+    byteLength: byteLength(d.byteLength.value, `${label}.byteLength`),
+    provenance: parseProvenance(d.provenance.value, `${label}.provenance`),
+    ...d.acceptance === void 0 ? {} : { acceptance: parseAcceptance(d.acceptance.value, status, `${label}.acceptance`) }
+  });
+}
+function utf8ByteLength2(value) {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index++) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint > 65535) index++;
+    bytes += codePoint < 128 ? 1 : codePoint < 2048 ? 2 : codePoint < 65536 ? 3 : 4;
+  }
+  return bytes;
+}
+function parseCore2(value, withClosureHash) {
+  const required = /* @__PURE__ */ new Set(["schema", "id", "version", "status", "runtimePack", "entries"]);
+  if (withClosureHash) required.add("closureHash");
+  const d = record2(value, required, /* @__PURE__ */ new Set(), "biome content bundle");
+  if (d.schema.value !== BIOME_CONTENT_BUNDLE_SCHEMA) {
+    fail10(`biome content bundle.schema must be '${BIOME_CONTENT_BUNDLE_SCHEMA}'`);
+  }
+  if (!BIOME_CONTENT_BUNDLE_STATUSES.includes(d.status.value)) fail10("biome content bundle.status is unsupported");
+  const status = d.status.value;
+  const runtimePack = parseIdentity(d.runtimePack.value, "biome content bundle.runtimePack");
+  const sourceEntries = dense2(d.entries.value, BIOME_CONTENT_BUNDLE_LIMITS.entries, "biome content bundle.entries");
+  if (sourceEntries.length < 1) fail10("biome content bundle.entries must not be empty");
+  const entries = Object.freeze(sourceEntries.map((entry, index) => parseEntry(entry, index, status)));
+  for (let index = 1; index < entries.length; index++) {
+    if (entries[index - 1].assetId >= entries[index].assetId) {
+      fail10("biome content bundle.entries must be strictly assetId-sorted and unique");
+    }
+  }
+  if (entries.some((entry) => entry.assetId === runtimePack.assetId)) {
+    fail10("biome content bundle runtime-pack assetId must not collide with a leaf entry");
+  }
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.byteLength, 0);
+  if (!Number.isSafeInteger(totalBytes) || totalBytes > BIOME_CONTENT_BUNDLE_LIMITS.totalBytes) {
+    fail10(`biome content bundle entry bytes exceed ${BIOME_CONTENT_BUNDLE_LIMITS.totalBytes}`);
+  }
+  const byId = new Map(entries.map((entry) => [entry.assetId, entry]));
+  for (const entry of entries) {
+    if (entry.acceptance === void 0) continue;
+    for (const [field, expectedKind] of [
+      ["mechanicalEvidence", "mechanical-evidence"],
+      ["humanVisualEvidence", "human-visual-evidence"]
+    ]) {
+      const identity = entry.acceptance[field];
+      if (identity === void 0) continue;
+      const evidence = byId.get(identity.assetId);
+      if (evidence === void 0) fail10(`${entry.assetId} ${field} does not resolve inside the bundle closure`);
+      if (evidence.kind !== expectedKind) fail10(`${entry.assetId} ${field} must resolve to kind '${expectedKind}'`);
+      if (evidence.contentHash !== identity.contentHash) fail10(`${entry.assetId} ${field} contentHash does not match its closure entry`);
+    }
+  }
+  const core = Object.freeze({
+    schema: BIOME_CONTENT_BUNDLE_SCHEMA,
+    id: string3(d.id.value, ID3, 64, "biome content bundle.id"),
+    version: string3(d.version.value, SEMVER3, BIOME_CONTENT_BUNDLE_LIMITS.versionChars, "biome content bundle.version"),
+    status,
+    runtimePack,
+    entries
+  });
+  const closureBytes = JSON.stringify({ status, runtimePack, entries });
+  if (utf8ByteLength2(closureBytes) > BIOME_CONTENT_BUNDLE_LIMITS.canonicalBytes) {
+    fail10(`biome content bundle canonical closure exceeds ${BIOME_CONTENT_BUNDLE_LIMITS.canonicalBytes} bytes`);
+  }
+  const derivedClosureHash = `sha256:${sha256(closureBytes)}`;
+  if (!withClosureHash) return Object.freeze({ core, derivedClosureHash });
+  const supplied = string3(d.closureHash.value, HASH6, 71, "biome content bundle.closureHash");
+  if (supplied !== derivedClosureHash) fail10("biome content bundle.closureHash does not match its runtime pack and entries");
+  return Object.freeze({ core, derivedClosureHash });
+}
+function parseBiomeContentBundle(value) {
+  const parsed = parseCore2(value, true);
+  return Object.freeze({ ...parsed.core, closureHash: parsed.derivedClosureHash });
+}
+function stableStringifyBiomeContentBundle(value) {
+  return JSON.stringify(parseBiomeContentBundle(value));
+}
+
+// src/world/compiler/biome-content-closure-artifact.mjs
+var BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE = "biome-content-closure/v1";
+var BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.biome-content-bundle-v1+json";
+var MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES = BIOME_CONTENT_BUNDLE_LIMITS.canonicalBytes + 1;
+var BiomeContentClosureArtifactError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomeContentClosureArtifactError";
+  }
+};
+var BiomeContentClosureArtifactCancelledError = class extends Error {
+  constructor() {
+    super("biome content closure artifact operation cancelled");
+    this.name = "BiomeContentClosureArtifactCancelledError";
+  }
+};
+var encoder4 = new TextEncoder();
+var decoder4 = new TextDecoder("utf-8", { fatal: true });
+function cancel(control) {
+  if (control !== void 0 && (control === null || typeof control !== "object" || Array.isArray(control) || Object.getPrototypeOf(control) !== Object.prototype || Object.keys(control).join() !== "shouldCancel" || typeof control.shouldCancel !== "function")) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact control must contain exactly shouldCancel");
+  }
+  if (control?.shouldCancel() === true) throw new BiomeContentClosureArtifactCancelledError();
+}
+function ownedBytes2(value) {
+  if (!(value instanceof Uint8Array) || !(value.buffer instanceof ArrayBuffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact bytes must be an owned complete Uint8Array");
+  }
+  if (value.byteLength < 2 || value.byteLength > MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact byte length is outside its bounded range");
+  }
+  return value;
+}
+function encodeBiomeContentClosureArtifact(bundle, control) {
+  cancel(control);
+  const bytes = encoder4.encode(`${stableStringifyBiomeContentBundle(bundle)}
+`);
+  if (bytes.byteLength > MAX_BIOME_CONTENT_CLOSURE_ARTIFACT_BYTES) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact exceeds its byte cap");
+  }
+  cancel(control);
+  return bytes;
+}
+function decodeBiomeContentClosureArtifact(input, control) {
+  const bytes = ownedBytes2(input);
+  cancel(control);
+  let text4;
+  try {
+    text4 = decoder4.decode(bytes);
+  } catch (error) {
+    throw new BiomeContentClosureArtifactError(`biome content closure artifact is not valid UTF-8: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!text4.endsWith("\n") || text4.slice(0, -1).includes("\n")) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact must be one canonical JSON line");
+  }
+  let source;
+  try {
+    source = JSON.parse(text4.slice(0, -1));
+  } catch (error) {
+    throw new BiomeContentClosureArtifactError(`biome content closure artifact JSON is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let bundle;
+  try {
+    bundle = parseBiomeContentBundle(source);
+  } catch (error) {
+    throw new BiomeContentClosureArtifactError(`biome content closure artifact bundle is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const canonical = encodeBiomeContentClosureArtifact(bundle, control);
+  if (canonical.byteLength !== bytes.byteLength || !canonical.every((value, index) => value === bytes[index])) {
+    throw new BiomeContentClosureArtifactError("biome content closure artifact is not canonical");
+  }
+  cancel(control);
+  return Object.freeze({ bundle, metadata: Object.freeze({
+    artifactType: BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+    mediaType: BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+    contentHash: derivedArtifactContentHash(bytes),
+    byteLength: bytes.byteLength
+  }) });
+}
+
+// src/world/biome-library-v1.mjs
+var VERSION2 = "1.0.1";
+var provenance2 = (id) => ({ sourceUri: `limina://biomes/v1/${id}`, licenseId: "CC0-1.0", authoredBy: "Limina Project" });
+var definition = (id, displayName, category, tags, temperatureC, moisture01, surfaceRoles, vegetation, waterTintSrgb) => ({
+  schema: BIOME_DEF_SCHEMA,
+  id,
+  version: VERSION2,
+  displayName,
+  taxonomy: { category, tags: [...tags].sort() },
+  climate: { temperatureC: { min: temperatureC[0], max: temperatureC[1] }, moisture01: { min: moisture01[0], max: moisture01[1] } },
+  surfaceMaterials: surfaceRoles.map((role) => ({ role })),
+  vegetationPalette: vegetation.map(([role, weight]) => ({ role, weight })).sort((left, right) => left.role < right.role ? -1 : left.role > right.role ? 1 : 0),
+  resourceTableRefs: [`tables/resources/${id}`],
+  spawnTableRefs: [`tables/spawns/${id}`],
+  waterTintSrgb,
+  ambientAudioRefs: [`audio/ambient/${id}`],
+  fulfillment: { status: "metadata-only", bindings: [] },
+  provenance: provenance2(id)
+});
+var definitions = [
+  definition("alpine", "Alpine", "terrestrial", ["cold", "highland"], [-18, 8], [0.2, 0.8], ["ground/alpine-turf", "rock/granite", "ground/snow"], [["flora/alpine-grass", 3], ["flora/lichen", 1]], [96, 151, 177]),
+  definition("atoll", "Atoll", "aquatic", ["coastal", "tropical"], [22, 38], [0.55, 1], ["ground/coral-sand", "ground/reef-limestone"], [["flora/coconut-palm", 3], ["flora/tropical-scrub", 1]], [54, 190, 205]),
+  definition("badlands", "Badlands", "geological", ["arid", "eroded"], [4, 42], [0, 0.28], ["rock/banded-sediment", "ground/dry-clay"], [["flora/desert-scrub", 1]], [109, 142, 139]),
+  definition("blighted-waste", "Blighted Waste", "fantasy", ["corruption", "hostile"], [-5, 36], [0, 0.65], ["ground/blighted-soil", "rock/blighted"], [["flora/blight-thorn", 3], ["flora/deadwood", 2]], [79, 76, 94]),
+  definition("bog", "Bog", "wetland", ["acidic", "peat"], [-2, 22], [0.75, 1], ["ground/peat", "ground/sphagnum"], [["flora/bog-shrub", 1], ["flora/sphagnum", 4]], [79, 103, 82]),
+  definition("boreal-forest", "Boreal Forest", "terrestrial", ["cold", "coniferous"], [-25, 16], [0.35, 0.9], ["ground/forest-duff", "ground/moss", "rock/granite"], [["flora/fir", 3], ["flora/spruce", 5]], [66, 109, 124]),
+  definition("canyon", "Canyon", "geological", ["cliff", "river-cut"], [-4, 42], [0.05, 0.55], ["rock/canyon-sandstone", "ground/scree"], [["flora/riparian-shrub", 1]], [82, 136, 142]),
+  definition("coral-reef", "Coral Reef", "aquatic", ["marine", "tropical"], [18, 34], [1, 1], ["ground/coral-rubble", "ground/reef-sand"], [["flora/coral-branch", 5], ["flora/sea-fan", 2]], [32, 157, 188]),
+  definition("crystal", "Crystal Expanse", "fantasy", ["arcane", "mineral"], [-20, 45], [0, 0.7], ["rock/crystal-bed", "ground/crystal-dust"], [["flora/crystal-growth", 4]], [99, 125, 201]),
+  definition("deep-ocean", "Deep Ocean", "aquatic", ["abyssal", "marine"], [-2, 12], [1, 1], ["ground/abyssal-silt", "rock/basalt"], [["flora/deep-kelp", 1]], [12, 37, 76]),
+  definition("desert", "Hot Desert", "terrestrial", ["arid", "hot"], [16, 50], [0, 0.2], ["ground/desert-sand", "rock/desert-varnish"], [["flora/cactus", 2], ["flora/desert-scrub", 1]], [79, 139, 155]),
+  definition("enchanted-forest", "Enchanted Forest", "fantasy", ["arcane", "forest"], [2, 28], [0.55, 1], ["ground/enchanted-duff", "ground/luminous-moss"], [["flora/ancient-broadleaf", 4], ["flora/luminous-fern", 2]], [78, 131, 153]),
+  definition("estuary", "Estuary", "wetland", ["brackish", "coastal"], [2, 32], [0.7, 1], ["ground/estuary-mud", "ground/tidal-sand"], [["flora/saltmarsh-grass", 4], ["flora/tidal-reed", 2]], [87, 142, 144]),
+  definition("floating-island", "Floating Island", "fantasy", ["aerial", "highland"], [-8, 30], [0.2, 0.9], ["ground/aerial-turf", "rock/floating-island"], [["flora/aerial-grass", 3], ["flora/wind-tree", 1]], [111, 170, 195]),
+  definition("fungal", "Fungal Wilds", "fantasy", ["fungal", "humid"], [2, 30], [0.7, 1], ["ground/fungal-loam", "ground/mycelium"], [["flora/giant-fungus", 3], ["flora/spore-cap", 4]], [91, 88, 134]),
+  definition("glacier", "Glacier", "geological", ["ice", "polar"], [-60, 2], [0.1, 0.8], ["ground/glacial-ice", "ground/snow", "rock/glacial-till"], [["flora/ice-lichen", 1]], [100, 169, 202]),
+  definition("grassland", "Temperate Grassland", "terrestrial", ["grassland", "temperate"], [-8, 30], [0.2, 0.7], ["ground/grass-turf", "ground/loam"], [["flora/meadow-grass", 5], ["flora/wildflower", 1]], [75, 133, 151]),
+  definition("kelp-forest", "Kelp Forest", "aquatic", ["coastal", "marine"], [2, 22], [1, 1], ["ground/coastal-rock", "ground/marine-sand"], [["flora/giant-kelp", 5], ["flora/sea-grass", 2]], [31, 111, 126]),
+  definition("lava-field", "Lava Field", "geological", ["igneous", "volcanic"], [10, 80], [0, 0.4], ["rock/basalt", "rock/lava-crust"], [["flora/fire-lichen", 1]], [97, 72, 55]),
+  definition("mangrove", "Mangrove", "wetland", ["coastal", "tropical"], [18, 40], [0.8, 1], ["ground/mangrove-mud", "ground/tidal-silt"], [["flora/mangrove-tree", 5], ["flora/tidal-root", 3]], [74, 130, 117]),
+  definition("marsh", "Marsh", "wetland", ["freshwater", "reeds"], [-2, 30], [0.75, 1], ["ground/marsh-mud", "ground/wet-grass"], [["flora/cattail", 3], ["flora/marsh-reed", 5]], [93, 137, 126]),
+  definition("mediterranean-shrubland", "Mediterranean Shrubland", "terrestrial", ["dry-summer", "shrubland"], [4, 38], [0.15, 0.6], ["ground/dry-loam", "rock/limestone"], [["flora/aromatic-shrub", 3], ["flora/olive-tree", 1]], [77, 135, 153]),
+  definition("mesa", "Mesa", "geological", ["arid", "plateau"], [2, 44], [0, 0.3], ["rock/mesa-sandstone", "ground/desert-gravel"], [["flora/desert-scrub", 1]], [91, 139, 148]),
+  definition("montane-forest", "Montane Forest", "terrestrial", ["forest", "highland"], [-12, 22], [0.35, 0.9], ["ground/montane-duff", "rock/granite", "ground/snow"], [["flora/fir", 3], ["flora/montane-pine", 5]], [73, 127, 149]),
+  definition("nether", "Nether", "fantasy", ["infernal", "hostile"], [25, 100], [0, 0.5], ["rock/infernal", "ground/ash"], [["flora/ember-fungus", 2], ["flora/infernal-thorn", 3]], [117, 47, 35]),
+  definition("ocean", "Ocean", "aquatic", ["marine", "pelagic"], [-2, 32], [1, 1], ["ground/marine-sand", "ground/marine-silt"], [["flora/sea-grass", 1]], [24, 108, 148]),
+  definition("polar-desert", "Polar Desert", "terrestrial", ["arid", "polar"], [-70, 4], [0, 0.2], ["ground/polar-gravel", "ground/snow"], [["flora/polar-lichen", 1]], [86, 139, 163]),
+  definition("prairie", "Prairie", "terrestrial", ["grassland", "temperate"], [-12, 34], [0.25, 0.7], ["ground/prairie-turf", "ground/black-soil"], [["flora/prairie-grass", 5], ["flora/prairie-wildflower", 2]], [74, 131, 148]),
+  definition("rainforest", "Tropical Rainforest", "terrestrial", ["forest", "tropical"], [18, 40], [0.75, 1], ["ground/rainforest-duff", "ground/wet-loam"], [["flora/rainforest-canopy", 5], ["flora/tropical-fern", 3]], [62, 124, 129]),
+  // The generated water footprint is narrower than the river biome's riparian corridor. Declare
+  // ground grass explicitly so dry banks do not become an artificial vegetation void; runtime
+  // water coverage remains the authoritative exclusion mask for submerged blades.
+  definition("river", "River", "aquatic", ["flowing", "freshwater"], [-2, 34], [0.7, 1], ["ground/river-gravel", "ground/river-silt"], [["flora/forest-grass", 4], ["flora/riparian-reed", 2], ["flora/waterweed", 1]], [52, 132, 157]),
+  definition("salt-flat", "Salt Flat", "geological", ["arid", "saline"], [-4, 48], [0, 0.2], ["ground/salt-crust", "ground/saline-mud"], [["flora/saltbush", 1]], [126, 153, 158]),
+  definition("savanna", "Savanna", "terrestrial", ["grassland", "tropical"], [14, 44], [0.15, 0.65], ["ground/savanna-grass", "ground/red-loam"], [["flora/acacia", 1], ["flora/savanna-grass", 5]], [75, 132, 146]),
+  definition("scrubland", "Scrubland", "terrestrial", ["semi-arid", "shrubland"], [-2, 38], [0.1, 0.5], ["ground/scrub-soil", "rock/weathered"], [["flora/scrub-grass", 2], ["flora/scrub-shrub", 4]], [80, 132, 143]),
+  definition("swamp", "Swamp", "wetland", ["forest", "freshwater"], [4, 36], [0.8, 1], ["ground/swamp-mud", "ground/wet-duff"], [["flora/bald-cypress", 3], ["flora/swamp-reed", 2]], [66, 115, 105]),
+  definition("taiga", "Taiga", "terrestrial", ["cold", "forest"], [-35, 14], [0.25, 0.8], ["ground/taiga-duff", "ground/snow"], [["flora/larch", 2], ["flora/spruce", 5]], [72, 122, 142]),
+  definition(
+    "temperate-deciduous-forest",
+    "Temperate Deciduous Forest",
+    "terrestrial",
+    ["deciduous", "forest"],
+    [-10, 32],
+    [0.4, 0.9],
+    ["ground/leaf-litter", "ground/forest-loam"],
+    [["flora/ash", 2], ["flora/fern", 2], ["flora/forest-grass", 6], ["flora/oak", 4], ["flora/shrub", 1]],
+    [69, 126, 143]
+  ),
+  definition("temperate-rainforest", "Temperate Rainforest", "terrestrial", ["forest", "wet"], [0, 24], [0.7, 1], ["ground/mossy-duff", "rock/mossy"], [["flora/cedar", 3], ["flora/giant-fern", 2]], [62, 121, 134]),
+  definition("tropical-seasonal-forest", "Tropical Seasonal Forest", "terrestrial", ["forest", "seasonal"], [16, 42], [0.35, 0.85], ["ground/seasonal-duff", "ground/red-loam"], [["flora/dry-tropical-tree", 4], ["flora/tropical-grass", 2]], [72, 130, 141]),
+  definition("tundra", "Tundra", "terrestrial", ["cold", "treeless"], [-45, 10], [0.1, 0.65], ["ground/permafrost", "ground/tundra-moss", "ground/snow"], [["flora/dwarf-shrub", 2], ["flora/tundra-moss", 5]], [86, 142, 162]),
+  definition("volcanic", "Volcanic Highlands", "geological", ["igneous", "mountain"], [-5, 55], [0, 0.75], ["rock/basalt", "ground/volcanic-ash"], [["flora/volcanic-fern", 1]], [91, 111, 112])
+];
+var BIOME_LIBRARY_V1 = parseBiomePack({
+  schema: BIOME_PACK_SCHEMA,
+  id: "limina-biomes-core",
+  version: VERSION2,
+  definitions,
+  legacyAliases: [
+    { legacyKind: "blight", biomeId: "blighted-waste" },
+    { legacyKind: "desert", biomeId: "desert" },
+    { legacyKind: "forest", biomeId: "temperate-deciduous-forest" },
+    { legacyKind: "grass", biomeId: "grassland" },
+    { legacyKind: "mountain", biomeId: "alpine" },
+    { legacyKind: "swamp", biomeId: "swamp" },
+    { legacyKind: "tundra", biomeId: "tundra" },
+    { legacyKind: "water", biomeId: "ocean" }
+  ],
+  provenance: { sourceUri: "limina://biomes/v1", licenseId: "CC0-1.0", authoredBy: "Limina Project" }
+});
+
+// src/world/biome-runtime-pack.mjs
+var BIOME_RUNTIME_PACK_SCHEMA = "limina.biome-runtime-pack/v1";
+var BIOME_RUNTIME_FULFILLMENT_STATES = Object.freeze(["metadata-only", "partial", "fulfilled"]);
+var BIOME_RUNTIME_BINDING_KINDS = Object.freeze(["surface", "vegetation"]);
+var BIOME_RUNTIME_PACK_LIMITS = Object.freeze({
+  biomes: 64,
+  surfaceRules: 4,
+  vegetationRules: 8,
+  bindingsPerBiome: 12,
+  idChars: 160,
+  radiusM: 1e4,
+  elevationM: 1e6,
+  waterDistanceM: 1e6,
+  scale: 100,
+  weight: 1e6,
+  tileScaleM: 1e4,
+  displacementScaleM: 10,
+  labelChars: 96,
+  uriChars: 512
+});
+var ID4 = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+var REF4 = /^[a-z][a-z0-9._/-]*$/;
+var SEMVER4 = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
+var HASH7 = /^sha256:[0-9a-f]{64}$/;
+var BiomeRuntimePackValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BiomeRuntimePackValidationError";
+  }
+};
+function fail11(message) {
+  throw new BiomeRuntimePackValidationError(message);
+}
+function record3(value, required, optional, label) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail11(`${label} must be a plain object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) fail11(`${label} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail11(`${label} must not contain symbol fields`);
+  const allowed = /* @__PURE__ */ new Set([...required, ...optional]);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor2] of Object.entries(descriptors)) {
+    if (!allowed.has(key)) fail11(`${label} has unknown field '${key}'`);
+    if (!("value" in descriptor2) || descriptor2.enumerable !== true) fail11(`${label}.${key} must be an enumerable data field`);
+  }
+  for (const key of required) if (!Object.hasOwn(value, key)) fail11(`${label} is missing '${key}'`);
+  return descriptors;
+}
+function dense3(value, maximum, label) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum) {
+    fail11(`${label} must be a standard array with at most ${maximum} entries`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail11(`${label} must be dense and field-free`);
+  }
+  return value;
+}
+function string4(value, pattern, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || !pattern.test(value)) fail11(`${label} is invalid`);
+  return value;
+}
+function text3(value, maximum, label) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) fail11(`${label} is invalid`);
+  return value;
+}
+function number2(value, minimum, maximum, label, positive2 = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum || positive2 && value === 0) {
+    fail11(`${label} must be a finite canonical number in ${positive2 ? "(" : "["}${minimum}, ${maximum}]`);
+  }
+  return value;
+}
+function integer6(value, minimum, maximum, label) {
+  const parsed = number2(value, minimum, maximum, label);
+  if (!Number.isSafeInteger(parsed)) fail11(`${label} must be an integer`);
+  return parsed;
+}
+function tupleBand(value, minimum, maximum, label, positive2 = false) {
+  const source = dense3(value, 2, label);
+  if (source.length !== 2) fail11(`${label} must contain exactly [min, max]`);
+  const min = number2(source[0], minimum, maximum, `${label}[0]`, positive2);
+  const max = number2(source[1], minimum, maximum, `${label}[1]`, positive2);
+  if (max < min) fail11(`${label}[1] must be at least ${label}[0]`);
+  return Object.freeze([min, max]);
+}
+function tuple3(value, minimum, maximum, label, positive2 = false) {
+  const source = dense3(value, 3, label);
+  if (source.length !== 3) fail11(`${label} must contain exactly three values`);
+  return Object.freeze(source.map((entry, index) => number2(entry, minimum, maximum, `${label}[${index}]`, positive2)));
+}
+function surfaceCalibration(value, label) {
+  const d = record3(value, /* @__PURE__ */ new Set(["albedoLinearGain", "normalStrength", "displacementScaleM"]), /* @__PURE__ */ new Set(), label);
+  return Object.freeze({
+    albedoLinearGain: tuple3(d.albedoLinearGain.value, Number.MIN_VALUE, 4, `${label}.albedoLinearGain`, true),
+    normalStrength: number2(d.normalStrength.value, 0, 4, `${label}.normalStrength`),
+    displacementScaleM: number2(
+      d.displacementScaleM.value,
+      0,
+      BIOME_RUNTIME_PACK_LIMITS.displacementScaleM,
+      `${label}.displacementScaleM`
+    )
+  });
+}
+function surfaceEnvironment(value, label) {
+  const d = record3(value, /* @__PURE__ */ new Set(["overlayWeight"]), /* @__PURE__ */ new Set(["slope01", "elevationM", "waterDistanceM"]), label);
+  const band2 = (descriptor2, minimum, maximum, path) => {
+    if (descriptor2 === void 0) return void 0;
+    const source = dense3(descriptor2.value, 3, path);
+    if (source.length !== 3) fail11(`${path} must contain exactly [min, max, feather]`);
+    const min = number2(source[0], minimum, maximum, `${path}[0]`);
+    const max = number2(source[1], minimum, maximum, `${path}[1]`);
+    const feather = number2(source[2], 0, maximum - minimum, `${path}[2]`);
+    if (max < min) fail11(`${path}[1] must be at least ${path}[0]`);
+    return Object.freeze([min, max, feather]);
+  };
+  return Object.freeze({
+    overlayWeight: number2(d.overlayWeight.value, 0, BIOME_RUNTIME_PACK_LIMITS.weight, `${label}.overlayWeight`),
+    ...d.slope01 === void 0 ? {} : { slope01: band2(d.slope01, 0, 1, `${label}.slope01`) },
+    ...d.elevationM === void 0 ? {} : { elevationM: band2(
+      d.elevationM,
+      -BIOME_RUNTIME_PACK_LIMITS.elevationM,
+      BIOME_RUNTIME_PACK_LIMITS.elevationM,
+      `${label}.elevationM`
+    ) },
+    ...d.waterDistanceM === void 0 ? {} : { waterDistanceM: band2(
+      d.waterDistanceM,
+      0,
+      BIOME_RUNTIME_PACK_LIMITS.waterDistanceM,
+      `${label}.waterDistanceM`
+    ) }
+  });
+}
+function assertStrictRoleOrder(rules, label) {
+  for (let index = 1; index < rules.length; index++) {
+    if (rules[index - 1].role >= rules[index].role) fail11(`${label} must be strictly role-sorted and unique`);
+  }
+}
+function parseSurfaceRules(value, definition2, label) {
+  const declared = new Set(definition2.surfaceMaterials.map((entry) => entry.role));
+  const rules = dense3(value, BIOME_RUNTIME_PACK_LIMITS.surfaceRules, label).map((entry, index) => {
+    const path = `${label}[${index}]`;
+    const d = record3(entry, /* @__PURE__ */ new Set(["role", "weight", "tileScaleM"]), /* @__PURE__ */ new Set(["calibration", "environment"]), path);
+    const role = string4(d.role.value, REF4, BIOME_RUNTIME_PACK_LIMITS.idChars, `${path}.role`);
+    if (!declared.has(role)) fail11(`${path}.role '${role}' is not declared by biome '${definition2.id}'`);
+    return Object.freeze({
+      role,
+      weight: number2(d.weight.value, 0, BIOME_RUNTIME_PACK_LIMITS.weight, `${path}.weight`, true),
+      tileScaleM: number2(d.tileScaleM.value, 0, BIOME_RUNTIME_PACK_LIMITS.tileScaleM, `${path}.tileScaleM`, true),
+      ...d.calibration === void 0 ? {} : { calibration: surfaceCalibration(d.calibration.value, `${path}.calibration`) },
+      ...d.environment === void 0 ? {} : { environment: surfaceEnvironment(d.environment.value, `${path}.environment`) }
+    });
+  });
+  if (rules.length < 1) fail11(`${label} must not be empty`);
+  assertStrictRoleOrder(rules, label);
+  if (rules.length !== declared.size) fail11(`${label} must cover every surface role declared by biome '${definition2.id}'`);
+  return Object.freeze(rules);
+}
+function parseVegetationRules(value, definition2, label) {
+  const declared = new Set(definition2.vegetationPalette.map((entry) => entry.role));
+  const required = /* @__PURE__ */ new Set(["role", "weight", "radiusM", "density01", "scale", "tintSrgb"]);
+  const optional = /* @__PURE__ */ new Set(["slope01", "elevationM", "moisture01", "waterDistanceM"]);
+  const rules = dense3(value, BIOME_RUNTIME_PACK_LIMITS.vegetationRules, label).map((entry, index) => {
+    const path = `${label}[${index}]`;
+    const d = record3(entry, required, optional, path);
+    const role = string4(d.role.value, REF4, BIOME_RUNTIME_PACK_LIMITS.idChars, `${path}.role`);
+    if (!declared.has(role)) fail11(`${path}.role '${role}' is not declared by biome '${definition2.id}'`);
+    const tint = dense3(d.tintSrgb.value, 3, `${path}.tintSrgb`);
+    if (tint.length !== 3) fail11(`${path}.tintSrgb must contain exactly 3 channels`);
+    const parsed = {
+      role,
+      weight: number2(d.weight.value, 0, BIOME_RUNTIME_PACK_LIMITS.weight, `${path}.weight`, true),
+      radiusM: number2(d.radiusM.value, 0, BIOME_RUNTIME_PACK_LIMITS.radiusM, `${path}.radiusM`, true),
+      density01: number2(d.density01.value, 0, 1, `${path}.density01`),
+      scale: tupleBand(d.scale.value, Number.MIN_VALUE, BIOME_RUNTIME_PACK_LIMITS.scale, `${path}.scale`, true),
+      ...d.slope01 === void 0 ? {} : { slope01: tupleBand(d.slope01.value, 0, 1, `${path}.slope01`) },
+      ...d.elevationM === void 0 ? {} : { elevationM: tupleBand(d.elevationM.value, -BIOME_RUNTIME_PACK_LIMITS.elevationM, BIOME_RUNTIME_PACK_LIMITS.elevationM, `${path}.elevationM`) },
+      ...d.moisture01 === void 0 ? {} : { moisture01: tupleBand(d.moisture01.value, 0, 1, `${path}.moisture01`) },
+      ...d.waterDistanceM === void 0 ? {} : { waterDistanceM: tupleBand(d.waterDistanceM.value, 0, BIOME_RUNTIME_PACK_LIMITS.waterDistanceM, `${path}.waterDistanceM`) },
+      tintSrgb: Object.freeze(tint.map((channel, channelIndex) => integer6(channel, 0, 255, `${path}.tintSrgb[${channelIndex}]`)))
+    };
+    return Object.freeze(parsed);
+  });
+  assertStrictRoleOrder(rules, label);
+  if (rules.length !== declared.size) fail11(`${label} must cover every vegetation role declared by biome '${definition2.id}'`);
+  return Object.freeze(rules);
+}
+function parseBindings2(value, declaredKeys, label) {
+  const bindings = dense3(value, BIOME_RUNTIME_PACK_LIMITS.bindingsPerBiome, label).map((entry, index) => {
+    const path = `${label}[${index}]`;
+    const d = record3(entry, /* @__PURE__ */ new Set(["kind", "role", "assetId", "contentHash", "licenseId", "sourceUri"]), /* @__PURE__ */ new Set(), path);
+    if (!BIOME_RUNTIME_BINDING_KINDS.includes(d.kind.value)) fail11(`${path}.kind is unsupported`);
+    const role = string4(d.role.value, REF4, BIOME_RUNTIME_PACK_LIMITS.idChars, `${path}.role`);
+    const key = `${d.kind.value}:${role}`;
+    if (!declaredKeys.has(key)) fail11(`${path} targets undeclared runtime rule '${key}'`);
+    return Object.freeze({
+      kind: d.kind.value,
+      role,
+      assetId: string4(d.assetId.value, REF4, BIOME_RUNTIME_PACK_LIMITS.idChars, `${path}.assetId`),
+      contentHash: string4(d.contentHash.value, HASH7, 71, `${path}.contentHash`),
+      licenseId: text3(d.licenseId.value, BIOME_RUNTIME_PACK_LIMITS.labelChars, `${path}.licenseId`),
+      sourceUri: text3(d.sourceUri.value, BIOME_RUNTIME_PACK_LIMITS.uriChars, `${path}.sourceUri`)
+    });
+  });
+  for (let index = 1; index < bindings.length; index++) {
+    const previous = `${bindings[index - 1].kind}:${bindings[index - 1].role}`;
+    const current = `${bindings[index].kind}:${bindings[index].role}`;
+    if (previous >= current) fail11(`${label} must be strictly kind/role-sorted and unique`);
+  }
+  return Object.freeze(bindings);
+}
+function fulfillmentStatus(bound, required) {
+  if (bound === 0) return "metadata-only";
+  return bound === required ? "fulfilled" : "partial";
+}
+function parseBiomeEntry(value, definition2, label) {
+  const d = record3(value, /* @__PURE__ */ new Set(["biomeId", "status", "surfaceRules", "vegetationRules", "bindings"]), /* @__PURE__ */ new Set(), label);
+  const biomeId = string4(d.biomeId.value, ID4, 64, `${label}.biomeId`);
+  if (biomeId !== definition2.id) fail11(`${label}.biomeId does not match its metadata definition`);
+  const surfaceRules = parseSurfaceRules(d.surfaceRules.value, definition2, `${label}.surfaceRules`);
+  const vegetationRules = parseVegetationRules(d.vegetationRules.value, definition2, `${label}.vegetationRules`);
+  const declaredKeys = /* @__PURE__ */ new Set([
+    ...surfaceRules.map((entry) => `surface:${entry.role}`),
+    ...vegetationRules.map((entry) => `vegetation:${entry.role}`)
+  ]);
+  const bindings = parseBindings2(d.bindings.value, declaredKeys, `${label}.bindings`);
+  const status = fulfillmentStatus(bindings.length, declaredKeys.size);
+  if (!BIOME_RUNTIME_FULFILLMENT_STATES.includes(d.status.value)) fail11(`${label}.status is unsupported`);
+  if (d.status.value !== status) fail11(`${label}.status must be '${status}' for its declared bindings`);
+  return Object.freeze({ biomeId, status, surfaceRules, vegetationRules, bindings });
+}
+function parseBiomeRuntimePack(value, metadataPackValue) {
+  const metadataPack = parseBiomePack(metadataPackValue);
+  const metadataPackHash = biomePackContentHash(metadataPack);
+  const d = record3(value, /* @__PURE__ */ new Set(["schema", "id", "version", "metadataPackContentHash", "status", "biomes"]), /* @__PURE__ */ new Set(), "biome runtime pack");
+  if (d.schema.value !== BIOME_RUNTIME_PACK_SCHEMA) fail11(`biome runtime pack.schema must be '${BIOME_RUNTIME_PACK_SCHEMA}'`);
+  if (d.metadataPackContentHash.value !== metadataPackHash) fail11("biome runtime pack.metadataPackContentHash does not match the provided metadata pack");
+  const definitions2 = new Map(metadataPack.definitions.map((definition2) => [definition2.id, definition2]));
+  const source = dense3(d.biomes.value, BIOME_RUNTIME_PACK_LIMITS.biomes, "biome runtime pack.biomes");
+  if (source.length < 1) fail11("biome runtime pack.biomes must not be empty");
+  const biomes = Object.freeze(source.map((entry, index) => {
+    const entryRecord = record3(entry, /* @__PURE__ */ new Set(["biomeId", "status", "surfaceRules", "vegetationRules", "bindings"]), /* @__PURE__ */ new Set(), `biome runtime pack.biomes[${index}]`);
+    const biomeId = string4(entryRecord.biomeId.value, ID4, 64, `biome runtime pack.biomes[${index}].biomeId`);
+    const definition2 = definitions2.get(biomeId);
+    if (definition2 === void 0) fail11(`biome runtime pack references unknown biome '${biomeId}'`);
+    return parseBiomeEntry(entry, definition2, `biome runtime pack.biomes[${index}]`);
+  }));
+  for (let index = 1; index < biomes.length; index++) {
+    if (biomes[index - 1].biomeId >= biomes[index].biomeId) fail11("biome runtime pack.biomes must be strictly biomeId-sorted and unique");
+  }
+  const required = biomes.reduce((sum, biome) => sum + biome.surfaceRules.length + biome.vegetationRules.length, 0);
+  const bound = biomes.reduce((sum, biome) => sum + biome.bindings.length, 0);
+  const status = fulfillmentStatus(bound, required);
+  if (!BIOME_RUNTIME_FULFILLMENT_STATES.includes(d.status.value)) fail11("biome runtime pack.status is unsupported");
+  if (d.status.value !== status) fail11(`biome runtime pack.status must be '${status}' for its declared bindings`);
+  return Object.freeze({
+    schema: BIOME_RUNTIME_PACK_SCHEMA,
+    id: string4(d.id.value, ID4, 64, "biome runtime pack.id"),
+    version: string4(d.version.value, SEMVER4, 64, "biome runtime pack.version"),
+    metadataPackContentHash: metadataPackHash,
+    status,
+    biomes
+  });
+}
+function stableStringifyBiomeRuntimePack(value, metadataPack) {
+  return JSON.stringify(parseBiomeRuntimePack(value, metadataPack));
+}
+function biomeRuntimePackContentHash(value, metadataPack) {
+  return `sha256:${sha256(stableStringifyBiomeRuntimePack(value, metadataPack))}`;
+}
+
+// src/world/compiler/biome-runtime-pack-artifact.mjs
+var BIOME_RUNTIME_PACK_ARTIFACT_TYPE = "biome-runtime-pack/v1";
+var BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.biome-runtime-pack+json";
+var MAX_BIOME_RUNTIME_PACK_ARTIFACT_BYTES = 4 * 1024 * 1024;
+function decodeBiomeRuntimePackArtifact(bytes) {
+  if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer) || bytes.byteOffset !== 0 || bytes.byteLength !== bytes.buffer.byteLength || bytes.byteLength < 2 || bytes.byteLength > MAX_BIOME_RUNTIME_PACK_ARTIFACT_BYTES) {
+    throw new TypeError("biome runtime-pack artifact must be an owned bounded Uint8Array");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error) {
+    throw new Error(`biome runtime-pack artifact JSON is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const runtimePack = parseBiomeRuntimePack(parsed, BIOME_LIBRARY_V1);
+  return Object.freeze({ runtimePack, semanticContentHash: biomeRuntimePackContentHash(runtimePack, BIOME_LIBRARY_V1) });
+}
+
 // src/browser/derived-terrain-residency.ts
 var DERIVED_TERRAIN_RESIDENCY_SCHEMA = "limina.derived-terrain-residency/v1";
 var MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS = 7;
 var MAX_DERIVED_TERRAIN_RESIDENCY_CHUNKS = (MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS * 2 + 1) ** 2;
-function plain(value, label) {
+function plain2(value, label) {
   if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new TypeError(`${label} must be a plain object`);
   }
   return value;
 }
-function exact(value, keys, label) {
+function exact2(value, keys, label) {
   const names = Object.getOwnPropertyNames(value);
   const expected = new Set(keys);
   if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
@@ -3895,8 +5791,8 @@ function centerTuple(value) {
   ]);
 }
 function parseDerivedTerrainResidency(input) {
-  const value = plain(input, "derived terrain residency");
-  exact(value, ["schema", "center", "lod", "radius"], "derived terrain residency");
+  const value = plain2(input, "derived terrain residency");
+  exact2(value, ["schema", "center", "lod", "radius"], "derived terrain residency");
   if (value.schema !== DERIVED_TERRAIN_RESIDENCY_SCHEMA || value.lod !== 0 || !Number.isSafeInteger(value.radius) || value.radius < 0 || value.radius > MAX_DERIVED_TERRAIN_RESIDENCY_RADIUS) {
     throw new TypeError("derived terrain residency is invalid");
   }
@@ -3927,7 +5823,7 @@ var DERIVED_RUNTIME_WORKER_SCHEMA = "limina.derived-runtime-worker/v4";
 var DERIVED_RUNTIME_RESOURCE_SNAPSHOT_SCHEMA = "limina.derived-runtime-resource-snapshot/v2";
 var DERIVED_RUNTIME_POLL_DELAYS_MS = Object.freeze([250, 500, 1e3, 2e3, 4e3, 8e3]);
 var DERIVED_RUNTIME_ACTIVATION_ACK_TIMEOUT_MS = 15e3;
-var HASH3 = /^sha256:[0-9a-f]{64}$/;
+var HASH8 = /^sha256:[0-9a-f]{64}$/;
 var TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 var REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 var ACTIVATION_ID = /^derived-activation-[1-9][0-9]{0,15}$/;
@@ -3972,15 +5868,15 @@ function requestId(value, label) {
   return value;
 }
 function parsePinnedSource(value) {
-  const record = plainRecord(value, "derived runtime pinnedSource");
-  exactDataKeys(record, ["revision", "headHash"], ["manifestHash"], "derived runtime pinnedSource");
-  if (!Number.isSafeInteger(record.revision) || record.revision < 0 || typeof record.headHash !== "string" || !HASH3.test(record.headHash) || record.manifestHash !== void 0 && (typeof record.manifestHash !== "string" || !HASH3.test(record.manifestHash))) {
+  const record4 = plainRecord(value, "derived runtime pinnedSource");
+  exactDataKeys(record4, ["revision", "headHash"], ["manifestHash"], "derived runtime pinnedSource");
+  if (!Number.isSafeInteger(record4.revision) || record4.revision < 0 || typeof record4.headHash !== "string" || !HASH8.test(record4.headHash) || record4.manifestHash !== void 0 && (typeof record4.manifestHash !== "string" || !HASH8.test(record4.manifestHash))) {
     throw fatal2("INVALID_MESSAGE", "derived runtime pinnedSource is invalid");
   }
   return Object.freeze({
-    revision: record.revision,
-    headHash: record.headHash,
-    ...record.manifestHash === void 0 ? {} : { manifestHash: record.manifestHash }
+    revision: record4.revision,
+    headHash: record4.headHash,
+    ...record4.manifestHash === void 0 ? {} : { manifestHash: record4.manifestHash }
   });
 }
 function parseInit(value) {
@@ -4074,19 +5970,115 @@ function parseClose(value) {
   });
 }
 function parseDerivedRuntimeWorkerInput(value) {
-  const record = plainRecord(value, "derived runtime worker message");
-  const type = Object.getOwnPropertyDescriptor(record, "type")?.value;
-  if (type === "init") return parseInit(record);
-  if (type === "set-residency") return parseSetResidency(record);
-  if (type === "reconcile-residency") return parseReconcileResidency(record);
-  if (type === "activation-ack") return parseAck(record);
-  if (type === "close") return parseClose(record);
+  const record4 = plainRecord(value, "derived runtime worker message");
+  const type = Object.getOwnPropertyDescriptor(record4, "type")?.value;
+  if (type === "init") return parseInit(record4);
+  if (type === "set-residency") return parseSetResidency(record4);
+  if (type === "reconcile-residency") return parseReconcileResidency(record4);
+  if (type === "activation-ack") return parseAck(record4);
+  if (type === "close") return parseClose(record4);
   throw fatal2("INVALID_MESSAGE", "derived runtime worker message type is unsupported");
 }
 function validateDescriptor(descriptor2, artifactType, mediaType, label) {
   if (descriptor2.artifactType !== artifactType || descriptor2.mediaType !== mediaType) {
     throw fatal2("ARTIFACT_CONTRACT_MISMATCH", `${label} descriptor type or media type is invalid`);
   }
+}
+function stageDerivedRuntimeChunk(input) {
+  if (input.signal.aborted) throw input.signal.reason;
+  if (input.artifacts.length < 1 || input.artifacts.length > 3) {
+    throw fatal2("UNSUPPORTED_CHUNK_ARTIFACTS", "derived terrain chunk must contain terrain and at most one surface and population artifact");
+  }
+  const byType = /* @__PURE__ */ new Map();
+  for (const payload of input.artifacts) {
+    const artifactType = payload.artifact.artifactType;
+    if (byType.has(artifactType)) {
+      throw fatal2("DUPLICATE_CHUNK_ARTIFACT", `derived terrain chunk contains duplicate artifact type '${artifactType}'`);
+    }
+    if (artifactType !== TERRAIN_CHUNK_ARTIFACT_TYPE && artifactType !== SURFACE_COMPOSITE_ARTIFACT_TYPE && artifactType !== BIOME_POPULATION_ARTIFACT_TYPE) {
+      throw fatal2("UNSUPPORTED_CHUNK_ARTIFACT", `derived terrain chunk contains unsupported artifact '${artifactType}'`);
+    }
+    byType.set(artifactType, payload);
+  }
+  const terrainPayload = byType.get(TERRAIN_CHUNK_ARTIFACT_TYPE);
+  if (terrainPayload === void 0) {
+    throw fatal2("MISSING_TERRAIN_ARTIFACT", "derived terrain chunk is missing its terrain artifact");
+  }
+  validateDescriptor(terrainPayload.artifact, TERRAIN_CHUNK_ARTIFACT_TYPE, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, "terrain chunk");
+  const decoded = decodeTerrainChunkArtifact(terrainPayload.bytes);
+  if (input.signal.aborted) throw input.signal.reason;
+  const surfacePayload = byType.get(SURFACE_COMPOSITE_ARTIFACT_TYPE);
+  const populationPayload = byType.get(BIOME_POPULATION_ARTIFACT_TYPE);
+  if (surfacePayload === void 0 && populationPayload === void 0) {
+    return Object.freeze({ kind: TERRAIN_CHUNK_ARTIFACT_TYPE, decoded });
+  }
+  if (surfacePayload === void 0) {
+    throw fatal2("POPULATION_BINDING_CONTEXT_MISSING", "biome population artifact requires its surface composite identity context");
+  }
+  if (input.artifacts.length !== (populationPayload === void 0 ? 2 : 3)) {
+    throw fatal2("UNSUPPORTED_CHUNK_ARTIFACTS", "surface-enabled terrain chunk must contain exactly two artifacts");
+  }
+  validateDescriptor(
+    surfacePayload.artifact,
+    SURFACE_COMPOSITE_ARTIFACT_TYPE,
+    SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+    "surface composite"
+  );
+  const surface = decodeSurfaceCompositeArtifact(surfacePayload.bytes, {
+    shouldCancel: () => input.signal.aborted
+  });
+  if (input.signal.aborted) throw input.signal.reason;
+  if (surface.coord.tx !== input.chunk.tx || surface.coord.tz !== input.chunk.tz || surface.coord.lod !== input.chunk.lod) {
+    throw fatal2("SURFACE_COORD_BINDING_MISMATCH", "surface composite coordinates do not match their manifest chunk");
+  }
+  if (surface.source.terrainChunkHash !== terrainPayload.artifact.contentHash) {
+    throw fatal2("SURFACE_TERRAIN_BINDING_MISMATCH", "surface composite is bound to another terrain artifact");
+  }
+  if (populationPayload === void 0) {
+    return Object.freeze({
+      kind: TERRAIN_CHUNK_ARTIFACT_TYPE,
+      decoded,
+      surface,
+      artifacts: Object.freeze({ terrain: terrainPayload.artifact, surface: surfacePayload.artifact })
+    });
+  }
+  validateDescriptor(
+    populationPayload.artifact,
+    BIOME_POPULATION_ARTIFACT_TYPE,
+    BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
+    "biome population plan"
+  );
+  const population = decodeBiomePopulationArtifact(populationPayload.bytes, {
+    shouldCancel: () => input.signal.aborted
+  });
+  if (input.signal.aborted) throw input.signal.reason;
+  if (population.metadata.contentHash !== populationPayload.artifact.contentHash || population.metadata.byteLength !== populationPayload.artifact.byteLength) {
+    throw fatal2("POPULATION_DESCRIPTOR_BINDING_MISMATCH", "biome population bytes do not match their manifest descriptor");
+  }
+  if (population.plan.coord.tx !== input.chunk.tx || population.plan.coord.tz !== input.chunk.tz || population.plan.coord.lod !== input.chunk.lod) {
+    throw fatal2("POPULATION_COORD_BINDING_MISMATCH", "biome population coordinates do not match their manifest chunk");
+  }
+  const biomeFields = input.manifest?.globalArtifacts?.filter((artifact) => artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE) ?? [];
+  if (biomeFields.length !== 1) {
+    throw fatal2("POPULATION_BINDING_CONTEXT_MISSING", "biome population artifact requires exactly one global biome field descriptor");
+  }
+  if (population.plan.identity.fieldContentHash !== biomeFields[0].contentHash || population.plan.identity.fieldContentHash !== surface.source.biomeFieldHash) {
+    throw fatal2("POPULATION_FIELD_BINDING_MISMATCH", "biome population artifact is bound to another biome field");
+  }
+  if (population.plan.identity.runtimePackContentHash !== surface.source.biomePackHash) {
+    throw fatal2("POPULATION_PACK_BINDING_MISMATCH", "biome population artifact is bound to another runtime pack");
+  }
+  return Object.freeze({
+    kind: TERRAIN_CHUNK_ARTIFACT_TYPE,
+    decoded,
+    surface,
+    population,
+    artifacts: Object.freeze({
+      terrain: terrainPayload.artifact,
+      surface: surfacePayload.artifact,
+      population: populationPayload.artifact
+    })
+  });
 }
 function shortError(error) {
   const rawMessage = error instanceof Error ? error.message : String(error);
@@ -4259,7 +6251,7 @@ var DerivedRuntimeWorkerController = class {
         }
         return selectDerivedTerrainChunks(manifest, this.#submissionResidency);
       },
-      stageChunk: (input) => this.#stageChunk(input.artifacts, input.signal),
+      stageChunk: (input) => stageDerivedRuntimeChunk(input),
       stageGlobal: (input) => this.#stageGlobal(input),
       activateRevision: (input) => this.#activate(input),
       disposeChunk: async () => {
@@ -4348,15 +6340,6 @@ var DerivedRuntimeWorkerController = class {
     if (result.status !== "artifact") throw fatal2("PROTOCOL_ERROR", "derived artifact unexpectedly returned not-modified");
     return result.bytes;
   }
-  #stageChunk(artifacts, signal) {
-    if (signal.aborted) throw signal.reason;
-    if (artifacts.length !== 1) throw fatal2("UNSUPPORTED_CHUNK_ARTIFACTS", "derived terrain chunk must contain exactly one artifact");
-    const payload = artifacts[0];
-    validateDescriptor(payload.artifact, TERRAIN_CHUNK_ARTIFACT_TYPE, TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE, "terrain chunk");
-    const decoded = decodeTerrainChunkArtifact(payload.bytes);
-    if (signal.aborted) throw signal.reason;
-    return Object.freeze({ kind: "terrain-chunk/v1", decoded });
-  }
   #stageGlobal(input) {
     if (input.signal.aborted) throw input.signal.reason;
     if (input.artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE) {
@@ -4370,6 +6353,34 @@ var DerivedRuntimeWorkerController = class {
       decodeNavigationIndexArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
       if (input.signal.aborted) throw input.signal.reason;
       return Object.freeze({ kind: NAVIGATION_INDEX_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_FIELD_ARTIFACT_TYPE) {
+      validateDescriptor(input.artifact, BIOME_FIELD_ARTIFACT_TYPE, BIOME_FIELD_ARTIFACT_MEDIA_TYPE, "biome field");
+      decodeBiomeFieldArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_FIELD_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE) {
+      validateDescriptor(
+        input.artifact,
+        BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+        BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+        "biome content closure"
+      );
+      decodeBiomeContentClosureArtifact(input.bytes, { shouldCancel: () => input.signal.aborted });
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE, bytes: input.bytes });
+    }
+    if (input.artifact.artifactType === BIOME_RUNTIME_PACK_ARTIFACT_TYPE) {
+      validateDescriptor(
+        input.artifact,
+        BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+        BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE,
+        "biome runtime pack"
+      );
+      decodeBiomeRuntimePackArtifact(input.bytes);
+      if (input.signal.aborted) throw input.signal.reason;
+      return Object.freeze({ kind: BIOME_RUNTIME_PACK_ARTIFACT_TYPE, bytes: input.bytes });
     }
     if (input.artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE) {
       validateDescriptor(input.artifact, HYDROLOGY_FIELD_ARTIFACT_TYPE, HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE, "hydrology field");
@@ -4387,7 +6398,7 @@ var DerivedRuntimeWorkerController = class {
       if (bindings.hydrologyFieldContentHash !== field.artifact.contentHash) {
         throw fatal2("WATER_FIELD_BINDING_MISMATCH", "hydrology water artifact is bound to another hydrology field");
       }
-      if (bindings.compilerGraphHash !== input.manifest.compiler.graphHash) {
+      if (bindings.compilerGraphHash !== derivedArtifactCompilerGraphHash(input.manifest, HYDROLOGY_WATER_ARTIFACT_TYPE)) {
         throw fatal2("WATER_GRAPH_BINDING_MISMATCH", "hydrology water artifact is bound to another compiler graph");
       }
       const prepared = prepareGeneratedWaterFieldInput({

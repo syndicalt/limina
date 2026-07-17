@@ -5448,6 +5448,7 @@ __export(three_bundle_exports, {
   GreaterStencilFunc: () => GreaterStencilFunc,
   GridHelper: () => GridHelper,
   Group: () => Group,
+  HDRLoader: () => HDRLoader,
   HTMLTexture: () => HTMLTexture,
   HalfFloatType: () => HalfFloatType,
   HemisphereLight: () => HemisphereLight,
@@ -5703,6 +5704,7 @@ __export(three_bundle_exports, {
   RGBA_S3TC_DXT3_Format: () => RGBA_S3TC_DXT3_Format,
   RGBA_S3TC_DXT5_Format: () => RGBA_S3TC_DXT5_Format,
   RGBDepthPacking: () => RGBDepthPacking,
+  RGBELoader: () => RGBELoader,
   RGBFormat: () => RGBFormat,
   RGBIntegerFormat: () => RGBIntegerFormat,
   RGB_BPTC_SIGNED_Format: () => RGB_BPTC_SIGNED_Format,
@@ -13541,18 +13543,18 @@ var WebXRController = class {
    * @param {XRReferenceSpace} referenceSpace - The reference space.
    * @return {WebXRController} A reference to this instance.
    */
-  update(inputSource, frame, referenceSpace) {
+  update(inputSource, frame2, referenceSpace) {
     let inputPose = null;
     let gripPose = null;
     let handPose = null;
     const targetRay = this._targetRay;
     const grip = this._grip;
     const hand = this._hand;
-    if (inputSource && frame.session.visibilityState !== "visible-blurred") {
+    if (inputSource && frame2.session.visibilityState !== "visible-blurred") {
       if (hand && inputSource.hand) {
         handPose = true;
         for (const inputjoint of inputSource.hand.values()) {
-          const jointPose = frame.getJointPose(inputjoint, referenceSpace);
+          const jointPose = frame2.getJointPose(inputjoint, referenceSpace);
           const joint = this._getHandJoint(hand, inputjoint);
           if (jointPose !== null) {
             joint.matrix.fromArray(jointPose.transform.matrix);
@@ -13584,7 +13586,7 @@ var WebXRController = class {
         }
       } else {
         if (grip !== null && inputSource.gripSpace) {
-          gripPose = frame.getPose(inputSource.gripSpace, referenceSpace);
+          gripPose = frame2.getPose(inputSource.gripSpace, referenceSpace);
           if (gripPose !== null) {
             grip.matrix.fromArray(gripPose.transform.matrix);
             grip.matrix.decompose(grip.position, grip.rotation, grip.scale);
@@ -13612,7 +13614,7 @@ var WebXRController = class {
         }
       }
       if (targetRay !== null) {
-        inputPose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
+        inputPose = frame2.getPose(inputSource.targetRaySpace, referenceSpace);
         if (inputPose === null && gripPose !== null) {
           inputPose = gripPose;
         }
@@ -21832,8 +21834,8 @@ var VideoFrameTexture = class extends VideoTexture {
    *
    * @param {VideoFrame} frame - The video frame.
    */
-  setFrame(frame) {
-    this.image = frame;
+  setFrame(frame2) {
+    this.image = frame2;
     this.needsUpdate = true;
   }
 };
@@ -27554,8 +27556,8 @@ function subclip(sourceClip, name, startFrame, endFrame, fps = 30) {
     const times = [];
     const values = [];
     for (let j3 = 0; j3 < track.times.length; ++j3) {
-      const frame = track.times[j3] * fps;
-      if (frame < startFrame || frame >= endFrame) continue;
+      const frame2 = track.times[j3] * fps;
+      if (frame2 < startFrame || frame2 >= endFrame) continue;
       times.push(track.times[j3]);
       for (let k3 = 0; k3 < valueSize; ++k3) {
         values.push(track.values[j3 * valueSize + k3]);
@@ -37933,8 +37935,8 @@ function getFilteredStack(stack3) {
       line: lineNum,
       column
     };
-  }).filter((frame) => {
-    return frame && !IGNORED_FILES.some((regex2) => regex2.test(frame.file));
+  }).filter((frame2) => {
+    return frame2 && !IGNORED_FILES.some((regex2) => regex2.test(frame2.file));
   });
 }
 var StackTrace = class {
@@ -37971,10 +37973,10 @@ var StackTrace = class {
     if (this.stack.length === 0) {
       return message;
     }
-    const stackString = this.stack.map((frame) => {
-      const location = `${frame.file}:${frame.line}:${frame.column}`;
-      if (frame.fn) {
-        return `    at ${frame.fn} (${location})`;
+    const stackString = this.stack.map((frame2) => {
+      const location = `${frame2.file}:${frame2.line}:${frame2.column}`;
+      if (frame2.fn) {
+        return `    at ${frame2.fn} (${location})`;
       }
       return `    at ${location}`;
     }).join("\n");
@@ -40154,8 +40156,8 @@ var UniformNode = class extends InputNode {
   }
   onUpdate(callback, updateType) {
     callback = callback.bind(this);
-    return super.onUpdate((frame) => {
-      const value = callback(frame, this);
+    return super.onUpdate((frame2) => {
+      const value = callback(frame2, this);
       if (value !== void 0) {
         this.value = value;
       }
@@ -42089,19 +42091,19 @@ var BufferAttributeNode = class extends InputNode {
     return this;
   }
 };
-function createBufferAttribute(array32, type = null, stride = 0, offset = 0, usage = StaticDrawUsage, instanced = false) {
+function createBufferAttribute(array32, type = null, stride = 0, offset = 0, usage = StaticDrawUsage, instanced2 = false) {
   if (type === "mat3" || type === null && array32.itemSize === 9) {
     return mat3(
-      new BufferAttributeNode(array32, "vec3", 9, 0).setUsage(usage).setInstanced(instanced),
-      new BufferAttributeNode(array32, "vec3", 9, 3).setUsage(usage).setInstanced(instanced),
-      new BufferAttributeNode(array32, "vec3", 9, 6).setUsage(usage).setInstanced(instanced)
+      new BufferAttributeNode(array32, "vec3", 9, 0).setUsage(usage).setInstanced(instanced2),
+      new BufferAttributeNode(array32, "vec3", 9, 3).setUsage(usage).setInstanced(instanced2),
+      new BufferAttributeNode(array32, "vec3", 9, 6).setUsage(usage).setInstanced(instanced2)
     );
   } else if (type === "mat4" || type === null && array32.itemSize === 16) {
     return mat4(
-      new BufferAttributeNode(array32, "vec4", 16, 0).setUsage(usage).setInstanced(instanced),
-      new BufferAttributeNode(array32, "vec4", 16, 4).setUsage(usage).setInstanced(instanced),
-      new BufferAttributeNode(array32, "vec4", 16, 8).setUsage(usage).setInstanced(instanced),
-      new BufferAttributeNode(array32, "vec4", 16, 12).setUsage(usage).setInstanced(instanced)
+      new BufferAttributeNode(array32, "vec4", 16, 0).setUsage(usage).setInstanced(instanced2),
+      new BufferAttributeNode(array32, "vec4", 16, 4).setUsage(usage).setInstanced(instanced2),
+      new BufferAttributeNode(array32, "vec4", 16, 8).setUsage(usage).setInstanced(instanced2),
+      new BufferAttributeNode(array32, "vec4", 16, 12).setUsage(usage).setInstanced(instanced2)
     );
   }
   return new BufferAttributeNode(array32, type, stride, offset).setUsage(usage);
@@ -42647,8 +42649,8 @@ var InspectorNode = class extends Node {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
-    frame.renderer.inspector.inspect(this);
+  update(frame2) {
+    frame2.renderer.inspector.inspect(this);
   }
   /**
    * Returns the type of the wrapped node.
@@ -43917,7 +43919,7 @@ var Object3DNode = class _Object3DNode extends Node {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  update(frame) {
+  update(frame2) {
     const object2 = this.object3d;
     const uniformNode = this.uniformNode;
     const scope = this.scope;
@@ -43933,12 +43935,12 @@ var Object3DNode = class _Object3DNode extends Node {
       uniformNode.value = uniformNode.value || new Vector3();
       object2.getWorldDirection(uniformNode.value);
     } else if (scope === _Object3DNode.VIEW_POSITION) {
-      const camera = frame.camera;
+      const camera = frame2.camera;
       uniformNode.value = uniformNode.value || new Vector3();
       uniformNode.value.setFromMatrixPosition(object2.matrixWorld);
       uniformNode.value.applyMatrix4(camera.matrixWorldInverse);
     } else if (scope === _Object3DNode.RADIUS) {
-      const geometry = frame.object.geometry;
+      const geometry = frame2.object.geometry;
       if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
       _sphere2.copy(geometry.boundingSphere).applyMatrix4(object2.matrixWorld);
       uniformNode.value = _sphere2.radius;
@@ -44001,9 +44003,9 @@ var ModelNode = class extends Object3DNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  update(frame) {
-    this.object3d = frame.object;
-    super.update(frame);
+  update(frame2) {
+    this.object3d = frame2.object;
+    super.update(frame2);
   }
 };
 var modelDirection = /* @__PURE__ */ nodeImmutable(ModelNode, ModelNode.DIRECTION);
@@ -44174,8 +44176,8 @@ var materialRefractionRatio = /* @__PURE__ */ uniform(0).onReference(({ material
 var materialEnvIntensity = /* @__PURE__ */ uniform(1).onReference(({ material }) => material).onObjectUpdate(function({ material, scene }) {
   return material.envMap ? material.envMapIntensity : scene.environmentIntensity;
 });
-var materialEnvRotation = /* @__PURE__ */ uniform(new Matrix4()).onReference(function(frame) {
-  return frame.material;
+var materialEnvRotation = /* @__PURE__ */ uniform(new Matrix4()).onReference(function(frame2) {
+  return frame2.material;
 }).onObjectUpdate(function({ material, scene }) {
   const rotation = scene.environment !== null && material.envMap === null ? scene.environmentRotation : material.envMapRotation;
   if (rotation) {
@@ -44966,8 +44968,8 @@ var materialPointSize = /* @__PURE__ */ nodeImmutable(MaterialNode, MaterialNode
 var materialDispersion = /* @__PURE__ */ nodeImmutable(MaterialNode, MaterialNode.DISPERSION);
 var materialLightMap = /* @__PURE__ */ nodeImmutable(MaterialNode, MaterialNode.LIGHT_MAP);
 var materialAO = /* @__PURE__ */ nodeImmutable(MaterialNode, MaterialNode.AO);
-var materialAnisotropyVector = /* @__PURE__ */ uniform(new Vector2()).onReference(function(frame) {
-  return frame.material;
+var materialAnisotropyVector = /* @__PURE__ */ uniform(new Vector2()).onReference(function(frame2) {
+  return frame2.material;
 }).onRenderUpdate(function({ material }) {
   this.value.set(material.anisotropy * Math.cos(material.anisotropyRotation), material.anisotropy * Math.sin(material.anisotropyRotation));
 });
@@ -45316,7 +45318,7 @@ var InstanceNode = class extends Node {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  update(frame) {
+  update(frame2) {
     if (this.buffer !== null && this.isStorageMatrix !== true) {
       this.buffer.clearUpdateRanges();
       this.buffer.updateRanges.push(...this.instanceMatrix.updateRanges);
@@ -45332,7 +45334,7 @@ var InstanceNode = class extends Node {
       }
     }
     if (this.previousInstanceMatrixNode !== null) {
-      frame.object.previousInstanceMatrix.array.set(this.instanceMatrix.array);
+      frame2.object.previousInstanceMatrix.array.set(this.instanceMatrix.array);
     }
   }
   /**
@@ -45604,10 +45606,10 @@ var SkinningNode = class extends Node {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  update(frame) {
-    const skeleton = frame.object && frame.object.skeleton ? frame.object.skeleton : this.skinnedMesh.skeleton;
-    if (_frameId.get(skeleton) === frame.frameId) return;
-    _frameId.set(skeleton, frame.frameId);
+  update(frame2) {
+    const skeleton = frame2.object && frame2.object.skeleton ? frame2.object.skeleton : this.skinnedMesh.skeleton;
+    if (_frameId.get(skeleton) === frame2.frameId) return;
+    _frameId.set(skeleton, frame2.frameId);
     if (this.previousBoneMatricesNode !== null) {
       if (skeleton.previousBoneMatrices === null) {
         skeleton.previousBoneMatrices = new Float32Array(skeleton.boneMatrices);
@@ -46109,16 +46111,16 @@ var ViewportTextureNode = class extends TextureNode {
     }
     return cacheTextures.get(reference3);
   }
-  updateReference(frame) {
-    const renderer = frame.renderer;
+  updateReference(frame2) {
+    const renderer = frame2.renderer;
     const renderTarget = renderer.getRenderTarget();
     const canvasTarget = renderer.getCanvasTarget();
     const reference3 = renderTarget ? renderTarget : canvasTarget;
     this.value = this.getTextureForReference(reference3);
     return this.value;
   }
-  updateBefore(frame) {
-    const renderer = frame.renderer;
+  updateBefore(frame2) {
+    const renderer = frame2.renderer;
     const renderTarget = renderer.getRenderTarget();
     const canvasTarget = renderer.getCanvasTarget();
     const reference3 = renderTarget ? renderTarget : canvasTarget;
@@ -47561,8 +47563,8 @@ var CubeMapNode = class extends TempNode {
     this._defaultTexture = defaultTexture;
     this.updateBeforeType = NodeUpdateType.RENDER;
   }
-  updateBefore(frame) {
-    const { renderer, material } = frame;
+  updateBefore(frame2) {
+    const { renderer, material } = frame2;
     const envNode = this.envNode;
     if (envNode.isTextureNode || envNode.isMaterialReferenceNode) {
       const texture3 = envNode.isTextureNode ? envNode.value : material[envNode.property];
@@ -50292,7 +50294,7 @@ var PMREMNode = class extends TempNode {
     this._height.value = cubeUVSize.texelHeight;
     this._maxMip.value = cubeUVSize.maxMip;
   }
-  updateBefore(frame) {
+  updateBefore(frame2) {
     let pmrem = this._pmrem;
     const pmremVersion = pmrem ? pmrem.pmremVersion : -1;
     const texture3 = this._value;
@@ -50300,7 +50302,7 @@ var PMREMNode = class extends TempNode {
       if (texture3.isPMREMTexture === true) {
         pmrem = texture3;
       } else {
-        pmrem = _getPMREMFromTexture(texture3, frame.renderer, this._generator);
+        pmrem = _getPMREMFromTexture(texture3, frame2.renderer, this._generator);
       }
       if (pmrem !== null) {
         this._pmrem = pmrem;
@@ -54779,9 +54781,9 @@ var FunctionOverloadingNode = class extends Node {
 };
 var overloadingBaseFn = /* @__PURE__ */ nodeProxy(FunctionOverloadingNode);
 var overloadingFn = (functionNodes) => (...params) => overloadingBaseFn(functionNodes, ...params);
-var time = /* @__PURE__ */ uniform(0).setGroup(renderGroup).onRenderUpdate((frame) => frame.time);
-var deltaTime = /* @__PURE__ */ uniform(0).setGroup(renderGroup).onRenderUpdate((frame) => frame.deltaTime);
-var frameId = /* @__PURE__ */ uniform(0, "uint").setGroup(renderGroup).onRenderUpdate((frame) => frame.frameId);
+var time = /* @__PURE__ */ uniform(0).setGroup(renderGroup).onRenderUpdate((frame2) => frame2.time);
+var deltaTime = /* @__PURE__ */ uniform(0).setGroup(renderGroup).onRenderUpdate((frame2) => frame2.deltaTime);
+var frameId = /* @__PURE__ */ uniform(0, "uint").setGroup(renderGroup).onRenderUpdate((frame2) => frame2.frameId);
 var oscSine = (t2 = time) => t2.add(0.75).mul(Math.PI * 2).sin().mul(0.5).add(0.5);
 var oscSquare = (t2 = time) => t2.fract().round();
 var oscTriangle = (t2 = time) => t2.add(0.5).fract().mul(2).sub(1).abs();
@@ -55059,10 +55061,10 @@ var ReflectorBaseNode = class extends Node {
     }
     return renderTarget;
   }
-  updateBefore(frame) {
+  updateBefore(frame2) {
     if (this.bounces === false && _inReflector) return false;
     _inReflector = true;
-    const { scene, camera, renderer, material } = frame;
+    const { scene, camera, renderer, material } = frame2;
     const { target } = this;
     const virtualCamera = this.getVirtualCamera(camera);
     const renderTarget = this.getRenderTarget(virtualCamera);
@@ -55443,11 +55445,11 @@ var EventNode = class _EventNode extends Node {
       this.updateBeforeType = NodeUpdateType.FRAME;
     }
   }
-  update(frame) {
-    this.callback(frame);
+  update(frame2) {
+    this.callback(frame2);
   }
-  updateBefore(frame) {
-    this.callback(frame);
+  updateBefore(frame2) {
+    this.callback(frame2);
   }
 };
 EventNode.OBJECT = "object";
@@ -56328,8 +56330,8 @@ var PassNode = class _PassNode extends TempNode {
     }
     return this.scope === _PassNode.COLOR ? this.getTextureNode() : this.getLinearDepthNode();
   }
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     const { scene } = this;
     let camera;
     let pixelRatio;
@@ -56501,8 +56503,8 @@ var ToonOutlinePassNode = class extends PassNode {
     this._materialCache = /* @__PURE__ */ new WeakMap();
     this.name = "Outline Pass";
   }
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     const currentRenderObjectFunction = renderer.getRenderObjectFunction();
     renderer.setRenderObjectFunction((object2, scene, camera, geometry, material, group, lightsNode, clippingContext) => {
       if (material.isMeshToonMaterial || material.isMeshToonNodeMaterial) {
@@ -56513,7 +56515,7 @@ var ToonOutlinePassNode = class extends PassNode {
       }
       renderer.renderObject(object2, scene, camera, geometry, material, group, lightsNode, clippingContext);
     });
-    super.updateBefore(frame);
+    super.updateBefore(frame2);
     renderer.setRenderObjectFunction(currentRenderObjectFunction);
   }
   /**
@@ -57406,10 +57408,10 @@ function getLightData(light) {
 }
 function lightShadowMatrix(light) {
   const data = getLightData(light);
-  return data.shadowMatrix || (data.shadowMatrix = uniform("mat4").setGroup(renderGroup).onRenderUpdate((frame) => {
-    if (light.castShadow !== true || frame.renderer.shadowMap.enabled === false) {
-      if (light.shadow.camera.coordinateSystem !== frame.camera.coordinateSystem) {
-        light.shadow.camera.coordinateSystem = frame.camera.coordinateSystem;
+  return data.shadowMatrix || (data.shadowMatrix = uniform("mat4").setGroup(renderGroup).onRenderUpdate((frame2) => {
+    if (light.castShadow !== true || frame2.renderer.shadowMap.enabled === false) {
+      if (light.shadow.camera.coordinateSystem !== frame2.camera.coordinateSystem) {
+        light.shadow.camera.coordinateSystem = frame2.camera.coordinateSystem;
         light.shadow.camera.updateProjectionMatrix();
       }
       light.shadow.updateMatrices(light);
@@ -58191,9 +58193,9 @@ var ShadowNode = class extends ShadowBaseNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  renderShadow(frame) {
+  renderShadow(frame2) {
     const { shadow: shadow3, shadowMap, light } = this;
-    const { renderer, scene } = frame;
+    const { renderer, scene } = frame2;
     shadow3.updateMatrices(light);
     shadowMap.setSize(shadow3.mapSize.width, shadow3.mapSize.height, shadowMap.depth);
     const currentSceneName = scene.name;
@@ -58206,9 +58208,9 @@ var ShadowNode = class extends ShadowBaseNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  updateShadow(frame) {
+  updateShadow(frame2) {
     const { shadowMap, light, shadow: shadow3 } = this;
-    const { renderer, scene, camera } = frame;
+    const { renderer, scene, camera } = frame2;
     const shadowType = renderer.shadowMap.type;
     const depthVersion = shadowMap.depthTexture.version;
     this._depthVersionCached = depthVersion;
@@ -58224,7 +58226,7 @@ var ShadowNode = class extends ShadowBaseNode {
     renderer.setRenderObjectFunction(getShadowRenderObjectFunction(renderer, shadow3, shadowType, useVelocity));
     renderer.setClearColor(0, 0);
     renderer.setRenderTarget(shadowMap);
-    this.renderShadow(frame);
+    this.renderShadow(frame2);
     renderer.setRenderObjectFunction(currentRenderObjectFunction);
     if (shadowType === VSMShadowMap && shadow3.isPointLightShadow !== true) {
       this.vsmPass(renderer);
@@ -58286,17 +58288,17 @@ var ShadowNode = class extends ShadowBaseNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  updateBefore(frame) {
+  updateBefore(frame2) {
     const { shadow: shadow3 } = this;
     let needsUpdate = shadow3.needsUpdate || shadow3.autoUpdate;
     if (needsUpdate) {
-      if (this._cameraFrameId[frame.camera] === frame.frameId) {
+      if (this._cameraFrameId[frame2.camera] === frame2.frameId) {
         needsUpdate = false;
       }
-      this._cameraFrameId[frame.camera] = frame.frameId;
+      this._cameraFrameId[frame2.camera] = frame2.frameId;
     }
     if (needsUpdate) {
-      this.updateShadow(frame);
+      this.updateShadow(frame2);
       if (this.shadowMap.depthTexture.version === this._depthVersionCached) {
         shadow3.needsUpdate = false;
       }
@@ -58354,9 +58356,9 @@ var PointShadowFilter = /* @__PURE__ */ Fn(({ depthTexture, bd3D, dp, shadow: sh
   const sample0 = vogelDiskSample(0, 5, phi);
   const sample1 = vogelDiskSample(1, 5, phi);
   const sample22 = vogelDiskSample(2, 5, phi);
-  const sample3 = vogelDiskSample(3, 5, phi);
+  const sample32 = vogelDiskSample(3, 5, phi);
   const sample4 = vogelDiskSample(4, 5, phi);
-  return cubeTexture(depthTexture, bd3D.add(tangent.mul(sample0.x).add(bitangent.mul(sample0.y)).mul(texelSize))).compare(dp).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample1.x).add(bitangent.mul(sample1.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample22.x).add(bitangent.mul(sample22.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample3.x).add(bitangent.mul(sample3.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample4.x).add(bitangent.mul(sample4.y)).mul(texelSize))).compare(dp)).mul(1 / 5);
+  return cubeTexture(depthTexture, bd3D.add(tangent.mul(sample0.x).add(bitangent.mul(sample0.y)).mul(texelSize))).compare(dp).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample1.x).add(bitangent.mul(sample1.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample22.x).add(bitangent.mul(sample22.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample32.x).add(bitangent.mul(sample32.y)).mul(texelSize))).compare(dp)).add(cubeTexture(depthTexture, bd3D.add(tangent.mul(sample4.x).add(bitangent.mul(sample4.y)).mul(texelSize))).compare(dp)).mul(1 / 5);
 });
 var pointShadowFilter = /* @__PURE__ */ Fn(({ filterFn, depthTexture, shadowCoord, shadow: shadow3 }, builder) => {
   const shadowPosition = shadowCoord.xyz.toConst();
@@ -58450,9 +58452,9 @@ var PointShadowNode = class extends ShadowNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  renderShadow(frame) {
+  renderShadow(frame2) {
     const { shadow: shadow3, shadowMap, light } = this;
-    const { renderer, scene } = frame;
+    const { renderer, scene } = frame2;
     const camera = shadow3.camera;
     const shadowMatrix = shadow3.matrix;
     const isWebGPU = renderer.coordinateSystem === WebGPUCoordinateSystem;
@@ -58682,9 +58684,9 @@ var PointLightNode = class extends AnalyticLightNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
+  update(frame2) {
     const { light } = this;
-    super.update(frame);
+    super.update(frame2);
     this.cutoffDistanceNode.value = light.distance;
     this.decayExponentNode.value = light.decay;
   }
@@ -63544,9 +63546,9 @@ var HemisphereLightNode = class extends AnalyticLightNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
+  update(frame2) {
     const { light } = this;
-    super.update(frame);
+    super.update(frame2);
     this.lightPositionNode.object3d = light;
     this.groundColorNode.value.copy(light.groundColor).multiplyScalar(light.intensity);
   }
@@ -63580,8 +63582,8 @@ var SpotLightNode = class extends AnalyticLightNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
-    super.update(frame);
+  update(frame2) {
+    super.update(frame2);
     const { light } = this;
     this.coneCosNode.value = Math.cos(light.angle);
     this.penumbraCosNode.value = Math.cos(light.angle * (1 - light.penumbra));
@@ -63679,9 +63681,9 @@ var LightProbeNode = class extends AnalyticLightNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
+  update(frame2) {
     const { light } = this;
-    super.update(frame);
+    super.update(frame2);
     for (let i2 = 0; i2 < 9; i2++) {
       this.lightProbe.array[i2].copy(light.sh.coefficients[i2]).multiplyScalar(light.intensity);
     }
@@ -63699,8 +63701,8 @@ var ProjectorLightNode = class extends SpotLightNode {
   static get type() {
     return "ProjectorLightNode";
   }
-  update(frame) {
-    super.update(frame);
+  update(frame2) {
+    super.update(frame2);
     const light = this.light;
     this.penumbraCosNode.value = Math.min(Math.cos(light.angle * (1 - light.penumbra)), 0.99999);
     if (light.aspect === null) {
@@ -63755,10 +63757,10 @@ var RectAreaLightNode = class extends AnalyticLightNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update(frame) {
-    super.update(frame);
+  update(frame2) {
+    super.update(frame2);
     const { light } = this;
-    const viewMatrix = frame.camera.matrixWorldInverse;
+    const viewMatrix = frame2.camera.matrixWorldInverse;
     _matrix42.identity();
     _matrix41.copy(light.matrixWorld);
     _matrix41.premultiply(viewMatrix);
@@ -65673,15 +65675,15 @@ function createXRLayer(layer) {
     });
   }
 }
-function onAnimationFrame(time32, frame) {
-  if (frame === void 0) return;
+function onAnimationFrame(time32, frame2) {
+  if (frame2 === void 0) return;
   const cameraXR = this._cameraXR;
   const renderer = this._renderer;
   const backend = renderer.backend;
   const glBaseLayer = this._glBaseLayer;
   const referenceSpace = this.getReferenceSpace();
-  const pose = frame.getViewerPose(referenceSpace);
-  this._xrFrame = frame;
+  const pose = frame2.getViewerPose(referenceSpace);
+  this._xrFrame = frame2;
   if (pose !== null) {
     const views = pose.views;
     if (this._glBaseLayer !== null) {
@@ -65734,12 +65736,12 @@ function onAnimationFrame(time32, frame) {
     const inputSource = this._controllerInputSources[i2];
     const controller = this._controllers[i2];
     if (inputSource !== null && controller !== void 0) {
-      controller.update(inputSource, frame, referenceSpace);
+      controller.update(inputSource, frame2, referenceSpace);
     }
   }
-  if (this._currentAnimationLoop) this._currentAnimationLoop(time32, frame);
-  if (frame.detectedPlanes) {
-    this.dispatchEvent({ type: "planesdetected", data: frame });
+  if (this._currentAnimationLoop) this._currentAnimationLoop(time32, frame2);
+  if (frame2.detectedPlanes) {
+    this.dispatchEvent({ type: "planesdetected", data: frame2 });
   }
   this._xrFrame = null;
 }
@@ -70010,14 +70012,14 @@ var Backend = class {
    */
   updateTimeStampUID(abstractRenderContext) {
     const contextData = this.get(abstractRenderContext);
-    const frame = this.renderer.info.frame;
+    const frame2 = this.renderer.info.frame;
     let prefix;
     if (abstractRenderContext.isComputeNode === true) {
       prefix = "c:" + this.renderer.info.compute.frameCalls;
     } else {
       prefix = "r:" + this.renderer.info.render.frameCalls;
     }
-    contextData.timestampUID = prefix + ":" + abstractRenderContext.id + ":f" + frame;
+    contextData.timestampUID = prefix + ":" + abstractRenderContext.id + ":f" + frame2;
   }
   /**
    * Returns a unique identifier for the given render context that can be used
@@ -72613,14 +72615,14 @@ var WebGLTimestampQueryPool = class extends TimestampQueryPool {
       const frames = [];
       for (const [uid, promise2] of resolvePromises) {
         const match = uid.match(/^(.*):f(\d+)$/);
-        const frame = parseInt(match[2]);
-        if (frames.includes(frame) === false) {
-          frames.push(frame);
+        const frame2 = parseInt(match[2]);
+        if (frames.includes(frame2) === false) {
+          frames.push(frame2);
         }
-        if (framesDuration[frame] === void 0) framesDuration[frame] = 0;
+        if (framesDuration[frame2] === void 0) framesDuration[frame2] = 0;
         const duration3 = await promise2;
         this.timestamps.set(uid, duration3);
-        framesDuration[frame] += duration3;
+        framesDuration[frame2] += duration3;
       }
       const totalDuration = framesDuration[frames[frames.length - 1]];
       this.lastValue = totalDuration;
@@ -79227,23 +79229,23 @@ var WebGPUTimestampQueryPool = class extends TimestampQueryPool {
       const bytesUsed = queryCount * 8;
       this.currentQueryIndex = 0;
       this.queryOffsets.clear();
-      const commandEncoder = this.device.createCommandEncoder();
-      commandEncoder.resolveQuerySet(
+      const resolveEncoder = this.device.createCommandEncoder({ label: "LIMINA_WGPU_6406_RESOLVE" });
+      resolveEncoder.resolveQuerySet(
         this.querySet,
         0,
         queryCount,
         this.resolveBuffer,
         0
       );
-      commandEncoder.copyBufferToBuffer(
+      const copyEncoder = this.device.createCommandEncoder({ label: "LIMINA_WGPU_6406_COPY" });
+      copyEncoder.copyBufferToBuffer(
         this.resolveBuffer,
         0,
         this.resultBuffer,
         0,
         bytesUsed
       );
-      const commandBuffer = commandEncoder.finish();
-      this.device.queue.submit([commandBuffer]);
+      this.device.queue.submit([resolveEncoder.finish(), copyEncoder.finish()]);
       if (this.resultBuffer.mapState !== "unmapped") {
         return this.lastValue;
       }
@@ -79259,16 +79261,16 @@ var WebGPUTimestampQueryPool = class extends TimestampQueryPool {
       const frames = [];
       for (const [uid, baseOffset] of currentOffsets) {
         const match = uid.match(/^(.*):f(\d+)$/);
-        const frame = parseInt(match[2]);
-        if (frames.includes(frame) === false) {
-          frames.push(frame);
+        const frame2 = parseInt(match[2]);
+        if (frames.includes(frame2) === false) {
+          frames.push(frame2);
         }
-        if (framesDuration[frame] === void 0) framesDuration[frame] = 0;
+        if (framesDuration[frame2] === void 0) framesDuration[frame2] = 0;
         const startTime = times[baseOffset];
         const endTime = times[baseOffset + 1];
         const duration3 = Number(endTime - startTime) / 1e6;
         this.timestamps.set(uid, duration3);
-        framesDuration[frame] += duration3;
+        framesDuration[frame2] += duration3;
       }
       const totalDuration = framesDuration[frames[frames.length - 1]];
       this.resultBuffer.unmap();
@@ -85083,10 +85085,10 @@ var GLTFMeshGpuInstancing = class {
     pending.push(this.parser.createNodeMesh(nodeIndex));
     return Promise.all(pending).then((results) => {
       const nodeObject3 = results.pop();
-      const meshes = nodeObject3.isGroup ? nodeObject3.children : [nodeObject3];
+      const meshes2 = nodeObject3.isGroup ? nodeObject3.children : [nodeObject3];
       const count = results[0].count;
       const instancedMeshes = [];
-      for (const mesh of meshes) {
+      for (const mesh of meshes2) {
         const m2 = new Matrix4();
         const p2 = new Vector3();
         const q3 = new Quaternion();
@@ -86251,7 +86253,7 @@ var GLTFParser = class {
     return Promise.all(pending).then(function(results) {
       const materials = results.slice(0, results.length - 1);
       const geometries = results[results.length - 1];
-      const meshes = [];
+      const meshes2 = [];
       for (let i2 = 0, il = geometries.length; i2 < il; i2++) {
         const geometry = geometries[i2];
         const primitive = primitives[i2];
@@ -86285,23 +86287,23 @@ var GLTFParser = class {
         assignExtrasToUserData(mesh, meshDef);
         if (primitive.extensions) addUnknownExtensionsToUserData(extensions, mesh, primitive);
         parser.assignFinalMaterial(mesh);
-        meshes.push(mesh);
+        meshes2.push(mesh);
       }
-      for (let i2 = 0, il = meshes.length; i2 < il; i2++) {
-        parser.associations.set(meshes[i2], {
+      for (let i2 = 0, il = meshes2.length; i2 < il; i2++) {
+        parser.associations.set(meshes2[i2], {
           meshes: meshIndex,
           primitives: i2
         });
       }
-      if (meshes.length === 1) {
-        if (meshDef.extensions) addUnknownExtensionsToUserData(extensions, meshes[0], meshDef);
-        return meshes[0];
+      if (meshes2.length === 1) {
+        if (meshDef.extensions) addUnknownExtensionsToUserData(extensions, meshes2[0], meshDef);
+        return meshes2[0];
       }
       const group = new Group();
       if (meshDef.extensions) addUnknownExtensionsToUserData(extensions, group, meshDef);
       parser.associations.set(group, { meshes: meshIndex });
-      for (let i2 = 0, il = meshes.length; i2 < il; i2++) {
-        group.add(meshes[i2]);
+      for (let i2 = 0, il = meshes2.length; i2 < il; i2++) {
+        group.add(meshes2[i2]);
       }
       return group;
     });
@@ -86787,6 +86789,266 @@ function addPrimitiveAttributes(geometry, primitiveDef, parser) {
     return primitiveDef.targets !== void 0 ? addMorphTargets(geometry, primitiveDef.targets, parser) : geometry;
   });
 }
+var HDRLoader = class extends DataTextureLoader {
+  /**
+      * Constructs a new RGBE/HDR loader.
+      *
+      * @param {LoadingManager} [manager] - The loading manager.
+      */
+  constructor(manager) {
+    super(manager);
+    this.type = HalfFloatType;
+  }
+  /**
+      * Parses the given RGBE texture data.
+      *
+      * @param {ArrayBuffer} buffer - The raw texture data.
+      * @return {DataTextureLoader~TexData} An object representing the parsed texture data.
+      */
+  parse(buffer3) {
+    const rgbe_read_error = 1, rgbe_write_error = 2, rgbe_format_error = 3, rgbe_memory_error = 4, rgbe_error = function(rgbe_error_code, msg) {
+      switch (rgbe_error_code) {
+        case rgbe_read_error:
+          throw new Error("THREE.HDRLoader: Read Error: " + (msg || ""));
+        case rgbe_write_error:
+          throw new Error("THREE.HDRLoader: Write Error: " + (msg || ""));
+        case rgbe_format_error:
+          throw new Error("THREE.HDRLoader: Bad File Format: " + (msg || ""));
+        default:
+        case rgbe_memory_error:
+          throw new Error("THREE.HDRLoader: Memory Error: " + (msg || ""));
+      }
+    }, RGBE_VALID_PROGRAMTYPE = 1, RGBE_VALID_FORMAT = 2, RGBE_VALID_DIMENSIONS = 4, NEWLINE = "\n", fgets = function(buffer4, lineLimit, consume) {
+      const chunkSize = 128;
+      lineLimit = !lineLimit ? 1024 : lineLimit;
+      let p2 = buffer4.pos, i2 = -1, len = 0, s2 = "", chunk = String.fromCharCode.apply(null, new Uint16Array(buffer4.subarray(p2, p2 + chunkSize)));
+      while (0 > (i2 = chunk.indexOf(NEWLINE)) && len < lineLimit && p2 < buffer4.byteLength) {
+        s2 += chunk;
+        len += chunk.length;
+        p2 += chunkSize;
+        chunk = String.fromCharCode.apply(null, new Uint16Array(buffer4.subarray(p2, p2 + chunkSize)));
+      }
+      if (-1 < i2) {
+        if (false !== consume) buffer4.pos += len + i2 + 1;
+        return s2 + chunk.slice(0, i2);
+      }
+      return false;
+    }, RGBE_ReadHeader = function(buffer4) {
+      const magic_token_re = /^#\?(\S+)/, gamma_re = /^\s*GAMMA\s*=\s*(\d+(\.\d+)?)\s*$/, exposure_re = /^\s*EXPOSURE\s*=\s*(\d+(\.\d+)?)\s*$/, format_re = /^\s*FORMAT=(\S+)\s*$/, dimensions_re = /^\s*\-Y\s+(\d+)\s+\+X\s+(\d+)\s*$/, header = {
+        valid: 0,
+        /* indicate which fields are valid */
+        string: "",
+        /* the actual header string */
+        comments: "",
+        /* comments found in header */
+        programtype: "RGBE",
+        /* listed at beginning of file to identify it after "#?". defaults to "RGBE" */
+        format: "",
+        /* RGBE format, default 32-bit_rle_rgbe */
+        gamma: 1,
+        /* image has already been gamma corrected with given gamma. defaults to 1.0 (no correction) */
+        exposure: 1,
+        /* a value of 1.0 in an image corresponds to <exposure> watts/steradian/m^2. defaults to 1.0 */
+        width: 0,
+        height: 0
+        /* image dimensions, width/height */
+      };
+      let line, match;
+      if (buffer4.pos >= buffer4.byteLength || !(line = fgets(buffer4))) {
+        rgbe_error(rgbe_read_error, "no header found");
+      }
+      if (!(match = line.match(magic_token_re))) {
+        rgbe_error(rgbe_format_error, "bad initial token");
+      }
+      header.valid |= RGBE_VALID_PROGRAMTYPE;
+      header.programtype = match[1];
+      header.string += line + "\n";
+      while (true) {
+        line = fgets(buffer4);
+        if (false === line) break;
+        header.string += line + "\n";
+        if ("#" === line.charAt(0)) {
+          header.comments += line + "\n";
+          continue;
+        }
+        if (match = line.match(gamma_re)) {
+          header.gamma = parseFloat(match[1]);
+        }
+        if (match = line.match(exposure_re)) {
+          header.exposure = parseFloat(match[1]);
+        }
+        if (match = line.match(format_re)) {
+          header.valid |= RGBE_VALID_FORMAT;
+          header.format = match[1];
+        }
+        if (match = line.match(dimensions_re)) {
+          header.valid |= RGBE_VALID_DIMENSIONS;
+          header.height = parseInt(match[1], 10);
+          header.width = parseInt(match[2], 10);
+        }
+        if (header.valid & RGBE_VALID_FORMAT && header.valid & RGBE_VALID_DIMENSIONS) break;
+      }
+      if (!(header.valid & RGBE_VALID_FORMAT)) {
+        rgbe_error(rgbe_format_error, "missing format specifier");
+      }
+      if (!(header.valid & RGBE_VALID_DIMENSIONS)) {
+        rgbe_error(rgbe_format_error, "missing image size specifier");
+      }
+      return header;
+    }, RGBE_ReadPixels_RLE = function(buffer4, w42, h22) {
+      const scanline_width = w42;
+      if (
+        // run length encoding is not allowed so read flat
+        scanline_width < 8 || scanline_width > 32767 || // this file is not run length encoded
+        (2 !== buffer4[0] || 2 !== buffer4[1] || buffer4[2] & 128)
+      ) {
+        return new Uint8Array(buffer4);
+      }
+      if (scanline_width !== (buffer4[2] << 8 | buffer4[3])) {
+        rgbe_error(rgbe_format_error, "wrong scanline width");
+      }
+      const data_rgba = new Uint8Array(4 * w42 * h22);
+      if (!data_rgba.length) {
+        rgbe_error(rgbe_memory_error, "unable to allocate buffer space");
+      }
+      let offset = 0, pos = 0;
+      const ptr_end = 4 * scanline_width;
+      const rgbeStart = new Uint8Array(4);
+      const scanline_buffer = new Uint8Array(ptr_end);
+      let num_scanlines = h22;
+      while (num_scanlines > 0 && pos < buffer4.byteLength) {
+        if (pos + 4 > buffer4.byteLength) {
+          rgbe_error(rgbe_read_error);
+        }
+        rgbeStart[0] = buffer4[pos++];
+        rgbeStart[1] = buffer4[pos++];
+        rgbeStart[2] = buffer4[pos++];
+        rgbeStart[3] = buffer4[pos++];
+        if (2 != rgbeStart[0] || 2 != rgbeStart[1] || (rgbeStart[2] << 8 | rgbeStart[3]) != scanline_width) {
+          rgbe_error(rgbe_format_error, "bad rgbe scanline format");
+        }
+        let ptr = 0, count;
+        while (ptr < ptr_end && pos < buffer4.byteLength) {
+          count = buffer4[pos++];
+          const isEncodedRun = count > 128;
+          if (isEncodedRun) count -= 128;
+          if (0 === count || ptr + count > ptr_end) {
+            rgbe_error(rgbe_format_error, "bad scanline data");
+          }
+          if (isEncodedRun) {
+            const byteValue = buffer4[pos++];
+            for (let i2 = 0; i2 < count; i2++) {
+              scanline_buffer[ptr++] = byteValue;
+            }
+          } else {
+            scanline_buffer.set(buffer4.subarray(pos, pos + count), ptr);
+            ptr += count;
+            pos += count;
+          }
+        }
+        const l2 = scanline_width;
+        for (let i2 = 0; i2 < l2; i2++) {
+          let off = 0;
+          data_rgba[offset] = scanline_buffer[i2 + off];
+          off += scanline_width;
+          data_rgba[offset + 1] = scanline_buffer[i2 + off];
+          off += scanline_width;
+          data_rgba[offset + 2] = scanline_buffer[i2 + off];
+          off += scanline_width;
+          data_rgba[offset + 3] = scanline_buffer[i2 + off];
+          offset += 4;
+        }
+        num_scanlines--;
+      }
+      return data_rgba;
+    };
+    const RGBEByteToRGBFloat = function(sourceArray, sourceOffset, destArray, destOffset) {
+      const e2 = sourceArray[sourceOffset + 3];
+      const scale2 = Math.pow(2, e2 - 128) / 255;
+      destArray[destOffset + 0] = sourceArray[sourceOffset + 0] * scale2;
+      destArray[destOffset + 1] = sourceArray[sourceOffset + 1] * scale2;
+      destArray[destOffset + 2] = sourceArray[sourceOffset + 2] * scale2;
+      destArray[destOffset + 3] = 1;
+    };
+    const RGBEByteToRGBHalf = function(sourceArray, sourceOffset, destArray, destOffset) {
+      const e2 = sourceArray[sourceOffset + 3];
+      const scale2 = Math.pow(2, e2 - 128) / 255;
+      destArray[destOffset + 0] = DataUtils.toHalfFloat(Math.min(sourceArray[sourceOffset + 0] * scale2, 65504));
+      destArray[destOffset + 1] = DataUtils.toHalfFloat(Math.min(sourceArray[sourceOffset + 1] * scale2, 65504));
+      destArray[destOffset + 2] = DataUtils.toHalfFloat(Math.min(sourceArray[sourceOffset + 2] * scale2, 65504));
+      destArray[destOffset + 3] = DataUtils.toHalfFloat(1);
+    };
+    const byteArray = new Uint8Array(buffer3);
+    byteArray.pos = 0;
+    const rgbe_header_info = RGBE_ReadHeader(byteArray);
+    const w5 = rgbe_header_info.width, h2 = rgbe_header_info.height, image_rgba_data = RGBE_ReadPixels_RLE(byteArray.subarray(byteArray.pos), w5, h2);
+    let data, type;
+    let numElements;
+    switch (this.type) {
+      case FloatType:
+        numElements = image_rgba_data.length / 4;
+        const floatArray = new Float32Array(numElements * 4);
+        for (let j3 = 0; j3 < numElements; j3++) {
+          RGBEByteToRGBFloat(image_rgba_data, j3 * 4, floatArray, j3 * 4);
+        }
+        data = floatArray;
+        type = FloatType;
+        break;
+      case HalfFloatType:
+        numElements = image_rgba_data.length / 4;
+        const halfArray = new Uint16Array(numElements * 4);
+        for (let j3 = 0; j3 < numElements; j3++) {
+          RGBEByteToRGBHalf(image_rgba_data, j3 * 4, halfArray, j3 * 4);
+        }
+        data = halfArray;
+        type = HalfFloatType;
+        break;
+      default:
+        throw new Error("THREE.HDRLoader: Unsupported type: " + this.type);
+    }
+    return {
+      width: w5,
+      height: h2,
+      data,
+      header: rgbe_header_info.string,
+      gamma: rgbe_header_info.gamma,
+      exposure: rgbe_header_info.exposure,
+      type
+    };
+  }
+  /**
+      * Sets the texture type.
+      *
+      * @param {(HalfFloatType|FloatType)} value - The texture type to set.
+      * @return {HDRLoader} A reference to this loader.
+      */
+  setDataType(value) {
+    this.type = value;
+    return this;
+  }
+  load(url2, onLoad, onProgress, onError) {
+    function onLoadCallback(texture3, texData) {
+      switch (texture3.type) {
+        case FloatType:
+        case HalfFloatType:
+          texture3.colorSpace = LinearSRGBColorSpace;
+          texture3.minFilter = LinearFilter;
+          texture3.magFilter = LinearFilter;
+          texture3.generateMipmaps = false;
+          texture3.flipY = true;
+          break;
+      }
+      if (onLoad) onLoad(texture3, texData);
+    }
+    return super.load(url2, onLoadCallback, onProgress, onError);
+  }
+};
+var RGBELoader = class extends HDRLoader {
+  constructor(manager) {
+    console.warn("RGBELoader has been deprecated. Please use HDRLoader instead.");
+    super(manager);
+  }
+};
 var _changeEvent = { type: "change" };
 var _startEvent = { type: "start" };
 var _endEvent = { type: "end" };
@@ -88857,11 +89119,11 @@ var GTAONode = class extends TempNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     _rendererState2 = RendererUtils.resetRendererState(renderer, _rendererState2);
     if (this.useTemporalFiltering === true) {
-      const frameId3 = frame.frameId;
+      const frameId3 = frame2.frameId;
       this._temporalDirection.value = _temporalRotations[frameId3 % 6] / 360;
     } else {
       this._temporalDirection.value = 0;
@@ -89102,8 +89364,8 @@ var BloomNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     _rendererState3 = RendererUtils.resetRendererState(renderer, _rendererState3);
     const size = renderer.getDrawingBufferSize(_size3);
     this.setSize(size.width, size.height);
@@ -89319,8 +89581,8 @@ var GodraysNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     _rendererState4 = RendererUtils.resetRendererState(renderer, _rendererState4);
     const size = renderer.getDrawingBufferSize(_size4);
     this.setSize(size.width, size.height);
@@ -89543,8 +89805,8 @@ var GaussianBlurNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     _rendererState5 = RendererUtils.resetRendererState(renderer, _rendererState5);
     const textureNode = this.textureNode;
     const map2 = textureNode.value;
@@ -89735,8 +89997,8 @@ var DepthOfFieldNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - The current node frame.
    */
-  updateBefore(frame) {
-    const { renderer } = frame;
+  updateBefore(frame2) {
+    const { renderer } = frame2;
     const map2 = this.textureNode.value;
     this.setSize(map2.image.width, map2.image.height);
     _rendererState6 = RendererUtils.resetRendererState(renderer, _rendererState6);
@@ -90765,6 +91027,9 @@ function querySpatialEntitiesBruteForce(world, options = {}) {
     }
   };
 }
+
+// src/render/environment-hdri.ts
+var DEFAULT_MAX_SOURCE_BYTES = 24 * 1024 * 1024;
 
 // src/engine.ts
 var ops = typeof Deno !== "undefined" && Deno?.core?.ops ? Deno.core.ops : void 0;
@@ -106071,14 +106336,75 @@ var AssetRegistry = class _AssetRegistry {
   }
 };
 
+// src/render/entity-scene-resources.ts
+var HOST_LIFETIME = "host";
+function isRecord(value) {
+  return value !== null && typeof value === "object";
+}
+function isHostOwned(resource) {
+  return isRecord(resource.userData) && resource.userData.liminaLifetime === HOST_LIFETIME;
+}
+function disposeEntitySceneResources(root) {
+  const geometries = /* @__PURE__ */ new Set();
+  const materials = /* @__PURE__ */ new Set();
+  const textures = /* @__PURE__ */ new Set();
+  const visit = (object2) => {
+    if (!isRecord(object2)) return;
+    if (isRecord(object2.geometry)) geometries.add(object2.geometry);
+    const objectMaterials = Array.isArray(object2.material) ? object2.material : [object2.material];
+    for (const material of objectMaterials) {
+      if (!isRecord(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) {
+        if (isRecord(value) && value.isTexture === true) textures.add(value);
+      }
+    }
+  };
+  const traversable = root;
+  if (typeof traversable.traverse === "function") traversable.traverse(visit);
+  else visit(root);
+  const errors = [];
+  const dispose = (resource) => {
+    if (isHostOwned(resource) || typeof resource.dispose !== "function") return;
+    try {
+      resource.dispose();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  };
+  for (const texture3 of textures) dispose(texture3);
+  for (const material of materials) dispose(material);
+  for (const geometry of geometries) dispose(geometry);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `entity scene-resource disposal failed for ${errors.length} resource(s)`);
+  }
+}
+
 // src/skills/entity-teardown.ts
 function teardownEntity(world, entity) {
   const entry = world.entities.destroy(entity);
   if (entry === void 0) return void 0;
-  if (entry.mesh !== void 0) world.scene.remove(entry.mesh);
-  if (entry.bodyId !== void 0) world.ops.op_physics_remove_body(entry.bodyId);
-  despawnRenderable(world.ecs, entry.eid);
-  world.tags.delete(entry.eid);
+  const errors = [];
+  const attempt = (operation) => {
+    try {
+      operation();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  };
+  if (entry.runtimeDispose !== void 0) attempt(entry.runtimeDispose);
+  if (entry.mesh !== void 0) {
+    attempt(() => world.scene.remove(entry.mesh));
+    attempt(() => disposeEntitySceneResources(entry.mesh));
+  }
+  if (entry.bodyId !== void 0) attempt(() => world.ops.op_physics_remove_body(entry.bodyId));
+  attempt(() => despawnRenderable(world.ecs, entry.eid));
+  attempt(() => {
+    world.tags.delete(entry.eid);
+  });
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `entity teardown failed for '${entity}' in ${errors.length} operation(s)`);
+  }
   return entry;
 }
 
@@ -106605,8 +106931,7 @@ var ProceduralTerrainSource = class {
   }
 };
 
-// src/materials/triplanar-noise.ts
-var T4 = three_tsl_exports;
+// src/materials/detail-noise-texture.ts
 var DETAIL_RES = 256;
 var DETAIL_CELLS = 8;
 var DETAIL_OCTAVES = 5;
@@ -106630,9 +106955,9 @@ function periodicValueNoise(seed, x3, z4, period) {
 }
 function periodicFbm(x3, z4, baseCells, octaves) {
   let amp = 1, sum = 0, norm = 0, cells = baseCells;
-  for (let o2 = 0; o2 < octaves; o2++) {
-    const s2 = DETAIL_SEED + Math.imul(o2, 2246822507) | 0;
-    sum += amp * periodicValueNoise(s2, x3 * cells, z4 * cells, cells);
+  for (let octave = 0; octave < octaves; octave++) {
+    const seed = DETAIL_SEED + Math.imul(octave, 2246822507) | 0;
+    sum += amp * periodicValueNoise(seed, x3 * cells, z4 * cells, cells);
     norm += amp;
     amp *= 0.5;
     cells *= 2;
@@ -106641,106 +106966,208 @@ function periodicFbm(x3, z4, baseCells, octaves) {
 }
 function bakeDetailNoise() {
   const res = DETAIL_RES;
-  const h2 = new Float32Array(res * res);
-  for (let r2 = 0; r2 < res; r2++) {
-    const z4 = r2 / res;
-    for (let c2 = 0; c2 < res; c2++) {
-      h2[r2 * res + c2] = periodicFbm(c2 / res, z4, DETAIL_CELLS, DETAIL_OCTAVES);
+  const height = new Float32Array(res * res);
+  for (let row = 0; row < res; row++) {
+    for (let column = 0; column < res; column++) {
+      height[row * res + column] = periodicFbm(column / res, row / res, DETAIL_CELLS, DETAIL_OCTAVES);
     }
   }
-  const gx = new Float32Array(res * res);
-  const gy = new Float32Array(res * res);
-  let maxg = 1e-6;
-  for (let r2 = 0; r2 < res; r2++) {
-    for (let c2 = 0; c2 < res; c2++) {
-      const cL = (c2 - 1 + res) % res, cR = (c2 + 1) % res;
-      const rU = (r2 - 1 + res) % res, rD = (r2 + 1) % res;
-      const dx = (h2[r2 * res + cR] - h2[r2 * res + cL]) * 0.5;
-      const dy = (h2[rD * res + c2] - h2[rU * res + c2]) * 0.5;
-      gx[r2 * res + c2] = dx;
-      gy[r2 * res + c2] = dy;
-      const a2 = Math.abs(dx), b3 = Math.abs(dy);
-      if (a2 > maxg) maxg = a2;
-      if (b3 > maxg) maxg = b3;
+  const gradientX = new Float32Array(res * res);
+  const gradientY = new Float32Array(res * res);
+  let maxGradient = 1e-6;
+  for (let row = 0; row < res; row++) {
+    for (let column = 0; column < res; column++) {
+      const left = (column - 1 + res) % res, right = (column + 1) % res;
+      const up = (row - 1 + res) % res, down = (row + 1) % res;
+      const dx = (height[row * res + right] - height[row * res + left]) * 0.5;
+      const dy = (height[down * res + column] - height[up * res + column]) * 0.5;
+      gradientX[row * res + column] = dx;
+      gradientY[row * res + column] = dy;
+      maxGradient = Math.max(maxGradient, Math.abs(dx), Math.abs(dy));
     }
   }
-  const inv = 1 / maxg;
   const data = new Uint8Array(res * res * 4);
-  for (let i2 = 0; i2 < h2.length; i2++) {
-    const o2 = i2 * 4;
-    data[o2] = Math.round(Math.min(1, Math.max(0, gx[i2] * inv * 0.5 + 0.5)) * 255);
-    data[o2 + 1] = Math.round(Math.min(1, Math.max(0, gy[i2] * inv * 0.5 + 0.5)) * 255);
-    data[o2 + 2] = Math.round(Math.min(1, Math.max(0, h2[i2])) * 255);
-    data[o2 + 3] = 255;
+  const inverseGradient = 1 / maxGradient;
+  for (let index = 0; index < height.length; index++) {
+    const offset = index * 4;
+    data[offset] = Math.round(Math.min(1, Math.max(0, gradientX[index] * inverseGradient * 0.5 + 0.5)) * 255);
+    data[offset + 1] = Math.round(Math.min(1, Math.max(0, gradientY[index] * inverseGradient * 0.5 + 0.5)) * 255);
+    data[offset + 2] = Math.round(Math.min(1, Math.max(0, height[index])) * 255);
+    data[offset + 3] = 255;
   }
-  const tex = new DataTexture(data, res, res, RGBAFormat, UnsignedByteType);
-  tex.wrapS = RepeatWrapping;
-  tex.wrapT = RepeatWrapping;
-  tex.minFilter = LinearFilter;
-  tex.magFilter = LinearFilter;
-  tex.needsUpdate = true;
-  return tex;
+  const texture3 = new DataTexture(data, res, res, RGBAFormat, UnsignedByteType);
+  texture3.wrapS = RepeatWrapping;
+  texture3.wrapT = RepeatWrapping;
+  texture3.minFilter = LinearFilter;
+  texture3.magFilter = LinearFilter;
+  texture3.needsUpdate = true;
+  return texture3;
 }
 function sharedDetailTexture() {
   if (SHARED_DETAIL === null) SHARED_DETAIL = bakeDetailNoise();
   return SHARED_DETAIL;
 }
+
+// src/materials/surface-sampling.ts
+var T4 = three_tsl_exports;
+function stochasticCoordinates(baseUv, sampleUv = baseUv) {
+  const dx = baseUv.dFdx();
+  const dy = baseUv.dFdy();
+  const selectorUv = baseUv.mul(0.03125);
+  const selector = T4.texture(sharedDetailTexture(), selectorUv).grad(dx.mul(0.03125), dy.mul(0.03125)).b;
+  const index = T4.floor(selector.mul(8));
+  const phase = T4.fract(selector.mul(8));
+  const offsetA = T4.sin(T4.vec2(3, 7).mul(index)).mul(0.5);
+  const offsetB = T4.sin(T4.vec2(3, 7).mul(index.add(1))).mul(0.5);
+  return {
+    uvA: sampleUv.add(offsetA),
+    uvB: sampleUv.add(offsetB),
+    blend: T4.smoothstep(0.2, 0.8, phase),
+    dx,
+    dy
+  };
+}
+function sampleSurfaceTexture(texture3, baseUv, sampleUv, antiTiling) {
+  const dx = baseUv.dFdx();
+  const dy = baseUv.dFdy();
+  if (!antiTiling) return T4.texture(texture3, sampleUv).grad(dx, dy);
+  const c2 = stochasticCoordinates(baseUv, sampleUv);
+  const a2 = T4.texture(texture3, c2.uvA).grad(c2.dx, c2.dy);
+  const b3 = T4.texture(texture3, c2.uvB).grad(c2.dx, c2.dy);
+  return T4.mix(a2, b3, c2.blend);
+}
+function parallaxOcclusionUv(displacement, baseUv, viewDirection, options, antiTiling, projectionWeight = T4.float(1)) {
+  const pom = T4.Fn(() => {
+    const outputUv = baseUv.toVar();
+    const vz = viewDirection.z.abs();
+    const distance4 = T4.positionView.length();
+    const distanceFade = T4.oneMinus(T4.smoothstep(options.fadeStart, options.fadeEnd, distance4));
+    const grazingFade = T4.smoothstep(0.08, 0.25, vz);
+    const strength = T4.float(options.heightScale).mul(distanceFade).mul(grazingFade).mul(projectionWeight);
+    T4.If(strength.greaterThan(1e-5), () => {
+      const layers = T4.mix(T4.float(options.maxLayers), T4.float(options.minLayers), T4.clamp(vz, 0, 1));
+      const layerStep = T4.oneMinus(T4.float(0)).div(layers);
+      const directionUv = viewDirection.xy.div(T4.max(vz, 0.08));
+      const deltaUv = directionUv.mul(strength).div(layers);
+      const currentUv = baseUv.toVar();
+      const previousUv = baseUv.toVar();
+      const currentLayer = T4.float(0).toVar();
+      const previousLayer = T4.float(0).toVar();
+      const height = sampleSurfaceTexture(displacement, baseUv, currentUv, antiTiling).r.toVar();
+      const previousHeight = T4.float(0).toVar();
+      previousHeight.assign(height);
+      T4.Loop(options.maxLayers, () => {
+        T4.If(currentLayer.greaterThanEqual(height), () => {
+          T4.Break();
+        });
+        previousUv.assign(currentUv);
+        previousLayer.assign(currentLayer);
+        previousHeight.assign(height);
+        currentUv.subAssign(deltaUv);
+        currentLayer.addAssign(layerStep);
+        height.assign(sampleSurfaceTexture(displacement, baseUv, currentUv, antiTiling).r);
+      });
+      const before = previousHeight.sub(previousLayer);
+      const after = height.sub(currentLayer);
+      const denominator = T4.max(before.sub(after).abs(), 1e-5);
+      const t2 = T4.clamp(before.div(denominator), 0, 1);
+      outputUv.assign(T4.mix(previousUv, currentUv, t2));
+    });
+    return outputUv;
+  });
+  return pom();
+}
+
+// src/materials/triplanar-noise.ts
+var T5 = three_tsl_exports;
 function triplanarWeights(sharpness) {
-  const N4 = T4.normalWorld;
+  const N4 = T5.normalWorld;
   const aN = N4.abs();
   let w5 = aN.pow(sharpness);
   const wsum = w5.x.add(w5.y).add(w5.z).add(1e-5);
   w5 = w5.div(wsum);
-  return { w: w5, sgn: T4.sign(N4) };
+  return { w: w5, sgn: T5.sign(N4) };
 }
-function triplanarLayer(tex, scale2, normalStrength, sharpness) {
+function wrappedPhase(value) {
+  const phase = value - Math.floor(value);
+  return Object.is(phase, -0) ? 0 : phase;
+}
+function triplanarLayer(tex, scale2, normalStrength, sharpness, projection = {}) {
   const { w: w5, sgn } = triplanarWeights(sharpness);
-  const pw = T4.positionWorld.mul(scale2);
-  const sYZ = T4.texture(tex, T4.vec2(pw.z, pw.y));
-  const sXZ = T4.texture(tex, T4.vec2(pw.x, pw.z));
-  const sXY = T4.texture(tex, T4.vec2(pw.x, pw.y));
+  const position = projection.position ?? T5.positionWorld;
+  const origin = projection.origin;
+  const phase = origin === void 0 ? T5.vec3(0, 0, 0) : T5.vec3(
+    wrappedPhase(origin[0] * scale2),
+    wrappedPhase(origin[1] * scale2),
+    wrappedPhase(origin[2] * scale2)
+  );
+  const pw = position.mul(scale2).add(phase);
+  const sYZ = T5.texture(tex, T5.vec2(pw.z, pw.y));
+  const sXZ = T5.texture(tex, T5.vec2(pw.x, pw.z));
+  const sXY = T5.texture(tex, T5.vec2(pw.x, pw.y));
   const value = sYZ.b.mul(w5.x).add(sXZ.b.mul(w5.y)).add(sXY.b.mul(w5.z));
-  const g3 = (s2) => T4.vec2(s2.r.mul(2).sub(1).mul(normalStrength), s2.g.mul(2).sub(1).mul(normalStrength));
+  const g3 = (s2) => T5.vec2(s2.r.mul(2).sub(1).mul(normalStrength), s2.g.mul(2).sub(1).mul(normalStrength));
   const gYZ = g3(sYZ), gXZ = g3(sXZ), gXY = g3(sXY);
-  const nYZ = T4.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
-  const nXZ = T4.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
-  const nXY = T4.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
+  const nYZ = T5.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
+  const nXZ = T5.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
+  const nXY = T5.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
   const normal2 = nYZ.mul(w5.x).add(nXZ.mul(w5.y)).add(nXY.mul(w5.z)).normalize();
   return { value, normal: normal2 };
 }
-function triplanarMapLayer(albedo, normal2, roughness3, scale2, normalStrength, sharpness) {
+function triplanarMapLayer(albedo, normal2, roughness3, occlusion, displacement, scale2, normalStrength, sharpness, options = { antiTiling: false }) {
   const { w: w5, sgn } = triplanarWeights(sharpness);
-  const pw = T4.positionWorld.mul(scale2);
-  const sample3 = (tex) => ({
-    yz: T4.texture(tex, T4.vec2(pw.z, pw.y)),
-    xz: T4.texture(tex, T4.vec2(pw.x, pw.z)),
-    xy: T4.texture(tex, T4.vec2(pw.x, pw.y))
+  const pw = T5.positionWorld.mul(scale2);
+  const baseYZ = T5.vec2(pw.z, pw.y);
+  const baseXZ = T5.vec2(pw.x, pw.z);
+  const baseXY = T5.vec2(pw.x, pw.y);
+  let sampleXZ = baseXZ;
+  if (options.parallax !== void 0 && displacement !== null) {
+    const viewWorld = T5.cameraPosition.sub(T5.positionWorld).normalize();
+    const upwardWeight = w5.y.mul(T5.smoothstep(0, 0.25, T5.normalWorld.y));
+    sampleXZ = parallaxOcclusionUv(
+      displacement,
+      baseXZ,
+      T5.vec3(viewWorld.x, viewWorld.z, viewWorld.y),
+      options.parallax,
+      options.antiTiling,
+      upwardWeight
+    );
+  }
+  const sample4 = (tex) => ({
+    yz: options.antiTiling ? sampleSurfaceTexture(tex, baseYZ, baseYZ, true) : T5.texture(tex, baseYZ),
+    xz: options.antiTiling || options.parallax !== void 0 ? sampleSurfaceTexture(tex, baseXZ, sampleXZ, options.antiTiling) : T5.texture(tex, baseXZ),
+    xy: options.antiTiling ? sampleSurfaceTexture(tex, baseXY, baseXY, true) : T5.texture(tex, baseXY)
   });
   let color3;
   if (albedo !== null) {
-    const s2 = sample3(albedo);
+    const s2 = sample4(albedo);
     color3 = s2.yz.rgb.mul(w5.x).add(s2.xz.rgb.mul(w5.y)).add(s2.xy.rgb.mul(w5.z));
   }
   let rough;
   if (roughness3 !== null) {
-    const s2 = sample3(roughness3);
+    const s2 = sample4(roughness3);
     rough = s2.yz.r.mul(w5.x).add(s2.xz.r.mul(w5.y)).add(s2.xy.r.mul(w5.z));
+  }
+  let ao2;
+  if (occlusion !== null) {
+    const s2 = sample4(occlusion);
+    ao2 = s2.yz.r.mul(w5.x).add(s2.xz.r.mul(w5.y)).add(s2.xy.r.mul(w5.z));
   }
   let nrm;
   if (normal2 !== null) {
-    const s2 = sample3(normal2);
-    const g3 = (t2) => T4.vec2(t2.r.mul(2).sub(1).mul(normalStrength), t2.g.mul(2).sub(1).mul(normalStrength));
+    const s2 = sample4(normal2);
+    const g3 = (t2) => T5.vec2(t2.r.mul(2).sub(1).mul(normalStrength), t2.g.mul(2).sub(1).mul(normalStrength));
     const gYZ = g3(s2.yz), gXZ = g3(s2.xz), gXY = g3(s2.xy);
-    const nYZ = T4.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
-    const nXZ = T4.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
-    const nXY = T4.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
+    const nYZ = T5.vec3(sgn.x, gYZ.y.negate(), gYZ.x.negate());
+    const nXZ = T5.vec3(gXZ.x.negate(), sgn.y, gXZ.y.negate());
+    const nXY = T5.vec3(gXY.x.negate(), gXY.y.negate(), sgn.z);
     nrm = nYZ.mul(w5.x).add(nXZ.mul(w5.y)).add(nXY.mul(w5.z)).normalize();
   }
-  return { color: color3, normal: nrm, roughness: rough };
+  return { color: color3, normal: nrm, roughness: rough, occlusion: ao2 };
 }
 
 // src/materials/procedural-pbr.ts
-var T5 = three_tsl_exports;
+var T6 = three_tsl_exports;
 var DEFAULT_KNOBS = { scale: 0.35, normal: 0.6, mottle: 0.22, roughVar: 0.12, sharpness: 4 };
 var PROCEDURAL_PBR_KNOBS = {
   sand: { scale: 0.55, normal: 0.7, mottle: 0.2, roughVar: 0.06 },
@@ -106762,12 +107189,12 @@ function applyProceduralPbr(material, base, name, override) {
   const tex = sharedDetailTexture();
   const layer = triplanarLayer(tex, k3.scale, k3.normal, k3.sharpness);
   const c2 = new Color(base.color);
-  const baseV = T5.vec3(c2.r, c2.g, c2.b);
+  const baseV = T6.vec3(c2.r, c2.g, c2.b);
   const mod3 = layer.value.sub(0.5).mul(k3.mottle).add(1);
   material.colorNode = baseV.mul(mod3);
-  material.normalNode = T5.transformNormalToView(layer.normal.normalize());
-  const rough = T5.float(base.roughness).add(layer.value.sub(0.5).mul(k3.roughVar));
-  material.roughnessNode = T5.clamp(rough, 0, 1);
+  material.normalNode = T6.transformNormalToView(layer.normal.normalize());
+  const rough = T6.float(base.roughness).add(layer.value.sub(0.5).mul(k3.roughVar));
+  material.roughnessNode = T6.clamp(rough, 0, 1);
 }
 
 // src/materials/palette.ts
@@ -106821,17 +107248,17 @@ function createMaterial(name, opts) {
 function hexToInt(colorHex) {
   return parseInt(colorHex.slice(1), 16);
 }
-function resolveRoleColor(dd, role) {
-  const entry = dd.palette.find((p2) => p2.role === role);
+function resolveRoleColor(dd, role2) {
+  const entry = dd.palette.find((p2) => p2.role === role2);
   if (entry === void 0) {
     const roles = dd.palette.map((p2) => p2.role).join(", ");
-    throw new Error(`design direction "${dd.id}" declares no color for role "${role}"; declared roles: ${roles}`);
+    throw new Error(`design direction "${dd.id}" declares no color for role "${role2}"; declared roles: ${roles}`);
   }
   return hexToInt(entry.colorHex);
 }
-function resolveRoleMaterial(dd, role) {
-  const color3 = resolveRoleColor(dd, role);
-  const hint = dd.material.roles.find((r2) => r2.role === role);
+function resolveRoleMaterial(dd, role2) {
+  const color3 = resolveRoleColor(dd, role2);
+  const hint = dd.material.roles.find((r2) => r2.role === role2);
   if (hint !== void 0) {
     return { color: color3, roughness: hint.roughness01, metalness: hint.metalness01 };
   }
@@ -107570,8 +107997,8 @@ var inspectScene = {
     for (const set2 of ctx.world.tags.values()) {
       for (const t2 of set2) tagCounts[t2] = (tagCounts[t2] ?? 0) + 1;
     }
-    const sample3 = ents.slice(0, input.sampleSize).map((e2) => ({ entity: e2.entity, position: e2.position }));
-    return { entityCount: ents.length, bounds, center, size, tagCounts, sample: sample3 };
+    const sample4 = ents.slice(0, input.sampleSize).map((e2) => ({ entity: e2.entity, position: e2.position }));
+    return { entityCount: ents.length, bounds, center, size, tagCounts, sample: sample4 };
   }
 };
 var moveInput = external_exports.object({
@@ -108312,11 +108739,11 @@ var loadGltfInput = external_exports.object({
   assetId: external_exports.string(),
   position: Vec34.default([0, 0, 0])
 });
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null;
 }
 function isMaterialLike(value) {
-  return isRecord(value);
+  return isRecord2(value);
 }
 var GLTF_TEXTURE_SLOTS = [
   "map",
@@ -108336,7 +108763,7 @@ var GLTF_TEXTURE_SLOTS = [
 ];
 function rehomeTextureToData(tex) {
   if (typeof __liminaImageBitmapToRGBA !== "function") return false;
-  if (!isRecord(tex) || !("image" in tex)) return false;
+  if (!isRecord2(tex) || !("image" in tex)) return false;
   const rgba = __liminaImageBitmapToRGBA(tex.image);
   if (rgba === null) return false;
   const upload = tex;
@@ -108366,7 +108793,7 @@ function rehomeMaterialTextures(material) {
     for (const m2 of material) rehomeMaterialTextures(m2);
     return;
   }
-  if (!isRecord(material)) return;
+  if (!isRecord2(material)) return;
   for (const slot of GLTF_TEXTURE_SLOTS) {
     if (slot in material) rehomeTextureToData(material[slot]);
   }
@@ -108384,7 +108811,7 @@ function collectGltfMetadata(assetId, hash4, bytes, root) {
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
   const visit = (node) => {
-    if (!isRecord(node)) return;
+    if (!isRecord2(node)) return;
     objectCount += 1;
     if (node.isMesh === true) meshCount += 1;
     const material = node.material;
@@ -108403,7 +108830,7 @@ function collectGltfMetadata(assetId, hash4, bytes, root) {
     }
   };
   visit(root);
-  const name = isRecord(root) && typeof root.name === "string" && root.name.length > 0 ? root.name : void 0;
+  const name = isRecord2(root) && typeof root.name === "string" && root.name.length > 0 ? root.name : void 0;
   return {
     kind: "gltf",
     assetId,
@@ -108435,6 +108862,7 @@ var GltfSceneCacheMissError = class extends Error {
 };
 var DEFAULT_GLTF_CACHE_ENTRIES = 256;
 var DEFAULT_GLTF_CACHE_SOURCE_BYTES = 512 * 1024 * 1024;
+var DEFAULT_GLTF_CACHE_RESIDENT_BYTES = 2 * 1024 * 1024 * 1024;
 function positiveSafeInteger(value, fallback, label4) {
   const resolved = value ?? fallback;
   if (!Number.isSafeInteger(resolved) || resolved < 1) throw new RangeError(`${label4} must be a positive safe integer`);
@@ -108450,18 +108878,18 @@ function gltfSceneContentKey(assetId, bytes) {
 }
 function markGltfHostResources(root) {
   const mark = (resource) => {
-    if (!isRecord(resource)) return;
-    const userData3 = isRecord(resource.userData) ? resource.userData : void 0;
+    if (!isRecord2(resource)) return;
+    const userData3 = isRecord2(resource.userData) ? resource.userData : void 0;
     if (userData3 !== void 0) userData3.liminaLifetime = "host";
   };
   const visit = (object2) => {
-    if (!isRecord(object2)) return;
+    if (!isRecord2(object2)) return;
     mark(object2.geometry);
     const materials = Array.isArray(object2.material) ? object2.material : [object2.material];
     for (const material of materials) {
-      if (!isRecord(material)) continue;
+      if (!isRecord2(material)) continue;
       mark(material);
-      for (const value of Object.values(material)) if (isRecord(value) && value.isTexture === true) mark(value);
+      for (const value of Object.values(material)) if (isRecord2(value) && value.isTexture === true) mark(value);
     }
   };
   const candidate = root;
@@ -108473,13 +108901,13 @@ function disposeGltfTemplate(root, disposedResources) {
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
   const visit = (object2) => {
-    if (!isRecord(object2)) return;
-    if (isRecord(object2.geometry)) geometries.add(object2.geometry);
+    if (!isRecord2(object2)) return;
+    if (isRecord2(object2.geometry)) geometries.add(object2.geometry);
     for (const material of Array.isArray(object2.material) ? object2.material : [object2.material]) {
-      if (!isRecord(material)) continue;
+      if (!isRecord2(material)) continue;
       materials.add(material);
       for (const value of Object.values(material)) {
-        if (isRecord(value) && value.isTexture === true) textures.add(value);
+        if (isRecord2(value) && value.isTexture === true) textures.add(value);
       }
     }
   };
@@ -108503,18 +108931,78 @@ function disposeGltfTemplate(root, disposedResources) {
   for (const geometry of geometries) dispose(geometry);
   return errors;
 }
+function arrayView(value) {
+  if (!isRecord2(value)) return void 0;
+  const array4 = ArrayBuffer.isView(value.array) ? value.array : isRecord2(value.data) && ArrayBuffer.isView(value.data.array) ? value.data.array : void 0;
+  return array4;
+}
+function estimateGltfSceneResidentBytes(root) {
+  const geometries = /* @__PURE__ */ new Set();
+  const materials = /* @__PURE__ */ new Set();
+  const textures = /* @__PURE__ */ new Set();
+  let objects = 0;
+  const visit = (object2) => {
+    if (!isRecord2(object2)) return;
+    objects++;
+    if (isRecord2(object2.geometry)) geometries.add(object2.geometry);
+    for (const material of Array.isArray(object2.material) ? object2.material : [object2.material]) {
+      if (!isRecord2(material)) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) if (isRecord2(value) && value.isTexture === true) textures.add(value);
+    }
+  };
+  const candidate = root;
+  if (typeof candidate.traverse === "function") candidate.traverse(visit);
+  else visit(root);
+  const geometryBuffers = /* @__PURE__ */ new Map();
+  const takeGeometryArray = (value) => {
+    const view = arrayView(value);
+    if (view !== void 0 && !geometryBuffers.has(view.buffer)) geometryBuffers.set(view.buffer, view.buffer.byteLength);
+  };
+  for (const geometry of geometries) {
+    takeGeometryArray(geometry.index);
+    if (isRecord2(geometry.attributes)) for (const attribute3 of Object.values(geometry.attributes)) takeGeometryArray(attribute3);
+    if (isRecord2(geometry.morphAttributes)) {
+      for (const attributes of Object.values(geometry.morphAttributes)) {
+        if (Array.isArray(attributes)) for (const attribute3 of attributes) takeGeometryArray(attribute3);
+      }
+    }
+  }
+  const geometryBytes2 = [...geometryBuffers.values()].reduce((sum, bytes) => sum + bytes, 0) * 2;
+  let textureBytes = 0;
+  for (const texture3 of textures) {
+    const images = [];
+    if (isRecord2(texture3.image)) images.push(texture3.image);
+    if (Array.isArray(texture3.mipmaps)) {
+      for (const mip of texture3.mipmaps) if (isRecord2(mip)) images.push(mip);
+    }
+    let baseBytes = 0;
+    for (const image of images) {
+      if (ArrayBuffer.isView(image.data)) baseBytes += image.data.byteLength;
+      else {
+        const width = image.width, height = image.height;
+        if (typeof width === "number" && typeof height === "number" && Number.isSafeInteger(width) && Number.isSafeInteger(height) && width > 0 && height > 0) {
+          baseBytes += width * height * 4;
+        }
+      }
+    }
+    textureBytes += baseBytes * (texture3.generateMipmaps === true ? 7 / 3 : 2);
+  }
+  const structuralBytes = objects * 1024 + materials.size * 2048 + geometries.size * 512 + textures.size * 512;
+  return Math.max(1, Math.ceil(geometryBytes2 + textureBytes + structuralBytes));
+}
 function cloneGltfRoot(root) {
   const r2 = root;
   if (typeof r2.clone !== "function") return root;
   const copy = r2.clone(true);
   const cloneMaterial = (material) => {
-    if (!isRecord(material) || typeof material.clone !== "function") return material;
+    if (!isRecord2(material) || typeof material.clone !== "function") return material;
     const cloned = material.clone();
-    if (isRecord(cloned.userData)) delete cloned.userData.liminaLifetime;
+    if (isRecord2(cloned.userData)) delete cloned.userData.liminaLifetime;
     return cloned;
   };
   const visit = (object2) => {
-    if (!isRecord(object2) || object2.material === void 0) return;
+    if (!isRecord2(object2) || object2.material === void 0) return;
     object2.material = Array.isArray(object2.material) ? object2.material.map(cloneMaterial) : cloneMaterial(object2.material);
   };
   const candidate = copy;
@@ -108554,20 +109042,24 @@ async function parseGltfTemplate(assetId, bytes) {
 var GltfSceneCache = class {
   #maxEntries;
   #maxSourceBytes;
+  #maxResidentBytes;
   #entries = /* @__PURE__ */ new Map();
   #aliases = /* @__PURE__ */ new Map();
   #aliasRequests = /* @__PURE__ */ new Map();
   #inFlight = /* @__PURE__ */ new Map();
   #disposedResources = /* @__PURE__ */ new WeakSet();
   #sourceBytes = 0;
+  #residentBytes = 0;
   #activeWorlds = 0;
   #requestSequence = 0;
   #parses = 0;
   #evictions = 0;
+  #activePrewarm = false;
   #disposed = false;
   constructor(options = {}) {
     this.#maxEntries = positiveSafeInteger(options.maxEntries, DEFAULT_GLTF_CACHE_ENTRIES, "glTF cache maxEntries");
     this.#maxSourceBytes = positiveSafeInteger(options.maxSourceBytes, DEFAULT_GLTF_CACHE_SOURCE_BYTES, "glTF cache maxSourceBytes");
+    this.#maxResidentBytes = positiveSafeInteger(options.maxResidentBytes, DEFAULT_GLTF_CACHE_RESIDENT_BYTES, "glTF cache maxResidentBytes");
   }
   beginWorld() {
     if (this.#disposed) throw new Error("glTF scene cache is disposed");
@@ -108577,6 +109069,9 @@ var GltfSceneCache = class {
   }
   endWorld() {
     if (this.#activeWorlds < 1) throw new Error("glTF scene cache has no active world");
+    if (this.#activePrewarm || this.#inFlight.size > 0) {
+      throw new Error("cannot end a world while active-world glTF prewarming is in flight");
+    }
     this.#activeWorlds -= 1;
   }
   has(assetId, bytes) {
@@ -108589,6 +109084,7 @@ var GltfSceneCache = class {
     return Object.freeze({
       entries: this.#entries.size,
       sourceBytes: this.#sourceBytes,
+      residentBytes: this.#residentBytes,
       inFlight: this.#inFlight.size,
       parses: this.#parses,
       evictions: this.#evictions
@@ -108596,6 +109092,35 @@ var GltfSceneCache = class {
   }
   async prewarm(assetId, bytes) {
     await this.#template(assetId, bytes);
+  }
+  /**
+   * Fill previously unknown content while the sole world is active. The caller must suspend every
+   * render frame for the complete await; this method is reserved for atomic derived activation.
+   * Existing entries are never evicted because active clones may share their immutable resources.
+   */
+  async prewarmActiveWorld(entries) {
+    if (this.#disposed) throw new Error("glTF scene cache is disposed");
+    if (this.#activeWorlds !== 1) throw new Error("active-world glTF prewarming requires exactly one active world");
+    if (this.#activePrewarm || this.#inFlight.size > 0) throw new Error("active-world glTF prewarming is already in flight");
+    if (!Array.isArray(entries) || Object.getPrototypeOf(entries) !== Array.prototype || Object.getOwnPropertySymbols(entries).length !== 0 || Object.getOwnPropertyNames(entries).length !== entries.length + 1) {
+      throw new TypeError("active-world glTF prewarm entries must be a dense standard array");
+    }
+    const seen = /* @__PURE__ */ new Map();
+    for (const [index, entry] of entries.entries()) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry) || Object.getOwnPropertyNames(entry).sort().join() !== "assetId,bytes" || typeof entry.assetId !== "string" || entry.assetId.length === 0 || !(entry.bytes instanceof Uint8Array)) {
+        throw new TypeError(`active-world glTF prewarm entry ${index} is invalid`);
+      }
+      const key = gltfSceneContentKey(entry.assetId, entry.bytes);
+      const prior = seen.get(entry.assetId);
+      if (prior !== void 0) throw new Error(`active-world glTF prewarm duplicates asset id '${entry.assetId}'`);
+      seen.set(entry.assetId, key);
+    }
+    this.#activePrewarm = true;
+    try {
+      await Promise.all(entries.map((entry) => this.#template(entry.assetId, entry.bytes, true)));
+    } finally {
+      this.#activePrewarm = false;
+    }
   }
   async parse(assetId, bytes) {
     return cloneGltfRoot(await this.#template(assetId, bytes));
@@ -108610,9 +109135,10 @@ var GltfSceneCache = class {
     this.#aliases.clear();
     this.#aliasRequests.clear();
     this.#sourceBytes = 0;
+    this.#residentBytes = 0;
     if (errors.length > 0) throw new AggregateError(errors, `glTF cache disposal failed for ${errors.length} resource(s)`);
   }
-  async #template(assetId, bytes) {
+  async #template(assetId, bytes, allowActiveFill = false) {
     if (this.#disposed) throw new Error("glTF scene cache is disposed");
     const key = gltfSceneContentKey(assetId, bytes);
     const cached2 = this.#entries.get(key);
@@ -108621,9 +109147,10 @@ var GltfSceneCache = class {
         this.#entries.delete(key);
         this.#entries.set(key, cached2);
         this.#aliases.set(assetId, key);
-      }
+      } else if (allowActiveFill) this.#aliases.set(assetId, key);
       return cached2.template;
     }
+    if (this.#activeWorlds > 0 && !allowActiveFill) throw new GltfSceneCacheMissError(assetId);
     const pending = this.#inFlight.get(key);
     if (pending !== void 0) {
       const request2 = ++this.#requestSequence;
@@ -108632,7 +109159,6 @@ var GltfSceneCache = class {
       if (this.#aliasRequests.get(assetId) === request2) this.#aliases.set(assetId, key);
       return entry.template;
     }
-    if (this.#activeWorlds > 0) throw new GltfSceneCacheMissError(assetId);
     if (bytes.byteLength > this.#maxSourceBytes) {
       throw new RangeError(`glTF source '${assetId}' is ${bytes.byteLength} bytes, exceeding cache budget ${this.#maxSourceBytes}`);
     }
@@ -108641,7 +109167,14 @@ var GltfSceneCache = class {
     this.#parses += 1;
     const loading2 = (async () => {
       const template = await parseGltfTemplate(assetId, bytes);
-      const entry = { key, sourceBytes: bytes.byteLength, template };
+      const residentBytes = estimateGltfSceneResidentBytes(template);
+      if (residentBytes > this.#maxResidentBytes) {
+        const budgetError = new RangeError(`decoded glTF '${assetId}' is estimated at ${residentBytes} resident bytes, exceeding cache budget ${this.#maxResidentBytes}`);
+        const disposalErrors = disposeGltfTemplate(template, this.#disposedResources);
+        if (disposalErrors.length > 0) throw new AggregateError([budgetError, ...disposalErrors], budgetError.message);
+        throw budgetError;
+      }
+      const entry = { key, sourceBytes: bytes.byteLength, residentBytes, template };
       if (this.#disposed) {
         const errors = disposeGltfTemplate(template, this.#disposedResources);
         throw new AggregateError(
@@ -108650,17 +109183,28 @@ var GltfSceneCache = class {
         );
       }
       const evictionErrors = [];
-      while (this.#entries.size >= this.#maxEntries || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes) {
-        const oldest = this.#entries.entries().next().value;
-        if (oldest === void 0) break;
-        this.#entries.delete(oldest[0]);
-        this.#sourceBytes -= oldest[1].sourceBytes;
-        for (const [alias, aliasKey] of this.#aliases) if (aliasKey === oldest[0]) this.#aliases.delete(alias);
-        evictionErrors.push(...disposeGltfTemplate(oldest[1].template, this.#disposedResources));
-        this.#evictions += 1;
+      if (allowActiveFill && this.#activeWorlds > 0) {
+        if (this.#entries.size >= this.#maxEntries || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes || this.#residentBytes + entry.residentBytes > this.#maxResidentBytes) {
+          const budgetError = new RangeError(`active-world glTF '${assetId}' cannot fit without evicting live cache resources`);
+          const disposalErrors = disposeGltfTemplate(template, this.#disposedResources);
+          if (disposalErrors.length > 0) throw new AggregateError([budgetError, ...disposalErrors], budgetError.message);
+          throw budgetError;
+        }
+      } else {
+        while (this.#entries.size >= this.#maxEntries || this.#sourceBytes + entry.sourceBytes > this.#maxSourceBytes || this.#residentBytes + entry.residentBytes > this.#maxResidentBytes) {
+          const oldest = this.#entries.entries().next().value;
+          if (oldest === void 0) break;
+          this.#entries.delete(oldest[0]);
+          this.#sourceBytes -= oldest[1].sourceBytes;
+          this.#residentBytes -= oldest[1].residentBytes;
+          for (const [alias, aliasKey] of this.#aliases) if (aliasKey === oldest[0]) this.#aliases.delete(alias);
+          evictionErrors.push(...disposeGltfTemplate(oldest[1].template, this.#disposedResources));
+          this.#evictions += 1;
+        }
       }
       this.#entries.set(key, entry);
       this.#sourceBytes += entry.sourceBytes;
+      this.#residentBytes += entry.residentBytes;
       if (this.#aliasRequests.get(assetId) === request) this.#aliases.set(assetId, key);
       if (evictionErrors.length > 0) {
         console.warn(new AggregateError(evictionErrors, `glTF cache eviction failed for ${evictionErrors.length} resource(s)`));
@@ -108846,7 +109390,7 @@ function gltfLocalAabb(bytes) {
   const json2 = parseGltfJson(bytes);
   if (json2 === null) return null;
   const nodes = json2.nodes ?? [];
-  const meshes = json2.meshes ?? [];
+  const meshes2 = json2.meshes ?? [];
   const accessors = json2.accessors ?? [];
   const minOut = [Infinity, Infinity, Infinity];
   const maxOut = [-Infinity, -Infinity, -Infinity];
@@ -108865,7 +109409,7 @@ function gltfLocalAabb(bytes) {
     nodeLocalMatrix(node, local);
     const nodeWorld = new Matrix4().multiplyMatrices(world, local);
     if (node.mesh !== void 0) {
-      const mesh = meshes[node.mesh];
+      const mesh = meshes2[node.mesh];
       for (const prim of mesh?.primitives ?? []) {
         const posIdx = prim.attributes?.POSITION;
         if (posIdx === void 0) continue;
@@ -109091,13 +109635,13 @@ function scatterAssets(tile, seed, config2) {
             instY = yMinFootprint;
           } else if (isCrest && lap > CURV_CONCAVE) {
           } else if (slope > 0) {
-            const cap = Math.min(r2 * EMBED_MAX_RADII, EMBED_ABS_MAX);
-            const sink = Math.min(r2 * slope * EMBED_K, cap);
+            const cap2 = Math.min(r2 * EMBED_MAX_RADII, EMBED_ABS_MAX);
+            const sink = Math.min(r2 * slope * EMBED_K, cap2);
             instY = y3 - sink;
           }
         } else if (slope > 0) {
-          const cap = Math.min(r2 * EMBED_MAX_RADII, EMBED_ABS_MAX);
-          const sink = Math.min(r2 * slope * EMBED_K, cap);
+          const cap2 = Math.min(r2 * EMBED_MAX_RADII, EMBED_ABS_MAX);
+          const sink = Math.min(r2 * slope * EMBED_K, cap2);
           instY = y3 - sink;
         }
         instY = Math.max(instY, elevationMin);
@@ -109111,6 +109655,8 @@ function scatterAssets(tile, seed, config2) {
 // src/terrain/asset-scatter-render.ts
 var Y_AXIS = new Vector3(0, 1, 0);
 var disposedScatterResources = /* @__PURE__ */ new WeakSet();
+var INSTANCE_LOCAL_MATRIX = "liminaPopulationLocalMatrix";
+var MAX_ASSET_SCATTER_DRAW_BATCHES = 64;
 function isHostLifetime(resource) {
   return !!resource && typeof resource === "object" && resource.userData?.liminaLifetime === "host";
 }
@@ -109138,6 +109684,15 @@ function buildAssetInstancedMeshes(root, instances, opts) {
     walk(root);
   }
   if (nodes.length === 0) return [];
+  const activeNodeCount = opts?.dead === true ? nodes.filter(({ material }) => (material.alphaTest ?? 0) <= 0.1).length : nodes.length;
+  if (activeNodeCount === 0) return [];
+  const maxMeshes = opts?.maxMeshes ?? MAX_ASSET_SCATTER_DRAW_BATCHES;
+  if (!Number.isSafeInteger(maxMeshes) || maxMeshes < 1 || maxMeshes > MAX_ASSET_SCATTER_DRAW_BATCHES) {
+    throw new RangeError(`asset scatter maxMeshes must be an integer in [1, ${MAX_ASSET_SCATTER_DRAW_BATCHES}]`);
+  }
+  if (activeNodeCount > maxMeshes) {
+    throw new RangeError(`asset has ${activeNodeCount} renderable mesh nodes, exceeding scatter draw-batch budget ${maxMeshes}`);
+  }
   let xmin = Infinity, ymin = Infinity, zmin = Infinity, xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
   const corner = new Vector3();
   for (const { geometry, local } of nodes) {
@@ -109176,8 +109731,38 @@ function buildAssetInstancedMeshes(root, instances, opts) {
       list.push(inst);
     }
     buckets.push(...cells.values());
+    const maxBuckets = Math.max(1, Math.floor(maxMeshes / activeNodeCount));
+    if (buckets.length > maxBuckets) {
+      let minX = Infinity, minZ = Infinity;
+      for (const instance3 of instances) {
+        minX = Math.min(minX, instance3.x);
+        minZ = Math.min(minZ, instance3.z);
+      }
+      const anchorX = Math.floor(minX / cellSize) * cellSize;
+      const anchorZ = Math.floor(minZ / cellSize) * cellSize;
+      let adaptiveSize = cellSize;
+      for (let attempt = 0; attempt < 32; attempt++) {
+        adaptiveSize *= 2;
+        const adaptive = /* @__PURE__ */ new Map();
+        for (const instance3 of instances) {
+          const key = `${Math.floor((instance3.x - anchorX) / adaptiveSize)}:${Math.floor((instance3.z - anchorZ) / adaptiveSize)}`;
+          let list = adaptive.get(key);
+          if (list === void 0) {
+            list = [];
+            adaptive.set(key, list);
+          }
+          list.push(instance3);
+        }
+        if (adaptive.size <= maxBuckets) {
+          buckets.length = 0;
+          buckets.push(...adaptive.values());
+          break;
+        }
+      }
+      if (buckets.length > maxBuckets) throw new Error("asset scatter could not satisfy its draw-batch budget");
+    }
   }
-  const meshes = [];
+  const meshes2 = [];
   const m2 = new Matrix4();
   const q3 = new Quaternion();
   const pos = new Vector3();
@@ -109203,22 +109788,37 @@ function buildAssetInstancedMeshes(root, instances, opts) {
     }
     for (const bucket of buckets) {
       const inst = new InstancedMesh(geometry, instMaterial, bucket.length);
-      for (let i2 = 0; i2 < bucket.length; i2++) {
-        const p2 = bucket[i2];
-        pos.set(p2.x, p2.y, p2.z);
-        q3.setFromAxisAngle(Y_AXIS, p2.yaw);
-        scl.set(p2.scale, p2.scale, p2.scale);
-        m2.compose(pos, q3, scl).multiply(placed);
-        inst.setMatrixAt(i2, m2);
-      }
-      inst.instanceMatrix.needsUpdate = true;
+      inst.userData[INSTANCE_LOCAL_MATRIX] = placed.clone();
+      setAssetInstancedMeshInstances(inst, bucket, { matrix: m2, position: pos, quaternion: q3, scale: scl });
       inst.castShadow = false;
       inst.receiveShadow = true;
       inst.computeBoundingSphere();
-      meshes.push(inst);
+      meshes2.push(inst);
     }
   }
-  return meshes;
+  return meshes2;
+}
+function setAssetInstancedMeshInstances(mesh, instances, scratch) {
+  const capacity = mesh.instanceMatrix.count;
+  if (instances.length > capacity) throw new RangeError(`population batch capacity ${capacity} cannot hold ${instances.length} instances`);
+  const placed = mesh.userData[INSTANCE_LOCAL_MATRIX];
+  if (!(placed instanceof Matrix4)) throw new TypeError("population mesh is missing its asset-local matrix");
+  const m2 = scratch?.matrix ?? new Matrix4();
+  const pos = scratch?.position ?? new Vector3();
+  const q3 = scratch?.quaternion ?? new Quaternion();
+  const scl = scratch?.scale ?? new Vector3();
+  for (let index = 0; index < instances.length; index++) {
+    const instance3 = instances[index];
+    pos.set(instance3.x, instance3.y, instance3.z);
+    q3.setFromAxisAngle(Y_AXIS, instance3.yaw);
+    scl.set(instance3.scale, instance3.scale, instance3.scale);
+    m2.compose(pos, q3, scl).multiply(placed);
+    mesh.setMatrixAt(index, m2);
+  }
+  mesh.count = instances.length;
+  mesh.visible = instances.length > 0;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (instances.length > 0) mesh.computeBoundingSphere();
 }
 function disposeAssetInstancedMesh(mesh) {
   mesh.dispose?.();
@@ -109234,6 +109834,1127 @@ function disposeAssetInstancedMesh(mesh) {
   }
 }
 
+// src/terrain/population-render.ts
+function validatePopulationLodLevels(levels) {
+  if (levels.length === 0) throw new RangeError("population LOD requires at least one level");
+  let previousDistance = -1;
+  const ids = /* @__PURE__ */ new Set();
+  for (const [index, level] of levels.entries()) {
+    if (typeof level.assetId !== "string" || level.assetId.length === 0) throw new TypeError(`population LOD level ${index} requires an assetId`);
+    if (!Number.isFinite(level.distance) || level.distance < 0 || level.distance <= previousDistance) {
+      throw new RangeError("population LOD distances must be finite, non-negative, and strictly increasing");
+    }
+    if (level.hysteresis !== void 0 && (!Number.isFinite(level.hysteresis) || level.hysteresis < 0 || level.hysteresis > 1)) {
+      throw new RangeError("population LOD hysteresis must be in [0, 1]");
+    }
+    if (ids.has(level.assetId)) throw new RangeError(`population LOD asset '${level.assetId}' is duplicated`);
+    ids.add(level.assetId);
+    previousDistance = level.distance;
+  }
+}
+function partitionPopulationInstances(instances, cellSize) {
+  if (!Number.isFinite(cellSize) || cellSize <= 0) throw new RangeError("population cellSize must be positive and finite");
+  const cells = /* @__PURE__ */ new Map();
+  for (const instance3 of instances) {
+    const cellX = Math.floor(instance3.x / cellSize);
+    const cellZ = Math.floor(instance3.z / cellSize);
+    const key = `${cellX}:${cellZ}`;
+    let cell = cells.get(key);
+    if (!cell) {
+      cell = { cellX, cellZ, instances: [] };
+      cells.set(key, cell);
+    }
+    cell.instances.push(instance3);
+  }
+  return Object.freeze([...cells.entries()].sort((a2, b3) => a2[1].cellZ - b3[1].cellZ || a2[1].cellX - b3[1].cellX).map(([key, cell]) => {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const instance3 of cell.instances) {
+      if (instance3.y < minY) minY = instance3.y;
+      if (instance3.y > maxY) maxY = instance3.y;
+    }
+    return Object.freeze({
+      key,
+      cellX: cell.cellX,
+      cellZ: cell.cellZ,
+      centerX: (cell.cellX + 0.5) * cellSize,
+      centerY: (minY + maxY) * 0.5,
+      centerZ: (cell.cellZ + 0.5) * cellSize,
+      instances: Object.freeze(cell.instances)
+    });
+  }));
+}
+function buildPopulationLodBatches(levels, instances, cellSize) {
+  validatePopulationLodLevels(levels);
+  const cells = partitionPopulationInstances(instances, cellSize);
+  const meshesByLevel = levels.map((level) => buildAssetInstancedMeshes(level.root, [...instances]));
+  const meshes2 = meshesByLevel.flat();
+  for (const mesh of meshes2) mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+  const currentLevels = new Int16Array(cells.length);
+  currentLevels.fill(-1);
+  const cameraPosition3 = new Vector3();
+  const selected = levels.map(() => []);
+  let disposed = false;
+  const classify = (distance4, current) => {
+    let selectedLevel = 0;
+    for (let index = 1; index < levels.length; index++) {
+      const level = levels[index];
+      const threshold = current === index ? level.distance * (1 - (level.hysteresis ?? 0.1)) : level.distance;
+      if (distance4 < threshold) break;
+      selectedLevel = index;
+    }
+    return selectedLevel;
+  };
+  const update = (camera) => {
+    if (disposed) return;
+    const cameraLike = camera;
+    if (cameraLike.getWorldPosition !== void 0) cameraLike.getWorldPosition(cameraPosition3);
+    else cameraPosition3.set(cameraLike.position?.x ?? 0, cameraLike.position?.y ?? 0, cameraLike.position?.z ?? 0);
+    const zoom = cameraLike.zoom !== void 0 && cameraLike.zoom > 0 ? cameraLike.zoom : 1;
+    let changed = false;
+    for (let index = 0; index < cells.length; index++) {
+      const cell = cells[index];
+      const dx = cameraPosition3.x - cell.centerX;
+      const dy = cameraPosition3.y - cell.centerY;
+      const dz = cameraPosition3.z - cell.centerZ;
+      const next = classify(Math.sqrt(dx * dx + dy * dy + dz * dz) / zoom, currentLevels[index]);
+      if (next !== currentLevels[index]) {
+        currentLevels[index] = next;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    for (const list of selected) list.length = 0;
+    for (let index = 0; index < cells.length; index++) {
+      const destination = selected[currentLevels[index]];
+      for (const instance3 of cells[index].instances) destination.push(instance3);
+    }
+    for (let levelIndex = 0; levelIndex < levels.length; levelIndex++) {
+      for (const mesh of meshesByLevel[levelIndex]) setAssetInstancedMeshInstances(mesh, selected[levelIndex]);
+    }
+  };
+  return Object.freeze({
+    meshes: Object.freeze(meshes2),
+    cells: cells.length,
+    update,
+    dispose(scene) {
+      if (disposed) return;
+      disposed = true;
+      const errors = [];
+      for (const mesh of meshes2) {
+        try {
+          scene?.remove?.(mesh);
+        } catch (error51) {
+          errors.push(error51);
+        }
+        try {
+          disposeAssetInstancedMesh(mesh);
+        } catch (error51) {
+          errors.push(error51);
+        }
+      }
+      if (errors.length > 0) throw new AggregateError(errors, `population LOD disposal failed in ${errors.length} operation(s)`);
+    }
+  });
+}
+
+// src/render/tree-foliage-material.ts
+var T7 = three_tsl_exports;
+function finiteRange(value, min3, max3, label4) {
+  if (!Number.isFinite(value) || value < min3 || value > max3) throw new RangeError(`${label4} must be finite in [${min3}, ${max3}]`);
+  return value;
+}
+function configureTextureColorSpaces(source) {
+  if (source.map !== null) source.map.colorSpace = SRGBColorSpace;
+  if (source.emissiveMap !== null) source.emissiveMap.colorSpace = SRGBColorSpace;
+  for (const texture3 of [source.alphaMap, source.aoMap, source.bumpMap, source.displacementMap, source.metalnessMap, source.normalMap, source.roughnessMap]) {
+    if (texture3 !== null) texture3.colorSpace = NoColorSpace;
+  }
+}
+function buildTreeFoliageMaterial(source, options = {}) {
+  if (source === null || source.isMeshStandardMaterial !== true) throw new TypeError("tree foliage source must be MeshStandardMaterial-compatible");
+  const alphaCutoff = finiteRange(options.alphaCutoff ?? Math.max(source.alphaTest || 0, 0.45), 0.01, 0.99, "tree foliage alphaCutoff");
+  const sssStrength = finiteRange(options.sssStrength ?? 0.24, 0, 2, "tree foliage sssStrength");
+  const sun = new Vector3(options.sunDirection?.x ?? 0.42, options.sunDirection?.y ?? 0.78, options.sunDirection?.z ?? 0.46);
+  if (sun.lengthSq() === 0 || !Number.isFinite(sun.lengthSq())) throw new RangeError("tree foliage sunDirection must be finite and non-zero");
+  sun.normalize();
+  const sunColor = new Color(options.sunColor ?? 16767136);
+  configureTextureColorSpaces(source);
+  const material = new MeshStandardNodeMaterial({
+    color: source.color.clone(),
+    roughness: source.roughness,
+    metalness: source.metalness,
+    map: source.map,
+    lightMap: source.lightMap,
+    lightMapIntensity: source.lightMapIntensity,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    emissive: source.emissive.clone(),
+    emissiveIntensity: source.emissiveIntensity,
+    emissiveMap: source.emissiveMap,
+    bumpMap: source.bumpMap,
+    bumpScale: source.bumpScale,
+    normalMap: source.normalMap,
+    normalMapType: source.normalMapType,
+    normalScale: source.normalScale.clone(),
+    displacementMap: source.displacementMap,
+    displacementScale: source.displacementScale,
+    displacementBias: source.displacementBias,
+    roughnessMap: source.roughnessMap,
+    metalnessMap: source.metalnessMap,
+    alphaMap: source.alphaMap,
+    envMap: source.envMap,
+    envMapIntensity: source.envMapIntensity,
+    alphaTest: alphaCutoff,
+    side: DoubleSide,
+    transparent: false,
+    opacity: source.opacity,
+    depthTest: source.depthTest,
+    depthWrite: true,
+    colorWrite: source.colorWrite,
+    polygonOffset: source.polygonOffset,
+    polygonOffsetFactor: source.polygonOffsetFactor,
+    polygonOffsetUnits: source.polygonOffsetUnits,
+    fog: source.fog,
+    flatShading: source.flatShading,
+    vertexColors: source.vertexColors
+  });
+  material.name = `${source.name || "foliage"}:limina-backlit`;
+  const sourceNodes = source;
+  if (sourceNodes.colorNode) material.colorNode = sourceNodes.colorNode;
+  if (sourceNodes.normalNode) material.normalNode = sourceNodes.normalNode;
+  if (sourceNodes.roughnessNode) material.roughnessNode = sourceNodes.roughnessNode;
+  if (sourceNodes.metalnessNode) material.metalnessNode = sourceNodes.metalnessNode;
+  if (sourceNodes.aoNode) material.aoNode = sourceNodes.aoNode;
+  if (sourceNodes.opacityNode) material.opacityNode = sourceNodes.opacityNode;
+  const baseColor = sourceNodes.colorNode ? sourceNodes.colorNode : T7.materialColor.rgb;
+  const existingEmissive = sourceNodes.emissiveNode ? sourceNodes.emissiveNode : T7.materialEmissive;
+  const view = T7.cameraPosition.sub(T7.positionWorld).normalize();
+  const sunNode = T7.uniform(sun);
+  const sunColorNode = T7.uniform(sunColor);
+  const strengthNode = T7.uniform(sssStrength);
+  const throughView = T7.max(view.negate().dot(sunNode), 0).pow(3);
+  const leafBack = T7.max(T7.normalWorld.dot(sunNode).negate(), 0).mul(0.65).add(0.35);
+  material.emissiveNode = T7.vec3(existingEmissive).add(T7.vec3(baseColor).mul(sunColorNode).mul(throughView).mul(leafBack).mul(strengthNode));
+  const userData3 = { ...source.userData };
+  delete userData3.liminaLifetime;
+  material.userData = { ...userData3, liminaTreeFoliage: Object.freeze({
+    graph: "pure-tsl-backscatter/1",
+    alphaCutoff,
+    sssStrength,
+    sunDirection: Object.freeze(sun.toArray()),
+    sunColor: sunColor.getHex()
+  }) };
+  return material;
+}
+
+// src/render/tree-impostor-material.ts
+var T8 = three_tsl_exports;
+var TREE_IMPOSTOR_CENTER_SCALE_ATTRIBUTE = "liminaTreeCenterScale";
+var TREE_IMPOSTOR_YAW_ATTRIBUTE = "liminaTreeYaw";
+function finiteRange2(value, min3, max3, label4) {
+  if (!Number.isFinite(value) || value < min3 || value > max3) throw new RangeError(`${label4} must be finite in [${min3}, ${max3}]`);
+  return value;
+}
+function buildTreeImpostorGeometry(source, capacity) {
+  if (!Number.isSafeInteger(capacity) || capacity <= 0) throw new RangeError("tree impostor capacity must be a positive safe integer");
+  if (source.getAttribute("position") === void 0 || source.getAttribute("uv") === void 0) throw new RangeError("tree impostor source geometry requires position and uv attributes");
+  const geometry = source.clone();
+  geometry.setAttribute(
+    TREE_IMPOSTOR_CENTER_SCALE_ATTRIBUTE,
+    new InstancedBufferAttribute(new Float32Array(capacity * 4), 4).setUsage(DynamicDrawUsage)
+  );
+  geometry.setAttribute(
+    TREE_IMPOSTOR_YAW_ATTRIBUTE,
+    new InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(DynamicDrawUsage)
+  );
+  return geometry;
+}
+function writeTreeImpostorInstance(geometry, index, tree, anchorX, anchorZ) {
+  const centerScale = geometry.getAttribute(TREE_IMPOSTOR_CENTER_SCALE_ATTRIBUTE), yaw = geometry.getAttribute(TREE_IMPOSTOR_YAW_ATTRIBUTE);
+  if (!Number.isSafeInteger(index) || index < 0 || index >= centerScale.count || index >= yaw.count) throw new RangeError("tree impostor instance index is out of range");
+  centerScale.setXYZW(index, tree.x - anchorX, tree.y, tree.z - anchorZ, tree.scale);
+  yaw.setX(index, tree.yaw);
+}
+function markTreeImpostorAttributesUpdated(geometry) {
+  geometry.getAttribute(TREE_IMPOSTOR_CENTER_SCALE_ATTRIBUTE).needsUpdate = true;
+  geometry.getAttribute(TREE_IMPOSTOR_YAW_ATTRIBUTE).needsUpdate = true;
+}
+function buildTreeImpostorMaterial(options) {
+  if (!(options.albedo instanceof Texture) || !(options.normalDepth instanceof Texture)) throw new TypeError("tree impostor requires albedo and normal-depth textures");
+  if (!Number.isSafeInteger(options.grid) || options.grid < 2 || options.grid > 16) throw new RangeError("tree impostor grid must be an integer in [2, 16]");
+  if (!Number.isSafeInteger(options.cellSize) || options.cellSize < 32 || options.cellSize > 512) throw new RangeError("tree impostor cellSize must be an integer in [32, 512]");
+  const alphaCutoff = finiteRange2(options.alphaCutoff, 0.01, 0.99, "tree impostor alphaCutoff");
+  const parallaxStrength = finiteRange2(options.parallaxStrength ?? 0.035, 0, 0.15, "tree impostor parallaxStrength");
+  const roughness3 = finiteRange2(options.roughness ?? 0.82, 0, 1, "tree impostor roughness");
+  options.albedo.colorSpace = SRGBColorSpace;
+  options.normalDepth.colorSpace = NoColorSpace;
+  options.albedo.wrapS = options.albedo.wrapT = options.normalDepth.wrapS = options.normalDepth.wrapT = ClampToEdgeWrapping;
+  for (const texture3 of [options.albedo, options.normalDepth]) {
+    texture3.generateMipmaps = false;
+    texture3.minFilter = LinearFilter;
+    texture3.magFilter = LinearFilter;
+  }
+  const material = new MeshStandardNodeMaterial({
+    roughness: roughness3,
+    metalness: 0,
+    alphaTest: alphaCutoff,
+    side: DoubleSide,
+    transparent: false,
+    depthWrite: true
+  });
+  material.name = "limina-tree-impostor-tsl";
+  const centerScale = T8.attribute(TREE_IMPOSTOR_CENTER_SCALE_ATTRIBUTE, "vec4");
+  const yaw = T8.attribute(TREE_IMPOSTOR_YAW_ATTRIBUTE, "float");
+  const center = centerScale.xyz;
+  const cameraObject = T8.modelWorldMatrixInverse.mul(T8.vec4(T8.cameraPosition, 1)).xyz;
+  const toCamera = cameraObject.sub(center);
+  const horizontal = T8.vec3(toCamera.x, 0, toCamera.z);
+  const horizontalLength = horizontal.length();
+  const ordinaryForward = horizontal.div(T8.max(horizontalLength, 1e-6));
+  const cameraRightObject = T8.modelWorldMatrixInverse.mul(T8.vec4(T8.cameraWorldMatrix[0].xyz, 0)).xyz.normalize();
+  const fallbackForward = T8.vec3(cameraRightObject.z.negate(), 0, cameraRightObject.x).normalize();
+  const forward = horizontalLength.greaterThan(1e-5).select(ordinaryForward, fallbackForward);
+  const right = T8.vec3(forward.z, 0, forward.x.negate());
+  const raw = T8.positionGeometry;
+  material.positionNode = center.add(right.mul(raw.x.mul(centerScale.w))).add(T8.vec3(0, raw.y.mul(centerScale.w), 0)).add(forward.mul(raw.z.mul(centerScale.w)));
+  const viewObject = toCamera.normalize();
+  const cy = yaw.cos(), sy = yaw.sin();
+  const viewLocal = T8.vec3(
+    cy.mul(viewObject.x).sub(sy.mul(viewObject.z)),
+    T8.max(viewObject.y, 0),
+    sy.mul(viewObject.x).add(cy.mul(viewObject.z))
+  ).normalize();
+  const l1 = viewLocal.x.abs().add(viewLocal.y).add(viewLocal.z.abs()).max(1e-6);
+  const a2 = viewLocal.x.div(l1), b3 = viewLocal.z.div(l1);
+  const directionUv = T8.vec2(a2.add(b3).add(1).mul(0.5), a2.sub(b3).add(1).mul(0.5)).clamp(0, 1);
+  const grid = T8.float(options.grid), cellSize = T8.float(options.cellSize), atlasSize = T8.float(options.grid * options.cellSize);
+  const frame2 = directionUv.mul(grid).sub(0.5);
+  const base = frame2.floor(), blend = frame2.fract();
+  const x0 = base.x.clamp(0, options.grid - 1), y0 = base.y.clamp(0, options.grid - 1);
+  const x1 = base.x.add(1).clamp(0, options.grid - 1), y1 = base.y.add(1).clamp(0, options.grid - 1);
+  const weights = [
+    blend.x.oneMinus().mul(blend.y.oneMinus()),
+    blend.x.mul(blend.y.oneMinus()),
+    blend.x.oneMinus().mul(blend.y),
+    blend.x.mul(blend.y)
+  ];
+  const cells = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
+  const localUv = T8.uv();
+  const decodeDirection = (cellX, cellY) => {
+    const qx = cellX.add(0.5).div(grid).mul(2).sub(1), qy = cellY.add(0.5).div(grid).mul(2).sub(1);
+    const dx = qx.add(qy).mul(0.5), dz = qx.sub(qy).mul(0.5);
+    const dy = T8.max(T8.float(1).sub(dx.abs()).sub(dz.abs()), 0);
+    return T8.vec3(dx, dy, dz).normalize();
+  };
+  const basis = (direction2) => {
+    const cross3 = T8.vec3(0, 1, 0).cross(direction2), length3 = cross3.length();
+    const frameRight = length3.greaterThan(1e-5).select(cross3.div(T8.max(length3, 1e-6)), T8.vec3(1, 0, 0));
+    return { right: frameRight, up: direction2.cross(frameRight).normalize() };
+  };
+  const atlasUv = (cellX, cellY, offset) => {
+    const inset = T8.float(0.5), usable = cellSize.sub(1);
+    const sample4 = localUv.add(offset).clamp(inset.div(cellSize), T8.float(1).sub(inset.div(cellSize)));
+    const pixelX = cellX.mul(cellSize).add(inset).add(sample4.x.mul(usable));
+    const pixelY = cellY.mul(cellSize).add(inset).add(sample4.y.oneMinus().mul(usable));
+    return T8.vec2(pixelX.div(atlasSize), T8.float(1).sub(pixelY.div(atlasSize)));
+  };
+  const samples = cells.map(([cellX, cellY]) => {
+    const direction2 = decodeDirection(cellX, cellY), frameBasis = basis(direction2);
+    const delta = viewLocal.sub(direction2);
+    const preliminaryUv = atlasUv(cellX, cellY, T8.vec2(0));
+    const preliminaryDepth = T8.texture(options.normalDepth, preliminaryUv).b.sub(0.5);
+    const offset = T8.vec2(delta.dot(frameBasis.right), delta.dot(frameBasis.up)).mul(preliminaryDepth).mul(parallaxStrength);
+    const uv3 = atlasUv(cellX, cellY, offset);
+    const albedo = T8.texture(options.albedo, uv3), normalDepth = T8.texture(options.normalDepth, uv3);
+    const normalXy = normalDepth.rg.mul(2).sub(1);
+    const normalZ = T8.max(T8.float(1).sub(normalXy.dot(normalXy)), 0).sqrt();
+    const normalTree = frameBasis.right.mul(normalXy.x).add(frameBasis.up.mul(normalXy.y)).add(direction2.mul(normalZ)).normalize();
+    const normalObject = T8.vec3(
+      cy.mul(normalTree.x).add(sy.mul(normalTree.z)),
+      normalTree.y,
+      sy.negate().mul(normalTree.x).add(cy.mul(normalTree.z))
+    ).normalize();
+    return { albedo, normal: normalObject };
+  });
+  let alpha = T8.float(0), premultiplied = T8.vec3(0), normal2 = T8.vec3(0);
+  for (let index = 0; index < 4; index++) {
+    const weightedAlpha = samples[index].albedo.a.mul(weights[index]);
+    alpha = alpha.add(weightedAlpha);
+    premultiplied = premultiplied.add(samples[index].albedo.rgb.mul(weightedAlpha));
+    normal2 = normal2.add(samples[index].normal.mul(weightedAlpha));
+  }
+  material.colorNode = premultiplied.div(T8.max(alpha, 1e-5));
+  material.opacityNode = alpha;
+  material.normalNode = T8.transformNormalToView(normal2.normalize());
+  material.userData.liminaTreeImpostor = Object.freeze({
+    schema: "limina.tree-impostor-runtime/1",
+    pureTsl: true,
+    projection: "upper-hemi-octa-rotated-diamond",
+    blend: "four-frame-premultiplied",
+    normal: "per-frame-decode-rotate-normalize",
+    depthParallax: parallaxStrength,
+    mipPolicy: "disabled-until-cell-gutters"
+  });
+  return material;
+}
+
+// src/render/tree-population-plan.ts
+var TREE_POPULATION_PAGE_SIZE = 48;
+var TREE_POPULATION_MAX_SPECIES = 12;
+var TREE_POPULATION_MAX_ACTIVE = 24576;
+var TREE_POPULATION_MAX_ACTIVE_AND_PENDING = 30720;
+function finite(value, label4) {
+  if (!Number.isFinite(value)) throw new RangeError(`${label4} must be finite`);
+  return value;
+}
+function positive(value, label4) {
+  finite(value, label4);
+  if (value <= 0) throw new RangeError(`${label4} must be positive`);
+  return value;
+}
+function hashWords(words) {
+  let hash4 = 0xcbf29ce484222325n;
+  for (const value of words) {
+    let word = BigInt(value >>> 0);
+    for (let byte = 0; byte < 4; byte++) {
+      hash4 = (hash4 ^ word & 0xffn) * 0x100000001b3n & 0xffffffffffffffffn;
+      word >>= 8n;
+    }
+  }
+  return `fnv1a64:${hash4.toString(16).padStart(16, "0")}`;
+}
+function floatWords(value) {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value, true);
+  return [view.getUint32(0, true), view.getUint32(4, true)];
+}
+function validateTreeSpeciesPolicies(policies) {
+  if (policies.length === 0 || policies.length > TREE_POPULATION_MAX_SPECIES) {
+    throw new RangeError(`tree population species count must be in [1, ${TREE_POPULATION_MAX_SPECIES}]`);
+  }
+  const resolved = /* @__PURE__ */ new Map();
+  for (const [index, policy] of policies.entries()) {
+    if (policy.speciesId.length === 0) throw new RangeError(`tree species policy ${index} requires a speciesId`);
+    if (resolved.has(policy.speciesId)) throw new RangeError(`tree species policy '${policy.speciesId}' is duplicated`);
+    const reducedDistance = positive(policy.reducedDistance, `tree species '${policy.speciesId}' reducedDistance`);
+    const impostorDistance = positive(policy.impostorDistance, `tree species '${policy.speciesId}' impostorDistance`);
+    const cullDistance = positive(policy.cullDistance, `tree species '${policy.speciesId}' cullDistance`);
+    if (!(reducedDistance < impostorDistance && impostorDistance < cullDistance)) {
+      throw new RangeError(`tree species '${policy.speciesId}' distances must be strictly increasing`);
+    }
+    const hysteresis = policy.hysteresis ?? 0.15;
+    if (!Number.isFinite(hysteresis) || hysteresis < 0 || hysteresis > 0.49) {
+      throw new RangeError(`tree species '${policy.speciesId}' hysteresis must be in [0, 0.49]`);
+    }
+    resolved.set(policy.speciesId, Object.freeze({ ...policy, reducedDistance, impostorDistance, cullDistance, hysteresis }));
+  }
+  return resolved;
+}
+function buildTreePopulationPlan(placements, policies, pageSize = TREE_POPULATION_PAGE_SIZE) {
+  positive(pageSize, "tree population pageSize");
+  const policyBySpecies = validateTreeSpeciesPolicies(policies);
+  const pages = /* @__PURE__ */ new Map();
+  const words = [...floatWords(pageSize), placements.length, policies.length];
+  for (const [ordinal, placement] of placements.entries()) {
+    const policy = policyBySpecies.get(placement.speciesId);
+    if (policy === void 0) throw new RangeError(`tree placement ${ordinal} references unknown species '${placement.speciesId}'`);
+    for (const [label4, value] of [["x", placement.x], ["y", placement.y], ["z", placement.z], ["yaw", placement.yaw], ["scale", placement.scale]]) {
+      finite(value, `tree placement ${ordinal}.${label4}`);
+    }
+    if (placement.scale <= 0) throw new RangeError(`tree placement ${ordinal}.scale must be positive`);
+    const pageX = Math.floor(placement.x / pageSize), pageZ = Math.floor(placement.z / pageSize);
+    if (!Number.isSafeInteger(pageX) || !Number.isSafeInteger(pageZ)) throw new RangeError("tree population signed page coordinate exceeds safe integer range");
+    const key = `${pageX}:${pageZ}`;
+    let page = pages.get(key);
+    if (page === void 0) {
+      page = { pageX, pageZ, instances: [] };
+      pages.set(key, page);
+    }
+    page.instances.push(Object.freeze({ ...placement, ordinal, localX: placement.x - pageX * pageSize, localZ: placement.z - pageZ * pageSize }));
+    words.push(
+      ordinal,
+      pageX,
+      pageZ,
+      ...floatWords(placement.x),
+      ...floatWords(placement.y),
+      ...floatWords(placement.z),
+      ...floatWords(placement.yaw),
+      ...floatWords(placement.scale)
+    );
+    for (let index = 0; index < placement.speciesId.length; index++) words.push(placement.speciesId.charCodeAt(index));
+  }
+  const ordered2 = [...pages.entries()].sort((a2, b3) => a2[1].pageZ - b3[1].pageZ || a2[1].pageX - b3[1].pageX).map(([key, page]) => Object.freeze({
+    key,
+    pageX: page.pageX,
+    pageZ: page.pageZ,
+    originX: page.pageX * pageSize,
+    originZ: page.pageZ * pageSize,
+    instances: Object.freeze(page.instances)
+  }));
+  return Object.freeze({
+    pageSize,
+    policies: policyBySpecies,
+    pages: Object.freeze(ordered2),
+    species: Object.freeze([...policyBySpecies.keys()].sort()),
+    trees: placements.length,
+    hash: hashWords(words)
+  });
+}
+function classifyTreePopulationRung(distance4, policy, current) {
+  finite(distance4, "tree population distance");
+  if (distance4 < 0) throw new RangeError("tree population distance must be non-negative");
+  const h2 = policy.hysteresis ?? 0.15;
+  if (current === 0) {
+    if (distance4 < policy.reducedDistance * (1 + h2)) return 0;
+    return distance4 < policy.impostorDistance ? 1 : distance4 < policy.cullDistance ? 2 : void 0;
+  }
+  if (current === 1) {
+    if (distance4 < policy.reducedDistance * (1 - h2)) return 0;
+    if (distance4 < policy.impostorDistance * (1 + h2)) return 1;
+    return distance4 < policy.cullDistance ? 2 : void 0;
+  }
+  if (current === 2) {
+    if (distance4 >= policy.cullDistance * (1 + h2)) return void 0;
+    if (distance4 >= policy.impostorDistance * (1 - h2)) return 2;
+    return distance4 < policy.reducedDistance * (1 - h2) ? 0 : 1;
+  }
+  if (distance4 < policy.reducedDistance) return 0;
+  if (distance4 < policy.impostorDistance) return 1;
+  if (distance4 < policy.cullDistance) return 2;
+  return void 0;
+}
+function selectTreePopulationPage(plan, page, camera, previous) {
+  finite(camera.x, "tree population camera.x");
+  finite(camera.y, "tree population camera.y");
+  finite(camera.z, "tree population camera.z");
+  const selected = [];
+  const signatureWords = [page.pageX, page.pageZ];
+  let nearestDistance = Infinity;
+  for (const instance3 of page.instances) {
+    const dx = camera.x - instance3.x, dy = camera.y - instance3.y, dz = camera.z - instance3.z;
+    const distance4 = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const policy = plan.policies.get(instance3.speciesId);
+    const rung = classifyTreePopulationRung(distance4, policy, previous?.get(instance3.ordinal));
+    if (rung === void 0) continue;
+    nearestDistance = Math.min(nearestDistance, distance4);
+    selected.push(Object.freeze({ ...instance3, rung }));
+    signatureWords.push(instance3.ordinal, rung);
+  }
+  if (selected.length === 0) return void 0;
+  return Object.freeze({
+    key: page.key,
+    pageX: page.pageX,
+    pageZ: page.pageZ,
+    originX: page.originX,
+    originZ: page.originZ,
+    instances: Object.freeze(selected),
+    nearestDistance,
+    signature: hashWords(signatureWords)
+  });
+}
+
+// src/render/tree-population-batch.ts
+var TREE_POPULATION_MAX_DRAWS = 60;
+var TREE_POPULATION_PROGRAM_GRAPHS = 3;
+var TREE_POPULATION_MAX_ATLAS_TEXTURES = 24;
+var TREE_POPULATION_MAX_GEOMETRY_BYTES = 64 * 1024 * 1024;
+var TREE_POPULATION_MAX_INSTANCE_BYTES = 8 * 1024 * 1024;
+var TREE_POPULATION_MAX_ATLAS_BYTES = 96 * 1024 * 1024;
+var TREE_POPULATION_MAX_RENDERER_BYTES = 192 * 1024 * 1024;
+function geometryBytes(geometry) {
+  let total = geometry.index?.array.byteLength ?? 0;
+  for (const attribute3 of Object.values(geometry.attributes)) total += attribute3.array.byteLength;
+  return total;
+}
+function validateMetrics(metrics) {
+  if (metrics.species > TREE_POPULATION_MAX_SPECIES) throw new RangeError(`tree renderer species exceed ${TREE_POPULATION_MAX_SPECIES}`);
+  if (metrics.draws > TREE_POPULATION_MAX_DRAWS) throw new RangeError(`tree renderer draws exceed ${TREE_POPULATION_MAX_DRAWS}`);
+  if (metrics.programGraphs > TREE_POPULATION_PROGRAM_GRAPHS) throw new RangeError(`tree renderer program graphs exceed ${TREE_POPULATION_PROGRAM_GRAPHS}`);
+  if (metrics.capacity > TREE_POPULATION_MAX_ACTIVE) throw new RangeError(`tree renderer capacity exceeds ${TREE_POPULATION_MAX_ACTIVE}`);
+  if (metrics.geometryBytes > TREE_POPULATION_MAX_GEOMETRY_BYTES) throw new RangeError("tree renderer geometry residency exceeds 64 MiB");
+  if (metrics.instanceBytes > TREE_POPULATION_MAX_INSTANCE_BYTES) throw new RangeError("tree renderer instance residency exceeds 8 MiB");
+  if (metrics.atlasTextures > TREE_POPULATION_MAX_ATLAS_TEXTURES) throw new RangeError(`tree renderer atlas textures exceed ${TREE_POPULATION_MAX_ATLAS_TEXTURES}`);
+  if (metrics.atlasBytes > TREE_POPULATION_MAX_ATLAS_BYTES) throw new RangeError("tree renderer atlas residency exceeds 96 MiB");
+  if (metrics.totalBytes > TREE_POPULATION_MAX_RENDERER_BYTES) throw new RangeError("tree renderer residency exceeds 192 MiB");
+}
+function aggregateTreeSpeciesBatchMetrics(species) {
+  const metrics = Object.freeze({
+    species: species.length,
+    draws: species.reduce((sum, item) => sum + item.draws, 0),
+    programGraphs: species.length === 0 ? 0 : TREE_POPULATION_PROGRAM_GRAPHS,
+    capacity: species.reduce((sum, item) => sum + item.capacity, 0),
+    geometryBytes: species.reduce((sum, item) => sum + item.geometryBytes, 0),
+    instanceBytes: species.reduce((sum, item) => sum + item.instanceBytes, 0),
+    atlasTextures: species.reduce((sum, item) => sum + item.atlasTextures, 0),
+    atlasBytes: species.reduce((sum, item) => sum + item.atlasBytes, 0),
+    totalBytes: species.reduce((sum, item) => sum + item.totalBytes, 0)
+  });
+  validateMetrics(metrics);
+  return metrics;
+}
+function instanced(geometry, material, capacity, name) {
+  const mesh = new InstancedMesh(geometry, material, capacity);
+  mesh.name = name;
+  mesh.count = 0;
+  mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+  mesh.frustumCulled = true;
+  return mesh;
+}
+var TreeSpeciesBatchAdapter = class {
+  constructor(speciesId, capacity, input) {
+    this.speciesId = speciesId;
+    this.capacity = capacity;
+    if (speciesId !== input.speciesId || speciesId.length === 0) throw new RangeError("tree batch speciesId mismatch");
+    if (!Number.isSafeInteger(capacity) || capacity <= 0 || capacity > TREE_POPULATION_MAX_ACTIVE || capacity !== input.capacity) {
+      throw new RangeError(`tree species '${speciesId}' capacity must be a positive safe integer <= ${TREE_POPULATION_MAX_ACTIVE}`);
+    }
+    this.branchFull = instanced(input.branch.full, input.branch.material, capacity, "limina-tree-branch-lod0");
+    this.branchReduced = instanced(input.branch.reduced, input.branch.material, capacity, "limina-tree-branch-lod1");
+    this.foliageFull = instanced(input.foliage.full, input.foliage.material, capacity, "limina-tree-foliage-lod0");
+    this.foliageReduced = instanced(input.foliage.reduced, input.foliage.material, capacity, "limina-tree-foliage-lod1");
+    this.impostorGeometry = buildTreeImpostorGeometry(input.impostorGeometry, capacity);
+    this.impostors = instanced(this.impostorGeometry, input.impostorMaterial, capacity, "limina-tree-impostor");
+    this.meshes = Object.freeze([this.branchFull, this.branchReduced, this.foliageFull, this.foliageReduced, this.impostors]);
+    this.root.name = `limina-tree-species:${speciesId}`;
+    this.root.add(...this.meshes);
+    this.ownedMaterials = Object.freeze([.../* @__PURE__ */ new Set([input.branch.material, input.foliage.material, input.impostorMaterial])]);
+    const geometry = geometryBytes(input.branch.full) + geometryBytes(input.branch.reduced) + geometryBytes(input.foliage.full) + geometryBytes(input.foliage.reduced) + geometryBytes(input.impostorGeometry);
+    const instance3 = capacity * (16 * 4 * 5 + 4 * 5);
+    const atlasBytes = input.atlasBytes ?? 0;
+    this.metrics = Object.freeze({
+      species: 1,
+      draws: 5,
+      programGraphs: 3,
+      capacity,
+      geometryBytes: geometry,
+      instanceBytes: instance3,
+      atlasTextures: input.atlasTextures ?? 0,
+      atlasBytes,
+      totalBytes: geometry + instance3 + atlasBytes
+    });
+    validateMetrics(this.metrics);
+  }
+  speciesId;
+  capacity;
+  root = new Group();
+  branchFull;
+  branchReduced;
+  foliageFull;
+  foliageReduced;
+  impostors;
+  metrics;
+  impostorGeometry;
+  meshes;
+  ownedMaterials;
+  published = Object.freeze([]);
+  anchorX = 0;
+  anchorZ = 0;
+  disposed = false;
+  publish(instances, anchorX, anchorZ) {
+    if (this.disposed) throw new Error(`tree species batch '${this.speciesId}' is disposed`);
+    if (!Number.isFinite(anchorX) || !Number.isFinite(anchorZ)) throw new RangeError("tree species batch anchor must be finite");
+    if (instances.length > this.capacity) throw new RangeError(`tree species '${this.speciesId}' publication exceeds capacity ${this.capacity}`);
+    const ordered2 = [...instances].sort((a2, b3) => a2.ordinal - b3.ordinal);
+    if (ordered2.some((tree) => tree.speciesId !== this.speciesId)) throw new RangeError(`tree species '${this.speciesId}' publication contains another species`);
+    const previous = this.published, previousAnchorX = this.anchorX, previousAnchorZ = this.anchorZ;
+    try {
+      this.apply(ordered2, anchorX, anchorZ);
+    } catch (primary) {
+      try {
+        this.apply(previous, previousAnchorX, previousAnchorZ);
+      } catch (rollback) {
+        throw new AggregateError([primary, rollback], `tree species '${this.speciesId}' publication rollback failed`);
+      }
+      throw primary;
+    }
+    this.published = Object.freeze(ordered2);
+    this.anchorX = anchorX;
+    this.anchorZ = anchorZ;
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    const errors = [];
+    for (const operation of [
+      () => this.root.remove(...this.meshes),
+      ...this.meshes.map((mesh) => () => mesh.dispose()),
+      () => this.impostorGeometry.dispose(),
+      ...this.ownedMaterials.map((material) => () => material.dispose())
+    ]) {
+      try {
+        operation();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, `tree species '${this.speciesId}' disposal failed in ${errors.length} operation(s)`);
+  }
+  apply(instances, anchorX, anchorZ) {
+    this.root.position.set(anchorX, 0, anchorZ);
+    let full = 0, reduced = 0, impostor2 = 0;
+    const matrix = new Matrix4(), position = new Vector3(), quaternion = new Quaternion(), scale2 = new Vector3();
+    for (const tree of instances) {
+      matrix.compose(
+        position.set(tree.x - anchorX, tree.y, tree.z - anchorZ),
+        quaternion.setFromEuler(new Euler(0, tree.yaw, 0)),
+        scale2.setScalar(tree.scale)
+      );
+      if (tree.rung === 0) {
+        this.branchFull.setMatrixAt(full, matrix);
+        this.foliageFull.setMatrixAt(full, matrix);
+        full++;
+      } else if (tree.rung === 1) {
+        this.branchReduced.setMatrixAt(reduced, matrix);
+        this.foliageReduced.setMatrixAt(reduced, matrix);
+        reduced++;
+      } else {
+        writeTreeImpostorInstance(this.impostorGeometry, impostor2, tree, anchorX, anchorZ);
+        this.impostors.setMatrixAt(impostor2++, matrix);
+      }
+    }
+    this.branchFull.count = this.foliageFull.count = full;
+    this.branchReduced.count = this.foliageReduced.count = reduced;
+    this.impostors.count = impostor2;
+    for (const mesh of this.meshes) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.count > 0) mesh.computeBoundingSphere();
+    }
+    markTreeImpostorAttributesUpdated(this.impostorGeometry);
+  }
+};
+
+// src/render/tree-population-batch-set.ts
+var TreePopulationBatchSet = class {
+  root = new Group();
+  metrics;
+  species = /* @__PURE__ */ new Map();
+  pages = /* @__PURE__ */ new Map();
+  anchorX = 0;
+  anchorZ = 0;
+  token = 0;
+  disposed = false;
+  constructor(adapters) {
+    if (adapters.length === 0) throw new RangeError("tree population batch set requires at least one species adapter");
+    for (const adapter of adapters) {
+      if (this.species.has(adapter.speciesId)) throw new RangeError(`tree population batch species '${adapter.speciesId}' is duplicated`);
+      this.species.set(adapter.speciesId, adapter);
+      this.root.add(adapter.root);
+    }
+    this.root.name = "limina-tree-population-batches";
+    this.metrics = aggregateTreeSpeciesBatchMetrics(adapters.map((adapter) => adapter.metrics));
+  }
+  buildMount(input) {
+    if (this.disposed) throw new Error("tree population batch set is disposed");
+    let committedToken, released = false;
+    return Object.freeze({
+      trees: input.selection.instances.length,
+      commit: () => {
+        if (released) throw new Error(`tree page '${input.selection.key}' candidate is already released`);
+        committedToken = this.publishPage(input.selection, input.anchorX, input.anchorZ);
+      },
+      dispose: () => {
+        if (released) return;
+        released = true;
+        if (committedToken !== void 0) this.removePage(input.selection.key, committedToken);
+      }
+    });
+  }
+  pageKeys() {
+    return Object.freeze([...this.pages.keys()].sort());
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.pages.clear();
+    const errors = [];
+    for (const adapter of this.species.values()) {
+      try {
+        this.root.remove(adapter.root);
+      } catch (error51) {
+        errors.push(error51);
+      }
+      try {
+        adapter.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, `tree population batch-set disposal failed in ${errors.length} operation(s)`);
+  }
+  publishPage(selection, anchorX, anchorZ) {
+    this.validateSelection(selection);
+    const priorPages = new Map(this.pages), priorAnchorX = this.anchorX, priorAnchorZ = this.anchorZ;
+    const token = ++this.token;
+    this.pages.set(selection.key, { token, selection });
+    try {
+      this.publishAll(anchorX, anchorZ);
+    } catch (primary) {
+      this.pages.clear();
+      for (const [key, value] of priorPages) this.pages.set(key, value);
+      try {
+        this.publishAll(priorAnchorX, priorAnchorZ);
+      } catch (rollback) {
+        throw new AggregateError([primary, rollback], `tree page '${selection.key}' publication rollback failed`);
+      }
+      throw primary;
+    }
+    return token;
+  }
+  removePage(key, token) {
+    const current = this.pages.get(key);
+    if (current?.token !== token) return;
+    this.pages.delete(key);
+    try {
+      this.publishAll(this.anchorX, this.anchorZ);
+    } catch (primary) {
+      this.pages.set(key, current);
+      try {
+        this.publishAll(this.anchorX, this.anchorZ);
+      } catch (rollback) {
+        throw new AggregateError([primary, rollback], `tree page '${key}' removal rollback failed`);
+      }
+      throw primary;
+    }
+  }
+  validateSelection(selection) {
+    for (const tree of selection.instances) if (!this.species.has(tree.speciesId)) {
+      throw new RangeError(`tree page '${selection.key}' references unmounted species '${tree.speciesId}'`);
+    }
+  }
+  publishAll(anchorX, anchorZ) {
+    const selected = new Map([...this.species.keys()].map((id) => [id, []]));
+    for (const page of [...this.pages.values()].sort((a2, b3) => a2.selection.pageZ - b3.selection.pageZ || a2.selection.pageX - b3.selection.pageX)) {
+      for (const tree of page.selection.instances) selected.get(tree.speciesId).push(tree);
+    }
+    for (const [id, adapter] of this.species) adapter.publish(selected.get(id), anchorX, anchorZ);
+    this.root.position.set(0, 0, 0);
+    this.anchorX = anchorX;
+    this.anchorZ = anchorZ;
+  }
+};
+
+// src/render/tree-population-residency.ts
+function cap(value, maximum, label4) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) throw new RangeError(`${label4} must be a positive safe integer <= ${maximum}`);
+  return value;
+}
+function previousRungs(active) {
+  if (active === void 0) return void 0;
+  return new Map(active.selection.instances.map((instance3) => [instance3.ordinal, instance3.rung]));
+}
+var TreePopulationResidencyController = class {
+  constructor(plan, options) {
+    this.plan = plan;
+    this.maxActiveTrees = cap(options.maxActiveTrees ?? TREE_POPULATION_MAX_ACTIVE, TREE_POPULATION_MAX_ACTIVE, "tree population maxActiveTrees");
+    this.maxActiveAndPendingTrees = cap(
+      options.maxActiveAndPendingTrees ?? TREE_POPULATION_MAX_ACTIVE_AND_PENDING,
+      TREE_POPULATION_MAX_ACTIVE_AND_PENDING,
+      "tree population maxActiveAndPendingTrees"
+    );
+    if (this.maxActiveAndPendingTrees < this.maxActiveTrees) throw new RangeError("tree population active+pending cap must be >= active cap");
+    this.build = options.build;
+    this.onError = options.onError;
+    for (const page of plan.pages) this.pages.set(page.key, page);
+  }
+  plan;
+  pages = /* @__PURE__ */ new Map();
+  active = /* @__PURE__ */ new Map();
+  errors = [];
+  maxActiveTrees;
+  maxActiveAndPendingTrees;
+  build;
+  onError;
+  activeTreeCount = 0;
+  pending;
+  generation = 0;
+  camera;
+  cleared = false;
+  update(x3, y3, z4) {
+    if (![x3, y3, z4].every(Number.isFinite)) throw new RangeError("tree population camera must be finite");
+    if (this.cleared) return Object.freeze({ launched: null, dropped: 0, blocked: false });
+    if (this.camera === void 0 || this.camera.x !== x3 || this.camera.y !== y3 || this.camera.z !== z4) {
+      this.camera = Object.freeze({ x: x3, y: y3, z: z4 });
+      this.generation++;
+    }
+    const desired = /* @__PURE__ */ new Map();
+    for (const page of this.plan.pages) {
+      const selection2 = selectTreePopulationPage(this.plan, page, this.camera, previousRungs(this.active.get(page.key)));
+      if (selection2 !== void 0) desired.set(page.key, selection2);
+    }
+    let dropped = 0;
+    for (const [key, active] of [...this.active]) {
+      if (desired.has(key)) continue;
+      this.active.delete(key);
+      this.activeTreeCount -= active.mount.trees;
+      dropped++;
+      try {
+        active.mount.dispose();
+      } catch (error51) {
+        this.report(error51);
+      }
+    }
+    if (this.pending !== void 0) return Object.freeze({ launched: null, dropped, blocked: false });
+    const candidates = [...desired.values()].filter((selection2) => this.active.get(selection2.key)?.selection.signature !== selection2.signature).sort((a2, b3) => a2.nearestDistance - b3.nearestDistance || a2.pageZ - b3.pageZ || a2.pageX - b3.pageX || a2.key.localeCompare(b3.key));
+    if (candidates.length === 0) return Object.freeze({ launched: null, dropped, blocked: false });
+    const selection = candidates[0];
+    const previous = this.active.get(selection.key);
+    const resultingActive = this.activeTreeCount - (previous?.mount.trees ?? 0) + selection.instances.length;
+    const withPending = this.activeTreeCount + selection.instances.length;
+    if (resultingActive > this.maxActiveTrees || withPending > this.maxActiveAndPendingTrees) {
+      return Object.freeze({ launched: null, dropped, blocked: true });
+    }
+    const generation = this.generation;
+    const task = this.runBuild({
+      selection,
+      generation,
+      anchorX: Math.floor(this.camera.x / this.plan.pageSize) * this.plan.pageSize,
+      anchorZ: Math.floor(this.camera.z / this.plan.pageSize) * this.plan.pageSize
+    });
+    this.pending = { key: selection.key, trees: selection.instances.length, signature: selection.signature, generation, task };
+    return Object.freeze({ launched: selection.key, dropped, blocked: false });
+  }
+  snapshot() {
+    const pendingTrees = this.pending?.trees ?? 0;
+    return Object.freeze({
+      active: Object.freeze([...this.active.values()].map((entry) => Object.freeze({
+        key: entry.page.key,
+        trees: entry.mount.trees,
+        signature: entry.selection.signature
+      })).sort((a2, b3) => a2.key.localeCompare(b3.key))),
+      pending: this.pending === void 0 ? null : Object.freeze({ key: this.pending.key, trees: this.pending.trees, signature: this.pending.signature }),
+      activeTrees: this.activeTreeCount,
+      pendingTrees,
+      totalTrees: this.activeTreeCount + pendingTrees
+    });
+  }
+  takeErrors() {
+    return this.errors.splice(0);
+  }
+  async settle() {
+    await this.pending?.task;
+  }
+  async clear() {
+    if (this.cleared) {
+      await this.pending?.task;
+      return;
+    }
+    this.cleared = true;
+    this.generation++;
+    const errors = [];
+    for (const active of this.active.values()) {
+      try {
+        active.mount.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    this.active.clear();
+    this.activeTreeCount = 0;
+    const priorErrorCount = this.errors.length;
+    await this.pending?.task;
+    errors.push(...this.errors.slice(priorErrorCount));
+    if (errors.length > 0) throw new AggregateError(errors, `tree population clear failed in ${errors.length} operation(s)`);
+  }
+  async runBuild(input) {
+    try {
+      let mount;
+      try {
+        mount = await this.build(input);
+      } catch (error51) {
+        this.report(error51);
+        return;
+      }
+      if (!Number.isSafeInteger(mount.trees) || mount.trees !== input.selection.instances.length) {
+        const primary = new Error(`tree population page '${input.selection.key}' published ${mount.trees} trees; reserved ${input.selection.instances.length}`);
+        try {
+          mount.dispose();
+        } catch (error51) {
+          this.report(new AggregateError([primary, error51], "tree population count rejection cleanup failed"));
+          return;
+        }
+        this.report(primary);
+        return;
+      }
+      const page = this.pages.get(input.selection.key);
+      const desired = !this.cleared && page !== void 0 && this.camera !== void 0 ? selectTreePopulationPage(this.plan, page, this.camera, previousRungs(this.active.get(page.key))) : void 0;
+      if (this.cleared || input.generation !== this.generation || desired?.signature !== input.selection.signature) {
+        try {
+          mount.dispose();
+        } catch (error51) {
+          this.report(error51);
+        }
+        return;
+      }
+      const previous = this.active.get(input.selection.key);
+      try {
+        mount.commit(previous?.mount);
+      } catch (primary) {
+        try {
+          mount.dispose();
+        } catch (error51) {
+          this.report(new AggregateError([primary, error51], "tree population commit cleanup failed"));
+          return;
+        }
+        this.report(primary);
+        return;
+      }
+      this.active.set(input.selection.key, { page, selection: input.selection, mount });
+      this.activeTreeCount += mount.trees - (previous?.mount.trees ?? 0);
+      if (previous !== void 0) {
+        try {
+          previous.mount.dispose();
+        } catch (error51) {
+          this.report(error51);
+        }
+      }
+    } finally {
+      if (this.pending?.generation === input.generation && this.pending.key === input.selection.key) this.pending = void 0;
+    }
+  }
+  report(error51) {
+    this.errors.push(error51);
+    try {
+      this.onError?.(error51);
+    } catch (observerError) {
+      this.errors.push(observerError);
+    }
+  }
+};
+
+// src/render/tree-population-runtime.ts
+function meshes(root) {
+  const found = [];
+  root.traverse?.((object2) => {
+    if (object2.isMesh) found.push(object2);
+  });
+  return found;
+}
+function role(mesh) {
+  if (Array.isArray(mesh.material)) throw new Error("tree runtime requires one material per flattened mesh primitive");
+  const material = mesh.material;
+  if (material?.isMeshStandardMaterial !== true) throw new Error("tree runtime requires MeshStandardMaterial-compatible source materials");
+  const label4 = `${mesh.name} ${material.name}`;
+  return material.alphaTest > 0 || material.transparent || /leaf|leaves|foliage|needle|canopy/i.test(label4) ? "foliage" : "branch";
+}
+function extract(root, label4) {
+  const groups = { branch: [], foliage: [] };
+  for (const mesh of meshes(root)) {
+    const material = mesh.material;
+    groups[role(mesh)].push({ geometry: mesh.geometry, material });
+  }
+  if (groups.branch.length !== 1 || groups.foliage.length !== 1) {
+    throw new Error(`${label4} must flatten to exactly one branch and one foliage primitive; found ${groups.branch.length}/${groups.foliage.length}`);
+  }
+  return Object.freeze({ branch: groups.branch[0], foliage: groups.foliage[0] });
+}
+function branchMaterial(source) {
+  if (source.map !== null) source.map.colorSpace = SRGBColorSpace;
+  for (const texture3 of [source.aoMap, source.normalMap, source.roughnessMap, source.metalnessMap]) if (texture3 !== null) texture3.colorSpace = NoColorSpace;
+  return new MeshStandardNodeMaterial({
+    color: source.color.clone(),
+    roughness: source.roughness,
+    metalness: source.metalness,
+    map: source.map,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    normalMap: source.normalMap,
+    normalScale: source.normalScale.clone(),
+    roughnessMap: source.roughnessMap,
+    metalnessMap: source.metalnessMap
+  });
+}
+function impostor(root, sourceHash, reducedHash) {
+  const found = meshes(root);
+  if (found.length !== 1 || Array.isArray(found[0].material)) throw new Error("tree impostor runtime requires one quad primitive/material");
+  const mesh = found[0], sourceMaterial = mesh.material;
+  const descriptor = mesh.parent?.userData?.liminaTreeImpostor ?? mesh.userData?.liminaTreeImpostor ?? root.userData?.liminaTreeImpostor;
+  if (descriptor?.schema !== "limina.tree-impostor/2" || descriptor.sourceContentHash !== sourceHash || descriptor.lodContentHash !== reducedHash) {
+    throw new Error("tree impostor descriptor does not match the pinned source/reduced asset hashes");
+  }
+  if (!(sourceMaterial.map instanceof Texture) || !(sourceMaterial.normalMap instanceof Texture)) throw new Error("tree impostor runtime requires embedded albedo and normal-depth textures");
+  const config2 = descriptor.config;
+  const material = buildTreeImpostorMaterial({
+    albedo: sourceMaterial.map,
+    normalDepth: sourceMaterial.normalMap,
+    grid: config2.grid,
+    cellSize: config2.cellSize,
+    alphaCutoff: config2.alphaCutoff
+  });
+  const atlasBytes = config2.atlasSize * config2.atlasSize * 4 * 2;
+  return Object.freeze({ geometry: mesh.geometry, material, atlasBytes });
+}
+var TreePopulationRuntime = class {
+  root;
+  draws = 5;
+  batches;
+  residency;
+  errors = [];
+  scene;
+  disposed = false;
+  constructor(input) {
+    const base = extract(input.baseRoot, "tree LOD0"), reduced = extract(input.reducedRoot, "tree LOD1");
+    const far = impostor(input.impostorRoot, input.sourceHash, input.reducedHash);
+    const placements = input.placements.map((tree) => ({
+      speciesId: input.speciesId,
+      x: tree.x,
+      y: tree.y,
+      z: tree.z,
+      yaw: tree.yaw,
+      scale: tree.scale
+    }));
+    const plan = buildTreePopulationPlan(placements, [{
+      speciesId: input.speciesId,
+      reducedDistance: input.treeLod.reducedDistance,
+      impostorDistance: input.treeLod.impostorDistance,
+      cullDistance: input.treeLod.cullDistance,
+      ...input.treeLod.hysteresis !== void 0 ? { hysteresis: input.treeLod.hysteresis } : {}
+    }]);
+    const adapter = new TreeSpeciesBatchAdapter(input.speciesId, Math.max(1, Math.min(placements.length, 24576)), {
+      speciesId: input.speciesId,
+      capacity: Math.max(1, Math.min(placements.length, 24576)),
+      branch: { full: base.branch.geometry, reduced: reduced.branch.geometry, material: branchMaterial(base.branch.material) },
+      foliage: { full: base.foliage.geometry, reduced: reduced.foliage.geometry, material: buildTreeFoliageMaterial(base.foliage.material) },
+      impostorGeometry: far.geometry,
+      impostorMaterial: far.material,
+      atlasTextures: 2,
+      atlasBytes: far.atlasBytes
+    });
+    this.batches = new TreePopulationBatchSet([adapter]);
+    this.root = this.batches.root;
+    this.residency = new TreePopulationResidencyController(plan, {
+      build: async (build) => this.batches.buildMount(build),
+      onError: (error51) => {
+        this.errors.push(error51);
+        input.onError?.(error51);
+      }
+    });
+    this.scene = input.scene;
+    input.scene.add?.(this.root);
+  }
+  update(camera) {
+    if (this.disposed) return;
+    const position = new Vector3(), candidate = camera;
+    if (candidate.getWorldPosition) candidate.getWorldPosition(position);
+    else position.set(candidate.position?.x ?? 0, candidate.position?.y ?? 0, candidate.position?.z ?? 0);
+    this.residency.update(position.x, position.y, position.z);
+  }
+  async settle() {
+    await this.residency.settle();
+  }
+  takeErrors() {
+    return [...this.errors.splice(0), ...this.residency.takeErrors()];
+  }
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.scene.remove?.(this.root);
+    void this.residency.clear().then(() => this.batches.dispose()).catch((error51) => {
+      this.errors.push(error51);
+    });
+  }
+};
+
 // src/terrain/grid.mjs
 var TERRAIN_GRID_SCHEMA = "limina.terrain-grid/v1";
 var TERRAIN_CHUNK_TOPOLOGY_SCHEMA = "limina.terrain-chunk-topology/v1";
@@ -109244,14 +110965,14 @@ var MAX_TERRAIN_FIELD_SAMPLES = 4097;
 var MIN_TERRAIN_CHUNK_COORD = -2147483648;
 var MAX_TERRAIN_CHUNK_COORD = 2147483647;
 var GRID_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-function finite(name, value) {
+function finite2(name, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${name} must be finite`);
   }
   return value;
 }
 function positiveFinite(name, value) {
-  finite(name, value);
+  finite2(name, value);
   if (!(value > 0)) throw new Error(`${name} must be > 0`);
   return value;
 }
@@ -109309,7 +111030,7 @@ function createTerrainGridSpec(input) {
   const spec = {
     schema: TERRAIN_GRID_SCHEMA,
     gridId,
-    origin: [finite("terrain grid origin x", origin[0]), finite("terrain grid origin z", origin[1])],
+    origin: [finite2("terrain grid origin x", origin[0]), finite2("terrain grid origin z", origin[1])],
     chunkSizeM: positiveFinite("terrain grid chunkSizeM", input.chunkSizeM),
     defaultSamples: validateTerrainChunkSamples(input.defaultSamples)
   };
@@ -109319,8 +111040,8 @@ function validateGridSpec(grid) {
   if (grid?.schema !== TERRAIN_GRID_SCHEMA) throw new Error(`terrain grid schema must be '${TERRAIN_GRID_SCHEMA}'`);
   validateTerrainGridId(grid.gridId);
   if (!Array.isArray(grid.origin) || grid.origin.length !== 2) throw new Error("terrain grid origin must be [x, z]");
-  finite("terrain grid origin x", grid.origin[0]);
-  finite("terrain grid origin z", grid.origin[1]);
+  finite2("terrain grid origin x", grid.origin[0]);
+  finite2("terrain grid origin z", grid.origin[1]);
   positiveFinite("terrain grid chunkSizeM", grid.chunkSizeM);
   validateTerrainChunkSamples(grid.defaultSamples);
   return grid;
@@ -109373,10 +111094,10 @@ function terrainFieldTopologyHash(input) {
   const bounds = input?.bounds;
   if (bounds === null || typeof bounds !== "object") throw new Error("terrain field bounds are required");
   const canonicalBounds = {
-    minX: finite("terrain field minX", bounds.minX),
-    minZ: finite("terrain field minZ", bounds.minZ),
-    maxX: finite("terrain field maxX", bounds.maxX),
-    maxZ: finite("terrain field maxZ", bounds.maxZ)
+    minX: finite2("terrain field minX", bounds.minX),
+    minZ: finite2("terrain field minZ", bounds.minZ),
+    maxX: finite2("terrain field maxX", bounds.maxX),
+    maxZ: finite2("terrain field maxZ", bounds.maxZ)
   };
   if (!(canonicalBounds.maxX > canonicalBounds.minX) || !(canonicalBounds.maxZ > canonicalBounds.minZ)) {
     throw new Error("terrain field bounds must have positive width and height");
@@ -109387,8 +111108,8 @@ function terrainFieldTopologyHash(input) {
 }
 function terrainWorldToChunk(gridInput, x3, z4) {
   const grid = validateGridSpec(gridInput);
-  const tx = Math.floor((finite("terrain world x", x3) - grid.origin[0]) / grid.chunkSizeM);
-  const tz = Math.floor((finite("terrain world z", z4) - grid.origin[1]) / grid.chunkSizeM);
+  const tx = Math.floor((finite2("terrain world x", x3) - grid.origin[0]) / grid.chunkSizeM);
+  const tz = Math.floor((finite2("terrain world z", z4) - grid.origin[1]) / grid.chunkSizeM);
   return Object.freeze({
     tx: validateTerrainChunkCoordinate("tx", tx),
     tz: validateTerrainChunkCoordinate("tz", tz)
@@ -109593,6 +111314,779 @@ function parseTiles(jsonl) {
   return out;
 }
 
+// src/world/worldmap-hash.mjs
+function point(p2) {
+  return [p2[0], p2[1]];
+}
+function points(ps) {
+  return ps.map(point);
+}
+function polygon(p2) {
+  const out = { points: points(p2.points) };
+  if (p2.holes !== void 0) out.holes = p2.holes.map((h2) => points(h2));
+  return out;
+}
+function reliefHint(r2) {
+  const shape = {};
+  if (r2.shape.polygon !== void 0) shape.polygon = points(r2.shape.polygon);
+  if (r2.shape.point !== void 0) shape.point = point(r2.shape.point);
+  return { kind: r2.kind, shape, amplitude: r2.amplitude };
+}
+function reliefGrid(g3) {
+  return {
+    w: g3.w,
+    h: g3.h,
+    rect: { x0: g3.rect.x0, z0: g3.rect.z0, w: g3.rect.w, h: g3.rect.h },
+    minY: g3.minY,
+    maxY: g3.maxY,
+    // Only-when-present (like every additive field) so a legacy u8 grid hashes byte-identically.
+    ...g3.encoding !== void 0 ? { encoding: g3.encoding } : {},
+    data: g3.data
+  };
+}
+function biomeRegion(b3) {
+  return { biome: b3.biome, points: points(b3.points) };
+}
+function waterway(w5) {
+  const out = { points: points(w5.points) };
+  if (w5.widthM !== void 0) out.widthM = w5.widthM;
+  out.class = w5.class;
+  if (w5.order !== void 0) out.order = w5.order;
+  if (w5.widths !== void 0) out.widths = [...w5.widths];
+  return out;
+}
+function waterBody(w5) {
+  return {
+    id: w5.id,
+    kind: w5.kind,
+    level: w5.level,
+    footprint: polygon(w5.footprint),
+    depthZones: w5.depthZones.map((zone) => ({
+      minShoreDistanceM: zone.minShoreDistanceM,
+      maxShoreDistanceM: zone.maxShoreDistanceM,
+      depthM: zone.depthM
+    }))
+  };
+}
+function hydrologyRecipe(h2) {
+  return {
+    schema: h2.schema,
+    precipitationMmPerYear: h2.precipitationMmPerYear,
+    riverMinCatchmentAreaM2: h2.riverMinCatchmentAreaM2,
+    basinMinAreaM2: h2.basinMinAreaM2,
+    basinMinDepthM: h2.basinMinDepthM,
+    waterfallMinDropM: h2.waterfallMinDropM
+  };
+}
+function route(r2) {
+  return { points: points(r2.points), class: r2.class };
+}
+function designRef(ref) {
+  return { schema: ref.schema, mapId: ref.mapId, kind: ref.kind, id: ref.id };
+}
+function anchor(a2) {
+  const out = { id: a2.id, kind: a2.kind, position: point(a2.position) };
+  if (a2.count !== void 0) out.count = a2.count;
+  if (a2.name !== void 0) out.name = a2.name;
+  if (a2.assetId !== void 0) out.assetId = a2.assetId;
+  if (a2.rot !== void 0) out.rot = a2.rot;
+  if (a2.scale !== void 0) out.scale = a2.scale;
+  if (a2.designRef !== void 0) out.designRef = designRef(a2.designRef);
+  out.source = a2.source;
+  return out;
+}
+function gazetteerEntry(g3) {
+  const out = { placeId: g3.placeId, name: g3.name, kind: g3.kind, parentId: g3.parentId === void 0 ? null : g3.parentId, position: point(g3.position) };
+  if (g3.radiusM !== void 0) out.radiusM = g3.radiusM;
+  if (g3.designRef !== void 0) out.designRef = designRef(g3.designRef);
+  return out;
+}
+function designIndexEntry(entry) {
+  const out = { designRef: designRef(entry.designRef), position: point(entry.position) };
+  if (entry.radiusM !== void 0) out.radiusM = entry.radiusM;
+  return out;
+}
+function provenance(p2, omitContentHash) {
+  const out = { tool: p2.tool };
+  if (p2.sourceHash !== void 0) out.sourceHash = p2.sourceHash;
+  if (p2.compiledAt !== void 0) out.compiledAt = p2.compiledAt;
+  if (!omitContentHash) out.contentHash = p2.contentHash;
+  if (p2.cropOf !== void 0) out.cropOf = { anchor: p2.cropOf.anchor, anchorPx: point(p2.cropOf.anchorPx), radiusM: p2.cropOf.radiusM };
+  return out;
+}
+function stableStringifyWorldMap(map2, opts = {}) {
+  const omitContentHash = opts.omitContentHash === true;
+  const canonical = {
+    version: map2.version,
+    id: map2.id,
+    unitsPerMeter: map2.unitsPerMeter,
+    origin: point(map2.origin),
+    extent: { w: map2.extent.w, h: map2.extent.h },
+    seaLevel: map2.seaLevel,
+    land: map2.land.map(polygon),
+    relief: map2.relief.map(reliefHint),
+    // Optional additive fields are emitted ONLY when present, so every pre-reliefGrid map keeps
+    // its original bytes (and hash) unchanged.
+    ...map2.reliefGrid !== void 0 ? { reliefGrid: reliefGrid(map2.reliefGrid) } : {},
+    biomes: map2.biomes.map(biomeRegion),
+    waterways: map2.waterways.map(waterway),
+    // Optional additive field: never materialize it for legacy maps.
+    ...map2.waterBodies !== void 0 ? { waterBodies: map2.waterBodies.map(waterBody) } : {},
+    ...map2.hydrology !== void 0 ? { hydrology: hydrologyRecipe(map2.hydrology) } : {},
+    routes: map2.routes.map(route),
+    anchors: map2.anchors.map(anchor),
+    // Optional additive field: emitted ONLY when present, so every pre-Places map hashes
+    // byte-identically (mirrors reliefGrid above).
+    ...map2.gazetteer !== void 0 ? { gazetteer: map2.gazetteer.map(gazetteerEntry) } : {},
+    ...map2.designIndex !== void 0 ? { designIndex: map2.designIndex.map(designIndexEntry) } : {},
+    provenance: provenance(map2.provenance, omitContentHash)
+  };
+  return JSON.stringify(canonical);
+}
+function worldMapContentHash(map2) {
+  return sha256(stableStringifyWorldMap(map2, { omitContentHash: true }));
+}
+
+// src/world/water-ir.mjs
+var WATERWAY_CLASSES = Object.freeze(["river", "stream"]);
+var WATER_BODY_KINDS = Object.freeze(["lake", "pond", "reservoir", "lagoon", "marsh", "swamp", "bog", "estuary"]);
+var WATER_LIMITS = Object.freeze({
+  bodies: 4096,
+  waterways: 4096,
+  ringPoints: 512,
+  holes: 32,
+  depthZones: 64,
+  waterwayPoints: 8192,
+  bodyPoints: 4096,
+  totalBodyPoints: 65536,
+  totalWaterwayPoints: 262144,
+  // Ten million metres supports continental authoring while keeping determinant error bounded.
+  absCoordinateM: 1e7,
+  absLevelM: 1e5,
+  depthM: 2e4,
+  shoreDistanceM: 1e6,
+  widthM: 1e5,
+  streamOrder: 12,
+  // Simple-polygon validation is quadratic. This hard budget bounds hostile aggregate work even
+  // when every individual ring remains below its point cap.
+  topologyWorkUnits: 2e6
+});
+var WATER_ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
+var WATERWAY_CLASS_SET = new Set(WATERWAY_CLASSES);
+var WATER_BODY_KIND_SET = new Set(WATER_BODY_KINDS);
+var WATER_BODY_KEYS = /* @__PURE__ */ new Set(["id", "kind", "level", "footprint", "depthZones"]);
+var WATER_FOOTPRINT_KEYS = /* @__PURE__ */ new Set(["points", "holes"]);
+var WATER_DEPTH_ZONE_KEYS = /* @__PURE__ */ new Set(["minShoreDistanceM", "maxShoreDistanceM", "depthM"]);
+function isPortableWaterId(value) {
+  return typeof value === "string" && WATER_ID_RE.test(value);
+}
+function isPlainJsonData(value, seen = /* @__PURE__ */ new Set()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+    if (Object.keys(descriptors).some((key) => key !== "length" && !/^(0|[1-9]\d*)$/.test(key))) return false;
+    for (let index = 0; index < value.length; index++) {
+      const descriptor = descriptors[String(index)];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || !isPlainJsonData(descriptor.value, seen)) return false;
+    }
+    return true;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  for (const descriptor of Object.values(descriptors)) {
+    if (!("value" in descriptor) || !descriptor.enumerable || !isPlainJsonData(descriptor.value, seen)) return false;
+  }
+  return true;
+}
+var WaterIrValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WaterIrValidationError";
+  }
+};
+function fail(message) {
+  throw new WaterIrValidationError(message);
+}
+function requireRecord(value, path, allowedKeys) {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) fail(`${path} must be a plain object`);
+  for (const key of Object.keys(value)) if (!allowedKeys.has(key)) fail(`${path} has unknown field '${key}'`);
+  return value;
+}
+function requireArray(value, path, min3, max3) {
+  if (!Array.isArray(value) || value.length < min3 || value.length > max3) fail(`${path} must contain ${min3}..${max3} entries`);
+  for (let index = 0; index < value.length; index++) if (!Object.hasOwn(value, index)) fail(`${path} must not be sparse`);
+  return value;
+}
+function requireFiniteNumber(value, path, min3, max3, integer3 = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min3 || value > max3 || integer3 && !Number.isInteger(value)) {
+    fail(`${path} must be a ${integer3 ? "finite integer" : "finite number"} in [${min3}, ${max3}]`);
+  }
+  return value;
+}
+function requirePositiveNumber(value, path, max3) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > max3) fail(`${path} must be finite, positive, and at most ${max3}`);
+  return value;
+}
+function requireFinitePoint(value, path) {
+  const point3 = requireArray(value, path, 2, 2);
+  return [
+    requireFiniteNumber(point3[0], `${path}[0]`, -WATER_LIMITS.absCoordinateM, WATER_LIMITS.absCoordinateM),
+    requireFiniteNumber(point3[1], `${path}[1]`, -WATER_LIMITS.absCoordinateM, WATER_LIMITS.absCoordinateM)
+  ];
+}
+function orientationSign(a2, b3, c2) {
+  const x1 = b3[0] - a2[0], y1 = b3[1] - a2[1], x22 = c2[0] - a2[0], y22 = c2[1] - a2[1];
+  const determinant3 = x1 * y22 - y1 * x22;
+  const tolerance = Number.EPSILON * 32 * (Math.abs(x1 * y22) + Math.abs(y1 * x22) + 1);
+  return determinant3 > tolerance ? 1 : determinant3 < -tolerance ? -1 : 0;
+}
+function onSegment2(a2, b3, point3) {
+  if (orientationSign(a2, b3, point3) !== 0) return false;
+  const tolerance = Number.EPSILON * 32 * Math.max(1, Math.abs(a2[0]), Math.abs(a2[1]), Math.abs(b3[0]), Math.abs(b3[1]), Math.abs(point3[0]), Math.abs(point3[1]));
+  return point3[0] >= Math.min(a2[0], b3[0]) - tolerance && point3[0] <= Math.max(a2[0], b3[0]) + tolerance && point3[1] >= Math.min(a2[1], b3[1]) - tolerance && point3[1] <= Math.max(a2[1], b3[1]) + tolerance;
+}
+function compare(budget) {
+  budget.workUnits++;
+  if (budget.workUnits > WATER_LIMITS.topologyWorkUnits) fail(`water topology exceeds ${WATER_LIMITS.topologyWorkUnits} bounded work units`);
+}
+function segmentsIntersect(a2, b3, c2, d2, budget) {
+  compare(budget);
+  const abC = orientationSign(a2, b3, c2), abD = orientationSign(a2, b3, d2);
+  const cdA = orientationSign(c2, d2, a2), cdB = orientationSign(c2, d2, b3);
+  if (abC !== 0 && abD !== 0 && cdA !== 0 && cdB !== 0) return abC !== abD && cdA !== cdB;
+  return abC === 0 && onSegment2(a2, b3, c2) || abD === 0 && onSegment2(a2, b3, d2) || cdA === 0 && onSegment2(c2, d2, a2) || cdB === 0 && onSegment2(c2, d2, b3);
+}
+function ringAreaSign(ring2, budget) {
+  const origin = ring2[0];
+  let twiceArea2 = 0;
+  let magnitude = 0;
+  for (let index = 1; index < ring2.length - 1; index++) {
+    compare(budget);
+    const point3 = ring2[index], next = ring2[index + 1];
+    const px2 = point3[0] - origin[0], py2 = point3[1] - origin[1];
+    const nx = next[0] - origin[0], ny = next[1] - origin[1];
+    const term = px2 * ny - nx * py2;
+    twiceArea2 += term;
+    magnitude += Math.abs(px2 * ny) + Math.abs(nx * py2);
+  }
+  const tolerance = Number.EPSILON * 32 * (magnitude + 1);
+  return twiceArea2 > tolerance ? 1 : twiceArea2 < -tolerance ? -1 : 0;
+}
+function validateRing(ring2, path, budget) {
+  const seen = /* @__PURE__ */ new Set();
+  for (let index = 0; index < ring2.length; index++) {
+    compare(budget);
+    const point3 = ring2[index], next = ring2[(index + 1) % ring2.length];
+    const key = `${point3[0]}\0${point3[1]}`;
+    if (seen.has(key) || point3[0] === next[0] && point3[1] === next[1]) fail(`${path} must not repeat vertices`);
+    seen.add(key);
+  }
+  if (ringAreaSign(ring2, budget) === 0) fail(`${path} must enclose numerically stable non-zero area`);
+  for (let i2 = 0; i2 < ring2.length; i2++) for (let j3 = i2 + 1; j3 < ring2.length; j3++) {
+    if (j3 === i2 + 1 || i2 === 0 && j3 === ring2.length - 1) continue;
+    if (segmentsIntersect(ring2[i2], ring2[(i2 + 1) % ring2.length], ring2[j3], ring2[(j3 + 1) % ring2.length], budget)) fail(`${path} must not self-intersect`);
+  }
+}
+function pointInRing(point3, ring2, budget) {
+  let inside = false;
+  for (let i2 = 0, j3 = ring2.length - 1; i2 < ring2.length; j3 = i2++) {
+    compare(budget);
+    const a2 = ring2[j3], b3 = ring2[i2];
+    if (onSegment2(a2, b3, point3)) return 0;
+    if (a2[1] > point3[1] !== b3[1] > point3[1] && point3[0] < (b3[0] - a2[0]) * (point3[1] - a2[1]) / (b3[1] - a2[1]) + a2[0]) inside = !inside;
+  }
+  return inside ? 1 : -1;
+}
+function ringsIntersect(a2, b3, budget) {
+  for (let i2 = 0; i2 < a2.length; i2++) for (let j3 = 0; j3 < b3.length; j3++) {
+    if (segmentsIntersect(a2[i2], a2[(i2 + 1) % a2.length], b3[j3], b3[(j3 + 1) % b3.length], budget)) return true;
+  }
+  return false;
+}
+function validateFootprint(footprint, path, budget) {
+  validateRing(footprint.points, `${path}.points`, budget);
+  const holes = footprint.holes ?? [];
+  for (let index = 0; index < holes.length; index++) {
+    const hole = holes[index];
+    validateRing(hole, `${path}.holes[${index}]`, budget);
+    if (pointInRing(hole[0], footprint.points, budget) !== 1 || ringsIntersect(hole, footprint.points, budget)) fail(`${path}.holes[${index}] must be strictly inside the footprint`);
+    for (let previous = 0; previous < index; previous++) {
+      if (ringsIntersect(hole, holes[previous], budget) || pointInRing(hole[0], holes[previous], budget) !== -1 || pointInRing(holes[previous][0], hole, budget) !== -1) {
+        fail(`${path}.holes[${index}] must not overlap or contain another hole`);
+      }
+    }
+  }
+}
+function inspectWaterBodyTopology(bodies) {
+  const budget = { workUnits: 0 };
+  try {
+    for (let index = 0; index < bodies.length; index++) validateFootprint(bodies[index].footprint, `waterBodies[${index}].footprint`, budget);
+    return { ok: true, workUnits: budget.workUnits };
+  } catch (error51) {
+    if (!(error51 instanceof WaterIrValidationError)) throw error51;
+    return { ok: false, workUnits: budget.workUnits, message: error51.message };
+  }
+}
+function parseRing(value, path) {
+  return requireArray(value, path, 3, WATER_LIMITS.ringPoints).map((point3, index) => requireFinitePoint(point3, `${path}[${index}]`));
+}
+function parseFootprint(value, path) {
+  const source = requireRecord(value, path, WATER_FOOTPRINT_KEYS);
+  const points2 = parseRing(source.points, `${path}.points`);
+  const holes = source.holes === void 0 ? void 0 : requireArray(source.holes, `${path}.holes`, 0, WATER_LIMITS.holes).map((hole, index) => parseRing(hole, `${path}.holes[${index}]`));
+  return { points: points2, ...holes !== void 0 ? { holes } : {} };
+}
+function parseAuthoredWaterBodies(value) {
+  if (!isPlainJsonData(value)) fail("waterBodies must be plain JSON data");
+  const source = requireArray(value, "waterBodies", 0, WATER_LIMITS.bodies);
+  const ids = /* @__PURE__ */ new Set();
+  let totalPoints = 0;
+  const bodies = source.map((candidate, bodyIndex) => {
+    const path = `waterBodies[${bodyIndex}]`;
+    const body = requireRecord(candidate, path, WATER_BODY_KEYS);
+    if (!isPortableWaterId(body.id)) fail(`${path}.id must be a portable lowercase ASCII id of at most 128 characters`);
+    if (ids.has(body.id)) fail(`waterBodies has duplicate id '${body.id}'`);
+    ids.add(body.id);
+    if (!WATER_BODY_KIND_SET.has(body.kind)) fail(`${path}.kind must be one of ${WATER_BODY_KINDS.join(", ")}`);
+    const footprint = parseFootprint(body.footprint, `${path}.footprint`);
+    const bodyPoints = footprint.points.length + (footprint.holes ?? []).reduce((sum, hole) => sum + hole.length, 0);
+    if (bodyPoints > WATER_LIMITS.bodyPoints) fail(`${path}.footprint exceeds ${WATER_LIMITS.bodyPoints} points`);
+    totalPoints += bodyPoints;
+    if (totalPoints > WATER_LIMITS.totalBodyPoints) fail(`waterBodies geometry exceeds ${WATER_LIMITS.totalBodyPoints} points`);
+    let previousMax = -Infinity, previousDepth = -Infinity;
+    const depthZones = requireArray(body.depthZones, `${path}.depthZones`, 1, WATER_LIMITS.depthZones).map((candidateZone, zoneIndex) => {
+      const zonePath = `${path}.depthZones[${zoneIndex}]`;
+      const zone = requireRecord(candidateZone, zonePath, WATER_DEPTH_ZONE_KEYS);
+      const minShoreDistanceM = requireFiniteNumber(zone.minShoreDistanceM, `${zonePath}.minShoreDistanceM`, 0, WATER_LIMITS.shoreDistanceM);
+      const maxShoreDistanceM = requirePositiveNumber(zone.maxShoreDistanceM, `${zonePath}.maxShoreDistanceM`, WATER_LIMITS.shoreDistanceM);
+      const depthM = requirePositiveNumber(zone.depthM, `${zonePath}.depthM`, WATER_LIMITS.depthM);
+      if (maxShoreDistanceM <= minShoreDistanceM) fail(`${zonePath} must have maxShoreDistanceM > minShoreDistanceM`);
+      if (zoneIndex === 0 && minShoreDistanceM !== 0) fail(`${path}.depthZones must start at the shoreline (minShoreDistanceM=0)`);
+      if (zoneIndex > 0 && minShoreDistanceM !== previousMax) fail(`${path}.depthZones must be ordered and contiguous without gaps or overlaps`);
+      if (depthM <= previousDepth) fail(`${path}.depthZones depths must increase monotonically toward the interior`);
+      previousMax = maxShoreDistanceM;
+      previousDepth = depthM;
+      return { minShoreDistanceM, maxShoreDistanceM, depthM };
+    });
+    return {
+      id: body.id,
+      kind: body.kind,
+      level: requireFiniteNumber(body.level, `${path}.level`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
+      footprint,
+      depthZones
+    };
+  });
+  const topology = inspectWaterBodyTopology(bodies);
+  if (!topology.ok) fail(topology.message);
+  return bodies;
+}
+
+// src/world/hydrology-ir.mjs
+var HYDROLOGY_RECIPE_SCHEMA = "limina.hydrology-recipe/v1";
+var HYDROLOGY_LIMITS = Object.freeze({
+  precipitationMmPerYear: 1e5,
+  catchmentAreaM2: 1e12,
+  basinAreaM2: 1e12,
+  basinDepthM: 2e4,
+  waterfallDropM: 2e4
+});
+var HYDROLOGY_RECIPE_KEYS = /* @__PURE__ */ new Set([
+  "schema",
+  "precipitationMmPerYear",
+  "riverMinCatchmentAreaM2",
+  "basinMinAreaM2",
+  "basinMinDepthM",
+  "waterfallMinDropM"
+]);
+var HydrologyIrValidationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "HydrologyIrValidationError";
+  }
+};
+function fail2(message) {
+  throw new HydrologyIrValidationError(message);
+}
+function requirePlainRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail2("hydrology must be a plain object");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) fail2("hydrology must be a plain object");
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail2("hydrology must not contain symbol fields");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!HYDROLOGY_RECIPE_KEYS.has(key)) fail2(`hydrology has unknown field '${key}'`);
+    if (!("value" in descriptor) || descriptor.enumerable !== true) fail2(`hydrology.${key} must be an enumerable data field`);
+  }
+  for (const key of HYDROLOGY_RECIPE_KEYS) if (!Object.hasOwn(value, key)) fail2(`hydrology is missing '${key}'`);
+  return descriptors;
+}
+function requireCanonicalNumber(descriptor, path, maximum, allowZero) {
+  const value = descriptor.value;
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || (allowZero ? value < 0 : value <= 0) || value > maximum) {
+    fail2(`${path} must be a finite canonical ${allowZero ? "non-negative" : "positive"} number at most ${maximum}`);
+  }
+  return value;
+}
+function parseAuthoredHydrologyRecipe(value) {
+  const descriptors = requirePlainRecord(value);
+  if (descriptors.schema.value !== HYDROLOGY_RECIPE_SCHEMA) {
+    fail2(`hydrology.schema must be '${HYDROLOGY_RECIPE_SCHEMA}'`);
+  }
+  return Object.freeze({
+    schema: HYDROLOGY_RECIPE_SCHEMA,
+    precipitationMmPerYear: requireCanonicalNumber(
+      descriptors.precipitationMmPerYear,
+      "hydrology.precipitationMmPerYear",
+      HYDROLOGY_LIMITS.precipitationMmPerYear,
+      true
+    ),
+    riverMinCatchmentAreaM2: requireCanonicalNumber(
+      descriptors.riverMinCatchmentAreaM2,
+      "hydrology.riverMinCatchmentAreaM2",
+      HYDROLOGY_LIMITS.catchmentAreaM2,
+      false
+    ),
+    basinMinAreaM2: requireCanonicalNumber(
+      descriptors.basinMinAreaM2,
+      "hydrology.basinMinAreaM2",
+      HYDROLOGY_LIMITS.basinAreaM2,
+      false
+    ),
+    basinMinDepthM: requireCanonicalNumber(
+      descriptors.basinMinDepthM,
+      "hydrology.basinMinDepthM",
+      HYDROLOGY_LIMITS.basinDepthM,
+      false
+    ),
+    waterfallMinDropM: requireCanonicalNumber(
+      descriptors.waterfallMinDropM,
+      "hydrology.waterfallMinDropM",
+      HYDROLOGY_LIMITS.waterfallDropM,
+      false
+    )
+  });
+}
+
+// src/world/design-ref.mjs
+var ATLAS_DESIGN_REF_SCHEMA = "limina.atlas-design-ref/v1";
+var ATLAS_DESIGN_REF_KINDS = Object.freeze(["feature", "marker", "place", "stamp"]);
+var MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS = 128;
+var MAX_DESIGN_INDEX_ENTRIES = 1e5;
+var KIND_SET = new Set(ATLAS_DESIGN_REF_KINDS);
+var CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+var DESIGN_REF_FIELDS = /* @__PURE__ */ new Set(["schema", "mapId", "kind", "id"]);
+function invalid(message) {
+  const error51 = new TypeError(message);
+  error51.code = "INVALID_ATLAS_DESIGN_REF";
+  return error51;
+}
+function boundedIdentifier(value, label4) {
+  if (typeof value !== "string" || value.length < 1 || value.length > MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS || value.trim().length < 1 || CONTROL_CHAR.test(value)) {
+    throw invalid(`${label4} must contain 1-${MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS} printable characters`);
+  }
+  return value;
+}
+function parseAtlasDesignRef(input) {
+  if (input === null || Array.isArray(input) || typeof input !== "object") {
+    throw invalid("Atlas designRef must be a plain object");
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw invalid("Atlas designRef must be a plain object");
+  }
+  if (Object.getOwnPropertySymbols(input).length !== 0) {
+    throw invalid("Atlas designRef fields are invalid");
+  }
+  const names = Object.getOwnPropertyNames(input);
+  if (names.length !== DESIGN_REF_FIELDS.size || names.some((name) => !DESIGN_REF_FIELDS.has(name))) {
+    throw invalid("Atlas designRef fields are invalid");
+  }
+  const fields = /* @__PURE__ */ Object.create(null);
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, name);
+    if (descriptor?.enumerable !== true || !("value" in descriptor)) {
+      throw invalid(`Atlas designRef.${name} must be an enumerable data field`);
+    }
+    fields[name] = descriptor.value;
+  }
+  if (fields.schema !== ATLAS_DESIGN_REF_SCHEMA) {
+    throw invalid("Atlas designRef.schema is invalid");
+  }
+  if (typeof fields.kind !== "string" || !KIND_SET.has(fields.kind)) {
+    throw invalid("Atlas designRef.kind is invalid");
+  }
+  return Object.freeze({
+    schema: ATLAS_DESIGN_REF_SCHEMA,
+    mapId: boundedIdentifier(fields.mapId, "Atlas designRef.mapId"),
+    kind: fields.kind,
+    id: boundedIdentifier(fields.id, "Atlas designRef.id")
+  });
+}
+function atlasDesignRefKey(input) {
+  const ref = parseAtlasDesignRef(input);
+  return JSON.stringify([ref.schema, ref.mapId, ref.kind, ref.id]);
+}
+
+// src/world/worldmap.ts
+var WORLD_MAP_VERSION = 1;
+var RELIEF_KINDS = ["mountain", "hills", "plateau", "peak", "depression"];
+var BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"];
+var ROUTE_CLASSES = ["road", "trail"];
+var ANCHOR_SOURCES = ["world-bible", "map", "places"];
+var PROVENANCE_TOOLS = ["design-space", "fmg"];
+var PointSchema = external_exports.tuple([external_exports.number(), external_exports.number()]);
+var PointsSchema = external_exports.array(PointSchema);
+var FiniteWaterCoordinateSchema = external_exports.number().finite().min(-WATER_LIMITS.absCoordinateM).max(WATER_LIMITS.absCoordinateM);
+var FinitePointSchema = external_exports.tuple([FiniteWaterCoordinateSchema, FiniteWaterCoordinateSchema]);
+var INVALID_PLAIN_DATA = /* @__PURE__ */ Symbol("invalid-plain-json-data");
+var INVALID_DESIGN_REF = /* @__PURE__ */ Symbol("invalid-atlas-design-ref");
+function plainJson(schema) {
+  return external_exports.preprocess((value) => isPlainJsonData(value) ? value : INVALID_PLAIN_DATA, schema);
+}
+function isPlainRootRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
+  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => "value" in descriptor && descriptor.enumerable);
+}
+var AtlasDesignRefSchema = external_exports.preprocess((value) => {
+  try {
+    return parseAtlasDesignRef(value);
+  } catch {
+    return INVALID_DESIGN_REF;
+  }
+}, external_exports.object({
+  schema: external_exports.literal(ATLAS_DESIGN_REF_SCHEMA),
+  mapId: external_exports.string().min(1).max(MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS),
+  kind: external_exports.enum(ATLAS_DESIGN_REF_KINDS),
+  id: external_exports.string().min(1).max(MAX_ATLAS_DESIGN_REF_IDENTIFIER_CHARS)
+}).strict());
+var PolygonSchema = external_exports.object({
+  points: PointsSchema.min(3),
+  holes: external_exports.array(PointsSchema.min(3)).optional()
+}).strict();
+var ReliefShapeSchema = external_exports.object({
+  polygon: PointsSchema.min(3).optional(),
+  point: PointSchema.optional()
+}).strict().refine(
+  (s2) => s2.polygon !== void 0 || s2.point !== void 0,
+  { message: "a relief hint's shape must carry a polygon or a point" }
+);
+var ReliefHintSchema = external_exports.object({
+  kind: external_exports.enum(RELIEF_KINDS),
+  shape: ReliefShapeSchema,
+  amplitude: external_exports.number()
+}).strict();
+var ReliefGridSchema = external_exports.object({
+  w: external_exports.number().int().min(2).max(1024),
+  h: external_exports.number().int().min(2).max(1024),
+  rect: external_exports.object({ x0: external_exports.number(), z0: external_exports.number(), w: external_exports.number().positive(), h: external_exports.number().positive() }).strict(),
+  minY: external_exports.number(),
+  maxY: external_exports.number(),
+  /** Vertical quantization of `data`: 'u16' packs each cell as 2 LITTLE-ENDIAN bytes (65,536 levels —
+   *  ~0.14m/step over a 9km range, real mountains without terracing); absent or 'u8' = the legacy
+   *  1-byte cell. ABSENT is the version discriminator: every pre-u16 map reads as u8 unchanged and
+   *  hashes byte-identically (worldmap-hash emits `encoding` only-when-present). */
+  encoding: external_exports.enum(["u8", "u16"]).optional(),
+  /** base64 of w*h cells (u8 → w*h bytes; u16 → 2*w*h little-endian bytes). */
+  data: external_exports.string().min(1).max(2796204)
+  // base64 ceiling for 1024*1024*2 bytes
+}).strict().refine((g3) => g3.maxY > g3.minY, { message: "reliefGrid maxY must be greater than minY" });
+var BiomeRegionSchema = external_exports.object({
+  biome: external_exports.enum(BIOME_KINDS),
+  points: PointsSchema.min(3)
+}).strict();
+var WaterwaySchema = plainJson(external_exports.object({
+  points: external_exports.array(FinitePointSchema).min(2).max(WATER_LIMITS.waterwayPoints),
+  widthM: external_exports.number().finite().positive().max(WATER_LIMITS.widthM).optional(),
+  class: external_exports.enum(WATERWAY_CLASSES),
+  /** Strahler stream order: 1=headwater, increasing only at equal-order confluences. */
+  order: external_exports.number().int().min(1).max(WATER_LIMITS.streamOrder).optional(),
+  /** Per-vertex channel widths in metres. When present, length exactly matches `points`. */
+  widths: external_exports.array(external_exports.number().finite().positive().max(WATER_LIMITS.widthM)).min(2).max(WATER_LIMITS.waterwayPoints).optional()
+}).strict().superRefine((waterway2, ctx) => {
+  if (waterway2.widths !== void 0 && waterway2.widths.length !== waterway2.points.length) {
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["widths"], message: "waterway widths must have exactly one value per point" });
+  }
+}));
+var WaterDepthZoneSchema = external_exports.object({
+  /** Inclusive horizontal distance inward from the shoreline, in metres. */
+  minShoreDistanceM: external_exports.number().finite().min(0).max(WATER_LIMITS.shoreDistanceM),
+  /** Exclusive outer edge of this band. */
+  maxShoreDistanceM: external_exports.number().finite().positive().max(WATER_LIMITS.shoreDistanceM),
+  /** Positive depth below this body's level, in metres. */
+  depthM: external_exports.number().finite().positive().max(WATER_LIMITS.depthM)
+}).strict().refine((zone) => zone.maxShoreDistanceM > zone.minShoreDistanceM, {
+  message: "depth zone maxShoreDistanceM must be greater than minShoreDistanceM"
+});
+var WaterFootprintSchema = external_exports.object({
+  points: external_exports.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints),
+  holes: external_exports.array(external_exports.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints)).max(WATER_LIMITS.holes).optional()
+}).strict();
+var WaterBodySchema = external_exports.object({
+  /** Stable lowercase ASCII id; path separators, whitespace and host-case ambiguity are forbidden. */
+  id: external_exports.string().min(1).max(128).refine(isPortableWaterId, { message: "water body id must be portable lowercase ASCII" }),
+  kind: external_exports.enum(WATER_BODY_KINDS),
+  level: external_exports.number().finite().min(-WATER_LIMITS.absLevelM).max(WATER_LIMITS.absLevelM),
+  footprint: WaterFootprintSchema,
+  /** Contiguous shore-to-interior bands: first min=0, each next min=previous max, and depth
+   *  strictly increases inward. This leaves no undefined bathymetry for WaterField consumers. */
+  depthZones: external_exports.array(WaterDepthZoneSchema).min(1).max(WATER_LIMITS.depthZones)
+}).strict().superRefine((body, ctx) => {
+  let previousMax = -Infinity, previousDepth = -Infinity;
+  for (let index = 0; index < body.depthZones.length; index++) {
+    const zone = body.depthZones[index];
+    if (index === 0 && zone.minShoreDistanceM !== 0) {
+      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index, "minShoreDistanceM"], message: "the first depth zone must start at the shoreline (0m)" });
+    }
+    if (index > 0 && zone.minShoreDistanceM !== previousMax) {
+      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index], message: "depth zones must be ordered and contiguous without gaps or overlaps" });
+    }
+    if (zone.depthM <= previousDepth) {
+      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index, "depthM"], message: "depth must increase monotonically toward the interior" });
+    }
+    previousMax = zone.maxShoreDistanceM;
+    previousDepth = zone.depthM;
+  }
+});
+var WaterBodiesSchema = plainJson(external_exports.array(WaterBodySchema).max(WATER_LIMITS.bodies).superRefine((bodies, ctx) => {
+  const ids = /* @__PURE__ */ new Set();
+  let points2 = 0;
+  for (let index = 0; index < bodies.length; index++) {
+    const body = bodies[index];
+    if (ids.has(body.id)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: [index, "id"], message: "water body ids must be unique" });
+    ids.add(body.id);
+    points2 += body.footprint.points.length;
+    for (const hole of body.footprint.holes ?? []) points2 += hole.length;
+    const bodyPoints = body.footprint.points.length + (body.footprint.holes ?? []).reduce((total, hole) => total + hole.length, 0);
+    if (bodyPoints > WATER_LIMITS.bodyPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: [index, "footprint"], message: `water body footprint exceeds ${WATER_LIMITS.bodyPoints} points` });
+  }
+  if (points2 > WATER_LIMITS.totalBodyPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: `water body geometry exceeds ${WATER_LIMITS.totalBodyPoints} points` });
+  const topology = inspectWaterBodyTopology(bodies);
+  if (!topology.ok) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: topology.message ?? "invalid water body topology" });
+}));
+var HydrologyRecipeSchema = external_exports.preprocess((value) => {
+  try {
+    return parseAuthoredHydrologyRecipe(value);
+  } catch {
+    return INVALID_PLAIN_DATA;
+  }
+}, external_exports.object({
+  schema: external_exports.literal(HYDROLOGY_RECIPE_SCHEMA),
+  precipitationMmPerYear: external_exports.number().finite().min(0).max(HYDROLOGY_LIMITS.precipitationMmPerYear),
+  riverMinCatchmentAreaM2: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.catchmentAreaM2),
+  basinMinAreaM2: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.basinAreaM2),
+  basinMinDepthM: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.basinDepthM),
+  waterfallMinDropM: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.waterfallDropM)
+}).strict());
+var RouteSchema = external_exports.object({
+  points: PointsSchema.min(2),
+  class: external_exports.enum(ROUTE_CLASSES)
+}).strict();
+var AnchorSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  kind: external_exports.string().min(1),
+  position: PointSchema,
+  count: external_exports.number().int().positive().optional(),
+  name: external_exports.string().min(1).optional(),
+  // Map Painter P3 stamps: an anchor that names its EXACT catalog asset (kind "asset"), with an
+  // optional yaw (radians) and uniform scale. Optional so legacy anchors (and their content
+  // hashes — worldmap-hash emits these only-when-present) are untouched.
+  assetId: external_exports.string().min(1).optional(),
+  rot: external_exports.number().optional(),
+  scale: external_exports.number().positive().optional(),
+  designRef: AtlasDesignRefSchema.optional(),
+  source: external_exports.enum(ANCHOR_SOURCES)
+}).strict();
+var GazetteerEntrySchema = external_exports.object({
+  placeId: external_exports.string().min(1),
+  name: external_exports.string().min(1),
+  kind: external_exports.string().min(1),
+  parentId: external_exports.string().min(1).nullable(),
+  position: PointSchema,
+  radiusM: external_exports.number().positive().optional(),
+  designRef: AtlasDesignRefSchema.optional()
+}).strict();
+var DesignIndexEntrySchema = external_exports.object({
+  designRef: AtlasDesignRefSchema,
+  position: PointSchema,
+  radiusM: external_exports.number().positive().optional()
+}).strict();
+var DesignIndexSchema = external_exports.array(DesignIndexEntrySchema).max(MAX_DESIGN_INDEX_ENTRIES).superRefine((entries, ctx) => {
+  const seen = /* @__PURE__ */ new Set();
+  for (let index = 0; index < entries.length; index++) {
+    const key = atlasDesignRefKey(entries[index].designRef);
+    if (seen.has(key)) ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: [index, "designRef"],
+      message: "duplicate Atlas designRef"
+    });
+    seen.add(key);
+  }
+});
+var CropOfSchema = external_exports.object({
+  anchor: external_exports.string().min(1),
+  anchorPx: PointSchema,
+  radiusM: external_exports.number().positive()
+}).strict();
+var ProvenanceSchema = external_exports.object({
+  tool: external_exports.enum(PROVENANCE_TOOLS),
+  sourceHash: external_exports.string().optional(),
+  compiledAt: external_exports.string().optional(),
+  contentHash: external_exports.string().min(1),
+  cropOf: CropOfSchema.optional()
+}).strict();
+var WorldMapObjectSchema = external_exports.object({
+  version: external_exports.literal(WORLD_MAP_VERSION),
+  id: external_exports.string().min(1),
+  unitsPerMeter: external_exports.number().positive(),
+  origin: PointSchema,
+  extent: external_exports.object({ w: external_exports.number().positive(), h: external_exports.number().positive() }).strict(),
+  seaLevel: external_exports.number(),
+  land: external_exports.array(PolygonSchema),
+  relief: external_exports.array(ReliefHintSchema),
+  reliefGrid: ReliefGridSchema.optional(),
+  biomes: external_exports.array(BiomeRegionSchema),
+  waterways: external_exports.array(WaterwaySchema).max(WATER_LIMITS.waterways).superRefine((waterways, ctx) => {
+    const points2 = waterways.reduce((total, waterway2) => total + waterway2.points.length, 0);
+    if (points2 > WATER_LIMITS.totalWaterwayPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: `waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points` });
+  }),
+  // Optional + additive: absent on every pre-WB-W1 map and never defaulted during migration.
+  waterBodies: WaterBodiesSchema.optional(),
+  // Optional authoring inputs only. Derived drainage topology is published as a compiler artifact.
+  hydrology: HydrologyRecipeSchema.optional(),
+  routes: external_exports.array(RouteSchema),
+  anchors: external_exports.array(AnchorSchema),
+  // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
+  gazetteer: external_exports.array(GazetteerEntrySchema).optional(),
+  // Exact reverse lookup for Atlas subjects, including features that do not materialize as entities.
+  // Optional so every legacy WorldMap retains its original canonical bytes and content hash.
+  designIndex: DesignIndexSchema.optional(),
+  provenance: ProvenanceSchema
+}).strict();
+var WorldMapSchema = external_exports.preprocess((value) => isPlainRootRecord(value) ? value : INVALID_PLAIN_DATA, WorldMapObjectSchema);
+function worldMapContentHash2(map2) {
+  return worldMapContentHash(map2);
+}
+function migrateWorldMap(raw) {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const map2 = raw;
+  if (typeof map2.version !== "number") return raw;
+  return map2;
+}
+function verifyWorldMap(parsed) {
+  const map2 = WorldMapSchema.parse(migrateWorldMap(parsed));
+  const expected = map2.provenance.contentHash;
+  const actual = worldMapContentHash2(map2);
+  return { ok: expected === actual, expected, actual };
+}
+
 // src/skills/asset.ts
 var Vec35 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 function placedWorldAabb(local, position, rotationEuler, scale2, normalizeHeight, ground) {
@@ -109661,6 +112155,9 @@ var placeInput = external_exports.object({
    *  the recorder. Present on REPLAY: the resolved bytes are verified against it so
    *  the authored asset identity is pinned (a swapped/updated asset is rejected). */
   hash: external_exports.string().optional(),
+  /** Exact Atlas source identity for placements compiled from a map subject. It is replayed with
+   *  the command and bound to the entity origin; direct/manual placements leave it absent. */
+  designRef: AtlasDesignRefSchema.optional(),
   /** REVIEW METADATA (not load-bearing — never touches the placed entity). When this placement is
    *  PROPOSED under a review profile (builder.review) and HELD in the approval queue, these ride the
    *  proposal so the reviewer approves what they can SEE. `qcRender` is an /assets-relative path to the
@@ -109688,7 +112185,25 @@ var PLACE_PERMS = ["scene.write"];
 var scatterConfigSchema = external_exports.object({
   seed: external_exports.number().int(),
   density: external_exports.number().int().min(1).max(64).optional(),
-  assets: external_exports.array(external_exports.object({ id: external_exports.string(), weight: external_exports.number().positive().optional() })).min(1),
+  assets: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    weight: external_exports.number().positive().optional(),
+    embedRadius: external_exports.number().nonnegative().optional(),
+    lods: external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      distance: external_exports.number().positive(),
+      hysteresis: external_exports.number().min(0).max(1).optional()
+    })).min(1).optional(),
+    treeLod: external_exports.object({
+      reducedId: external_exports.string(),
+      reducedDistance: external_exports.number().positive(),
+      impostorId: external_exports.string(),
+      impostorDistance: external_exports.number().positive(),
+      cullDistance: external_exports.number().positive(),
+      hysteresis: external_exports.number().min(0).max(0.49).optional()
+    }).optional()
+  })).min(1),
+  cellSize: external_exports.number().positive().optional(),
   elevationMin: external_exports.number().optional(),
   elevationMax: external_exports.number().optional(),
   slopeMax: external_exports.number().nonnegative().optional(),
@@ -109696,11 +112211,14 @@ var scatterConfigSchema = external_exports.object({
   coverage: external_exports.number().min(0).max(1).optional(),
   cluster: external_exports.number().min(0).max(1).optional(),
   clusterFreq: external_exports.number().positive().optional(),
+  embedRadius: external_exports.number().nonnegative().optional(),
   biomes: external_exports.array(external_exports.number().int()).optional(),
   tempMin: external_exports.number().optional(),
   tempMax: external_exports.number().optional(),
   /** Footprint-exclusion discs (world XZ) — a candidate inside any is skipped (settlement clearings). */
-  exclusions: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional()
+  exclusions: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional(),
+  /** Footprint-inclusion discs (world XZ) — a candidate outside all is skipped. */
+  inclusions: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional()
 });
 var scatterInput = external_exports.object({
   /** The handle of an ALREADY-GENERATED region (from world.generateRegion). The
@@ -109760,6 +112278,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         rotationEuler: input.rotation,
         scale: input.scale
       });
+      ctx.world.entities.bindOrigin(entity, { tool: "asset.place", input: { ...input } });
       const localAabb = gltfLocalAabb(resolved.bytes);
       const placed = localAabb === null ? null : placedWorldAabb(localAabb, groundPos, input.rotation, input.scale, input.normalizeHeight, input.ground);
       let bounds = placed === null ? [0, 0, 0] : [placed.max[0] - placed.min[0], placed.max[1] - placed.min[1], placed.max[2] - placed.min[2]];
@@ -109816,6 +112335,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         rotation: input.rotation ?? null,
         scale: input.scale ?? null,
         grounded: input.ground,
+        ...input.designRef !== void 0 ? { designRef: input.designRef } : {},
         bounds,
         entity
       });
@@ -109911,7 +112431,7 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
   const scatter = {
     name: "asset.scatter",
     version: "1.0.0",
-    description: "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.",
+    description: "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Optional LOD levels use cell-classified, draw-bounded aggregate instance batches. Returns the placement count + pinned hashes.",
     category: "three",
     permissions: [...PLACE_PERMS],
     // The recorder copies the resolved per-asset content hashes back into the recorded
@@ -109924,12 +112444,45 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
       const source = terrain.source;
       const cache3 = terrain.cache ?? new TileCache();
       const config2 = input.config;
+      const paletteById = /* @__PURE__ */ new Map();
+      for (const asset of config2.assets) {
+        if (asset.lods !== void 0 && asset.treeLod !== void 0) throw new RangeError(`asset.scatter: palette asset '${asset.id}' cannot combine generic lods with treeLod`);
+        if (asset.treeLod !== void 0 && !(asset.treeLod.reducedDistance < asset.treeLod.impostorDistance && asset.treeLod.impostorDistance < asset.treeLod.cullDistance)) {
+          throw new RangeError(`asset.scatter: treeLod distances for '${asset.id}' must be strictly increasing`);
+        }
+        if (asset.lods !== void 0) {
+          validatePopulationLodLevels([
+            { assetId: asset.id, distance: 0 },
+            ...asset.lods.map((level) => ({
+              assetId: level.id,
+              distance: level.distance,
+              ...level.hysteresis !== void 0 ? { hysteresis: level.hysteresis } : {}
+            }))
+          ]);
+        }
+        const previous = paletteById.get(asset.id);
+        if (previous !== void 0 && (previous.lods !== void 0 || asset.lods !== void 0 || previous.treeLod !== void 0 || asset.treeLod !== void 0)) {
+          throw new RangeError(`asset.scatter: LOD-enabled palette asset '${asset.id}' must be unique`);
+        }
+        paletteById.set(asset.id, previous ?? asset);
+      }
+      const treeSpecies = [...paletteById.values()].filter((asset) => asset.treeLod !== void 0);
+      if (treeSpecies.length > 12) throw new RangeError("asset.scatter: treeLod palette exceeds the 12-species runtime cap");
       const region = terrain.regions.get(input.regionId);
       if (region === void 0) {
         throw new Error(`asset.scatter: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`);
       }
       const assetHashes = {};
-      for (const id of new Set(config2.assets.map((a2) => a2.id))) {
+      const referencedAssetIds = /* @__PURE__ */ new Set();
+      for (const asset of config2.assets) {
+        referencedAssetIds.add(asset.id);
+        for (const lod of asset.lods ?? []) referencedAssetIds.add(lod.id);
+        if (asset.treeLod !== void 0) {
+          referencedAssetIds.add(asset.treeLod.reducedId);
+          referencedAssetIds.add(asset.treeLod.impostorId);
+        }
+      }
+      for (const id of referencedAssetIds) {
         const resolved = assets.resolve(id);
         const committed = input.assetHashes?.[id];
         if (committed !== void 0 && committed !== resolved.hash) {
@@ -109944,6 +112497,9 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         const tile = await cache3.resolve(req, source);
         for (const inst of scatterAssets(tile, region.seed, config2)) placements.push(inst);
       }
+      let treePlacementCount = 0;
+      for (const placement of placements) if (paletteById.get(placement.assetId)?.treeLod !== void 0) treePlacementCount++;
+      if (treePlacementCount > 24576) throw new RangeError("asset.scatter: treeLod placements exceed the 24,576 active-tree cap");
       let mounted = 0;
       const scene = ctx.world.scene;
       if (scene !== void 0 && typeof scene.add === "function") {
@@ -109957,21 +112513,108 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
           list.push(inst);
         }
         const mountedMeshes = [];
-        for (const [id, list] of byId) {
-          const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
-          for (const mesh of buildAssetInstancedMeshes(root, list)) {
-            scene.add(mesh);
-            mountedMeshes.push(mesh);
-            mounted++;
-          }
-        }
-        if (mountedMeshes.length > 0) {
-          (region.renderDisposables ??= []).push(() => {
-            for (const mesh of mountedMeshes) {
-              if (typeof scene.remove === "function") scene.remove(mesh);
-              disposeAssetInstancedMesh(mesh);
+        const mountedPopulations = [];
+        const mountedTrees = [];
+        const worldLods = ctx.world.lods ??= [];
+        let active = true;
+        const cleanupMounted = () => {
+          if (!active) return;
+          active = false;
+          const errors = [];
+          for (const population of mountedPopulations) {
+            const index = worldLods.indexOf(population);
+            if (index >= 0) worldLods.splice(index, 1);
+            try {
+              population.dispose(scene);
+            } catch (error51) {
+              errors.push(error51);
             }
-          });
+          }
+          for (const population of mountedTrees) {
+            const index = worldLods.indexOf(population);
+            if (index >= 0) worldLods.splice(index, 1);
+            try {
+              population.dispose();
+            } catch (error51) {
+              errors.push(error51);
+            }
+          }
+          for (const mesh of mountedMeshes) {
+            try {
+              if (typeof scene.remove === "function") scene.remove(mesh);
+            } catch (error51) {
+              errors.push(error51);
+            }
+            try {
+              disposeAssetInstancedMesh(mesh);
+            } catch (error51) {
+              errors.push(error51);
+            }
+          }
+          if (errors.length > 0) throw new AggregateError(errors, `asset.scatter cleanup failed in ${errors.length} operation(s)`);
+        };
+        try {
+          for (const [id, list] of byId) {
+            const paletteAsset = paletteById.get(id);
+            if (paletteAsset === void 0) throw new Error(`asset.scatter: placement references unknown palette asset '${id}'`);
+            if (paletteAsset.treeLod !== void 0) {
+              const [baseRoot, reducedRoot, impostorRoot] = await Promise.all([
+                parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache),
+                parseGltfScene(paletteAsset.treeLod.reducedId, assets.resolve(paletteAsset.treeLod.reducedId).bytes, ctx.world.gltfCache),
+                parseGltfScene(paletteAsset.treeLod.impostorId, assets.resolve(paletteAsset.treeLod.impostorId).bytes, ctx.world.gltfCache)
+              ]);
+              const population = new TreePopulationRuntime({
+                speciesId: id,
+                placements: list,
+                treeLod: paletteAsset.treeLod,
+                sourceHash: assetHashes[id],
+                reducedHash: assetHashes[paletteAsset.treeLod.reducedId],
+                baseRoot,
+                reducedRoot,
+                impostorRoot,
+                scene,
+                onError: (error51) => ctx.emit("asset.tree_population_error", { assetId: id, message: error51 instanceof Error ? error51.message : String(error51) })
+              });
+              mountedTrees.push(population);
+              worldLods.push(population);
+              population.update(ctx.world.camera);
+              mounted += population.draws;
+            } else if (paletteAsset.lods !== void 0) {
+              const levels = [
+                { assetId: id, distance: 0, root: await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache) },
+                ...await Promise.all(paletteAsset.lods.map(async (level) => ({
+                  assetId: level.id,
+                  distance: level.distance,
+                  ...level.hysteresis !== void 0 ? { hysteresis: level.hysteresis } : {},
+                  root: await parseGltfScene(level.id, assets.resolve(level.id).bytes, ctx.world.gltfCache)
+                })))
+              ];
+              const population = buildPopulationLodBatches(levels, list, config2.cellSize ?? 24);
+              mountedPopulations.push(population);
+              worldLods.push(population);
+              for (const mesh of population.meshes) scene.add(mesh);
+              population.update(ctx.world.camera);
+              mounted += population.meshes.length;
+            } else {
+              const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
+              for (const mesh of buildAssetInstancedMeshes(root, list, config2.cellSize === void 0 ? void 0 : { chunkSize: config2.cellSize })) {
+                mountedMeshes.push(mesh);
+                scene.add(mesh);
+                mounted++;
+              }
+            }
+          }
+        } catch (error51) {
+          try {
+            cleanupMounted();
+          } catch (cleanupError) {
+            const cleanup = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+            throw new AggregateError([error51, ...cleanup], `asset.scatter mount failed and ${cleanup.length} rollback operation(s) failed`);
+          }
+          throw error51;
+        }
+        if (mountedMeshes.length > 0 || mountedPopulations.length > 0 || mountedTrees.length > 0) {
+          (region.renderDisposables ??= []).push(cleanupMounted);
         }
       }
       ctx.emit("asset.scattered", {
@@ -109999,6 +112642,12 @@ var importInput = external_exports.object({
   normal: external_exports.string().optional(),
   /** Asset id of the roughness map (optional; its R channel is read). */
   roughness: external_exports.string().optional(),
+  /** Asset id of the ambient-occlusion map (optional; its R channel is read). */
+  occlusion: external_exports.string().optional(),
+  /** Asset id of the white-high displacement map used by optional POM. */
+  displacement: external_exports.string().optional(),
+  /** AO contribution. 0 disables darkening while retaining the pinned map; 1 uses it fully. */
+  occlusionStrength: external_exports.number().min(0).max(1).default(1),
   /** TRIPLANAR projection (no UV stretch on arbitrary primitives). Default false → classic
    *  UV-mapped slots (needs geometry UVs), the proven glTF texture path. */
   triplanar: external_exports.boolean().default(false),
@@ -110014,6 +112663,22 @@ var importInput = external_exports.object({
   baseRoughness: external_exports.number().min(0).max(1).default(0.85),
   /** Optional albedo tint (sRGB hex) multiplied over the map. */
   color: external_exports.number().int().min(0).max(16777215).optional(),
+  /** Two-translation stochastic anti-tiling, shared across every supplied PBR map. */
+  antiTiling: external_exports.boolean().default(false),
+  /** Bounded true parallax-occlusion mapping. Requires `displacement`. */
+  parallax: external_exports.object({
+    heightScale: external_exports.number().min(0).max(0.2).default(0.04),
+    minLayers: external_exports.number().int().min(4).max(16).default(8),
+    maxLayers: external_exports.number().int().min(8).max(24).default(16),
+    fadeStart: external_exports.number().min(0).max(1e3).default(20),
+    fadeEnd: external_exports.number().positive().max(2e3).default(40)
+  }).refine((value) => value.maxLayers >= value.minLayers, {
+    message: "maxLayers must be greater than or equal to minLayers",
+    path: ["maxLayers"]
+  }).refine((value) => value.fadeEnd > value.fadeStart, {
+    message: "fadeEnd must be greater than fadeStart",
+    path: ["fadeEnd"]
+  }).optional(),
   /** The COMMITTED content addresses of the pack images (id → "sha256:..."). Absent at
    *  authoring (resolved + returned, then committed back by the recorder); present on REPLAY,
    *  where each resolved image is verified against it so a swapped texture is rejected. */
@@ -110029,8 +112694,8 @@ var importOutput = external_exports.object({
 function registerMaterialSkills(registry2, assets, materials) {
   const importSkill = {
     name: "material.import",
-    version: "1.0.0",
-    description: "Import a CC0 texture pack (albedo + optional normal + roughness images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
+    version: "1.2.0",
+    description: "Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
     category: "three",
     permissions: ["scene.write"],
     // The recorder copies the resolved per-image hashes back into the recorded command's input
@@ -110044,7 +112709,12 @@ function registerMaterialSkills(registry2, assets, materials) {
       ];
       if (input.normal !== void 0) slots.push({ id: input.normal, srgb: false, key: "normal" });
       if (input.roughness !== void 0) slots.push({ id: input.roughness, srgb: false, key: "roughness" });
-      const textures = { albedo: null, normal: null, roughness: null };
+      if (input.occlusion !== void 0) slots.push({ id: input.occlusion, srgb: false, key: "occlusion" });
+      if (input.displacement !== void 0) slots.push({ id: input.displacement, srgb: false, key: "displacement" });
+      if (input.parallax !== void 0 && input.displacement === void 0) {
+        throw new Error("material.import: parallax requires a displacement map");
+      }
+      const textures = { albedo: null, normal: null, roughness: null, occlusion: null, displacement: null };
       const hashes = {};
       const maps = [];
       for (const slot of slots) {
@@ -110064,17 +112734,119 @@ function registerMaterialSkills(registry2, assets, materials) {
         sharpness: input.sharpness,
         metalness: input.metalness,
         roughness: input.baseRoughness,
+        occlusionStrength: input.occlusionStrength,
+        antiTiling: input.antiTiling,
+        parallax: input.parallax,
         color: input.color
       }, textures, hashes);
-      ctx.emit("material.imported", { name: input.name, maps, hashes, triplanar: input.triplanar });
+      ctx.emit("material.imported", { name: input.name, maps, hashes, triplanar: input.triplanar, antiTiling: input.antiTiling, parallax: input.parallax !== void 0 });
       return { name: input.name, maps, hashes };
     }
   };
   registry2.register(importSkill);
 }
 
+// src/world/compiler/canonical.mjs
+var DEFAULT_CANONICAL_MAX_BYTES = 1024 * 1024;
+var DEFAULT_CANONICAL_MAX_DEPTH = 32;
+var DEFAULT_CANONICAL_MAX_NODES = 1e5;
+var DEFAULT_CANONICAL_MAX_PROPERTIES = 4096;
+var DEFAULT_CANONICAL_MAX_ARRAY_LENGTH = 65536;
+function compilerUtf8ByteLength(input) {
+  if (typeof input !== "string") throw new Error("compiler UTF-8 byte length input must be a string");
+  let bytes = 0;
+  for (let index = 0; index < input.length; index++) {
+    const code3 = input.charCodeAt(index);
+    if (code3 < 128) bytes += 1;
+    else if (code3 < 2048) bytes += 2;
+    else if (code3 >= 55296 && code3 <= 56319 && index + 1 < input.length) {
+      const next = input.charCodeAt(index + 1);
+      if (next >= 56320 && next <= 57343) {
+        bytes += 4;
+        index++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+function canonicalCompilerJson(value, limits = {}) {
+  const maxBytes = limits.maxBytes ?? DEFAULT_CANONICAL_MAX_BYTES;
+  const maxDepth = limits.maxDepth ?? DEFAULT_CANONICAL_MAX_DEPTH;
+  const maxNodes = limits.maxNodes ?? DEFAULT_CANONICAL_MAX_NODES;
+  const maxProperties = limits.maxProperties ?? DEFAULT_CANONICAL_MAX_PROPERTIES;
+  const maxArrayLength = limits.maxArrayLength ?? DEFAULT_CANONICAL_MAX_ARRAY_LENGTH;
+  for (const [name, limit] of Object.entries({ maxBytes, maxDepth, maxNodes, maxProperties, maxArrayLength })) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error(`compiler canonical ${name} must be a positive safe integer`);
+  }
+  const active = /* @__PURE__ */ new Set();
+  let nodes = 0;
+  const visit = (input, path, depth3) => {
+    if (++nodes > maxNodes) throw new Error(`compiler canonical value exceeds ${maxNodes} nodes`);
+    if (depth3 > maxDepth) throw new Error(`compiler canonical value exceeds depth ${maxDepth} at ${path}`);
+    if (input === null) return "null";
+    switch (typeof input) {
+      case "boolean":
+        return input ? "true" : "false";
+      case "string":
+        return JSON.stringify(input);
+      case "number":
+        if (!Number.isFinite(input)) throw new Error(`compiler canonical number at ${path} must be finite`);
+        return Object.is(input, -0) ? "0" : JSON.stringify(input);
+      case "object":
+        break;
+      default:
+        throw new Error(`compiler canonical value at ${path} is outside the JSON domain`);
+    }
+    if (active.has(input)) throw new Error(`compiler canonical value contains a cycle at ${path}`);
+    active.add(input);
+    try {
+      if (Array.isArray(input)) {
+        if (input.length > maxArrayLength) throw new Error(`compiler canonical array at ${path} exceeds ${maxArrayLength} entries`);
+        const names2 = Object.getOwnPropertyNames(input);
+        const expected = /* @__PURE__ */ new Set(["length", ...Array.from({ length: input.length }, (_3, index) => String(index))]);
+        if (names2.some((name) => !expected.has(name)) || Object.getOwnPropertySymbols(input).length > 0) {
+          throw new Error(`compiler canonical array at ${path} has custom properties`);
+        }
+        const items = [];
+        for (let index = 0; index < input.length; index++) {
+          if (!Object.prototype.hasOwnProperty.call(input, index)) throw new Error(`compiler canonical array at ${path} is sparse`);
+          const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+          if (descriptor?.get !== void 0 || descriptor?.set !== void 0 || descriptor?.enumerable !== true) {
+            throw new Error(`compiler canonical array at ${path}[${index}] has an accessor or hidden entry`);
+          }
+          items.push(visit(input[index], `${path}[${index}]`, depth3 + 1));
+        }
+        return `[${items.join(",")}]`;
+      }
+      const prototype = Object.getPrototypeOf(input);
+      if (prototype !== Object.prototype && prototype !== null) throw new Error(`compiler canonical object at ${path} is not plain`);
+      if (Object.getOwnPropertySymbols(input).length > 0) throw new Error(`compiler canonical object at ${path} has symbol keys`);
+      const names = Object.getOwnPropertyNames(input).sort();
+      if (names.length > maxProperties) throw new Error(`compiler canonical object at ${path} exceeds ${maxProperties} properties`);
+      const fields = [];
+      for (const name of names) {
+        const descriptor = Object.getOwnPropertyDescriptor(input, name);
+        if (descriptor?.get !== void 0 || descriptor?.set !== void 0 || descriptor?.enumerable !== true) {
+          throw new Error(`compiler canonical object at ${path}.${name} has an accessor or hidden field`);
+        }
+        fields.push(`${JSON.stringify(name)}:${visit(input[name], `${path}.${name}`, depth3 + 1)}`);
+      }
+      return `{${fields.join(",")}}`;
+    } finally {
+      active.delete(input);
+    }
+  };
+  const canonical = visit(value, "$", 0);
+  const byteLength = compilerUtf8ByteLength(canonical);
+  if (byteLength > maxBytes) throw new Error(`compiler canonical value is ${byteLength} bytes; maximum is ${maxBytes}`);
+  return canonical;
+}
+function compilerContentHash(value, limits = {}) {
+  return `sha256:${sha256(canonicalCompilerJson(value, limits))}`;
+}
+
 // src/materials/material-registry.ts
-var T6 = three_tsl_exports;
+var T9 = three_tsl_exports;
 var MaterialRegistry = class {
   map = /* @__PURE__ */ new Map();
   /** True when `name` is a registered imported material. */
@@ -110090,6 +112862,24 @@ var MaterialRegistry = class {
     const e2 = this.map.get(name);
     if (e2 === void 0) throw new Error(`unknown imported material "${name}"`);
     return { ...e2.hashes };
+  }
+  /** Canonical identity of the complete imported recipe (tuning plus every map content hash). */
+  contentHashOf(name) {
+    const entry = this.map.get(name);
+    if (entry === void 0) throw new Error(`unknown imported material "${name}"`);
+    return entry.contentHash;
+  }
+  /** Read-only surface source for the shared biome material compiler. Textures remain registry-
+   * owned and must never be disposed by the consumer. */
+  surfaceOf(name) {
+    const entry = this.map.get(name);
+    if (entry === void 0) throw new Error(`unknown imported material "${name}"`);
+    return Object.freeze({
+      spec: Object.freeze({ ...entry.spec }),
+      textures: Object.freeze({ ...entry.textures }),
+      hashes: Object.freeze({ ...entry.hashes }),
+      contentHash: entry.contentHash
+    });
   }
   /**
    * Register (or replace) an imported material recipe from already-DECODED textures. Builds the
@@ -110108,23 +112898,82 @@ var MaterialRegistry = class {
           textures.albedo,
           textures.normal,
           textures.roughness,
+          textures.occlusion,
+          textures.displacement,
           spec.scale,
           spec.normalStrength,
-          spec.sharpness
+          spec.sharpness,
+          { antiTiling: spec.antiTiling, parallax: spec.parallax }
         );
         if (layer.color !== void 0) {
           material.colorNode = spec.color !== void 0 ? layer.color.mul(new Color(spec.color)) : layer.color;
         }
-        if (layer.normal !== void 0) material.normalNode = T6.transformNormalToView(layer.normal.normalize());
-        if (layer.roughness !== void 0) material.roughnessNode = T6.clamp(layer.roughness, 0, 1);
-      } else {
+        if (layer.normal !== void 0) material.normalNode = T9.transformNormalToView(layer.normal.normalize());
+        if (layer.roughness !== void 0) material.roughnessNode = T9.clamp(layer.roughness, 0, 1);
+        if (layer.occlusion !== void 0) {
+          material.aoNode = T9.mix(T9.float(1), T9.clamp(layer.occlusion, 0, 1), T9.float(spec.occlusionStrength));
+        }
+        if (spec.antiTiling || spec.parallax !== void 0) {
+          material.userData.liminaSurfaceSampling = Object.freeze({
+            antiTiling: spec.antiTiling,
+            projection: "triplanar-upward-xz-pom",
+            parallax: spec.parallax === void 0 ? null : Object.freeze({ ...spec.parallax, convention: "white-high", boundedLoop: true, explicitGradients: true }),
+            displacementTexture: textures.displacement
+          });
+        }
+      } else if (!spec.antiTiling && spec.parallax === void 0) {
         if (textures.albedo !== null) material.map = textures.albedo;
         if (textures.normal !== null) material.normalMap = textures.normal;
         if (textures.roughness !== null) material.roughnessMap = textures.roughness;
+        if (textures.occlusion !== null) {
+          textures.occlusion.channel = 0;
+          material.aoMap = textures.occlusion;
+          material.aoMapIntensity = spec.occlusionStrength;
+        }
+      } else {
+        const baseUv = T9.uv();
+        const sampledUv = spec.parallax !== void 0 && textures.displacement !== null ? parallaxOcclusionUv(textures.displacement, baseUv, T9.parallaxDirection, spec.parallax, spec.antiTiling) : baseUv;
+        const sample4 = (texture3) => sampleSurfaceTexture(texture3, baseUv, sampledUv, spec.antiTiling);
+        if (textures.albedo !== null) {
+          const albedo = sample4(textures.albedo).rgb;
+          material.colorNode = spec.color !== void 0 ? albedo.mul(new Color(spec.color)) : albedo;
+        }
+        if (textures.normal !== null) {
+          material.normalNode = T9.normalMap(sample4(textures.normal).rgb, T9.vec2(spec.normalStrength));
+        }
+        if (textures.roughness !== null) material.roughnessNode = T9.clamp(sample4(textures.roughness).r, 0, 1);
+        if (textures.occlusion !== null) {
+          material.aoNode = T9.mix(T9.float(1), T9.clamp(sample4(textures.occlusion).r, 0, 1), T9.float(spec.occlusionStrength));
+        }
+        material.userData.liminaSurfaceSampling = Object.freeze({
+          antiTiling: spec.antiTiling,
+          parallax: spec.parallax === void 0 ? null : Object.freeze({ ...spec.parallax, convention: "white-high", boundedLoop: true, explicitGradients: true }),
+          displacedUv: sampledUv,
+          displacementTexture: textures.displacement
+        });
       }
       return material;
     };
-    this.map.set(name, { spec, textures, hashes: { ...hashes }, build });
+    const pinnedHashes = { ...hashes };
+    const canonicalSpec = {
+      triplanar: spec.triplanar,
+      scale: spec.scale,
+      normalStrength: spec.normalStrength,
+      sharpness: spec.sharpness,
+      metalness: spec.metalness,
+      roughness: spec.roughness,
+      occlusionStrength: spec.occlusionStrength,
+      antiTiling: spec.antiTiling,
+      ...spec.parallax !== void 0 ? { parallax: spec.parallax } : {},
+      ...spec.color !== void 0 ? { color: spec.color } : {}
+    };
+    this.map.set(name, {
+      spec,
+      textures,
+      hashes: pinnedHashes,
+      contentHash: compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes }),
+      build
+    });
   }
   /** Build a fresh material instance for a registered imported name (throws if unknown). */
   build(name) {
@@ -110281,21 +113130,21 @@ function registerAgentSkills(registry2) {
 // src/skills/system.ts
 var Vec37 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Quat2 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null;
 }
 function numberField(value, key) {
-  if (!isRecord2(value)) return void 0;
+  if (!isRecord3(value)) return void 0;
   const n2 = value[key];
   return typeof n2 === "number" && Number.isFinite(n2) ? n2 : void 0;
 }
 function stringField(value, key) {
-  if (!isRecord2(value)) return void 0;
+  if (!isRecord3(value)) return void 0;
   const s2 = value[key];
   return typeof s2 === "string" ? s2 : void 0;
 }
 function booleanField(value, key) {
-  if (!isRecord2(value)) return void 0;
+  if (!isRecord3(value)) return void 0;
   const b3 = value[key];
   return typeof b3 === "boolean" ? b3 : void 0;
 }
@@ -110310,7 +113159,7 @@ function agentSnapshot(agent) {
     decisionIntervalTicks: numberField(agent, "decisionIntervalTicks") ?? 0,
     inFlight: booleanField(agent, "inFlight") ?? false,
     lastDecisionTick: numberField(agent, "lastDecisionTick") ?? 0,
-    queueLength: Array.isArray(isRecord2(agent) ? agent.queue : void 0) ? agent.queue.length : 0,
+    queueLength: Array.isArray(isRecord3(agent) ? agent.queue : void 0) ? agent.queue.length : 0,
     lastPerceptionEventId: stringField(agent, "lastPerceptionEventId")
   };
 }
@@ -110337,7 +113186,7 @@ function sceneMetadata(ctx) {
       height: ctx.world.height
     },
     scene: {
-      background: isRecord2(scene.background) && typeof scene.background.toString === "function" ? scene.background.toString() : scene.background,
+      background: isRecord3(scene.background) && typeof scene.background.toString === "function" ? scene.background.toString() : scene.background,
       position: [scene.position.x, scene.position.y, scene.position.z]
     },
     camera: {
@@ -110846,7 +113695,7 @@ function ancestry(replay, startId) {
 }
 function governingDecision(replay, event) {
   if (POLICY_TYPES[event.type] !== void 0) return event;
-  const cap = (() => {
+  const cap2 = (() => {
     if (event.payload !== null && typeof event.payload === "object") {
       const p2 = event.payload;
       if ("cap" in p2 && typeof p2.cap === "string") return p2.cap;
@@ -110859,9 +113708,9 @@ function governingDecision(replay, event) {
   for (const ancestor of ancestry(replay, event.id)) {
     if (POLICY_TYPES[ancestor.type] === void 0) continue;
     if (firstPolicy === void 0) firstPolicy = ancestor;
-    if (cap !== void 0 && capMatch === void 0) {
+    if (cap2 !== void 0 && capMatch === void 0) {
       const parsed = parsePolicy(ancestor);
-      if (parsed?.cap === cap) capMatch = ancestor;
+      if (parsed?.cap === cap2) capMatch = ancestor;
     }
   }
   return capMatch ?? firstPolicy;
@@ -115010,8 +117859,8 @@ function biomePaintId(biome) {
     case "desert":
       return 1;
     case "tundra":
-      return 5;
-    // snow (PAINT_ALBEDO[5] / PAINT_MATERIALS.snow)
+      return 7;
+    // cold muted ground; snow remains an explicit authored surface
     case "water":
       return void 0;
     // never paints; it's below sea level anyway.
@@ -115027,10 +117876,16 @@ function rasterizeWorldMap(worldMap, opts) {
   const baseAmplitude = opts.baseAmplitude ?? 12;
   if (!(size > 0)) throw new Error("rasterizeWorldMap: size must be > 0");
   if (!(n2 >= 2)) throw new Error("rasterizeWorldMap: resolution must be >= 2");
+  const center = opts.center ?? [0, 0];
+  if (!Array.isArray(center) || center.length !== 2 || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+    throw new Error("rasterizeWorldMap: center must be finite [x,z]");
+  }
   const seaLevel = worldMap.seaLevel;
   const landBase = seaLevel + 2;
   const half = size / 2;
   const step3 = size / (n2 - 1);
+  const minX = center[0] - half;
+  const minZ = center[1] - half;
   const landPolys = projectLandPolys(worldMap);
   const landBoundaryIndex = buildLandBoundaryIndex(landPolys);
   const reliefs = projectRelief(worldMap);
@@ -115056,12 +117911,14 @@ function rasterizeWorldMap(worldMap, opts) {
   const heights = new Float32Array(n2 * n2);
   const paintMat = new Uint8Array(n2 * n2);
   const paintW = new Float32Array(n2 * n2);
+  const channelTerrainPaintMat = new Uint8Array(n2 * n2);
+  const channelTerrainPaintW = new Float32Array(n2 * n2);
   const blight = new Float32Array(n2 * n2);
   for (let row = 0; row < n2; row++) {
-    const wz = -half + row * step3;
+    const wz = minZ + row * step3;
     for (let col = 0; col < n2; col++) {
       if ((row * n2 + col & 1023) === 0 && opts.shouldCancel?.()) throw new MapRasterCancelledError();
-      const wx = -half + col * step3;
+      const wx = minX + col * step3;
       const i2 = row * n2 + col;
       const inLand = isInsideLandPolys(landPolys, wx, wz);
       let coastD = distToLandBoundary(landBoundaryIndex, wx, wz);
@@ -115142,6 +117999,7 @@ function rasterizeWorldMap(worldMap, opts) {
           matW = sandW;
         }
       }
+      let channelMatId = matId, channelMatW = matW;
       for (const w5 of waterways) {
         if (w5.points.length < 2) continue;
         const halfWidth = w5.widthM / 2;
@@ -115163,9 +118021,15 @@ function rasterizeWorldMap(worldMap, opts) {
           matId = seabedId;
           matW = seabedW;
         }
+        if (seabedW > channelMatW) {
+          channelMatId = seabedId;
+          channelMatW = seabedW;
+        }
       }
       paintMat[i2] = matId;
       paintW[i2] = matW;
+      channelTerrainPaintMat[i2] = channelMatId;
+      channelTerrainPaintW[i2] = channelMatW;
     }
   }
   const erosionBake = bakeMasterErosion({
@@ -115176,11 +118040,12 @@ function rasterizeWorldMap(worldMap, opts) {
     recipe: opts.erosion ?? NO_EROSION_RECIPE
   }, { shouldCancel: opts.shouldCancel });
   if (erosionBake.erosionPasses === 1) heights.set(erosionBake.heights);
+  const channelTerrainHeights = heights.slice();
   const channelFloor = seaLevel - 0.6;
   for (let row = 0; row < n2; row++) {
-    const wz = -half + row * step3;
+    const wz = minZ + row * step3;
     for (let col = 0; col < n2; col++) {
-      const wx = -half + col * step3;
+      const wx = minX + col * step3;
       const i2 = row * n2 + col;
       let carve = 0;
       for (const w5 of waterways) {
@@ -115207,9 +118072,9 @@ function rasterizeWorldMap(worldMap, opts) {
   if (swampRings.length > 0) {
     const poolFloor = seaLevel - 0.7;
     for (let row = 0; row < n2; row++) {
-      const wz = -half + row * step3;
+      const wz = minZ + row * step3;
       for (let col = 0; col < n2; col++) {
-        const wx = -half + col * step3;
+        const wx = minX + col * step3;
         const i2 = row * n2 + col;
         if (heights[i2] <= seaLevel || heights[i2] > seaLevel + 2.5) continue;
         let inSwamp = false;
@@ -115224,14 +118089,18 @@ function rasterizeWorldMap(worldMap, opts) {
         if (pool > 0.12) {
           const t2 = smoothstep012((pool - 0.12) / 0.18);
           heights[i2] = Math.min(heights[i2], lerp4(heights[i2], poolFloor, t2));
+          channelTerrainHeights[i2] = Math.min(channelTerrainHeights[i2], lerp4(channelTerrainHeights[i2], poolFloor, t2));
         }
       }
     }
   }
   return {
     heights,
+    channelTerrainHeights,
     paintMat,
     paintW,
+    channelTerrainPaintMat,
+    channelTerrainPaintW,
     blight,
     seaLevelM: seaLevel,
     erosion: erosionBake.recipe,
@@ -115288,11 +118157,11 @@ function preparePointInRing(ring2) {
   }
   return { ring: ring2, minX, minZ, maxX, maxZ, bins, binOf };
 }
-function pointInPreparedRing(x3, z4, prepared) {
-  if (x3 < prepared.minX || x3 > prepared.maxX || z4 < prepared.minZ || z4 > prepared.maxZ) return false;
+function pointInPreparedRing(x3, z4, prepared2) {
+  if (x3 < prepared2.minX || x3 > prepared2.maxX || z4 < prepared2.minZ || z4 > prepared2.maxZ) return false;
   let inside = false;
-  for (const [j3, i2] of prepared.bins[prepared.binOf(z4)]) {
-    const xi = prepared.ring[i2][0], zi = prepared.ring[i2][1], xj = prepared.ring[j3][0], zj = prepared.ring[j3][1];
+  for (const [j3, i2] of prepared2.bins[prepared2.binOf(z4)]) {
+    const xi = prepared2.ring[i2][0], zi = prepared2.ring[i2][1], xj = prepared2.ring[j3][0], zj = prepared2.ring[j3][1];
     const denom = zj - zi || 1e-12;
     if (zi > z4 !== zj > z4 && x3 < (xj - xi) * (z4 - zi) / denom + xi) inside = !inside;
   }
@@ -115585,8 +118454,11 @@ function createMapTerrainField(options) {
     minimumHeightM: minimum,
     maximumHeightM: maximum,
     heightsM: raster.heights,
+    channelTerrainHeightsM: raster.channelTerrainHeights,
     paintMat: raster.paintMat,
     paintW: raster.paintW,
+    channelTerrainPaintMat: raster.channelTerrainPaintMat,
+    channelTerrainPaintW: raster.channelTerrainPaintW,
     biomeCell,
     biomeKinds
   });
@@ -115713,673 +118585,6 @@ var SwappableTerrainSource = class {
     return this.inner.sampleClimate(seed, x3, z4, hints);
   }
 };
-
-// src/world/worldmap-hash.mjs
-function point(p2) {
-  return [p2[0], p2[1]];
-}
-function points(ps) {
-  return ps.map(point);
-}
-function polygon(p2) {
-  const out = { points: points(p2.points) };
-  if (p2.holes !== void 0) out.holes = p2.holes.map((h2) => points(h2));
-  return out;
-}
-function reliefHint(r2) {
-  const shape = {};
-  if (r2.shape.polygon !== void 0) shape.polygon = points(r2.shape.polygon);
-  if (r2.shape.point !== void 0) shape.point = point(r2.shape.point);
-  return { kind: r2.kind, shape, amplitude: r2.amplitude };
-}
-function reliefGrid(g3) {
-  return {
-    w: g3.w,
-    h: g3.h,
-    rect: { x0: g3.rect.x0, z0: g3.rect.z0, w: g3.rect.w, h: g3.rect.h },
-    minY: g3.minY,
-    maxY: g3.maxY,
-    // Only-when-present (like every additive field) so a legacy u8 grid hashes byte-identically.
-    ...g3.encoding !== void 0 ? { encoding: g3.encoding } : {},
-    data: g3.data
-  };
-}
-function biomeRegion(b3) {
-  return { biome: b3.biome, points: points(b3.points) };
-}
-function waterway(w5) {
-  const out = { points: points(w5.points) };
-  if (w5.widthM !== void 0) out.widthM = w5.widthM;
-  out.class = w5.class;
-  if (w5.order !== void 0) out.order = w5.order;
-  if (w5.widths !== void 0) out.widths = [...w5.widths];
-  return out;
-}
-function waterBody(w5) {
-  return {
-    id: w5.id,
-    kind: w5.kind,
-    level: w5.level,
-    footprint: polygon(w5.footprint),
-    depthZones: w5.depthZones.map((zone) => ({
-      minShoreDistanceM: zone.minShoreDistanceM,
-      maxShoreDistanceM: zone.maxShoreDistanceM,
-      depthM: zone.depthM
-    }))
-  };
-}
-function hydrologyRecipe(h2) {
-  return {
-    schema: h2.schema,
-    precipitationMmPerYear: h2.precipitationMmPerYear,
-    riverMinCatchmentAreaM2: h2.riverMinCatchmentAreaM2,
-    basinMinAreaM2: h2.basinMinAreaM2,
-    basinMinDepthM: h2.basinMinDepthM,
-    waterfallMinDropM: h2.waterfallMinDropM
-  };
-}
-function route(r2) {
-  return { points: points(r2.points), class: r2.class };
-}
-function anchor(a2) {
-  const out = { id: a2.id, kind: a2.kind, position: point(a2.position) };
-  if (a2.count !== void 0) out.count = a2.count;
-  if (a2.name !== void 0) out.name = a2.name;
-  if (a2.assetId !== void 0) out.assetId = a2.assetId;
-  if (a2.rot !== void 0) out.rot = a2.rot;
-  if (a2.scale !== void 0) out.scale = a2.scale;
-  out.source = a2.source;
-  return out;
-}
-function gazetteerEntry(g3) {
-  const out = { placeId: g3.placeId, name: g3.name, kind: g3.kind, parentId: g3.parentId === void 0 ? null : g3.parentId, position: point(g3.position) };
-  if (g3.radiusM !== void 0) out.radiusM = g3.radiusM;
-  return out;
-}
-function provenance(p2, omitContentHash) {
-  const out = { tool: p2.tool };
-  if (p2.sourceHash !== void 0) out.sourceHash = p2.sourceHash;
-  if (p2.compiledAt !== void 0) out.compiledAt = p2.compiledAt;
-  if (!omitContentHash) out.contentHash = p2.contentHash;
-  if (p2.cropOf !== void 0) out.cropOf = { anchor: p2.cropOf.anchor, anchorPx: point(p2.cropOf.anchorPx), radiusM: p2.cropOf.radiusM };
-  return out;
-}
-function stableStringifyWorldMap(map2, opts = {}) {
-  const omitContentHash = opts.omitContentHash === true;
-  const canonical = {
-    version: map2.version,
-    id: map2.id,
-    unitsPerMeter: map2.unitsPerMeter,
-    origin: point(map2.origin),
-    extent: { w: map2.extent.w, h: map2.extent.h },
-    seaLevel: map2.seaLevel,
-    land: map2.land.map(polygon),
-    relief: map2.relief.map(reliefHint),
-    // Optional additive fields are emitted ONLY when present, so every pre-reliefGrid map keeps
-    // its original bytes (and hash) unchanged.
-    ...map2.reliefGrid !== void 0 ? { reliefGrid: reliefGrid(map2.reliefGrid) } : {},
-    biomes: map2.biomes.map(biomeRegion),
-    waterways: map2.waterways.map(waterway),
-    // Optional additive field: never materialize it for legacy maps.
-    ...map2.waterBodies !== void 0 ? { waterBodies: map2.waterBodies.map(waterBody) } : {},
-    ...map2.hydrology !== void 0 ? { hydrology: hydrologyRecipe(map2.hydrology) } : {},
-    routes: map2.routes.map(route),
-    anchors: map2.anchors.map(anchor),
-    // Optional additive field: emitted ONLY when present, so every pre-Places map hashes
-    // byte-identically (mirrors reliefGrid above).
-    ...map2.gazetteer !== void 0 ? { gazetteer: map2.gazetteer.map(gazetteerEntry) } : {},
-    provenance: provenance(map2.provenance, omitContentHash)
-  };
-  return JSON.stringify(canonical);
-}
-function worldMapContentHash(map2) {
-  return sha256(stableStringifyWorldMap(map2, { omitContentHash: true }));
-}
-
-// src/world/water-ir.mjs
-var WATERWAY_CLASSES = Object.freeze(["river", "stream"]);
-var WATER_BODY_KINDS = Object.freeze(["lake", "pond", "reservoir", "lagoon", "marsh", "swamp", "bog", "estuary"]);
-var WATER_LIMITS = Object.freeze({
-  bodies: 4096,
-  waterways: 4096,
-  ringPoints: 512,
-  holes: 32,
-  depthZones: 64,
-  waterwayPoints: 8192,
-  bodyPoints: 4096,
-  totalBodyPoints: 65536,
-  totalWaterwayPoints: 262144,
-  // Ten million metres supports continental authoring while keeping determinant error bounded.
-  absCoordinateM: 1e7,
-  absLevelM: 1e5,
-  depthM: 2e4,
-  shoreDistanceM: 1e6,
-  widthM: 1e5,
-  streamOrder: 12,
-  // Simple-polygon validation is quadratic. This hard budget bounds hostile aggregate work even
-  // when every individual ring remains below its point cap.
-  topologyWorkUnits: 2e6
-});
-var WATER_ID_RE = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/;
-var WATERWAY_CLASS_SET = new Set(WATERWAY_CLASSES);
-var WATER_BODY_KIND_SET = new Set(WATER_BODY_KINDS);
-var WATER_BODY_KEYS = /* @__PURE__ */ new Set(["id", "kind", "level", "footprint", "depthZones"]);
-var WATER_FOOTPRINT_KEYS = /* @__PURE__ */ new Set(["points", "holes"]);
-var WATER_DEPTH_ZONE_KEYS = /* @__PURE__ */ new Set(["minShoreDistanceM", "maxShoreDistanceM", "depthM"]);
-function isPortableWaterId(value) {
-  return typeof value === "string" && WATER_ID_RE.test(value);
-}
-function isPlainJsonData(value, seen = /* @__PURE__ */ new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object" || seen.has(value)) return false;
-  seen.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
-  if (Array.isArray(value)) {
-    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
-    if (Object.keys(descriptors).some((key) => key !== "length" && !/^(0|[1-9]\d*)$/.test(key))) return false;
-    for (let index = 0; index < value.length; index++) {
-      const descriptor = descriptors[String(index)];
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || !isPlainJsonData(descriptor.value, seen)) return false;
-    }
-    return true;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  for (const descriptor of Object.values(descriptors)) {
-    if (!("value" in descriptor) || !descriptor.enumerable || !isPlainJsonData(descriptor.value, seen)) return false;
-  }
-  return true;
-}
-var WaterIrValidationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "WaterIrValidationError";
-  }
-};
-function fail(message) {
-  throw new WaterIrValidationError(message);
-}
-function requireRecord(value, path, allowedKeys) {
-  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) fail(`${path} must be a plain object`);
-  for (const key of Object.keys(value)) if (!allowedKeys.has(key)) fail(`${path} has unknown field '${key}'`);
-  return value;
-}
-function requireArray(value, path, min3, max3) {
-  if (!Array.isArray(value) || value.length < min3 || value.length > max3) fail(`${path} must contain ${min3}..${max3} entries`);
-  for (let index = 0; index < value.length; index++) if (!Object.hasOwn(value, index)) fail(`${path} must not be sparse`);
-  return value;
-}
-function requireFiniteNumber(value, path, min3, max3, integer3 = false) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min3 || value > max3 || integer3 && !Number.isInteger(value)) {
-    fail(`${path} must be a ${integer3 ? "finite integer" : "finite number"} in [${min3}, ${max3}]`);
-  }
-  return value;
-}
-function requirePositiveNumber(value, path, max3) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > max3) fail(`${path} must be finite, positive, and at most ${max3}`);
-  return value;
-}
-function requireFinitePoint(value, path) {
-  const point3 = requireArray(value, path, 2, 2);
-  return [
-    requireFiniteNumber(point3[0], `${path}[0]`, -WATER_LIMITS.absCoordinateM, WATER_LIMITS.absCoordinateM),
-    requireFiniteNumber(point3[1], `${path}[1]`, -WATER_LIMITS.absCoordinateM, WATER_LIMITS.absCoordinateM)
-  ];
-}
-function orientationSign(a2, b3, c2) {
-  const x1 = b3[0] - a2[0], y1 = b3[1] - a2[1], x22 = c2[0] - a2[0], y22 = c2[1] - a2[1];
-  const determinant3 = x1 * y22 - y1 * x22;
-  const tolerance = Number.EPSILON * 32 * (Math.abs(x1 * y22) + Math.abs(y1 * x22) + 1);
-  return determinant3 > tolerance ? 1 : determinant3 < -tolerance ? -1 : 0;
-}
-function onSegment2(a2, b3, point3) {
-  if (orientationSign(a2, b3, point3) !== 0) return false;
-  const tolerance = Number.EPSILON * 32 * Math.max(1, Math.abs(a2[0]), Math.abs(a2[1]), Math.abs(b3[0]), Math.abs(b3[1]), Math.abs(point3[0]), Math.abs(point3[1]));
-  return point3[0] >= Math.min(a2[0], b3[0]) - tolerance && point3[0] <= Math.max(a2[0], b3[0]) + tolerance && point3[1] >= Math.min(a2[1], b3[1]) - tolerance && point3[1] <= Math.max(a2[1], b3[1]) + tolerance;
-}
-function compare(budget) {
-  budget.workUnits++;
-  if (budget.workUnits > WATER_LIMITS.topologyWorkUnits) fail(`water topology exceeds ${WATER_LIMITS.topologyWorkUnits} bounded work units`);
-}
-function segmentsIntersect(a2, b3, c2, d2, budget) {
-  compare(budget);
-  const abC = orientationSign(a2, b3, c2), abD = orientationSign(a2, b3, d2);
-  const cdA = orientationSign(c2, d2, a2), cdB = orientationSign(c2, d2, b3);
-  if (abC !== 0 && abD !== 0 && cdA !== 0 && cdB !== 0) return abC !== abD && cdA !== cdB;
-  return abC === 0 && onSegment2(a2, b3, c2) || abD === 0 && onSegment2(a2, b3, d2) || cdA === 0 && onSegment2(c2, d2, a2) || cdB === 0 && onSegment2(c2, d2, b3);
-}
-function ringAreaSign(ring2, budget) {
-  const origin = ring2[0];
-  let twiceArea2 = 0;
-  let magnitude = 0;
-  for (let index = 1; index < ring2.length - 1; index++) {
-    compare(budget);
-    const point3 = ring2[index], next = ring2[index + 1];
-    const px2 = point3[0] - origin[0], py2 = point3[1] - origin[1];
-    const nx = next[0] - origin[0], ny = next[1] - origin[1];
-    const term = px2 * ny - nx * py2;
-    twiceArea2 += term;
-    magnitude += Math.abs(px2 * ny) + Math.abs(nx * py2);
-  }
-  const tolerance = Number.EPSILON * 32 * (magnitude + 1);
-  return twiceArea2 > tolerance ? 1 : twiceArea2 < -tolerance ? -1 : 0;
-}
-function validateRing(ring2, path, budget) {
-  const seen = /* @__PURE__ */ new Set();
-  for (let index = 0; index < ring2.length; index++) {
-    compare(budget);
-    const point3 = ring2[index], next = ring2[(index + 1) % ring2.length];
-    const key = `${point3[0]}\0${point3[1]}`;
-    if (seen.has(key) || point3[0] === next[0] && point3[1] === next[1]) fail(`${path} must not repeat vertices`);
-    seen.add(key);
-  }
-  if (ringAreaSign(ring2, budget) === 0) fail(`${path} must enclose numerically stable non-zero area`);
-  for (let i2 = 0; i2 < ring2.length; i2++) for (let j3 = i2 + 1; j3 < ring2.length; j3++) {
-    if (j3 === i2 + 1 || i2 === 0 && j3 === ring2.length - 1) continue;
-    if (segmentsIntersect(ring2[i2], ring2[(i2 + 1) % ring2.length], ring2[j3], ring2[(j3 + 1) % ring2.length], budget)) fail(`${path} must not self-intersect`);
-  }
-}
-function pointInRing(point3, ring2, budget) {
-  let inside = false;
-  for (let i2 = 0, j3 = ring2.length - 1; i2 < ring2.length; j3 = i2++) {
-    compare(budget);
-    const a2 = ring2[j3], b3 = ring2[i2];
-    if (onSegment2(a2, b3, point3)) return 0;
-    if (a2[1] > point3[1] !== b3[1] > point3[1] && point3[0] < (b3[0] - a2[0]) * (point3[1] - a2[1]) / (b3[1] - a2[1]) + a2[0]) inside = !inside;
-  }
-  return inside ? 1 : -1;
-}
-function ringsIntersect(a2, b3, budget) {
-  for (let i2 = 0; i2 < a2.length; i2++) for (let j3 = 0; j3 < b3.length; j3++) {
-    if (segmentsIntersect(a2[i2], a2[(i2 + 1) % a2.length], b3[j3], b3[(j3 + 1) % b3.length], budget)) return true;
-  }
-  return false;
-}
-function validateFootprint(footprint, path, budget) {
-  validateRing(footprint.points, `${path}.points`, budget);
-  const holes = footprint.holes ?? [];
-  for (let index = 0; index < holes.length; index++) {
-    const hole = holes[index];
-    validateRing(hole, `${path}.holes[${index}]`, budget);
-    if (pointInRing(hole[0], footprint.points, budget) !== 1 || ringsIntersect(hole, footprint.points, budget)) fail(`${path}.holes[${index}] must be strictly inside the footprint`);
-    for (let previous = 0; previous < index; previous++) {
-      if (ringsIntersect(hole, holes[previous], budget) || pointInRing(hole[0], holes[previous], budget) !== -1 || pointInRing(holes[previous][0], hole, budget) !== -1) {
-        fail(`${path}.holes[${index}] must not overlap or contain another hole`);
-      }
-    }
-  }
-}
-function inspectWaterBodyTopology(bodies) {
-  const budget = { workUnits: 0 };
-  try {
-    for (let index = 0; index < bodies.length; index++) validateFootprint(bodies[index].footprint, `waterBodies[${index}].footprint`, budget);
-    return { ok: true, workUnits: budget.workUnits };
-  } catch (error51) {
-    if (!(error51 instanceof WaterIrValidationError)) throw error51;
-    return { ok: false, workUnits: budget.workUnits, message: error51.message };
-  }
-}
-function parseRing(value, path) {
-  return requireArray(value, path, 3, WATER_LIMITS.ringPoints).map((point3, index) => requireFinitePoint(point3, `${path}[${index}]`));
-}
-function parseFootprint(value, path) {
-  const source = requireRecord(value, path, WATER_FOOTPRINT_KEYS);
-  const points2 = parseRing(source.points, `${path}.points`);
-  const holes = source.holes === void 0 ? void 0 : requireArray(source.holes, `${path}.holes`, 0, WATER_LIMITS.holes).map((hole, index) => parseRing(hole, `${path}.holes[${index}]`));
-  return { points: points2, ...holes !== void 0 ? { holes } : {} };
-}
-function parseAuthoredWaterBodies(value) {
-  if (!isPlainJsonData(value)) fail("waterBodies must be plain JSON data");
-  const source = requireArray(value, "waterBodies", 0, WATER_LIMITS.bodies);
-  const ids = /* @__PURE__ */ new Set();
-  let totalPoints = 0;
-  const bodies = source.map((candidate, bodyIndex) => {
-    const path = `waterBodies[${bodyIndex}]`;
-    const body = requireRecord(candidate, path, WATER_BODY_KEYS);
-    if (!isPortableWaterId(body.id)) fail(`${path}.id must be a portable lowercase ASCII id of at most 128 characters`);
-    if (ids.has(body.id)) fail(`waterBodies has duplicate id '${body.id}'`);
-    ids.add(body.id);
-    if (!WATER_BODY_KIND_SET.has(body.kind)) fail(`${path}.kind must be one of ${WATER_BODY_KINDS.join(", ")}`);
-    const footprint = parseFootprint(body.footprint, `${path}.footprint`);
-    const bodyPoints = footprint.points.length + (footprint.holes ?? []).reduce((sum, hole) => sum + hole.length, 0);
-    if (bodyPoints > WATER_LIMITS.bodyPoints) fail(`${path}.footprint exceeds ${WATER_LIMITS.bodyPoints} points`);
-    totalPoints += bodyPoints;
-    if (totalPoints > WATER_LIMITS.totalBodyPoints) fail(`waterBodies geometry exceeds ${WATER_LIMITS.totalBodyPoints} points`);
-    let previousMax = -Infinity, previousDepth = -Infinity;
-    const depthZones = requireArray(body.depthZones, `${path}.depthZones`, 1, WATER_LIMITS.depthZones).map((candidateZone, zoneIndex) => {
-      const zonePath = `${path}.depthZones[${zoneIndex}]`;
-      const zone = requireRecord(candidateZone, zonePath, WATER_DEPTH_ZONE_KEYS);
-      const minShoreDistanceM = requireFiniteNumber(zone.minShoreDistanceM, `${zonePath}.minShoreDistanceM`, 0, WATER_LIMITS.shoreDistanceM);
-      const maxShoreDistanceM = requirePositiveNumber(zone.maxShoreDistanceM, `${zonePath}.maxShoreDistanceM`, WATER_LIMITS.shoreDistanceM);
-      const depthM = requirePositiveNumber(zone.depthM, `${zonePath}.depthM`, WATER_LIMITS.depthM);
-      if (maxShoreDistanceM <= minShoreDistanceM) fail(`${zonePath} must have maxShoreDistanceM > minShoreDistanceM`);
-      if (zoneIndex === 0 && minShoreDistanceM !== 0) fail(`${path}.depthZones must start at the shoreline (minShoreDistanceM=0)`);
-      if (zoneIndex > 0 && minShoreDistanceM !== previousMax) fail(`${path}.depthZones must be ordered and contiguous without gaps or overlaps`);
-      if (depthM <= previousDepth) fail(`${path}.depthZones depths must increase monotonically toward the interior`);
-      previousMax = maxShoreDistanceM;
-      previousDepth = depthM;
-      return { minShoreDistanceM, maxShoreDistanceM, depthM };
-    });
-    return {
-      id: body.id,
-      kind: body.kind,
-      level: requireFiniteNumber(body.level, `${path}.level`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
-      footprint,
-      depthZones
-    };
-  });
-  const topology = inspectWaterBodyTopology(bodies);
-  if (!topology.ok) fail(topology.message);
-  return bodies;
-}
-
-// src/world/hydrology-ir.mjs
-var HYDROLOGY_RECIPE_SCHEMA = "limina.hydrology-recipe/v1";
-var HYDROLOGY_LIMITS = Object.freeze({
-  precipitationMmPerYear: 1e5,
-  catchmentAreaM2: 1e12,
-  basinAreaM2: 1e12,
-  basinDepthM: 2e4,
-  waterfallDropM: 2e4
-});
-var HYDROLOGY_RECIPE_KEYS = /* @__PURE__ */ new Set([
-  "schema",
-  "precipitationMmPerYear",
-  "riverMinCatchmentAreaM2",
-  "basinMinAreaM2",
-  "basinMinDepthM",
-  "waterfallMinDropM"
-]);
-var HydrologyIrValidationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "HydrologyIrValidationError";
-  }
-};
-function fail2(message) {
-  throw new HydrologyIrValidationError(message);
-}
-function requirePlainRecord(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) fail2("hydrology must be a plain object");
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) fail2("hydrology must be a plain object");
-  if (Object.getOwnPropertySymbols(value).length !== 0) fail2("hydrology must not contain symbol fields");
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!HYDROLOGY_RECIPE_KEYS.has(key)) fail2(`hydrology has unknown field '${key}'`);
-    if (!("value" in descriptor) || descriptor.enumerable !== true) fail2(`hydrology.${key} must be an enumerable data field`);
-  }
-  for (const key of HYDROLOGY_RECIPE_KEYS) if (!Object.hasOwn(value, key)) fail2(`hydrology is missing '${key}'`);
-  return descriptors;
-}
-function requireCanonicalNumber(descriptor, path, maximum, allowZero) {
-  const value = descriptor.value;
-  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || (allowZero ? value < 0 : value <= 0) || value > maximum) {
-    fail2(`${path} must be a finite canonical ${allowZero ? "non-negative" : "positive"} number at most ${maximum}`);
-  }
-  return value;
-}
-function parseAuthoredHydrologyRecipe(value) {
-  const descriptors = requirePlainRecord(value);
-  if (descriptors.schema.value !== HYDROLOGY_RECIPE_SCHEMA) {
-    fail2(`hydrology.schema must be '${HYDROLOGY_RECIPE_SCHEMA}'`);
-  }
-  return Object.freeze({
-    schema: HYDROLOGY_RECIPE_SCHEMA,
-    precipitationMmPerYear: requireCanonicalNumber(
-      descriptors.precipitationMmPerYear,
-      "hydrology.precipitationMmPerYear",
-      HYDROLOGY_LIMITS.precipitationMmPerYear,
-      true
-    ),
-    riverMinCatchmentAreaM2: requireCanonicalNumber(
-      descriptors.riverMinCatchmentAreaM2,
-      "hydrology.riverMinCatchmentAreaM2",
-      HYDROLOGY_LIMITS.catchmentAreaM2,
-      false
-    ),
-    basinMinAreaM2: requireCanonicalNumber(
-      descriptors.basinMinAreaM2,
-      "hydrology.basinMinAreaM2",
-      HYDROLOGY_LIMITS.basinAreaM2,
-      false
-    ),
-    basinMinDepthM: requireCanonicalNumber(
-      descriptors.basinMinDepthM,
-      "hydrology.basinMinDepthM",
-      HYDROLOGY_LIMITS.basinDepthM,
-      false
-    ),
-    waterfallMinDropM: requireCanonicalNumber(
-      descriptors.waterfallMinDropM,
-      "hydrology.waterfallMinDropM",
-      HYDROLOGY_LIMITS.waterfallDropM,
-      false
-    )
-  });
-}
-
-// src/world/worldmap.ts
-var WORLD_MAP_VERSION = 1;
-var RELIEF_KINDS = ["mountain", "hills", "plateau", "peak", "depression"];
-var BIOME_KINDS = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"];
-var ROUTE_CLASSES = ["road", "trail"];
-var ANCHOR_SOURCES = ["world-bible", "map", "places"];
-var PROVENANCE_TOOLS = ["design-space", "fmg"];
-var PointSchema = external_exports.tuple([external_exports.number(), external_exports.number()]);
-var PointsSchema = external_exports.array(PointSchema);
-var FiniteWaterCoordinateSchema = external_exports.number().finite().min(-WATER_LIMITS.absCoordinateM).max(WATER_LIMITS.absCoordinateM);
-var FinitePointSchema = external_exports.tuple([FiniteWaterCoordinateSchema, FiniteWaterCoordinateSchema]);
-var INVALID_PLAIN_DATA = /* @__PURE__ */ Symbol("invalid-plain-json-data");
-function plainJson(schema) {
-  return external_exports.preprocess((value) => isPlainJsonData(value) ? value : INVALID_PLAIN_DATA, schema);
-}
-function isPlainRootRecord(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  if (Object.getOwnPropertySymbols(value).length !== 0) return false;
-  return Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) => "value" in descriptor && descriptor.enumerable);
-}
-var PolygonSchema = external_exports.object({
-  points: PointsSchema.min(3),
-  holes: external_exports.array(PointsSchema.min(3)).optional()
-}).strict();
-var ReliefShapeSchema = external_exports.object({
-  polygon: PointsSchema.min(3).optional(),
-  point: PointSchema.optional()
-}).strict().refine(
-  (s2) => s2.polygon !== void 0 || s2.point !== void 0,
-  { message: "a relief hint's shape must carry a polygon or a point" }
-);
-var ReliefHintSchema = external_exports.object({
-  kind: external_exports.enum(RELIEF_KINDS),
-  shape: ReliefShapeSchema,
-  amplitude: external_exports.number()
-}).strict();
-var ReliefGridSchema = external_exports.object({
-  w: external_exports.number().int().min(2).max(1024),
-  h: external_exports.number().int().min(2).max(1024),
-  rect: external_exports.object({ x0: external_exports.number(), z0: external_exports.number(), w: external_exports.number().positive(), h: external_exports.number().positive() }).strict(),
-  minY: external_exports.number(),
-  maxY: external_exports.number(),
-  /** Vertical quantization of `data`: 'u16' packs each cell as 2 LITTLE-ENDIAN bytes (65,536 levels —
-   *  ~0.14m/step over a 9km range, real mountains without terracing); absent or 'u8' = the legacy
-   *  1-byte cell. ABSENT is the version discriminator: every pre-u16 map reads as u8 unchanged and
-   *  hashes byte-identically (worldmap-hash emits `encoding` only-when-present). */
-  encoding: external_exports.enum(["u8", "u16"]).optional(),
-  /** base64 of w*h cells (u8 → w*h bytes; u16 → 2*w*h little-endian bytes). */
-  data: external_exports.string().min(1).max(2796204)
-  // base64 ceiling for 1024*1024*2 bytes
-}).strict().refine((g3) => g3.maxY > g3.minY, { message: "reliefGrid maxY must be greater than minY" });
-var BiomeRegionSchema = external_exports.object({
-  biome: external_exports.enum(BIOME_KINDS),
-  points: PointsSchema.min(3)
-}).strict();
-var WaterwaySchema = plainJson(external_exports.object({
-  points: external_exports.array(FinitePointSchema).min(2).max(WATER_LIMITS.waterwayPoints),
-  widthM: external_exports.number().finite().positive().max(WATER_LIMITS.widthM).optional(),
-  class: external_exports.enum(WATERWAY_CLASSES),
-  /** Strahler stream order: 1=headwater, increasing only at equal-order confluences. */
-  order: external_exports.number().int().min(1).max(WATER_LIMITS.streamOrder).optional(),
-  /** Per-vertex channel widths in metres. When present, length exactly matches `points`. */
-  widths: external_exports.array(external_exports.number().finite().positive().max(WATER_LIMITS.widthM)).min(2).max(WATER_LIMITS.waterwayPoints).optional()
-}).strict().superRefine((waterway2, ctx) => {
-  if (waterway2.widths !== void 0 && waterway2.widths.length !== waterway2.points.length) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["widths"], message: "waterway widths must have exactly one value per point" });
-  }
-}));
-var WaterDepthZoneSchema = external_exports.object({
-  /** Inclusive horizontal distance inward from the shoreline, in metres. */
-  minShoreDistanceM: external_exports.number().finite().min(0).max(WATER_LIMITS.shoreDistanceM),
-  /** Exclusive outer edge of this band. */
-  maxShoreDistanceM: external_exports.number().finite().positive().max(WATER_LIMITS.shoreDistanceM),
-  /** Positive depth below this body's level, in metres. */
-  depthM: external_exports.number().finite().positive().max(WATER_LIMITS.depthM)
-}).strict().refine((zone) => zone.maxShoreDistanceM > zone.minShoreDistanceM, {
-  message: "depth zone maxShoreDistanceM must be greater than minShoreDistanceM"
-});
-var WaterFootprintSchema = external_exports.object({
-  points: external_exports.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints),
-  holes: external_exports.array(external_exports.array(FinitePointSchema).min(3).max(WATER_LIMITS.ringPoints)).max(WATER_LIMITS.holes).optional()
-}).strict();
-var WaterBodySchema = external_exports.object({
-  /** Stable lowercase ASCII id; path separators, whitespace and host-case ambiguity are forbidden. */
-  id: external_exports.string().min(1).max(128).refine(isPortableWaterId, { message: "water body id must be portable lowercase ASCII" }),
-  kind: external_exports.enum(WATER_BODY_KINDS),
-  level: external_exports.number().finite().min(-WATER_LIMITS.absLevelM).max(WATER_LIMITS.absLevelM),
-  footprint: WaterFootprintSchema,
-  /** Contiguous shore-to-interior bands: first min=0, each next min=previous max, and depth
-   *  strictly increases inward. This leaves no undefined bathymetry for WaterField consumers. */
-  depthZones: external_exports.array(WaterDepthZoneSchema).min(1).max(WATER_LIMITS.depthZones)
-}).strict().superRefine((body, ctx) => {
-  let previousMax = -Infinity, previousDepth = -Infinity;
-  for (let index = 0; index < body.depthZones.length; index++) {
-    const zone = body.depthZones[index];
-    if (index === 0 && zone.minShoreDistanceM !== 0) {
-      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index, "minShoreDistanceM"], message: "the first depth zone must start at the shoreline (0m)" });
-    }
-    if (index > 0 && zone.minShoreDistanceM !== previousMax) {
-      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index], message: "depth zones must be ordered and contiguous without gaps or overlaps" });
-    }
-    if (zone.depthM <= previousDepth) {
-      ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["depthZones", index, "depthM"], message: "depth must increase monotonically toward the interior" });
-    }
-    previousMax = zone.maxShoreDistanceM;
-    previousDepth = zone.depthM;
-  }
-});
-var WaterBodiesSchema = plainJson(external_exports.array(WaterBodySchema).max(WATER_LIMITS.bodies).superRefine((bodies, ctx) => {
-  const ids = /* @__PURE__ */ new Set();
-  let points2 = 0;
-  for (let index = 0; index < bodies.length; index++) {
-    const body = bodies[index];
-    if (ids.has(body.id)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: [index, "id"], message: "water body ids must be unique" });
-    ids.add(body.id);
-    points2 += body.footprint.points.length;
-    for (const hole of body.footprint.holes ?? []) points2 += hole.length;
-    const bodyPoints = body.footprint.points.length + (body.footprint.holes ?? []).reduce((total, hole) => total + hole.length, 0);
-    if (bodyPoints > WATER_LIMITS.bodyPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: [index, "footprint"], message: `water body footprint exceeds ${WATER_LIMITS.bodyPoints} points` });
-  }
-  if (points2 > WATER_LIMITS.totalBodyPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: `water body geometry exceeds ${WATER_LIMITS.totalBodyPoints} points` });
-  const topology = inspectWaterBodyTopology(bodies);
-  if (!topology.ok) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: topology.message ?? "invalid water body topology" });
-}));
-var HydrologyRecipeSchema = external_exports.preprocess((value) => {
-  try {
-    return parseAuthoredHydrologyRecipe(value);
-  } catch {
-    return INVALID_PLAIN_DATA;
-  }
-}, external_exports.object({
-  schema: external_exports.literal(HYDROLOGY_RECIPE_SCHEMA),
-  precipitationMmPerYear: external_exports.number().finite().min(0).max(HYDROLOGY_LIMITS.precipitationMmPerYear),
-  riverMinCatchmentAreaM2: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.catchmentAreaM2),
-  basinMinAreaM2: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.basinAreaM2),
-  basinMinDepthM: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.basinDepthM),
-  waterfallMinDropM: external_exports.number().finite().positive().max(HYDROLOGY_LIMITS.waterfallDropM)
-}).strict());
-var RouteSchema = external_exports.object({
-  points: PointsSchema.min(2),
-  class: external_exports.enum(ROUTE_CLASSES)
-}).strict();
-var AnchorSchema = external_exports.object({
-  id: external_exports.string().min(1),
-  kind: external_exports.string().min(1),
-  position: PointSchema,
-  count: external_exports.number().int().positive().optional(),
-  name: external_exports.string().min(1).optional(),
-  // Map Painter P3 stamps: an anchor that names its EXACT catalog asset (kind "asset"), with an
-  // optional yaw (radians) and uniform scale. Optional so legacy anchors (and their content
-  // hashes — worldmap-hash emits these only-when-present) are untouched.
-  assetId: external_exports.string().min(1).optional(),
-  rot: external_exports.number().optional(),
-  scale: external_exports.number().positive().optional(),
-  source: external_exports.enum(ANCHOR_SOURCES)
-}).strict();
-var GazetteerEntrySchema = external_exports.object({
-  placeId: external_exports.string().min(1),
-  name: external_exports.string().min(1),
-  kind: external_exports.string().min(1),
-  parentId: external_exports.string().min(1).nullable(),
-  position: PointSchema,
-  radiusM: external_exports.number().positive().optional()
-}).strict();
-var CropOfSchema = external_exports.object({
-  anchor: external_exports.string().min(1),
-  anchorPx: PointSchema,
-  radiusM: external_exports.number().positive()
-}).strict();
-var ProvenanceSchema = external_exports.object({
-  tool: external_exports.enum(PROVENANCE_TOOLS),
-  sourceHash: external_exports.string().optional(),
-  compiledAt: external_exports.string().optional(),
-  contentHash: external_exports.string().min(1),
-  cropOf: CropOfSchema.optional()
-}).strict();
-var WorldMapObjectSchema = external_exports.object({
-  version: external_exports.literal(WORLD_MAP_VERSION),
-  id: external_exports.string().min(1),
-  unitsPerMeter: external_exports.number().positive(),
-  origin: PointSchema,
-  extent: external_exports.object({ w: external_exports.number().positive(), h: external_exports.number().positive() }).strict(),
-  seaLevel: external_exports.number(),
-  land: external_exports.array(PolygonSchema),
-  relief: external_exports.array(ReliefHintSchema),
-  reliefGrid: ReliefGridSchema.optional(),
-  biomes: external_exports.array(BiomeRegionSchema),
-  waterways: external_exports.array(WaterwaySchema).max(WATER_LIMITS.waterways).superRefine((waterways, ctx) => {
-    const points2 = waterways.reduce((total, waterway2) => total + waterway2.points.length, 0);
-    if (points2 > WATER_LIMITS.totalWaterwayPoints) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, message: `waterway geometry exceeds ${WATER_LIMITS.totalWaterwayPoints} points` });
-  }),
-  // Optional + additive: absent on every pre-WB-W1 map and never defaulted during migration.
-  waterBodies: WaterBodiesSchema.optional(),
-  // Optional authoring inputs only. Derived drainage topology is published as a compiler artifact.
-  hydrology: HydrologyRecipeSchema.optional(),
-  routes: external_exports.array(RouteSchema),
-  anchors: external_exports.array(AnchorSchema),
-  // The named-place index (Places Stage 4). Optional + additive: absent on every pre-Places map.
-  gazetteer: external_exports.array(GazetteerEntrySchema).optional(),
-  provenance: ProvenanceSchema
-}).strict();
-var WorldMapSchema = external_exports.preprocess((value) => isPlainRootRecord(value) ? value : INVALID_PLAIN_DATA, WorldMapObjectSchema);
-function worldMapContentHash2(map2) {
-  return worldMapContentHash(map2);
-}
-function migrateWorldMap(raw) {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const map2 = raw;
-  if (typeof map2.version !== "number") return raw;
-  return map2;
-}
-function verifyWorldMap(parsed) {
-  const map2 = WorldMapSchema.parse(migrateWorldMap(parsed));
-  const expected = map2.provenance.contentHash;
-  const actual = worldMapContentHash2(map2);
-  return { ok: expected === actual, expected, actual };
-}
 
 // src/terrain/terrain-types.ts
 var TERRAIN_TYPES = {
@@ -116576,13 +118781,11 @@ function hexRGB(hex3) {
 var TRUNK = hexRGB(5981750);
 var FOLIAGE = hexRGB(3108153);
 var ROCKCOL = hexRGB(7303018);
-var GRASSCOL = hexRGB(5212735);
 
 // src/terrain/props-render.ts
 var MATERIALS2 = {
-  [0 /* Tree */]: { roughness: 0.9, metalness: 0, doubleSide: false },
-  [1 /* Rock */]: { roughness: 0.95, metalness: 0, doubleSide: false },
-  [2 /* Grass */]: { roughness: 0.85, metalness: 0, doubleSide: true }
+  [0 /* Tree */]: { roughness: 0.9, metalness: 0 },
+  [1 /* Rock */]: { roughness: 0.95, metalness: 0 }
 };
 var Y_AXIS2 = new Vector3(0, 1, 0);
 
@@ -116591,8 +118794,39 @@ function tileKey(tx, tz) {
   return `${validateTerrainChunkCoordinate("tx", tx)},${validateTerrainChunkCoordinate("tz", tz)}`;
 }
 
+// src/terrain/material-palette.ts
+var TERRAIN_PAINT_ALBEDO_HEX = Object.freeze([
+  null,
+  // 0 = unpainted
+  12891790,
+  // 1 sand
+  6258492,
+  // 2 grass
+  7693911,
+  // 3 rock
+  7295796,
+  // 4 dirt
+  14870508,
+  // 5 snow
+  4804910,
+  // 6 murk
+  8884858
+  // 7 tundra
+]);
+
 // src/terrain/material-pbr.ts
-var T7 = three_tsl_exports;
+var T10 = three_tsl_exports;
+var TERRAIN_PAINT_ALBEDO_BYTES = Object.freeze(
+  TERRAIN_PAINT_ALBEDO_HEX.map((hex3) => {
+    if (hex3 === null) return null;
+    const color3 = new Color(hex3);
+    return Object.freeze([
+      Math.round(color3.r * 255),
+      Math.round(color3.g * 255),
+      Math.round(color3.b * 255)
+    ]);
+  })
+);
 function applyPbrMaterial(material, tile, baseRough, pbr) {
   const tempRange = pbr.tempRange ?? [-30, 40];
   const precipMax = pbr.precipMax ?? 3e3;
@@ -116602,7 +118836,7 @@ function applyPbrMaterial(material, tile, baseRough, pbr) {
   const cols = { ...RAMP_DEFAULT_COLORS, ...pbr.colors ?? {} };
   const C3 = (hex3) => {
     const c2 = new Color(hex3);
-    return T7.vec3(c2.r, c2.g, c2.b);
+    return T10.vec3(c2.r, c2.g, c2.b);
   };
   const subSeaV = C3(cols.subSea), sandV = C3(cols.sand), dryV = C3(cols.dryGrass);
   const forestV = C3(cols.forest), rockV = C3(cols.rock), snowV = C3(cols.snow);
@@ -116610,11 +118844,13 @@ function applyPbrMaterial(material, tile, baseRough, pbr) {
   const sharp = d2.triplanarSharpness ?? 4;
   const mottle = d2.mottle ?? 0.28;
   const tex = sharedDetailTexture();
-  const rockL = triplanarLayer(tex, d2.rockScale ?? 0.14, d2.rockNormal ?? 1.15, sharp);
-  const grassL = triplanarLayer(tex, d2.grassScale ?? 0.45, d2.grassNormal ?? 0.7, sharp);
-  const snowL = triplanarLayer(tex, d2.snowScale ?? 0.1, d2.snowNormal ?? 0.3, sharp);
-  const sandL = triplanarLayer(tex, d2.sandScale ?? 0.55, d2.sandNormal ?? 0.7, sharp);
-  const microL = triplanarLayer(tex, d2.microScale ?? 1.3, d2.microNormal ?? 0.4, sharp);
+  const featureLocal = pbr.featureLocalOrigin !== void 0;
+  const projection = featureLocal ? { position: T10.positionLocal, origin: pbr.featureLocalOrigin } : void 0;
+  const rockL = triplanarLayer(tex, d2.rockScale ?? 0.14, d2.rockNormal ?? 1.15, sharp, projection);
+  const grassL = triplanarLayer(tex, d2.grassScale ?? 0.45, d2.grassNormal ?? 0.7, sharp, projection);
+  const snowL = triplanarLayer(tex, d2.snowScale ?? 0.1, d2.snowNormal ?? 0.3, sharp, projection);
+  const sandL = triplanarLayer(tex, d2.sandScale ?? 0.55, d2.sandNormal ?? 0.7, sharp, projection);
+  const microL = triplanarLayer(tex, d2.microScale ?? 1.3, d2.microNormal ?? 0.4, sharp, projection);
   const mod3 = (val) => val.sub(0.5).mul(mottle).add(1);
   const sea = pbr.seaLevel;
   let minY = pbr.minY, maxY = pbr.maxY;
@@ -116635,77 +118871,117 @@ function applyPbrMaterial(material, tile, baseRough, pbr) {
   const baked = bakeTileClimate(tile, tempRange, precipMax);
   trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
-  const u3 = T7.positionWorld.x.sub(minX).div(maxX - minX);
-  const v3 = T7.positionWorld.z.sub(minZ).div(maxZ - minZ);
-  const clim = T7.texture(baked.texture, T7.vec2(u3, v3));
+  const surfacePosition = featureLocal ? T10.positionLocal : T10.positionWorld;
+  const u3 = surfacePosition.x.sub(minX).div(maxX - minX);
+  const v3 = surfacePosition.z.sub(minZ).div(maxZ - minZ);
+  const clim = T10.texture(baked.texture, T10.vec2(u3, v3));
   const tempC = clim.r.mul(tSpan).add(tMin);
   const precip = clim.g.mul(precipMax);
-  const y3 = T7.positionWorld.y;
-  const r2 = T7.clamp(y3.sub(sea).div(aboveSpan), 0, 1);
-  const steep = T7.clamp(T7.oneMinus(T7.normalWorld.y), 0, 1);
-  const wet = T7.smoothstep(precipDry, precipWet, precip);
-  const cold = T7.oneMinus(T7.smoothstep(-5, 6, tempC));
-  const rEff = T7.clamp(r2.add(cold.mul(0.06)), 0, 1);
-  const elevRock = T7.smoothstep(0.32, 0.46, rEff);
-  const slopeRock = T7.smoothstep(0.2, 0.55, steep);
-  const rockMask = T7.oneMinus(T7.oneMinus(elevRock).mul(T7.oneMinus(slopeRock)));
-  const gentle = T7.oneMinus(slopeRock);
-  const snowMask = T7.smoothstep(0.84, 0.95, rEff).mul(gentle);
-  const cliff = T7.smoothstep(0.55, 0.82, steep).mul(T7.oneMinus(snowMask));
-  const coastMask = T7.oneMinus(T7.smoothstep(0, coastBand, y3.sub(sea))).mul(gentle);
-  const subMask = T7.smoothstep(0, subBand, T7.float(sea).sub(y3));
-  const grassAlbedo = T7.mix(dryV, forestV, wet).mul(mod3(grassL.value));
+  const y3 = surfacePosition.y;
+  const r2 = T10.clamp(y3.sub(sea).div(aboveSpan), 0, 1);
+  const steep = T10.clamp(T10.oneMinus(T10.normalWorld.y), 0, 1);
+  const wet = T10.smoothstep(precipDry, precipWet, precip);
+  const cold = T10.oneMinus(T10.smoothstep(-5, 6, tempC));
+  const rEff = T10.clamp(r2.add(cold.mul(0.06)), 0, 1);
+  const elevRock = T10.smoothstep(0.32, 0.46, rEff);
+  const slopeRock = T10.smoothstep(0.2, 0.55, steep);
+  const rockMask = T10.oneMinus(T10.oneMinus(elevRock).mul(T10.oneMinus(slopeRock)));
+  const gentle = T10.oneMinus(slopeRock);
+  const snowMask = T10.smoothstep(0.84, 0.95, rEff).mul(gentle);
+  const cliff = T10.smoothstep(0.55, 0.82, steep).mul(T10.oneMinus(snowMask));
+  const coastMask = T10.oneMinus(T10.smoothstep(0, coastBand, y3.sub(sea))).mul(gentle);
+  const subMask = T10.smoothstep(0, subBand, T10.float(sea).sub(y3));
+  const grassAlbedo = T10.mix(dryV, forestV, wet).mul(mod3(grassL.value));
   const rockAlbedo = rockV.mul(mod3(rockL.value));
   const snowAlbedo = snowV.mul(mod3(snowL.value));
   const sandAlbedo = sandV.mul(mod3(sandL.value));
   const subAlbedo = subSeaV.mul(mod3(sandL.value));
   let col = grassAlbedo;
-  col = T7.mix(col, rockAlbedo, rockMask);
-  col = T7.mix(col, snowAlbedo, snowMask);
-  col = T7.mix(col, rockAlbedo, cliff);
-  col = T7.mix(col, sandAlbedo, coastMask);
-  col = T7.mix(col, subAlbedo, subMask);
+  col = T10.mix(col, rockAlbedo, rockMask);
+  col = T10.mix(col, snowAlbedo, snowMask);
+  col = T10.mix(col, rockAlbedo, cliff);
+  col = T10.mix(col, sandAlbedo, coastMask);
+  col = T10.mix(col, subAlbedo, subMask);
+  if (tile.paintMat !== void 0 && tile.paintW !== void 0) {
+    const paintData = new Uint8Array(tile.nrows * tile.ncols * 4);
+    for (let index = 0; index < tile.paintMat.length; index++) {
+      const color3 = TERRAIN_PAINT_ALBEDO_BYTES[tile.paintMat[index]] ?? null;
+      const offset = index * 4;
+      paintData[offset] = color3?.[0] ?? 0;
+      paintData[offset + 1] = color3?.[1] ?? 0;
+      paintData[offset + 2] = color3?.[2] ?? 0;
+      paintData[offset + 3] = color3 === null ? 0 : Math.round(Math.min(1, Math.max(0, tile.paintW[index])) * 255);
+    }
+    const paintTexture = new DataTexture(
+      paintData,
+      tile.ncols,
+      tile.nrows,
+      RGBAFormat,
+      UnsignedByteType
+    );
+    paintTexture.minFilter = LinearFilter;
+    paintTexture.magFilter = LinearFilter;
+    paintTexture.wrapS = ClampToEdgeWrapping;
+    paintTexture.wrapT = ClampToEdgeWrapping;
+    paintTexture.name = "limina:terrain-paint";
+    paintTexture.needsUpdate = true;
+    trackMaterialTexture(material, paintTexture);
+    const paint = T10.texture(paintTexture, T10.vec2(u3, v3));
+    col = T10.mix(col, paint.rgb, paint.a);
+  }
+  const blightAmt = T10.smoothstep(0.15, 0.85, clim.a);
+  const lum = col.r.mul(0.299).add(col.g.mul(0.587)).add(col.b.mul(0.114));
+  const ash = T10.vec3(lum, lum, lum).mul(0.5).add(T10.vec3(0.035, 0.03, 0.024));
+  col = T10.mix(col, ash, blightAmt);
   material.colorNode = col;
   let nrm = grassL.normal;
-  nrm = T7.mix(nrm, rockL.normal, rockMask);
-  nrm = T7.mix(nrm, snowL.normal, snowMask);
-  nrm = T7.mix(nrm, rockL.normal, cliff);
-  nrm = T7.mix(nrm, sandL.normal, coastMask);
-  nrm = T7.mix(nrm, T7.normalWorld, subMask.mul(0.7));
-  const micro = microL.normal.sub(T7.normalWorld).mul(T7.oneMinus(subMask));
+  nrm = T10.mix(nrm, rockL.normal, rockMask);
+  nrm = T10.mix(nrm, snowL.normal, snowMask);
+  nrm = T10.mix(nrm, rockL.normal, cliff);
+  nrm = T10.mix(nrm, sandL.normal, coastMask);
+  nrm = T10.mix(nrm, T10.normalWorld, subMask.mul(0.7));
+  const micro = microL.normal.sub(T10.normalWorld).mul(T10.oneMinus(subMask));
   nrm = nrm.add(micro).normalize();
-  material.normalNode = T7.transformNormalToView(nrm.normalize());
+  material.normalNode = T10.transformNormalToView(nrm.normalize());
   const lr = pbr.layerRoughness ?? {};
-  let rough = T7.float(lr.grass ?? Math.min(baseRough, 0.85));
-  rough = T7.mix(rough, T7.float(lr.rock ?? 0.92), rockMask);
-  rough = T7.mix(rough, T7.float(lr.snow ?? 0.6), snowMask);
-  rough = T7.mix(rough, T7.float(lr.rock ?? 0.92), cliff);
-  rough = T7.mix(rough, T7.float(lr.sand ?? 0.95), coastMask);
-  rough = T7.mix(rough, T7.float(lr.subSea ?? 0.5), subMask);
+  let rough = T10.float(lr.grass ?? Math.min(baseRough, 0.85));
+  rough = T10.mix(rough, T10.float(lr.rock ?? 0.92), rockMask);
+  rough = T10.mix(rough, T10.float(lr.snow ?? 0.6), snowMask);
+  rough = T10.mix(rough, T10.float(lr.rock ?? 0.92), cliff);
+  rough = T10.mix(rough, T10.float(lr.sand ?? 0.95), coastMask);
+  rough = T10.mix(rough, T10.float(lr.subSea ?? 0.5), subMask);
+  rough = T10.mix(rough, T10.float(0.97), blightAmt);
   const wl = pbr.waterline;
   if (wl !== void 0) {
     const wlSea = wl.seaLevel ?? sea;
     const { wetMask, foamMask } = shorelineBandMasks(wlSea, wl.wetBand ?? 1.2, wl.foamBand ?? 0.25);
-    col = T7.mix(col, col.mul(wl.darken ?? 0.55), wetMask);
+    col = T10.mix(col, col.mul(wl.darken ?? 0.55), wetMask);
     const foamStrength = wl.foam ?? 0.5;
     if (foamStrength > 0) {
       const foam = new Color(wl.foamColor ?? 15922932);
-      col = T7.mix(col, T7.vec3(foam.r, foam.g, foam.b), foamMask.mul(foamStrength));
+      col = T10.mix(col, T10.vec3(foam.r, foam.g, foam.b), foamMask.mul(foamStrength));
     }
     material.colorNode = col;
-    rough = T7.mix(rough, T7.float(wl.wetRoughness ?? 0.32), wetMask);
+    rough = T10.mix(rough, T10.float(wl.wetRoughness ?? 0.32), wetMask);
   }
-  material.roughnessNode = T7.clamp(rough, 0, 1);
+  material.roughnessNode = T10.clamp(rough, 0, 1);
+  if (pbr.featureLocalOrigin !== void 0) {
+    material.userData.liminaTerrainFeatureOrigin = Object.freeze([
+      pbr.featureLocalOrigin[0],
+      pbr.featureLocalOrigin[1],
+      pbr.featureLocalOrigin[2]
+    ]);
+  }
 }
 
 // src/terrain/render.ts
-var T8 = three_tsl_exports;
+var T11 = three_tsl_exports;
 function shorelineBandMasks(seaLevel, wetBand, foamBand) {
-  const lap = T8.positionWorld.x.mul(0.6).add(T8.positionWorld.z.mul(0.55)).add(T8.time.mul(1.1)).sin().mul(0.13);
-  const ad = T8.positionWorld.y.sub(seaLevel).add(lap).abs();
+  const lap = T11.positionWorld.x.mul(0.6).add(T11.positionWorld.z.mul(0.55)).add(T11.time.mul(1.1)).sin().mul(0.13);
+  const ad = T11.positionWorld.y.sub(seaLevel).add(lap).abs();
   return {
-    wetMask: T8.oneMinus(T8.smoothstep(0, wetBand, ad)),
-    foamMask: T8.oneMinus(T8.smoothstep(0, foamBand, ad))
+    wetMask: T11.oneMinus(T11.smoothstep(0, wetBand, ad)),
+    foamMask: T11.oneMinus(T11.smoothstep(0, foamBand, ad))
   };
 }
 function applyShoreline(material, dryColor, baseRough, shore) {
@@ -116715,13 +118991,13 @@ function applyShoreline(material, dryColor, baseRough, shore) {
   const wetBand = shore.wetBand ?? 0.9;
   const foamBand = shore.foamBand ?? 0.22;
   const { wetMask, foamMask } = shorelineBandMasks(shore.seaLevel, wetBand, foamBand);
-  const dryV = T8.vec3(dry.r, dry.g, dry.b);
-  const wetV = T8.vec3(wet.r, wet.g, wet.b);
-  const foamV = T8.vec3(foam.r, foam.g, foam.b);
-  let col = T8.mix(dryV, wetV, wetMask.mul(0.85));
-  col = T8.mix(col, foamV, foamMask);
+  const dryV = T11.vec3(dry.r, dry.g, dry.b);
+  const wetV = T11.vec3(wet.r, wet.g, wet.b);
+  const foamV = T11.vec3(foam.r, foam.g, foam.b);
+  let col = T11.mix(dryV, wetV, wetMask.mul(0.85));
+  col = T11.mix(col, foamV, foamMask);
   material.colorNode = col;
-  material.roughnessNode = T8.float(baseRough).sub(wetMask.mul(Math.max(0, baseRough - 0.45)));
+  material.roughnessNode = T11.float(baseRough).sub(wetMask.mul(Math.max(0, baseRough - 0.45)));
 }
 var RAMP_DEFAULT_COLORS = {
   subSea: 4867638,
@@ -116775,6 +119051,7 @@ function bakeTileClimate(tile, tempRange, precipMax) {
   texture3.magFilter = LinearFilter;
   texture3.wrapS = ClampToEdgeWrapping;
   texture3.wrapT = ClampToEdgeWrapping;
+  texture3.name = "limina:terrain-climate";
   texture3.needsUpdate = true;
   const [ox, oy, oz] = tile.origin;
   const [sx, , sz] = tile.scale;
@@ -116791,7 +119068,7 @@ function applyBiomeRamp(material, tile, baseRough, pal) {
   const cols = { ...RAMP_DEFAULT_COLORS, ...pal.colors ?? {} };
   const C3 = (hex3) => {
     const c2 = new Color(hex3);
-    return T8.vec3(c2.r, c2.g, c2.b);
+    return T11.vec3(c2.r, c2.g, c2.b);
   };
   const subSeaV = C3(cols.subSea), sandV = C3(cols.sand), dryV = C3(cols.dryGrass);
   const forestV = C3(cols.forest), rockV = C3(cols.rock), snowV = C3(cols.snow);
@@ -116814,64 +119091,56 @@ function applyBiomeRamp(material, tile, baseRough, pal) {
   const baked = bakeTileClimate(tile, tempRange, precipMax);
   trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
-  const u3 = T8.positionWorld.x.sub(minX).div(maxX - minX);
-  const v3 = T8.positionWorld.z.sub(minZ).div(maxZ - minZ);
-  const clim = T8.texture(baked.texture, T8.vec2(u3, v3));
+  const u3 = T11.positionWorld.x.sub(minX).div(maxX - minX);
+  const v3 = T11.positionWorld.z.sub(minZ).div(maxZ - minZ);
+  const clim = T11.texture(baked.texture, T11.vec2(u3, v3));
   const tempC = clim.r.mul(tSpan).add(tMin);
   const precip = clim.g.mul(precipMax);
-  const y3 = T8.positionWorld.y;
-  const r2 = T8.clamp(y3.sub(sea).div(aboveSpan), 0, 1);
-  const steep = T8.clamp(T8.oneMinus(T8.normalWorld.y), 0, 1);
-  const wet = T8.smoothstep(precipDry, precipWet, precip);
-  const cold = T8.oneMinus(T8.smoothstep(-5, 6, tempC));
-  const rEff = T8.clamp(r2.add(cold.mul(0.06)), 0, 1);
-  const green = T8.mix(dryV, forestV, wet);
+  const y3 = T11.positionWorld.y;
+  const r2 = T11.clamp(y3.sub(sea).div(aboveSpan), 0, 1);
+  const steep = T11.clamp(T11.oneMinus(T11.normalWorld.y), 0, 1);
+  const wet = T11.smoothstep(precipDry, precipWet, precip);
+  const cold = T11.oneMinus(T11.smoothstep(-5, 6, tempC));
+  const rEff = T11.clamp(r2.add(cold.mul(0.06)), 0, 1);
+  const green = T11.mix(dryV, forestV, wet);
   let col = green;
-  const rockMask = T8.smoothstep(0.32, 0.46, rEff);
-  col = T8.mix(col, rockV, rockMask);
-  const snowMask = T8.smoothstep(0.84, 0.95, rEff);
-  col = T8.mix(col, snowV, snowMask);
-  const cliff = T8.smoothstep(0.55, 0.82, steep).mul(T8.oneMinus(snowMask)).mul(0.7);
-  col = T8.mix(col, rockV, cliff);
-  const coastMask = T8.oneMinus(T8.smoothstep(0, coastBand, y3.sub(sea)));
-  col = T8.mix(col, sandV, coastMask);
-  const subMask = T8.smoothstep(0, subBand, T8.float(sea).sub(y3));
-  col = T8.mix(col, subSeaV, subMask);
-  const blightAmt = T8.smoothstep(0.15, 0.85, clim.a);
+  const rockMask = T11.smoothstep(0.32, 0.46, rEff);
+  col = T11.mix(col, rockV, rockMask);
+  const snowMask = T11.smoothstep(0.84, 0.95, rEff);
+  col = T11.mix(col, snowV, snowMask);
+  const cliff = T11.smoothstep(0.55, 0.82, steep).mul(T11.oneMinus(snowMask)).mul(0.7);
+  col = T11.mix(col, rockV, cliff);
+  const coastMask = T11.oneMinus(T11.smoothstep(0, coastBand, y3.sub(sea)));
+  col = T11.mix(col, sandV, coastMask);
+  const subMask = T11.smoothstep(0, subBand, T11.float(sea).sub(y3));
+  col = T11.mix(col, subSeaV, subMask);
+  const blightAmt = T11.smoothstep(0.15, 0.85, clim.a);
   const lum = col.r.mul(0.299).add(col.g.mul(0.587)).add(col.b.mul(0.114));
-  const ash = T8.vec3(lum, lum, lum).mul(0.5).add(T8.vec3(0.035, 0.03, 0.024));
-  col = T8.mix(col, ash, blightAmt);
+  const ash = T11.vec3(lum, lum, lum).mul(0.5).add(T11.vec3(0.035, 0.03, 0.024));
+  col = T11.mix(col, ash, blightAmt);
   material.colorNode = col;
-  let rough = T8.mix(T8.float(baseRough), T8.float(0.6), snowMask);
-  rough = T8.mix(rough, T8.float(0.5), subMask);
-  rough = T8.mix(rough, T8.float(0.97), blightAmt);
-  material.roughnessNode = T8.clamp(rough, 0, 1);
+  let rough = T11.mix(T11.float(baseRough), T11.float(0.6), snowMask);
+  rough = T11.mix(rough, T11.float(0.5), subMask);
+  rough = T11.mix(rough, T11.float(0.97), blightAmt);
+  material.roughnessNode = T11.clamp(rough, 0, 1);
 }
+var TERRAIN_ELEVATION_ALBEDO_HEX = Object.freeze({
+  sand: 12891790,
+  grass: 6258492,
+  grassDark: 4481066,
+  rock: 7564128,
+  rockDark: 5590854,
+  snow: 14870508
+});
 var ELEV_COL = {
-  sand: new Color(12891790),
-  grass: new Color(6258492),
-  grassDark: new Color(4481066),
-  rock: new Color(7564128),
-  rockDark: new Color(5590854),
-  // darker scree shade the rock band mottles toward
-  snow: new Color(14870508)
+  sand: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.sand),
+  grass: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.grass),
+  grassDark: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark),
+  rock: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.rock),
+  rockDark: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.rockDark),
+  snow: new Color(TERRAIN_ELEVATION_ALBEDO_HEX.snow)
 };
-var PAINT_ALBEDO = [
-  null,
-  // 0 = unpainted
-  new Color(12891790),
-  // 1 sand
-  new Color(6258492),
-  // 2 grass
-  new Color(7693911),
-  // 3 rock
-  new Color(7295796),
-  // 4 dirt
-  new Color(14870508),
-  // 5 snow (matches the eroded pipeline's snow band)
-  new Color(4804910)
-  // 6 murk — dark wet olive for marsh/swamp ground
-];
+var PAINT_ALBEDO = TERRAIN_PAINT_ALBEDO_HEX.map((hex3) => hex3 === null ? null : new Color(hex3));
 function applyPaintOverlay(geom, tile) {
   const { paintMat, paintW } = tile;
   if (paintMat === void 0 || paintW === void 0) return;
@@ -116898,7 +119167,7 @@ function applyElevationColors(geom, tile, ramp) {
   const x0 = ox - sx / 2, z0 = oz - sz / 2;
   const dxStep = sx / (ncols - 1), dzStep = sz / (nrows - 1);
   const clamp6 = (v3, a2, b3) => Math.min(b3, Math.max(a2, v3));
-  const heightAt2 = (x3, z4) => {
+  const heightAt = (x3, z4) => {
     const fc = clamp6((x3 - x0) / dxStep, 0, ncols - 1);
     const fr = clamp6((z4 - z0) / dzStep, 0, nrows - 1);
     const c0 = Math.floor(fc), r0 = Math.floor(fr);
@@ -116910,7 +119179,7 @@ function applyElevationColors(geom, tile, ramp) {
     return a2 + (b3 - a2) * tz;
   };
   const step3 = Math.max(1e-3, dxStep);
-  const slopeAt = (x3, z4) => Math.hypot(heightAt2(x3 + step3, z4) - heightAt2(x3 - step3, z4), heightAt2(x3, z4 + step3) - heightAt2(x3, z4 - step3)) / (2 * step3);
+  const slopeAt = (x3, z4) => Math.hypot(heightAt(x3 + step3, z4) - heightAt(x3 - step3, z4), heightAt(x3, z4 + step3) - heightAt(x3, z4 - step3)) / (2 * step3);
   const blightGrid = tile.blight;
   const blightAt = (x3, z4) => {
     if (blightGrid === void 0) return 0;
@@ -117204,13 +119473,15 @@ function defaultWaterLevel(survey) {
 function resolveLayer(layer, pack, survey, waterLevel, waterMargin = 0) {
   const relief = survey.maxY - survey.minY;
   const palette = [];
-  for (const { role, weight } of layer.assets) {
-    const bound = pack[role];
+  for (const { role: role2, weight } of layer.assets) {
+    const bound = pack[role2];
     if (bound === void 0) continue;
     palette.push({
       id: bound.id,
       ...weight !== void 0 ? { weight } : {},
-      ...bound.embedRadius !== void 0 ? { embedRadius: bound.embedRadius } : {}
+      ...bound.embedRadius !== void 0 ? { embedRadius: bound.embedRadius } : {},
+      ...bound.lods !== void 0 ? { lods: bound.lods } : {},
+      ...bound.treeLod !== void 0 ? { treeLod: bound.treeLod } : {}
     });
   }
   const config2 = { seed: layer.seed, assets: palette };
@@ -117220,6 +119491,7 @@ function resolveLayer(layer, pack, survey, waterLevel, waterMargin = 0) {
   if (layer.clusterFreq !== void 0) config2.clusterFreq = layer.clusterFreq;
   if (layer.slopeMax !== void 0) config2.slopeMax = layer.slopeMax;
   if (layer.sizeRange !== void 0) config2.sizeRange = layer.sizeRange;
+  if (layer.cellSize !== void 0) config2.cellSize = layer.cellSize;
   if (layer.embedRadius !== void 0) config2.embedRadius = layer.embedRadius;
   if (layer.biomes !== void 0) config2.biomes = layer.biomes;
   if (layer.tempMin !== void 0) config2.tempMin = layer.tempMin;
@@ -117262,7 +119534,8 @@ async function scatterBiomeContent(deps) {
   const hints = deps.regions?.get(deps.regionId)?.hints ?? terrainTypeHints(deps.type, deps.bounds);
   const survey = surveyRegionRelief(deps.source, deps.seed, deps.bounds, hints);
   const wl = deps.waterLevel ?? (isWaterType(deps.type) ? defaultWaterLevel(survey) : void 0);
-  const configs = biomeScatterConfigs(deps.type, deps.pack, survey, wl, deps.waterMargin ?? 0);
+  const resolvedConfigs = biomeScatterConfigs(deps.type, deps.pack, survey, wl, deps.waterMargin ?? 0);
+  const configs = deps.cellSize === void 0 ? resolvedConfigs : resolvedConfigs.map((config2) => ({ ...config2, cellSize: deps.cellSize }));
   const layers = [];
   let total = 0;
   for (const config2 of configs) {
@@ -117369,7 +119642,15 @@ function clearRegionRenderDisposables(region) {
   const disposables = region.renderDisposables;
   if (disposables === void 0 || disposables.length === 0) return;
   region.renderDisposables = [];
-  for (const dispose of disposables) dispose();
+  const errors = [];
+  for (const dispose of disposables) {
+    try {
+      dispose();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, `region render disposal failed in ${errors.length} operation(s)`);
 }
 function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regions = /* @__PURE__ */ new Map(), assets, waterContact) {
   async function applyTile(region, regionId, tx, tz, ctx) {
@@ -117704,6 +119985,9 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     waterLevel: external_exports.number().optional(),
     /** Dry margin (world Y) added ABOVE the water level for waterGated layers. Default 0. */
     waterMargin: external_exports.number().optional(),
+    /** Spatial population render-cell size. Smaller cells improve LOD distance
+     *  accuracy; for non-LOD assets they trade culling granularity for draw calls. */
+    cellSize: external_exports.number().positive().optional(),
     /** Override the scatter seed (default: the region's generation seed). */
     seed: external_exports.number().int().optional(),
     /** The project's role→asset binding for the scatter (conifer/broadleaf/boulder/…). The engine
@@ -117716,7 +120000,26 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
     biomePack: external_exports.partialRecord(
       external_exports.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
-      external_exports.object({ id: external_exports.string(), embedRadius: external_exports.number().optional() })
+      external_exports.object({
+        id: external_exports.string(),
+        embedRadius: external_exports.number().nonnegative().optional(),
+        lods: external_exports.array(external_exports.object({
+          id: external_exports.string(),
+          distance: external_exports.number().positive(),
+          hysteresis: external_exports.number().min(0).max(1).optional()
+        })).min(1).optional(),
+        treeLod: external_exports.object({
+          reducedId: external_exports.string().min(1),
+          reducedDistance: external_exports.number().positive(),
+          impostorId: external_exports.string().min(1),
+          impostorDistance: external_exports.number().positive(),
+          cullDistance: external_exports.number().positive(),
+          hysteresis: external_exports.number().min(0).max(1).optional()
+        }).refine(
+          (value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+          { message: "treeLod distances must be strictly increasing" }
+        ).optional()
+      })
     ).optional()
   });
   const populateBiomeOutput = external_exports.object({
@@ -117726,7 +120029,7 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     instances: external_exports.number().int(),
     /** Surveyed relief the fractional elevation gates resolved against. */
     relief: external_exports.object({ minY: external_exports.number(), maxY: external_exports.number() }),
-    /** Per-layer summary (instances + mounted InstancedMesh count). */
+    /** Per-layer summary (instances + mounted level-mesh count). */
     layers: external_exports.array(external_exports.object({ instances: external_exports.number().int(), mounted: external_exports.number().int() }))
   });
   const populateBiome = {
@@ -117788,7 +120091,8 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         seed,
         base,
         waterLevel: input.waterLevel,
-        waterMargin: input.waterMargin
+        waterMargin: input.waterMargin,
+        cellSize: input.cellSize
       });
       ctx.emit("terrain.region.populated", {
         regionId: input.regionId,
@@ -117814,830 +120118,573 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
   return { cache: cache3, regions };
 }
 
-// src/skills/grass-plan.ts
-var GRASS_BLADE_ASSET = "__grass_blade__";
-var GRASS_CLIMATES = {
-  // Lush green high summer.
-  summer: { base: 4153127, tip: 9416267, coverage: 0.85, snowMix: 0 },
-  // Gold-brown turning autumn.
-  autumn: { base: 7296290, tip: 12819012, coverage: 0.7, snowMix: 0 },
-  // Sparse, dry, desaturated tan.
-  dry: { base: 8681273, tip: 13287043, coverage: 0.4, snowMix: 0 },
-  // Sparse, blue-grey, snow-dusted winter.
-  winter: { base: 5858639, tip: 14081495, coverage: 0.32, snowMix: 0.55 }
-};
-function buildGrassScatterConfig(plan) {
-  return {
-    seed: plan.seed,
-    density: plan.density,
-    assets: [{ id: GRASS_BLADE_ASSET }],
-    slopeMax: plan.slopeMax,
-    sizeRange: plan.sizeRange,
-    coverage: plan.coverage,
-    cluster: plan.cluster,
-    ...plan.elevationMin !== void 0 ? { elevationMin: plan.elevationMin } : {},
-    ...plan.elevationMax !== void 0 ? { elevationMax: plan.elevationMax } : {},
-    ...plan.exclusions !== void 0 && plan.exclusions.length > 0 ? { exclusions: plan.exclusions } : {},
-    ...plan.inclusions !== void 0 && plan.inclusions.length > 0 ? { inclusions: plan.inclusions } : {}
-  };
-}
-function planGrassBlades(tile, plan) {
-  return scatterAssets(tile, plan.seed, buildGrassScatterConfig(plan));
+// src/render/grass-field-package.ts
+function grassFieldInstanceSpacing(pkg, quality, lod) {
+  const profile = pkg.profile(quality);
+  const blades = profile.bladesPerInstance[lod];
+  const density = profile.bladesPerSquareMeter[lod];
+  if (!Number.isSafeInteger(blades) || blades < 1 || blades > 64) {
+    throw new RangeError(`grass package '${pkg.id}' has invalid bladesPerInstance for lod ${lod}`);
+  }
+  if (!Number.isFinite(density) || density <= 0 || density > 1e3) {
+    throw new RangeError(`grass package '${pkg.id}' has invalid bladesPerSquareMeter for lod ${lod}`);
+  }
+  return Math.sqrt(blades / density);
 }
 
-// src/skills/grass.ts
-var T9 = three_tsl_exports;
-var inertTransform2 = () => ({ position: { set() {
-} }, quaternion: { set() {
-} }, scale: { set() {
-} } });
-var Y_AXIS3 = new Vector3(0, 1, 0);
-var SUN_DIR = new Vector3(5, 9, 6).normalize();
-var SUN_COLOR = new Color(16774374);
-var DRY_TIP = new Color(13087338);
-var WIND_DIR = (() => {
-  const x3 = 0.85, z4 = 0.53;
-  const l2 = Math.hypot(x3, z4);
-  return [x3 / l2, z4 / l2];
-})();
-function buildGrassBladeGeometry(height, width, segments, curvature) {
-  const segs = Math.max(1, Math.min(8, Math.round(segments)));
-  const positions = [];
-  const normals = [];
-  const uvs = [];
-  const indices = [];
-  for (let i2 = 0; i2 <= segs; i2++) {
-    const t2 = i2 / segs;
-    const x3 = 2 * (1 - t2) * t2 * curvature;
-    const y3 = t2 * height;
-    const halfW = width * 0.5 * (1 - t2 * 0.8);
-    positions.push(x3 - halfW, y3, 0, x3 + halfW, y3, 0);
-    normals.push(0, 1, 0, 0, 1, 0);
-    uvs.push(0, t2, 1, t2);
-  }
-  const tip = (segs + 1) * 2;
-  positions.push(0, height, 0);
-  normals.push(0, 1, 0);
-  uvs.push(0.5, 1);
-  for (let i2 = 0; i2 < segs; i2++) {
-    const a2 = i2 * 2, b3 = i2 * 2 + 1, c2 = i2 * 2 + 2, d2 = i2 * 2 + 3;
-    indices.push(a2, c2, b3, b3, c2, d2);
-  }
-  indices.push(segs * 2, tip, segs * 2 + 1);
-  const geom = new BufferGeometry();
-  geom.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geom.setAttribute("normal", new Float32BufferAttribute(normals, 3));
-  geom.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
-  geom.setIndex(indices);
-  geom.computeBoundingBox();
-  geom.computeBoundingSphere();
-  return geom;
+// src/render/grass-field-plan.ts
+var GRASS_FIELD_MAX_SLOTS = 1024;
+var GRASS_FIELD_MAX_RESIDENT_SLOTS = 230400;
+var GRASS_FIELD_PAGE_AXIS = 32;
+function finite3(value, label4) {
+  if (!Number.isFinite(value)) throw new RangeError(`${label4} must be finite`);
+  return value;
 }
-function buildGrassMaterial(opts) {
-  const pal = GRASS_CLIMATES[opts.climate];
-  const baseC = new Color(pal.base);
-  const tipC = new Color(pal.tip);
-  const baseV = T9.vec3(baseC.r, baseC.g, baseC.b);
-  const tipV = T9.vec3(tipC.r, tipC.g, tipC.b);
-  const dryV = T9.vec3(DRY_TIP.r, DRY_TIP.g, DRY_TIP.b);
-  const material = new MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0, side: DoubleSide });
-  const pl = T9.positionLocal;
-  const hf = T9.clamp(pl.y.div(opts.bladeHeight), 0, 1);
-  const h2 = hf.mul(hf);
-  const bezierW = hf.mul(T9.oneMinus(hf)).mul(4);
-  const aw = T9.attribute("aWind", "vec4");
-  const wx = aw.x, wz = aw.y, yaw = aw.w;
-  const idxF = T9.float(T9.instanceIndex);
-  const rW = T9.hash(idxF.add(2));
-  const rH = T9.hash(idxF.add(11));
-  const rC = T9.hash(idxF.add(23));
-  const rL = T9.hash(idxF.add(37));
-  const rP = T9.hash(idxF.add(53));
-  const rS = T9.hash(idxF.add(67));
-  const rHue = T9.hash(idxF.add(83));
-  const rDry = T9.hash(idxF.add(97));
-  const widthMul = rW.mul(0.6).add(0.6);
-  const heightMul = rH.mul(0.6).add(0.7);
-  const curveExtra = rC.sub(0.28).mul(opts.curvature * 2.4);
-  const leanAmt = rL.sub(0.5).mul(opts.bladeHeight * 0.55);
-  const phase = rP.mul(6.2832);
-  let px2 = pl.x.mul(widthMul);
-  px2 = px2.add(bezierW.mul(curveExtra));
-  px2 = px2.add(h2.mul(leanAmt));
-  const py2 = pl.y.mul(heightMul);
-  const along = wx.mul(WIND_DIR[0]).add(wz.mul(WIND_DIR[1]));
-  const t2 = T9.time.mul(opts.windSpeed);
-  const global2 = along.mul(0.25).add(t2.mul(1.2)).add(phase).sin().mul(opts.windStrength);
-  const gustEnv = T9.smoothstep(
-    0.15,
-    0.85,
-    along.mul(0.06).add(t2.mul(0.3)).sin().mul(0.25).add(wz.mul(0.07).sub(t2.mul(0.22)).sin().mul(0.25)).add(0.5)
-  );
-  const gust = along.mul(opts.windGustFreq).add(t2.mul(2.5)).sin().mul(opts.windGust).mul(gustEnv);
-  const turb = t2.mul(3).add(phase.mul(1.9)).sin().mul(opts.windStrength * 0.35);
-  let swayAmt = global2.add(gust).add(turb).mul(h2);
-  let heightFade;
-  if (opts.fade !== void 0) {
-    const dfx = wx.sub(T9.cameraPosition.x);
-    const dfz = wz.sub(T9.cameraPosition.z);
-    const dist = T9.sqrt(dfx.mul(dfx).add(dfz.mul(dfz)));
-    heightFade = T9.oneMinus(T9.smoothstep(opts.fade.start, opts.fade.end, dist));
-    swayAmt = swayAmt.mul(heightFade);
-  }
-  const cy = yaw.cos(), sy = yaw.sin();
-  const wWX = swayAmt.mul(WIND_DIR[0]), wWZ = swayAmt.mul(WIND_DIR[1]);
-  const windLX = cy.mul(wWX).sub(sy.mul(wWZ));
-  const windLZ = sy.mul(wWX).add(cy.mul(wWZ));
-  const pyOut = heightFade === void 0 ? py2 : py2.mul(heightFade);
-  material.positionNode = T9.vec3(px2.add(windLX), pyOut, pl.z.add(windLZ));
-  const shade2 = rS.sub(0.5).mul(0.18);
-  const hueShift = rHue.sub(0.5);
-  let col = T9.mix(baseV, tipV, hf);
-  col = col.add(T9.vec3(hueShift.mul(0.07), hueShift.mul(0.02), hueShift.mul(-0.04)));
-  const dryPick = T9.smoothstep(0.62, 1, rDry);
-  const dryAmt = T9.smoothstep(0.5, 1, hf).mul(dryPick).mul(0.5);
-  col = T9.mix(col, dryV, dryAmt);
-  col = col.add(shade2);
-  const ao2 = T9.mix(T9.float(1 - opts.aoStrength), T9.float(1), T9.smoothstep(0, 0.35, hf));
-  col = col.mul(ao2);
-  if (pal.snowMix > 0) {
-    const snow = T9.smoothstep(0.4, 1, hf).mul(pal.snowMix);
-    col = T9.mix(col, T9.vec3(0.9, 0.92, 0.95), snow);
-  }
-  col = T9.max(col, 0);
-  material.colorNode = col;
-  const V3 = T9.cameraPosition.sub(T9.positionWorld).normalize();
-  const back = T9.max(V3.negate().dot(T9.vec3(SUN_DIR.x, SUN_DIR.y, SUN_DIR.z)), 0);
-  const sss = back.pow(3).mul(opts.sssStrength).mul(hf);
-  material.emissiveNode = col.mul(T9.vec3(SUN_COLOR.r, SUN_COLOR.g, SUN_COLOR.b)).mul(sss);
-  return material;
+function u32(value) {
+  return value >>> 0;
 }
-function buildGrassInstancedMesh(placements, opts) {
-  if (placements.length === 0) return null;
-  const cap = Math.max(1, Math.floor(opts.maxBlades));
-  let kept = placements;
-  if (placements.length > cap) {
-    const keepFrac = cap / placements.length;
-    const thr = keepFrac * 4294967296;
-    kept = placements.filter((p2) => {
-      const ix = Math.round(p2.x * 137) | 0, iz = Math.round(p2.z * 149) | 0;
-      let h2 = (Math.imul(ix, 374761393) ^ Math.imul(iz, 668265263)) >>> 0;
-      h2 = Math.imul(h2 ^ h2 >>> 13, 1274126177) >>> 0;
-      return h2 >>> 0 < thr;
-    });
-  }
-  const geom = buildGrassBladeGeometry(opts.bladeHeight, opts.bladeWidth, opts.segments, opts.curvature);
-  const material = buildGrassMaterial(opts);
-  const n2 = kept.length;
-  const mesh = new InstancedMesh(geom, material, n2);
-  const wind = new Float32Array(n2 * 4);
-  const m2 = new Matrix4();
-  const q3 = new Quaternion();
-  const pos = new Vector3();
-  const scl = new Vector3();
-  for (let i2 = 0; i2 < n2; i2++) {
-    const p2 = kept[i2];
-    pos.set(p2.x, p2.y, p2.z);
-    q3.setFromAxisAngle(Y_AXIS3, p2.yaw);
-    scl.set(p2.scale, p2.scale, p2.scale);
-    m2.compose(pos, q3, scl);
-    mesh.setMatrixAt(i2, m2);
-    wind[i2 * 4] = p2.x;
-    wind[i2 * 4 + 1] = p2.z;
-    wind[i2 * 4 + 2] = 0;
-    wind[i2 * 4 + 3] = p2.yaw;
-  }
-  geom.setAttribute("aWind", new InstancedBufferAttribute(wind, 4));
-  mesh.instanceMatrix.needsUpdate = true;
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  mesh.frustumCulled = false;
-  mesh.name = "limina:grass";
-  return mesh;
+function gridQuotient(value, spacing) {
+  const quotient = value / spacing;
+  const nearest = Math.round(quotient);
+  return Math.abs(quotient - nearest) <= Number.EPSILON * Math.max(1, Math.abs(quotient)) * 8 ? nearest : quotient;
 }
-function buildGrassGroundTint(tile, opts) {
-  const { nrows, ncols, heights } = tile;
-  const [ox, oy, oz] = tile.origin;
-  const [sx, sy, sz] = tile.scale;
-  const base = new Color(opts.baseColor);
-  const exN = opts.exclusions.length;
-  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
-  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
-  const h2 = (r2, c2) => heights[r2 * ncols + c2];
-  const positions = new Float32Array(nrows * ncols * 3);
-  const tintAttr = new Float32Array(nrows * ncols * 4);
-  let anyMask = false;
-  for (let r2 = 0; r2 < nrows; r2++) {
-    for (let c2 = 0; c2 < ncols; c2++) {
-      const vi = r2 * ncols + c2;
-      const x3 = ox - sx / 2 + c2 / Math.max(1, ncols - 1) * sx;
-      const z4 = oz - sz / 2 + r2 / Math.max(1, nrows - 1) * sz;
-      const y3 = oy + h2(r2, c2) * sy;
-      positions[vi * 3] = x3;
-      positions[vi * 3 + 1] = y3 + 0.03;
-      positions[vi * 3 + 2] = z4;
-      const dC = (h2(r2, Math.min(ncols - 1, c2 + 1)) - h2(r2, Math.max(0, c2 - 1))) * sy;
-      const dR = (h2(Math.min(nrows - 1, r2 + 1), c2) - h2(Math.max(0, r2 - 1), c2)) * sy;
-      const slope = Math.sqrt(dC / runX * (dC / runX) + dR / runZ * (dR / runZ));
-      let masked = y3 >= opts.elevationMin && y3 <= opts.elevationMax && slope <= opts.slopeMax;
-      if (masked && exN > 0) {
-        for (let e2 = 0; e2 < exN; e2++) {
-          const ex = opts.exclusions[e2], dx = x3 - ex.x, dz = z4 - ex.z;
-          if (dx * dx + dz * dz <= ex.r * ex.r) {
-            masked = false;
-            break;
-          }
-        }
-      }
-      const incl = opts.inclusions;
-      if (masked && incl !== void 0 && incl.length > 0) {
-        let inside = false;
-        for (let e2 = 0; e2 < incl.length; e2++) {
-          const in0 = incl[e2], dx = x3 - in0.x, dz = z4 - in0.z;
-          if (dx * dx + dz * dz <= in0.r * in0.r) {
-            inside = true;
-            break;
-          }
-        }
-        masked = inside;
-      }
-      let hsh = (Math.imul(c2 + 1, 374761393) ^ Math.imul(r2 + 1, 668265263)) >>> 0;
-      hsh = Math.imul(hsh ^ hsh >>> 13, 1274126177) >>> 0;
-      const j3 = 0.9 + hsh / 4294967296 * 0.2;
-      tintAttr[vi * 4] = base.r * j3;
-      tintAttr[vi * 4 + 1] = base.g * j3;
-      tintAttr[vi * 4 + 2] = base.b * j3;
-      tintAttr[vi * 4 + 3] = masked ? opts.opacity : 0;
-      if (masked) anyMask = true;
-    }
-  }
-  if (!anyMask) return null;
-  const indices = [];
-  for (let r2 = 0; r2 < nrows - 1; r2++) {
-    for (let c2 = 0; c2 < ncols - 1; c2++) {
-      const a2 = r2 * ncols + c2, b3 = r2 * ncols + c2 + 1, cc = (r2 + 1) * ncols + c2, d2 = (r2 + 1) * ncols + c2 + 1;
-      indices.push(a2, cc, b3, b3, cc, d2);
-    }
-  }
-  const geom = new BufferGeometry();
-  geom.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geom.setAttribute("aTint", new Float32BufferAttribute(tintAttr, 4));
-  geom.setIndex(indices);
-  geom.computeVertexNormals();
-  geom.computeBoundingBox();
-  geom.computeBoundingSphere();
-  const material = new MeshStandardNodeMaterial({ roughness: 0.95, metalness: 0, transparent: true, side: DoubleSide });
-  const at2 = T9.attribute("aTint", "vec4");
-  material.colorNode = T9.vec3(at2.x, at2.y, at2.z);
-  material.opacityNode = at2.w;
-  material.depthWrite = false;
-  const mesh = new Mesh(geom, material);
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  mesh.renderOrder = -1;
-  mesh.name = "limina:grass-tint";
-  return mesh;
+function gridFloor(value, spacing) {
+  return Math.floor(gridQuotient(value, spacing));
 }
-function disposeGrassMesh(mesh) {
-  const m2 = mesh;
-  m2.geometry?.dispose?.();
-  m2.material?.dispose?.();
-  m2.dispose?.();
+function gridCeil(value, spacing) {
+  return Math.ceil(gridQuotient(value, spacing));
 }
-function grassElevationBounds(layer) {
-  const oy = layer.tile.origin[1];
-  const ramp = layer.elevationColors;
-  if (ramp !== void 0) {
-    const snowFrac = ramp.snowFrac ?? 0.95;
-    return { seaLevel: ramp.seaLevel, snowLine: oy + ramp.amplitude * snowFrac };
+function partitionGrassFieldBounds(bounds, spacing) {
+  const pitch = finite3(spacing, "grass field spacing");
+  if (pitch <= 0) throw new RangeError("grass field spacing must be positive");
+  for (const [key, value] of Object.entries(bounds)) finite3(value, `grass field bounds.${key}`);
+  if (bounds.maxX <= bounds.minX || bounds.maxZ <= bounds.minZ) throw new RangeError("grass field bounds must be non-empty and half-open");
+  const minGridX = gridFloor(bounds.minX, pitch), maxGridX = gridCeil(bounds.maxX, pitch);
+  const minGridZ = gridFloor(bounds.minZ, pitch), maxGridZ = gridCeil(bounds.maxZ, pitch);
+  for (const value of [minGridX, maxGridX, minGridZ, maxGridZ]) {
+    if (!Number.isSafeInteger(value) || value < -2147483648 || value > 2147483647) throw new RangeError("grass field signed grid coordinate exceeds int32");
   }
-  const h2 = layer.tile.heights;
-  const sy = layer.tile.scale[1];
-  let lo = Infinity, hi = -Infinity;
-  for (let i2 = 0; i2 < h2.length; i2++) {
-    const v3 = h2[i2];
-    if (v3 < lo) lo = v3;
-    if (v3 > hi) hi = v3;
+  const minPageX = Math.floor(minGridX / GRASS_FIELD_PAGE_AXIS), maxPageX = Math.floor((maxGridX - 1) / GRASS_FIELD_PAGE_AXIS);
+  const minPageZ = Math.floor(minGridZ / GRASS_FIELD_PAGE_AXIS), maxPageZ = Math.floor((maxGridZ - 1) / GRASS_FIELD_PAGE_AXIS);
+  const pages = [];
+  for (let pageZ = minPageZ; pageZ <= maxPageZ; pageZ++) for (let pageX = minPageX; pageX <= maxPageX; pageX++) {
+    const pageMinX = pageX * GRASS_FIELD_PAGE_AXIS * pitch;
+    const pageMinZ = pageZ * GRASS_FIELD_PAGE_AXIS * pitch;
+    pages.push(Object.freeze({
+      minX: Math.max(bounds.minX, pageMinX),
+      minZ: Math.max(bounds.minZ, pageMinZ),
+      maxX: Math.min(bounds.maxX, pageMinX + GRASS_FIELD_PAGE_AXIS * pitch),
+      maxZ: Math.min(bounds.maxZ, pageMinZ + GRASS_FIELD_PAGE_AXIS * pitch)
+    }));
   }
-  if (!isFinite(lo)) {
-    lo = 0;
-    hi = 1;
-  }
-  const seaLevel = oy + lo * sy;
-  const amp = Math.max(1, (hi - lo) * sy);
-  return { seaLevel, snowLine: seaLevel + amp * 0.95 };
+  return Object.freeze(pages);
 }
-var grassInput = external_exports.object({
-  /** Terrain layer to carpet. Defaults to the most recently created one. */
-  terrain: external_exports.string().optional(),
-  /** Climate profile — drives blade colour + default density (green summer / gold autumn /
-   *  sparse-dry / snow-dusted winter). */
-  climate: external_exports.enum(["summer", "autumn", "dry", "winter"]).default("summer"),
-  /** Candidate samples per grid axis (density² candidates). Grass wants a high value to carpet a
-   *  dense lawn. Cap raised 512 → 1024 (≤1M candidates) to allow a genuinely lush turf; the ~167K
-   *  blades at density 512 already read as a dense lawn and stay in the single-draw-call budget. */
-  density: external_exports.number().int().min(1).max(1024).default(360),
-  /** Scatter salt — same seed reproduces the same carpet. */
-  seed: external_exports.number().int().default(1337),
-  /** Fraction of passing candidates placed. Defaults to the climate's coverage. */
-  coverage: external_exports.number().min(0).max(1).optional(),
-  /** Clumping strength [0,1] — >0 gathers grass into denser tufts. */
-  cluster: external_exports.number().min(0).max(1).default(0.3),
-  /** Max local slope (rise/run) — steeper faces stay bare. */
-  slopeMax: external_exports.number().min(0).default(0.6),
-  /** World-Y floor. Defaults to the layer's sea level (grass grows above water). */
-  elevationMin: external_exports.number().optional(),
-  /** World-Y ceiling. Defaults to the layer's snow line (grass thins below it). */
-  elevationMax: external_exports.number().optional(),
-  /** Per-blade uniform scale range (height + width jitter). */
-  sizeRange: external_exports.tuple([external_exports.number().positive(), external_exports.number().positive()]).default([0.7, 1.3]),
-  /** Base blade height (world units) before scale jitter — SHORT dense turf by default, not tall
-   *  meadow. */
-  bladeHeight: external_exports.number().positive().default(0.3),
-  /** Base blade width (world units) at the ground; tapers to a point at the tip. */
-  bladeWidth: external_exports.number().positive().default(0.045),
-  /** Vertical bezier segments per blade (3 = lawn LOD, 5 = hero). */
-  segments: external_exports.number().int().min(1).max(8).default(3),
-  /** Lateral bow of the blade (world units) — the quadratic-bezier control offset. Small for turf. */
-  curvature: external_exports.number().min(0).default(0.06),
-  /** Peak tip sway (world units) — base wind amplitude. Small for short grass. */
-  windStrength: external_exports.number().min(0).default(0.045),
-  /** Sway speed. */
-  windSpeed: external_exports.number().min(0).default(1.1),
-  /** Gust-front amplitude (world units) — medium-frequency wave rolling across the field. */
-  windGust: external_exports.number().min(0).default(0.06),
-  /** Gust-front spatial frequency (rad/world-unit along the wind direction). */
-  windGustFreq: external_exports.number().min(0).default(0.18),
-  /** Subsurface-scattering (backlit translucency) strength. */
-  sssStrength: external_exports.number().min(0).default(0.5),
-  /** Root ambient-occlusion darkening [0..1] — grounds the blade base into the turf. */
-  aoStrength: external_exports.number().min(0).max(1).default(0.45),
-  /** Opacity [0..1] of the GROUND-TINT overlay that paints the terrain toward the grass base green
-   *  under the blades (over the same footprint) so gaps read as turf. 0 disables it. */
-  groundTint: external_exports.number().min(0).max(1).default(0.85),
-  /** Hard cap on RENDERED blade instances for bounded draw cost — placements above it are decimated
-   *  by a deterministic uniform stride (the log still records the full density; only the render
-   *  thins). Keeps a huge density request in one bounded single-draw-call carpet. */
-  maxBlades: external_exports.number().int().min(1e3).default(32e4),
-  /** Extra keep-out discs — UNIONED with the settlement footprints for this terrain, so grass
-   *  avoids the village with no manual wiring (identical seam to vegetation.scatter). */
-  exclusions: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional(),
-  /** INCLUSION discs — confine the carpet to these regions (the inverse of exclusions). Used to lay a
-   *  tended LAWN on a building's yard: dense short turf ONLY within the yard discs. */
-  include: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional(),
-  /** Extra tags for the grass entity (always tagged "grass" + "vegetation"). */
-  tags: external_exports.array(external_exports.string()).optional()
-});
-function registerGrassSkill(registry2, layers, footprints = /* @__PURE__ */ new Map(), mounted = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map()) {
-  const grass = {
-    name: "vegetation.grass",
-    version: "1.0.0",
-    description: "Carpet an editable terrain layer in climate-aware instanced ground grass, gated by slope + elevation (above water / below the snow line) and the SAME settlement footprints trees honor (so grass stops at the building pads / courtyard / lane). One InstancedMesh of curved, tapered bezier blades with a WebGPU-native TSL material (climate colour, three-layer coherent wind, subsurface-scattering backlight). Deterministic + recorded: the log carries the config, never the per-blade transforms. Returns the grass entity + blade count.",
-    category: "terrain",
-    permissions: ["scene.write"],
-    input: grassInput,
-    output: external_exports.object({ entity: external_exports.string(), blades: external_exports.number().int(), exclusions: external_exports.number().int() }),
-    handler: (input, ctx) => {
-      let terrainId = input.terrain;
-      if (terrainId === void 0) {
-        let last;
-        for (const k3 of layers.keys()) last = k3;
-        terrainId = last;
-      }
-      const layer = terrainId !== void 0 ? layers.get(terrainId) : void 0;
-      if (layer === void 0) throw new Error("vegetation.grass: no terrain layer \u2014 create one with terrain.create first");
-      const terrainKey = terrainId;
-      const pal = GRASS_CLIMATES[input.climate];
-      const bounds = grassElevationBounds(layer);
-      const elevationMin = input.elevationMin ?? bounds.seaLevel;
-      const elevationMax = input.elevationMax ?? bounds.snowLine;
-      const coverage = input.coverage ?? pal.coverage;
-      const computePlacements = () => {
-        const registered = footprints.get(terrainKey) ?? [];
-        const allExclusions = [...registered, ...input.exclusions ?? []];
-        const plan = {
-          seed: input.seed,
-          density: input.density,
-          coverage,
-          cluster: input.cluster,
-          slopeMax: input.slopeMax,
-          sizeRange: input.sizeRange,
-          elevationMin,
-          elevationMax,
-          exclusions: allExclusions,
-          ...input.include !== void 0 && input.include.length > 0 ? { inclusions: input.include } : {}
-        };
-        return planGrassBlades(layer.tile, plan);
-      };
-      const scene = ctx.world.scene;
-      const canRender = ctx.world.mode !== "headless" && scene !== void 0 && typeof scene.add === "function";
-      let mesh = null;
-      let tintMesh = null;
-      let placements = computePlacements();
-      const disposeMesh = () => {
-        if (mesh !== null) {
-          if (typeof scene?.remove === "function") scene.remove(mesh);
-          disposeGrassMesh(mesh);
-          mesh = null;
-        }
-        if (tintMesh !== null) {
-          if (typeof scene?.remove === "function") scene.remove(tintMesh);
-          disposeGrassMesh(tintMesh);
-          tintMesh = null;
-        }
-      };
-      const remount = () => {
-        placements = computePlacements();
-        if (!canRender) return;
-        disposeMesh();
-        try {
-          const built = buildGrassInstancedMesh(placements, {
-            climate: input.climate,
-            bladeHeight: input.bladeHeight,
-            bladeWidth: input.bladeWidth,
-            segments: input.segments,
-            curvature: input.curvature,
-            windStrength: input.windStrength,
-            windSpeed: input.windSpeed,
-            windGust: input.windGust,
-            windGustFreq: input.windGustFreq,
-            sssStrength: input.sssStrength,
-            aoStrength: input.aoStrength,
-            maxBlades: input.maxBlades
-          });
-          if (built !== null) {
-            scene?.add?.(built);
-            mesh = built;
-          }
-          const registered = footprints.get(terrainKey) ?? [];
-          const allExclusions = [...registered, ...input.exclusions ?? []];
-          const tint = buildGrassGroundTint(layer.tile, {
-            baseColor: pal.base,
-            elevationMin,
-            elevationMax,
-            slopeMax: input.slopeMax,
-            exclusions: allExclusions,
-            ...input.include !== void 0 && input.include.length > 0 ? { inclusions: input.include } : {},
-            opacity: input.groundTint
-          });
-          if (tint !== null) {
-            scene?.add?.(tint);
-            tintMesh = tint;
-          }
-        } catch (err) {
-          ctx.emit("vegetation.grass_mount_failed", { message: err instanceof Error ? err.message : String(err) });
-        }
-      };
-      remount();
-      const [ox, oy, oz] = layer.tile.origin;
-      const eid = spawnRenderable(ctx.world.ecs, inertTransform2(), ox, oy, oz);
-      if (eid >= MAX_ENTITIES) {
-        despawnRenderable(ctx.world.ecs, eid);
-        throw new Error("vegetation.grass: entity capacity exceeded");
-      }
-      const origin = { tool: "vegetation.grass", input: { ...input } };
-      const entity = ctx.world.entities.create({ eid, origin });
-      tagEntity(ctx, entity, ["grass", "vegetation", ...input.tags ?? []]);
-      mounted.set(entity, disposeMesh);
-      const clears = vegetationClears.get(terrainKey) ?? [];
-      clears.push(() => {
-        remount();
-      });
-      vegetationClears.set(terrainKey, clears);
-      ctx.emit("vegetation.grass_scattered", { entity, terrain: terrainKey, blades: placements.length, mounted: mesh !== null ? placements.length : 0, climate: input.climate });
-      return { entity, blades: placements.length, exclusions: (footprints.get(terrainKey) ?? []).length + (input.exclusions?.length ?? 0) };
+function pcg32(value) {
+  const state = u32(Math.imul(u32(value), 747796405) + 2891336453);
+  const word = u32(Math.imul(u32(state >>> (state >>> 28) + 4 ^ state), 277803737));
+  return u32(word >>> 22 ^ word);
+}
+function grassFieldRandom(seed, gridX, gridZ, stream) {
+  let mixed = u32(seed);
+  mixed = u32(mixed ^ Math.imul(gridX | 0, 2654435761));
+  mixed = u32(mixed ^ Math.imul(gridZ | 0, 2246822519));
+  mixed = u32(mixed ^ Math.imul(stream | 0, 3266489917));
+  return pcg32(mixed);
+}
+function densityAccepts(density, draw) {
+  if (!Number.isSafeInteger(density) || density < 0 || density > 65535) throw new RangeError("density must be uint16");
+  if (density === 65535) return true;
+  return (draw & 65535) < density;
+}
+function grassFieldCandidate(plan, slot) {
+  if (!Number.isSafeInteger(slot) || slot < 0 || slot * 2 + 1 >= plan.gridCoordinates.length) throw new RangeError("grass field slot is out of range");
+  const gridX = plan.gridCoordinates[slot * 2], gridZ = plan.gridCoordinates[slot * 2 + 1];
+  const jitter = grassFieldRandom(plan.seed, gridX, gridZ, 1);
+  const x3 = (gridX + 0.5) * plan.spacing + ((jitter & 65535) / 65536 - 0.5) * plan.spacing;
+  const z4 = (gridZ + 0.5) * plan.spacing + ((jitter >>> 16) / 65536 - 0.5) * plan.spacing;
+  return Object.freeze({
+    gridX,
+    gridZ,
+    x: x3,
+    z: z4,
+    inside: x3 >= plan.bounds.minX && x3 < plan.bounds.maxX && z4 >= plan.bounds.minZ && z4 < plan.bounds.maxZ
+  });
+}
+function hashPlan(plan) {
+  let hash4 = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const feed = (value) => {
+    let word = BigInt(value >>> 0);
+    for (let i2 = 0; i2 < 4; i2++) {
+      hash4 = (hash4 ^ word & 0xffn) * prime & 0xffffffffffffffffn;
+      word >>= 8n;
     }
   };
-  registry2.register(grass);
+  const feedFloat = (value) => {
+    const view = new DataView(new ArrayBuffer(8));
+    view.setFloat64(0, value, true);
+    feed(view.getUint32(0, true));
+    feed(view.getUint32(4, true));
+  };
+  feed(plan.seed);
+  feed(plan.minGridX);
+  feed(plan.minGridZ);
+  feed(plan.columns);
+  feed(plan.rows);
+  feedFloat(plan.spacing);
+  feedFloat(plan.bounds.minX);
+  feedFloat(plan.bounds.minZ);
+  feedFloat(plan.bounds.maxX);
+  feedFloat(plan.bounds.maxZ);
+  for (let i2 = 0; i2 < plan.density.length; i2++) feed(plan.density[i2]);
+  return `fnv1a64:${hash4.toString(16).padStart(16, "0")}`;
+}
+function buildGrassFieldPlan(input) {
+  const spacing = finite3(input.spacing, "grass field spacing");
+  if (spacing <= 0) throw new RangeError("grass field spacing must be positive");
+  const b3 = input.bounds;
+  for (const [key, value] of Object.entries(b3)) finite3(value, `grass field bounds.${key}`);
+  if (b3.maxX <= b3.minX || b3.maxZ <= b3.minZ) throw new RangeError("grass field bounds must be non-empty and half-open");
+  if (!Number.isSafeInteger(input.seed) || input.seed < -2147483648 || input.seed > 2147483647) {
+    throw new RangeError("grass field seed must be an int32");
+  }
+  const minGridX = gridFloor(b3.minX, spacing);
+  const minGridZ = gridFloor(b3.minZ, spacing);
+  const maxGridX = gridCeil(b3.maxX, spacing);
+  const maxGridZ = gridCeil(b3.maxZ, spacing);
+  for (const value of [minGridX, minGridZ, maxGridX, maxGridZ]) {
+    if (!Number.isSafeInteger(value) || value < -2147483648 || value > 2147483647) throw new RangeError("grass field signed grid coordinate exceeds int32");
+  }
+  const columns = maxGridX - minGridX, rows = maxGridZ - minGridZ;
+  const slots = columns * rows;
+  if (!Number.isSafeInteger(slots) || slots < 1 || slots > GRASS_FIELD_MAX_SLOTS) {
+    throw new RangeError(`grass field slots must be in [1, ${GRASS_FIELD_MAX_SLOTS}]`);
+  }
+  if (input.density !== void 0 && (Object.getPrototypeOf(input.density) !== Uint16Array.prototype || input.density.length !== slots)) {
+    throw new RangeError(`grass field density must be a Uint16Array of length ${slots}`);
+  }
+  const density = input.density?.slice() ?? new Uint16Array(slots).fill(65535);
+  const coords = new Int32Array(slots * 2), accepted = new Uint8Array(slots);
+  let slot = 0;
+  for (let z4 = minGridZ; z4 < maxGridZ; z4++) for (let x3 = minGridX; x3 < maxGridX; x3++, slot++) {
+    coords[slot * 2] = x3;
+    coords[slot * 2 + 1] = z4;
+  }
+  const planBase = Object.freeze({
+    bounds: Object.freeze({ ...b3 }),
+    spacing,
+    seed: input.seed | 0,
+    minGridX,
+    minGridZ,
+    columns,
+    rows,
+    slots,
+    gridCoordinates: coords,
+    density,
+    accepted
+  });
+  for (let index = 0; index < slots; index++) {
+    const candidate = grassFieldCandidate(planBase, index);
+    accepted[index] = candidate.inside && densityAccepts(density[index], grassFieldRandom(input.seed, candidate.gridX, candidate.gridZ, 0)) ? 1 : 0;
+  }
+  return Object.freeze({ ...planBase, hash: hashPlan(planBase) });
+}
+function validateGrassFieldResidentSlots(slotCounts) {
+  let total = 0;
+  for (const count of slotCounts) {
+    if (!Number.isSafeInteger(count) || count < 0 || count > GRASS_FIELD_MAX_SLOTS) throw new RangeError("resident grass field slot count is invalid");
+    total += count;
+    if (total > GRASS_FIELD_MAX_RESIDENT_SLOTS) throw new RangeError(`resident grass field slots exceed ${GRASS_FIELD_MAX_RESIDENT_SLOTS}`);
+  }
+  return total;
 }
 
-// src/render/grass-source.ts
+// src/render/grass-field-compute.ts
+var T12 = three_tsl_exports;
+function isNativeGrassFieldComputeRenderer(renderer) {
+  return renderer.hasInitialized?.() === true && renderer.backend?.isWebGPUBackend === true && renderer.backend?.isWebGLBackend !== true;
+}
+function buildGrassFieldCompute(input) {
+  if (!isNativeGrassFieldComputeRenderer(input.renderer)) throw new Error("grass field compute requires an initialized native WebGPU backend");
+  const N4 = input.nodeApi ?? T12;
+  const { plan } = input;
+  if (Object.getPrototypeOf(input.heights) !== Float32Array.prototype || input.heights.length !== plan.slots) {
+    throw new RangeError(`grass field heights must be a Float32Array of length ${plan.slots}`);
+  }
+  for (let i2 = 0; i2 < input.heights.length; i2++) if (!Number.isFinite(input.heights[i2])) throw new RangeError("grass field height must be finite");
+  const [sizeLo, sizeHi] = input.sizeRange ?? [0.7, 1.3];
+  if (!Number.isFinite(sizeLo) || !Number.isFinite(sizeHi) || sizeLo < 0 || sizeHi < sizeLo) throw new RangeError("grass field sizeRange is invalid");
+  const [originX, originY, originZ] = input.featureOrigin ?? [0, 0, 0];
+  if (![originX, originY, originZ].every(Number.isFinite)) throw new RangeError("grass field featureOrigin must be finite");
+  const originGridX = Math.floor(originX / plan.spacing);
+  const originGridZ = Math.floor(originZ / plan.spacing);
+  const originPhaseX = originGridX * plan.spacing - originX;
+  const originPhaseZ = originGridZ * plan.spacing - originZ;
+  const localBounds = {
+    minX: plan.bounds.minX - originX,
+    maxX: plan.bounds.maxX - originX,
+    minZ: plan.bounds.minZ - originZ,
+    maxZ: plan.bounds.maxZ - originZ
+  };
+  const densityUpload = Uint32Array.from(plan.density);
+  const densityTexture = new DataTexture(densityUpload, plan.slots, 1, RedIntegerFormat, UnsignedIntType);
+  densityTexture.minFilter = NearestFilter;
+  densityTexture.magFilter = NearestFilter;
+  densityTexture.generateMipmaps = false;
+  densityTexture.needsUpdate = true;
+  const localHeights = new Float32Array(plan.slots);
+  for (let index = 0; index < plan.slots; index++) localHeights[index] = input.heights[index] - originY;
+  const heightTexture = new DataTexture(localHeights, plan.slots, 1, RedFormat, FloatType);
+  heightTexture.minFilter = NearestFilter;
+  heightTexture.magFilter = NearestFilter;
+  heightTexture.generateMipmaps = false;
+  heightTexture.needsUpdate = true;
+  const rootsYaw = N4.instancedArray(plan.slots, "vec4").setName("liminaGrassRootYaw");
+  const scales = N4.instancedArray(plan.slots, "float").setName("liminaGrassScale");
+  const rootYawAttribute = rootsYaw.toAttribute();
+  const scaleAttribute = scales.toAttribute();
+  const pcg = (value) => {
+    const v3 = value;
+    const state = v3.toUint().mul(747796405).add(2891336453);
+    const word = state.shiftRight(state.shiftRight(28).add(4)).bitXor(state).mul(277803737);
+    return word.shiftRight(22).bitXor(word);
+  };
+  const random = (gx, gz, stream) => {
+    const x3 = gx, z4 = gz;
+    let mixed = N4.uint(plan.seed);
+    mixed = mixed.bitXor(x3.toUint().mul(N4.uint(2654435761)));
+    mixed = mixed.bitXor(z4.toUint().mul(N4.uint(2246822519)));
+    mixed = mixed.bitXor(N4.uint(stream).mul(N4.uint(3266489917)));
+    return pcg(mixed);
+  };
+  const kernel = N4.Fn(() => {
+    const index = N4.instanceIndex;
+    const gx = N4.int(index.mod(N4.uint(plan.columns))).add(plan.minGridX);
+    const gz = N4.int(index.div(N4.uint(plan.columns))).add(plan.minGridZ);
+    const texel = N4.ivec2(N4.int(index), 0);
+    const density = N4.textureLoad(densityTexture, texel).r.toUint();
+    const draw = random(gx, gz, 0).bitAnd(N4.uint(65535));
+    const accepted = density.equal(N4.uint(65535)).or(draw.lessThan(density));
+    const jitter = random(gx, gz, 1);
+    const style = random(gx, gz, 2);
+    const jx = jitter.bitAnd(N4.uint(65535)).toFloat().div(65536).sub(0.5).mul(plan.spacing);
+    const jz = jitter.shiftRight(N4.uint(16)).toFloat().div(65536).sub(0.5).mul(plan.spacing);
+    const x3 = gx.sub(originGridX).toFloat().add(0.5).mul(plan.spacing).add(originPhaseX).add(jx);
+    const z4 = gz.sub(originGridZ).toFloat().add(0.5).mul(plan.spacing).add(originPhaseZ).add(jz);
+    const inside = x3.greaterThanEqual(localBounds.minX).and(x3.lessThan(localBounds.maxX)).and(z4.greaterThanEqual(localBounds.minZ)).and(z4.lessThan(localBounds.maxZ));
+    const y3 = N4.textureLoad(heightTexture, texel).r;
+    const yaw = style.bitAnd(N4.uint(65535)).toFloat().mul(Math.PI * 2 / 65536);
+    const authoredScale = N4.float(sizeLo).add(style.shiftRight(N4.uint(16)).toFloat().div(65536).mul(sizeHi - sizeLo));
+    rootsYaw.element(index).assign(N4.vec4(x3, y3, z4, yaw));
+    scales.element(index).assign(N4.select(accepted.and(inside), authoredScale, N4.float(0)));
+  })().compute(plan.slots, [64]);
+  let disposed = false;
+  return Object.freeze({
+    slots: plan.slots,
+    kernel,
+    rootsYaw,
+    scales,
+    rootYawAttribute,
+    scaleAttribute,
+    densityTexture,
+    heightTexture,
+    dispatch: () => disposed ? Promise.reject(new Error("grass field compute resource is disposed")) : input.renderer.computeAsync(kernel),
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      kernel.dispose?.();
+      densityTexture.dispose();
+      heightTexture.dispose();
+      rootsYaw.value.dispose?.();
+      scales.value.dispose?.();
+    }
+  });
+}
+
+// src/render/grass-field-terrain.ts
 var GRASS_PAINT_ID = 2;
-var DEFAULT_SPACING = 0.45;
-var DEFAULT_CHUNK = 24;
-var DEFAULT_SLOPE_MAX = 0.9;
-var DEFAULT_SIZE_RANGE = [0.7, 1.3];
-var DEFAULT_MAX_PER_CHUNK = 8e3;
-function grassChunkKey(cx, cz) {
-  return `${cx}:${cz}`;
-}
-function tileFrame(tile) {
-  const [ox, oy, oz] = tile.origin;
-  const [sx, sy, sz] = tile.scale;
+function frame(tile) {
+  const [ox, oy, oz] = tile.origin, [sx, sy, sz] = tile.scale;
   return {
     x0: ox - sx / 2,
     z0: oz - sz / 2,
+    x1: ox + sx / 2,
+    z1: oz + sz / 2,
     dx: sx / Math.max(1, tile.ncols - 1),
     dz: sz / Math.max(1, tile.nrows - 1),
-    ncols: tile.ncols,
-    nrows: tile.nrows,
     oy,
     sy
   };
 }
-function heightAt(tile, f2, x3, z4) {
-  const fc = Math.min(f2.ncols - 1, Math.max(0, (x3 - f2.x0) / f2.dx));
-  const fr = Math.min(f2.nrows - 1, Math.max(0, (z4 - f2.z0) / f2.dz));
-  const c0 = Math.floor(fc), r0 = Math.floor(fr);
-  const c1 = Math.min(f2.ncols - 1, c0 + 1), r1 = Math.min(f2.nrows - 1, r0 + 1);
-  const tx = fc - c0, tz = fr - r0;
-  const h2 = tile.heights;
-  const a2 = h2[r0 * f2.ncols + c0] + (h2[r0 * f2.ncols + c1] - h2[r0 * f2.ncols + c0]) * tx;
-  const b3 = h2[r1 * f2.ncols + c0] + (h2[r1 * f2.ncols + c1] - h2[r1 * f2.ncols + c0]) * tx;
-  return f2.oy + (a2 + (b3 - a2) * tz) * f2.sy;
+function grassFieldTerrainBounds(tile) {
+  const f2 = frame(tile);
+  return Object.freeze({ minX: f2.x0, minZ: f2.z0, maxX: f2.x1, maxZ: f2.z1 });
 }
-function grassWeightAt(tile, f2, x3, z4) {
-  const mat = tile.paintMat, w5 = tile.paintW;
-  if (mat === void 0 || w5 === void 0) return 0;
-  const fc = Math.min(f2.ncols - 1, Math.max(0, (x3 - f2.x0) / f2.dx));
-  const fr = Math.min(f2.nrows - 1, Math.max(0, (z4 - f2.z0) / f2.dz));
-  const c0 = Math.floor(fc), r0 = Math.floor(fr);
-  const c1 = Math.min(f2.ncols - 1, c0 + 1), r1 = Math.min(f2.nrows - 1, r0 + 1);
+function sample3(tile, f2, x3, z4, densityAt, paintPolicy = "merge") {
+  const fc = Math.min(tile.ncols - 1, Math.max(0, (x3 - f2.x0) / f2.dx));
+  const fr = Math.min(tile.nrows - 1, Math.max(0, (z4 - f2.z0) / f2.dz));
+  const c0 = Math.floor(fc), r0 = Math.floor(fr), c1 = Math.min(tile.ncols - 1, c0 + 1), r1 = Math.min(tile.nrows - 1, r0 + 1);
   const tx = fc - c0, tz = fr - r0;
-  const g3 = (r2, c2) => {
-    const i2 = r2 * f2.ncols + c2;
-    return mat[i2] === GRASS_PAINT_ID ? w5[i2] : 0;
+  const bilinear = (read) => {
+    const a0 = read(r0 * tile.ncols + c0), a1 = read(r0 * tile.ncols + c1);
+    const b0 = read(r1 * tile.ncols + c0), b1 = read(r1 * tile.ncols + c1);
+    return a0 + (a1 - a0) * tx + (b0 + (b1 - b0) * tx - (a0 + (a1 - a0) * tx)) * tz;
   };
-  const a2 = g3(r0, c0) + (g3(r0, c1) - g3(r0, c0)) * tx;
-  const b3 = g3(r1, c0) + (g3(r1, c1) - g3(r1, c0)) * tx;
-  return a2 + (b3 - a2) * tz;
-}
-function chunkHasNoGrass(tile, f2, minX, minZ, maxX, maxZ) {
-  const mat = tile.paintMat, w5 = tile.paintW;
-  if (mat === void 0 || w5 === void 0) return true;
-  const c0 = Math.max(0, Math.floor((minX - f2.x0) / f2.dx) - 1);
-  const c1 = Math.min(f2.ncols - 1, Math.ceil((maxX - f2.x0) / f2.dx) + 1);
-  const r0 = Math.max(0, Math.floor((minZ - f2.z0) / f2.dz) - 1);
-  const r1 = Math.min(f2.nrows - 1, Math.ceil((maxZ - f2.z0) / f2.dz) + 1);
-  for (let r2 = r0; r2 <= r1; r2++) {
-    for (let c2 = c0; c2 <= c1; c2++) {
-      const i2 = r2 * f2.ncols + c2;
-      if (mat[i2] === GRASS_PAINT_ID && w5[i2] > 0) return false;
-    }
+  const y3 = f2.oy + bilinear((index) => tile.heights[index]) * f2.sy;
+  let weight = densityAt?.(x3, z4) ?? 0;
+  if (!Number.isFinite(weight) || weight < 0 || weight > 1) throw new RangeError("grass field densityAt must return a finite value in [0,1]");
+  if (paintPolicy === "merge" && tile.paintMat !== void 0 && tile.paintW !== void 0) {
+    const grass = bilinear((index) => tile.paintMat[index] === GRASS_PAINT_ID ? tile.paintW[index] : 0);
+    const other = bilinear((index) => tile.paintMat[index] !== 0 && tile.paintMat[index] !== GRASS_PAINT_ID ? tile.paintW[index] : 0);
+    weight = Math.max(weight, grass) * (1 - Math.max(0, Math.min(1, other)));
   }
-  return true;
+  return { y: y3, weight: Math.max(0, Math.min(1, weight)) };
 }
-function grassChunkCoordsForTile(tile, chunkSize = DEFAULT_CHUNK) {
-  const [ox, , oz] = tile.origin;
-  const [sx, , sz] = tile.scale;
-  const minCx = Math.floor((ox - sx / 2) / chunkSize);
-  const maxCx = Math.floor((ox + sx / 2 - 1e-9) / chunkSize);
-  const minCz = Math.floor((oz - sz / 2) / chunkSize);
-  const maxCz = Math.floor((oz + sz / 2 - 1e-9) / chunkSize);
-  const out = [];
-  for (let cz = minCz; cz <= maxCz; cz++) for (let cx = minCx; cx <= maxCx; cx++) out.push({ cx, cz });
-  return out;
-}
-function grassChunkCoordsInCircle(tile, x3, z4, r2, chunkSize = DEFAULT_CHUNK) {
-  const out = [];
-  for (const c2 of grassChunkCoordsForTile(tile, chunkSize)) {
-    const minX = c2.cx * chunkSize, minZ = c2.cz * chunkSize;
-    const nx = Math.min(Math.max(x3, minX), minX + chunkSize);
-    const nz = Math.min(Math.max(z4, minZ), minZ + chunkSize);
-    const dx = x3 - nx, dz = z4 - nz;
-    if (dx * dx + dz * dz <= r2 * r2) out.push(c2);
+function prepareGrassFieldTerrainPages(tile, options, requestedBounds = grassFieldTerrainBounds(tile)) {
+  if (!Number.isFinite(options.slopeMax ?? 0.9) || (options.slopeMax ?? 0.9) < 0) throw new RangeError("grass field slopeMax must be finite and nonnegative");
+  if (options.paintPolicy !== void 0 && options.paintPolicy !== "merge" && options.paintPolicy !== "ignore") {
+    throw new RangeError("grass field paintPolicy must be 'merge' or 'ignore'");
   }
-  return out;
-}
-function grassChunkPlacements(tile, cx, cz, opts) {
-  const spacing = opts.spacing ?? DEFAULT_SPACING;
-  const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK;
-  const elevationMin = opts.elevationMin ?? -Infinity;
-  const slopeMax = opts.slopeMax ?? DEFAULT_SLOPE_MAX;
-  const [sizeLo, sizeHi] = opts.sizeRange ?? DEFAULT_SIZE_RANGE;
-  const maxBlades = opts.maxBladesPerChunk ?? DEFAULT_MAX_PER_CHUNK;
-  const f2 = tileFrame(tile);
-  const tMinX = f2.x0, tMaxX = f2.x0 + f2.dx * (f2.ncols - 1);
-  const tMinZ = f2.z0, tMaxZ = f2.z0 + f2.dz * (f2.nrows - 1);
-  const minX = Math.max(cx * chunkSize, tMinX), maxX = Math.min((cx + 1) * chunkSize, tMaxX);
-  const minZ = Math.max(cz * chunkSize, tMinZ), maxZ = Math.min((cz + 1) * chunkSize, tMaxZ);
-  if (minX >= maxX || minZ >= maxZ) return [];
-  if (chunkHasNoGrass(tile, f2, minX, minZ, maxX, maxZ)) return [];
-  const exclusions = opts.exclusions ?? [];
-  const exN = exclusions.length;
-  const i0 = Math.ceil(minX / spacing - 1e-9), i1 = Math.floor(maxX / spacing);
-  const k0 = Math.ceil(minZ / spacing - 1e-9), k1 = Math.floor(maxZ / spacing);
-  const seed = (opts.seed | 0) ^ 1738889751;
-  const out = [];
+  const f2 = frame(tile);
+  const bounds = {
+    minX: Math.max(f2.x0, requestedBounds.minX),
+    minZ: Math.max(f2.z0, requestedBounds.minZ),
+    maxX: Math.min(f2.x1, requestedBounds.maxX),
+    maxZ: Math.min(f2.z1, requestedBounds.maxZ)
+  };
+  if (!(bounds.maxX > bounds.minX && bounds.maxZ > bounds.minZ)) return Object.freeze([]);
+  const elevationMin = options.elevationMin ?? -Infinity, elevationMax = options.elevationMax ?? Infinity;
+  const slopeMax = options.slopeMax ?? 0.9;
   const slopeStep = Math.max(0.25, Math.min(f2.dx, f2.dz) * 0.5);
-  for (let k3 = k0; k3 <= k1; k3++) {
-    for (let i2 = i0; i2 <= i1; i2++) {
-      const h02 = hashSeed(seed, i2, k3);
-      const accept = h02 / 4294967296;
-      const h12 = hashSeed(h02 ^ 2654435769, i2, k3);
-      const h2 = hashSeed(h02 ^ 2246822519, k3, i2);
-      const jx = ((h12 & 65535) / 65536 - 0.5) * spacing;
-      const jz = ((h12 >>> 16 & 65535) / 65536 - 0.5) * spacing;
-      const x3 = i2 * spacing + jx;
-      const z4 = k3 * spacing + jz;
-      if (x3 < tMinX || x3 > tMaxX || z4 < tMinZ || z4 > tMaxZ) continue;
-      const w5 = grassWeightAt(tile, f2, x3, z4);
-      if (w5 <= 0 || accept >= w5) continue;
-      const y3 = heightAt(tile, f2, x3, z4);
-      if (y3 <= elevationMin) continue;
-      const gx = (heightAt(tile, f2, x3 + slopeStep, z4) - heightAt(tile, f2, x3 - slopeStep, z4)) / (2 * slopeStep);
-      const gz = (heightAt(tile, f2, x3, z4 + slopeStep) - heightAt(tile, f2, x3, z4 - slopeStep)) / (2 * slopeStep);
+  const exclusions = options.exclusions ?? [];
+  const prepared2 = [];
+  for (const pageBounds of partitionGrassFieldBounds(bounds, options.spacing)) {
+    const provisional = buildGrassFieldPlan({ bounds: pageBounds, spacing: options.spacing, seed: options.seed });
+    const density = new Uint16Array(provisional.slots), heights = new Float32Array(provisional.slots);
+    for (let slot = 0; slot < provisional.slots; slot++) {
+      const candidate = grassFieldCandidate(provisional, slot);
+      const surface = sample3(tile, f2, candidate.x, candidate.z, options.densityAt, options.paintPolicy);
+      heights[slot] = surface.y;
+      if (!candidate.inside || surface.y <= elevationMin || surface.y > elevationMax || surface.weight <= 0 || options.hardExclusionAt?.(candidate.x, candidate.z) === true) continue;
+      const gx = (sample3(tile, f2, candidate.x + slopeStep, candidate.z, options.densityAt, options.paintPolicy).y - sample3(tile, f2, candidate.x - slopeStep, candidate.z, options.densityAt, options.paintPolicy).y) / (2 * slopeStep);
+      const gz = (sample3(tile, f2, candidate.x, candidate.z + slopeStep, options.densityAt, options.paintPolicy).y - sample3(tile, f2, candidate.x, candidate.z - slopeStep, options.densityAt, options.paintPolicy).y) / (2 * slopeStep);
       if (Math.sqrt(gx * gx + gz * gz) > slopeMax) continue;
-      if (exN > 0) {
-        let excluded = false;
-        for (let e2 = 0; e2 < exN; e2++) {
-          const ex = exclusions[e2], dxr = x3 - ex.x, dzr = z4 - ex.z;
-          if (dxr * dxr + dzr * dzr <= ex.r * ex.r) {
-            excluded = true;
-            break;
-          }
+      let excluded = false;
+      for (const exclusion of exclusions) {
+        const dx = candidate.x - exclusion.x, dz = candidate.z - exclusion.z;
+        if (dx * dx + dz * dz <= exclusion.r * exclusion.r) {
+          excluded = true;
+          break;
         }
-        if (excluded) continue;
       }
-      const yaw = (h2 & 65535) / 65536 * Math.PI * 2;
-      const scale2 = sizeLo + (h2 >>> 16 & 65535) / 65536 * (sizeHi - sizeLo);
-      out.push({ x: x3, y: y3, z: z4, yaw, scale: scale2 });
-      if (out.length >= maxBlades) return out;
+      if (!excluded) density[slot] = Math.round(surface.weight * 65535);
     }
+    const plan = buildGrassFieldPlan({ bounds: pageBounds, spacing: options.spacing, seed: options.seed, density });
+    prepared2.push(Object.freeze({
+      plan,
+      heights,
+      featureOrigin: Object.freeze([pageBounds.minX, tile.origin[1], pageBounds.minZ])
+    }));
   }
-  return out;
+  validateGrassFieldResidentSlots(prepared2.map((entry) => entry.plan.slots));
+  return Object.freeze(prepared2);
 }
 
-// src/terrain/grass-render.ts
-var Y_AXIS4 = new Vector3(0, 1, 0);
-function meshOptions(style) {
-  return {
-    climate: style.climate ?? "summer",
-    bladeHeight: style.bladeHeight ?? 0.32,
-    bladeWidth: style.bladeWidth ?? 0.03,
-    segments: style.segments ?? 3,
-    curvature: style.curvature ?? 0.12,
-    windStrength: style.windStrength ?? 0.045,
-    windSpeed: style.windSpeed ?? 1.1,
-    windGust: style.windGust ?? 0.06,
-    windGustFreq: style.windGustFreq ?? 0.18,
-    sssStrength: style.sssStrength ?? 0.5,
-    aoStrength: style.aoStrength ?? 0.45,
-    maxBlades: Number.MAX_SAFE_INTEGER,
-    // per-chunk caps live in GrassSourceOptions
-    ...style.fade !== void 0 ? { fade: style.fade } : {}
-  };
+// src/render/grass-field-render.ts
+function positive2(value, fallback, label4) {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || !(resolved > 0)) throw new RangeError(`${label4} must be finite and positive`);
+  return resolved;
 }
-function buildChunkMesh(blade, material, placements, opts) {
-  const n2 = placements.length;
-  const geom = blade.clone();
-  const wind = new Float32Array(n2 * 4);
-  const mesh = new InstancedMesh(geom, material, n2);
-  const m2 = new Matrix4();
-  const q3 = new Quaternion();
-  const pos = new Vector3();
-  const scl = new Vector3();
-  for (let i2 = 0; i2 < n2; i2++) {
-    const p2 = placements[i2];
-    pos.set(p2.x, p2.y, p2.z);
-    q3.setFromAxisAngle(Y_AXIS4, p2.yaw);
-    scl.set(p2.scale, p2.scale, p2.scale);
-    m2.compose(pos, q3, scl);
-    mesh.setMatrixAt(i2, m2);
-    wind[i2 * 4] = p2.x;
-    wind[i2 * 4 + 1] = p2.z;
-    wind[i2 * 4 + 2] = 0;
-    wind[i2 * 4 + 3] = p2.yaw;
+function prepared(tile, source, spacingMultiplier, bounds) {
+  return prepareGrassFieldTerrainPages(tile, {
+    seed: source.seed,
+    spacing: positive2(source.spacing, 0.45, "grass field spacing") * spacingMultiplier,
+    elevationMin: source.elevationMin,
+    elevationMax: source.elevationMax,
+    slopeMax: source.slopeMax,
+    exclusions: source.exclusions,
+    densityAt: source.densityAt,
+    hardExclusionAt: source.hardExclusionAt
+  }, bounds ?? grassFieldTerrainBounds(tile));
+}
+function pagePlacements(tile, source, spacingMultiplier, bounds) {
+  const pages = prepared(tile, source, spacingMultiplier, bounds);
+  const placements = [];
+  let slots = 0;
+  const sizeRange = source.sizeRange ?? [0.7, 1.3];
+  for (const page of pages) {
+    slots += page.plan.slots;
+    for (let slot = 0; slot < page.plan.slots; slot++) {
+      if (page.plan.accepted[slot] !== 1) continue;
+      const candidate = grassFieldCandidate(page.plan, slot);
+      const style = grassFieldRandom(source.seed, candidate.gridX, candidate.gridZ, 2);
+      placements.push({
+        assetId: "__grass_field__",
+        x: candidate.x,
+        y: page.heights[slot],
+        z: candidate.z,
+        yaw: (style & 65535) * Math.PI * 2 / 65536,
+        scale: sizeRange[0] + (style >>> 16) / 65536 * (sizeRange[1] - sizeRange[0])
+      });
+    }
   }
-  geom.setAttribute("aWind", new InstancedBufferAttribute(wind, 4));
+  return { placements, slots };
+}
+function boundedPlacements(placements, cap2, center) {
+  if (placements.length <= cap2) return placements;
+  return [...placements].sort((left, right) => {
+    const ld = (left.x - center.x) ** 2 + (left.z - center.z) ** 2;
+    const rd = (right.x - center.x) ** 2 + (right.z - center.z) ** 2;
+    return ld - rd || left.z - right.z || left.x - right.x;
+  }).slice(0, cap2);
+}
+function budgetedBounds(bounds, spacing, maxSlots) {
+  const minGridX = Math.floor(bounds.minX / spacing), maxGridX = Math.ceil(bounds.maxX / spacing);
+  const minGridZ = Math.floor(bounds.minZ / spacing), maxGridZ = Math.ceil(bounds.maxZ / spacing);
+  const columns = maxGridX - minGridX, rows = maxGridZ - minGridZ;
+  if (columns * rows <= maxSlots) return bounds;
+  const targetColumns = Math.min(columns, Math.max(1, Math.floor(Math.sqrt(maxSlots * columns / rows))));
+  const targetRows = Math.min(rows, Math.max(1, Math.floor(maxSlots / targetColumns)));
+  const centerGridX = (bounds.minX + bounds.maxX) / (2 * spacing);
+  const centerGridZ = (bounds.minZ + bounds.maxZ) / (2 * spacing);
+  const startX = Math.max(minGridX, Math.min(maxGridX - targetColumns, Math.floor(centerGridX - targetColumns / 2)));
+  const startZ = Math.max(minGridZ, Math.min(maxGridZ - targetRows, Math.floor(centerGridZ - targetRows / 2)));
+  return Object.freeze({
+    minX: Math.max(bounds.minX, startX * spacing),
+    minZ: Math.max(bounds.minZ, startZ * spacing),
+    maxX: Math.min(bounds.maxX, (startX + targetColumns) * spacing),
+    maxZ: Math.min(bounds.maxZ, (startZ + targetRows) * spacing)
+  });
+}
+function buildFieldMesh(placements, pkg, quality, lod, variant, featureOrigin) {
+  if (placements.length === 0) return null;
+  const context3 = { quality, lod, maxBlades: placements.length, featureOrigin, ...variant === void 0 ? {} : { variant } };
+  const geometry = pkg.createGeometry(context3);
+  const wind = new Float32Array(placements.length * 4);
+  const matrix = new Matrix4(), rotation = new Quaternion(), position = new Vector3(), scale2 = new Vector3();
+  const mesh = new InstancedMesh(geometry, pkg.createMaterial(context3), placements.length);
+  for (let index = 0; index < placements.length; index++) {
+    const placement = placements[index];
+    position.set(placement.x - featureOrigin[0], placement.y - featureOrigin[1], placement.z - featureOrigin[2]);
+    rotation.setFromAxisAngle(new Vector3(0, 1, 0), placement.yaw);
+    scale2.setScalar(placement.scale);
+    matrix.compose(position, rotation, scale2);
+    mesh.setMatrixAt(index, matrix);
+    wind[index * 4] = placement.x - featureOrigin[0];
+    wind[index * 4 + 1] = placement.z - featureOrigin[2];
+    wind[index * 4 + 3] = placement.yaw;
+  }
+  geometry.setAttribute("aWind", new InstancedBufferAttribute(wind, 4));
   mesh.instanceMatrix.needsUpdate = true;
+  mesh.position.set(...featureOrigin);
   mesh.castShadow = false;
   mesh.receiveShadow = false;
-  mesh.name = "limina:grass-chunk";
-  mesh.computeBoundingSphere();
-  const bs = mesh.boundingSphere;
-  if (bs !== null) bs.radius += opts.bladeHeight * 0.6 + opts.windStrength + opts.windGust + 0.15;
   return mesh;
 }
-function buildGrassTuftGeometry(opts) {
-  const blade = buildGrassBladeGeometry(opts.bladeHeight, opts.bladeWidth, opts.segments, opts.curvature);
-  const positions = [];
-  const normals = [];
-  const uvs = [];
-  const indices = [];
-  const src = {
-    pos: blade.getAttribute("position"),
-    nrm: blade.getAttribute("normal"),
-    uv: blade.getAttribute("uv"),
-    idx: blade.getIndex()
-  };
-  const COPIES = 3;
-  const Y_SCALE = [1, 0.8, 0.62];
-  for (let cIdx = 0; cIdx < COPIES; cIdx++) {
-    const ang = cIdx / COPIES * Math.PI * 2 + cIdx * 0.7;
-    const ca = Math.cos(ang), sa = Math.sin(ang);
-    const ox = ca * 0.05, oz = sa * 0.05;
-    const ys = Y_SCALE[cIdx];
-    const base = positions.length / 3;
-    for (let i2 = 0; i2 < src.pos.count; i2++) {
-      const x3 = src.pos.getX(i2), y3 = src.pos.getY(i2), z4 = src.pos.getZ(i2);
-      positions.push(ca * x3 - sa * z4 + ox, y3 * ys, sa * x3 + ca * z4 + oz);
-      normals.push(src.nrm.getX(i2), src.nrm.getY(i2), src.nrm.getZ(i2));
-      uvs.push(src.uv.getX(i2), src.uv.getY(i2));
-    }
-    for (let i2 = 0; i2 < src.idx.count; i2++) indices.push(base + src.idx.getX(i2));
-  }
-  blade.dispose();
-  const geom = new BufferGeometry();
-  geom.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  geom.setAttribute("normal", new Float32BufferAttribute(normals, 3));
-  geom.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
-  geom.setIndex(indices);
-  geom.computeBoundingBox();
-  geom.computeBoundingSphere();
-  return geom;
-}
-var TileGrass = class {
-  constructor(scene, tile, source, style = {}, shared) {
+var GrassFieldTileMount = class {
+  constructor(scene, tile, source, visualPackage, quality = "balanced", lod = 0, spacingMultiplier = 1, variant, maxBlades, requestedBounds) {
     this.scene = scene;
     this.tile = tile;
     this.source = source;
-    if (shared !== void 0) {
-      this.opts = shared.opts;
-      this.blade = shared.blade;
-      this.material = shared.material;
-      this.ownsResources = false;
-    } else {
-      this.opts = meshOptions(style);
-      this.blade = buildGrassTuftGeometry(this.opts);
-      this.material = buildGrassMaterial(this.opts);
-      this.ownsResources = true;
-    }
+    this.visualPackage = visualPackage;
+    this.quality = quality;
+    this.lod = lod;
+    this.spacingMultiplier = spacingMultiplier;
+    this.variant = variant;
+    this.maxBlades = maxBlades;
+    this.requestedBounds = requestedBounds;
     this.refreshAll();
   }
   scene;
   tile;
   source;
-  chunks = /* @__PURE__ */ new Map();
-  blade;
-  material;
-  opts;
-  ownsResources;
+  visualPackage;
+  quality;
+  lod;
+  spacingMultiplier;
+  variant;
+  maxBlades;
+  requestedBounds;
+  mesh = null;
+  acceptedInstances = 0;
+  slots = 0;
   disposed = false;
+  instanceCount() {
+    return this.acceptedInstances;
+  }
   bladeCount() {
-    let n2 = 0;
-    for (const c2 of this.chunks.values()) n2 += c2.count;
-    return n2;
+    return this.acceptedInstances * this.visualPackage.profile(this.quality).bladesPerInstance[this.lod];
+  }
+  slotCount() {
+    return this.slots;
   }
   chunkCount() {
-    return this.chunks.size;
+    return this.mesh === null ? 0 : 1;
   }
-  /** The mounted chunk meshes (gates/introspection). */
   chunkMeshes() {
-    return [...this.chunks.values()];
+    return this.mesh === null ? [] : [this.mesh];
   }
-  setChunk(key, placements) {
-    const prev = this.chunks.get(key);
-    if (prev !== void 0) {
-      this.scene.remove(prev);
-      prev.geometry.dispose();
-      prev.dispose?.();
-      this.chunks.delete(key);
-    }
-    if (placements.length === 0) return;
-    const mesh = buildChunkMesh(this.blade, this.material, placements, this.opts);
-    this.chunks.set(key, mesh);
-    this.scene.add(mesh);
+  refreshCircle(_x2, _z2, _radius) {
+    this.refreshAll();
   }
-  /** Recompute + swap the chunks intersecting a world-XZ disc — the live brush path
-   *  (terrain.paint / terrain.deform refresh only what the stamp touched). */
-  refreshCircle(x3, z4, r2) {
-    if (this.disposed) return;
-    const opts = this.source();
-    for (const { cx, cz } of grassChunkCoordsInCircle(this.tile, x3, z4, r2, opts.chunkSize)) {
-      this.setChunk(grassChunkKey(cx, cz), grassChunkPlacements(this.tile, cx, cz, opts));
-    }
-  }
-  /** Recompute + swap EVERY chunk (mount time; the vegetation-clear closure after
-   *  village.build registers its footprints). */
   refreshAll() {
     if (this.disposed) return;
-    const opts = this.source();
-    const live = /* @__PURE__ */ new Set();
-    if (this.tile.paintMat !== void 0 && this.tile.paintW !== void 0) {
-      for (const { cx, cz } of grassChunkCoordsForTile(this.tile, opts.chunkSize)) {
-        const key = grassChunkKey(cx, cz);
-        this.setChunk(key, grassChunkPlacements(this.tile, cx, cz, opts));
-        if (this.chunks.has(key)) live.add(key);
-      }
+    const profile = this.visualPackage.profile(this.quality);
+    const authored = this.source();
+    const packageSpacing = grassFieldInstanceSpacing(this.visualPackage, this.quality, this.lod);
+    const resolvedSource = {
+      ...authored,
+      // Denser authoring is allowed; sparser authoring cannot silently violate the package's
+      // published visual-density contract.
+      spacing: Math.min(authored.spacing ?? packageSpacing, packageSpacing)
+    };
+    const bladeBudget = Math.min(profile.maxResidentBlades, this.maxBlades ?? Number.MAX_SAFE_INTEGER);
+    const authoredBounds = this.requestedBounds ?? grassFieldTerrainBounds(this.tile);
+    const maxInstances = Math.max(1, Math.floor(bladeBudget / profile.bladesPerInstance[this.lod]));
+    const spacing = resolvedSource.spacing * this.spacingMultiplier;
+    const bounds = budgetedBounds(
+      authoredBounds,
+      spacing,
+      Math.min(GRASS_FIELD_MAX_RESIDENT_SLOTS, maxInstances)
+    );
+    const built = pagePlacements(this.tile, resolvedSource, this.spacingMultiplier, bounds);
+    const placements = boundedPlacements(
+      built.placements,
+      maxInstances,
+      { x: (bounds.minX + bounds.maxX) / 2, z: (bounds.minZ + bounds.maxZ) / 2 }
+    );
+    const visual = profile.lod[this.lod];
+    const next = buildFieldMesh(placements, this.visualPackage, this.quality, this.lod, this.variant, this.tile.origin);
+    if (next !== null) {
+      next.name = "limina:grass-field-tile";
+      next.frustumCulled = true;
+      next.computeBoundingSphere();
+      const radius = next.boundingSphere?.radius;
+      if (radius !== void 0) next.boundingSphere.radius = radius + visual.maxHeight * 0.7 + visual.maxHorizontalDisplacement + visual.footprintRadius;
+      this.scene.add(next);
     }
-    for (const key of [...this.chunks.keys()]) {
-      if (!live.has(key)) this.setChunk(key, []);
+    const prior = this.mesh;
+    this.mesh = next;
+    this.acceptedInstances = placements.length;
+    this.slots = built.slots;
+    if (prior !== null) {
+      this.scene.remove(prior);
+      prior.geometry.dispose();
+      prior.material.dispose();
+      prior.dispose();
     }
   }
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    for (const mesh of this.chunks.values()) {
-      this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.dispose?.();
-    }
-    this.chunks.clear();
-    if (this.ownsResources) {
-      this.blade.dispose();
-      this.material.dispose();
-    }
+    const mesh = this.mesh;
+    this.mesh = null;
+    if (mesh === null) return;
+    this.scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+    mesh.dispose();
   }
 };
 
@@ -118952,9 +120999,9 @@ function denseArray(value, minimum, maximum, label4, seen) {
   }
   return values;
 }
-function canonicalNumber(value, label4, minimum, maximum, positive = false) {
-  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || (positive ? value <= minimum : value < minimum) || value > maximum) {
-    fail3(`${label4} must be a finite canonical number in ${positive ? "(" : "["}${minimum}, ${maximum}]`);
+function canonicalNumber(value, label4, minimum, maximum, positive3 = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || (positive3 ? value <= minimum : value < minimum) || value > maximum) {
+    fail3(`${label4} must be a finite canonical number in ${positive3 ? "(" : "["}${minimum}, ${maximum}]`);
   }
   return value;
 }
@@ -119489,6 +121536,7 @@ var WORLD_MAP_ROOT_KEYS = /* @__PURE__ */ new Set([
   "routes",
   "anchors",
   "gazetteer",
+  "designIndex",
   "provenance"
 ]);
 var REQUIRED_ARRAY_KEYS = ["land", "relief", "biomes", "waterways", "routes", "anchors"];
@@ -119520,14 +121568,14 @@ function fail4(message) {
 function canonicalNumber2(value) {
   return Object.is(value, -0) ? 0 : value;
 }
-function finite2(value, label4, maxAbs = MAX_WATER_FIELD_ABS_WORLD_M) {
+function finite4(value, label4, maxAbs = MAX_WATER_FIELD_ABS_WORLD_M) {
   if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > maxAbs) {
     fail4(`${label4} must be finite with absolute value <= ${maxAbs}`);
   }
   return canonicalNumber2(value);
 }
 function positiveFinite2(value, label4) {
-  const parsed = finite2(value, label4);
+  const parsed = finite4(value, label4);
   if (!(parsed > 0)) fail4(`${label4} must be positive`);
   return parsed;
 }
@@ -119597,13 +121645,13 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
     if (error51 instanceof HydrologyWaterArtifactCancelledError) throw new WaterFieldCancelledError();
     fail4(`generated water artifact verification failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
-  const prepared = Object.freeze({
+  const prepared2 = Object.freeze({
     artifactContentHash: contentHash2,
     bindings: decoded.bindings,
     topology: decoded.topology
   });
-  verifiedGeneratedInputs.add(prepared);
-  return prepared;
+  verifiedGeneratedInputs.add(prepared2);
+  return prepared2;
 }
 function verifiedGeneratedWaterFieldContentHash(value) {
   if (value === void 0) return null;
@@ -119620,12 +121668,12 @@ function validateWorldMapIdentity(input) {
   if (typeof map2.id !== "string" || map2.id.length === 0) fail4("water field WorldMap id must be non-empty");
   positiveFinite2(map2.unitsPerMeter, "water field WorldMap unitsPerMeter");
   if (!Array.isArray(map2.origin) || map2.origin.length !== 2) fail4("water field WorldMap origin must be a 2-tuple");
-  finite2(map2.origin[0], "water field WorldMap origin[0]");
-  finite2(map2.origin[1], "water field WorldMap origin[1]");
+  finite4(map2.origin[0], "water field WorldMap origin[0]");
+  finite4(map2.origin[1], "water field WorldMap origin[1]");
   const extent = plainRecord(map2.extent, "water field WorldMap extent");
   positiveFinite2(extent.w, "water field WorldMap extent.w");
   positiveFinite2(extent.h, "water field WorldMap extent.h");
-  finite2(map2.seaLevel, "water field WorldMap seaLevel", WATER_LIMITS.absLevelM);
+  finite4(map2.seaLevel, "water field WorldMap seaLevel", WATER_LIMITS.absLevelM);
   for (const key of REQUIRED_ARRAY_KEYS) if (!Array.isArray(map2[key])) fail4(`water field WorldMap ${key} must be an array`);
   const provenance2 = plainRecord(map2.provenance, "water field WorldMap provenance");
   if (!CONTENT_HASH_RE.test(provenance2.contentHash)) fail4("water field WorldMap provenance.contentHash must be lowercase sha256 hex");
@@ -119640,8 +121688,8 @@ function validateWorldMapIdentity(input) {
 }
 function transformedPoint(point3, originX, originZ, unitsPerMeter, label4) {
   return Object.freeze([
-    finite2(originX + point3[0] * unitsPerMeter, `${label4}[0]`),
-    finite2(originZ + point3[1] * unitsPerMeter, `${label4}[1]`)
+    finite4(originX + point3[0] * unitsPerMeter, `${label4}[0]`),
+    finite4(originZ + point3[1] * unitsPerMeter, `${label4}[1]`)
   ]);
 }
 function transformRing(ring2, originX, originZ, unitsPerMeter, label4, shouldCancel, work) {
@@ -120031,10 +122079,10 @@ var WaterField = class {
     Object.freeze(this);
   }
   #queryRaw(xValue, zValue, terrainHeightValue) {
-    const x3 = finite2(xValue, "water query x");
-    const z4 = finite2(zValue, "water query z");
+    const x3 = finite4(xValue, "water query x");
+    const z4 = finite4(zValue, "water query z");
     const terrainSupplied = terrainHeightValue !== void 0;
-    const terrainHeightM = terrainSupplied ? finite2(terrainHeightValue, "water query terrainHeightM") : null;
+    const terrainHeightM = terrainSupplied ? finite4(terrainHeightValue, "water query terrainHeightM") : null;
     const stats = { visitedNodes: 0, candidateBodies: 0, testedBodies: 0, edgeNodesVisited: 0, segmentTests: 0 };
     let winner = null;
     if (this.#nodes.length > 0) {
@@ -120141,12 +122189,12 @@ var WaterField = class {
   sampleGrid(options) {
     const source = plainRecord(options, "water sample options");
     const rect = plainRecord(source.rect, "water sample rect");
-    const x0 = finite2(rect.x0, "water sample rect.x0");
-    const z0 = finite2(rect.z0, "water sample rect.z0");
+    const x0 = finite4(rect.x0, "water sample rect.x0");
+    const z0 = finite4(rect.z0, "water sample rect.z0");
     const width = positiveFinite2(rect.w, "water sample rect.w");
     const height = positiveFinite2(rect.h, "water sample rect.h");
-    finite2(x0 + width, "water sample rect max x");
-    finite2(z0 + height, "water sample rect max z");
+    finite4(x0 + width, "water sample rect max x");
+    finite4(z0 + height, "water sample rect max z");
     const rows = sampleDimension(source.rows, "water sample rows", MAX_WATER_FIELD_ROWS);
     const cols = sampleDimension(source.cols, "water sample cols", MAX_WATER_FIELD_COLS);
     if (source.terrainSampler !== void 0 && typeof source.terrainSampler !== "function") fail4("water sample terrainSampler must be a function");
@@ -120163,7 +122211,7 @@ var WaterField = class {
         checkpoint2(source.shouldCancel, work++);
         const x3 = cols === 1 ? x0 + width / 2 : x0 + col / (cols - 1) * width;
         const terrainHeightM = source.terrainSampler === void 0 ? void 0 : source.terrainSampler(x3, z4, row, col);
-        if (source.terrainSampler !== void 0) finite2(terrainHeightM, `water sample terrainSampler(${row},${col})`);
+        if (source.terrainSampler !== void 0) finite4(terrainHeightM, `water sample terrainSampler(${row},${col})`);
         const queried = this.#queryRaw(x3, z4, terrainHeightM);
         const result = queried.result;
         const offset = (row * cols + col) * WATER_SAMPLE_RECORD_BYTES;
@@ -120202,12 +122250,12 @@ var WaterField = class {
     const body = this.#bodies[bodyIndex];
     if (body.source !== "authored") fail4("water body depth masks require an authored body with depth zones");
     const rect = plainRecord(source.rect, "water body depth mask rect");
-    const x0 = finite2(rect.x0, "water body depth mask rect.x0");
-    const z0 = finite2(rect.z0, "water body depth mask rect.z0");
+    const x0 = finite4(rect.x0, "water body depth mask rect.x0");
+    const z0 = finite4(rect.z0, "water body depth mask rect.z0");
     const width = positiveFinite2(rect.w, "water body depth mask rect.w");
     const height = positiveFinite2(rect.h, "water body depth mask rect.h");
-    finite2(x0 + width, "water body depth mask rect max x");
-    finite2(z0 + height, "water body depth mask rect max z");
+    finite4(x0 + width, "water body depth mask rect max x");
+    finite4(z0 + height, "water body depth mask rect max z");
     const rows = sampleDimension(source.rows, "water body depth mask rows", MAX_WATER_FIELD_ROWS);
     const cols = sampleDimension(source.cols, "water body depth mask cols", MAX_WATER_FIELD_COLS);
     const maximumDepthM = positiveFinite2(source.maximumDepthM, "water body depth mask maximumDepthM");
@@ -120290,17 +122338,17 @@ function createWaterField(worldMapInput, options = {}) {
 
 // src/world/water-contact.ts
 var CONTENT_HASH = /^[0-9a-f]{64}$/;
-function finite3(value, label4) {
+function finite5(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
 function parseBounds(value) {
   if (value === void 0) return null;
   const bounds = Object.freeze({
-    minX: finite3(value.minX, "water contact bounds.minX"),
-    maxX: finite3(value.maxX, "water contact bounds.maxX"),
-    minZ: finite3(value.minZ, "water contact bounds.minZ"),
-    maxZ: finite3(value.maxZ, "water contact bounds.maxZ")
+    minX: finite5(value.minX, "water contact bounds.minX"),
+    maxX: finite5(value.maxX, "water contact bounds.maxX"),
+    minZ: finite5(value.minZ, "water contact bounds.minZ"),
+    maxZ: finite5(value.maxZ, "water contact bounds.maxZ")
   });
   if (!(bounds.maxX > bounds.minX) || !(bounds.maxZ > bounds.minZ)) {
     throw new RangeError("water contact bounds must have positive width and height");
@@ -120364,9 +122412,9 @@ var WaterContactRuntime = class {
       throw new TypeError("water contact offset must be a 3-tuple");
     }
     const offset = Object.freeze([
-      finite3(offsetInput[0], "water contact offset[0]"),
-      finite3(offsetInput[1], "water contact offset[1]"),
-      finite3(offsetInput[2], "water contact offset[2]")
+      finite5(offsetInput[0], "water contact offset[0]"),
+      finite5(offsetInput[1], "water contact offset[1]"),
+      finite5(offsetInput[2], "water contact offset[2]")
     ]);
     const bounds = parseBounds(spec.bounds);
     const identity = Object.freeze({ worldMapContentHash: contentHash2, generatedArtifactContentHash });
@@ -120406,29 +122454,29 @@ var WaterContactRuntime = class {
       ...active.bounds === null ? {} : { bounds: active.bounds }
     }, generatedWater);
   }
-  activate(prepared, sampleTerrainHeight) {
-    if (prepared === null || typeof prepared !== "object" || !this.#prepared.has(prepared)) {
+  activate(prepared2, sampleTerrainHeight) {
+    if (prepared2 === null || typeof prepared2 !== "object" || !this.#prepared.has(prepared2)) {
       throw new TypeError("water contact activation requires a binding prepared by this runtime");
     }
     if (typeof sampleTerrainHeight !== "function") throw new TypeError("water contact terrain sampler must be a function");
-    const preparedState = this.#prepared.get(prepared);
+    const preparedState = this.#prepared.get(prepared2);
     if (this.#active !== null) {
-      if (samePrepared(this.#active, prepared)) {
+      if (samePrepared(this.#active, prepared2)) {
         this.#active = Object.freeze({
-          ...prepared,
+          ...prepared2,
           field: this.#active.field,
           worldMap: preparedState.worldMap,
           sampleTerrainHeight
         });
         return;
       }
-      if (this.#active.bindingId !== prepared.bindingId) {
+      if (this.#active.bindingId !== prepared2.bindingId) {
         throw new Error(`water contact binding conflict: '${this.#active.bindingId}' is already active`);
       }
-      this.#active = Object.freeze({ ...prepared, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
+      this.#active = Object.freeze({ ...prepared2, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
       return;
     }
-    this.#active = Object.freeze({ ...prepared, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
+    this.#active = Object.freeze({ ...prepared2, field: preparedState.field, worldMap: preparedState.worldMap, sampleTerrainHeight });
   }
   /** Clear only the named owner. A different terrain path cannot erase the active volume. */
   clear(bindingId) {
@@ -120437,15 +122485,15 @@ var WaterContactRuntime = class {
     return true;
   }
   query(worldXValue, worldZValue) {
-    const worldX = finite3(worldXValue, "water contact query x");
-    const worldZ = finite3(worldZValue, "water contact query z");
+    const worldX = finite5(worldXValue, "water contact query x");
+    const worldZ = finite5(worldZValue, "water contact query z");
     const active = this.#active;
     if (active === null) return drySample();
     const bounds = active.bounds;
     if (bounds !== null && (worldX < bounds.minX || worldX > bounds.maxX || worldZ < bounds.minZ || worldZ > bounds.maxZ)) {
       return drySample();
     }
-    const terrainHeightM = finite3(active.sampleTerrainHeight(worldX, worldZ), "water contact terrain height");
+    const terrainHeightM = finite5(active.sampleTerrainHeight(worldX, worldZ), "water contact terrain height");
     const [offsetX, offsetY, offsetZ] = active.offset;
     const result = active.field.query(worldX - offsetX, worldZ - offsetZ, terrainHeightM - offsetY);
     if (result.isSubmerged !== true || result.surfaceLevelM === null || result.actualSubmergedDepthM === null) {
@@ -120483,7 +122531,7 @@ function editableTerrainHeightSampler(tile) {
 }
 
 // src/skills/terrain-edit.ts
-var inertTransform3 = () => ({ position: { set() {
+var inertTransform2 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
@@ -120583,14 +122631,14 @@ function hashNoise(col, row) {
   h2 = Math.imul(h2 ^ h2 >>> 13, 1274126177) | 0;
   return ((h2 ^ h2 >>> 16) >>> 0) / 4294967296;
 }
-var PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6 };
+var PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6, tundra: 7 };
 var paintInput = external_exports.object({
   entity: external_exports.string().optional(),
   center: external_exports.tuple([external_exports.number(), external_exports.number()]),
   radius: external_exports.number().positive(),
   strength: external_exports.number().min(0).max(1).default(0.5),
   falloff: external_exports.enum(FALLOFFS).default("smooth"),
-  material: external_exports.enum(["sand", "grass", "rock", "dirt", "snow", "murk"]).default("grass"),
+  material: external_exports.enum(["sand", "grass", "rock", "dirt", "snow", "murk", "tundra"]).default("grass"),
   erase: external_exports.boolean().default(false)
 });
 function applyBrushPaint(tile, input) {
@@ -120676,7 +122724,7 @@ function applyBrush(tile, input) {
     }
   }
 }
-function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map(), assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), waterContact) {
+function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map(), assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), waterContact, grassVisualPackage) {
   const create = {
     name: "terrain.create",
     version: "1.0.0",
@@ -120734,6 +122782,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
         const raster = rasterizeWorldMap(worldMap, {
           size: input.size,
           resolution: n2,
+          center: [input.origin[0], input.origin[2]],
           seed: g3.seed,
           baseAmplitude: g3.amplitude,
           ...g3.erosion !== void 0 ? { erosion: g3.erosion } : {}
@@ -120784,7 +122833,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
         scene.add(built);
         mesh = built;
       }
-      const eid = spawnRenderable(ctx.world.ecs, inertTransform3(), input.origin[0], input.origin[1], input.origin[2]);
+      const eid = spawnRenderable(ctx.world.ecs, inertTransform2(), input.origin[0], input.origin[1], input.origin[2]);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
         ctx.world.ops.op_physics_remove_body(bodyId);
@@ -120795,17 +122844,18 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
       const layer = { tile, mesh, eid, entity, bodyId, ...elevationColors !== void 0 ? { elevationColors } : {} };
       layers.set(entity, layer);
       const supportsBladeDetail = Math.max(tile.scale[0], tile.scale[2]) <= 1024;
-      if (ctx.world.mode !== "headless" && ctx.world.peek !== true && supportsBladeDetail && scene !== void 0 && typeof scene.add === "function") {
+      if (ctx.world.mode !== "headless" && ctx.world.peek !== true && supportsBladeDetail && scene !== void 0 && typeof scene.add === "function" && grassVisualPackage !== void 0) {
         const grassSeed = input.generate?.seed ?? 1337;
         const seaLevel = elevationColors?.seaLevel;
-        layer.grass = new TileGrass(
+        layer.grass = new GrassFieldTileMount(
           scene,
           tile,
           () => ({
             seed: grassSeed,
             ...seaLevel !== void 0 ? { elevationMin: seaLevel + 0.05 } : {},
             exclusions: footprints.get(entity) ?? []
-          })
+          }),
+          grassVisualPackage
         );
         const clears = vegetationClears.get(entity) ?? [];
         clears.push(() => {
@@ -121291,7 +123341,7 @@ function chainFrom2(placed) {
   }
   return chain;
 }
-function laneCenterline(heightAt2, placed) {
+function laneCenterline(heightAt, placed) {
   if (placed.length < 2) return null;
   const chain = chainFrom2(placed);
   const pts = chain.map((p2, i2) => {
@@ -121310,15 +123360,15 @@ function laneCenterline(heightAt2, placed) {
     mx *= p2.r + 2.5;
     mz *= p2.r + 2.5;
     const x3 = p2.x + mx, z4 = p2.z + mz;
-    return { x: x3, y: heightAt2(x3, z4), z: z4 };
+    return { x: x3, y: heightAt(x3, z4), z: z4 };
   });
   const n2 = Math.max(64, pts.length * 24);
   const samples = [];
   for (let i2 = 0; i2 <= n2; i2++) samples.push(curvePoint(pts, i2 / n2));
   return { pts, samples, n: n2 };
 }
-function buildLaneGeometry(heightAt2, placed) {
-  const centerline = laneCenterline(heightAt2, placed);
+function buildLaneGeometry(heightAt, placed) {
+  const centerline = laneCenterline(heightAt, placed);
   if (centerline === null) return null;
   const { pts, samples, n: n2 } = centerline;
   const halfW = 1.4;
@@ -121354,7 +123404,7 @@ function buildLaneGeometry(heightAt2, placed) {
       const x3 = pp.x + sX * off, z4 = pp.z + sZ * off;
       const o2 = (i2 * W2 + c2) * 3;
       pos[o2] = x3;
-      pos[o2 + 1] = heightAt2(x3, z4) + CROSS[c2].lift;
+      pos[o2 + 1] = heightAt(x3, z4) + CROSS[c2].lift;
       pos[o2 + 2] = z4;
       const u3 = (i2 * W2 + c2) * 2;
       uv3[u3] = (0.5 - CROSS[c2].f * 0.5) * (halfW * 2);
@@ -121369,10 +123419,10 @@ function buildLaneGeometry(heightAt2, placed) {
   }
   return { positions: pos, uvs: uv3, indices: idx };
 }
-function buildGroundPadGeometry(heightAt2, x0, z0, r2, lift = 0.14) {
+function buildGroundPadGeometry(heightAt, x0, z0, r2, lift = 0.14) {
   const rings = Math.min(16, Math.max(6, Math.round(r2 / 1.8)));
   const seg = 36;
-  const pos = [x0, heightAt2(x0, z0) + lift, z0];
+  const pos = [x0, heightAt(x0, z0) + lift, z0];
   const uv3 = [x0, z0];
   const idx = [];
   for (let i2 = 1; i2 <= rings; i2++) {
@@ -121381,7 +123431,7 @@ function buildGroundPadGeometry(heightAt2, x0, z0, r2, lift = 0.14) {
     for (let s2 = 0; s2 < seg; s2++) {
       const a2 = s2 / seg * Math.PI * 2;
       const x3 = x0 + Math.cos(a2) * rad, z4 = z0 + Math.sin(a2) * rad;
-      pos.push(x3, heightAt2(x3, z4) + sink, z4);
+      pos.push(x3, heightAt(x3, z4) + sink, z4);
       uv3.push(x3, z4);
     }
   }
@@ -121397,7 +123447,7 @@ function buildGroundPadGeometry(heightAt2, x0, z0, r2, lift = 0.14) {
 }
 
 // src/materials/building-textures.ts
-var T10 = three_tsl_exports;
+var T13 = three_tsl_exports;
 var FIELD_SEED = 2654435761 | 0;
 function clamp015(x3) {
   return x3 < 0 ? 0 : x3 > 1 ? 1 : x3;
@@ -121464,8 +123514,8 @@ function bakeField(res, field) {
     }
   }
   mags.sort((a2, b22) => a2 - b22);
-  const cap = Math.max(1e-4, mags[Math.min(mags.length - 1, Math.floor(mags.length * 0.995))]);
-  const inv = 1 / cap;
+  const cap2 = Math.max(1e-4, mags[Math.min(mags.length - 1, Math.floor(mags.length * 0.995))]);
+  const inv = 1 / cap2;
   const data = new Uint8Array(res * res * 4);
   for (let i2 = 0; i2 < h2.length; i2++) {
     const o2 = i2 * 4;
@@ -121492,12 +123542,12 @@ function slateScale(u3, vk, k3) {
   const uk = u3 * SLATE_TILES + (k3 % 2 + 2) % 2 * 0.5;
   const ti = Math.floor(uk);
   const fu = uk - ti;
-  const cap = Math.sqrt(Math.max(0, 1 - (2 * fu - 1) * (2 * fu - 1)));
-  const vb = vk - (1 - cap) * SLATE_ROUND;
+  const cap2 = Math.sqrt(Math.max(0, 1 - (2 * fu - 1) * (2 * fu - 1)));
+  const vb = vk - (1 - cap2) * SLATE_ROUND;
   if (vb < 0 || vb > SLATE_OVERLAP) return -1;
   const t2 = vb / SLATE_OVERLAP;
   const body = 1 - 0.8 * t2;
-  const side = smoothstep5(0, 0.16, cap);
+  const side = smoothstep5(0, 0.16, cap2);
   return body * side;
 }
 function slateField(u3, v3) {
@@ -121602,10 +123652,10 @@ function texturedRoleMaterial(kind, baseColorHex, roughness3, opts) {
   const material = new MeshStandardNodeMaterial({ color: baseColorHex, roughness: roughness3, metalness: metalness3 });
   const layer = triplanarLayer(kindTexture(kind), scale2, normalStrength, sharpness);
   const c2 = new Color(baseColorHex);
-  const baseV = T10.vec3(c2.r, c2.g, c2.b);
+  const baseV = T13.vec3(c2.r, c2.g, c2.b);
   material.colorNode = baseV.mul(layer.value.sub(0.5).mul(mottle).add(1));
-  material.normalNode = T10.transformNormalToView(layer.normal.normalize());
-  material.roughnessNode = T10.clamp(T10.float(roughness3).add(layer.value.sub(0.5).mul(roughVar)), 0, 1);
+  material.normalNode = T13.transformNormalToView(layer.normal.normalize());
+  material.roughnessNode = T13.clamp(T13.float(roughness3).add(layer.value.sub(0.5).mul(roughVar)), 0, 1);
   return material;
 }
 
@@ -121624,11 +123674,11 @@ var ROLE_GRAIN = {
   slate: "stone"
 };
 var ROLE_TEXTURE = { slate: "slate", wood: "wood" };
-function kitMaterial(ctx, role, grainOverride) {
-  const p2 = resolveRoleMaterial(ctx.dd, role);
-  const tk = ROLE_TEXTURE[role];
+function kitMaterial(ctx, role2, grainOverride) {
+  const p2 = resolveRoleMaterial(ctx.dd, role2);
+  const tk = ROLE_TEXTURE[role2];
   if (tk !== void 0) return texturedRoleMaterial(tk, p2.color, p2.roughness, { metalness: p2.metalness });
-  const grain = grainOverride ?? ROLE_GRAIN[role] ?? "stone";
+  const grain = grainOverride ?? ROLE_GRAIN[role2] ?? "stone";
   const m2 = new MeshStandardNodeMaterial({ color: p2.color, roughness: p2.roughness, metalness: p2.metalness ?? 0 });
   applyProceduralPbr(m2, { color: p2.color, roughness: p2.roughness }, grain);
   return m2;
@@ -121681,18 +123731,18 @@ function mergedMesh(pieces, materials) {
   return new Mesh(geometry, materials);
 }
 var wallPanel = (spec, ctx) => {
-  const [W2, H3, T13] = spec.size;
+  const [W2, H3, T17] = spec.size;
   const pm = spec.params ?? {};
-  const reveal = Math.min(pm.reveal ?? 0.06, T13 * 0.6);
+  const reveal = Math.min(pm.reveal ?? 0.06, T17 * 0.6);
   const proud = pm.proud ?? 0.05;
   const frameW = Math.min(pm.frameW ?? 0.19, W2 * 0.28, H3 * 0.25);
   const fd = reveal + proud + 0.02;
-  const fz = T13 / 2 + proud - fd / 2;
+  const fz = T17 / 2 + proud - fd / 2;
   const half = (v3) => v3 / 2;
   const plasterMat = kitPlasterMaterial(ctx);
   const timberMat = kitMaterial(ctx, "wood");
   const pieces = [];
-  pieces.push({ geo: boxGeo(W2, H3, T13 - reveal, 0, 0, -reveal / 2), mat: 0 });
+  pieces.push({ geo: boxGeo(W2, H3, T17 - reveal, 0, 0, -reveal / 2), mat: 0 });
   const postX = half(W2) - half(frameW);
   const railY = half(H3) - half(frameW);
   pieces.push({ geo: boxGeo(frameW, H3, fd, -postX, 0, fz), mat: 1 });
@@ -121714,7 +123764,7 @@ var wallPanel = (spec, ctx) => {
     pieces.push({ geo: boxGeoRot(braceW, L3, fd, cx0 - reach / 2, cy0 + reach / 2, fz, Math.PI / 4), mat: 1 });
   }
   const mesh = mergedMesh(pieces, [plasterMat, timberMat]);
-  return { mesh, colliderHalf: [half(W2), half(H3), half(T13) + proud] };
+  return { mesh, colliderHalf: [half(W2), half(H3), half(T17) + proud] };
 };
 var stairPart = (spec, ctx) => {
   const [W2, H3, Dep] = spec.size;
@@ -121931,7 +123981,7 @@ var DEFAULT_DESIGN_DIRECTION = {
 
 // src/skills/building-recipe.ts
 var EPS2 = 1e-3;
-var inertTransform4 = () => ({ position: { set() {
+var inertTransform3 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
@@ -121945,7 +123995,7 @@ function assembleBuilding(recipe, position, world, opts) {
   const ctx = { dd, seed: opts?.seed ?? 0 };
   const gen = (kind) => opts?.parts?.[kind] ?? KIT[kind];
   const masonryWalls = recipe.construction === "cut-stone" || recipe.construction === "cob";
-  const rootEid = spawnRenderable(world.ecs, inertTransform4(), px2, py2, pz2);
+  const rootEid = spawnRenderable(world.ecs, inertTransform3(), px2, py2, pz2);
   if (rootEid >= MAX_ENTITIES) {
     despawnRenderable(world.ecs, rootEid);
     throw new Error("assembleBuilding: entity capacity exceeded (root)");
@@ -121955,10 +124005,10 @@ function assembleBuilding(recipe, position, world, opts) {
   const parts = [];
   const toWorld2 = (local) => [px2 + local[0] * cosY + local[2] * sinY, py2 + local[1], pz2 - local[0] * sinY + local[2] * cosY];
   const SIDE_YAW = { north: 0, south: Math.PI, east: Math.PI / 2, west: -Math.PI / 2 };
-  const placePart = (structuralKind, partKind, role, local, partLocalSize, sideYaw, swapXZ) => {
+  const placePart = (structuralKind, partKind, role2, local, partLocalSize, sideYaw, swapXZ) => {
     const [lx, ly, lz] = partLocalSize;
     if (lx <= EPS2 || ly <= EPS2 || lz <= EPS2) return void 0;
-    const out = gen(partKind)({ kind: partKind, size: [lx, ly, lz], role }, ctx);
+    const out = gen(partKind)({ kind: partKind, size: [lx, ly, lz], role: role2 }, ctx);
     const partYaw = yaw + sideYaw;
     const ch = out.colliderHalf;
     const half = swapXZ ? [ch[2], ch[1], ch[0]] : [ch[0], ch[1], ch[2]];
@@ -121974,10 +124024,10 @@ function assembleBuilding(recipe, position, world, opts) {
     placePart("plinth", "plinth", "stone", [0, -ph / 2, 0], [W2 + over * 2, ph, D3 + over * 2], 0, false);
   }
   placePart("floor", "sill", "trim", [0, -t2 / 2, 0], [W2, t2, D3], 0, false);
-  const seg = (side, structuralKind, partKind, axisC, axisLen, yC, ySize, role = "stone", thick = t2) => {
+  const seg = (side, structuralKind, partKind, axisC, axisLen, yC, ySize, role2 = "stone", thick = t2) => {
     if (axisLen <= EPS2 || ySize <= EPS2) return;
     const local = side === "north" ? [axisC, yC, D3 / 2 - t2 / 2] : side === "south" ? [axisC, yC, -D3 / 2 + t2 / 2] : side === "east" ? [W2 / 2 - t2 / 2, yC, axisC] : [-W2 / 2 + t2 / 2, yC, axisC];
-    placePart(structuralKind, partKind, role, local, [axisLen, ySize, thick], SIDE_YAW[side], side === "east" || side === "west");
+    placePart(structuralKind, partKind, role2, local, [axisLen, ySize, thick], SIDE_YAW[side], side === "east" || side === "west");
   };
   const WALL_PANEL_MIN = 0.8;
   const emitWall = (side) => {
@@ -122250,6 +124300,166 @@ var BUILDING_ARCHETYPES = {
 };
 function archetypeBrief(id) {
   return BUILDING_ARCHETYPES[id];
+}
+
+// src/skills/grass-plan.ts
+var GRASS_BLADE_ASSET = "__grass_blade__";
+var GRASS_CLIMATES = {
+  // Lush green high summer.
+  summer: { base: 4153127, tip: 9416267, coverage: 0.85, snowMix: 0 },
+  // Gold-brown turning autumn.
+  autumn: { base: 7296290, tip: 12819012, coverage: 0.7, snowMix: 0 },
+  // Sparse, dry, desaturated tan.
+  dry: { base: 8681273, tip: 13287043, coverage: 0.4, snowMix: 0 },
+  // Sparse, blue-grey, snow-dusted winter.
+  winter: { base: 5858639, tip: 14081495, coverage: 0.32, snowMix: 0.55 }
+};
+function buildGrassScatterConfig(plan) {
+  return {
+    seed: plan.seed,
+    density: plan.density,
+    assets: [{ id: GRASS_BLADE_ASSET }],
+    slopeMax: plan.slopeMax,
+    sizeRange: plan.sizeRange,
+    coverage: plan.coverage,
+    cluster: plan.cluster,
+    ...plan.elevationMin !== void 0 ? { elevationMin: plan.elevationMin } : {},
+    ...plan.elevationMax !== void 0 ? { elevationMax: plan.elevationMax } : {},
+    ...plan.exclusions !== void 0 && plan.exclusions.length > 0 ? { exclusions: plan.exclusions } : {},
+    ...plan.inclusions !== void 0 && plan.inclusions.length > 0 ? { inclusions: plan.inclusions } : {}
+  };
+}
+function planGrassBlades(tile, plan) {
+  return scatterAssets(tile, plan.seed, buildGrassScatterConfig(plan));
+}
+
+// src/render/grass-placement-mesh.ts
+var T14 = three_tsl_exports;
+var Y_AXIS3 = new Vector3(0, 1, 0);
+function buildGrassInstancedMesh(placements, opts, selection) {
+  if (placements.length === 0) return null;
+  const profile = selection.visualPackage.profile(selection.quality);
+  const bladesPerInstance = profile.bladesPerInstance[selection.lod];
+  const bladeBudget = Math.min(Math.max(1, Math.floor(opts.maxBlades)), profile.maxResidentBlades);
+  const cap2 = Math.max(1, Math.floor(bladeBudget / bladesPerInstance));
+  let kept = placements;
+  if (placements.length > cap2) {
+    const cx = opts.featureOrigin?.[0] ?? placements.reduce((sum, placement) => sum + placement.x, 0) / placements.length;
+    const cz = opts.featureOrigin?.[2] ?? placements.reduce((sum, placement) => sum + placement.z, 0) / placements.length;
+    kept = [...placements].sort((left, right) => {
+      const ld = (left.x - cx) ** 2 + (left.z - cz) ** 2;
+      const rd = (right.x - cx) ** 2 + (right.z - cz) ** 2;
+      return ld - rd || left.z - right.z || left.x - right.x;
+    }).slice(0, cap2);
+  }
+  const context3 = {
+    quality: selection.quality,
+    lod: selection.lod,
+    maxBlades: bladeBudget,
+    ...opts.featureOrigin === void 0 ? {} : { featureOrigin: opts.featureOrigin },
+    ...selection.variant === void 0 ? {} : { variant: selection.variant }
+  };
+  const geometry = selection.visualPackage.createGeometry(context3);
+  const material = selection.visualPackage.createMaterial(context3);
+  const mesh = new InstancedMesh(geometry, material, kept.length);
+  const wind = new Float32Array(kept.length * 4);
+  const matrix = new Matrix4();
+  const rotation = new Quaternion();
+  const position = new Vector3();
+  const scale2 = new Vector3();
+  const originX = opts.featureOrigin?.[0] ?? 0;
+  const originY = opts.featureOrigin?.[1] ?? 0;
+  const originZ = opts.featureOrigin?.[2] ?? 0;
+  for (let index = 0; index < kept.length; index++) {
+    const placement = kept[index];
+    position.set(placement.x - originX, placement.y - originY, placement.z - originZ);
+    rotation.setFromAxisAngle(Y_AXIS3, placement.yaw);
+    scale2.setScalar(placement.scale);
+    matrix.compose(position, rotation, scale2);
+    mesh.setMatrixAt(index, matrix);
+    wind[index * 4] = placement.x - originX;
+    wind[index * 4 + 1] = placement.z - originZ;
+    wind[index * 4 + 2] = 0;
+    wind[index * 4 + 3] = placement.yaw;
+  }
+  geometry.setAttribute("aWind", new InstancedBufferAttribute(wind, 4));
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.frustumCulled = false;
+  mesh.name = "limina:grass";
+  mesh.position.set(originX, originY, originZ);
+  return mesh;
+}
+function buildGrassGroundTint(tile, opts) {
+  const { nrows, ncols, heights } = tile;
+  const [ox, oy, oz] = tile.origin;
+  const [sx, sy, sz] = tile.scale;
+  const base = new Color(opts.baseColor);
+  const runX = sx / Math.max(1, ncols - 1) * 2 || 1;
+  const runZ = sz / Math.max(1, nrows - 1) * 2 || 1;
+  const height = (row, column) => heights[row * ncols + column];
+  const positions = new Float32Array(nrows * ncols * 3);
+  const tint = new Float32Array(nrows * ncols * 4);
+  let anyMask = false;
+  for (let row = 0; row < nrows; row++) for (let column = 0; column < ncols; column++) {
+    const vertex = row * ncols + column;
+    const x3 = ox - sx / 2 + column / Math.max(1, ncols - 1) * sx;
+    const z4 = oz - sz / 2 + row / Math.max(1, nrows - 1) * sz;
+    const y3 = oy + height(row, column) * sy;
+    positions[vertex * 3] = x3;
+    positions[vertex * 3 + 1] = y3 + 0.03;
+    positions[vertex * 3 + 2] = z4;
+    const dc = (height(row, Math.min(ncols - 1, column + 1)) - height(row, Math.max(0, column - 1))) * sy;
+    const dr = (height(Math.min(nrows - 1, row + 1), column) - height(Math.max(0, row - 1), column)) * sy;
+    const slope = Math.hypot(dc / runX, dr / runZ);
+    let masked = y3 >= opts.elevationMin && y3 <= opts.elevationMax && slope <= opts.slopeMax;
+    if (masked) for (const exclusion of opts.exclusions) {
+      const dx = x3 - exclusion.x, dz = z4 - exclusion.z;
+      if (dx * dx + dz * dz <= exclusion.r * exclusion.r) {
+        masked = false;
+        break;
+      }
+    }
+    if (masked && opts.inclusions !== void 0 && opts.inclusions.length > 0) {
+      masked = opts.inclusions.some((inclusion) => {
+        const dx = x3 - inclusion.x, dz = z4 - inclusion.z;
+        return dx * dx + dz * dz <= inclusion.r * inclusion.r;
+      });
+    }
+    let hash4 = (Math.imul(column + 1, 374761393) ^ Math.imul(row + 1, 668265263)) >>> 0;
+    hash4 = Math.imul(hash4 ^ hash4 >>> 13, 1274126177) >>> 0;
+    const jitter = 0.9 + hash4 / 4294967296 * 0.2;
+    tint[vertex * 4] = base.r * jitter;
+    tint[vertex * 4 + 1] = base.g * jitter;
+    tint[vertex * 4 + 2] = base.b * jitter;
+    tint[vertex * 4 + 3] = masked ? opts.opacity : 0;
+    anyMask ||= masked;
+  }
+  if (!anyMask) return null;
+  const indices = [];
+  for (let row = 0; row < nrows - 1; row++) for (let column = 0; column < ncols - 1; column++) {
+    const a2 = row * ncols + column, b3 = a2 + 1, c2 = (row + 1) * ncols + column, d2 = c2 + 1;
+    indices.push(a2, c2, b3, b3, c2, d2);
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("aTint", new Float32BufferAttribute(tint, 4));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  const material = new MeshStandardNodeMaterial({ roughness: 0.95, metalness: 0, transparent: true, side: DoubleSide });
+  const tintNode = T14.attribute("aTint", "vec4");
+  material.colorNode = T14.vec3(tintNode.x, tintNode.y, tintNode.z);
+  material.opacityNode = tintNode.w;
+  material.depthWrite = false;
+  const mesh = new Mesh(geometry, material);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.renderOrder = -1;
+  mesh.name = "limina:grass-tint";
+  return mesh;
 }
 
 // src/world/pipeline/village-materials.mjs
@@ -122572,7 +124782,7 @@ function makeMaterials(THREE, direction2, rng) {
 }
 
 // src/skills/village.ts
-var inertTransform5 = () => ({ position: { set() {
+var inertTransform4 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
@@ -122703,7 +124913,7 @@ function footprintRadius(assets, assetId) {
 }
 var FOOTPRINT_TREE_MARGIN = 2.5;
 var LANE_HALF_WIDTH = 1.4;
-function registerVillageSkills(registry2, layers, assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map()) {
+function registerVillageSkills(registry2, layers, assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), grassVisualPackage) {
   const build = {
     name: "village.build",
     version: "1.0.0",
@@ -122728,13 +124938,19 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       }
       const tile = layer.tile;
       const siting = input.steering.siting;
+      const scene = ctx.world.scene;
+      const canRender = scene !== void 0 && typeof scene.add === "function";
+      const canRenderGrass = canRender && (ctx.world.mode !== "headless" || ctx.world.renderer !== void 0);
+      if (siting.yard === "lawn" && canRenderGrass && grassVisualPackage === void 0) {
+        throw new Error("village.build: lawn rendering requires an injected GrassFieldVisualPackage");
+      }
       const n2 = tile.ncols, nr = tile.nrows;
       const [ox, oy, oz] = tile.origin;
       const sizeX = tile.scale[0], sizeZ = tile.scale[2];
       const x0 = ox - sizeX / 2, z0 = oz - sizeZ / 2;
       const dxStep = sizeX / (n2 - 1), dzStep = sizeZ / (nr - 1);
       const heights = tile.heights;
-      const heightAt2 = (x3, z4) => {
+      const heightAt = (x3, z4) => {
         const fc = clamp5((x3 - x0) / dxStep, 0, n2 - 1);
         const fr = clamp5((z4 - z0) / dzStep, 0, nr - 1);
         const c0 = Math.floor(fc), r0 = Math.floor(fr);
@@ -122747,8 +124963,8 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       };
       const step3 = Math.max(1e-3, dxStep);
       const slopeAt = (x3, z4) => {
-        const hx = heightAt2(x3 + step3, z4) - heightAt2(x3 - step3, z4);
-        const hz = heightAt2(x3, z4 + step3) - heightAt2(x3, z4 - step3);
+        const hx = heightAt(x3 + step3, z4) - heightAt(x3 - step3, z4);
+        const hz = heightAt(x3, z4 + step3) - heightAt(x3, z4 - step3);
         return Math.hypot(hx, hz) / (2 * step3);
       };
       let lo = Infinity, hi = -Infinity;
@@ -122759,7 +124975,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       }
       const seaLevel = layer.elevationColors?.seaLevel ?? oy + lo - 2;
       const sampler3 = {
-        heightAt: heightAt2,
+        heightAt,
         slopeAt,
         halfSize: sizeX / 2,
         seaLevel,
@@ -122846,7 +125062,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         radii,
         anchorBindings.length > 0 ? anchorBindings : void 0
       );
-      const levelTargets = placements.map((p2) => heightAt2(p2.x, p2.z));
+      const levelTargets = placements.map((p2) => heightAt(p2.x, p2.z));
       const snowSafeFocalTop = sampler3.seaLevel + 2 + Math.max(1, hi - lo) * 0.82;
       for (let k3 = 0; k3 < placements.length; k3++) {
         const p2 = placements[k3];
@@ -122889,7 +125105,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       const outPlacements = [];
       for (const p2 of placements) {
         const inst = instOf[p2.index];
-        const y3 = heightAt2(p2.x, p2.z);
+        const y3 = heightAt(p2.x, p2.z);
         const kitSeed = villageSeed + Math.imul(p2.index + 1, 2654435761) >>> 0;
         const anchorId = p2.anchorId;
         if (inst.kind === "brief") {
@@ -122932,16 +125148,14 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       }
       const placed = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] }));
       const groundGeoms = [];
-      const laneBuf = siting.lane === "none" ? null : buildLaneGeometry(heightAt2, placed);
+      const laneBuf = siting.lane === "none" ? null : buildLaneGeometry(heightAt, placed);
       if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: siting.lane === "cobble" ? "cobble" : siting.lane === "gravel" ? "gravel" : "earth" });
       if ((siting.yard === "earth" || siting.yard === "cobble-courtyard") && placements.length > 0) {
         const p2 = placements[0];
         const r2 = radii[p2.index];
-        groundGeoms.push({ buf: buildGroundPadGeometry(heightAt2, p2.x, p2.z, r2 + 16, 0.2), kind: "earth" });
-        if (siting.yard === "cobble-courtyard") groundGeoms.push({ buf: buildGroundPadGeometry(heightAt2, p2.x, p2.z, r2 + 4, 0.32), kind: "cobble" });
+        groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p2.x, p2.z, r2 + 16, 0.2), kind: "earth" });
+        if (siting.yard === "cobble-courtyard") groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p2.x, p2.z, r2 + 4, 0.32), kind: "cobble" });
       }
-      const scene = ctx.world.scene;
-      const canRender = scene !== void 0 && typeof scene.add === "function";
       const groundSeed = (input.seed ?? hashStr(JSON.stringify({ d: input.direction, s: input.steering }))) >>> 0;
       const hasCanvas = typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined";
       const mats = canRender && hasCanvas ? makeMaterials(three_bundle_exports, input.direction, mulberry323(groundSeed || 1)) : null;
@@ -122952,7 +125166,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
           scene.add(m2);
           mesh = m2;
         }
-        const geid = spawnRenderable(ctx.world.ecs, inertTransform5(), 0, 0, 0);
+        const geid = spawnRenderable(ctx.world.ecs, inertTransform4(), 0, 0, 0);
         if (geid >= MAX_ENTITIES) {
           despawnRenderable(ctx.world.ecs, geid);
           throw new Error("village.build: entity capacity exceeded (MAX_ENTITIES) placing ground geometry");
@@ -122960,38 +125174,35 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         const groundEntity = ctx.world.entities.create({ eid: geid, mesh, origin: { tool: "village.build", input: { ground: true } } });
         entities.push(groundEntity);
       }
-      if (siting.yard === "lawn" && canRender) {
+      if (siting.yard === "lawn" && canRenderGrass) {
         const lawnIncl = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] + 12 }));
         const lawnExcl = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] * 0.6 }));
         const elevMin = sampler3.seaLevel - 5, elevMax = oy + hi + 12;
-        const lawnPlacements = planGrassBlades(tile, {
-          seed: (villageSeed ^ 439041101) >>> 0,
-          density: 300,
-          coverage: 0.97,
-          cluster: 0.12,
-          slopeMax: 4,
-          sizeRange: [0.7, 1.1],
-          elevationMin: elevMin,
-          elevationMax: elevMax,
-          exclusions: lawnExcl,
-          inclusions: lawnIncl
-        });
         const lawnMeshes = [];
-        const lawnMesh = buildGrassInstancedMesh(lawnPlacements, {
-          climate: "summer",
-          bladeHeight: 0.22,
-          bladeWidth: 0.05,
-          segments: 3,
-          curvature: 0.05,
-          windStrength: 0.03,
-          windSpeed: 1,
-          windGust: 0.04,
-          windGustFreq: 0.18,
-          sssStrength: 0.5,
-          aoStrength: 0.5,
-          maxBlades: 9e4
-        });
-        if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
+        const lawnBladeBudget = Math.max(3, Math.floor(
+          grassVisualPackage.profile("performance").maxResidentBlades / Math.max(1, placements.length)
+        ));
+        for (let lawnIndex = 0; lawnIndex < placements.length; lawnIndex++) {
+          const p2 = placements[lawnIndex];
+          const lawnPlacements = planGrassBlades(tile, {
+            seed: (villageSeed ^ 439041101) + lawnIndex * 2654435761 >>> 0,
+            density: 300,
+            coverage: 0.97,
+            cluster: 0.12,
+            slopeMax: 4,
+            sizeRange: [0.7, 1.1],
+            elevationMin: elevMin,
+            elevationMax: elevMax,
+            exclusions: [lawnExcl[lawnIndex]],
+            inclusions: [lawnIncl[lawnIndex]]
+          });
+          const lawnMesh = buildGrassInstancedMesh(
+            lawnPlacements,
+            { maxBlades: lawnBladeBudget, featureOrigin: [p2.x, 0, p2.z] },
+            { visualPackage: grassVisualPackage, quality: "performance", lod: 1, variant: "summer" }
+          );
+          if (lawnMesh !== null) lawnMeshes.push(lawnMesh);
+        }
         const lawnTint = buildGrassGroundTint(tile, {
           baseColor: GRASS_CLIMATES.summer.base,
           elevationMin: elevMin,
@@ -123004,7 +125215,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         if (lawnTint !== null) lawnMeshes.push(lawnTint);
         for (const lm of lawnMeshes) {
           scene.add(lm);
-          const leid = spawnRenderable(ctx.world.ecs, inertTransform5(), 0, 0, 0);
+          const leid = spawnRenderable(ctx.world.ecs, inertTransform4(), 0, 0, 0);
           if (leid >= MAX_ENTITIES) {
             despawnRenderable(ctx.world.ecs, leid);
             throw new Error("village.build: entity capacity exceeded (lawn)");
@@ -123047,7 +125258,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
               const root = await parseGltfScene(id2, assets.resolve(id2).bytes, ctx.world.gltfCache);
               for (const dm of buildAssetInstancedMeshes(root, list, { normalizeHeight: 0.5 })) {
                 scene.add(dm);
-                const deid = spawnRenderable(ctx.world.ecs, inertTransform5(), 0, 0, 0);
+                const deid = spawnRenderable(ctx.world.ecs, inertTransform4(), 0, 0, 0);
                 if (deid >= MAX_ENTITIES) {
                   despawnRenderable(ctx.world.ecs, deid);
                   break;
@@ -123079,7 +125290,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         const r2 = Math.min(core + siting.clearingMargin, 30);
         exclusions.push({ x: cx, z: cz, r: r2 });
       }
-      const laneCl = laneCenterline(heightAt2, placed);
+      const laneCl = laneCenterline(heightAt, placed);
       if (laneCl !== null) {
         const laneR = LANE_HALF_WIDTH + FOOTPRINT_TREE_MARGIN;
         const spacing = laneR;
@@ -123115,7 +125326,7 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
 }
 
 // src/skills/vegetation.ts
-var inertTransform6 = () => ({ position: { set() {
+var inertTransform5 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
@@ -123124,7 +125335,19 @@ var nextFrame = () => new Promise((resolve) => {
   else setTimeout(resolve, 0);
 });
 var EMPTY_VEGETATION_PACK = {};
-var vegetationPackSchema = external_exports.record(external_exports.string(), external_exports.array(external_exports.object({ id: external_exports.string().min(1), weight: external_exports.number().positive().optional() })));
+var treeLodSchema = external_exports.object({
+  reducedId: external_exports.string().min(1),
+  reducedDistance: external_exports.number().positive(),
+  impostorId: external_exports.string().min(1),
+  impostorDistance: external_exports.number().positive(),
+  cullDistance: external_exports.number().positive(),
+  hysteresis: external_exports.number().nonnegative().optional()
+}).refine(
+  (value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+  { message: "treeLod distances must be strictly increasing" }
+);
+var vegetationPackEntrySchema = external_exports.object({ id: external_exports.string().min(1), weight: external_exports.number().positive().optional(), treeLod: treeLodSchema.optional() });
+var vegetationPackSchema = external_exports.record(external_exports.string(), external_exports.array(vegetationPackEntrySchema));
 function loadVegetationPack(ops2) {
   try {
     const bytes = ops2.op_read_asset("tree-pack.json");
@@ -123134,16 +125357,27 @@ function loadVegetationPack(ops2) {
   }
   return {};
 }
-function speciesPaletteIds(species, explicit, pack) {
+function speciesPaletteEntries(species, explicit, pack) {
   const entries = explicit !== void 0 && explicit.length > 0 ? explicit : species.flatMap((s2) => pack[s2] ?? []);
-  return [...new Set(entries.map((e2) => e2.id))];
+  const byId = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const previous = byId.get(entry.id);
+    if (previous !== void 0 && (previous.treeLod !== void 0 || entry.treeLod !== void 0)) {
+      throw new RangeError(`vegetation: treeLod-enabled archetype '${entry.id}' must be unique`);
+    }
+    if (previous === void 0) byId.set(entry.id, entry);
+  }
+  return [...byId.values()];
+}
+function speciesPaletteIds(species, explicit, pack) {
+  return speciesPaletteEntries(species, explicit, pack).map((entry) => entry.id);
 }
 function pickArchetype(palette, seed) {
   if (palette.length === 0) throw new Error("vegetation: empty archetype palette");
   const i2 = (seed % palette.length + palette.length) % palette.length;
   return palette[i2];
 }
-var paletteAssetSchema = external_exports.object({ id: external_exports.string().min(1), weight: external_exports.number().positive().optional() });
+var paletteAssetSchema = vegetationPackEntrySchema;
 var scatterInput2 = external_exports.object({
   /** Terrain layer to scatter on. Defaults to the most recently created one. */
   terrain: external_exports.string().optional(),
@@ -123214,10 +125448,20 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
       };
       const species = input.species ?? ["spruce", "pine", "birch"];
       const pack = input.assets !== void 0 && input.assets.length > 0 ? EMPTY_VEGETATION_PACK : loadVegetationPack(ctx.world.ops);
-      const paletteIds = speciesPaletteIds(species, input.assets, pack);
+      const paletteEntries = speciesPaletteEntries(species, input.assets, pack);
+      const paletteIds = paletteEntries.map((entry) => entry.id);
+      const paletteById = new Map(paletteEntries.map((entry) => [entry.id, entry]));
       if (paletteIds.length === 0) throw new Error("vegetation.scatter: no archetypes \u2014 pass assets:[...] or install a tree-pack.json binding the requested species");
+      const treeEntries = paletteEntries.filter((entry) => entry.treeLod !== void 0);
+      if (treeEntries.length > 12) throw new RangeError("vegetation.scatter: treeLod palette exceeds the 12-species runtime cap");
       const assetHashes = {};
-      for (const id of paletteIds) assetHashes[id] = assets.resolve(id).hash;
+      for (const entry of paletteEntries) {
+        assetHashes[entry.id] = assets.resolve(entry.id).hash;
+        if (entry.treeLod !== void 0) {
+          assetHashes[entry.treeLod.reducedId] = assets.resolve(entry.treeLod.reducedId).hash;
+          assetHashes[entry.treeLod.impostorId] = assets.resolve(entry.treeLod.impostorId).hash;
+        }
+      }
       let loH = Infinity;
       for (let i2 = 0; i2 < layer.tile.heights.length; i2++) {
         const v3 = layer.tile.heights[i2];
@@ -123245,19 +125489,48 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
       };
       const scene = ctx.world.scene;
       const canRender = ctx.world.mode !== "headless" && scene !== void 0 && typeof scene.add === "function";
-      let meshes = [];
+      let meshes2 = [];
+      let treePopulations = [];
+      const worldLods = ctx.world.lods ??= [];
+      let mountedDraws = 0;
       let placements = computePlacements();
+      let active = true;
+      let entity = "";
+      let clear;
       const disposeMeshes = () => {
-        for (const m2 of meshes) {
-          if (typeof scene?.remove === "function") scene.remove(m2);
-          disposeAssetInstancedMesh(m2);
+        const errors = [];
+        const owned = meshes2;
+        const ownedTrees = treePopulations;
+        meshes2 = [];
+        treePopulations = [];
+        mountedDraws = 0;
+        for (const population of ownedTrees) {
+          const index = worldLods.indexOf(population);
+          if (index >= 0) worldLods.splice(index, 1);
+          try {
+            population.dispose();
+          } catch (error51) {
+            errors.push(error51);
+          }
         }
-        meshes = [];
+        for (const m2 of owned) {
+          try {
+            if (typeof scene?.remove === "function") scene.remove(m2);
+          } catch (error51) {
+            errors.push(error51);
+          }
+          try {
+            disposeAssetInstancedMesh(m2);
+          } catch (error51) {
+            errors.push(error51);
+          }
+        }
+        if (errors.length > 0) throw new AggregateError(errors, `vegetation forest disposal failed in ${errors.length} operation(s)`);
       };
       const remount = async () => {
+        if (!active) return;
         placements = computePlacements();
         if (!canRender) return;
-        disposeMeshes();
         const byId = /* @__PURE__ */ new Map();
         for (const inst of placements) {
           let list = byId.get(inst.assetId);
@@ -123267,12 +125540,48 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
           }
           list.push(inst);
         }
+        let treePlacementCount = 0;
+        for (const [id, list] of byId) if (paletteById.get(id)?.treeLod !== void 0) treePlacementCount += list.length;
+        if (treePlacementCount > 24576) throw new RangeError("vegetation.scatter: treeLod placements exceed the 24,576 active-tree cap");
+        disposeMeshes();
         let idx = 0;
         const totalArchetypes = byId.size;
         for (const [id, list] of byId) {
+          if (!active) return;
           idx++;
           ctx.emit("vegetation.mounting", { archetype: id, index: idx, total: totalArchetypes, instances: list.length });
           try {
+            const entry = paletteById.get(id);
+            if (entry === void 0) throw new Error(`vegetation.scatter: placement references unknown archetype '${id}'`);
+            if (entry.treeLod !== void 0) {
+              const [baseRoot, reducedRoot, impostorRoot] = await Promise.all([
+                parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache),
+                parseGltfScene(entry.treeLod.reducedId, assets.resolve(entry.treeLod.reducedId).bytes, ctx.world.gltfCache),
+                parseGltfScene(entry.treeLod.impostorId, assets.resolve(entry.treeLod.impostorId).bytes, ctx.world.gltfCache)
+              ]);
+              const population = new TreePopulationRuntime({
+                speciesId: id,
+                placements: list,
+                treeLod: entry.treeLod,
+                sourceHash: assetHashes[id],
+                reducedHash: assetHashes[entry.treeLod.reducedId],
+                baseRoot,
+                reducedRoot,
+                impostorRoot,
+                scene,
+                onError: (error51) => ctx.emit("vegetation.tree_population_error", { archetype: id, message: error51 instanceof Error ? error51.message : String(error51) })
+              });
+              if (!active) {
+                population.dispose();
+                return;
+              }
+              treePopulations.push(population);
+              worldLods.push(population);
+              population.update(ctx.world.camera);
+              mountedDraws += population.draws;
+              await nextFrame();
+              continue;
+            }
             const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
             const living = [];
             const dead = [];
@@ -123282,8 +125591,13 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
               for (const mesh of buildAssetInstancedMeshes(root, variant.set, { chunkSize: 96, ...variant.dead ? { dead: true } : {} })) {
                 mesh.castShadow = true;
                 mesh.receiveShadow = true;
+                if (!active) {
+                  disposeAssetInstancedMesh(mesh);
+                  continue;
+                }
                 scene?.add?.(mesh);
-                meshes.push(mesh);
+                meshes2.push(mesh);
+                mountedDraws++;
               }
             }
           } catch (err) {
@@ -123294,21 +125608,70 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
       };
       await remount();
       const [ox, oy, oz] = layer.tile.origin;
-      const eid = spawnRenderable(ctx.world.ecs, inertTransform6(), ox, oy, oz);
+      const eid = spawnRenderable(ctx.world.ecs, inertTransform5(), ox, oy, oz);
       if (eid >= MAX_ENTITIES) {
-        despawnRenderable(ctx.world.ecs, eid);
-        throw new Error("vegetation.scatter: entity capacity exceeded");
+        active = false;
+        const cleanup = [];
+        try {
+          disposeMeshes();
+        } catch (error51) {
+          cleanup.push(error51);
+        }
+        try {
+          despawnRenderable(ctx.world.ecs, eid);
+        } catch (error51) {
+          cleanup.push(error51);
+        }
+        const primary = new Error("vegetation.scatter: entity capacity exceeded");
+        if (cleanup.length > 0) throw new AggregateError([primary, ...cleanup], `vegetation.scatter capacity rejection and ${cleanup.length} cleanup operation(s) failed`);
+        throw primary;
       }
       const origin = { tool: "vegetation.scatter", input: { ...input } };
-      const entity = ctx.world.entities.create({ eid, origin });
-      tagEntity(ctx, entity, ["forest", "vegetation", ...input.tags ?? []]);
-      mounted.set(entity, disposeMeshes);
-      const clears = vegetationClears.get(terrainKey) ?? [];
-      clears.push(async () => {
-        await remount();
-      });
-      vegetationClears.set(terrainKey, clears);
-      ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: meshes.length });
+      const runtimeDispose = () => {
+        if (!active) return;
+        active = false;
+        mounted.delete(entity);
+        if (clear !== void 0) {
+          const registered = vegetationClears.get(terrainKey);
+          const index = registered?.indexOf(clear) ?? -1;
+          if (index >= 0) registered.splice(index, 1);
+          if (registered?.length === 0) vegetationClears.delete(terrainKey);
+        }
+        disposeMeshes();
+      };
+      try {
+        entity = ctx.world.entities.create({ eid, origin, runtimeDispose });
+        tagEntity(ctx, entity, ["forest", "vegetation", ...input.tags ?? []]);
+        mounted.set(entity, runtimeDispose);
+        const clears = vegetationClears.get(terrainKey) ?? [];
+        clear = async () => {
+          await remount();
+        };
+        clears.push(clear);
+        vegetationClears.set(terrainKey, clears);
+      } catch (error51) {
+        const cleanup = [];
+        try {
+          runtimeDispose();
+        } catch (cleanupError) {
+          cleanup.push(cleanupError);
+        }
+        if (entity !== "") {
+          try {
+            ctx.world.entities.destroy(entity);
+          } catch (cleanupError) {
+            cleanup.push(cleanupError);
+          }
+        }
+        try {
+          despawnRenderable(ctx.world.ecs, eid);
+        } catch (cleanupError) {
+          cleanup.push(cleanupError);
+        }
+        if (cleanup.length > 0) throw new AggregateError([error51, ...cleanup], `vegetation.scatter publication and ${cleanup.length} rollback operation(s) failed`);
+        throw error51;
+      }
+      ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: mountedDraws });
       return { entity, instances: placements.length, assetHashes, placements };
     }
   };
@@ -123378,8 +125741,331 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
   registry2.register(plant);
 }
 
+// src/skills/grass-field.ts
+var MAX_GRID_TILES = 225;
+var inertTransform6 = () => ({ position: { set() {
+} }, quaternion: { set() {
+} }, scale: { set() {
+} } });
+var inputSchema = external_exports.object({
+  terrain: external_exports.string().optional(),
+  seed: external_exports.number().int().min(-2147483648).max(2147483647).default(1337),
+  spacing: external_exports.number().positive().default(0.75),
+  tileSize: external_exports.number().positive().default(24),
+  elevationMin: external_exports.number().optional(),
+  elevationMax: external_exports.number().optional(),
+  slopeMax: external_exports.number().nonnegative().default(0.9),
+  sizeRange: external_exports.tuple([external_exports.number().nonnegative(), external_exports.number().nonnegative()]).default([0.7, 1.3]),
+  climate: external_exports.enum(["summer", "autumn", "dry", "winter"]).default("summer")
+}).strict().superRefine((value, ctx) => {
+  if (value.sizeRange[1] < value.sizeRange[0]) ctx.addIssue({ code: "custom", message: "sizeRange max must be >= min", path: ["sizeRange"] });
+  if (value.elevationMin !== void 0 && value.elevationMax !== void 0 && value.elevationMax < value.elevationMin) {
+    ctx.addIssue({ code: "custom", message: "elevationMax must be >= elevationMin", path: ["elevationMax"] });
+  }
+});
+var outputSchema = external_exports.object({
+  entity: external_exports.string(),
+  gridTiles: external_exports.number().int(),
+  candidateSlots: external_exports.number().int(),
+  planHash: external_exports.string()
+}).strict();
+function throwCleanup(primary, cleanup, label4) {
+  if (cleanup.length === 0) throw primary;
+  throw new AggregateError([primary, ...cleanup], `${label4}; ${cleanup.length} cleanup operation(s) also failed`);
+}
+function attemptCleanup(operation, errors) {
+  try {
+    operation();
+  } catch (error51) {
+    errors.push(error51);
+  }
+}
+function prepareTiles(layer, input, exclusions, visualPackage) {
+  const tile = layer.tile;
+  const [ox, , oz] = tile.origin, [sx, , sz] = tile.scale;
+  const f2 = { x0: ox - sx / 2, z0: oz - sz / 2, x1: ox + sx / 2, z1: oz + sz / 2 };
+  const minTileX = Math.floor(f2.x0 / input.tileSize), maxTileX = Math.ceil(f2.x1 / input.tileSize);
+  const minTileZ = Math.floor(f2.z0 / input.tileSize), maxTileZ = Math.ceil(f2.z1 / input.tileSize);
+  const count = (maxTileX - minTileX) * (maxTileZ - minTileZ);
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_GRID_TILES) throw new RangeError(`vegetation.grassField grid tiles must be in [1, ${MAX_GRID_TILES}]`);
+  const packageSpacing = visualPackage === void 0 ? input.spacing : grassFieldInstanceSpacing(visualPackage, "balanced", 0);
+  const spacing = Math.min(input.spacing, packageSpacing);
+  const prepared2 = [];
+  for (let tz = minTileZ; tz < maxTileZ; tz++) for (let tx = minTileX; tx < maxTileX; tx++) {
+    const minX = Math.max(f2.x0, tx * input.tileSize), maxX = Math.min(f2.x1, (tx + 1) * input.tileSize);
+    const minZ = Math.max(f2.z0, tz * input.tileSize), maxZ = Math.min(f2.z1, (tz + 1) * input.tileSize);
+    if (!(maxX > minX && maxZ > minZ)) continue;
+    prepared2.push(...prepareGrassFieldTerrainPages(tile, {
+      seed: input.seed,
+      spacing,
+      elevationMin: input.elevationMin ?? layer.elevationColors?.seaLevel ?? -Infinity,
+      elevationMax: input.elevationMax ?? Infinity,
+      slopeMax: input.slopeMax,
+      exclusions
+    }, { minX, minZ, maxX, maxZ }));
+  }
+  validateGrassFieldResidentSlots(prepared2.map((entry) => entry.plan.slots));
+  if (visualPackage === void 0) return prepared2;
+  const profile = visualPackage.profile("balanced");
+  const bladesPerInstance = profile.bladesPerInstance[0];
+  let remainingInstances = Math.floor(profile.maxResidentBlades / bladesPerInstance);
+  const centered = [...prepared2].sort((left, right) => {
+    const lc = left.plan.bounds, rc = right.plan.bounds;
+    const lx = (lc.minX + lc.maxX) / 2 - tile.origin[0], lz = (lc.minZ + lc.maxZ) / 2 - tile.origin[2];
+    const rx = (rc.minX + rc.maxX) / 2 - tile.origin[0], rz = (rc.minZ + rc.maxZ) / 2 - tile.origin[2];
+    return lx * lx + lz * lz - (rx * rx + rz * rz) || lc.minZ - rc.minZ || lc.minX - rc.minX;
+  });
+  const bounded = [];
+  for (const entry of centered) {
+    if (entry.plan.slots > remainingInstances) continue;
+    bounded.push(entry);
+    remainingInstances -= entry.plan.slots;
+  }
+  return bounded;
+}
+function aggregateHash(tiles) {
+  let hash4 = 0xcbf29ce484222325n;
+  const feed = (byte) => {
+    hash4 = (hash4 ^ BigInt(byte & 255)) * 0x100000001b3n & 0xffffffffffffffffn;
+  };
+  const encoder = new TextEncoder();
+  const floatBytes = new DataView(new ArrayBuffer(4));
+  for (const tile of tiles) {
+    for (const byte of encoder.encode(tile.plan.hash)) feed(byte);
+    for (const height of tile.heights) {
+      floatBytes.setFloat32(0, height, true);
+      for (let index = 0; index < 4; index++) feed(floatBytes.getUint8(index));
+    }
+  }
+  return `fnv1a64:${hash4.toString(16).padStart(16, "0")}`;
+}
+function cpuTile(entry, input, visualPackage) {
+  const placements = [];
+  for (let slot = 0; slot < entry.plan.slots; slot++) if (entry.plan.accepted[slot] === 1) {
+    const candidate = grassFieldCandidate(entry.plan, slot), style = grassFieldRandom(input.seed, candidate.gridX, candidate.gridZ, 2);
+    placements.push({
+      assetId: "__grass_field__",
+      x: candidate.x,
+      y: entry.heights[slot],
+      z: candidate.z,
+      yaw: (style & 65535) * Math.PI * 2 / 65536,
+      scale: input.sizeRange[0] + (style >>> 16) / 65536 * (input.sizeRange[1] - input.sizeRange[0])
+    });
+  }
+  const mesh = buildGrassInstancedMesh(
+    placements,
+    { maxBlades: entry.plan.slots * visualPackage.profile("balanced").bladesPerInstance[0], featureOrigin: entry.featureOrigin },
+    { visualPackage, quality: "balanced", lod: 0, variant: input.climate }
+  );
+  if (mesh === null) return null;
+  const visual = visualPackage.profile("balanced").lod[0];
+  mesh.frustumCulled = true;
+  mesh.computeBoundingSphere();
+  if (mesh.boundingSphere !== null) {
+    mesh.boundingSphere.radius += visual.maxHeight * input.sizeRange[1] * 0.6 + visual.maxHorizontalDisplacement + visual.footprintRadius + 0.15;
+  }
+  let disposed = false;
+  return { mesh, dispose: () => {
+    if (disposed) return;
+    disposed = true;
+    const errors = [];
+    attemptCleanup(() => mesh.geometry.dispose(), errors);
+    attemptCleanup(() => mesh.material.dispose(), errors);
+    attemptCleanup(() => mesh.dispose(), errors);
+    if (errors.length > 0) throw new AggregateError(errors, `CPU grass tile disposal failed in ${errors.length} operation(s)`);
+  } };
+}
+async function gpuTile(entry, input, renderer, buildCompute, visualPackage) {
+  let compute3, geometry;
+  let material, mesh;
+  try {
+    compute3 = buildCompute({ renderer, plan: entry.plan, heights: entry.heights, sizeRange: input.sizeRange, featureOrigin: entry.featureOrigin });
+    const visualContext = {
+      quality: "balanced",
+      lod: 0,
+      maxBlades: entry.plan.slots * visualPackage.profile("balanced").bladesPerInstance[0],
+      variant: input.climate,
+      featureOrigin: entry.featureOrigin,
+      fieldAttributes: { rootYaw: compute3.rootYawAttribute, scale: compute3.scaleAttribute }
+    };
+    geometry = visualPackage.createGeometry(visualContext);
+    material = visualPackage.createMaterial(visualContext);
+    const visual = visualPackage.profile("balanced").lod[0];
+    mesh = new InstancedMesh(geometry, material, entry.plan.slots);
+    const identity = new Matrix4();
+    for (let slot = 0; slot < entry.plan.slots; slot++) mesh.setMatrixAt(slot, identity);
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.position.set(...entry.featureOrigin);
+    mesh.name = "limina:grass-field-compute";
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    let minY = Infinity, maxY = -Infinity;
+    for (const y3 of entry.heights) {
+      minY = Math.min(minY, y3);
+      maxY = Math.max(maxY, y3);
+    }
+    const cx = (entry.plan.bounds.minX + entry.plan.bounds.maxX) / 2 - entry.featureOrigin[0];
+    const cz = (entry.plan.bounds.minZ + entry.plan.bounds.maxZ) / 2 - entry.featureOrigin[2];
+    const cy = (minY + maxY) / 2 - entry.featureOrigin[1] + visual.maxHeight * input.sizeRange[1] / 2;
+    const rx = (entry.plan.bounds.maxX - entry.plan.bounds.minX) / 2;
+    const rz = (entry.plan.bounds.maxZ - entry.plan.bounds.minZ) / 2;
+    const ry = (maxY - minY) / 2 + visual.maxHeight * input.sizeRange[1] + visual.maxHorizontalDisplacement;
+    mesh.boundingSphere = new Sphere(
+      new Vector3(cx, cy, cz),
+      Math.sqrt(rx * rx + ry * ry + rz * rz) + visual.footprintRadius * input.sizeRange[1]
+    );
+    await compute3.dispatch();
+    let disposed = false;
+    return { mesh, dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      const errors = [];
+      attemptCleanup(() => compute3.dispose(), errors);
+      attemptCleanup(() => geometry.dispose(), errors);
+      attemptCleanup(() => material.dispose(), errors);
+      attemptCleanup(() => mesh.dispose(), errors);
+      if (errors.length > 0) throw new AggregateError(errors, `GPU grass tile disposal failed in ${errors.length} operation(s)`);
+    } };
+  } catch (error51) {
+    const cleanup = [];
+    if (compute3 !== void 0) attemptCleanup(() => compute3.dispose(), cleanup);
+    if (geometry !== void 0) attemptCleanup(() => geometry.dispose(), cleanup);
+    if (material !== void 0) attemptCleanup(() => material.dispose(), cleanup);
+    if (mesh !== void 0) attemptCleanup(() => mesh.dispose(), cleanup);
+    throwCleanup(error51, cleanup, "GPU grass tile build failed");
+  }
+}
+async function buildMount(prepared2, input, renderer, buildCompute, visualPackage) {
+  const root = new Group();
+  root.name = "limina:grass-field";
+  const tiles = [];
+  const native = renderer !== void 0 && isNativeGrassFieldComputeRenderer(renderer);
+  try {
+    for (const entry of prepared2) {
+      const tile = native ? await gpuTile(entry, input, renderer, buildCompute, visualPackage) : cpuTile(entry, input, visualPackage);
+      if (tile !== null) {
+        tiles.push(tile);
+        root.add(tile.mesh);
+      }
+    }
+  } catch (error51) {
+    const cleanup = [];
+    for (const tile of tiles) attemptCleanup(() => tile.dispose(), cleanup);
+    root.clear();
+    throwCleanup(error51, cleanup, "grass field mount build failed");
+  }
+  let disposed = false;
+  return { root, tiles: Object.freeze(tiles), dispose: () => {
+    if (disposed) return;
+    disposed = true;
+    root.clear();
+    const errors = [];
+    for (const tile of tiles) attemptCleanup(() => tile.dispose(), errors);
+    if (errors.length > 0) throw new AggregateError(errors, `grass field disposal failed for ${errors.length} tile resource(s)`);
+  } };
+}
+function registerGrassFieldSkill(registry2, layers, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), dependencies = {}, visualPackage) {
+  const definition = {
+    name: "vegetation.grassField",
+    version: "1.0.0",
+    category: "terrain",
+    permissions: ["scene.write"],
+    description: "Create a deterministic, bounded, paint-driven grass field using native WebGPU compute when available and the canonical CPU field plan otherwise.",
+    input: inputSchema,
+    output: outputSchema,
+    handler: async (input, ctx) => {
+      let terrainId = input.terrain;
+      if (terrainId === void 0) for (const key of layers.keys()) terrainId = key;
+      const layer = terrainId === void 0 ? void 0 : layers.get(terrainId);
+      if (layer === void 0 || terrainId === void 0) throw new Error("vegetation.grassField: no terrain layer \u2014 create one with terrain.create first");
+      const buildCompute = dependencies.buildCompute ?? buildGrassFieldCompute;
+      const initial = prepareTiles(layer, input, footprints.get(terrainId) ?? [], visualPackage);
+      const candidateSlots = validateGrassFieldResidentSlots(initial.map((entry) => entry.plan.slots));
+      const planHash = aggregateHash(initial);
+      const scene = ctx.world.scene;
+      const canRender = ctx.world.mode !== "headless" && typeof scene?.add === "function";
+      if (canRender && visualPackage === void 0) {
+        throw new Error("vegetation.grassField: rendering requires an injected GrassFieldVisualPackage");
+      }
+      let mount;
+      if (canRender) mount = await buildMount(initial, input, ctx.world.renderer, buildCompute, visualPackage);
+      const [ox, oy, oz] = layer.tile.origin;
+      const eid = spawnRenderable(ctx.world.ecs, inertTransform6(), ox, oy, oz);
+      if (eid >= MAX_ENTITIES) {
+        mount?.dispose();
+        despawnRenderable(ctx.world.ecs, eid);
+        throw new Error("vegetation.grassField: entity capacity exceeded");
+      }
+      let active = true, entity = "";
+      let clear;
+      const runtimeDispose = () => {
+        if (!active) return;
+        active = false;
+        const errors = [];
+        if (mount !== void 0) {
+          const prior = mount;
+          mount = void 0;
+          attemptCleanup(() => scene.remove?.(prior.root), errors);
+          attemptCleanup(() => prior.dispose(), errors);
+        }
+        if (clear !== void 0) {
+          const callbacks = vegetationClears.get(terrainId);
+          const index = callbacks?.indexOf(clear) ?? -1;
+          if (index >= 0) callbacks.splice(index, 1);
+          if (callbacks?.length === 0) vegetationClears.delete(terrainId);
+        }
+        if (errors.length > 0) throw new AggregateError(errors, `grass field runtime disposal failed in ${errors.length} operation(s)`);
+      };
+      try {
+        entity = ctx.world.entities.create({ eid, origin: { tool: "vegetation.grassField", input: { ...input } }, runtimeDispose });
+        tagEntity(ctx, entity, ["grass", "vegetation", "grass-field"]);
+        if (mount !== void 0) scene.add?.(mount.root);
+        clear = async () => {
+          if (!active || !canRender) return;
+          const replacementPrepared = prepareTiles(layer, input, footprints.get(terrainId) ?? [], visualPackage);
+          const replacement = await buildMount(replacementPrepared, input, ctx.world.renderer, buildCompute, visualPackage);
+          if (!active) {
+            replacement.dispose();
+            return;
+          }
+          try {
+            scene.add?.(replacement.root);
+          } catch (error51) {
+            const cleanup = [];
+            attemptCleanup(() => scene.remove?.(replacement.root), cleanup);
+            attemptCleanup(() => replacement.dispose(), cleanup);
+            throwCleanup(error51, cleanup, "grass field replacement publication failed");
+          }
+          const prior = mount;
+          mount = replacement;
+          if (prior !== void 0) {
+            const cleanup = [];
+            attemptCleanup(() => scene.remove?.(prior.root), cleanup);
+            attemptCleanup(() => prior.dispose(), cleanup);
+            if (cleanup.length > 0) throw new AggregateError(cleanup, `grass field prior-mount disposal failed in ${cleanup.length} operation(s)`);
+          }
+        };
+        const callbacks = vegetationClears.get(terrainId) ?? [];
+        callbacks.push(clear);
+        vegetationClears.set(terrainId, callbacks);
+      } catch (error51) {
+        const cleanup = [];
+        attemptCleanup(runtimeDispose, cleanup);
+        if (entity !== "") attemptCleanup(() => {
+          ctx.world.entities.destroy(entity);
+        }, cleanup);
+        attemptCleanup(() => despawnRenderable(ctx.world.ecs, eid), cleanup);
+        throwCleanup(error51, cleanup, "vegetation.grassField publication failed");
+      }
+      ctx.emit("vegetation.grass_field_created", { entity, terrain: terrainId, gridTiles: initial.length, candidateSlots, planHash });
+      return { entity, gridTiles: initial.length, candidateSlots, planHash };
+    }
+  };
+  registry2.register(definition);
+}
+
 // src/render/post.ts
-var T11 = three_tsl_exports;
+var T15 = three_tsl_exports;
 var AO = ao;
 var BLOOM = bloom;
 var GODRAYS = godrays;
@@ -123443,8 +126129,8 @@ function resolvePostPreset(override) {
 function buildPostPipeline(renderer, scene, camera, override) {
   const preset = resolvePostPreset(override);
   const post = new RenderPipeline(renderer);
-  const scenePass = T11.pass(scene, camera);
-  scenePass.setMRT(T11.mrt({ output: T11.output, normal: T11.normalView }));
+  const scenePass = T15.pass(scene, camera);
+  scenePass.setMRT(T15.mrt({ output: T15.output, normal: T15.normalView }));
   const colorNode = scenePass.getTextureNode("output");
   const normalNode = scenePass.getTextureNode("normal");
   const depthNode = scenePass.getTextureNode("depth");
@@ -123459,8 +126145,8 @@ function buildPostPipeline(renderer, scene, camera, override) {
     aoNode.samples.value = preset.ao.samples;
     aoNode.resolutionScale = preset.ao.resolutionScale;
     const aoR = aoNode.getTextureNode().r;
-    const occlusion = T11.mix(T11.float(1), aoR, T11.float(preset.ao.intensity));
-    litColor = colorNode.mul(T11.vec4(T11.vec3(occlusion), 1));
+    const occlusion = T15.mix(T15.float(1), aoR, T15.float(preset.ao.intensity));
+    litColor = colorNode.mul(T15.vec4(T15.vec3(occlusion), 1));
   }
   let bloomNode = null;
   let composited = litColor;
@@ -123480,30 +126166,30 @@ function buildPostPipeline(renderer, scene, camera, override) {
       godraysNode.maxDensity.value = preset.godrays.maxDensity;
       godraysNode.distanceAttenuation.value = preset.godrays.distanceAttenuation;
       godraysNode.raymarchSteps.value = preset.godrays.raymarchSteps;
-      composited = composited.add(godraysNode.mul(T11.float(preset.godrays.intensity)));
+      composited = composited.add(godraysNode.mul(T15.float(preset.godrays.intensity)));
     }
   }
   let dofNode = null;
   if (preset.dof.enabled) {
     const viewZ = scenePass.getViewZNode();
-    dofNode = DOF(composited, viewZ, T11.float(preset.dof.focusDistance), T11.float(preset.dof.focalLength), T11.float(preset.dof.bokehScale));
+    dofNode = DOF(composited, viewZ, T15.float(preset.dof.focusDistance), T15.float(preset.dof.focalLength), T15.float(preset.dof.bokehScale));
     composited = dofNode;
   }
   let outlineNode = null;
   if (preset.outline.enabled) {
     outlineNode = SOBEL(composited);
-    const ink = T11.float(1).sub(outlineNode.r.mul(T11.float(preset.outline.strength))).max(0);
-    composited = composited.mul(T11.vec4(T11.vec3(ink), 1));
+    const ink = T15.float(1).sub(outlineNode.r.mul(T15.float(preset.outline.strength))).max(0);
+    composited = composited.mul(T15.vec4(T15.vec3(ink), 1));
   }
   let outputNode = composited;
   if (preset.grade.enabled) {
     let rgb = composited.rgb;
-    if (preset.grade.exposure !== 1) rgb = rgb.mul(T11.float(preset.grade.exposure));
+    if (preset.grade.exposure !== 1) rgb = rgb.mul(T15.float(preset.grade.exposure));
     if (preset.grade.contrast !== 1) {
-      rgb = rgb.sub(0.18).mul(T11.float(preset.grade.contrast)).add(0.18).max(0);
+      rgb = rgb.sub(0.18).mul(T15.float(preset.grade.contrast)).add(0.18).max(0);
     }
-    if (preset.grade.saturation !== 1) rgb = T11.saturation(rgb, T11.float(preset.grade.saturation));
-    outputNode = T11.vec4(rgb, composited.a);
+    if (preset.grade.saturation !== 1) rgb = T15.saturation(rgb, T15.float(preset.grade.saturation));
+    outputNode = T15.vec4(rgb, composited.a);
   }
   post.outputNode = outputNode;
   let disposed = false;
@@ -123693,13 +126379,15 @@ function registerRenderSkills(registry2) {
 // src/render/water/geometry.ts
 var DUPLICATE_EPSILON_M = 1e-7;
 var DEFAULT_MITER_LIMIT = 4;
-function finite4(value, label4) {
+var RIVER_ALONG_SUBDIVISIONS = 3;
+var RIVER_CROSS_SUBDIVISIONS = 6;
+function finite6(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
 function point2(value, label4) {
   if (!Array.isArray(value) || value.length !== 2) throw new TypeError(`${label4} must be a 2-tuple`);
-  return [finite4(value[0], `${label4}[0]`), finite4(value[1], `${label4}[1]`)];
+  return [finite6(value[0], `${label4}[0]`), finite6(value[1], `${label4}[1]`)];
 }
 function ring(value, label4) {
   if (!Array.isArray(value) || value.length < 3 || value.length > WATER_LIMITS.ringPoints) {
@@ -123775,9 +126463,9 @@ function cleanRiver(input) {
   const cleaned = [];
   for (let index = 0; index < input.points.length; index++) {
     const [x3, z4] = point2(input.points[index], `river points[${index}]`);
-    const widthM = finite4(input.widthsM[index], `river widthsM[${index}]`);
+    const widthM = finite6(input.widthsM[index], `river widthsM[${index}]`);
     if (!(widthM > 0) || widthM > WATER_LIMITS.widthM) throw new RangeError(`river widthsM[${index}] is outside supported bounds`);
-    const elevationM = finite4(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
+    const elevationM = finite6(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
     const previous = cleaned[cleaned.length - 1];
     if (previous !== void 0 && Math.hypot(x3 - previous.x, z4 - previous.z) <= DUPLICATE_EPSILON_M) {
       previous.widthM = Math.max(previous.widthM, widthM);
@@ -123830,9 +126518,36 @@ function joins(points2, miterLimit) {
   }
   return { joins: result, directions };
 }
+function riverPointNormals(points2, offsets) {
+  return points2.map((point3, index) => {
+    const previous = points2[Math.max(0, index - 1)], next = points2[Math.min(points2.length - 1, index + 1)];
+    const tx = next.x - previous.x, ty = next.elevationM - previous.elevationM, tz = next.z - previous.z;
+    const join = offsets[index];
+    const ax = join.incoming[0] + join.outgoing[0], az = join.incoming[1] + join.outgoing[1];
+    const acrossLength = Math.hypot(ax, az) || 1;
+    const acrossX = ax / acrossLength, acrossZ = az / acrossLength;
+    let nx = -acrossZ * ty, ny = acrossZ * tx - acrossX * tz, nz = acrossX * ty;
+    if (ny < 0) {
+      nx *= -1;
+      ny *= -1;
+      nz *= -1;
+    }
+    const length3 = Math.hypot(nx, ny, nz) || 1;
+    return Object.freeze([nx / length3, ny / length3, nz / length3]);
+  });
+}
+function riverPointFlowDirections(segmentDirections, pointCount) {
+  return Array.from({ length: pointCount }, (_3, index) => {
+    const incoming = segmentDirections[Math.max(0, index - 1)];
+    const outgoing = segmentDirections[Math.min(segmentDirections.length - 1, index)];
+    const x3 = incoming[0] + outgoing[0], z4 = incoming[1] + outgoing[1];
+    const length3 = Math.hypot(x3, z4) || 1;
+    return Object.freeze([x3 / length3, z4 / length3]);
+  });
+}
 function buildVariableRiverRibbonGeometry(input) {
   const points2 = cleanRiver(input);
-  const miterLimit = finite4(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
+  const miterLimit = finite6(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
   if (miterLimit < 1 || miterLimit > 16) throw new RangeError("river miterLimit must be in [1, 16]");
   const built = joins(points2, miterLimit);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -123853,22 +126568,62 @@ function buildVariableRiverRibbonGeometry(input) {
   for (let index = 1; index < points2.length; index++) {
     distances[index] = distances[index - 1] + Math.hypot(points2[index].x - points2[index - 1].x, points2[index].z - points2[index - 1].z);
   }
-  const positions = [], arcDistances = [], flowDirections = [], indices = [];
-  const push = (x3, y3, z4, arc, flow) => {
+  const pointNormals = riverPointNormals(points2, built.joins);
+  const pointFlows = riverPointFlowDirections(built.directions, points2.length);
+  const positions = [], normals = [], arcDistances = [], crossDistances = [], flowDirections = [], indices = [];
+  const push = (x3, y3, z4, arc, cross3, flow, normal2) => {
     const index = positions.length / 3;
     positions.push(x3 - origin[0], y3 - origin[1], z4 - origin[2]);
+    normals.push(normal2[0], normal2[1], normal2[2]);
     arcDistances.push(arc);
+    crossDistances.push(cross3);
     flowDirections.push(flow[0], flow[1]);
     return index;
   };
   for (let segment = 0; segment < points2.length - 1; segment++) {
-    const start = points2[segment], end = points2[segment + 1], flow = built.directions[segment];
+    const start = points2[segment], end = points2[segment + 1];
+    const startFlow = pointFlows[segment], endFlow = pointFlows[segment + 1];
     const startOffset = built.joins[segment].outgoing, endOffset = built.joins[segment + 1].incoming;
-    const a2 = push(start.x + startOffset[0], start.elevationM, start.z + startOffset[1], distances[segment], flow);
-    const b3 = push(start.x - startOffset[0], start.elevationM, start.z - startOffset[1], distances[segment], flow);
-    const c2 = push(end.x + endOffset[0], end.elevationM, end.z + endOffset[1], distances[segment + 1], flow);
-    const d2 = push(end.x - endOffset[0], end.elevationM, end.z - endOffset[1], distances[segment + 1], flow);
-    indices.push(a2, c2, b3, b3, c2, d2);
+    const first = positions.length / 3;
+    for (let along = 0; along <= RIVER_ALONG_SUBDIVISIONS; along++) {
+      const t2 = along / RIVER_ALONG_SUBDIVISIONS, inverse3 = 1 - t2;
+      const centerX = start.x * inverse3 + end.x * t2, centerY = start.elevationM * inverse3 + end.elevationM * t2;
+      const centerZ = start.z * inverse3 + end.z * t2;
+      const offsetX = startOffset[0] * inverse3 + endOffset[0] * t2;
+      const offsetZ = startOffset[1] * inverse3 + endOffset[1] * t2;
+      let flowX = startFlow[0] * inverse3 + endFlow[0] * t2, flowZ = startFlow[1] * inverse3 + endFlow[1] * t2;
+      const flowLength = Math.hypot(flowX, flowZ) || 1;
+      flowX /= flowLength;
+      flowZ /= flowLength;
+      let normalX = pointNormals[segment][0] * inverse3 + pointNormals[segment + 1][0] * t2;
+      let normalY = pointNormals[segment][1] * inverse3 + pointNormals[segment + 1][1] * t2;
+      let normalZ = pointNormals[segment][2] * inverse3 + pointNormals[segment + 1][2] * t2;
+      const normalLength = Math.hypot(normalX, normalY, normalZ) || 1;
+      normalX /= normalLength;
+      normalY /= normalLength;
+      normalZ /= normalLength;
+      const arc = distances[segment] * inverse3 + distances[segment + 1] * t2;
+      const halfWidth = Math.hypot(offsetX, offsetZ);
+      for (let across = 0; across <= RIVER_CROSS_SUBDIVISIONS; across++) {
+        const side = 1 - 2 * across / RIVER_CROSS_SUBDIVISIONS;
+        push(
+          centerX + offsetX * side,
+          centerY,
+          centerZ + offsetZ * side,
+          arc,
+          halfWidth * side,
+          [flowX, flowZ],
+          [normalX, normalY, normalZ]
+        );
+      }
+    }
+    const row = RIVER_CROSS_SUBDIVISIONS + 1;
+    for (let along = 0; along < RIVER_ALONG_SUBDIVISIONS; along++) {
+      for (let across = 0; across < RIVER_CROSS_SUBDIVISIONS; across++) {
+        const a2 = first + along * row + across, b3 = a2 + 1, c2 = a2 + row, d2 = c2 + 1;
+        indices.push(a2, c2, b3, b3, c2, d2);
+      }
+    }
   }
   let bevelJoinCount = 0;
   for (let index = 1; index < points2.length - 1; index++) {
@@ -123876,27 +126631,42 @@ function buildVariableRiverRibbonGeometry(input) {
     if (!join.bevel || Math.abs(join.turn) <= 1e-9) continue;
     bevelJoinCount++;
     const current = points2[index];
-    const flow = [
-      built.directions[index - 1][0] + built.directions[index][0],
-      built.directions[index - 1][1] + built.directions[index][1]
-    ];
-    const flowLength = Math.hypot(flow[0], flow[1]) || 1;
-    flow[0] /= flowLength;
-    flow[1] /= flowLength;
+    const flow = pointFlows[index];
     const side = join.turn > 0 ? -1 : 1;
     const incoming = join.incoming, outgoing = join.outgoing;
-    const a2 = push(current.x + incoming[0] * side, current.elevationM, current.z + incoming[1] * side, distances[index], flow);
-    const b3 = push(current.x, current.elevationM, current.z, distances[index], flow);
-    const c2 = push(current.x + outgoing[0] * side, current.elevationM, current.z + outgoing[1] * side, distances[index], flow);
+    const a2 = push(
+      current.x + incoming[0] * side,
+      current.elevationM,
+      current.z + incoming[1] * side,
+      distances[index],
+      Math.hypot(incoming[0], incoming[1]) * side,
+      flow,
+      pointNormals[index]
+    );
+    const b3 = push(current.x, current.elevationM, current.z, distances[index], 0, flow, pointNormals[index]);
+    const c2 = push(
+      current.x + outgoing[0] * side,
+      current.elevationM,
+      current.z + outgoing[1] * side,
+      distances[index],
+      Math.hypot(outgoing[0], outgoing[1]) * side,
+      flow,
+      pointNormals[index]
+    );
     if (join.turn > 0) indices.push(a2, b3, c2);
     else indices.push(a2, c2, b3);
   }
   const geometry = new BufferGeometry();
   geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
   geometry.setAttribute("waterArcDistance", new Float32BufferAttribute(arcDistances, 1));
+  geometry.setAttribute("waterCrossDistance", new Float32BufferAttribute(crossDistances, 1));
   geometry.setAttribute("waterFlowDirection", new Float32BufferAttribute(flowDirections, 2));
   geometry.setIndex(indices);
-  geometry.computeVertexNormals();
+  geometry.userData.liminaRiverTessellation = Object.freeze({
+    along: RIVER_ALONG_SUBDIVISIONS,
+    across: RIVER_CROSS_SUBDIVISIONS
+  });
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return {
@@ -123910,8 +126680,10 @@ function buildVariableRiverRibbonGeometry(input) {
 }
 
 // src/render/water/material.ts
-var T12 = three_tsl_exports;
+var T16 = three_tsl_exports;
 var WATER_OWNED_TEXTURES_KEY = "liminaOwnedTextures";
+var WATER_OWNED_NODES_KEY = "liminaOwnedNodes";
+var WATER_AUXILIARY_TARGETS_KEY = "liminaWaterAuxiliaryTargets";
 function trackWaterMaterialTexture(material, texture3) {
   const userData3 = material.userData;
   const current = userData3[WATER_OWNED_TEXTURES_KEY];
@@ -123919,12 +126691,20 @@ function trackWaterMaterialTexture(material, texture3) {
   if (!textures.includes(texture3)) textures.push(texture3);
   userData3[WATER_OWNED_TEXTURES_KEY] = textures;
 }
+function attachWaterMaterialAuxiliaries(mesh) {
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const targets = material.userData[WATER_AUXILIARY_TARGETS_KEY];
+    if (!Array.isArray(targets)) continue;
+    for (const target of targets) if (target instanceof Object3D && target.parent !== mesh) mesh.add(target);
+  }
+}
 function createWaterMaterial(options) {
   const waveCount = Math.max(0, Math.min(4, Math.floor(options.waveCount ?? 4)));
   const orientation = options.orientation ?? "xz";
   const material = new MeshStandardNodeMaterial({
     color: options.color,
-    roughness: options.kind === "river" ? 0.14 : 0.1,
+    roughness: options.kind === "river" ? 0.22 : 0.1,
     metalness: 0,
     transparent: true,
     opacity: options.kind === "river" ? 0.84 : 0.85,
@@ -123933,64 +126713,162 @@ function createWaterMaterial(options) {
   });
   try {
     const base = new Color(options.color);
-    const deep = T12.vec3(base.r, base.g, base.b);
-    const shallow = T12.vec3(
+    const deep = T16.vec3(base.r, base.g, base.b);
+    const shallow = T16.vec3(
       Math.min(1, base.r * 1.7 + 0.05),
       Math.min(1, base.g * 1.45 + 0.2),
       Math.min(1, base.b * 1.15 + 0.1)
     );
-    const facing = T12.clamp(T12.cameraPosition.sub(T12.positionWorld).normalize().y, 0, 1);
-    const fresnel = T12.oneMinus(facing).pow(4);
+    const facing = T16.clamp(T16.cameraPosition.sub(T16.positionWorld).normalize().y, 0, 1);
+    const fresnel = T16.oneMinus(facing).pow(4);
     const waves = [
       { dx: 0.8, dz: 0.6, frequency: 0.3, speed: 0.9, amplitude: 1 },
       { dx: -0.6, dz: 0.8, frequency: 0.42, speed: 1.1, amplitude: 0.8 },
       { dx: 0.5, dz: -0.85, frequency: 0.55, speed: 0.7, amplitude: 0.6 },
       { dx: -0.9, dz: -0.4, frequency: 0.68, speed: 1.3, amplitude: 0.45 }
     ];
-    const localX = T12.positionLocal.x;
-    const localZ = orientation === "xy" ? T12.positionLocal.y : T12.positionLocal.z;
-    let height = T12.float(0), slopeX = T12.float(0), slopeZ = T12.float(0);
-    for (let index = 0; index < waveCount; index++) {
-      const wave = waves[index];
-      const phase = localX.mul(wave.dx * wave.frequency).add(localZ.mul(wave.dz * wave.frequency)).add(T12.time.mul(wave.speed));
-      height = height.add(phase.sin().mul(wave.amplitude));
-      const derivative = phase.cos().mul(wave.amplitude * wave.frequency);
-      slopeX = slopeX.add(derivative.mul(wave.dx));
-      slopeZ = slopeZ.add(derivative.mul(wave.dz));
+    const localX = T16.positionLocal.x;
+    const localZ = orientation === "xy" ? T16.positionLocal.y : T16.positionLocal.z;
+    const riverArc = options.kind === "river" ? T16.attribute("waterArcDistance", "float") : T16.float(0);
+    const riverDirection = options.kind === "river" ? T16.attribute("waterFlowDirection", "vec2") : T16.vec2(0, 0);
+    const riverCross = options.kind === "river" ? T16.attribute("waterCrossDistance", "float") : T16.float(0);
+    let height = T16.float(0), slopeX = T16.float(0), slopeZ = T16.float(0);
+    if (options.kind === "river") {
+      const fan = [
+        { angle: 0.12, frequency: 0.86, speed: 1.3, amplitude: 1, envelope: [0.041, 0.117] },
+        { angle: -0.29, frequency: 1.13, speed: 1.05, amplitude: 0.7, envelope: [0.067, 0.089] },
+        { angle: 1.22, frequency: 2.51, speed: 0.5, amplitude: 0.3, envelope: [0.053, 0.141] },
+        { angle: -1.02, frequency: 3.07, speed: 0.44, amplitude: 0.24, envelope: [0.087, 0.061] },
+        { angle: 0.58, frequency: 6.11, speed: 1.9, amplitude: 0.09, envelope: [0.113, 0.071] },
+        { angle: -1.31, frequency: 7.57, speed: 1.7, amplitude: 0.07, envelope: [0.059, 0.127] }
+      ];
+      const octaveCount = Math.min(fan.length / 2, waveCount);
+      let alongSlope = T16.float(0), crossSlope = T16.float(0);
+      for (let index = 0; index < octaveCount * 2; index++) {
+        const wave = fan[index];
+        const along = Math.cos(wave.angle), across = Math.sin(wave.angle);
+        const phase = riverArc.mul(along * wave.frequency).add(riverCross.mul(across * wave.frequency)).sub(T16.time.mul(wave.speed * wave.frequency)).add(index * 2.39);
+        const envelope = riverArc.mul(wave.envelope[0]).add(riverCross.mul(wave.envelope[1])).add(index * 1.93 + 0.7).sin().mul(0.35).add(0.65);
+        height = height.add(phase.sin().mul(envelope).mul(wave.amplitude));
+        const derivative = phase.cos().mul(envelope).mul(wave.amplitude * wave.frequency);
+        alongSlope = alongSlope.add(derivative.mul(along));
+        crossSlope = crossSlope.add(derivative.mul(across));
+      }
+      slopeX = alongSlope.mul(riverDirection.x).sub(crossSlope.mul(riverDirection.y));
+      slopeZ = alongSlope.mul(riverDirection.y).add(crossSlope.mul(riverDirection.x));
+      if (octaveCount > 0) {
+        material.userData.liminaWaterFlowAlignedNormals = true;
+        material.userData.liminaWaterNormalOctaves = octaveCount;
+      }
+    } else {
+      for (let index = 0; index < waveCount; index++) {
+        const wave = waves[index];
+        const phase = localX.mul(wave.dx * wave.frequency).add(localZ.mul(wave.dz * wave.frequency)).add(T16.time.mul(wave.speed));
+        height = height.add(phase.sin().mul(wave.amplitude));
+        const derivative = phase.cos().mul(wave.amplitude);
+        slopeX = slopeX.add(derivative.mul(wave.dx * wave.frequency));
+        slopeZ = slopeZ.add(derivative.mul(wave.dz * wave.frequency));
+      }
     }
-    const normalStrength = options.peek === true ? 0 : options.kind === "river" ? 0.2 : 0.34;
-    const localNormal = orientation === "xy" ? T12.vec3(slopeX.mul(-normalStrength), slopeZ.mul(-normalStrength), 1).normalize() : T12.vec3(slopeX.mul(-normalStrength), 1, slopeZ.mul(-normalStrength)).normalize();
-    material.normalNode = T12.transformNormalToView(localNormal);
+    const normalStrength = options.peek === true ? 0 : options.kind === "river" ? 0.06 : 0.34;
+    const localNormal = orientation === "xy" ? T16.vec3(slopeX.mul(-normalStrength), slopeZ.mul(-normalStrength), 1).normalize() : options.kind === "river" ? T16.normalLocal.add(T16.vec3(slopeX.mul(-normalStrength), 0, slopeZ.mul(-normalStrength))).normalize() : T16.vec3(slopeX.mul(-normalStrength), 1, slopeZ.mul(-normalStrength)).normalize();
+    material.normalNode = T16.transformNormalToView(localNormal);
     if (orientation === "xy" && waveCount > 0 && options.kind === "ocean") {
-      material.positionNode = T12.positionLocal.add(T12.vec3(0, 0, height.mul(0.06)));
+      material.positionNode = T16.positionLocal.add(T16.vec3(0, 0, height.mul(0.06)));
     }
-    const height01 = T12.clamp(height.mul(0.18).add(0.5), 0, 1);
-    material.roughnessNode = options.peek === true ? T12.float(0.9) : T12.float(options.kind === "river" ? 0.09 : 0.05).add(height01.mul(options.kind === "river" ? 0.09 : 0.07));
-    if (options.depth !== void 0) {
+    const height01 = T16.clamp(height.mul(0.18).add(0.5), 0, 1);
+    material.roughnessNode = options.peek === true ? T16.float(0.9) : options.kind === "river" ? T16.mix(T16.float(0.19), T16.float(0.07), fresnel).add(height01.mul(0.05)) : T16.float(0.05).add(height01.mul(0.07));
+    let riverTransmittance, riverClarity, riverWetBand;
+    if (options.kind === "river" && options.depth !== void 0) {
       const { minX, minZ, maxX, maxZ } = options.depth.bounds;
-      const u3 = T12.positionWorld.x.sub(minX).div(Math.max(maxX - minX, Number.EPSILON));
-      const v3 = T12.positionWorld.z.sub(minZ).div(Math.max(maxZ - minZ, Number.EPSILON));
-      const sampled = T12.texture(options.depth.texture, T12.vec2(u3, v3));
-      const outsideU = T12.max(u3.mul(-1), u3.sub(1));
-      const outsideV = T12.max(v3.mul(-1), v3.sub(1));
-      const outside = T12.clamp(T12.max(outsideU, outsideV).mul(40), 0, 1);
-      const depth01 = options.depth.outsideAsDeep === true ? T12.mix(sampled.r, T12.float(1), outside) : sampled.r;
-      const ownership = options.depth.coverageChannel === true ? sampled.g : T12.float(1);
-      const colourDeep = T12.smoothstep(0.05, 0.42, depth01);
-      material.colorNode = T12.mix(shallow, deep, T12.clamp(colourDeep.add(fresnel.mul(0.25)), 0, 1));
-      const opacity = T12.float(0.22).add(T12.smoothstep(0, 0.55, depth01).mul(0.75));
-      material.opacityNode = opacity.mul(ownership);
+      const u3 = T16.positionWorld.x.sub(minX).div(Math.max(maxX - minX, Number.EPSILON));
+      const v3 = T16.positionWorld.z.sub(minZ).div(Math.max(maxZ - minZ, Number.EPSILON));
+      const sampled = T16.texture(options.depth.texture, T16.vec2(u3, v3));
+      const depth01 = sampled.r;
+      const ownership = options.depth.coverageChannel === true ? sampled.g : T16.float(1);
+      const maxDepthM = options.depth.maxDepthM ?? 3.5;
+      const pathM = T16.min(depth01.mul(maxDepthM).div(T16.max(facing, 0.12)), 24);
+      riverTransmittance = T16.exp(pathM.mul(T16.vec3(-0.46, -0.18, -0.12)));
+      riverClarity = T16.clamp(T16.dot(riverTransmittance, T16.vec3(0.25, 0.4, 0.35)), 0, 1);
+      riverWetBand = T16.oneMinus(T16.smoothstep(0, 0.05, depth01)).mul(ownership);
+      const shoreBand = T16.oneMinus(T16.smoothstep(0.02, 0.2, depth01)).mul(ownership);
+      const foamWave1 = riverArc.mul(2.3).add(riverCross.mul(1.4)).sub(T16.time.mul(3.1)).sin().mul(0.5).add(0.5);
+      const foamWave2 = riverArc.mul(5.1).sub(riverCross.mul(2.7)).sub(T16.time.mul(4.3)).sin().mul(0.5).add(0.5);
+      const foam = shoreBand.mul(T16.smoothstep(0.22, 0.72, foamWave1.mul(foamWave2).add(height01.mul(0.18))));
+      const caustic = T16.oneMinus(T16.smoothstep(0.08, 0.48, depth01)).mul(riverArc.mul(1.9).add(riverCross.mul(1.15)).add(T16.time.mul(0.7)).sin().mul(0.5).add(0.5)).mul(ownership);
+      let waterColor = T16.mix(shallow, deep, T16.clamp(T16.oneMinus(riverClarity).add(fresnel.mul(0.2)), 0, 1));
+      waterColor = waterColor.add(T16.vec3(0.08, 0.16, 0.12).mul(caustic));
+      waterColor = T16.mix(waterColor, waterColor.mul(0.4), riverWetBand.mul(0.85));
+      material.colorNode = T16.mix(waterColor, T16.vec3(0.82, 0.94, 0.9), foam.mul(0.85));
+      const opacity = T16.float(0.34).add(T16.oneMinus(riverClarity).mul(0.6));
+      material.opacityNode = T16.max(opacity, foam.mul(0.95)).mul(ownership);
+      material.roughnessNode = T16.max(material.roughnessNode, foam.mul(0.72));
+      material.userData.liminaWaterShoreFoam = true;
+      material.userData.liminaWaterCaustics = true;
+      material.userData.liminaWaterVolumetricAbsorption = true;
+      material.userData.liminaWaterWetShoreMargin = true;
+      material.userData.liminaWaterDownstreamFlow = true;
+      material.userData.liminaWaterTwoDimensionalFlow = true;
+      trackWaterMaterialTexture(material, options.depth.texture);
+    } else if (options.depth !== void 0) {
+      const { minX, minZ, maxX, maxZ } = options.depth.bounds;
+      const u3 = T16.positionWorld.x.sub(minX).div(Math.max(maxX - minX, Number.EPSILON));
+      const v3 = T16.positionWorld.z.sub(minZ).div(Math.max(maxZ - minZ, Number.EPSILON));
+      const sampled = T16.texture(options.depth.texture, T16.vec2(u3, v3));
+      const outsideU = T16.max(u3.mul(-1), u3.sub(1));
+      const outsideV = T16.max(v3.mul(-1), v3.sub(1));
+      const outside = T16.clamp(T16.max(outsideU, outsideV).mul(40), 0, 1);
+      const depth01 = options.depth.outsideAsDeep === true ? T16.mix(sampled.r, T16.float(1), outside) : sampled.r;
+      const ownership = options.depth.coverageChannel === true ? sampled.g : T16.float(1);
+      const colourDeep = T16.smoothstep(0.05, 0.42, depth01);
+      let waterColor = T16.mix(shallow, deep, T16.clamp(colourDeep.add(fresnel.mul(0.25)), 0, 1));
+      const shoreBand = T16.oneMinus(T16.smoothstep(0.025, 0.16, depth01)).mul(ownership);
+      const ripple = T16.positionWorld.x.mul(0.73).add(T16.positionWorld.z.mul(0.57)).sub(T16.time.mul(0.8)).sin().mul(0.5).add(0.5);
+      const foam = shoreBand.mul(T16.smoothstep(0.2, 0.78, ripple));
+      const caustic = T16.oneMinus(T16.smoothstep(0.08, 0.48, depth01)).mul(T16.positionWorld.x.mul(1.8).add(T16.positionWorld.z.mul(-1.35)).add(T16.time.mul(0.7)).sin().mul(0.5).add(0.5)).mul(ownership);
+      waterColor = waterColor.add(T16.vec3(0.08, 0.16, 0.12).mul(caustic));
+      material.colorNode = T16.mix(waterColor, T16.vec3(0.82, 0.94, 0.9), foam.mul(0.72));
+      const opacity = T16.float(0.22).add(T16.smoothstep(0, 0.55, depth01).mul(0.75));
+      material.opacityNode = T16.max(opacity, foam.mul(0.92)).mul(ownership);
+      material.roughnessNode = T16.max(material.roughnessNode, foam.mul(0.72));
+      material.userData.liminaWaterShoreFoam = true;
+      material.userData.liminaWaterCaustics = true;
       trackWaterMaterialTexture(material, options.depth.texture);
     } else if (options.kind === "river") {
-      const arc = T12.attribute("waterArcDistance", "float");
-      const flow = arc.mul(0.18).sub(T12.time.mul(1.6)).sin().mul(0.5).add(0.5);
-      material.colorNode = T12.mix(deep, shallow, T12.float(0.16).add(flow.mul(0.12)));
-      material.opacityNode = T12.float(0.78).add(flow.mul(0.12));
+      const arc = T16.attribute("waterArcDistance", "float");
+      const flow = arc.mul(0.18).sub(T16.time.mul(1.6)).sin().mul(0.5).add(0.5);
+      material.colorNode = T16.mix(deep, shallow, T16.float(0.16).add(flow.mul(0.12)));
+      material.opacityNode = T16.float(0.78).add(flow.mul(0.12));
     } else {
-      const distance4 = T12.positionView.z.mul(-1);
-      const deepness = T12.clamp(T12.smoothstep(6, 55, distance4).mul(0.85).add(fresnel.mul(0.5)), 0, 1);
-      material.colorNode = T12.mix(shallow, deep, deepness);
-      material.opacityNode = T12.float(0.55).add(deepness.mul(0.43));
+      const distance4 = T16.positionView.z.mul(-1);
+      const deepness = T16.clamp(T16.smoothstep(6, 55, distance4).mul(0.85).add(fresnel.mul(0.5)), 0, 1);
+      material.colorNode = T16.mix(shallow, deep, deepness);
+      material.opacityNode = T16.float(0.55).add(deepness.mul(0.43));
+    }
+    const optics = options.sceneOptics ?? "none";
+    if (optics !== "none" && options.peek !== true) {
+      const distortion = T16.vec2(slopeX, slopeZ).mul(options.kind === "river" ? 0.013 : 9e-3);
+      const refractedUv = T16.viewportSafeUV(T16.screenUV.add(distortion));
+      const refracted = T16.viewportSharedTexture(refractedUv);
+      let backdrop = refracted.rgb;
+      if (options.kind === "river" && riverTransmittance !== void 0) {
+        backdrop = backdrop.mul(riverTransmittance).add(deep.mul(T16.oneMinus(riverClarity)).mul(0.85));
+        backdrop = backdrop.mul(T16.mix(T16.float(1), T16.float(0.45), riverWetBand));
+      }
+      if (optics === "refraction-reflection" && options.kind !== "river") {
+        const reflection = T16.reflector({
+          resolutionScale: Math.max(0.125, Math.min(1, options.reflectionScale ?? 0.35)),
+          bounces: false
+        });
+        reflection.uvNode = reflection.uvNode.add(distortion);
+        backdrop = T16.mix(backdrop, reflection.rgb, fresnel.mul(0.82));
+        material.userData[WATER_OWNED_NODES_KEY] = [reflection];
+        material.userData[WATER_AUXILIARY_TARGETS_KEY] = [reflection.target];
+        material.userData.liminaWaterPlanarReflection = true;
+      }
+      material.backdropNode = backdrop;
+      material.backdropAlphaNode = options.kind === "river" && riverClarity !== void 0 ? T16.mix(T16.float(0.08), T16.float(0.85), riverClarity).mul(T16.oneMinus(fresnel.mul(0.55))) : T16.float(options.kind === "river" ? 0.24 : 0.58).mul(T16.oneMinus(fresnel.mul(0.45)));
+      material.userData.liminaWaterSceneDepthRefraction = true;
     }
     return material;
   } catch (error51) {
@@ -124030,7 +126908,7 @@ function bakeWaterDepth(depth3, seaLevel) {
   texture3.wrapS = ClampToEdgeWrapping;
   texture3.wrapT = ClampToEdgeWrapping;
   texture3.needsUpdate = true;
-  return { texture: texture3, bounds: depth3.bounds };
+  return { texture: texture3, bounds: depth3.bounds, maxDepthM: range3 };
 }
 function buildWaterSurface(opts) {
   const size = opts.size ?? DEFAULT_WATER_SIZE;
@@ -124047,9 +126925,11 @@ function buildWaterSurface(opts) {
       orientation: "xy",
       depth: baked === void 0 ? void 0 : { ...baked, outsideAsDeep: true },
       peek: opts.peek,
-      waveCount: opts.waveCount
+      waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics
     });
     const mesh = new Mesh(geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(opts.center?.[0] ?? 0, opts.level, opts.center?.[1] ?? 0);
     mesh.castShadow = false;
@@ -124074,9 +126954,11 @@ function buildWaterBodySurface(options) {
       kind: "basin",
       orientation: "xz",
       depth: options.depth,
-      waveCount: options.waveCount
+      waveCount: options.waveCount,
+      sceneOptics: options.sceneOptics
     });
     const mesh = new Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.position.set(built.origin[0], options.level, built.origin[1]);
     mesh.castShadow = false;
     mesh.receiveShadow = false;
@@ -124106,9 +126988,11 @@ function buildRiverRibbon(opts) {
       color: opts.color ?? DEFAULT_WATER_COLOR,
       kind: "river",
       orientation: "xz",
-      waveCount: opts.waveCount
+      waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics
     });
     const mesh = new Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.position.set(built.origin[0], built.origin[1], built.origin[2]);
     mesh.castShadow = false;
     mesh.receiveShadow = false;
@@ -124135,7 +127019,7 @@ var DEFAULTS = Object.freeze({
     shadowMapSize: 1024,
     shadowHalfExtent: 128,
     post: Object.freeze({ enabled: false, aoSamples: 4, aoResolutionScale: 0.5, bloom: false }),
-    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1048576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none" }),
+    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1048576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none", sceneOptics: "none" }),
     telemetryIntervalFrames: 30
   }),
   balanced: Object.freeze({
@@ -124144,7 +127028,7 @@ var DEFAULTS = Object.freeze({
     shadowMapSize: 2048,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 8, aoResolutionScale: 0.5, bloom: true }),
-    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4194304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam" }),
+    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4194304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam", sceneOptics: "refraction" }),
     telemetryIntervalFrames: 30
   }),
   cinematic: Object.freeze({
@@ -124153,7 +127037,7 @@ var DEFAULTS = Object.freeze({
     shadowMapSize: 4096,
     shadowHalfExtent: 96,
     post: Object.freeze({ enabled: true, aoSamples: 16, aoResolutionScale: 1, bloom: true }),
-    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16777216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist" }),
+    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16777216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist", sceneOptics: "refraction-reflection" }),
     telemetryIntervalFrames: 30
   })
 });
@@ -124173,13 +127057,24 @@ function disposeEntry(scene, entry) {
 function disposeMeshResources(mesh) {
   const errors = [];
   const textures = /* @__PURE__ */ new Set();
-  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const material of materials) {
-    const owned = material.userData[WATER_OWNED_TEXTURES_KEY];
-    if (Array.isArray(owned)) for (const texture3 of owned) {
-      if (texture3 && typeof texture3 === "object") textures.add(texture3);
+  const nodes = /* @__PURE__ */ new Set();
+  const materials = /* @__PURE__ */ new Set();
+  const geometries = /* @__PURE__ */ new Set();
+  mesh.traverse((object2) => {
+    if (!(object2 instanceof Mesh)) return;
+    geometries.add(object2.geometry);
+    for (const material of Array.isArray(object2.material) ? object2.material : [object2.material]) {
+      materials.add(material);
+      const owned = material.userData[WATER_OWNED_TEXTURES_KEY];
+      if (Array.isArray(owned)) for (const texture3 of owned) {
+        if (texture3 && typeof texture3 === "object") textures.add(texture3);
+      }
+      const ownedNodes = material.userData[WATER_OWNED_NODES_KEY];
+      if (Array.isArray(ownedNodes)) for (const node of ownedNodes) {
+        if (node && typeof node === "object") nodes.add(node);
+      }
     }
-  }
+  });
   for (const texture3 of textures) {
     try {
       texture3.dispose?.();
@@ -124187,18 +127082,28 @@ function disposeMeshResources(mesh) {
       errors.push(error51);
     }
   }
-  for (const material of new Set(materials)) {
+  for (const node of nodes) {
+    try {
+      node.dispose?.();
+    } catch (error51) {
+      errors.push(error51);
+    }
+  }
+  for (const material of materials) {
     try {
       material.dispose();
     } catch (error51) {
       errors.push(error51);
     }
   }
-  try {
-    mesh.geometry.dispose();
-  } catch (error51) {
-    errors.push(error51);
+  for (const geometry of geometries) {
+    try {
+      geometry.dispose();
+    } catch (error51) {
+      errors.push(error51);
+    }
   }
+  mesh.clear();
   return errors;
 }
 var VisibleWaterManager = class {
@@ -124256,6 +127161,10 @@ var VisibleWaterManager = class {
       mesh.receiveShadow = replacement.receiveShadow;
       mesh.name = replacement.name;
       mesh.userData = replacement.userData;
+      const oldChildren = [...mesh.children];
+      mesh.clear();
+      for (const child of [...replacement.children]) mesh.add(child);
+      for (const child of oldChildren) replacement.add(child);
       replacement.geometry = oldGeometry;
       replacement.material = oldMaterial;
       cleanupErrors.push(...disposeMeshResources(replacement));
@@ -124562,7 +127471,15 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
         }
       }
       const key = `legacy:surface:${legacySequence++}`;
-      const mounted = managerFor(ctx.world.scene).mount(key, "ocean", () => buildWaterSurface({ level, size: input.size, color: input.color, depth: depth3, peek: ctx.world.peek === true }), { source: "legacy-skill" });
+      const mounted = managerFor(ctx.world.scene).mount(key, "ocean", (waterQuality) => buildWaterSurface({
+        level,
+        size: input.size,
+        color: input.color,
+        depth: depth3,
+        peek: ctx.world.peek === true,
+        waveCount: waterQuality.waveCount,
+        sceneOptics: waterQuality.sceneOptics
+      }), { source: "legacy-skill" });
       const surface = { level, size: input.size, color: input.color, mesh: mounted.entry.mesh, key, kind: "ocean" };
       surfaces.push(surface);
       ctx.emit("world.water.added", { level, size: input.size, color: input.color });
@@ -124608,6 +127525,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
       surfaceElevationsM,
       seaLevel: level,
       waveCount: input.mapDerived === true ? waterQuality.waveCount : void 0,
+      sceneOptics: waterQuality.sceneOptics,
       class: input.class,
       order: input.order
     }), { class: input.class, ...input.order === void 0 ? {} : { order: input.order } }, input.identity ?? key);
@@ -124743,6 +127661,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
           color: input.color,
           segments: waterQuality.oceanSegments,
           waveCount: waterQuality.waveCount,
+          sceneOptics: waterQuality.sceneOptics,
           depth: terrainSource === void 0 ? void 0 : {
             bounds: { minX, minZ, maxX, maxZ },
             resolution: waterQuality.depthRasterSize,
@@ -124784,6 +127703,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
               footprint: { points: points2, ...holes === void 0 ? {} : { holes } },
               color: input.color,
               waveCount: waterQuality.waveCount,
+              sceneOptics: waterQuality.sceneOptics,
               depth: { texture: texture3, bounds, coverageChannel: true }
             });
           }, { mapHash: hash4, bodyId: body.id, bodyKind: body.kind }, semanticIdentity("authored-body", hash4, body.id, input.color ?? null));
@@ -124999,16 +127919,16 @@ var AgentScheduler = class {
   }
   admitDecisions(agents, tick, tracer, isDue) {
     const candidates = ordered(agents).filter((agent) => !agent.inFlight && agent.perception !== void 0 && isDue(agent));
-    const cap = asPositiveInt(this.budget.maxDecisionStartsPerTick, Number.MAX_SAFE_INTEGER);
-    if (candidates.length === 0 || cap === 0) {
+    const cap2 = asPositiveInt(this.budget.maxDecisionStartsPerTick, Number.MAX_SAFE_INTEGER);
+    if (candidates.length === 0 || cap2 === 0) {
       if (candidates.length > 0) {
-        for (const agent of candidates) this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap });
+        for (const agent of candidates) this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap: cap2 });
       }
       return [];
     }
     const admitted = [];
     let visits = 0;
-    while (admitted.length < cap && visits < candidates.length) {
+    while (admitted.length < cap2 && visits < candidates.length) {
       const index = this.decisionCursor % candidates.length;
       const agent = candidates[index];
       const state = this.runtimeState(agent);
@@ -125033,7 +127953,7 @@ var AgentScheduler = class {
       const admittedIds = new Set(admitted.map((item) => item.agent.id));
       for (const agent of candidates) {
         if (!admittedIds.has(agent.id)) {
-          this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap, candidates: candidates.length });
+          this.emitBackpressure(tracer, agent, tick, "decision_start_cap", { cap: cap2, candidates: candidates.length });
         }
       }
     }
@@ -125371,9 +128291,9 @@ function registerOrchestrationSkills(registry2, deps) {
       if (input.bundle.includes(ORCHESTRATE_PERMISSION) && !(childDepth < maxDepth)) {
         throw new Error(`delegate: a worker at depth ${childDepth} may not be granted '${ORCHESTRATE_PERMISSION}' \u2014 delegation depth cap is ${maxDepth} (a depth-${childDepth} worker would spawn at depth ${childDepth + 1})`);
       }
-      for (const cap of new Set(input.bundle)) {
-        if (!ctx.permissions.has(cap)) {
-          throw new Error(`delegate: worker bundle cap '${cap}' is not held by coordinator session`);
+      for (const cap2 of new Set(input.bundle)) {
+        if (!ctx.permissions.has(cap2)) {
+          throw new Error(`delegate: worker bundle cap '${cap2}' is not held by coordinator session`);
         }
       }
       const providerName = input.provider ?? deps.defaultProvider;
@@ -128938,7 +131858,7 @@ function registerClipAuthorSkills(registry2) {
     }
   };
   const sampleInput = external_exports.object({ id: external_exports.string(), t: external_exports.number() });
-  const sample3 = {
+  const sample4 = {
     name: "animation.sampleClip",
     version: "1.0.0",
     description: "Sample an authored clip at time t \u2014 returns each track's interpolated value (looped/clamped per the clip). Pure read; the host applies the values to entities.",
@@ -128953,7 +131873,7 @@ function registerClipAuthorSkills(registry2) {
     }
   };
   registry2.register(author);
-  registry2.register(sample3);
+  registry2.register(sample4);
   return { clipAuthor: mgr };
 }
 
@@ -132255,11 +135175,11 @@ function base64ToBytes(b64) {
   }
   return out;
 }
-var finite5 = external_exports.number().refine(Number.isFinite, "expected finite number");
-var int4 = finite5.refine(Number.isInteger, "expected integer");
+var finite7 = external_exports.number().refine(Number.isFinite, "expected finite number");
+var int4 = finite7.refine(Number.isInteger, "expected integer");
 var sparseIndexValue = external_exports.union([int4, external_exports.null()]);
-var vec33 = external_exports.tuple([finite5, finite5, finite5]);
-var vec43 = external_exports.tuple([finite5, finite5, finite5, finite5]);
+var vec33 = external_exports.tuple([finite7, finite7, finite7]);
+var vec43 = external_exports.tuple([finite7, finite7, finite7, finite7]);
 var entityIndexSchema = external_exports.object({
   aliveCount: int4,
   maxId: int4,
@@ -132314,9 +135234,9 @@ var snapshotEntitySchema = external_exports.object({
 });
 var characterSnapshotSchema = external_exports.object({
   bodyId: int4,
-  vy: finite5,
+  vy: finite7,
   grounded: external_exports.boolean(),
-  heading: finite5,
+  heading: finite7,
   // Additive within schema v3: old v3 snapshots default to the legacy dry state.
   swimming: external_exports.boolean().optional().default(false)
 });
@@ -134218,10 +137138,10 @@ function registerCoreSkills(registry2, opts) {
   registerTerrainSkills(registry2, terrainSource, terrainCache, terrainRegions, assets, waterContact);
   const settlementFootprints = /* @__PURE__ */ new Map();
   const vegetationClears = /* @__PURE__ */ new Map();
-  registerTerrainEditSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact);
+  registerTerrainEditSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage);
   registerVegetationSkills(registry2, terrainLayers, assets, settlementFootprints, void 0, vegetationClears);
-  registerVillageSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears);
-  registerGrassSkill(registry2, terrainLayers, settlementFootprints, void 0, vegetationClears);
+  registerVillageSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, opts?.grassVisualPackage);
+  registerGrassFieldSkill(registry2, terrainLayers, settlementFootprints, vegetationClears, {}, opts?.grassVisualPackage);
   registerRenderSkills(registry2);
   const renderWater = registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLayers, assets);
   const water = { ...renderWater, contact: waterContact };
@@ -134889,26 +137809,26 @@ function subtreeIds(world, root) {
   const visited = /* @__PURE__ */ new Set();
   const stack3 = [{ entity: root, depth: 0, exit: false }];
   while (stack3.length > 0) {
-    const frame = stack3.pop();
-    if (frame.exit) {
-      active.delete(frame.entity);
+    const frame2 = stack3.pop();
+    if (frame2.exit) {
+      active.delete(frame2.entity);
       continue;
     }
-    if (frame.depth > MAX_SCENE_GRAPH_DEPTH) {
+    if (frame2.depth > MAX_SCENE_GRAPH_DEPTH) {
       throw new Error(`scene hierarchy exceeds maximum depth ${MAX_SCENE_GRAPH_DEPTH}`);
     }
-    if (active.has(frame.entity)) throw new Error(`scene hierarchy contains a cycle at '${frame.entity}'`);
-    if (visited.has(frame.entity)) throw new Error(`scene hierarchy reaches '${frame.entity}' more than once`);
+    if (active.has(frame2.entity)) throw new Error(`scene hierarchy contains a cycle at '${frame2.entity}'`);
+    if (visited.has(frame2.entity)) throw new Error(`scene hierarchy reaches '${frame2.entity}' more than once`);
     if (result.length >= MAX_TRANSFORM_SCOPE_ENTITIES) {
       throw new Error(`scene transform scope exceeds ${MAX_TRANSFORM_SCOPE_ENTITIES} entities`);
     }
-    active.add(frame.entity);
-    visited.add(frame.entity);
-    result.push(frame.entity);
-    stack3.push({ ...frame, exit: true });
-    const children = world.entities.childrenOf(frame.entity).slice().sort(codeUnitCompare);
+    active.add(frame2.entity);
+    visited.add(frame2.entity);
+    result.push(frame2.entity);
+    stack3.push({ ...frame2, exit: true });
+    const children = world.entities.childrenOf(frame2.entity).slice().sort(codeUnitCompare);
     for (let index = children.length - 1; index >= 0; index--) {
-      stack3.push({ entity: children[index], depth: frame.depth + 1, exit: false });
+      stack3.push({ entity: children[index], depth: frame2.depth + 1, exit: false });
     }
   }
   return result;
@@ -134935,30 +137855,30 @@ function materialObjects(root) {
   const active = /* @__PURE__ */ new Set();
   const stack3 = [{ object: root, depth: 0, exit: false }];
   while (stack3.length > 0) {
-    const frame = stack3.pop();
-    if (frame.exit) {
-      active.delete(frame.object);
+    const frame2 = stack3.pop();
+    if (frame2.exit) {
+      active.delete(frame2.object);
       continue;
     }
-    if (frame.depth > MAX_SCENE_GRAPH_DEPTH) {
+    if (frame2.depth > MAX_SCENE_GRAPH_DEPTH) {
       throw new Error(`scene object graph exceeds maximum depth ${MAX_SCENE_GRAPH_DEPTH}`);
     }
-    if (active.has(frame.object)) throw new Error("scene object graph contains a cycle");
-    if (seen.has(frame.object)) throw new Error("scene object graph reaches an object more than once");
+    if (active.has(frame2.object)) throw new Error("scene object graph contains a cycle");
+    if (seen.has(frame2.object)) throw new Error("scene object graph reaches an object more than once");
     if (objects.length >= MAX_MATERIAL_OBJECTS) {
       throw new Error(`scene material scope exceeds ${MAX_MATERIAL_OBJECTS} objects`);
     }
-    active.add(frame.object);
-    seen.add(frame.object);
-    objects.push(frame.object);
-    stack3.push({ ...frame, exit: true });
-    const rawChildren = frame.object.children;
+    active.add(frame2.object);
+    seen.add(frame2.object);
+    objects.push(frame2.object);
+    stack3.push({ ...frame2, exit: true });
+    const rawChildren = frame2.object.children;
     if (rawChildren === void 0) continue;
     if (!Array.isArray(rawChildren)) throw new Error("scene object children are not an array");
     for (let index = rawChildren.length - 1; index >= 0; index--) {
       const child = rawChildren[index];
       if (typeof child !== "object" || child === null) throw new Error("scene object graph contains a non-object child");
-      stack3.push({ object: child, depth: frame.depth + 1, exit: false });
+      stack3.push({ object: child, depth: frame2.depth + 1, exit: false });
     }
   }
   return objects;
@@ -135405,8 +138325,8 @@ function parseDurableAuthoringRecord(input, sha2562, index) {
 function validateDurableAuthoringRecord(recordInput, transactionInput, previousHeadInput, previousRecordHash, sha2562, index) {
   const { record: record2 } = parseDurableAuthoringRecord(recordInput, sha2562, index);
   const previousHead = WorldProjectHeadSchema.parse(previousHeadInput);
-  const prepared = parseAuthoringTransaction(transactionInput);
-  const transaction = prepared.transaction;
+  const prepared2 = parseAuthoringTransaction(transactionInput);
+  const transaction = prepared2.transaction;
   const transactionHash = canonicalHash(sha2562, transaction);
   const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
   if (record2.previousRecordHash !== previousRecordHash) {
@@ -135783,18 +138703,18 @@ var AuthoringTransactionKernel = class _AuthoringTransactionKernel {
   }
   /** All commit attempts are serialized so concurrent retries cannot apply twice. */
   commit(input) {
-    const prepared = parseAuthoringTransaction(input);
-    const transactionHash = normalizeSha256(this.#sha256(prepared.canonical));
-    const transaction = immutable3(prepared.transaction);
+    const prepared2 = parseAuthoringTransaction(input);
+    const transactionHash = normalizeSha256(this.#sha256(prepared2.canonical));
+    const transaction = immutable3(prepared2.transaction);
     const pending = this.#tail.then(() => this.#commitExclusive(transaction, transactionHash));
     this.#tail = pending.then(() => void 0, () => void 0);
     return pending;
   }
   /** Commit and return the exact compact commitFields envelope without a racy latest lookup. */
   commitWithRecord(input) {
-    const prepared = parseAuthoringTransaction(input);
-    const transactionHash = normalizeSha256(this.#sha256(prepared.canonical));
-    const transaction = immutable3(prepared.transaction);
+    const prepared2 = parseAuthoringTransaction(input);
+    const transactionHash = normalizeSha256(this.#sha256(prepared2.canonical));
+    const transaction = immutable3(prepared2.transaction);
     const pending = this.#tail.then(async () => {
       const committed = !this.#ledger.has(transaction.transactionId);
       const receipt = await this.#commitExclusive(transaction, transactionHash);
@@ -135811,9 +138731,9 @@ var AuthoringTransactionKernel = class _AuthoringTransactionKernel {
   }
   /** Replay one authoritative WorldLog command and verify its embedded commitFields atomically. */
   commitRecorded(input, expectedRecordInput) {
-    const prepared = parseAuthoringTransaction(input);
-    const transactionHash = normalizeSha256(this.#sha256(prepared.canonical));
-    const transaction = immutable3(prepared.transaction);
+    const prepared2 = parseAuthoringTransaction(input);
+    const transactionHash = normalizeSha256(this.#sha256(prepared2.canonical));
+    const transaction = immutable3(prepared2.transaction);
     const expectedRecord = parseDurableAuthoringRecord(expectedRecordInput, this.#sha256).record;
     const pending = this.#tail.then(() => this.#commitExclusive(transaction, transactionHash, expectedRecord));
     this.#tail = pending.then(() => void 0, () => void 0);
@@ -137008,18 +139928,18 @@ var InputRingBuffer = class {
    *  sequence, writes frame N+1 into its ring slot, then publishes N+1 as the
    *  sequence (so a consumer only ever observes a fully-written slot). Returns the
    *  published sequence number. */
-  writeInput(frame) {
+  writeInput(frame2) {
     let next = (this.loadSeq() >>> 0) + 1 >>> 0;
     if (next === 0) next = 1;
     const base = (next - 1) % RING_FRAMES * FRAME_FLOATS;
-    this.writeFloat(base + 0, frame.move[0]);
-    this.writeFloat(base + 1, frame.move[1]);
-    this.writeFloat(base + 2, frame.move[2]);
-    this.writeFloat(base + 3, frame.look[0]);
-    this.writeFloat(base + 4, frame.look[1]);
-    this.writeFloat(base + 5, frame.buttons[0]);
-    this.writeFloat(base + 6, frame.buttons[1]);
-    this.writeFloat(base + 7, frame.tick);
+    this.writeFloat(base + 0, frame2.move[0]);
+    this.writeFloat(base + 1, frame2.move[1]);
+    this.writeFloat(base + 2, frame2.move[2]);
+    this.writeFloat(base + 3, frame2.look[0]);
+    this.writeFloat(base + 4, frame2.look[1]);
+    this.writeFloat(base + 5, frame2.buttons[0]);
+    this.writeFloat(base + 6, frame2.buttons[1]);
+    this.writeFloat(base + 7, frame2.tick);
     this.storeSeq(next);
     return next;
   }
@@ -137783,18 +140703,18 @@ var SimWorkerController = class _SimWorkerController {
    *  Returns the new tick number. */
   tick() {
     if (this.disposed) return this.tickCount;
-    const frame = this.inputRing.readLatest(this.inFrame);
-    this.lastInputFrame = frame;
+    const frame2 = this.inputRing.readLatest(this.inFrame);
+    this.lastInputFrame = frame2;
     const activePlayer = this.activePlayer();
     if (activePlayer !== void 0) {
       activePlayer.controller.step(
-        frame !== null ? {
+        frame2 !== null ? {
           // move = [strafe, vertical, forward]; look[0] = heading yaw.
-          forward: frame.move[2],
-          strafe: frame.move[0],
-          yaw: frame.look[0],
-          run: frame.buttons[1] > 0.5,
-          jump: frame.buttons[0] > 0.5
+          forward: frame2.move[2],
+          strafe: frame2.move[0],
+          yaw: frame2.look[0],
+          run: frame2.buttons[1] > 0.5,
+          jump: frame2.buttons[0] > 0.5
         } : { forward: 0, strafe: 0, yaw: 0, run: false, jump: false },
         FIXED_DT2
       );

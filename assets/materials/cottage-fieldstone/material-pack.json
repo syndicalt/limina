@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-fieldstone",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "castle_wall_slates",
+    "assetUrl": "https://polyhaven.com/a/castle_wall_slates",
+    "apiUrl": "https://api.polyhaven.com/files/castle_wall_slates",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:1f9722fb20671b925f2355909bd7fca368a63210745e54784fc989064e0703ab"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-fieldstone/albedo.jpg",
+      "sha256": "sha256:1c42fe616560553caf8f61f298750e6a2cee06bf2a4af9156a930057d02da003",
+      "assetHash": "sha256:981be63ee60da554f648fe97db4fca0441e54d7262aeba735baa9bb3d0b2d840",
+      "md5": "0f32f47b63c6303ba0d2c79d6672a402",
+      "bytes": 625282,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/castle_wall_slates/castle_wall_slates_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-fieldstone/normal.jpg",
+      "sha256": "sha256:9be1475eb6dde811e8cea0f950f2700ed75bc23c7b3fd66b6d7731c639b7faba",
+      "assetHash": "sha256:427e7167ab9aa79a75018231ae833dc0432a438c874ce27afc42b07bb0eccf7a",
+      "md5": "e2909f4123b3dce0a4774de14e5f8685",
+      "bytes": 1072473,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/castle_wall_slates/castle_wall_slates_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-fieldstone/roughness.jpg",
+      "sha256": "sha256:57f07432fea65e2282b31fc730978d5ae98a3cb432c3f7e48f5b9892c3104d6d",
+      "assetHash": "sha256:99260648a8fd51caa31e9d658e2bc9b3e4b88d1636a5a7970a8b1c29a052b320",
+      "md5": "d8bf1af4754dea48327002d4ec417925",
+      "bytes": 517739,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/castle_wall_slates/castle_wall_slates_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-fieldstone/occlusion.jpg",
+      "sha256": "sha256:68cfd2fb711f26def6e6c0ca4c3f2622c7f396acf8e8fe148c088ebf14c42aa8",
+      "assetHash": "sha256:b68e05542b09ad4805736609f3528df69bc43500de3b07338f854e42d5c9abaa",
+      "md5": "fd08680f51910be27bf8f96e7950c18d",
+      "bytes": 435021,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/castle_wall_slates/castle_wall_slates_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-fieldstone/displacement.jpg",
+      "sha256": "sha256:d0987f0ba04e5a4be165b2f3f4f84250cb440a623991a96b85bb37f2ebde5c15",
+      "assetHash": "sha256:e223116f4f3c10761b3d2e5c05c60c00729d5342427215888c22b5058382def5",
+      "md5": "d1c120e24040b619474d88a41be6db52",
+      "bytes": 198898,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/castle_wall_slates/castle_wall_slates_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-fieldstone",
+    "albedo": "materials/cottage-fieldstone/albedo.jpg",
+    "normal": "materials/cottage-fieldstone/normal.jpg",
+    "roughness": "materials/cottage-fieldstone/roughness.jpg",
+    "occlusion": "materials/cottage-fieldstone/occlusion.jpg",
+    "displacement": "materials/cottage-fieldstone/displacement.jpg"
+  }
+}

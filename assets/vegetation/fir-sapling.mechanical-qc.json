@@ -1,0 +1,16 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-fir-sapling",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/fir_sapling", "licenseSpdx": "CC0-1.0", "attribution": "fir_sapling by Poly Haven (CC0 1.0)" },
+  "models": [
+    { "level": 0, "path": "vegetation/fir-sapling-lod0.glb", "sha256": "sha256:561eeab1936ff8bdd5780160a7663b89c7cd0289de3ad95521b813ed5b1152cc", "boundsM": [2.737733, 1.300616, 0.807023], "vertexCount": 43565, "triangleCount": 16724, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] },
+    { "level": 1, "path": "vegetation/fir-sapling-lod1.glb", "sha256": "sha256:2fbb896f6eba047a9a496a202935f90539f1069c6aaba88f23289da8a508d0d7", "boundsM": [2.694318, 1.24544, 0.747704], "vertexCount": 13760, "triangleCount": 5676, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] },
+    { "level": 2, "path": "vegetation/fir-sapling-lod2.glb", "sha256": "sha256:ea7330c229805fb57b3c7da357ca29f590bcbeed82d1afaf62cd39c9a314336f", "boundsM": [2.670342, 1.24544, 0.719527], "vertexCount": 6471, "triangleCount": 3163, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }
+  ],
+  "checks": { "allGlbReadable": true, "allSelfContained": true, "boundsPreservedAcrossLods": true, "materialsPreservedAcrossLods": true, "textureSlotsPreservedAcrossLods": true, "textureResolutionPreservedAcrossLods": true, "triangleCountStrictlyDecreases": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "lodDistancesM": null,
+  "lodDistanceStatus": "unassigned",
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

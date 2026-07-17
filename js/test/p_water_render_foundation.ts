@@ -59,12 +59,75 @@ assert(ribbon.pointCount === 4 && ribbon.segmentCount === 3, "consecutive duplic
 assert(ribbon.bevelJoinCount >= 1, "sharp join did not use the bounded bevel fallback");
 const riverPosition = ribbon.geometry.getAttribute("position") as THREE.BufferAttribute;
 const arc = ribbon.geometry.getAttribute("waterArcDistance") as THREE.BufferAttribute;
+const cross = ribbon.geometry.getAttribute("waterCrossDistance") as THREE.BufferAttribute;
+const crossRatio = ribbon.geometry.getAttribute("waterCrossRatio") as THREE.BufferAttribute;
 const flow = ribbon.geometry.getAttribute("waterFlowDirection") as THREE.BufferAttribute;
-assert(riverPosition.count === arc.count && arc.count === flow.count, "flow attributes are not vertex-aligned");
+const riverNormal = ribbon.geometry.getAttribute("normal") as THREE.BufferAttribute;
+assert(riverPosition.count === arc.count && arc.count === flow.count && arc.count === cross.count && arc.count === crossRatio.count,
+  "flow attributes are not vertex-aligned");
 assert(arc.getX(arc.count - 1) <= ribbon.lengthM, "arc-distance attribute exceeds total reach length");
+{
+  // Signed cross-stream metres: both banks present, symmetric about a zero centerline, and no
+  // wider than the widest half-width times the miter allowance. Without this attribute the
+  // flow-aligned ripple field would collapse to one-dimensional downstream stripes.
+  let minCross = Infinity, maxCross = -Infinity, centerSamples = 0;
+  for (let index = 0; index < cross.count; index++) {
+    const value = cross.getX(index);
+    assert(Number.isFinite(value), "cross-distance attribute contains a non-finite value");
+    minCross = Math.min(minCross, value); maxCross = Math.max(maxCross, value);
+    if (value === 0) centerSamples++;
+  }
+  assert(minCross < -0.9 && maxCross > 0.9, "cross-distance attribute does not span both banks");
+  assert(Math.abs(minCross + maxCross) < 1e-3, "cross-distance attribute is not symmetric about the centerline");
+  assert(centerSamples > 0, "cross-distance attribute has no centerline zero samples");
+  assert(Math.max(Math.abs(minCross), maxCross) <= 10 / 2 * 1 + 1e-6, "cross-distance exceeds the miter-limited half-width");
+  for (let index = 0; index < crossRatio.count; index++) {
+    assert(Number.isFinite(crossRatio.getX(index)) && Math.abs(crossRatio.getX(index)) <= 1,
+      "normalized cross-stream ratio is non-finite or outside the banks");
+  }
+}
+{
+  // Sign convention: positive cross is the LEFT bank of the flow direction. On a straight +x
+  // river the left perpendicular is +z, so the signed cross must equal the vertex's local z
+  // exactly — a flipped sign would shear the flow-space ripple field against the bank.
+  const straight = buildVariableRiverRibbonGeometry({ points: [[0, 0], [30, 0]], widthsM: [4, 4], surfaceElevationsM: [2, 2] });
+  const straightPosition = straight.geometry.getAttribute("position") as THREE.BufferAttribute;
+  const straightCross = straight.geometry.getAttribute("waterCrossDistance") as THREE.BufferAttribute;
+  for (let index = 0; index < straightCross.count; index++) {
+    assert(Math.abs(straightCross.getX(index) - straightPosition.getZ(index)) < 1e-5,
+      "cross-distance sign disagrees with the left-of-flow bank");
+  }
+  straight.geometry.dispose();
+}
+const normalAtArc = new Map<string, [number, number, number]>();
+const flowAtArc = new Map<string, [number, number]>();
+for (let index = 0; index < arc.count; index++) {
+  const key = arc.getX(index).toFixed(6);
+  const normal: [number, number, number] = [riverNormal.getX(index), riverNormal.getY(index), riverNormal.getZ(index)];
+  const prior = normalAtArc.get(key);
+  if (prior === undefined) normalAtArc.set(key, normal);
+  else assert(Math.hypot(normal[0] - prior[0], normal[1] - prior[1], normal[2] - prior[2]) < 1e-6,
+    `river duplicated lighting normals at arc ${key} and reintroduced a cross-channel panel seam`);
+  assert(normal[1] > 0, "river lighting normal points below the surface");
+  const direction: [number, number] = [flow.getX(index), flow.getY(index)];
+  const priorFlow = flowAtArc.get(key);
+  if (priorFlow === undefined) flowAtArc.set(key, direction);
+  else assert(Math.hypot(direction[0] - priorFlow[0], direction[1] - priorFlow[1]) < 1e-6,
+    `river duplicated flow direction at arc ${key} and reintroduced a wave-normal panel seam`);
+}
 const reversed = buildVariableRiverRibbonGeometry({
   points: [...points].reverse(), widthsM: [10, 8, 5, 4, 2], surfaceElevationsM: [1, 2, 3.25, 3.5, 4],
 });
+const tessellationShort = buildVariableRiverRibbonGeometry({ points: [[0, 0], [2, 0]], widthsM: [2, 2], surfaceElevationsM: [1, 1] });
+const tessellationLongWide = buildVariableRiverRibbonGeometry({ points: [[0, 0], [18, 0]], widthsM: [9, 9], surfaceElevationsM: [1, 1] });
+const shortPolicy = tessellationShort.geometry.userData.liminaRiverTessellation;
+const longWidePolicy = tessellationLongWide.geometry.userData.liminaRiverTessellation;
+assert(shortPolicy.policy === "bounded-world-space/v1"
+  && longWidePolicy.maxAlong > shortPolicy.maxAlong
+  && longWidePolicy.maxAcross > shortPolicy.maxAcross
+  && longWidePolicy.maxAlong <= 24 && longWidePolicy.maxAcross <= 20,
+  "river tessellation did not adapt to world-space segment length/width within its hard caps");
+tessellationShort.geometry.dispose(); tessellationLongWide.geometry.dispose();
 assert(reversed.geometry.getIndex()!.count > 0, "reversed river winding produced empty geometry");
 assertUpwardTriangles(ribbon.geometry, "left-turn river");
 assertUpwardTriangles(reversed.geometry, "right-turn river");
@@ -85,6 +148,30 @@ assert(capped, "river point cap was not enforced");
 
 const material = createWaterMaterial({ color: 0x2b5d72, kind: "river", orientation: "xz" });
 assert(material.transparent && material.depthWrite === false, "transparent water still writes depth");
+assert(material.userData.liminaWaterFlowAlignedNormals === true && (material.userData.liminaWaterNormalOctaves as number) >= 1,
+  "river material lost its flow-aligned multi-scale normal field");
+assert(material.userData.liminaWaterVolumetricAbsorption !== true,
+  "volumetric absorption claimed without a verified depth bake — the claim would be untrue");
+{
+  // The volumetric read is depth-bake-gated and river-only: a full binding turns on Beer–Lambert
+  // absorption plus the wet-margin/foam contact bands; a basin with the same binding must not
+  // inherit the flow-space river graph.
+  const depthTexture = new THREE.DataTexture(new Uint8Array([255, 255, 128, 255, 64, 255, 8, 255]), 2, 2, THREE.RGFormat, THREE.UnsignedByteType);
+  depthTexture.needsUpdate = true;
+  const binding = { texture: depthTexture, bounds: { minX: 0, minZ: 0, maxX: 8, maxZ: 8 }, coverageChannel: true, maxDepthM: 2.5 };
+  const volumetric = createWaterMaterial({ color: 0x2b5d72, kind: "river", orientation: "xz", depth: binding, sceneOptics: "refraction" });
+  assert(volumetric.userData.liminaWaterVolumetricAbsorption === true
+    && volumetric.userData.liminaWaterWetShoreMargin === true
+    && volumetric.userData.liminaWaterShoreFoam === true
+    && volumetric.userData.liminaWaterDownstreamFlow === true
+    && volumetric.userData.liminaWaterSceneDepthRefraction === true,
+    "depth-bound river material lost a production look feature (absorption/wet margin/foam/flow/refraction)");
+  const basinMaterial = createWaterMaterial({ color: 0x2b5d72, kind: "basin", orientation: "xz", depth: binding });
+  assert(basinMaterial.userData.liminaWaterFlowAlignedNormals !== true
+    && basinMaterial.userData.liminaWaterVolumetricAbsorption !== true,
+    "basin material wrongly inherited the river flow-space graph");
+  volumetric.dispose(); basinMaterial.dispose(); depthTexture.dispose();
+}
 
 const scene = new THREE.Scene();
 const manager = new VisibleWaterManager(scene, DEFAULT_RENDER_QUALITY_PROFILES.balanced.water);

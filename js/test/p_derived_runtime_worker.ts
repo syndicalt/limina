@@ -11,6 +11,12 @@ import {
   encodeTerrainChunkArtifact,
 } from "../src/world/compiler/terrain-artifact.mjs";
 import {
+  SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+  SURFACE_COMPOSITE_ARTIFACT_TYPE,
+  encodeSurfaceCompositeArtifact,
+} from "../src/world/compiler/surface-composite-artifact.mjs";
+import { SURFACE_COMPOSITE_POLICY_VERSION, SURFACE_COMPOSITE_TILE_SCHEMA } from "../src/world/surface-composite-tile.mjs";
+import {
   WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
   WORLD_OVERVIEW_ARTIFACT_TYPE,
   encodeWorldOverviewArtifact,
@@ -20,6 +26,30 @@ import {
   NAVIGATION_INDEX_ARTIFACT_TYPE,
   encodeNavigationIndexArtifact,
 } from "../src/world/compiler/navigation-index-artifact.mjs";
+import {
+  BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
+  BIOME_FIELD_ARTIFACT_TYPE,
+  decodeBiomeFieldArtifact,
+  encodeBiomeFieldArtifact,
+} from "../src/world/compiler/biome-field-artifact.mjs";
+import {
+  BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
+  BIOME_POPULATION_ARTIFACT_SCHEMA,
+  BIOME_POPULATION_ARTIFACT_TYPE,
+  encodeBiomePopulationArtifact,
+} from "../src/world/compiler/biome-population-artifact.mjs";
+import { compileBiomeField } from "../src/world/biome-field.mjs";
+import { BIOME_LIBRARY_V1 } from "../src/world/biome-library-v1.mjs";
+import { biomePackContentHash } from "../src/world/biome-ir.mjs";
+import {
+  BIOME_RUNTIME_PACK_SCHEMA,
+  biomeRuntimePackContentHash,
+  stableStringifyBiomeRuntimePack,
+} from "../src/world/biome-runtime-pack.mjs";
+import {
+  BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE,
+  BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+} from "../src/world/compiler/biome-runtime-pack-artifact.mjs";
 import { ATLAS_DESIGN_REF_SCHEMA } from "../src/world/design-ref.mjs";
 import {
   HYDROLOGY_FIELD_ARTIFACT_MEDIA_TYPE,
@@ -39,6 +69,7 @@ import {
   DERIVED_RUNTIME_WORKER_SCHEMA,
   DerivedRuntimeWorkerController,
   parseDerivedRuntimeWorkerInput,
+  stageDerivedRuntimeChunk,
 } from "../src/browser/derived-runtime-worker.ts";
 import { DERIVED_TERRAIN_RESIDENCY_SCHEMA } from "../src/browser/derived-terrain-residency.ts";
 import {
@@ -105,6 +136,51 @@ const terrainDescriptor = Object.freeze({
   byteLength: terrainBytes.byteLength,
   mediaType: TERRAIN_CHUNK_ARTIFACT_MEDIA_TYPE,
 });
+function surfaceCompositeBytes(
+  terrainChunkHash = terrainDescriptor.contentHash,
+  coord: Readonly<{ tx: number; tz: number; lod: number }> = { tx: 0, tz: 0, lod: 0 },
+  biomeFieldHash = hash("surface-biome-field"),
+  biomePackHash = hash("surface-biome-pack"),
+): Uint8Array {
+  const pixels = 4;
+  const albedo = new Uint8Array(pixels * 4).fill(64);
+  const normal = new Uint8Array(pixels * 4).fill(128);
+  const orm = new Uint8Array(pixels * 4).fill(192);
+  for (let index = 3; index < pixels * 4; index += 4) {
+    albedo[index] = 255;
+    normal[index] = 255;
+    orm[index] = 255;
+  }
+  return encodeSurfaceCompositeArtifact({
+    schema: SURFACE_COMPOSITE_TILE_SCHEMA,
+    source: {
+      biomeFieldHash,
+      biomePackHash,
+      terrainChunkHash,
+      policyVersion: SURFACE_COMPOSITE_POLICY_VERSION,
+    },
+    coord,
+    placement: { origin: [0, 0], sizeM: 64, featureOrigin: [0, 0] },
+    resolution: { interior: 2, gutter: 0, total: 2 },
+    maps: {
+      albedo: { data: albedo, contentHash: derivedArtifactContentHash(albedo), colorSpace: "srgb" },
+      normal: { data: normal, contentHash: derivedArtifactContentHash(normal), colorSpace: "none", convention: "opengl-y-plus" },
+      orm: { data: orm, contentHash: derivedArtifactContentHash(orm), colorSpace: "none", channels: "ao-roughness-metalness-grass-density" },
+    },
+    edgeHashes: {
+      north: hash("surface-edge-north"), east: hash("surface-edge-east"),
+      south: hash("surface-edge-south"), west: hash("surface-edge-west"),
+    },
+    diagnostics: { roles: 1, runtimeTextureSamples: 3, outputBytes: pixels * 4 * 3 },
+  });
+}
+const surfaceBytes = surfaceCompositeBytes();
+const surfaceDescriptor = Object.freeze({
+  artifactType: SURFACE_COMPOSITE_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(surfaceBytes),
+  byteLength: surfaceBytes.byteLength,
+  mediaType: SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+});
 const overviewBytes = encodeWorldOverviewArtifact({
   rows: 3,
   cols: 3,
@@ -135,6 +211,88 @@ const navigationDescriptor = Object.freeze({
   contentHash: derivedArtifactContentHash(navigationBytes),
   byteLength: navigationBytes.byteLength,
   mediaType: NAVIGATION_INDEX_ARTIFACT_MEDIA_TYPE,
+});
+const biomeFieldSource = compileBiomeField({
+  pack: BIOME_LIBRARY_V1,
+  grid: { origin: [-64, -64], rows: 2, cols: 2, cellSizeM: 64 },
+  samples: {
+    temperatureC: new Float32Array([12, 18, -8, 4]),
+    moisture01: new Float32Array([0.6, 0.2, 0.8, 0.4]),
+    elevationM: new Float32Array([0, 20, 80, 40]),
+    slope01: new Float32Array([0.1, 0.2, 0.4, 0.3]),
+    waterDistanceM: new Float32Array([10, 40, 80, 20]),
+  },
+  influences: [],
+  modifiers: [],
+  topN: 4,
+  climateFeather: { temperatureC: 6, moisture01: 0.2 },
+});
+const biomeFieldBytes = encodeBiomeFieldArtifact(biomeFieldSource);
+const biomeFieldDescriptor = Object.freeze({
+  artifactType: BIOME_FIELD_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(biomeFieldBytes),
+  byteLength: biomeFieldBytes.byteLength,
+  mediaType: BIOME_FIELD_ARTIFACT_MEDIA_TYPE,
+});
+const runtimeBiome = BIOME_LIBRARY_V1.definitions[0];
+const populationRuntimePackDocument = {
+  schema: BIOME_RUNTIME_PACK_SCHEMA,
+  id: "test-runtime",
+  version: "1.0.0",
+  metadataPackContentHash: biomePackContentHash(BIOME_LIBRARY_V1),
+  status: "metadata-only",
+  biomes: [{
+    biomeId: runtimeBiome.id,
+    status: "metadata-only",
+    surfaceRules: runtimeBiome.surfaceMaterials
+      .map(({ role }) => ({ role, weight: 1, tileScaleM: 4 }))
+      .sort((left, right) => left.role.localeCompare(right.role)),
+    vegetationRules: runtimeBiome.vegetationPalette
+      .map(({ role, weight }) => ({ role, weight, radiusM: 1.5, density01: 0.5,
+        scale: [0.8, 1.2], tintSrgb: [255, 255, 255] }))
+      .sort((left, right) => left.role.localeCompare(right.role)),
+    bindings: [],
+  }],
+};
+const populationRuntimePackBytes = new TextEncoder().encode(
+  stableStringifyBiomeRuntimePack(populationRuntimePackDocument, BIOME_LIBRARY_V1),
+);
+const populationRuntimePackHash = biomeRuntimePackContentHash(populationRuntimePackDocument, BIOME_LIBRARY_V1);
+const populationRuntimePackDescriptor = Object.freeze({
+  artifactType: BIOME_RUNTIME_PACK_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(populationRuntimePackBytes),
+  byteLength: populationRuntimePackBytes.byteLength,
+  mediaType: BIOME_RUNTIME_PACK_ARTIFACT_MEDIA_TYPE,
+});
+const populationSurfaceBytes = surfaceCompositeBytes(
+  terrainDescriptor.contentHash,
+  { tx: 0, tz: 0, lod: 0 },
+  biomeFieldDescriptor.contentHash,
+  populationRuntimePackHash,
+);
+const populationSurfaceDescriptor = Object.freeze({
+  artifactType: SURFACE_COMPOSITE_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(populationSurfaceBytes),
+  byteLength: populationSurfaceBytes.byteLength,
+  mediaType: SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE,
+});
+const populationBytes = encodeBiomePopulationArtifact({
+  schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+  coord: { tx: 0, tz: 0, lod: 0 },
+  identity: {
+    fieldContentHash: biomeFieldDescriptor.contentHash,
+    runtimePackContentHash: populationRuntimePackHash,
+  },
+  placements: [{
+    role: "canopy", assetId: "trees/oak", contentHash: hash("oak-descriptor"),
+    x: 12, y: 3, z: 18, yaw: 0.25, scale: 1.1, pageX: 0, pageZ: 0,
+  }],
+});
+const populationDescriptor = Object.freeze({
+  artifactType: BIOME_POPULATION_ARTIFACT_TYPE,
+  contentHash: derivedArtifactContentHash(populationBytes),
+  byteLength: populationBytes.byteLength,
+  mediaType: BIOME_POPULATION_ARTIFACT_MEDIA_TYPE,
 });
 const hydrology = createHydrologyTopology({
   rows: 2,
@@ -179,7 +337,11 @@ function manifest(revision: number, options: {
   globals?: boolean;
   overview?: boolean;
   navigation?: typeof navigationDescriptor | Readonly<{ artifactType: string; contentHash: string; byteLength: number; mediaType: string }>;
+  biome?: typeof biomeFieldDescriptor | Readonly<{ artifactType: string; contentHash: string; byteLength: number; mediaType: string }>;
+  runtimePack?: typeof populationRuntimePackDescriptor | null;
   terrain?: Uint8Array;
+  surface?: typeof surfaceDescriptor;
+  population?: typeof populationDescriptor;
   graphHash?: string;
 } = {}) {
   const terrain = options.terrain ?? terrainBytes;
@@ -211,6 +373,10 @@ function manifest(revision: number, options: {
     },
     grid,
     globalArtifacts: [
+      ...(options.biome === undefined ? [] : [options.biome]),
+      ...(options.runtimePack === null ? [] : options.runtimePack !== undefined
+        ? [options.runtimePack]
+        : options.population === undefined ? [] : [populationRuntimePackDescriptor]),
       ...(options.globals ? [fieldDescriptor, waterDescriptor] : []),
       ...(options.navigation === undefined ? [] : [options.navigation]),
       ...(options.overview ? [overviewDescriptor] : []),
@@ -223,7 +389,11 @@ function manifest(revision: number, options: {
       tz: 0,
       topologyHash: hash("stable-topology"),
       sourceSliceHashes: [],
-      artifacts: [descriptor],
+      artifacts: [
+        ...(options.population === undefined ? [] : [options.population]),
+        ...(options.surface === undefined ? [] : [options.surface]),
+        descriptor,
+      ],
     }],
   });
 }
@@ -314,8 +484,13 @@ class FakeTransport {
   constructor(initial: DerivedRuntimeCurrent) {
     this.current = initial;
     this.artifacts.set(terrainDescriptor.contentHash, terrainBytes);
+    this.artifacts.set(surfaceDescriptor.contentHash, surfaceBytes);
+    this.artifacts.set(populationSurfaceDescriptor.contentHash, populationSurfaceBytes);
+    this.artifacts.set(populationDescriptor.contentHash, populationBytes);
     this.artifacts.set(overviewDescriptor.contentHash, overviewBytes);
     this.artifacts.set(navigationDescriptor.contentHash, navigationBytes);
+    this.artifacts.set(biomeFieldDescriptor.contentHash, biomeFieldBytes);
+    this.artifacts.set(populationRuntimePackDescriptor.contentHash, populationRuntimePackBytes);
     this.artifacts.set(fieldDescriptor.contentHash, fieldBytes);
     this.artifacts.set(waterDescriptor.contentHash, waterBytes);
   }
@@ -431,6 +606,212 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   });
   rejectsSync(() => parseDerivedRuntimeWorkerInput(hostile), /enumerable data field/, "reconcile-residency accepted an accessor");
   assert(!invoked, "reconcile-residency parser invoked an untrusted accessor");
+}
+
+// Chunk staging remains byte-for-byte compatible for the legacy terrain-only profile and
+// atomically binds the new CPU-decoded surface profile by artifact type rather than array order.
+{
+  const signal = new AbortController().signal;
+  const chunk = Object.freeze({ tx: 0, tz: 0, lod: 0 });
+  const legacy = stageDerivedRuntimeChunk({
+    chunk,
+    artifacts: [{ artifact: terrainDescriptor, bytes: terrainBytes }],
+    signal,
+  }) as Record<string, unknown>;
+  assert(Object.isFrozen(legacy) && Object.keys(legacy).sort().join(",") === "decoded,kind",
+    "terrain-only staging changed the legacy resource profile");
+
+  const staged = stageDerivedRuntimeChunk({
+    chunk,
+    artifacts: [
+      { artifact: surfaceDescriptor, bytes: surfaceBytes },
+      { artifact: terrainDescriptor, bytes: terrainBytes },
+    ],
+    signal,
+  }) as {
+    decoded: { tile: { heights: Float32Array } };
+    surface: { coord: { tx: number; tz: number; lod: number }; maps: { albedo: { data: Uint8Array } } };
+    artifacts: { terrain: typeof terrainDescriptor; surface: typeof surfaceDescriptor };
+  };
+  assert(Object.isFrozen(staged) && Object.isFrozen(staged.artifacts)
+      && staged.decoded.tile.heights.length === 4 && staged.surface.coord.tx === 0
+      && staged.surface.maps.albedo.data.buffer !== surfaceBytes.buffer
+      && staged.artifacts.terrain === terrainDescriptor && staged.artifacts.surface === surfaceDescriptor,
+  "surface staging was not atomic, descriptor-bound, frozen, or independently owned");
+
+  const stagedPopulation = stageDerivedRuntimeChunk({
+    manifest: { globalArtifacts: [biomeFieldDescriptor] },
+    chunk,
+    artifacts: [
+      { artifact: populationDescriptor, bytes: populationBytes },
+      { artifact: terrainDescriptor, bytes: terrainBytes },
+      { artifact: populationSurfaceDescriptor, bytes: populationSurfaceBytes },
+    ],
+    signal,
+  }) as {
+    population: { plan: { placements: Array<{ assetId: string }> }; metadata: { contentHash: string } };
+    artifacts: { population: typeof populationDescriptor };
+  };
+  assert(Object.isFrozen(stagedPopulation) && stagedPopulation.population.plan.placements[0].assetId === "trees/oak"
+      && stagedPopulation.population.metadata.contentHash === populationDescriptor.contentHash
+      && stagedPopulation.artifacts.population === populationDescriptor,
+  "three-artifact population staging was not decoded, identity-bound, and atomic");
+
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationDescriptor, bytes: populationBytes },
+    { artifact: populationDescriptor, bytes: populationBytes },
+  ], signal }), /duplicate artifact type/, "chunk staging accepted duplicate population artifacts");
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationDescriptor, bytes: populationBytes },
+  ], signal }), /requires its surface composite/, "chunk staging accepted population without surface identity context");
+
+  const tamperedPopulation = populationBytes.slice();
+  tamperedPopulation[tamperedPopulation.length - 1] ^= 1;
+  const tamperedPopulationDescriptor = Object.freeze({
+    ...populationDescriptor,
+    contentHash: derivedArtifactContentHash(tamperedPopulation),
+  });
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationSurfaceDescriptor, bytes: populationSurfaceBytes },
+    { artifact: tamperedPopulationDescriptor, bytes: tamperedPopulation },
+  ], signal }), /integrity hash mismatch/, "chunk staging accepted internally tampered population bytes");
+
+  const wrongPopulationBytes = encodeBiomePopulationArtifact({
+    schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+    coord: { tx: 0, tz: 0, lod: 0 },
+    identity: { fieldContentHash: hash("wrong-field"), runtimePackContentHash: populationRuntimePackHash },
+    placements: [],
+  });
+  const wrongPopulationDescriptor = Object.freeze({ ...populationDescriptor,
+    contentHash: derivedArtifactContentHash(wrongPopulationBytes), byteLength: wrongPopulationBytes.byteLength });
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationSurfaceDescriptor, bytes: populationSurfaceBytes },
+    { artifact: wrongPopulationDescriptor, bytes: wrongPopulationBytes },
+  ], signal }), /bound to another biome field/, "chunk staging accepted a cross-field population plan");
+
+  const wrongCoordPopulationBytes = encodeBiomePopulationArtifact({
+    schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+    coord: { tx: 1, tz: 0, lod: 0 },
+    identity: { fieldContentHash: biomeFieldDescriptor.contentHash, runtimePackContentHash: populationRuntimePackHash },
+    placements: [],
+  });
+  const wrongCoordPopulationDescriptor = Object.freeze({ ...populationDescriptor,
+    contentHash: derivedArtifactContentHash(wrongCoordPopulationBytes), byteLength: wrongCoordPopulationBytes.byteLength });
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationSurfaceDescriptor, bytes: populationSurfaceBytes },
+    { artifact: wrongCoordPopulationDescriptor, bytes: wrongCoordPopulationBytes },
+  ], signal }), /coordinates do not match/, "chunk staging accepted population for another coordinate");
+
+  const wrongPackPopulationBytes = encodeBiomePopulationArtifact({
+    schema: BIOME_POPULATION_ARTIFACT_SCHEMA,
+    coord: { tx: 0, tz: 0, lod: 0 },
+    identity: { fieldContentHash: biomeFieldDescriptor.contentHash, runtimePackContentHash: hash("wrong-runtime-pack") },
+    placements: [],
+  });
+  const wrongPackPopulationDescriptor = Object.freeze({ ...populationDescriptor,
+    contentHash: derivedArtifactContentHash(wrongPackPopulationBytes), byteLength: wrongPackPopulationBytes.byteLength });
+  rejectsSync(() => stageDerivedRuntimeChunk({ manifest: { globalArtifacts: [biomeFieldDescriptor] }, chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: populationSurfaceDescriptor, bytes: populationSurfaceBytes },
+    { artifact: wrongPackPopulationDescriptor, bytes: wrongPackPopulationBytes },
+  ], signal }), /bound to another runtime pack/, "chunk staging accepted population from another runtime pack");
+
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+  ], signal }), /duplicate artifact type/, "chunk staging accepted duplicate terrain artifacts");
+  const unknownDescriptor = Object.freeze({ ...surfaceDescriptor, artifactType: "unknown-chunk/v1" });
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: unknownDescriptor, bytes: surfaceBytes },
+  ], signal }), /unsupported artifact/, "chunk staging accepted an unknown artifact type");
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: surfaceDescriptor, bytes: surfaceBytes },
+  ], signal }), /missing its terrain artifact/, "chunk staging accepted a surface without terrain");
+  const wrongMedia = Object.freeze({ ...surfaceDescriptor, mediaType: "application/octet-stream" });
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: wrongMedia, bytes: surfaceBytes },
+  ], signal }), /descriptor type or media type is invalid/, "chunk staging accepted the wrong surface media type");
+
+  const wrongCoordBytes = surfaceCompositeBytes(terrainDescriptor.contentHash, { tx: 1, tz: 0, lod: 0 });
+  const wrongCoordDescriptor = Object.freeze({ ...surfaceDescriptor,
+    contentHash: derivedArtifactContentHash(wrongCoordBytes), byteLength: wrongCoordBytes.byteLength });
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: wrongCoordDescriptor, bytes: wrongCoordBytes },
+  ], signal }), /coordinates do not match/, "chunk staging accepted a surface bound to another coordinate");
+
+  const wrongTerrainBytes = surfaceCompositeBytes(hash("another-terrain"));
+  const wrongTerrainDescriptor = Object.freeze({ ...surfaceDescriptor,
+    contentHash: derivedArtifactContentHash(wrongTerrainBytes), byteLength: wrongTerrainBytes.byteLength });
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: wrongTerrainDescriptor, bytes: wrongTerrainBytes },
+  ], signal }), /bound to another terrain artifact/, "chunk staging accepted a cross-terrain surface binding");
+
+  const tampered = surfaceBytes.slice();
+  tampered[tampered.length - 1] ^= 1;
+  rejectsSync(() => stageDerivedRuntimeChunk({ chunk, artifacts: [
+    { artifact: terrainDescriptor, bytes: terrainBytes },
+    { artifact: surfaceDescriptor, bytes: tampered },
+  ], signal }), /hash mismatch|canonical|truncated|exceeds/, "chunk staging accepted tampered surface bytes");
+}
+
+// A production-profile chunk transfers terrain, surface, and decoded population as one CPU-only
+// snapshot. Recursive cloning owns the population arrays without introducing renderer resources.
+{
+  const state = harness(current(manifest(101, {
+    biome: biomeFieldDescriptor,
+    surface: populationSurfaceDescriptor,
+    population: populationDescriptor,
+  })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "population chunk activation");
+  const activation = messages(state, "activate")[0];
+  const populationSnapshot = activation.snapshot as {
+    chunks: Array<{ resource: Record<string, any> }>;
+    globals: Array<{ artifactType: string; resource: Record<string, any> }>;
+  };
+  const resource = populationSnapshot.chunks[0].resource;
+  const runtimePackResource = populationSnapshot.globals
+    .find((entry) => entry.artifactType === BIOME_RUNTIME_PACK_ARTIFACT_TYPE)?.resource;
+  assert(Object.keys(resource).sort().join(",") === "artifacts,decoded,kind,population,surface"
+      && resource.population.plan.placements.length === 1
+      && resource.population.plan.placements[0].assetId === "trees/oak"
+      && resource.population.metadata.contentHash === populationDescriptor.contentHash,
+  "three-artifact chunk did not transfer one complete CPU-only population resource");
+  assert(runtimePackResource?.kind === BIOME_RUNTIME_PACK_ARTIFACT_TYPE
+      && runtimePackResource.bytes instanceof Uint8Array
+      && runtimePackResource.bytes.byteLength === populationRuntimePackBytes.byteLength
+      && derivedArtifactContentHash(runtimePackResource.bytes) === populationRuntimePackDescriptor.contentHash,
+  "population snapshot omitted the exact canonical runtime-pack artifact bytes");
+  assert(!("geometry" in resource.population) && !("material" in resource.population),
+    "population transfer leaked renderer/GPU resources into the worker snapshot");
+  await state.controller.close("close-population-chunk");
+}
+
+// The real revision-manager path forwards canonical chunk coordinates and transfers one complete
+// two-artifact resource; the surface cannot activate independently of its terrain.
+{
+  const state = harness(current(manifest(100, { surface: surfaceDescriptor })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "surface chunk activation");
+  const activation = messages(state, "activate")[0];
+  const resource = (activation.snapshot as { chunks: Array<{ resource: Record<string, unknown> }> }).chunks[0].resource;
+  assert(state.transport.artifactOrder.join(",") === `${SURFACE_COMPOSITE_ARTIFACT_TYPE},terrain-chunk/v1`
+      && Object.keys(resource).sort().join(",") === "artifacts,decoded,kind,surface",
+  "two-artifact chunk did not stage and transfer as one canonical resource");
+  await state.controller.close("close-surface-chunk");
 }
 
 // Watch mode activates current, polls deterministically, reuses worker-owned buffers, and keeps credentials out of output.
@@ -884,6 +1265,83 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
   await state.controller.close("close-navigation-descriptor");
 }
 
+// Biome fields stay canonical across the worker boundary. The main realm owns the only decoded
+// channels used by a candidate; worker rollback retains an un-detached canonical live resource.
+{
+  const state = harness(current(manifest(89, { biome: biomeFieldDescriptor })));
+  await state.init();
+  state.timers.runNext(0);
+  await acknowledgeLatest(state);
+  await eventually(() => messages(state, "revision").length === 1, "biome field activation");
+  assert(state.transport.artifactOrder.join(",") === `${BIOME_FIELD_ARTIFACT_TYPE},terrain-chunk/v1`,
+    `biome field staging order changed (${state.transport.artifactOrder.join(",")})`);
+  const activation = messages(state, "activate")[0];
+  const resource = activation.snapshot.globals[0].resource;
+  assert(resource.kind === BIOME_FIELD_ARTIFACT_TYPE && resource.bytes instanceof Uint8Array
+    && resource.bytes.byteLength === biomeFieldBytes.byteLength
+    && Object.keys(resource).sort().join(",") === "bytes,kind",
+  "worker transferred decoded biome state instead of canonical bytes");
+  const parsed = parseTransferredDerivedRuntimeSnapshot(activation.snapshot);
+  assert(parsed.biomeField?.metadata.contentHash === biomeFieldDescriptor.contentHash
+    && parsed.biomeField.field.indices.buffer !== resource.bytes.buffer
+    && parsed.biomeField.field.weights.buffer !== resource.bytes.buffer,
+  "main realm did not independently verify/decode owned biome channels");
+  await state.controller.close("close-biome-field");
+}
+
+{
+  const malformedBytes = biomeFieldBytes.slice();
+  malformedBytes[0] ^= 0xff;
+  const malformedDescriptor = Object.freeze({
+    ...biomeFieldDescriptor,
+    contentHash: derivedArtifactContentHash(malformedBytes),
+  });
+  const state = harness(current(manifest(90, { biome: malformedDescriptor })));
+  state.transport.artifacts.set(malformedDescriptor.contentHash, malformedBytes);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "malformed biome field rejection");
+  assert(messages(state, "activate").length === 0 && messages(state, "error")[0].code === "INTERNAL_ERROR",
+    "malformed canonical-hash-bound biome field reached activation");
+  await state.controller.close("close-malformed-biome-field");
+}
+
+{
+  const wrongMediaDescriptor = Object.freeze({ ...biomeFieldDescriptor, mediaType: "application/octet-stream" });
+  const state = harness(current(manifest(92, { biome: wrongMediaDescriptor })));
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "biome field descriptor rejection");
+  assert(messages(state, "activate").length === 0
+    && messages(state, "error")[0].code === "ARTIFACT_CONTRACT_MISMATCH",
+  "malformed biome field descriptor reached decode or activation");
+  await state.controller.close("close-biome-field-descriptor");
+}
+
+// Runtime-pack bytes are independently decoded in the worker before any population snapshot can
+// activate; an exactly hash-bound but structurally invalid document fails closed.
+{
+  const malformedRuntimePackBytes = populationRuntimePackBytes.slice();
+  malformedRuntimePackBytes[malformedRuntimePackBytes.byteLength - 1] ^= 1;
+  const malformedRuntimePackDescriptor = Object.freeze({
+    ...populationRuntimePackDescriptor,
+    contentHash: derivedArtifactContentHash(malformedRuntimePackBytes),
+  });
+  const state = harness(current(manifest(93, {
+    biome: biomeFieldDescriptor,
+    runtimePack: malformedRuntimePackDescriptor,
+    surface: populationSurfaceDescriptor,
+    population: populationDescriptor,
+  })));
+  state.transport.artifacts.set(malformedRuntimePackDescriptor.contentHash, malformedRuntimePackBytes);
+  await state.init();
+  state.timers.runNext(0);
+  await eventually(() => messages(state, "error").length === 1, "malformed runtime-pack rejection");
+  assert(messages(state, "activate").length === 0 && messages(state, "error")[0].code === "INTERNAL_ERROR",
+    "malformed canonical-hash-bound runtime-pack bytes reached population activation");
+  await state.controller.close("close-malformed-runtime-pack");
+}
+
 // A large publication retains full manifest identity while fetching and transferring only the
 // exact radius-7 terrain window plus complete global artifacts.
 {
@@ -940,14 +1398,36 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
 
 // Main-thread rejection rolls back manager visibility and retries; the next activation still has intact prior resources.
 {
-  const first = current(manifest(10));
+  const first = current(manifest(10, {
+    biome: biomeFieldDescriptor,
+    surface: populationSurfaceDescriptor,
+    population: populationDescriptor,
+  }));
   const changedTerrain = encodeTerrainChunkArtifact({
     nrows: 2, ncols: 2, origin: [0, 0, 0], scale: [64, 10, 64], heights: new Float32Array([1, 0.5, 0.25, 0]),
   });
-  const secondManifest = manifest(11, { terrain: changedTerrain });
+  const changedTerrainHash = derivedArtifactContentHash(changedTerrain);
+  const changedSurface = surfaceCompositeBytes(
+    changedTerrainHash,
+    { tx: 0, tz: 0, lod: 0 },
+    biomeFieldDescriptor.contentHash,
+    populationRuntimePackHash,
+  );
+  const changedSurfaceDescriptor = Object.freeze({
+    ...populationSurfaceDescriptor,
+    contentHash: derivedArtifactContentHash(changedSurface),
+    byteLength: changedSurface.byteLength,
+  });
+  const secondManifest = manifest(11, {
+    terrain: changedTerrain,
+    biome: biomeFieldDescriptor,
+    surface: changedSurfaceDescriptor,
+    population: populationDescriptor,
+  });
   const second = current(secondManifest, 2);
   const state = harness(first);
-  state.transport.artifacts.set(derivedArtifactContentHash(changedTerrain), changedTerrain);
+  state.transport.artifacts.set(changedTerrainHash, changedTerrain);
+  state.transport.artifacts.set(changedSurfaceDescriptor.contentHash, changedSurface);
   await state.init();
   state.timers.runNext(0);
   await acknowledgeLatest(state);
@@ -969,11 +1449,20 @@ rejectsSync(() => parseDerivedRuntimeWorkerInput({
     accepted: true,
   });
   await eventually(() => messages(state, "revision").length === 2, "activation retry");
-  const retried = messages(state, "activate").at(-1)!.snapshot as { chunks: Array<{ resource: { decoded: { tile: { heights: Float32Array } } } }> };
+  const retried = messages(state, "activate").at(-1)!.snapshot as { chunks: Array<{ resource: {
+    decoded: { tile: { heights: Float32Array } };
+    population: { plan: { placements: Array<{ assetId: string }> } };
+  } }> };
   assert(retried.chunks[0].resource.decoded.tile.heights.length === 4, "ack rollback leaked or detached staged resources");
+  assert(retried.chunks[0].resource.population.plan.placements[0].assetId === "trees/oak",
+    "ack rollback leaked or detached staged population arrays before retry");
+  const retriedBiomeBytes = messages(state, "activate").at(-1)!.snapshot.globals[0].resource.bytes as Uint8Array;
+  const retriedBiome = decodeBiomeFieldArtifact(retriedBiomeBytes);
+  assert(retriedBiome.metadata.contentHash === biomeFieldDescriptor.contentHash,
+    "ack rollback leaked or detached the retained biome artifact before retry");
   await state.controller.close("close-rollback");
 }
 
-const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic reconciliation, descriptor-bound canonical navigation transfer, bounded windows, fail-closed decode, acknowledged rollback, and reusable ownership proven.";
+const completion = "[js] p_derived_runtime_worker OK: exact secret-safe protocol, deterministic reconciliation, descriptor-bound canonical navigation/biome/population transfer, bounded windows, fail-closed decode, acknowledged rollback, and reusable ownership proven.";
 if (ops?.op_log === undefined) console.log(completion);
 else ops.op_log(completion);

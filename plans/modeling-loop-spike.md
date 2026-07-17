@@ -13,7 +13,19 @@ milliseconds, not survive to a render you have to spot.
 
 ## The substrate (build this BEFORE more geometry)
 
-Four pieces, in dependency order:
+Five pieces, in dependency order:
+
+### 0. Synthesize the building program *(design authority)*
+
+The agent translates the prompt into a coordinate-free semantic program: rooms and uses, adjacency,
+storeys, circulation, daylight, site relationship, roof intent, interaction requirements, and budgets.
+A deterministic typology rulebook enumerates and scores several valid architectural candidates. References
+are optional, targeted evidence for unfamiliar construction or style decisions; they are never the source
+of exact geometry and downloaded examples are never imported automatically.
+
+The selected `BuildingProgram` is the sole semantic authority upstream. A generated `ArchitectureSpec` is
+the sole geometric authority downstream. The synthesis manifest binds the transition without creating a
+third editable source of truth.
 
 ### 1. Declarative building/asset RECIPE + a tested assembler  *(author altitude)*
 Stop emitting boxes with inline trig. The agent emits a **recipe** — declarative parts:
@@ -41,7 +53,10 @@ ONE assembled building from canonical angles (3/4 hero + front + a turntable fra
 
 ### 4. The modeling LOOP  *(on top of 1-3 — mirrors `eyes/self_correct.ts`)*
 ```
-recipe ──► assemble ──► [STRUCTURAL GATE] ─fail→ fix recipe/assembler (no render, instant)
+prompt ──► BuildingProgram ──► bounded candidate synthesis
+                                      │
+                                      v
+selected recipe ─► assemble ─► [STRUCTURAL GATE] ─fail→ reject/repair program or rulebook
                               │ pass
                               ▼
                     headless render (canonical angles)
@@ -54,6 +69,20 @@ recipe ──► assemble ──► [STRUCTURAL GATE] ─fail→ fix recipe/asse
               card status: verified · recipe saved (deterministic, replayable)
 ```
 The structural gate runs EVERY iteration (cheap); the render+critique runs when structure is sound.
+
+### Regular and hero profiles
+
+The loop has two acceptance profiles over the same recipe/Blender/export/runtime foundation:
+
+- **Regular assets** converge against reusable archetypes, standardized budgets, canonical views, and
+  fleet-level QC. Optimize for throughput, modularity, reuse, and predictable residency.
+- **Hero assets** add an asset-specific visual thesis, narrative construction, site/approach contract,
+  bespoke interactions and states, custom silhouette-preserving LOD review, expanded engine views, and
+  mandatory exact-artifact human approval. Optimize for landmark identity and authored depth.
+
+The hero lane does not permit raw geometry, custom budgets, or visual ambition to bypass the structural
+gate. It specializes the brief and review authority while retaining the same compiler and release funnel.
+See [`hero-asset-pipeline.md`](./hero-asset-pipeline.md).
 
 ## What this reuses (little is new)
 

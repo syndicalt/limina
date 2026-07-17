@@ -99,6 +99,35 @@ assert(added.every((object) => object instanceof THREE.InstancedMesh), "LOD scat
 assert(world.lods?.length === 1, "population LOD controller was not registered with the render world");
 assert(childMeshes.length === 3, `expected one near primitive plus two far primitives, got ${childMeshes.length}`);
 assert(childMeshes.every((mesh) => mesh.instanceMatrix.count === scattered.instances), "LOD mesh capacity does not cover the population");
+
+// A scene publication failure after the first primitive must roll back every mesh/controller
+// already owned by this command. Nothing may remain registered in world.lods.
+const rollbackWorld = makeWorld();
+const rollbackAdded: THREE.InstancedMesh[] = [];
+const rollbackRemoved: unknown[] = [];
+let rollbackDisposals = 0;
+(rollbackWorld.world.scene as unknown as { add(object: unknown): void; remove(object: unknown): void }).add = (object: unknown) => {
+  const mesh = object as THREE.InstancedMesh;
+  rollbackAdded.push(mesh);
+  mesh.addEventListener("dispose", () => { rollbackDisposals++; });
+  if (rollbackAdded.length === 2) throw new Error("injected second-mesh publication failure");
+};
+(rollbackWorld.world.scene as unknown as { remove(object: unknown): void }).remove = (object: unknown) => { rollbackRemoved.push(object); };
+const rolledBack = await registry.invoke("asset.scatter", {
+  regionId,
+  config: {
+    seed: 8,
+    density: 6,
+    cellSize: 16,
+    assets: [{ id: nearId, embedRadius: 0.5, lods: [{ id: farId, distance: 24, hysteresis: 0.2 }] }],
+    inclusions: [{ x: 16, z: 16, r: 48 }],
+  },
+}, { ...base, world: rollbackWorld.world });
+assert(rolledBack !== undefined && !rolledBack.success && JSON.stringify(rolledBack.error).includes("injected second-mesh"), "injected asset.scatter publication failure did not surface");
+assert(rollbackWorld.world.lods?.length === 0, "asset.scatter rollback retained a population controller");
+assert(rollbackAdded.every((mesh) => rollbackRemoved.includes(mesh)), "asset.scatter rollback did not detach every owned population mesh");
+assert(rollbackDisposals >= rollbackAdded.length, "asset.scatter rollback did not dispose every attempted population mesh");
+
 world.camera.position.set(10_000, 0, 10_000);
 world.lods[0]!.update(world.camera);
 assert(childMeshes[0]?.count === 0 && childMeshes.slice(1).every((mesh) => mesh.count === scattered.instances), "far camera did not aggregate every instance into the far level");

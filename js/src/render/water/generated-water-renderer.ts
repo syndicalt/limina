@@ -5,14 +5,25 @@ import {
   HYDROLOGY_COMBINED_WATER_TOPOLOGY_VERSION,
 } from "../../world/hydrology-water-topology.mjs";
 import { WATER_LIMITS } from "../../world/water-ir.mjs";
+import { smoothRiverPresentationReach } from "../../world/river-presentation-curve.mjs";
 import { buildVariableRiverRibbonGeometry, buildWaterFootprintGeometry, type WaterPoint2 } from "./geometry.ts";
-import { createWaterMaterial } from "./material.ts";
+import { attachWaterMaterialAuxiliaries, createWaterMaterial, createWaterfallMaterial } from "./material.ts";
 import { VisibleWaterManager, type VisibleWaterKind } from "./visible-water-manager.ts";
 
 const GENERATED_BASIN_ID = /^gen-b-[0-9a-z]+-[0-9a-z]+$/;
 const GENERATED_REACH_ID = /^gen-r-[0-9a-z]+-[0-9a-z]+$/;
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
-const WATER_COLOR = 0x2b5d72;
+// Temperate water body colour is deliberately dark and low-saturation. Sky/terrain reflection
+// and verified depth transmission provide the visible colour; a bright cyan base recreates the
+// flat blue veneer even when the optical graph is otherwise correct.
+const WATER_COLOR = 0x173f43;
+const presentationReachCache = new WeakMap<object, ReturnType<typeof smoothRiverPresentationReach>>();
+
+function presentationReach<T extends object>(reach: T): ReturnType<typeof smoothRiverPresentationReach> {
+  const cached = presentationReachCache.get(reach); if (cached !== undefined) return cached;
+  const smoothed = smoothRiverPresentationReach(reach);
+  presentationReachCache.set(reach, smoothed); return smoothed;
+}
 
 export interface GeneratedWaterfallSpanView {
   readonly startSegment: number;
@@ -23,10 +34,21 @@ export interface GeneratedWaterfallSpanView {
 export interface GeneratedBasinView {
   readonly id: string;
   readonly spillLevelM: number;
+  readonly maxDepthM: number;
   readonly footprint: {
     readonly points: readonly WaterPoint2[];
     readonly holes: readonly (readonly WaterPoint2[])[];
   };
+}
+
+export interface GeneratedWaterFieldView {
+  readonly placement: { readonly originX: number; readonly originZ: number };
+  readonly rows: number;
+  readonly cols: number;
+  readonly cellSizeM: number;
+  /** Descriptor-verified hydrology sea level; presentation consumers must not infer it from codec bounds. */
+  readonly seaLevelM: number;
+  readonly oceanMask: Uint8Array;
 }
 
 export interface GeneratedReachView {
@@ -51,6 +73,10 @@ export interface GeneratedWaterTopologyView {
 export interface VerifiedGeneratedWaterRenderResource {
   readonly artifactHash: string;
   readonly topology: GeneratedWaterTopologyView;
+  /** Descriptor-verified hydrology domain used to reject pixels outside this water artifact's field. */
+  readonly field: GeneratedWaterFieldView;
+  /** Exact resident derived-terrain sampler. Missing tiles produce transparent water, never guessed depth. */
+  readonly sampleTerrainHeight: (x: number, z: number) => number | null;
 }
 
 export interface GeneratedWaterRenderMount {
@@ -63,11 +89,66 @@ export interface GeneratedWaterRenderMount {
   dispose(): void;
 }
 
+function pointInWaterRing(points: readonly WaterPoint2[], x: number, z: number): boolean {
+  let inside = false;
+  for (let index = 0, prior = points.length - 1; index < points.length; prior = index++) {
+    const a = points[index], b = points[prior];
+    if ((a[1] > z) !== (b[1] > z)
+        && x < (b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+/** Exact CPU-side semantic water coverage for vegetation exclusion and other presentation masks.
+ * It consumes only a binding-verified render resource; callers cannot invent a second river path. */
+export function generatedWaterCoversPoint(
+  resource: VerifiedGeneratedWaterRenderResource,
+  x: number,
+  z: number,
+  marginM = 0,
+): boolean {
+  if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(marginM) || marginM < 0) {
+    throw new RangeError("generated-water coverage query must be finite with a non-negative margin");
+  }
+  const field = resource.field;
+  const col = Math.round((x - field.placement.originX) / field.cellSizeM);
+  const row = Math.round((z - field.placement.originZ) / field.cellSizeM);
+  if (row >= 0 && row < field.rows && col >= 0 && col < field.cols
+      && field.oceanMask[row * field.cols + col] !== 0) return true;
+  for (const basin of resource.topology.basins) {
+    if (pointInWaterRing(basin.footprint.points, x, z)
+        && !basin.footprint.holes.some((hole) => pointInWaterRing(hole, x, z))) return true;
+  }
+  for (const sourceReach of resource.topology.reaches) {
+    const reach = presentationReach(sourceReach);
+    for (let segment = 0; segment < reach.points.length - 1; segment++) {
+      const a = reach.points[segment], b = reach.points[segment + 1];
+      const dx = b[0] - a[0], dz = b[1] - a[1], length2 = dx * dx + dz * dz;
+      const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / length2));
+      const px = a[0] + dx * t, pz = a[1] + dz * t;
+      const width = reach.widths[segment] + (reach.widths[segment + 1] - reach.widths[segment]) * t;
+      if (Math.hypot(x - px, z - pz) <= width / 2 + marginM) return true;
+    }
+  }
+  return false;
+}
+
 interface BasinSnapshot {
   readonly id: string;
   readonly spillLevelM: number;
+  readonly maxDepthM: number;
   readonly outer: readonly WaterPoint2[];
   readonly holes: readonly (readonly WaterPoint2[])[];
+}
+
+interface FieldSnapshot {
+  readonly originX: number;
+  readonly originZ: number;
+  readonly rows: number;
+  readonly cols: number;
+  readonly cellSizeM: number;
+  readonly seaLevelM: number;
+  readonly oceanMask: Uint8Array;
 }
 
 interface WaterfallSnapshot {
@@ -84,6 +165,10 @@ interface ReachSnapshot {
   readonly widths: readonly number[];
   readonly terrainElevationsM: readonly number[];
   readonly surfaceElevationsM: readonly number[];
+  readonly waterfallSource: Readonly<{
+    points: readonly WaterPoint2[]; widths: readonly number[];
+    terrainElevationsM: readonly number[]; surfaceElevationsM: readonly number[];
+  }>;
   readonly waterfalls: readonly WaterfallSnapshot[];
 }
 
@@ -136,6 +221,18 @@ function inspectResource(resource: VerifiedGeneratedWaterRenderResource, manager
   if (manager.disposed) throw new Error("generated-water renderer requires a live visible-water manager");
   if (resource === null || typeof resource !== "object") throw new TypeError("generated-water render resource must be an object");
   if (!CONTENT_HASH.test(resource.artifactHash)) throw new TypeError("generated-water artifactHash must be a canonical sha256 hash");
+  if (typeof resource.sampleTerrainHeight !== "function") throw new TypeError("generated-water terrain sampler must be a function");
+  const field = resource.field;
+  if (field === null || typeof field !== "object") throw new TypeError("generated-water field must be an object");
+  finite(field.placement?.originX, "generated-water field originX");
+  finite(field.placement?.originZ, "generated-water field originZ");
+  integer(field.rows, 2, 1025, "generated-water field rows");
+  integer(field.cols, 2, 1025, "generated-water field cols");
+  positive(field.cellSizeM, "generated-water field cellSizeM");
+  finite(field.seaLevelM, "generated-water field seaLevelM");
+  if (!(field.oceanMask instanceof Uint8Array) || field.oceanMask.length !== field.rows * field.cols) {
+    throw new RangeError("generated-water field ocean mask does not match its dimensions");
+  }
   const topology = resource.topology;
   if (topology === null || typeof topology !== "object") throw new TypeError("generated-water topology must be an object");
   if (topology.schema !== HYDROLOGY_COMBINED_WATER_TOPOLOGY_SCHEMA
@@ -157,6 +254,7 @@ function inspectResource(resource: VerifiedGeneratedWaterRenderResource, manager
     if (basin.id.length > 64 || !GENERATED_BASIN_ID.test(basin.id) || ids.has(basin.id)) throw new TypeError(`generated-water basin ${basinIndex} id is invalid or duplicated`);
     ids.add(basin.id);
     finite(basin.spillLevelM, `generated-water basin ${basin.id} spillLevelM`);
+    positive(basin.maxDepthM, `generated-water basin ${basin.id} maxDepthM`);
     basinPoints += inspectRing(basin.footprint.points, `generated-water basin ${basin.id} outer`);
     if (!Array.isArray(basin.footprint.holes) || basin.footprint.holes.length > WATER_LIMITS.holes) {
       throw new RangeError(`generated-water basin ${basin.id} exceeds the hole cap`);
@@ -217,36 +315,171 @@ function snapshotPoint(point: WaterPoint2): WaterPoint2 {
   return Object.freeze([point[0], point[1]] as const);
 }
 
-function snapshotResource(resource: VerifiedGeneratedWaterRenderResource): { basins: readonly BasinSnapshot[]; reaches: readonly ReachSnapshot[] } {
+function snapshotResource(resource: VerifiedGeneratedWaterRenderResource): {
+  basins: readonly BasinSnapshot[];
+  reaches: readonly ReachSnapshot[];
+  field: FieldSnapshot;
+  sampleTerrainHeight: (x: number, z: number) => number | null;
+} {
   const basins = resource.topology.basins.map((basin) => Object.freeze({
     id: basin.id,
     spillLevelM: basin.spillLevelM,
+    maxDepthM: basin.maxDepthM,
     outer: Object.freeze(basin.footprint.points.map(snapshotPoint)),
     holes: Object.freeze(basin.footprint.holes.map((ring) => Object.freeze(ring.map(snapshotPoint)))),
   }));
-  const reaches = resource.topology.reaches.map((reach) => Object.freeze({
+  const reaches = resource.topology.reaches.map((reach) => {
+    const smoothed = presentationReach(reach);
+    return Object.freeze({
     id: reach.id,
     class: reach.class,
     order: reach.order,
-    points: Object.freeze(reach.points.map(snapshotPoint)),
-    widths: Object.freeze([...reach.widths]),
-    terrainElevationsM: Object.freeze([...reach.terrainElevationsM]),
-    surfaceElevationsM: Object.freeze([...reach.surfaceElevationsM]),
+    points: Object.freeze(smoothed.points.map(snapshotPoint)),
+    widths: Object.freeze([...smoothed.widths]),
+    terrainElevationsM: Object.freeze([...smoothed.terrainElevationsM]),
+    surfaceElevationsM: Object.freeze([...smoothed.surfaceElevationsM]),
+    waterfallSource: Object.freeze({ points: Object.freeze(reach.points.map(snapshotPoint)),
+      widths: Object.freeze([...reach.widths]), terrainElevationsM: Object.freeze([...reach.terrainElevationsM]),
+      surfaceElevationsM: Object.freeze([...reach.surfaceElevationsM]) }),
     waterfalls: Object.freeze(reach.waterfalls.map((span) => Object.freeze({
       startSegment: span.startSegment,
       endSegmentExclusive: span.endSegmentExclusive,
       totalDropM: span.totalDropM,
     }))),
-  }));
-  return { basins: Object.freeze(basins), reaches: Object.freeze(reaches) };
+  }); });
+  const field = Object.freeze({
+    originX: resource.field.placement.originX,
+    originZ: resource.field.placement.originZ,
+    rows: resource.field.rows,
+    cols: resource.field.cols,
+    cellSizeM: resource.field.cellSizeM,
+    seaLevelM: resource.field.seaLevelM,
+    oceanMask: resource.field.oceanMask.slice(),
+  });
+  return {
+    basins: Object.freeze(basins),
+    reaches: Object.freeze(reaches),
+    field,
+    sampleTerrainHeight: resource.sampleTerrainHeight,
+  };
 }
 
-function basinMesh(basin: BasinSnapshot, quality: Readonly<WaterRenderQuality>): THREE.Mesh {
+function basinBounds(basin: BasinSnapshot): Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }> {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const point of basin.outer) {
+    minX = Math.min(minX, point[0]); minZ = Math.min(minZ, point[1]);
+    maxX = Math.max(maxX, point[0]); maxZ = Math.max(maxZ, point[1]);
+  }
+  return Object.freeze({ minX, minZ, maxX, maxZ });
+}
+
+function rasterizeRing(
+  coverage: Uint8Array,
+  ring: readonly WaterPoint2[],
+  bounds: Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }>,
+  resolution: number,
+  value: number,
+): void {
+  const intersections: number[] = [];
+  const spanX = bounds.maxX - bounds.minX, spanZ = bounds.maxZ - bounds.minZ;
+  for (let row = 0; row < resolution; row++) {
+    const z = bounds.minZ + (row + 0.5) / resolution * spanZ;
+    intersections.length = 0;
+    for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+      const a = ring[current], b = ring[previous];
+      if ((a[1] > z) !== (b[1] > z)) intersections.push((b[0] - a[0]) * (z - a[1]) / (b[1] - a[1]) + a[0]);
+    }
+    intersections.sort((left, right) => left - right);
+    for (let edge = 0; edge + 1 < intersections.length; edge += 2) {
+      const first = Math.max(0, Math.ceil((intersections[edge] - bounds.minX) / spanX * resolution - 0.5));
+      const last = Math.min(resolution - 1, Math.floor((intersections[edge + 1] - bounds.minX) / spanX * resolution - 0.5));
+      for (let col = first; col <= last; col++) coverage[row * resolution + col] = value;
+    }
+  }
+}
+
+function rasterizeFootprint(
+  basin: BasinSnapshot,
+  bounds: Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }>,
+  resolution: number,
+): Uint8Array {
+  const coverage = new Uint8Array(resolution * resolution);
+  rasterizeRing(coverage, basin.outer, bounds, resolution, 1);
+  for (const hole of basin.holes) rasterizeRing(coverage, hole, bounds, resolution, 0);
+  return coverage;
+}
+
+function depthRasterDimension(quality: Readonly<WaterRenderQuality>, bodyCount: number): number {
+  const perBodyPixels = Math.max(16, Math.floor(quality.depthTextureBudgetPixels / Math.max(1, bodyCount)));
+  return Math.max(4, Math.min(quality.depthRasterSize, Math.floor(Math.sqrt(perBodyPixels))));
+}
+
+/** Build an owned RG raster: R=normalized true water-column depth, G=semantic coverage. */
+export function buildGeneratedBasinDepthTexture(
+  basin: BasinSnapshot,
+  field: FieldSnapshot,
+  sampleTerrainHeight: (x: number, z: number) => number | null,
+  resolution: number,
+): Readonly<{ texture: THREE.DataTexture; bounds: Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }>; maxDepthM: number }> {
+  integer(resolution, 4, 256, "generated-water basin depth resolution");
+  const bounds = basinBounds(basin);
+  if (!(bounds.maxX > bounds.minX) || !(bounds.maxZ > bounds.minZ)) throw new RangeError("generated-water basin has empty depth bounds");
+  const data = new Uint8Array(resolution * resolution * 2);
+  const semanticCoverage = rasterizeFootprint(basin, bounds, resolution);
+  const fieldMaxX = field.originX + (field.cols - 1) * field.cellSizeM;
+  const fieldMaxZ = field.originZ + (field.rows - 1) * field.cellSizeM;
+  for (let row = 0; row < resolution; row++) {
+    const z = bounds.minZ + (row + 0.5) / resolution * (bounds.maxZ - bounds.minZ);
+    for (let col = 0; col < resolution; col++) {
+      const x = bounds.minX + (col + 0.5) / resolution * (bounds.maxX - bounds.minX);
+      if (semanticCoverage[row * resolution + col] === 0
+          || x < field.originX || x > fieldMaxX || z < field.originZ || z > fieldMaxZ) continue;
+      const fieldCol = Math.max(0, Math.min(field.cols - 1, Math.round((x - field.originX) / field.cellSizeM)));
+      const fieldRow = Math.max(0, Math.min(field.rows - 1, Math.round((z - field.originZ) / field.cellSizeM)));
+      if (field.oceanMask[fieldRow * field.cols + fieldCol] !== 0) continue;
+      const terrainY = sampleTerrainHeight(x, z);
+      if (terrainY === null || !Number.isFinite(terrainY)) continue;
+      const depthM = basin.spillLevelM - terrainY;
+      if (!(depthM > 0)) continue;
+      const offset = (row * resolution + col) * 2;
+      data[offset] = Math.max(1, Math.min(255, Math.round(depthM / basin.maxDepthM * 255)));
+      data[offset + 1] = 255;
+    }
+  }
+  const texture = new THREE.DataTexture(data, resolution, resolution, THREE.RGFormat, THREE.UnsignedByteType);
+  texture.name = `limina:generated-water-depth:${basin.id}`;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.needsUpdate = true;
+  return Object.freeze({ texture, bounds, maxDepthM: basin.maxDepthM });
+}
+
+function basinMesh(
+  basin: BasinSnapshot,
+  field: FieldSnapshot,
+  sampleTerrainHeight: (x: number, z: number) => number | null,
+  bodyCount: number,
+  quality: Readonly<WaterRenderQuality>,
+): THREE.Mesh {
   const built = buildWaterFootprintGeometry({ outer: basin.outer, holes: basin.holes });
+  const depth = buildGeneratedBasinDepthTexture(
+    basin, field, sampleTerrainHeight, depthRasterDimension(quality, bodyCount),
+  );
   let material: THREE.Material | undefined;
   try {
-    material = createWaterMaterial({ color: WATER_COLOR, kind: "basin", orientation: "xz", waveCount: quality.waveCount });
+    material = createWaterMaterial({
+      color: WATER_COLOR,
+      kind: "basin",
+      orientation: "xz",
+      waveCount: quality.waveCount,
+      depth: { texture: depth.texture, bounds: depth.bounds, coverageChannel: true, maxDepthM: depth.maxDepthM },
+      sceneOptics: quality.sceneOptics,
+      reflectionScale: quality.sceneOptics === "refraction-reflection" ? 0.35 : undefined,
+    });
     const mesh = new THREE.Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.position.set(built.origin[0], basin.spillLevelM, built.origin[1]);
     mesh.name = "limina:generated-water-basin";
     mesh.renderOrder = 2;
@@ -254,22 +487,135 @@ function basinMesh(basin: BasinSnapshot, quality: Readonly<WaterRenderQuality>):
     mesh.receiveShadow = false;
     return mesh;
   } catch (error) {
+    if (material === undefined) depth.texture.dispose();
     material?.dispose();
     built.geometry.dispose();
     throw error;
   }
 }
 
-function reachMesh(reach: ReachSnapshot, quality: Readonly<WaterRenderQuality>): THREE.Mesh {
+/** Low-pass only the presentation depth signal inside semantic coverage. Generated channel beds
+ * are sampled on the compiler grid; exposing their point-to-point noise directly as opacity and
+ * colour creates visible cross-river panels. Coverage and topology are never blurred. */
+function smoothReachPresentationDepth(raw: Float64Array, resolution: number): Float64Array {
+  let source = raw;
+  for (let pass = 0; pass < 2; pass++) {
+    const target = new Float64Array(raw.length);
+    for (let row = 0; row < resolution; row++) for (let col = 0; col < resolution; col++) {
+      const pixel = row * resolution + col;
+      if (!(source[pixel] > 0)) continue;
+      let sum = 0, weight = 0;
+      for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+        const sampleRow = row + dz, sampleCol = col + dx;
+        if (sampleRow < 0 || sampleRow >= resolution || sampleCol < 0 || sampleCol >= resolution) continue;
+        const value = source[sampleRow * resolution + sampleCol];
+        if (!(value > 0)) continue;
+        const sampleWeight = 1 / (1 + dx * dx + dz * dz);
+        sum += value * sampleWeight; weight += sampleWeight;
+      }
+      target[pixel] = weight > 0 ? sum / weight : source[pixel];
+    }
+    source = target;
+  }
+  return source;
+}
+
+/** Build an owned RG raster for the exact variable-width reach: R=smoothed terrain-derived
+ * presentation depth, G=unmodified semantic coverage. */
+export function buildGeneratedReachDepthTexture(
+  reach: ReachSnapshot,
+  field: FieldSnapshot,
+  sampleTerrainHeight: (x: number, z: number) => number | null,
+  resolution: number,
+): Readonly<{ texture: THREE.DataTexture; bounds: Readonly<{ minX: number; minZ: number; maxX: number; maxZ: number }>; maxDepthM: number }> {
+  integer(resolution, 4, 256, "generated-water reach depth resolution");
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (let index = 0; index < reach.points.length; index++) {
+    const radius = reach.widths[index] / 2, point = reach.points[index];
+    minX = Math.min(minX, point[0] - radius); maxX = Math.max(maxX, point[0] + radius);
+    minZ = Math.min(minZ, point[1] - radius); maxZ = Math.max(maxZ, point[1] + radius);
+  }
+  if (!(maxX > minX) || !(maxZ > minZ)) throw new RangeError("generated-water reach has empty depth bounds");
+  const bounds = Object.freeze({ minX, minZ, maxX, maxZ });
+  const pixelCount = resolution * resolution;
+  const ownerDistance = new Float64Array(pixelCount); ownerDistance.fill(Infinity);
+  const surface = new Float64Array(pixelCount);
+  const spanX = maxX - minX, spanZ = maxZ - minZ;
+  for (let segment = 0; segment < reach.points.length - 1; segment++) {
+    const a = reach.points[segment], b = reach.points[segment + 1];
+    const dx = b[0] - a[0], dz = b[1] - a[1], length2 = dx * dx + dz * dz;
+    const radius = Math.max(reach.widths[segment], reach.widths[segment + 1]) / 2;
+    const firstCol = Math.max(0, Math.floor((Math.min(a[0], b[0]) - radius - minX) / spanX * resolution));
+    const lastCol = Math.min(resolution - 1, Math.ceil((Math.max(a[0], b[0]) + radius - minX) / spanX * resolution));
+    const firstRow = Math.max(0, Math.floor((Math.min(a[1], b[1]) - radius - minZ) / spanZ * resolution));
+    const lastRow = Math.min(resolution - 1, Math.ceil((Math.max(a[1], b[1]) + radius - minZ) / spanZ * resolution));
+    for (let row = firstRow; row <= lastRow; row++) for (let col = firstCol; col <= lastCol; col++) {
+      const x = minX + (col + 0.5) / resolution * spanX, z = minZ + (row + 0.5) / resolution * spanZ;
+      const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / length2));
+      const px = a[0] + dx * t, pz = a[1] + dz * t, distance = Math.hypot(x - px, z - pz);
+      const width = reach.widths[segment] + (reach.widths[segment + 1] - reach.widths[segment]) * t;
+      const pixel = row * resolution + col;
+      if (distance <= width / 2 && distance < ownerDistance[pixel]) {
+        ownerDistance[pixel] = distance;
+        surface[pixel] = reach.surfaceElevationsM[segment]
+          + (reach.surfaceElevationsM[segment + 1] - reach.surfaceElevationsM[segment]) * t;
+      }
+    }
+  }
+  const rawDepth = new Float64Array(pixelCount);
+  const fieldMaxX = field.originX + (field.cols - 1) * field.cellSizeM;
+  const fieldMaxZ = field.originZ + (field.rows - 1) * field.cellSizeM;
+  let maximumDepth = 0;
+  for (let row = 0; row < resolution; row++) for (let col = 0; col < resolution; col++) {
+    const pixel = row * resolution + col;
+    if (!Number.isFinite(ownerDistance[pixel])) continue;
+    const x = minX + (col + 0.5) / resolution * spanX, z = minZ + (row + 0.5) / resolution * spanZ;
+    if (x < field.originX || x > fieldMaxX || z < field.originZ || z > fieldMaxZ) continue;
+    const fieldCol = Math.max(0, Math.min(field.cols - 1, Math.round((x - field.originX) / field.cellSizeM)));
+    const fieldRow = Math.max(0, Math.min(field.rows - 1, Math.round((z - field.originZ) / field.cellSizeM)));
+    if (field.oceanMask[fieldRow * field.cols + fieldCol] !== 0) continue;
+    const terrainY = sampleTerrainHeight(x, z);
+    if (terrainY === null || !Number.isFinite(terrainY)) continue;
+    const depth = surface[pixel] - terrainY;
+    if (depth > 0) { rawDepth[pixel] = depth; maximumDepth = Math.max(maximumDepth, depth); }
+  }
+  const presentationDepth = smoothReachPresentationDepth(rawDepth, resolution);
+  maximumDepth = 0;
+  for (const depth of presentationDepth) maximumDepth = Math.max(maximumDepth, depth);
+  const data = new Uint8Array(pixelCount * 2);
+  const scale = Math.max(0.25, maximumDepth);
+  for (let pixel = 0; pixel < pixelCount; pixel++) if (presentationDepth[pixel] > 0) {
+    data[pixel * 2] = Math.max(1, Math.min(255, Math.round(presentationDepth[pixel] / scale * 255)));
+    data[pixel * 2 + 1] = 255;
+  }
+  const texture = new THREE.DataTexture(data, resolution, resolution, THREE.RGFormat, THREE.UnsignedByteType);
+  texture.name = `limina:generated-water-depth:${reach.id}`;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false; texture.flipY = false; texture.needsUpdate = true;
+  return Object.freeze({ texture, bounds, maxDepthM: scale });
+}
+
+function reachMesh(
+  reach: ReachSnapshot,
+  field: FieldSnapshot,
+  sampleTerrainHeight: (x: number, z: number) => number | null,
+  bodyCount: number,
+  quality: Readonly<WaterRenderQuality>,
+): THREE.Mesh {
   const built = buildVariableRiverRibbonGeometry({
     points: reach.points,
     widthsM: reach.widths,
     surfaceElevationsM: reach.surfaceElevationsM,
   });
+  const depth = buildGeneratedReachDepthTexture(reach, field, sampleTerrainHeight, depthRasterDimension(quality, bodyCount));
   let material: THREE.Material | undefined;
   try {
-    material = createWaterMaterial({ color: WATER_COLOR, kind: "river", orientation: "xz", waveCount: quality.waveCount });
+    material = createWaterMaterial({ color: WATER_COLOR, kind: "river", orientation: "xz", waveCount: quality.waveCount,
+      depth: { texture: depth.texture, bounds: depth.bounds, coverageChannel: true, maxDepthM: depth.maxDepthM },
+      sceneOptics: quality.sceneOptics });
     const mesh = new THREE.Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
     mesh.position.set(built.origin[0], built.origin[1], built.origin[2]);
     mesh.name = "limina:generated-water-reach";
     mesh.renderOrder = 3;
@@ -277,6 +623,7 @@ function reachMesh(reach: ReachSnapshot, quality: Readonly<WaterRenderQuality>):
     mesh.receiveShadow = false;
     return mesh;
   } catch (error) {
+    if (material === undefined) depth.texture.dispose();
     material?.dispose();
     built.geometry.dispose();
     throw error;
@@ -284,20 +631,21 @@ function reachMesh(reach: ReachSnapshot, quality: Readonly<WaterRenderQuality>):
 }
 
 function waterfallGeometry(reach: ReachSnapshot, span: WaterfallSnapshot): THREE.BufferGeometry {
-  const endPoint = reach.points[span.endSegmentExclusive];
-  const directionPoint = reach.points[span.endSegmentExclusive - 1];
+  const source = reach.waterfallSource;
+  const endPoint = source.points[span.endSegmentExclusive];
+  const directionPoint = source.points[span.endSegmentExclusive - 1];
   const dx = endPoint[0] - directionPoint[0];
   const dz = endPoint[1] - directionPoint[1];
   const directionLength = Math.hypot(dx, dz);
   if (!(directionLength > 0)) throw new RangeError(`generated-water waterfall in ${reach.id} has no final direction`);
-  const halfWidth = reach.widths[span.endSegmentExclusive] / 2;
+  const halfWidth = source.widths[span.endSegmentExclusive] / 2;
   const offsetX = -dz / directionLength * halfWidth;
   const offsetZ = dx / directionLength * halfWidth;
-  let topY = reach.surfaceElevationsM[span.startSegment];
-  let bottomY = reach.surfaceElevationsM[span.endSegmentExclusive];
+  let topY = source.surfaceElevationsM[span.startSegment];
+  let bottomY = source.surfaceElevationsM[span.endSegmentExclusive];
   if (!(topY > bottomY)) {
-    topY = reach.terrainElevationsM[span.startSegment];
-    bottomY = reach.terrainElevationsM[span.endSegmentExclusive];
+    topY = source.terrainElevationsM[span.startSegment];
+    bottomY = source.terrainElevationsM[span.endSegmentExclusive];
   }
   if (!(topY > bottomY)) throw new RangeError(`generated-water waterfall in ${reach.id} has no vertical drop`);
   const originX = endPoint[0];
@@ -330,19 +678,70 @@ function waterfallGeometry(reach: ReachSnapshot, span: WaterfallSnapshot): THREE
 function waterfallMesh(reach: ReachSnapshot, span: WaterfallSnapshot, quality: Readonly<WaterRenderQuality>): THREE.Mesh {
   const geometry = waterfallGeometry(reach, span);
   let material: THREE.Material | undefined;
+  let mesh: THREE.Mesh | undefined;
   try {
-    material = createWaterMaterial({ color: WATER_COLOR, kind: "river", orientation: "xz", waveCount: quality.waveCount });
-    const mesh = new THREE.Mesh(geometry, material);
+    material = createWaterfallMaterial("curtain");
+    mesh = new THREE.Mesh(geometry, material);
     const origin = geometry.userData.generatedWaterOrigin as readonly [number, number, number];
     mesh.position.set(origin[0], origin[1], origin[2]);
     mesh.name = "limina:generated-water-waterfall";
     mesh.renderOrder = 4;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
+    const bottomLocalY = -span.totalDropM / 2;
+    const width = reach.waterfallSource.widths[span.endSegmentExclusive];
+    if (quality.waterfallExtras === "foam" || quality.waterfallExtras === "foam-mist") {
+      const foamGeometry = new THREE.CircleGeometry(Math.max(0.35, width * 0.62), Math.max(12, Math.min(32, quality.oceanSegments / 2)));
+      foamGeometry.rotateX(-Math.PI / 2);
+      const foamPositions = foamGeometry.getAttribute("position");
+      const foamArc = new Float32Array(foamPositions.count);
+      const foamFlow = new Float32Array(foamPositions.count * 2);
+      for (let index = 0; index < foamPositions.count; index++) {
+        foamArc[index] = Math.hypot(foamPositions.getX(index), foamPositions.getZ(index));
+        foamFlow[index * 2] = 1;
+      }
+      foamGeometry.setAttribute("waterArcDistance", new THREE.BufferAttribute(foamArc, 1));
+      foamGeometry.setAttribute("waterFlowDirection", new THREE.BufferAttribute(foamFlow, 2));
+      const foam = new THREE.Mesh(foamGeometry, createWaterfallMaterial("foam"));
+      foam.position.y = bottomLocalY + 0.035;
+      foam.name = "limina:generated-water-waterfall-foam";
+      foam.renderOrder = 5; foam.castShadow = false; foam.receiveShadow = false;
+      mesh.add(foam);
+    }
+    if (quality.waterfallExtras === "foam-mist") {
+      const mistHeight = Math.max(0.8, Math.min(span.totalDropM * 0.42, width * 1.25));
+      const mistWidth = Math.max(1, width * 1.45);
+      const positions = new Float32Array([
+        -0.5, -0.5, 0, 0.5, -0.5, 0, -0.5, 0.5, 0, 0.5, 0.5, 0,
+        0, -0.5, -0.5, 0, -0.5, 0.5, 0, 0.5, -0.5, 0, 0.5, 0.5,
+      ]);
+      const mistGeometry = new THREE.BufferGeometry();
+      mistGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      mistGeometry.setIndex([0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7]);
+      mistGeometry.computeVertexNormals(); mistGeometry.computeBoundingBox(); mistGeometry.computeBoundingSphere();
+      const mist = new THREE.Mesh(mistGeometry, createWaterfallMaterial("mist"));
+      mist.position.y = bottomLocalY + mistHeight * 0.46;
+      mist.scale.set(mistWidth, mistHeight, mistWidth);
+      mist.name = "limina:generated-water-waterfall-mist";
+      mist.renderOrder = 6; mist.castShadow = false; mist.receiveShadow = false;
+      mesh.add(mist);
+    }
+    mesh.userData.waterfallExtras = quality.waterfallExtras;
     return mesh;
   } catch (error) {
-    material?.dispose();
-    geometry.dispose();
+    if (mesh === undefined) {
+      material?.dispose();
+      geometry.dispose();
+    } else {
+      const materials = new Set<THREE.Material>(), geometries = new Set<THREE.BufferGeometry>();
+      mesh.traverse((object) => { if (object instanceof THREE.Mesh) {
+        geometries.add(object.geometry);
+        for (const candidate of Array.isArray(object.material) ? object.material : [object.material]) materials.add(candidate);
+      } });
+      for (const candidate of materials) candidate.dispose();
+      for (const candidate of geometries) candidate.dispose();
+      mesh.clear();
+    }
     throw error;
   }
 }
@@ -357,7 +756,9 @@ function descriptors(resource: VerifiedGeneratedWaterRenderResource): readonly M
       kind: "basin" as const,
       identity: key,
       metadata: Object.freeze({ source: "generated-hydrology", feature: "basin", artifactHash: resource.artifactHash, basinId: basin.id }),
-      create: (quality: Readonly<WaterRenderQuality>) => basinMesh(basin, quality),
+      create: (quality: Readonly<WaterRenderQuality>) => basinMesh(
+        basin, snapshot.field, snapshot.sampleTerrainHeight, snapshot.basins.length, quality,
+      ),
     }));
   }
   for (const reach of snapshot.reaches) {
@@ -368,7 +769,9 @@ function descriptors(resource: VerifiedGeneratedWaterRenderResource): readonly M
       identity: key,
       metadata: Object.freeze({ source: "generated-hydrology", feature: "reach", artifactHash: resource.artifactHash,
         reachId: reach.id, class: reach.class, order: reach.order, gameplayAuthority: false }),
-      create: (quality: Readonly<WaterRenderQuality>) => reachMesh(reach, quality),
+      create: (quality: Readonly<WaterRenderQuality>) => reachMesh(
+        reach, snapshot.field, snapshot.sampleTerrainHeight, snapshot.basins.length + snapshot.reaches.length, quality,
+      ),
     }));
     for (let spanIndex = 0; spanIndex < reach.waterfalls.length; spanIndex++) {
       const span = reach.waterfalls[spanIndex];

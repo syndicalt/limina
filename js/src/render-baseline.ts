@@ -20,6 +20,7 @@
 
 import * as THREE from "../build/three.bundle.mjs";
 import type { RenderQualityProfile } from "./render/quality.ts";
+import type { HdrEnvironmentLease } from "./render/environment-hdri.ts";
 
 // ---- Preset --------------------------------------------------------------
 
@@ -92,8 +93,14 @@ export interface RenderBaselinePreset {
   environment: boolean;
   /** Linear scale on the environment's contribution to lighting. */
   environmentIntensity: number;
+  /** Yaw, pitch, and roll of the PBR environment in radians. */
+  environmentRotation: [number, number, number];
   /** Paint the sky gradient as `scene.background` (replaces the dark void). */
   background: boolean;
+  /** Linear scale on the visible sky background. */
+  backgroundIntensity: number;
+  /** Yaw, pitch, and roll of the visible sky in radians. */
+  backgroundRotation: [number, number, number];
   /** Distance/height haze + aerial perspective so terrain fades into the horizon. */
   atmosphere: AtmospherePreset;
   /** Default ground plane so bodies are grounded and catch the sun's shadow. */
@@ -117,7 +124,10 @@ export const DEFAULT_RENDER_BASELINE: RenderBaselinePreset = {
   sky: { top: 0x4a7fc4, horizon: 0xcdd9e6, bottom: 0x2a2620 },
   environment: true,
   environmentIntensity: 1.0,
+  environmentRotation: [0, 0, 0],
   background: true,
+  backgroundIntensity: 1.0,
+  backgroundRotation: [0, 0, 0],
   // GENTLE default haze: a uniform exponential distance fog tinted to the horizon
   // band (color:null ⇒ sky.horizon = 0xcdd9e6). Subtle density so near geometry stays
   // crisp and a comparison/row demo isn't washed out, while distant geometry softly
@@ -159,7 +169,10 @@ export const TROPICAL_BEACH_BASELINE: RenderBaselinePreset = {
   sky: { top: 0x2f7fd6, horizon: 0xffe7c4, bottom: 0x70573f },
   environment: true,
   environmentIntensity: 1.15,
+  environmentRotation: [0, 0, 0],
   background: true,
+  backgroundIntensity: 1.0,
+  backgroundRotation: [0, 0, 0],
   // WARM beach haze: matched to the warm hazy horizon band (color:null ⇒ sky.horizon =
   // 0xffe7c4) so the distant sea + headland melt into the same golden horizon the water
   // reflects — a touch lighter density than the default since the open sea reads best with
@@ -183,7 +196,18 @@ export type RenderBaselineOverride = DeepPartial<RenderBaselinePreset>;
 // shape — the full Engine, the browser playback target, or a test stub.
 
 interface BaselineTarget {
-  scene: { add(o: unknown): void; remove?(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number; fog?: unknown; fogNode?: unknown };
+  scene: {
+    add(o: unknown): void;
+    remove?(o: unknown): void;
+    background?: unknown;
+    backgroundIntensity?: number;
+    backgroundRotation?: { set(x: number, y: number, z: number): void; clone?(): unknown; copy?(value: unknown): void };
+    environment?: unknown;
+    environmentIntensity?: number;
+    environmentRotation?: { set(x: number, y: number, z: number): void; clone?(): unknown; copy?(value: unknown): void };
+    fog?: unknown;
+    fogNode?: unknown;
+  };
   camera?: {
     position?: { set(x: number, y: number, z: number): void };
     lookAt?(x: number, y: number, z: number): void;
@@ -207,7 +231,7 @@ export interface AppliedRenderBaseline {
   hemisphere?: unknown;
   ambient?: unknown;
   ground?: unknown;
-  environmentMode: "pmrem" | "gradient" | "none";
+  environmentMode: "hdri" | "pmrem" | "gradient" | "none";
   /** WHICH haze model was installed: "exp" (FogExp2 distance fog → scene.fog),
    *  "height" (node height-falloff fog → scene.fogNode), or "none" (disabled). */
   atmosphereMode: "exp" | "height" | "none";
@@ -244,7 +268,10 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
     sky: { ...base.sky, ...over.sky },
     environment: over.environment ?? base.environment,
     environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
+    environmentRotation: mergeVec3(base.environmentRotation, over.environmentRotation),
     background: over.background ?? base.background,
+    backgroundIntensity: over.backgroundIntensity ?? base.backgroundIntensity,
+    backgroundRotation: mergeVec3(base.backgroundRotation, over.backgroundRotation),
     atmosphere: {
       ...base.atmosphere,
       ...over.atmosphere,
@@ -348,22 +375,29 @@ export function applyRenderBaseline(
   target: BaselineTarget,
   override?: RenderBaselineOverride,
   sharedBackground?: RenderBaselineBackground,
+  hdrEnvironment?: HdrEnvironmentLease,
 ): AppliedRenderBaseline {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
-  if (!preset.enabled) return {
-    preset,
-    environmentMode: "none",
-    atmosphereMode: "none",
-    updateShadowFocus(): void {},
-    setQuality(): void {},
-    dispose(): void {},
-  };
+  if (!preset.enabled) {
+    hdrEnvironment?.release();
+    return {
+      preset,
+      environmentMode: "none",
+      atmosphereMode: "none",
+      updateShadowFocus(): void {},
+      setQuality(): void {},
+      dispose(): void {},
+    };
+  }
 
   const { scene, renderer, camera } = target;
   const previousScene = {
     background: scene.background,
+    backgroundIntensity: scene.backgroundIntensity,
+    backgroundRotation: scene.backgroundRotation?.clone?.(),
     environment: scene.environment,
     environmentIntensity: scene.environmentIntensity,
+    environmentRotation: scene.environmentRotation?.clone?.(),
     fog: scene.fog,
     fogNode: scene.fogNode,
   };
@@ -418,21 +452,27 @@ export function applyRenderBaseline(
   const skyTex = buildSkyEquirect(preset.sky);
   let backgroundTex: unknown;
   if (preset.background && "background" in scene) {
-    if (sharedBackground !== undefined) {
+    if (hdrEnvironment !== undefined) {
+      backgroundTex = hdrEnvironment.background;
+    } else if (sharedBackground !== undefined) {
       sharedBackground.update(preset.sky);
       backgroundTex = sharedBackground.texture;
     } else {
       backgroundTex = skyTex;
     }
     scene.background = backgroundTex;
+    if ("backgroundIntensity" in scene) scene.backgroundIntensity = preset.backgroundIntensity;
+    scene.backgroundRotation?.set(...preset.backgroundRotation);
   }
 
   let environmentMode: AppliedRenderBaseline["environmentMode"] = "none";
   let environmentTexture: unknown;
   let pmremTarget: { texture?: unknown; dispose?(): void } | undefined;
   if (preset.environment) {
-    let envTexture: unknown = skyTex; // fallback: the gradient itself
-    if (rendererIsUsable(renderer)) {
+    let envTexture: unknown = hdrEnvironment?.environment ?? skyTex; // fallback: the gradient itself
+    if (hdrEnvironment !== undefined) {
+      environmentMode = "hdri";
+    } else if (rendererIsUsable(renderer)) {
       // PMREM needs a live renderer/GPU. Try it; on ANY failure fall back to
       // the cheap gradient (never ship a broken environment, never throw).
       let pmrem: { fromEquirectangular(texture: unknown): unknown; dispose(): void } | undefined;
@@ -456,6 +496,7 @@ export function applyRenderBaseline(
     if ("environmentIntensity" in scene) {
       scene.environmentIntensity = preset.environmentIntensity;
     }
+    scene.environmentRotation?.set(...preset.environmentRotation);
   }
 
   // 3b. ATMOSPHERE — distance/height haze so terrain dissolves into the horizon.
@@ -589,10 +630,16 @@ export function applyRenderBaseline(
     cleanup("sun", () => sun.dispose());
     cleanup("environment", () => pmremTarget?.dispose?.());
     cleanup("sky", () => (skyTex as { dispose?(): void }).dispose?.());
+    cleanup("HDR lease", () => hdrEnvironment?.release());
     if (scene.background === backgroundTex) scene.background = previousScene.background;
+    if (scene.background === previousScene.background) {
+      if ("backgroundIntensity" in scene) scene.backgroundIntensity = previousScene.backgroundIntensity;
+      if (previousScene.backgroundRotation !== undefined) scene.backgroundRotation?.copy?.(previousScene.backgroundRotation);
+    }
     if (preset.environment && scene.environment === environmentTexture) {
       scene.environment = previousScene.environment;
       if ("environmentIntensity" in scene) scene.environmentIntensity = previousScene.environmentIntensity;
+      if (previousScene.environmentRotation !== undefined) scene.environmentRotation?.copy?.(previousScene.environmentRotation);
     }
     if (atmosphereMode === "height" && scene.fogNode === fog) scene.fogNode = previousScene.fogNode;
     if (atmosphereMode === "height" && scene.fog === null) scene.fog = previousScene.fog;

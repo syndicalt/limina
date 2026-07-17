@@ -35,12 +35,19 @@ const stubAssets = { resolve: (id: string) => ({ assetId: id, bytes: new Uint8Ar
 const perms = resolveProfile("builder.readWrite");
 const N = 65;
 
-async function buildForest(session: string): Promise<{ placements: Array<{ assetId: string; x: number; y: number; z: number; scale: number }>; count: number }> {
+async function buildForest(session: string): Promise<{
+  placements: Array<{ assetId: string; x: number; y: number; z: number; scale: number }>;
+  count: number;
+  dispose(): void;
+  lifecycleState(): { mounted: number; clears: number; entityLive: boolean };
+}> {
   const world = makeHeadlessWorld();
   const layers = new Map<string, EditableTerrain>();
+  const mounted = new Map<string, () => void>();
+  const clears = new Map<string, Array<() => void | Promise<void>>>();
   const registry = new SkillRegistry(new LiminaTracer(session));
   registerTerrainEditSkills(registry, layers);
-  registerVegetationSkills(registry, layers, stubAssets);
+  registerVegetationSkills(registry, layers, stubAssets, new Map(), mounted, clears);
   const at = (t: number) => ({ agentId: "agt_p64", sessionId: session, permissions: perms, tick: t, world });
 
   const rc = await registry.invoke("terrain.create", { size: 200, resolution: N, baseHeight: 0 }, at(1));
@@ -61,8 +68,17 @@ async function buildForest(session: string): Promise<{ placements: Array<{ asset
     elevationMax: 20, slopeMax: 0.6, coverage: 0.9,
   }, at(3));
   assert(rv.success, `vegetation.scatter must succeed: ${JSON.stringify(rv.error)}`);
-  const res = rv.result as { instances: number; placements: Array<{ assetId: string; x: number; y: number; z: number; scale: number }> };
-  return { placements: res.placements, count: res.instances };
+  const res = rv.result as { entity: string; instances: number; placements: Array<{ assetId: string; x: number; y: number; z: number; scale: number }> };
+  return {
+    placements: res.placements,
+    count: res.instances,
+    dispose(): void { world.entities.resolve(res.entity)?.runtimeDispose?.(); },
+    lifecycleState: () => ({
+      mounted: mounted.size,
+      clears: [...clears.values()].reduce((sum, callbacks) => sum + callbacks.length, 0),
+      entityLive: world.entities.resolve(res.entity) !== undefined,
+    }),
+  };
 }
 
 const PALETTE = new Set(["trees/spruce-1.glb", "trees/spruce-2.glb", "trees/pine-1.glb", "trees/pine-2.glb", "trees/birch-1.glb", "trees/birch-2.glb"]);
@@ -88,5 +104,13 @@ for (let i = 0; i < a.placements.length; i++) {
   if (pa.assetId !== pb.assetId || pa.x !== pb.x || pa.y !== pb.y || pa.z !== pb.z || pa.scale !== pb.scale) { identical = false; firstDiff = i; break; }
 }
 assert(identical, `scatter must be deterministic — placement ${firstDiff} diverged on replay`);
+
+// 4. Runtime-only forest ownership is attached to the entity. Destroying the renderer owner
+// unregisters both the legacy mounted entry and its retained settlement-clear callback exactly once.
+assert(a.lifecycleState().mounted === 1 && a.lifecycleState().clears === 1, "forest runtime ownership was not published");
+a.dispose();
+a.dispose();
+assert(a.lifecycleState().mounted === 0, "forest runtimeDispose retained the mounted ownership entry");
+assert(a.lifecycleState().clears === 0, "forest runtimeDispose retained the settlement-clear callback");
 
 ops.op_log(`[js] p64_vegetation_scatter OK: vegetation.scatter placed ${a.count} trees on the sculpted terrain (palette-only, under the tree line, gated by slope), deterministic + replay-identical — real, agent-callable forest scatter on editable terrain.`);

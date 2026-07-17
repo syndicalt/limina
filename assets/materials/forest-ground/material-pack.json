@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "forest-ground",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Ground037",
+    "assetUrl": "https://ambientcg.com/a/Ground037",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Ground037_1K-JPG.zip",
+    "archiveBytes": 10574958,
+    "archiveSha256": "sha256:4e69db2b7251b1736fa70fe6fe4ab80d64bd220117dd5dd4c7caaead51c2574e"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/forest-ground/albedo.jpg",
+      "sha256": "sha256:d92bec8a35b9cb16ec79b421ca0f572a7400286eae109beafa266629ef49a6cf",
+      "assetHash": "sha256:d65861e259ff04b9d598810fd538c0c091db155dac267d66448547abeb506662",
+      "bytes": 2187764
+    },
+    "normal": {
+      "assetId": "materials/forest-ground/normal.jpg",
+      "sha256": "sha256:ea59dbdcfa5bf2f28bdd4aa896d4e5f96c4cce5939100dcc6db4bbbcdebfe38d",
+      "assetHash": "sha256:c8968fe228c79fdcfb89a1a31c240438917af0c9c91dd7a674af0fc419d01194",
+      "bytes": 2474236
+    },
+    "roughness": {
+      "assetId": "materials/forest-ground/roughness.jpg",
+      "sha256": "sha256:3786b088e981aae562f06b6477972d379cffd09a5cc542ab42f9ffd94f9bcb0e",
+      "assetHash": "sha256:68cd34a9bf5424b34b41fc5f74a61ab636638aa919cd479bff88ebd1ea8a1e99",
+      "bytes": 694944
+    },
+    "occlusion": {
+      "assetId": "materials/forest-ground/occlusion.jpg",
+      "sha256": "sha256:8afe189ae915888551076cb279f6282c84255e4b2bdb2c4ce8c1c891074245ef",
+      "assetHash": "sha256:3abb0af3fce37e29f68be21c5662571b62ca91c07ee9640b70f26e10f9c38d05",
+      "bytes": 612112
+    },
+    "displacement": {
+      "assetId": "materials/forest-ground/displacement.jpg",
+      "sha256": "sha256:bc102168f5d014ce208ed5c1d9140c39513d29303e1b3436cb06c92c7780e419",
+      "assetHash": "sha256:481c39bb600269e71ce71f7f7402e6e4c5b60f22e11a6902362d19b6431e786d",
+      "bytes": 500481
+    }
+  },
+  "materialImport": {
+    "name": "forest-ground",
+    "albedo": "materials/forest-ground/albedo.jpg",
+    "normal": "materials/forest-ground/normal.jpg",
+    "roughness": "materials/forest-ground/roughness.jpg",
+    "occlusion": "materials/forest-ground/occlusion.jpg",
+    "displacement": "materials/forest-ground/displacement.jpg"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "temperate-ash-canopy",
+  "version": "1.0.0",
+  "role": "flora/ash",
+  "backend": "tree-population",
+  "sourceAssetId": "vegetation/temperate-canopy/ash-307.glb",
+  "sourceContentHash": "sha256:525b686c50634750fc0c203245c253e12f8777dbb93febf75734cca73f8ddc75",
+  "reducedAssetId": "vegetation/temperate-canopy/ash-307-lod2.glb",
+  "reducedContentHash": "sha256:3cb080a6be6c2caec5c07e8361283892d47fce3275c1561d0b8752ae5e49a6bd",
+  "impostorAssetId": "vegetation/temperate-canopy/ash-307-impostor.glb",
+  "impostorContentHash": "sha256:730b98b508bfc22394da5f47590cbdb57b7bace2cf3ad164d8e54f8c17004685",
+  "reducedDistance": 80,
+  "impostorDistance": 220,
+  "cullDistance": 360,
+  "hysteresis": 0.15,
+  "provenance": {
+    "licenseId": "MIT",
+    "sourceUri": "https://github.com/dgreenheck/ez-tree"
+  }
+}

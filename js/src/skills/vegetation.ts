@@ -8,8 +8,9 @@
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
-import { scatterAssets, type AssetInstance, type ScatterConfig, type ScatterExclusion } from "../terrain/asset-scatter.ts";
+import { scatterAssets, type AssetInstance, type ScatterConfig, type ScatterExclusion, type ScatterTreeLod } from "../terrain/asset-scatter.ts";
 import { buildAssetInstancedMeshes, disposeAssetInstancedMesh } from "../terrain/asset-scatter-render.ts";
+import { TreePopulationRuntime } from "../render/tree-population-runtime.ts";
 import { loadGltfIntoScene, parseGltfScene } from "./three.ts";
 import { tagEntity } from "./ecs.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
@@ -36,7 +37,7 @@ const nextFrame = (): Promise<void> =>
 // `assets` palette per call, which wins over the pack.
 
 /** One weighted archetype binding in a project's VEGETATION PACK: a concrete tree asset id. */
-export interface VegetationPackEntry { id: string; weight?: number; }
+export interface VegetationPackEntry { id: string; weight?: number; treeLod?: ScatterTreeLod; }
 
 /** A project's binding of species → archetype asset ids. Read from tree-pack.json (the SAME sandboxed
  *  host op asset-catalog.ts / the biome pack use). Partial: an unmapped species → empty palette. */
@@ -45,7 +46,17 @@ export type VegetationPack = Record<string, VegetationPackEntry[]>;
 /** The empty pack — the default when a project supplies none. Every species unmapped → nothing plants. */
 export const EMPTY_VEGETATION_PACK: VegetationPack = {};
 
-const vegetationPackSchema = z.record(z.string(), z.array(z.object({ id: z.string().min(1), weight: z.number().positive().optional() })));
+const treeLodSchema = z.object({
+  reducedId: z.string().min(1),
+  reducedDistance: z.number().positive(),
+  impostorId: z.string().min(1),
+  impostorDistance: z.number().positive(),
+  cullDistance: z.number().positive(),
+  hysteresis: z.number().nonnegative().optional(),
+}).refine((value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+  { message: "treeLod distances must be strictly increasing" });
+const vegetationPackEntrySchema = z.object({ id: z.string().min(1), weight: z.number().positive().optional(), treeLod: treeLodSchema.optional() });
+const vegetationPackSchema = z.record(z.string(), z.array(vegetationPackEntrySchema));
 
 /** Read + parse the project VEGETATION PACK (tree-pack.json) via the sandboxed host asset op.
  *  Tolerates a missing/unreadable/unparsable file (→ empty pack), exactly like asset-catalog's seed
@@ -66,9 +77,21 @@ export function loadVegetationPack(ops: { op_read_asset(id: string): Uint8Array 
  *  archetype ids. An inline `assets` palette wins; otherwise each species is looked up in the pack;
  *  an unmapped species contributes nothing (graceful). Order-preserving so the seed→variant pick and
  *  the scatter placement stay deterministic. */
-export function speciesPaletteIds(species: string[], explicit: VegetationPackEntry[] | undefined, pack: VegetationPack): string[] {
+export function speciesPaletteEntries(species: string[], explicit: VegetationPackEntry[] | undefined, pack: VegetationPack): VegetationPackEntry[] {
   const entries = explicit !== undefined && explicit.length > 0 ? explicit : species.flatMap((s) => pack[s] ?? []);
-  return [...new Set(entries.map((e) => e.id))];
+  const byId = new Map<string, VegetationPackEntry>();
+  for (const entry of entries) {
+    const previous = byId.get(entry.id);
+    if (previous !== undefined && (previous.treeLod !== undefined || entry.treeLod !== undefined)) {
+      throw new RangeError(`vegetation: treeLod-enabled archetype '${entry.id}' must be unique`);
+    }
+    if (previous === undefined) byId.set(entry.id, entry);
+  }
+  return [...byId.values()];
+}
+
+export function speciesPaletteIds(species: string[], explicit: VegetationPackEntry[] | undefined, pack: VegetationPack): string[] {
+  return speciesPaletteEntries(species, explicit, pack).map((entry) => entry.id);
 }
 
 /** Pick one archetype id from a resolved palette deterministically from `seed`. */
@@ -79,7 +102,7 @@ export function pickArchetype(palette: string[], seed: number): string {
 }
 
 /** Inline per-call archetype palette — a caller-supplied binding that wins over the project pack. */
-const paletteAssetSchema = z.object({ id: z.string().min(1), weight: z.number().positive().optional() });
+const paletteAssetSchema = vegetationPackEntrySchema;
 
 const scatterInput = z.object({
   /** Terrain layer to scatter on. Defaults to the most recently created one. */
@@ -176,12 +199,22 @@ export function registerVegetationSkills(
       // empty forest). The pack read is a sync host op over static content → deterministic on replay.
       const species = input.species ?? ["spruce", "pine", "birch"];
       const pack = input.assets !== undefined && input.assets.length > 0 ? EMPTY_VEGETATION_PACK : loadVegetationPack(ctx.world.ops);
-      const paletteIds = speciesPaletteIds(species, input.assets, pack);
+      const paletteEntries = speciesPaletteEntries(species, input.assets, pack);
+      const paletteIds = paletteEntries.map((entry) => entry.id);
+      const paletteById = new Map(paletteEntries.map((entry) => [entry.id, entry]));
       if (paletteIds.length === 0) throw new Error("vegetation.scatter: no archetypes — pass assets:[...] or install a tree-pack.json binding the requested species");
+      const treeEntries = paletteEntries.filter((entry) => entry.treeLod !== undefined);
+      if (treeEntries.length > 12) throw new RangeError("vegetation.scatter: treeLod palette exceeds the 12-species runtime cap");
 
       // Content-address (pin) every palette asset — a swapped archetype is rejected on replay.
       const assetHashes: Record<string, string> = {};
-      for (const id of paletteIds) assetHashes[id] = assets.resolve(id).hash;
+      for (const entry of paletteEntries) {
+        assetHashes[entry.id] = assets.resolve(entry.id).hash;
+        if (entry.treeLod !== undefined) {
+          assetHashes[entry.treeLod.reducedId] = assets.resolve(entry.treeLod.reducedId).hash;
+          assetHashes[entry.treeLod.impostorId] = assets.resolve(entry.treeLod.impostorId).hash;
+        }
+      }
 
       // Default the elevation FLOOR to the layer's sea level (exactly like grass, grass.ts) so a
       // forest never wades into water — the low basins are lakebeds, not planting ground. An
@@ -232,11 +265,31 @@ export function registerVegetationSkills(
       // Live set of this forest's instanced meshes — mutated in place by (re)mount so the removal
       // closure + the clear closure both see the current set.
       let meshes: unknown[] = [];
+      let treePopulations: TreePopulationRuntime[] = [];
+      const worldLods = (ctx.world.lods ??= []);
+      let mountedDraws = 0;
       let placements: AssetInstance[] = computePlacements();
+      let active = true;
+      let entity = "";
+      let clear: (() => Promise<void>) | undefined;
 
       const disposeMeshes = (): void => {
-        for (const m of meshes) { if (typeof scene?.remove === "function") scene.remove(m); disposeAssetInstancedMesh(m as never); }
+        const errors: unknown[] = [];
+        const owned = meshes;
+        const ownedTrees = treePopulations;
         meshes = [];
+        treePopulations = [];
+        mountedDraws = 0;
+        for (const population of ownedTrees) {
+          const index = worldLods.indexOf(population);
+          if (index >= 0) worldLods.splice(index, 1);
+          try { population.dispose(); } catch (error) { errors.push(error); }
+        }
+        for (const m of owned) {
+          try { if (typeof scene?.remove === "function") scene.remove(m); } catch (error) { errors.push(error); }
+          try { disposeAssetInstancedMesh(m as never); } catch (error) { errors.push(error); }
+        }
+        if (errors.length > 0) throw new AggregateError(errors, `vegetation forest disposal failed in ${errors.length} operation(s)`);
       };
 
       // (Re)mount the forest from freshly-computed placements. Drops any previously-mounted meshes
@@ -244,24 +297,51 @@ export function registerVegetationSkills(
       // the forest MINUS the instances on the settlement — a strict subset — and the old full set is
       // disposed). CRASH-PROOF per archetype (a bad GLB never kills the apply loop).
       const remount = async (): Promise<void> => {
+        if (!active) return;
         placements = computePlacements();
         if (!canRender) return;
-        disposeMeshes();
         const byId = new Map<string, AssetInstance[]>();
         for (const inst of placements) {
           let list = byId.get(inst.assetId);
           if (list === undefined) { list = []; byId.set(inst.assetId, list); }
           list.push(inst);
         }
+        let treePlacementCount = 0;
+        for (const [id, list] of byId) if (paletteById.get(id)?.treeLod !== undefined) treePlacementCount += list.length;
+        if (treePlacementCount > 24_576) throw new RangeError("vegetation.scatter: treeLod placements exceed the 24,576 active-tree cap");
+        // Validate the complete replacement before retiring the live forest. Capacity rejection
+        // therefore preserves the prior publication instead of leaving a cleared viewport.
+        disposeMeshes();
         // Mount ONE archetype per frame: parsing a dense GLB + uploading its InstancedMesh to the
         // GPU is heavy; doing all six back-to-back blocks the main thread long enough to trip the
         // browser's unresponsive-page watchdog / lose the WebGPU device (the reported "crash").
         let idx = 0;
         const totalArchetypes = byId.size;
         for (const [id, list] of byId) {
+          if (!active) return;
           idx++;
           ctx.emit("vegetation.mounting", { archetype: id, index: idx, total: totalArchetypes, instances: list.length });
           try {
+            const entry = paletteById.get(id);
+            if (entry === undefined) throw new Error(`vegetation.scatter: placement references unknown archetype '${id}'`);
+            if (entry.treeLod !== undefined) {
+              const [baseRoot, reducedRoot, impostorRoot] = await Promise.all([
+                parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache),
+                parseGltfScene(entry.treeLod.reducedId, assets.resolve(entry.treeLod.reducedId).bytes, ctx.world.gltfCache),
+                parseGltfScene(entry.treeLod.impostorId, assets.resolve(entry.treeLod.impostorId).bytes, ctx.world.gltfCache),
+              ]);
+              const population = new TreePopulationRuntime({ speciesId: id, placements: list, treeLod: entry.treeLod,
+                sourceHash: assetHashes[id]!, reducedHash: assetHashes[entry.treeLod.reducedId]!,
+                baseRoot, reducedRoot, impostorRoot, scene: scene!,
+                onError: (error) => ctx.emit("vegetation.tree_population_error", { archetype: id, message: error instanceof Error ? error.message : String(error) }) });
+              if (!active) { population.dispose(); return; }
+              treePopulations.push(population);
+              worldLods.push(population);
+              population.update(ctx.world.camera);
+              mountedDraws += population.draws;
+              await nextFrame();
+              continue;
+            }
             const root = await parseGltfScene(id, assets.resolve(id).bytes, ctx.world.gltfCache);
             // Chunk this archetype's instances into 96 m cells — a forest can span an entire terrain
             // layer/map, and without chunking one whole-scatter bounding sphere would (almost) always
@@ -279,8 +359,10 @@ export function registerVegetationSkills(
               for (const mesh of buildAssetInstancedMeshes(root, variant.set, { chunkSize: 96, ...(variant.dead ? { dead: true } : {}) })) {
                 (mesh as unknown as InstMesh).castShadow = true;
                 (mesh as unknown as InstMesh).receiveShadow = true;
+                if (!active) { disposeAssetInstancedMesh(mesh); continue; }
                 scene?.add?.(mesh);
                 meshes.push(mesh);
+                mountedDraws++;
               }
             }
           } catch (err) {
@@ -295,19 +377,51 @@ export function registerVegetationSkills(
       // A forest handle entity (world-integrated + removable), anchored at the terrain origin.
       const [ox, oy, oz] = layer.tile.origin;
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
-      if (eid >= MAX_ENTITIES) { despawnRenderable(ctx.world.ecs, eid); throw new Error("vegetation.scatter: entity capacity exceeded"); }
+      if (eid >= MAX_ENTITIES) {
+        active = false;
+        const cleanup: unknown[] = [];
+        try { disposeMeshes(); } catch (error) { cleanup.push(error); }
+        try { despawnRenderable(ctx.world.ecs, eid); } catch (error) { cleanup.push(error); }
+        const primary = new Error("vegetation.scatter: entity capacity exceeded");
+        if (cleanup.length > 0) throw new AggregateError([primary, ...cleanup], `vegetation.scatter capacity rejection and ${cleanup.length} cleanup operation(s) failed`);
+        throw primary;
+      }
       const origin = { tool: "vegetation.scatter", input: { ...input } };
-      const entity = ctx.world.entities.create({ eid, origin });
-      tagEntity(ctx as never, entity, ["forest", "vegetation", ...(input.tags ?? [])]);
-      // Keep the removal closure pointed at the LIVE mesh set (mutated by remount).
-      mounted.set(entity, disposeMeshes);
-      // Register the subtractive-clear closure: village.build calls it after registering footprints,
-      // so a forest scattered before the village is re-grown with the settlement footprints carved out.
-      const clears = vegetationClears.get(terrainKey) ?? [];
-      clears.push(async () => { await remount(); });
-      vegetationClears.set(terrainKey, clears);
+      const runtimeDispose = (): void => {
+        if (!active) return;
+        active = false;
+        mounted.delete(entity);
+        if (clear !== undefined) {
+          const registered = vegetationClears.get(terrainKey);
+          const index = registered?.indexOf(clear) ?? -1;
+          if (index >= 0) registered!.splice(index, 1);
+          if (registered?.length === 0) vegetationClears.delete(terrainKey);
+        }
+        disposeMeshes();
+      };
+      try {
+        entity = ctx.world.entities.create({ eid, origin, runtimeDispose });
+        tagEntity(ctx as never, entity, ["forest", "vegetation", ...(input.tags ?? [])]);
+        // Keep the removal closure pointed at the LIVE mesh set (mutated by remount).
+        mounted.set(entity, runtimeDispose);
+        // Register the subtractive-clear closure: village.build calls it after registering footprints,
+        // so a forest scattered before the village is re-grown with the settlement footprints carved out.
+        const clears = vegetationClears.get(terrainKey) ?? [];
+        clear = async () => { await remount(); };
+        clears.push(clear);
+        vegetationClears.set(terrainKey, clears);
+      } catch (error) {
+        const cleanup: unknown[] = [];
+        try { runtimeDispose(); } catch (cleanupError) { cleanup.push(cleanupError); }
+        if (entity !== "") {
+          try { ctx.world.entities.destroy(entity); } catch (cleanupError) { cleanup.push(cleanupError); }
+        }
+        try { despawnRenderable(ctx.world.ecs, eid); } catch (cleanupError) { cleanup.push(cleanupError); }
+        if (cleanup.length > 0) throw new AggregateError([error, ...cleanup], `vegetation.scatter publication and ${cleanup.length} rollback operation(s) failed`);
+        throw error;
+      }
 
-      ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: meshes.length });
+      ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: mountedDraws });
       return { entity, instances: placements.length, assetHashes, placements };
     },
   };

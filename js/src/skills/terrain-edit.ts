@@ -14,7 +14,8 @@ import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.t
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 import { applyElevationColors, applyPaintOverlay, buildTerrainMesh, type ElevationColorRamp, terrainTileBufferGeometry } from "../terrain/render.ts";
-import { TileGrass } from "../terrain/grass-render.ts";
+import { GrassFieldTileMount } from "../render/grass-field-render.ts";
+import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
 import { buildBlightMist } from "../mist.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { generateHeightfield } from "../world/pipeline/terrain-heightfield.mjs";
@@ -34,7 +35,7 @@ const inertTransform = (): Transformable => ({ position: { set() {} }, quaternio
 
 /** The live editable layer: its mutable tile + rendered mesh (mesh is undefined in a headless
  *  context whose scene is a stub — the tile state is still maintained + records/replays). */
-export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: TileGrass; blightMist?: MeshLike; }
+export interface EditableTerrain { tile: TerrainTile; mesh: MeshLike | undefined; eid: number; elevationColors?: ElevationColorRamp; entity: string; bodyId: number; grass?: GrassFieldTileMount; blightMist?: MeshLike; }
 interface MeshLike { geometry: { dispose?: () => void }; }
 
 export interface EditableTerrainWaterContactHooks {
@@ -246,12 +247,13 @@ export function registerTerrainEditSkills(
   assets?: AssetRegistry,
   /** Shared settlement-footprint registry (keyed by terrain id) that village.build fills.
    *  The paint-driven grass reads it LIVE (via a provider) so blades stop at building pads /
-   *  courtyards / lanes — the same exclusion seam vegetation.scatter / vegetation.grass honour. */
+   *  courtyards / lanes — the same exclusion seam vegetation.scatter / vegetation.grassField honour. */
   footprints: Map<string, ScatterExclusion[]> = new Map(),
   /** Shared VEGETATION-CLEAR registry (keyed by terrain id). The paint-grass registers a
    *  refresh closure so village.build's footprint registration carves already-grown blades. */
   vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
   waterContact?: EditableTerrainWaterContactHooks,
+  grassVisualPackage?: GrassFieldVisualPackage,
 ): { layers: Map<string, EditableTerrain> } {
   const create: SkillDefinition<z.infer<typeof createInput>, { entity: string; mapHash?: string }> = {
     name: "terrain.create",
@@ -421,7 +423,7 @@ export function registerTerrainEditSkills(
       // paint channel says grass (density ∝ paintW — a map-rasterized slab arrives painted; a
       // flat/procedural slab grows blades as terrain.paint strokes land). Scene-direct chunked
       // InstancedMeshes — ZERO entity slots, nothing recorded; replay re-mounts identically from
-      // the recorded create/paint ops (grass-render.ts / render/grass-source.ts). The exclusion
+      // the recorded create/paint ops through the canonical grass-field placement pipeline. The exclusion
       // provider reads the terrain's CURRENT settlement footprints, and the registered clear
       // closure lets village.build carve blades off its pads after it registers them (the same
       // "veg grows first, civilization clears" order vegetation.scatter/grass follow).
@@ -430,17 +432,18 @@ export function registerTerrainEditSkills(
       // peek cost). The slab's own painted vertex-colors already tint the grassy ground.
       const supportsBladeDetail = Math.max(tile.scale[0], tile.scale[2]) <= 1024;
       if (ctx.world.mode !== "headless" && ctx.world.peek !== true && supportsBladeDetail
-        && scene !== undefined && typeof scene.add === "function") {
+        && scene !== undefined && typeof scene.add === "function" && grassVisualPackage !== undefined) {
         const grassSeed = input.generate?.seed ?? 1337;
         const seaLevel = elevationColors?.seaLevel;
-        layer.grass = new TileGrass(
-          scene as unknown as ConstructorParameters<typeof TileGrass>[0],
+        layer.grass = new GrassFieldTileMount(
+          scene as unknown as ConstructorParameters<typeof GrassFieldTileMount>[0],
           tile,
           () => ({
             seed: grassSeed,
             ...(seaLevel !== undefined ? { elevationMin: seaLevel + 0.05 } : {}),
             exclusions: footprints.get(entity) ?? [],
           }),
+          grassVisualPackage,
         );
         const clears = vegetationClears.get(entity) ?? [];
         clears.push(() => { layer.grass?.refreshAll(); });

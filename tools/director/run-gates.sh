@@ -27,7 +27,7 @@ for a in "$@"; do [ "$a" = "--headless" ] && HEADLESS=1; done
 [ -n "${LIMINA_HEADLESS:-}" ] && HEADLESS=1
 [ -n "${CI:-}" ] && HEADLESS=1
 # js/test that open a native window or need a real WebGPU adapter / readback:
-HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3_fidelity_readback p3_showcase_window p3_textured_gltf_window p5_text_substrate "
+HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3_fidelity_readback p3_showcase_window p3_textured_gltf_window p5_text_substrate p_material_surface_gpu p_grass_field_gpu p_grass_field_stream_gpu p_biome_surface_gpu p_gpu_surface_probe "
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -49,6 +49,7 @@ run_test() {
   case "$name" in
     *ollama*|*_ws|*_ws_*|p4_multi_client*) record_skip "$name" "needs external service (ollama/ws)"; return;;
     p9_model_real_tile|p9_model_source_http) record_skip "$name" "needs external terrain-model worker"; return;;
+    p_tree_asset_scatter|p_tree_vegetation_scatter|p_tree_biome_scatter|p_biome_population_mount) record_skip "$name" "runs through the accepted-asset integration gate below"; return;;
   esac
   if [ "$HEADLESS" = 1 ] && [[ "$HEADLESS_TESTS" == *" $name "* ]]; then
     record_skip "$name" "needs GPU/window (headless runner)"; return
@@ -118,6 +119,52 @@ if npm --prefix js run check:coordinator-demo --silent >/dev/null 2>&1; then ech
 # of the limina-driven js/test/*.ts sweep above.
 if node js/test/p69_tree_source.mjs >/dev/null 2>&1; then echo "   p69-tree-source: PASS"; else echo "   p69-tree-source: FAIL"; hostfail=1; fi
 
+# Grass strategy guard: old TileGrass/grassSoup/renamed micro-tuft implementations may not return
+# in source or any shipped runtime. Mechanical density remains evidence, never a visual verdict.
+if node --test tools/material/grass-strategy-static.test.mjs >/dev/null 2>&1; then echo "   grass-strategy-static: PASS"; else echo "   grass-strategy-static: FAIL"; hostfail=1; fi
+
+# Static-opaque retopo funnel: real pinned Blender/Cycles CPU build, deterministic duplicate build,
+# fail-closed input boundary, asset-sanity/QC integration, and atomic publication rollback.
+if command -v bun >/dev/null 2>&1 && [ -x "${BLENDER_BIN:-$HOME/blender-5.1.2-linux-x64/blender}" ]; then
+  if ( cd tools && bun run test:retopo >/dev/null 2>&1 ); then echo "   retopo-static: PASS"; else echo "   retopo-static: FAIL"; hostfail=1; fi
+else echo "   retopo-static: SKIP (bun or pinned Blender 5.1.2 absent)"; fi
+
+# A3 force-WebGL proof: compile the bounded TSL POM against the real CC0 pack and compare it to
+# an otherwise-identical control from two camera angles. SwiftShader keeps this CI-safe.
+material_surface_rc=0; node tools/material/material-surface-browser-gate.mjs >/dev/null 2>&1 || material_surface_rc=$?
+if [ $material_surface_rc -eq 0 ]; then echo "   material-surface-forceWebGL: PASS"
+elif [ $material_surface_rc -eq 2 ]; then echo "   material-surface-forceWebGL: SKIP (no Chromium/Playwright)"
+else echo "   material-surface-forceWebGL: FAIL"; hostfail=1; fi
+
+grass_field_browser_rc=0; node tools/material/grass-field-browser-gate.mjs >/dev/null 2>&1 || grass_field_browser_rc=$?
+if [ $grass_field_browser_rc -eq 0 ]; then echo "   grass-field-forceWebGL: PASS"
+elif [ $grass_field_browser_rc -eq 2 ]; then echo "   grass-field-forceWebGL: SKIP (no Chromium/Playwright)"
+else echo "   grass-field-forceWebGL: FAIL"; hostfail=1; fi
+
+# B2 tree proof: the browser gate compiles the pure-TSL foliage/impostor graph through the real
+# forceWebGL backend; the accepted-asset gate CPU-bakes a real oak chain and drives both scatter skills.
+tree_population_browser_rc=0; node tools/material/tree-population-browser-gate.mjs >/dev/null 2>&1 || tree_population_browser_rc=$?
+if [ $tree_population_browser_rc -eq 0 ]; then echo "   tree-population-forceWebGL: PASS"
+elif [ $tree_population_browser_rc -eq 2 ]; then echo "   tree-population-forceWebGL: SKIP (no Chromium/Playwright)"
+else echo "   tree-population-forceWebGL: FAIL"; hostfail=1; fi
+
+biome_surface_browser_rc=0; node tools/material/biome-surface-browser-gate.mjs >/dev/null 2>&1 || biome_surface_browser_rc=$?
+if [ $biome_surface_browser_rc -eq 0 ]; then echo "   biome-surface-forceWebGL: PASS"
+elif [ $biome_surface_browser_rc -eq 2 ]; then echo "   biome-surface-forceWebGL: SKIP (no Chromium/Playwright)"
+else echo "   biome-surface-forceWebGL: FAIL"; hostfail=1; fi
+
+# Real generated-river pixel proof: the exact mount/depth-bake/material path must animate, respond
+# to shallow/deep terrain, and stay below the measured repetitive-rib autocorrelation ceiling.
+generated_river_browser_rc=0; node tools/material/generated-river-browser-gate.mjs >/dev/null 2>&1 || generated_river_browser_rc=$?
+if [ $generated_river_browser_rc -eq 0 ]; then echo "   generated-river-forceWebGL: PASS"
+elif [ $generated_river_browser_rc -eq 2 ]; then echo "   generated-river-forceWebGL: SKIP (no Chromium/Playwright)"
+else echo "   generated-river-forceWebGL: FAIL"; hostfail=1; fi
+
+tree_scatter_rc=0; node tools/asset/tree-scatter-integration.test.mjs >/dev/null 2>&1 || tree_scatter_rc=$?
+if [ $tree_scatter_rc -eq 0 ]; then echo "   tree-scatter-integration: PASS"
+elif [ $tree_scatter_rc -eq 2 ]; then echo "   tree-scatter-integration: SKIP (accepted oak inputs or pinned Blender absent)"
+else echo "   tree-scatter-integration: FAIL"; hostfail=1; fi
+
 # Genuine Zaxy/EventLoom integration. It is external by definition, so its absence
 # is announced; when available, incompatibility or round-trip failure is fatal.
 zaxy_bin="${ZAXY_BIN:-zaxy}"
@@ -169,6 +216,10 @@ trap cleanup_editor_gates EXIT
 node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
 editor_static_pid=$!
 LIMINA_EDITOR_PORT="$editor_host_port" LIMINA_EDITOR_STATIC_PORT="$editor_static_port" \
+  LIMINA_PROJECT_ID="limina" \
+  LIMINA_DERIVED_RUNTIME_BASE_URL="http://127.0.0.1:$editor_static_port" \
+  LIMINA_DERIVED_RUNTIME_TOKEN="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
+  LIMINA_DERIVED_RUNTIME_BRANCH_ID="main" \
   LIMINA_EDITOR_WORLDLOG="editor_gate_${editor_host_port}_worldlog.jsonl" \
   LIMINA_EDITOR_TRACE="editor_gate_${editor_host_port}_trace.jsonl" \
   LIMINA_EDITOR_KERNEL_LOCK="editor_gate_${editor_host_port}_kernel.lock.json" \

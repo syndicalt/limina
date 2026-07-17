@@ -23,6 +23,16 @@ import {
   derivedArtifactContentHash,
 } from "../../js/src/world/compiler/index.mjs";
 import {
+  BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+  encodeBiomeContentClosureArtifact,
+} from "../../js/src/world/compiler/biome-content-closure-artifact.mjs";
+import {
+  BIOME_CONTENT_BUNDLE_SCHEMA,
+  deriveBiomeContentBundleClosureHash,
+} from "../../js/src/world/biome-content-bundle.mjs";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
+import {
   MAX_STALE_STAGE_CLEANUPS,
   DERIVED_PUBLICATION_POINTER_SCHEMA,
   DERIVED_PUBLICATION_POINTER_SCHEMA_V1,
@@ -124,6 +134,7 @@ function pointerPath(root) { return join(root, ".limina", "derived", "main", "pu
 function manifestPath(root, manifestHash) { return join(root, ".limina", "derived", "main", "manifests", `${manifestHash.slice(7)}.json`); }
 function artifactPath(root, contentHash) { return join(root, ".limina", "derived", "main", "artifacts", `${contentHash.slice(7)}.bin`); }
 function snapshotPath(root, snapshotHash) { return join(root, ".limina", "derived", "main", "snapshots", `${snapshotHash.slice(7)}.json`); }
+function contentPath(root, contentHash) { return join(root, ".limina", "derived", "main", "content", `${contentHash.slice(7)}.bin`); }
 
 async function publish(root, fixture, jobId, overrides = {}) {
   return publishDerivedRevision({
@@ -133,6 +144,55 @@ async function publish(root, fixture, jobId, overrides = {}) {
     readHead: async () => authoritative(),
     ...overrides,
   });
+}
+
+function withContentClosure(fixture, sourceEntries, status = "candidate") {
+  const contentEntries = sourceEntries.map(({ id, bytes }) => ({
+    id,
+    path: `assets/${id}`,
+    hash: portableAssetContentHash(bytes),
+    bytes,
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  const draft = {
+    schema: BIOME_CONTENT_BUNDLE_SCHEMA,
+    id: `publisher-${fixture.manifest.compiler.configHash.slice(7, 19)}`,
+    version: "1.0.0",
+    status,
+    runtimePack: { assetId: "runtime/temperate.json", contentHash: hash("runtime-pack") },
+    entries: contentEntries.map((entry) => ({
+      assetId: entry.id,
+      contentHash: entry.hash,
+      kind: "texture",
+      byteLength: entry.bytes.byteLength,
+      provenance: { licenseSpdx: "CC0-1.0", sourceUri: `limina://publisher-test/${entry.id}` },
+    })),
+  };
+  const bundle = { ...draft, closureHash: deriveBiomeContentBundleClosureHash(draft) };
+  const closureBytes = encodeBiomeContentClosureArtifact(bundle);
+  const closureDescriptor = {
+    artifactType: BIOME_CONTENT_CLOSURE_ARTIFACT_TYPE,
+    contentHash: derivedArtifactContentHash(closureBytes),
+    byteLength: closureBytes.byteLength,
+    mediaType: BIOME_CONTENT_CLOSURE_ARTIFACT_MEDIA_TYPE,
+  };
+  const manifest = createDerivedRevisionManifest({
+    schema: fixture.manifest.schema,
+    projectId: fixture.manifest.projectId,
+    branchId: fixture.manifest.branchId,
+    source: fixture.manifest.source,
+    compiler: fixture.manifest.compiler,
+    grid: fixture.manifest.grid,
+    globalArtifacts: [...fixture.manifest.globalArtifacts, closureDescriptor]
+      .sort((left, right) => left.artifactType.localeCompare(right.artifactType)),
+    chunks: fixture.manifest.chunks,
+  });
+  return {
+    ...fixture,
+    manifest,
+    artifacts: [...fixture.artifacts, { contentHash: closureDescriptor.contentHash, bytes: closureBytes }],
+    contentEntries,
+    contentBundle: bundle,
+  };
 }
 
 function reusedDescriptor(fixture) {
@@ -183,6 +243,136 @@ test("publishes a fully validated current revision and reports source staleness 
     });
     assert.equal(stale.status, "stale");
     assert.equal(stale.diagnostics.matchesCurrentSource, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("installs closure-authorized content before publication and preserves candidate status without implying release approval", async () => {
+  const root = projectFixture();
+  try {
+    const fixture = withContentClosure(revisionFixture("content-first"), [
+      { id: "materials/forest-albedo.bin", bytes: new Uint8Array([1, 2, 3, 4]) },
+      { id: "population/oak-descriptor.json", bytes: new TextEncoder().encode('{"backend":"tree-population"}') },
+    ]);
+    const published = await publish(root, fixture, "job-content-first");
+    assert.equal(published.content.status, "candidate");
+    assert.equal(published.content.closureHash, fixture.contentBundle.closureHash);
+    for (const entry of fixture.contentEntries) {
+      assert.deepEqual(new Uint8Array(readFileSync(contentPath(root, entry.hash))), entry.bytes);
+    }
+    const read = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(read.content.status, "candidate");
+    assert.equal(read.content.closureHash, fixture.contentBundle.closureHash);
+    assert.equal(read.status, "current");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("rejects tampered closure-authorized input without changing the prior pointer", async () => {
+  const root = projectFixture();
+  try {
+    await publish(root, revisionFixture("content-tamper-baseline"), "job-content-tamper-baseline");
+    const before = readFileSync(pointerPath(root), "utf8");
+    const fixture = withContentClosure(revisionFixture("content-tamper"), [
+      { id: "models/oak.glb", bytes: new Uint8Array([10, 20, 30, 40]) },
+    ]);
+    fixture.contentEntries[0] = {
+      ...fixture.contentEntries[0],
+      bytes: new Uint8Array([10, 20, 30, 41]),
+    };
+    await assert.rejects(publish(root, fixture, "job-content-tamper"), /content hash mismatch/);
+    assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("revalidates installed closure content at commit and preserves the prior pointer on corruption", async () => {
+  const root = projectFixture();
+  try {
+    await publish(root, revisionFixture("content-commit-baseline"), "job-content-commit-baseline");
+    const before = readFileSync(pointerPath(root), "utf8");
+    const fixture = withContentClosure(revisionFixture("content-commit-race"), [
+      { id: "models/oak-reduced.glb", bytes: new Uint8Array([5, 6, 7, 8]) },
+    ]);
+    await assert.rejects(publish(root, fixture, "job-content-commit-race", {
+      fault: (point) => {
+        if (point === "after-manifest-install") {
+          writeFileSync(contentPath(root, fixture.contentEntries[0].hash), new Uint8Array([5, 6, 7, 9]));
+        }
+      },
+    }), /biome content.*hash mismatch/i);
+    assert.equal(readFileSync(pointerPath(root), "utf8"), before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("dedupes closure content by engine hash and retains previous revision content after B", async () => {
+  const root = projectFixture();
+  try {
+    const shared = new Uint8Array([7, 7, 7]);
+    const previousOnly = new Uint8Array([1, 9, 1]);
+    const currentOnly = new Uint8Array([2, 8, 2]);
+    const previous = withContentClosure(revisionFixture("content-a"), [
+      { id: "shared/a.bin", bytes: shared },
+      { id: "shared/b.bin", bytes: shared.slice() },
+      { id: "versions/a-only.bin", bytes: previousOnly },
+    ]);
+    await publish(root, previous, "job-content-a");
+    const contentRoot = join(root, ".limina", "derived", "main", "content");
+    assert.equal(readdirSync(contentRoot).length, 2, "same-hash closure entries were installed twice");
+    const current = withContentClosure(revisionFixture("content-b"), [
+      { id: "shared/a.bin", bytes: shared.slice() },
+      { id: "versions/b-only.bin", bytes: currentOnly },
+    ]);
+    await publish(root, current, "job-content-b");
+    assert.equal(readdirSync(contentRoot).length, 3, "B removed previous bytes or reinstalled shared content");
+    assert.equal(nodePublicationFs.existsSync(contentPath(root, portableAssetContentHash(previousOnly))), true);
+    assert.equal(nodePublicationFs.existsSync(contentPath(root, portableAssetContentHash(shared))), true);
+    assert.equal(nodePublicationFs.existsSync(contentPath(root, portableAssetContentHash(currentOnly))), true);
+    const alreadyInstalled = withContentClosure(revisionFixture("content-c"), [
+      { id: "shared/a.bin", bytes: shared.slice() },
+      { id: "versions/b-only.bin", bytes: currentOnly.slice() },
+    ]);
+    delete alreadyInstalled.contentEntries;
+    await publish(root, alreadyInstalled, "job-content-c");
+    assert.equal(readdirSync(contentRoot).length, 3, "optional content omission reinstalled or removed verified bytes");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("reader rejects missing or corrupt closure-authorized installed content", async () => {
+  for (const mode of ["missing", "corrupt"]) {
+    const root = projectFixture();
+    try {
+      const bytes = new Uint8Array([4, 3, 2, 1]);
+      const fixture = withContentClosure(revisionFixture(`content-${mode}`), [
+        { id: "models/fern.glb", bytes },
+      ]);
+      await publish(root, fixture, `job-content-${mode}`);
+      const path = contentPath(root, fixture.contentEntries[0].hash);
+      if (mode === "missing") unlinkSync(path);
+      else writeFileSync(path, new Uint8Array([4, 3, 2, 0]));
+      await assert.rejects(
+        readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() }),
+        mode === "missing" ? /biome content.*missing|content.*missing/i : /biome content.*hash mismatch/i,
+      );
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test("content corruption falls back to the previous closure without deleting its bytes", async () => {
+  const root = projectFixture();
+  try {
+    const previous = withContentClosure(revisionFixture("content-fallback-a"), [
+      { id: "versions/previous.bin", bytes: new Uint8Array([1, 1, 1]) },
+    ]);
+    const current = withContentClosure(revisionFixture("content-fallback-b"), [
+      { id: "versions/current.bin", bytes: new Uint8Array([2, 2, 2]) },
+    ]);
+    await publish(root, previous, "job-content-fallback-a");
+    await publish(root, current, "job-content-fallback-b");
+    writeFileSync(contentPath(root, current.contentEntries[0].hash), new Uint8Array([2, 2, 3]));
+    const fallback = await readPublishedDerivedRevision({ projectRoot: root, branchId: "main", readHead: async () => authoritative() });
+    assert.equal(fallback.status, "fallback");
+    assert.equal(fallback.manifest.manifestHash, previous.manifest.manifestHash);
+    assert.equal(fallback.content.closureHash, previous.contentBundle.closureHash);
+    assert.equal(nodePublicationFs.existsSync(contentPath(root, previous.contentEntries[0].hash)), true);
+    assert.match(fallback.diagnostics.currentError, /biome content.*hash mismatch/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

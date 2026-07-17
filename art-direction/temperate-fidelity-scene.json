@@ -1,0 +1,67 @@
+{
+  "schema": "limina.temperate-fidelity-scene/v1",
+  "lane": "nature",
+  "map": {
+    "assetId": "maps/temperate-fidelity-primary.worldmap.json",
+    "contentHash": "sha256:204a908f931966ec588cb4fcd3bc23af83f30489b66e32dc53ae4b93a3981d01"
+  },
+  "biomeSnapshot": {
+    "assetId": "biomes/temperate-fidelity.biome-field.bin",
+    "contentHash": "sha256:c1a864869f2e68d64f5473495b0c06fd036af625e3f7a0aadde78cd31b3f2460",
+    "sourceFieldContentHash": "sha256:c1a864869f2e68d64f5473495b0c06fd036af625e3f7a0aadde78cd31b3f2460",
+    "coverage": "complete-world"
+  },
+  "terrainEditLayers": [
+    {
+      "assetId": "terrain/temperate-fidelity-composition.layer.json",
+      "contentHash": "sha256:cf9713ba74cefdfa4f029cb259392fe89f0b37e6748ba926d5d7abd2a5d69b8d",
+      "layerId": "temperate-river-valley-composition",
+      "baseTopologyHash": "sha256:271105d6677ae5724a6ec0d9a7ca8459b46b2cfa9b1551ac2d1a844942fc85d1"
+    }
+  ],
+  "compiler": {
+    "version": "1.3.0",
+    "seed": 1511,
+    "baseAmplitude": 8,
+    "gridId": "temperate-fidelity.surface",
+    "erosionRecipe": "default-map/v1"
+  },
+  "captureDomain": {
+    "minX": -144,
+    "minZ": -144,
+    "maxX": 144,
+    "maxZ": 144,
+    "reachableBiomeIds": [
+      "deep-ocean",
+      "river",
+      "temperate-deciduous-forest"
+    ]
+  },
+  "cameras": [
+    { "id": "river-approach", "position": [-92, 12, 118], "target": [8, 7, -18], "fovDeg": 52 },
+    { "id": "forest-river", "position": [76, 10, 92], "target": [4, 6, -34], "fovDeg": 48 },
+    { "id": "river-leading-line", "position": [14.5, 0, 75.1], "target": [20, 0, 121.5], "fovDeg": 48, "eyeHeightM": 2.2, "targetHeightM": 1.1 },
+    { "id": "canopy-depth", "position": [-106, 14, -42], "target": [18, 9, -88], "fovDeg": 50 }
+  ],
+  "presentation": {
+    "structures": false,
+    "debugOverlays": false,
+    "minimumResolution": [1920, 1080],
+    "captureTimeSeconds": 12,
+    "warmupFrames": 4,
+    "lighting": {
+      "toneMappingExposure": 0.82,
+      "sun": { "color": 16765623, "intensity": 0.55, "position": [-80, 130, 65] },
+      "hemisphere": { "skyColor": 12441072, "groundColor": 3291426, "intensity": 0.6 },
+      "environmentIntensity": 0.35,
+      "backgroundIntensity": 0.56,
+      "environmentRotationY": -0.65
+    },
+    "atmosphere": { "fogColor": 13029831, "fogDensity": 0.0032 },
+    "post": {
+      "ao": { "radius": 0.35, "scale": 0.85, "thickness": 0.65, "intensity": 0.7 },
+      "bloom": { "strength": 0.16, "radius": 0.32, "threshold": 1.05 },
+      "grade": { "exposure": 1, "contrast": 1.08, "saturation": 1.14 }
+    }
+  }
+}

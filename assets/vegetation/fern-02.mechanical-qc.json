@@ -1,0 +1,15 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-fern-02",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/fern_02", "licenseSpdx": "CC0-1.0", "attribution": "fern_02 by Poly Haven (CC0 1.0)" },
+  "models": [{ "level": 0, "path": "vegetation/fern-02-lod0.glb", "sha256": "sha256:57c4394ea6200bf5abfaffba596d45a350fe4ba49c2ed8943a71a74025b90f4d", "boundsM": [1.97253, 0.427695, 1.724028], "vertexCount": 4337, "triangleCount": 6232, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }],
+  "checks": { "glbReadable": true, "selfContained": true, "textureResolutionPreserved": true, "texturePayloadsPreserved": true, "materialContractsPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "optimization": { "schema": "limina.vegetation-flatten/1", "tool": "tools/asset/flatten-vegetation-glb.mjs", "meshCountBefore": 4, "meshCountAfter": 1, "vertexCountPreserved": true, "triangleCountPreserved": true, "maxBoundsDeltaM": 0 },
+  "lodChain": [],
+  "lodStatus": "not-generated",
+  "optimizationStatus": "mesh-consolidated-losslessly-lod-required",
+  "internalContactSheet": { "path": "qc/internal/polyhaven-groundcover-candidates.png", "sha256": "sha256:41368d04113b36fc1eff2b3b0d2f234cda9e0d2550d876baf7c2f2a576489abc" },
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}
