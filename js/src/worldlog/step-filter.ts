@@ -37,8 +37,9 @@
 // velocity/sleep-state op the engine does not expose. The filter's change test is otherwise
 // EXACTLY the definition of state the acceptance gates compare (bit-exact body transforms).
 //
-// TRACKING: the recorder's ops proxy feeds `observe()` for EVERY wrapped physics op at ANY chain
-// depth (skills call the same wrapped `world.ops`), so the filter sees every dynamic-body
+// TRACKING: the recorder feeds `observe()` for EVERY wrapped physics op at ANY chain depth --
+// top-level ops via the recording proxy, in-skill ops via the non-recording chainOps facade
+// skills execute against -- so the filter sees every dynamic-body
 // creation/removal regardless of whether the op itself was recorded. This covers RAW bodies that
 // never enter the entity table (bootstrap `add_box` etc.) -- an entity-table walk would miss
 // those, and a raw body mid-flight must keep its steps recorded. Ops the proxy does not wrap
@@ -68,7 +69,7 @@ export class IdleStepFilter {
    *  (a fresh body always counts as changed once, so its first post-spawn step records). */
   private readonly bodies = new Map<number, Float32Array | null>();
   private readonly scratch = new Float32Array(7);
-  /** Monotonic depth-0 step counter. Deliberately NOT the world tick: the server's tick counter
+  /** Monotonic top-level step counter. Deliberately NOT the world tick: the server's tick counter
    *  restarts at 0 after a rehydrated boot while replayed commands carry large historical ticks,
    *  so a tick-based grace window would mis-arm across the boot seam. Polls only move forward. */
   private polls = 0;
@@ -104,8 +105,8 @@ export class IdleStepFilter {
         this.activity = true;
         return;
       case "step":
-        // A NESTED (inside-a-skill, depth>0) step advanced the sim behind our cache. The skill
-        // command replays it, so it is not recorded here -- but the next depth-0 step must
+        // A NESTED (inside-a-skill) step advanced the sim behind our cache. The skill
+        // command replays it, so it is not recorded here -- but the next top-level step must
         // re-poll from a "something happened" stance.
         this.activity = true;
         return;
@@ -114,7 +115,7 @@ export class IdleStepFilter {
     }
   }
 
-  /** Called AFTER a depth-0 `op_physics_step` was applied. Returns true iff the step should be
+  /** Called AFTER a top-level `op_physics_step` was applied. Returns true iff the step should be
    *  recorded: any tracked body's transform changed bit-wise this tick, or the grace window since
    *  the last change/activity has not yet elapsed. Also refreshes the per-body transform cache. */
   shouldRecordStep(ops: EngineOps): boolean {

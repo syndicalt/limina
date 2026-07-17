@@ -28,7 +28,7 @@ import {
   type WaterContactBindingSpec,
 } from "../world/water-contact.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
-import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 
 /** An inert transform for the terrain entity's ECS slot (the mesh is world-fixed at its origin). */
 const inertTransform = (): Transformable => ({ position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } });
@@ -191,6 +191,67 @@ function applyBrushPaint(tile: TerrainTile, input: z.infer<typeof paintInput>): 
       }
     }
   }
+}
+
+/** The brush-affected height sub-rectangle, captured BEFORE a deform mutates the
+ *  tile (H1 compensation). Bounds use the same world→grid mapping as applyBrush,
+ *  padded to the enclosing cell rect, so every cell the stamp can touch is inside.
+ *  Bounded memory: one patch per deform per in-flight chain. */
+interface HeightPatch { row0: number; col0: number; rows: number; cols: number; data: Float32Array }
+
+function captureHeightPatch(tile: TerrainTile, center: [number, number], radius: number): HeightPatch {
+  const { nrows, ncols, origin, scale, heights } = tile;
+  const x0 = origin[0] - scale[0] / 2;
+  const z0 = origin[2] - scale[2] / 2;
+  const dxStep = scale[0] / (ncols - 1);
+  const dzStep = scale[2] / (nrows - 1);
+  const col0 = Math.min(ncols - 1, Math.max(0, Math.floor((center[0] - radius - x0) / dxStep)));
+  const col1 = Math.max(0, Math.min(ncols - 1, Math.ceil((center[0] + radius - x0) / dxStep)));
+  const row0 = Math.min(nrows - 1, Math.max(0, Math.floor((center[1] - radius - z0) / dzStep)));
+  const row1 = Math.max(0, Math.min(nrows - 1, Math.ceil((center[1] + radius - z0) / dzStep)));
+  const cols = Math.max(0, col1 - col0 + 1);
+  const rows = Math.max(0, row1 - row0 + 1);
+  const data = new Float32Array(rows * cols);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) data[r * cols + c] = heights[(row0 + r) * ncols + (col0 + c)];
+  }
+  return { row0, col0, rows, cols, data };
+}
+
+function restoreHeightPatch(tile: TerrainTile, patch: HeightPatch): void {
+  const { ncols, heights } = tile;
+  for (let r = 0; r < patch.rows; r++) {
+    for (let c = 0; c < patch.cols; c++) heights[(patch.row0 + r) * ncols + (patch.col0 + c)] = patch.data[r * patch.cols + c];
+  }
+}
+
+/** Re-derive everything downstream of a mutated heights array. REBUILD THE GROUND
+ *  COLLIDER so physics follows the reshaped surface: without this, a deform moves
+ *  the visual mesh but leaves the heightfield collider at its pre-deform heights —
+ *  the player floats where terrain was cut down and sinks THROUGH where it was
+ *  raised. Rapier exposes no in-place heightfield update, so the old body is
+ *  removed and a fresh heightfield added from the current heights (the SAME op
+ *  pair native streaming uses → identical on the headless-authoritative and
+ *  render Rapier worlds). Then the render geometry is rebuilt (elevation colors
+ *  re-applied so a leveled terrace keeps its shading) and the grass the brush
+ *  moved is re-seated. Shared by terrain.deform AND its H1 undo, so a restored
+ *  patch propagates through the exact rebuild the deform ran. */
+function reprojectLayerHeights(world: WorldContext, layer: EditableTerrain, cx: number, cz: number, radius: number): void {
+  const { tile } = layer;
+  const [dox, doy, doz] = tile.origin;
+  const [dsx, dsy, dsz] = tile.scale;
+  world.ops.op_physics_remove_body(layer.bodyId);
+  const newBodyId = world.ops.op_physics_add_heightfield(dox, doy, doz, tile.nrows, tile.ncols, dsx, dsy, dsz, tile.heights);
+  layer.bodyId = newBodyId;
+  world.entities.rebindBody(layer.entity, newBodyId);
+  if (layer.mesh !== undefined) {
+    const next = terrainTileBufferGeometry(tile);
+    if (layer.elevationColors !== undefined) applyElevationColors(next, tile, layer.elevationColors);
+    const old = layer.mesh.geometry;
+    (layer.mesh as unknown as { geometry: unknown }).geometry = next;
+    old.dispose?.();
+  }
+  layer.grass?.refreshCircle(cx, cz, radius + 3);
 }
 
 /** Apply one deterministic brush stamp to a tile's heights, in place. */
@@ -480,36 +541,23 @@ export function registerTerrainEditSkills(
       const layer = id !== undefined ? layers.get(id) : undefined;
       if (layer === undefined) return { ok: false };
 
+      // H1 compensation: capture the brush-affected height patch BEFORE mutating;
+      // on chain unwind, restore it and re-run the exact downstream rebuild the
+      // deform itself runs (collider, render geometry, grass). The undo's collider
+      // rebuild allocates a fresh native body id — count-neutral, per-world
+      // self-consistent, which is what replay parity compares.
+      const patch = captureHeightPatch(layer.tile, input.center, input.radius);
+      const undoLayer = layer, undoWorld = ctx.world;
+      ctx.undo("terrain.deform height patch", () => {
+        restoreHeightPatch(undoLayer.tile, patch);
+        reprojectLayerHeights(undoWorld, undoLayer, input.center[0], input.center[1], input.radius);
+      });
+
       applyBrush(layer.tile, input);
 
-      // REBUILD THE GROUND COLLIDER so physics follows the reshaped surface. Without this, deform
-      // moves the visual mesh but leaves the heightfield collider at its pre-deform heights — the
-      // player then floats where terrain was cut down (e.g. village.build's terraces) and sinks
-      // THROUGH where it was raised. Rapier exposes no in-place heightfield height update, so we
-      // remove the old body and add a fresh heightfield from the mutated heights (the SAME op pair
-      // native streaming uses → identical on the headless-authoritative and render Rapier worlds,
-      // so replay/native↔wasm parity holds). Runs in EVERY authoring context (both own a Rapier
-      // world), not just where a render mesh exists.
-      const { tile } = layer;
-      const [dox, doy, doz] = tile.origin;
-      const [dsx, dsy, dsz] = tile.scale;
-      ctx.world.ops.op_physics_remove_body(layer.bodyId);
-      const newBodyId = ctx.world.ops.op_physics_add_heightfield(dox, doy, doz, tile.nrows, tile.ncols, dsx, dsy, dsz, tile.heights);
-      layer.bodyId = newBodyId;
-      ctx.world.entities.rebindBody(layer.entity, newBodyId);
-
-      // Rebuild the render geometry from the mutated heights (browser render context only).
-      if (layer.mesh !== undefined) {
-        const next = terrainTileBufferGeometry(layer.tile);
-        // Re-apply elevation vertex colors so a leveled terrace keeps its sand/grass/rock/snow
-        // shading instead of reverting to the material's flat base color.
-        if (layer.elevationColors !== undefined) applyElevationColors(next, layer.tile, layer.elevationColors);
-        const old = layer.mesh.geometry;
-        (layer.mesh as unknown as { geometry: unknown }).geometry = next;
-        old.dispose?.();
-      }
-      // Re-seat the grass blades the brush moved (their Y is baked from the pre-deform surface).
-      layer.grass?.refreshCircle(input.center[0], input.center[1], input.radius + 3);
+      // REBUILD collider + render geometry + grass from the mutated heights (the
+      // sink-through fix — see reprojectLayerHeights for the full argument).
+      reprojectLayerHeights(ctx.world, layer, input.center[0], input.center[1], input.radius);
       ctx.emit("terrain.deformed", { entity: id, mode: input.mode });
       return { ok: true };
     },

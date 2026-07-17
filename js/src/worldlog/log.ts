@@ -16,9 +16,11 @@
 // Replay-complete command set -- every source of world mutation / nondeterminism
 // the engine has (audited across Phase 0-3):
 //
-//   1. "seed"    -- the deterministic PRNG seed (uint32). Installed AS
-//                   `Math.random` (see installSeededRandom) so any randomness in
-//                   any skill handler is reproducible. Recorded ONCE, first.
+//   1. "seed"    -- the deterministic PRNG seed (uint32). Installs TWO streams
+//                   (see installSeededRandom): the global `Math.random` slot
+//                   (three/legacy consumers) and the world-owned SKILL stream
+//                   (`world.rng`, seed ^ SKILL_RNG_SEED_XOR) that skill handlers
+//                   draw from. Recorded ONCE, first.
 //   2. "physics" -- a native Rapier op issued OUTSIDE a skill (scenario/loop
 //                   bootstrap + the per-tick step): create_world (gravity),
 //                   add_ground, add_* (spawns), apply_impulse, remove_body, and
@@ -387,10 +389,28 @@ export function mulberry32(seed: number): () => number {
 // its live internal state and a restore can resume it (see installRandomState).
 let installedRng: SeededRng | undefined;
 
-/** Install a seeded PRNG AS the global `Math.random`, so ALL randomness in any
- *  skill handler (and any library it calls) becomes deterministic and replayable
- *  from the recorded seed. Returns the generator (also reachable via Math.random).
- *  Replay re-installs the SAME seed before re-applying commands.
+/** Derives the world-owned SKILL stream's seed from the recorded session seed
+ *  (golden-ratio constant; arbitrary, but it MUST NEVER CHANGE -- every skill
+ *  draw in every recorded session derives from it). */
+export const SKILL_RNG_SEED_XOR = 0x9e3779b9;
+
+// The world-owned SKILL RNG stream created alongside the global install (M4):
+// skills draw from `ctx.world.rng` (this generator, handed to the WorldContext by
+// the seeding/replay/recovery paths), NEVER from Math.random. The global stream
+// is position-contaminated by render-context-only consumers (three.js draws
+// Math.random for UUIDs whenever a mesh is created), so a skill draw or captured
+// state on the global stream depends on WHICH context ran, not on the command
+// stream. The skill stream has exactly one consumer class -- skill handlers --
+// so its position is a pure function of the recorded commands.
+let installedSkillRng: SeededRng | undefined;
+
+/** Install a seeded PRNG AS the global `Math.random` (legacy/three consumers) AND
+ *  create the world-owned SKILL stream from the same seed, so all randomness --
+ *  library draws on the global slot, skill draws on `world.rng` -- becomes
+ *  deterministic and replayable from the recorded seed. Returns the global
+ *  generator (also reachable via Math.random); the skill stream is read via
+ *  getInstalledSkillRng(). Replay re-installs the SAME seed before re-applying
+ *  commands.
  *
  *  SINGLE-WORLD-PER-PROCESS INVARIANT: `Math.random` and `installedRng` are a
  *  MODULE SINGLETON, so exactly ONE seeded world may drive randomness in a process
@@ -411,6 +431,10 @@ export function installSeededRandom(seed: number, force = false): () => number {
   }
   const gen = statefulMulberry32(seed >>> 0);
   installedRng = gen;
+  // The world-owned skill stream is created from the same recorded seed (see
+  // installedSkillRng above). Creating it consumes nothing from the global
+  // stream, so the global Math.random stream stays byte-identical to before.
+  installedSkillRng = statefulMulberry32((seed ^ SKILL_RNG_SEED_XOR) >>> 0);
   // Math.random is a writable method slot in V8; replace it with the seeded gen.
   Math.random = gen.next;
   return gen.next;
@@ -447,13 +471,44 @@ export function setInstalledRng(rng: SeededRng): void {
 
 /** Install a seeded PRNG resumed at a captured internal state (M2 recovery).
  *  The next draw continues the SAME stream the original run produced after the
- *  snapshot point -- the mid-stream RNG resume the delta replay depends on. */
+ *  snapshot point -- the mid-stream RNG resume the delta replay depends on.
+ *  Global stream only; recovery resumes the skill stream separately via
+ *  installSkillRandomState (restoreSnapshot installs both). */
 export function installRandomState(state: number): () => number {
   const gen = statefulMulberry32(0);
   gen.setState(state);
   installedRng = gen;
   Math.random = gen.next;
   return gen.next;
+}
+
+/** The world-owned SKILL RNG stream from the most recent seed install (undefined
+ *  before any install). Context assemblers hand it to the WorldContext (`world.rng`)
+ *  right after seeding, so skills draw from a stream no render-context consumer
+ *  can shift. */
+export function getInstalledSkillRng(): SeededRng | undefined {
+  return installedSkillRng;
+}
+
+/** Internal 32-bit state of the skill stream (for a world snapshot). Prefer the
+ *  world's own generator when the caller holds one (captureWorldSnapshot does);
+ *  this module-level read covers callers without a world handle. A process that
+ *  resumed only the LEGACY global stream (installRandomState from a snapshot
+ *  predating skillRngState) falls back to the global state -- the same seeding
+ *  rule restore applies for an absent field, exact because no skill draw predates
+ *  the skill stream. Throws when no seeded RNG is installed at all. */
+export function captureSkillRandomState(): number {
+  if (installedSkillRng !== undefined) return installedSkillRng.getState();
+  return captureRandomState();
+}
+
+/** Install the SKILL stream resumed at a captured internal state (M2 recovery).
+ *  Returns the generator so restore can hand it to the recovered WorldContext. */
+export function installSkillRandomState(state: number): SeededRng {
+  const gen = statefulMulberry32(0);
+  gen.setState(state);
+  installedSkillRng = gen;
+  return gen;
 }
 
 // ---- World-state snapshot + bit-identical comparison ----------------------

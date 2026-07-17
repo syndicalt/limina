@@ -34,16 +34,6 @@ import { teardownEntity } from "./entity-teardown.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
-function chainAssetRuntimeDispose(entry: { runtimeDispose?: () => void }, label: string, cleanup: () => void): void {
-  const prior = entry.runtimeDispose; let finished = false;
-  entry.runtimeDispose = () => {
-    if (finished) return; finished = true; const errors: unknown[] = [];
-    try { cleanup(); } catch (error) { errors.push(error); }
-    try { prior?.(); } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, `${label} runtime disposal failed`);
-  };
-}
-
 /** Transform an asset's LOCAL AABB (gltfLocalAabb) by a placement — scale → rotation → position — then
  *  apply the SAME normalizeHeight (a uniform scale about the entity origin) + ground lift asset.place
  *  applies to the visible mesh, yielding the placed WORLD AABB the building collider spans. Pure +
@@ -344,7 +334,17 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
             ctx.world.ops.op_physics_remove_body(colliderBodyId);
             throw new Error("asset.place collider owner disappeared before lifecycle binding");
           }
-          chainAssetRuntimeDispose(rec, "asset.place", () => ctx.world.ops.op_physics_remove_body(colliderBodyId));
+          ctx.world.entities.chainRuntimeDispose(entity, "asset.place", () => ctx.world.ops.op_physics_remove_body(colliderBodyId));
+          // M18: persist the OWNERSHIP, not the closure — the id rides the entity into the
+          // world snapshot so restore can re-arm the remove-body dispose (no leaked wall).
+          ctx.world.entities.bindRuntimeBodies(entity, [colliderBodyId]);
+          // H1 compensation for the standalone collider (deliberately NOT bound to the
+          // entity's bodyId): undo through the finished-guarded dispose chain, so the
+          // entity-teardown undo's own runtimeDispose call later is a no-op, never a
+          // double op_physics_remove_body.
+          ctx.undo("asset.place collider", () => {
+            rec.runtimeDispose?.();
+          });
         }
       }
       // Optional material override (reuses three.setMaterial's apply, by id). Scoped
@@ -443,11 +443,19 @@ export function registerAssetSkills(registry: SkillRegistry, assets: AssetRegist
       }
       if (rec !== undefined && (colliderBodyId !== undefined || lod !== undefined)) {
         const body = colliderBodyId, lods = (ctx.world as unknown as { lods?: unknown[] }).lods;
-        chainAssetRuntimeDispose(rec, "asset.placeLod", () => {
+        ctx.world.entities.chainRuntimeDispose(entity, "asset.placeLod", () => {
           const errors: unknown[] = [];
           if (body !== undefined) try { ctx.world.ops.op_physics_remove_body(body); } catch (error) { errors.push(error); }
           if (lod !== undefined && lods !== undefined) { const index = lods.indexOf(lod); if (index >= 0) lods.splice(index, 1); }
           if (errors.length) throw new AggregateError(errors, "asset.placeLod owned resource cleanup failed");
+        });
+        // M18: the collider id (LOD registration is render-only, rebuilt on replay) rides the
+        // entity into the snapshot so restore re-arms the remove-body dispose.
+        if (body !== undefined) ctx.world.entities.bindRuntimeBodies(entity, [body]);
+        // H1 compensation for the standalone collider + LOD registration — via the
+        // finished-guarded dispose chain (same rationale as asset.place's collider undo).
+        ctx.undo("asset.placeLod collider/lod", () => {
+          rec.runtimeDispose?.();
         });
       }
       const levelCount = lod !== undefined ? (lod as unknown as { levels: unknown[] }).levels.length : 0;

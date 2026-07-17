@@ -9,7 +9,8 @@
 // skill seam over it. Deterministic + replay-safe (assembleBuilding is pure given the recipe + DD).
 
 import { z } from "../../../build/zod.bundle.mjs";
-import type { SkillDefinition, SkillRegistry } from "../registry.ts";
+import type { ExecutionContext, SkillDefinition, SkillRegistry } from "../registry.ts";
+import { teardownEntity } from "../entity-teardown.ts";
 import { type BuildingRecipe, assembleBuilding } from "../building-recipe.ts";
 import { PALETTE_ROLE_NAMES } from "../../game/design-direction.ts";
 import { CONSTRUCTION_NAMES } from "../../game/building-brief.ts";
@@ -51,6 +52,21 @@ const assembleInput = z.object({
   seed: z.number().optional().describe("Deterministic variation seed for the kit parts."),
 });
 
+/** H1 compensation for a kit assembly: register BEFORE assembleBuilding runs, so
+ *  even a mid-assembly throw is covered — at unwind time `idsCreatedSince`
+ *  enumerates exactly the parts that actually got created (newest-first
+ *  teardown). teardownEntity no-ops on already-destroyed ids, so overlap with
+ *  later-registered sibling undos on the same chain is safe; the registry's
+ *  concurrent-chain guard poisons instead of unwinding when ANOTHER head chain
+ *  could own ids in the range. */
+function undoCreatedEntities(ctx: ExecutionContext, label: string): void {
+  const seqBefore = ctx.world.entities.nextSeq;
+  ctx.undo(label, () => {
+    const created = ctx.world.entities.idsCreatedSince(seqBefore);
+    for (let i = created.length - 1; i >= 0; i--) teardownEntity(ctx.world, created[i]);
+  });
+}
+
 const assembleOutput = z.object({
   root: z.string().describe("The building-root entity — the whole structure as one selectable/exportable unit."),
   entities: z.array(z.string()).describe("Every part entity (parented under root)."),
@@ -69,6 +85,7 @@ function makeAssemble(): SkillDefinition<z.infer<typeof assembleInput>, z.infer<
     output: assembleOutput,
     handler: (input, ctx) => {
       const { position, seed, ...recipe } = input;
+      undoCreatedEntities(ctx, "building.assemble parts");
       const res = assembleBuilding(recipe as BuildingRecipe, position, ctx.world, seed !== undefined ? { seed } : undefined);
       ctx.emit("building.assembled", { root: res.root, center: position, parts: res.entityCount, width: recipe.width, depth: recipe.depth, height: recipe.height });
       return { root: res.root, entities: res.parts.map((p) => p.entity), entityCount: res.entityCount, bounds: res.bounds };
@@ -132,6 +149,7 @@ function makeArchitectureBuilding(): SkillDefinition<z.infer<typeof archInput>, 
         openings,
         roof: input.withRoof ? { type: input.roofStyle, pitch: input.roofPitch, overhang: input.roofOverhang } : null,
       };
+      undoCreatedEntities(ctx, "architecture.building parts");
       const res = assembleBuilding(recipe, input.position, ctx.world, input.seed !== undefined ? { seed: input.seed } : undefined);
       ctx.emit("architecture.built", {
         kind: "building", center: input.position, width: input.width, depth: input.depth, height: input.height,

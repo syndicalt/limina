@@ -69,6 +69,20 @@ export interface InventorySnapshot {
   equipment: { equipmentSlot: string; itemId: string; quantity: number }[];
 }
 
+/** The WHOLE manager state (item definitions + every inventory incl. per-slot `data`),
+ *  as the world-snapshot participant captures/restores it (H2). Unlike InventorySnapshot
+ *  (a lossy comparison/UI view), this is lossless: restore rebuilds the manager exactly. */
+export interface InventoryManagerSnapshot {
+  itemDefs: ItemDef[];
+  inventories: {
+    entity: string;
+    capacity: number;
+    typeRestrictions?: string[];
+    slots: InventorySlot[];
+    equipment: { equipmentSlot: string; item: InventorySlot }[];
+  }[];
+}
+
 export class InventoryManager {
   private readonly inventories = new Map<string, Inventory>();
   private readonly itemDefs = new Map<string, ItemDef>();
@@ -269,6 +283,42 @@ export class InventoryManager {
       if (!inv.slots.has(i)) return i;
     }
     return undefined;
+  }
+
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant, H2):
+   *  item defs sorted by id, inventories by entity, slots by index, equipment by slot name. */
+  captureSnapshot(): InventoryManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      itemDefs: [...this.itemDefs.values()].sort((a, b) => byString(a.id, b.id)).map((d) => ({ ...d })),
+      inventories: [...this.inventories.values()].sort((a, b) => byString(a.entity, b.entity)).map((inv) => ({
+        entity: inv.entity,
+        capacity: inv.capacity,
+        typeRestrictions: inv.typeRestrictions === undefined ? undefined : [...inv.typeRestrictions],
+        slots: [...inv.slots.values()].sort((a, b) => a.slot - b.slot).map((s) => ({ ...s })),
+        equipment: [...inv.equipment.entries()].sort((a, b) => byString(a[0], b[0])).map(([equipmentSlot, item]) => ({ equipmentSlot, item: { ...item } })),
+      })),
+    };
+  }
+
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(state: InventoryManagerSnapshot): void {
+    this.itemDefs.clear();
+    this.inventories.clear();
+    for (const def of state.itemDefs) this.itemDefs.set(def.id, { ...def });
+    for (const inv of state.inventories) {
+      const slots = new Map<number, InventorySlot>();
+      for (const s of inv.slots) slots.set(s.slot, { ...s });
+      const equipment = new Map<string, InventorySlot>();
+      for (const e of inv.equipment) equipment.set(e.equipmentSlot, { ...e.item });
+      this.inventories.set(inv.entity, {
+        entity: inv.entity,
+        capacity: inv.capacity,
+        typeRestrictions: inv.typeRestrictions === undefined ? undefined : [...inv.typeRestrictions],
+        slots,
+        equipment,
+      });
+    }
   }
 }
 

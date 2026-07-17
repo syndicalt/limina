@@ -23,6 +23,7 @@ import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.t
 import type { Transformable } from "../ecs/world.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import { teardownEntity } from "./entity-teardown.ts";
 // The shared, pure layout brain (dependency-free JS; imported as `any`). planVillage is
 // a deterministic function of (sampler, direction, steering, radii); hashStr derives a
 // stable seed for the recorded request.
@@ -253,6 +254,19 @@ export function registerVillageSkills(
       const layer = id !== undefined ? layers.get(id) : undefined;
       if (layer === undefined || id === undefined) {
         throw new Error("village.build: no terrain layer to build on — create one with terrain.create first");
+      }
+      // H1 compensation, registered BEFORE any mutation: on chain unwind, tear
+      // down every entity created from this point on — the directly-created
+      // ground/lawn/tint/deco entities AND (belt-and-braces) nested placements,
+      // whose own enrolled undos overlap safely (teardownEntity no-ops on an
+      // already-destroyed id). Terrain height changes are compensated by the
+      // nested terrain.deform undos; the footprint registry by its own undo below.
+      {
+        const seqBefore = ctx.world.entities.nextSeq;
+        ctx.undo("village.build entities", () => {
+          const created = ctx.world.entities.idsCreatedSince(seqBefore);
+          for (let i = created.length - 1; i >= 0; i--) teardownEntity(ctx.world, created[i]);
+        });
       }
       const tile = layer.tile;
       const siting = input.steering.siting; // terrace/yard/lane treatment — spec-driven, defaults natural.
@@ -699,6 +713,26 @@ export function registerVillageSkills(
           if (acc >= spacing) { exclusions.push({ x: s.x, z: s.z, r: laneR }); acc = 0; }
           prev = s;
         }
+      }
+      // H1 compensation for the footprint-registry REPLACE (an ancillary write a
+      // later failure — a throwing vegetation clear, a broken emit — would strand):
+      // restore the prior entry, then best-effort re-fire the registered clears so
+      // vegetation mounted against the now-reverted discs is recomputed. Render-only
+      // refresh; the registry entry itself is the replay-relevant state (a future
+      // recorded vegetation.scatter reads it as exclusions).
+      {
+        const prior = footprints.get(id);
+        const undoTerrainId = id;
+        ctx.undo("village.build footprints", () => {
+          if (prior === undefined) footprints.delete(undoTerrainId);
+          else footprints.set(undoTerrainId, prior);
+          for (const clear of vegetationClears.get(undoTerrainId) ?? []) {
+            try {
+              const r = clear();
+              if (r instanceof Promise) r.catch(() => { /* render-only refresh; unwind already restored sim state */ });
+            } catch { /* render-only refresh */ }
+          }
+        });
       }
       footprints.set(id, exclusions);
 

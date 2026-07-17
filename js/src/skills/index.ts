@@ -67,6 +67,8 @@ import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMMana
 import { registerDesignSkills } from "./design.ts";
 import { WaterContactRuntime } from "../world/water-contact.ts";
 import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
+import { buildCoreSnapshotParticipants } from "./snapshot-participants.ts";
+import type { SnapshotParticipantRegistry } from "../worldlog/snapshot.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -131,6 +133,11 @@ export interface CoreSkills {
   progression: { progressionManager: ProgressionManager };
   /** Phase 12: world dynamics (time, weather, spawn) and audio extensions (BGM, SFX, reverb). */
   worldstate: { worldStateManager: WorldStateManager; bgmManager: BGMManager; reverbManager: ReverbManager };
+  /** H2: every core manager owning runtime-mutated sim state, enrolled for snapshot
+   *  capture/restore — the ONE object hosts pass to captureWorldSnapshot /
+   *  restoreSnapshot / recoverWorld. The bucket-per-manager classification table
+   *  lives in skills/snapshot-participants.ts; a new manager must pick a bucket. */
+  snapshotParticipants: SnapshotParticipantRegistry;
 }
 
 export function registerCoreSkills(
@@ -316,6 +323,27 @@ export function registerCoreSkills(
   const save = registerSaveSkills(registry);
   const progression = registerProgressionSkills(registry);
   const worldstate = registerWorldAudioExtensionSkills(registry);
+  // H2: enroll every runtime-mutated sim-state manager as a snapshot participant
+  // (classification table + schemas: skills/snapshot-participants.ts). Hosts pass
+  // this one registry to captureWorldSnapshot/restoreSnapshot/recoverWorld.
+  const snapshotParticipants = buildCoreSnapshotParticipants({
+    inventoryManager: inventory.inventoryManager,
+    interactionManager: interaction.interactionManager,
+    gameStateManager: gamestate.gameStateManager,
+    triggerManager: triggers.triggerManager,
+    eventManager: triggers.eventManager,
+    questManager: quest.questManager,
+    statsManager: combat.statsManager,
+    combatManager: combat.combatManager,
+    abilityManager: ability.abilityManager,
+    navmeshManager: nav.navmeshManager,
+    progressionManager: progression.progressionManager,
+    worldStateManager: worldstate.worldStateManager,
+    gazetteerManager: navigation.gazetteerManager,
+    cutsceneManager: cutscene.cutsceneManager,
+    directorManager: director.directorManager,
+    eventSpecs: behaviorSpec.events,
+  });
   return {
     packages, ui, locomotion, social, audio,
     terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
@@ -324,5 +352,6 @@ export function registerCoreSkills(
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
     behaviorSpec,
     nav, functionalBuildings: { topologyManager }, functionalSettlements: { placementManager: functionalSettlementPlacementManager }, navigation, vfx, save, progression, worldstate,
+    snapshotParticipants,
   };
 }

@@ -141,6 +141,45 @@ export class StatsManager {
   listStatusEffects(entity: string): StatusEffect[] {
     return this.entityStats.get(entity)?.statusEffects ?? [];
   }
+
+  /** Deterministic capture of the whole manager (snapshot participant, H2): entities
+   *  sorted, stats by name; status effects keep application order (ids are dense
+   *  `status_N`, so order is deterministic). `seq` rides so a post-restore
+   *  applyStatusEffect mints the SAME next id it would have live. */
+  captureSnapshot(): StatsManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      seq: this.seq,
+      entities: [...this.entityStats.values()].sort((a, b) => byString(a.entity, b.entity)).map((es) => ({
+        entity: es.entity,
+        stats: [...es.stats.values()].sort((a, b) => byString(a.name, b.name)).map((s) => ({ ...s })),
+        // Explicit key order (canonical capture): a live StatusEffect is built as
+        // `{ ...effect, id, elapsed }`, whose key order differs from a restored one —
+        // spreading it would make capture bytes depend on construction history.
+        statusEffects: es.statusEffects.map((e) => ({
+          id: e.id, type: e.type, duration: e.duration, elapsed: e.elapsed, magnitude: e.magnitude,
+          tickInterval: e.tickInterval, onApply: e.onApply, onRemove: e.onRemove, onTick: e.onTick, config: e.config,
+        })),
+      })),
+    };
+  }
+
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap: StatsManagerSnapshot): void {
+    this.entityStats.clear();
+    this.seq = snap.seq;
+    for (const e of snap.entities) {
+      const stats = new Map<string, StatDef>();
+      for (const s of e.stats) stats.set(s.name, { ...s });
+      this.entityStats.set(e.entity, { entity: e.entity, stats, statusEffects: e.statusEffects.map((fx) => ({ ...fx })) });
+    }
+  }
+}
+
+/** The whole StatsManager state as the snapshot participant carries it (H2). */
+export interface StatsManagerSnapshot {
+  seq: number;
+  entities: { entity: string; stats: StatDef[]; statusEffects: StatusEffect[] }[];
 }
 
 /** A live defensive stance (combat.defend): reduces incoming damage until it expires by tick. */
@@ -218,6 +257,27 @@ export class CombatManager {
     const after = change?.value ?? before;
     return { healed: after - before, remaining: after }; // ACTUAL clamped delta, not the request
   }
+
+  /** Deterministic capture of the live defend stances, entity-sorted (snapshot participant, H2).
+   *  Stat state itself is the StatsManager participant's; this carries only combat's own state. */
+  captureSnapshot(): CombatManagerSnapshot {
+    return {
+      stances: [...this.stances.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([entity, s]) => ({ entity, ...s })),
+    };
+  }
+
+  /** Wholesale replace the defend stances (participant restore). */
+  restoreSnapshot(snap: CombatManagerSnapshot): void {
+    this.stances.clear();
+    for (const s of snap.stances) this.stances.set(s.entity, { damageReduction: s.damageReduction, reflectChance: s.reflectChance, expiresTick: s.expiresTick });
+  }
+}
+
+/** The whole CombatManager state as the snapshot participant carries it (H2). */
+export interface CombatManagerSnapshot {
+  stances: ({ entity: string } & DefendStance)[];
 }
 
 // ---- Deterministic crit (pure hash, NO RNG) ----

@@ -68,6 +68,16 @@ export class GazetteerManager {
   clear(): void {
     this.byId.clear();
   }
+  /** Deterministic capture, placeId-sorted (snapshot participant, H2). */
+  captureSnapshot(): GazetteerRecord[] {
+    return [...this.byId.values()]
+      .sort((a, b) => (a.placeId < b.placeId ? -1 : a.placeId > b.placeId ? 1 : 0))
+      .map((r) => ({ ...r, position: [r.position[0], r.position[1]] }));
+  }
+  /** Wholesale replace the index (participant restore) — `load` already replaces. */
+  restoreSnapshot(records: readonly GazetteerRecord[]): void {
+    this.load(records.map((r) => ({ ...r, position: [r.position[0], r.position[1]] })));
+  }
 }
 
 const gazetteerLoadInput = z.object({

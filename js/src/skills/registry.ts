@@ -10,6 +10,8 @@ import type { TransformStorage } from "../ecs/facade.ts";
 import type { Tracer } from "../observability/event.ts";
 import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
+import type { SeededRng } from "../worldlog/log.ts";
+import { captureEntityIndex, restoreEntityIndex, type EntityIndexSnapshot } from "../worldlog/snapshot.ts";
 import { type PolicyEngine, type PolicyContext, type PolicyDecision, policyEventType, policyEventPayload } from "../policy/engine.ts";
 import type { DesignArtifactStore } from "../world/design-artifacts.ts";
 import type { GltfSceneCache } from "./three.ts";
@@ -51,6 +53,12 @@ export interface WorldContext {
   /** Render-only distance/residency controllers updated once before each draw. */
   lods?: { update(camera: CameraLike): void }[];
   ops: EngineOps;
+  /** The world-owned deterministic SKILL RNG stream (worldlog/log.ts, M4). A skill
+   *  needing randomness draws `ctx.world.rng.next()` -- NEVER `Math.random()`,
+   *  whose global stream position depends on which CONTEXT ran (three.js draws it
+   *  for UUIDs only when meshes are created), not on the command stream. Wired by
+   *  the seeding/replay/recovery paths; absent in unseeded worlds. */
+  rng?: SeededRng;
   agents?: AgentLookup;
   renderer?: unknown;
   /** Parsed glTF templates owned by the browser render host. Browser render worlds must use this
@@ -88,6 +96,15 @@ export interface ExecutionContext {
    *  MUST pass `chainId: ctx.chainId` so the nested call is folded into the
    *  already-recorded top-level command instead of recorded again. */
   chainId?: string;
+  /** Register a COMPENSATION for a world mutation this handler just applied (H1
+   *  failure atomicity). Undos accumulate on ONE LIFO ledger per HEAD chain —
+   *  nested invokes append to their head's ledger — and run only when the head
+   *  invocation fails (handler throw, output contract_error, hooks.after throw);
+   *  success drops the ledger. With the recorder's discard-on-failure this makes
+   *  a failed multi-step skill exactly "never happened": live == log == replay.
+   *  `fn` must be synchronous and must tolerate state already freed by a later
+   *  (earlier-run) undo — teardownEntity's undefined-on-missing contract. */
+  undo(label: string, fn: () => void): void;
   emit(type: string, payload: unknown, causedBy?: string[]): string;
 }
 
@@ -216,6 +233,44 @@ export interface ReloadResult {
   summary?: Record<string, unknown>;
 }
 
+/** One registered compensation on a chain's undo ledger. */
+interface ChainUndoEntry {
+  label: string;
+  fn: () => void;
+}
+
+/** Per-HEAD-chain unwind state (H1). Created when the head invocation reaches
+ *  apply; nested invokes (same chainId) find it and append undos. Dropped on
+ *  head settle — unwound first when the head failed. */
+interface ChainHeadFrame {
+  chainId: string;
+  skill: string;
+  ledger: ChainUndoEntry[];
+  /** Head-frame allocator/RNG capture (write skills only). Restored on unwind so
+   *  `ent_` ids, eids, and skill-RNG draws rewind — teardown alone leaves the
+   *  counters advanced and replay (which never runs the failed chain) would then
+   *  allocate DIFFERENT ids for every later command. */
+  capture?: {
+    world: WorldContext;
+    rngState?: number;
+    entitySeq: number;
+    entityVersion: number;
+    entityIndex: EntityIndexSnapshot;
+  };
+  /** True when another head chain was live at any point during this frame's
+   *  life. Rewinding allocators is only sound if no other chain allocated in
+   *  the window, so an overlapped unwind poisons instead of guessing. */
+  overlapped: boolean;
+}
+
+export interface SkillRegistryOptions {
+  /** FALSIFIABILITY FIXTURE ONLY (the p103 gate proves its asserts detect a
+   *  ledger-less registry). A production caller must never pass this — without
+   *  the ledger a failed multi-step skill leaves a half-built world that the
+   *  discarded command can never replay. */
+  disableChainUndoLedger?: boolean;
+}
+
 export class SkillRegistry {
   private readonly worldReconcilers = new Set<(world: WorldContext) => void>();
   /** Register idempotent derived-state recovery run before every skill handler.
@@ -231,8 +286,35 @@ export class SkillRegistry {
    *  check at this choke point and adds quotas/revocation/budgets; when unset the
    *  registry falls back to the static permission check (legacy callers). */
   private policy?: PolicyEngine;
-  constructor(readonly tracer: Tracer, policy?: PolicyEngine) {
+  /** Live head-chain unwind frames, keyed by chainId (H1). Data, not a counter —
+   *  concurrent head chains each keep their own frame. */
+  private readonly chainFrames = new Map<string, ChainHeadFrame>();
+  /** Mints chain ids for top-level invokes with NO recorder attached (the
+   *  recorder mints `chain_N` before original invoke runs). Distinct prefix so
+   *  the two namespaces can never collide. */
+  private localChainSeq = 0;
+  /** First failed rollback. A world that failed to roll back is indeterminate:
+   *  once set, every further WRITE invoke fails closed (reads stay available for
+   *  diagnosis) and hosts map it to their authority poison (net/server.ts). */
+  private poisonError?: Error;
+  private readonly rollbackFailureHandlers: Array<(error: Error) => void> = [];
+  private readonly chainUndoLedgerEnabled: boolean;
+  constructor(readonly tracer: Tracer, policy?: PolicyEngine, opts?: SkillRegistryOptions) {
     this.policy = policy;
+    this.chainUndoLedgerEnabled = opts?.disableChainUndoLedger !== true;
+  }
+
+  /** The first rollback failure, or undefined while the registry is healthy.
+   *  Mirrors authoring/kernel.ts `poisoned`: hosts check it (or subscribe via
+   *  onRollbackFailure) and stop authoring against the indeterminate world. */
+  get poisoned(): Error | undefined {
+    return this.poisonError;
+  }
+
+  /** Subscribe to rollback failures (called at most the moment the registry
+   *  poisons). net/server.ts maps this to its existing poisonAuthority. */
+  onRollbackFailure(handler: (error: Error) => void): void {
+    this.rollbackFailureHandlers.push(handler);
   }
 
   /** Attach (or replace) the policy engine that governs every invoke crossing. */
@@ -481,8 +563,11 @@ export class SkillRegistry {
   }
 
   /** Build the per-invocation execution context + a metadata thunk. Shared by
-   *  invoke() and resolveApproval() so emitted-event accounting is identical. */
-  private makeCtx(base: InvokeBase): { ctx: ExecutionContext; meta: () => MCPResponse["metadata"] } {
+   *  invoke() and resolveApproval() so emitted-event accounting is identical.
+   *  `chainId` is the EFFECTIVE chain id (the caller's, or one this invoke
+   *  minted): ctx.chainId must always be forwardable by nested invokes so the
+   *  whole chain shares one undo ledger even with no recorder attached. */
+  private makeCtx(base: InvokeBase, chainId: string): { ctx: ExecutionContext; meta: () => MCPResponse["metadata"] } {
     const start = Date.now();
     const emitted: string[] = [];
     const ctx: ExecutionContext = {
@@ -492,7 +577,18 @@ export class SkillRegistry {
       permissions: base.permissions,
       tick: base.tick,
       world: base.world,
-      chainId: base.chainId,
+      chainId,
+      undo: (label, fn) => {
+        if (!this.chainUndoLedgerEnabled) return;
+        const frame = this.chainFrames.get(chainId);
+        // Undos are only meaningful while the chain's head frame is live (the
+        // handler window). A registration outside it has no unwind to ride and
+        // silently dropping it would be an uncompensated mutation — fail loudly.
+        if (frame === undefined) {
+          throw new Error(`ctx.undo('${label}'): no live chain frame for '${chainId}' — undo registered outside the handler window`);
+        }
+        frame.ledger.push({ label, fn });
+      },
       emit: (type, payload, causedBy) => {
         const id = this.tracer.emit({
           type,
@@ -556,12 +652,27 @@ export class SkillRegistry {
   }
 
   async invoke(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
-    const { ctx, meta } = this.makeCtx(base);
+    // Effective chain id: the caller's (a recorder-minted head id, or a nested
+    // handler forwarding ctx.chainId), else minted here — so even an unrecorded
+    // world gets ONE undo ledger per top-level chain. Distinct prefix from the
+    // recorder's `chain_N` namespace.
+    const chainId = base.chainId ?? `lchain_${this.localChainSeq++}`;
+    const { ctx, meta } = this.makeCtx(base, chainId);
 
     // 1. Resolve.
     const skill = this.skills.get(name);
     if (skill === undefined) {
       return { success: false, error: { code: "not_found", message: `unknown skill: ${name}` } };
+    }
+    // 1b. Fail closed after a failed rollback: the world is indeterminate, so no
+    //     further WRITE may author against it. Reads stay available for diagnosis
+    //     (mirrors authoring/kernel.ts writer_poisoned).
+    if (this.poisonError !== undefined && skillEffect(skill) !== "read") {
+      return {
+        success: false,
+        error: { code: "conflict", message: `registry is poisoned after a failed rollback; restart required: ${this.poisonError.message}` },
+        metadata: meta(),
+      };
     }
     // 2. Validate input against the skill's schema.
     const parsed = skill.input.safeParse(input);
@@ -630,8 +741,110 @@ export class SkillRegistry {
       return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta() };
     }
 
-    // 4. Apply.
-    return this.applyHandler(skill, parsed.data, base, ctx, meta, execCausedBy);
+    // 4. Apply — under the per-chain undo ledger (H1 failure atomicity). The
+    //    HEAD invocation of a chain (first frame seen for this chainId) arms the
+    //    ledger + the head-frame allocator/RNG capture; nested invokes (same
+    //    chainId, frame already live) append their undos to the head's ledger.
+    //    Any failure surfacing from the head's applyHandler — handler throw,
+    //    output contract_error, hooks.after throw — unwinds the WHOLE chain, so
+    //    the recorder's discard-on-failure leaves live == log == replay ==
+    //    "it never happened". Success drops the ledger.
+    const frame = this.chainUndoLedgerEnabled && !this.chainFrames.has(chainId)
+      ? this.beginChainFrame(chainId, skill, base.world)
+      : undefined;
+    try {
+      const res = await this.applyHandler(skill, parsed.data, base, ctx, meta, execCausedBy);
+      if (frame !== undefined && !res.success) this.unwindChainFrame(frame, ctx);
+      return res;
+    } finally {
+      if (frame !== undefined) this.chainFrames.delete(chainId);
+    }
+  }
+
+  /** Arm a head chain's unwind frame. The allocator/RNG capture is skipped for
+   *  declared READ skills (they mutate nothing) so hot polling paths — the
+   *  editor's per-tick inspector.snapshot / worldlog.tail — never pay the
+   *  O(entities) index copy. */
+  private beginChainFrame(chainId: string, skill: SkillDefinition, world: WorldContext): ChainHeadFrame {
+    const overlapped = this.chainFrames.size > 0;
+    // Overlap is symmetric: every frame alive while another exists is marked, so
+    // an unwind can tell whether shared allocator state stayed exclusively its own.
+    if (overlapped) for (const f of this.chainFrames.values()) f.overlapped = true;
+    const frame: ChainHeadFrame = { chainId, skill: skill.name, ledger: [], overlapped };
+    if (skillEffect(skill) !== "read") {
+      frame.capture = {
+        world,
+        rngState: world.rng?.getState(),
+        entitySeq: world.entities.nextSeq,
+        entityVersion: world.entities.version,
+        entityIndex: captureEntityIndex(world.ecs),
+      };
+    }
+    this.chainFrames.set(chainId, frame);
+    return frame;
+  }
+
+  /** Unwind a failed head chain: run its undo ledger LIFO, then rewind the skill
+   *  RNG, the bitECS entity index, and the EntityTable seq/version captured at
+   *  head start — teardown alone is not enough, because `ent_`/eid allocation is
+   *  monotonic and replay (which never runs the failed chain) would otherwise
+   *  allocate DIFFERENT ids for every subsequent command. Synchronous: no other
+   *  chain can interleave mid-unwind on this single thread. */
+  private unwindChainFrame(frame: ChainHeadFrame, ctx: ExecutionContext): void {
+    const capture = frame.capture;
+    const world = capture?.world ?? ctx.world;
+    const rngMoved = capture?.rngState !== undefined && world.rng !== undefined && world.rng.getState() !== capture.rngState;
+    const tableMoved = capture !== undefined && world.entities.version !== capture.entityVersion;
+    // The failed chain left no compensable tracks — nothing to rewind.
+    if (frame.ledger.length === 0 && !rngMoved && !tableMoved) return;
+    if (frame.overlapped) {
+      // Another head chain was live inside this chain's window: rewinding SHARED
+      // allocator/RNG state would clobber its allocations, and range-scoped undos
+      // could tear down its entities. That interleaving is a real multi-agent
+      // authoring conflict — refuse to guess, poison loudly.
+      this.poisonRegistry(ctx, frame, "concurrent_chains", [
+        { label: "chain overlap", message: `chain '${frame.chainId}' (${frame.skill}) failed with compensable mutations while another head chain was live` },
+      ]);
+      return;
+    }
+    const failures: Array<{ label: string; message: string }> = [];
+    for (let i = frame.ledger.length - 1; i >= 0; i--) {
+      const entry = frame.ledger[i];
+      try {
+        entry.fn();
+      } catch (error) {
+        failures.push({ label: entry.label, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (capture !== undefined) {
+      try {
+        if (capture.rngState !== undefined) world.rng?.setState(capture.rngState);
+        restoreEntityIndex(world.ecs, capture.entityIndex);
+        world.entities.rewindAllocator(capture.entitySeq, capture.entityVersion);
+      } catch (error) {
+        failures.push({ label: "allocator rewind", message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (failures.length > 0) this.poisonRegistry(ctx, frame, "undo_failed", failures);
+  }
+
+  /** Mirror authoring/kernel.ts #rollback: collect the failures, emit
+   *  `skill.rollback.failed`, poison, and notify hosts (net/server.ts maps the
+   *  callback to its existing poisonAuthority). A world that failed to roll back
+   *  is indeterminate; nothing may author against it. */
+  private poisonRegistry(ctx: ExecutionContext, frame: ChainHeadFrame, reason: string, failures: ReadonlyArray<{ label: string; message: string }>): void {
+    const error = new Error(
+      `skill rollback failed (${reason}) for chain '${frame.chainId}' (${frame.skill}): ${failures.map((f) => `${f.label}: ${f.message}`).join("; ")}`,
+    );
+    if (this.poisonError === undefined) this.poisonError = error;
+    ctx.emit("skill.rollback.failed", { chainId: frame.chainId, skill: frame.skill, reason, failures: [...failures] });
+    for (const handler of this.rollbackFailureHandlers) {
+      try {
+        handler(error);
+      } catch {
+        // A broken observer must not mask the poison itself.
+      }
+    }
   }
 
   /** Resolve a held approval. `grant` -> apply the parked intent now and return

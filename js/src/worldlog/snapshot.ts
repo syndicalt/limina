@@ -20,9 +20,10 @@
 //      SAME next id; AND the bitECS entity-index allocator, so a delta
 //      `addEntity` issues the SAME next eid (incl. recycled slots after removal).
 //      The native handle counter rides inside the physics blob (handles Vec).
-//   4. RNG STATE       -- the seeded `Math.random` generator's internal 32-bit
-//      state at T, so any randomness a delta skill draws continues the SAME
-//      stream (NOT re-seeded from genesis).
+//   4. RNG STATE       -- the internal 32-bit state of BOTH seeded streams at T:
+//      the global `Math.random` slot (legacy/three consumers) and the world-owned
+//      skill stream (`world.rng`, what delta skill handlers draw), so randomness
+//      continues the SAME streams (NOT re-seeded from genesis).
 //
 // Recovery (see `recoverWorld`) restores 1-4 into a FRESH world, then replays
 // ONLY the delta commands (seq >= snapshotSeq) -- the same command-application
@@ -37,8 +38,10 @@ import type { WorldContext } from "../skills/registry.ts";
 import { BehaviorSpecSchema, EventSpecSchema, type BehaviorSpec, type EventSpec } from "../behavior/behavior-spec.ts";
 import {
   captureRandomState,
+  captureSkillRandomState,
   captureWorldState,
   installRandomState,
+  installSkillRandomState,
   PHYSICS_OP_FN,
   PHYSICS_OP_OUT_BUFFER,
   syncAllBodies,
@@ -122,6 +125,12 @@ export interface SnapshotEntity {
   /** First-class DECLARATIVE behaviour (BehaviorSpec: idle/patrol/wander/script), so a scene saved
    *  with behaviour reloads with it — carried WITHOUT replaying the behavior.set commands. */
   behavior?: BehaviorSpec;
+  /** Standalone physics bodies OWNED by this entity but deliberately not bound to its `bodyId`
+   *  (asset.place/placeLod building colliders). The bodies themselves ride the physics blob with
+   *  stable handles; carrying the ids lets restore RE-ARM the remove-body dispose closure, so
+   *  destroying a restored placed asset removes its collider instead of leaking an invisible
+   *  wall (M18). Additive within v3: absent on pre-M18 snapshots. */
+  runtimeBodyIds?: number[];
 }
 
 /** One world-level event definition (EventSpec {trigger, action}) + its stable id. Events are NOT
@@ -142,6 +151,109 @@ export interface SnapshotableEventRegistry {
   restoreEventSpecs(entries: readonly EventSpecSnapshotEntry[]): void;
 }
 
+// ---- snapshot participants (H2) --------------------------------------------
+// The generalization of the bespoke `characters?:` / `events?:` plumbing: every
+// owner of runtime-mutated sim state (the CoreSkills managers) DECLARES itself to
+// the snapshot machinery instead of the machinery hard-coding the owners it
+// knows about. Hosts pass ONE SnapshotParticipantRegistry (assembled by
+// registerCoreSkills as `core.snapshotParticipants`); the legacy optional
+// `characters`/`events` params remain for one release, delegating to reserved
+// participant keys.
+
+/** One owner of runtime-mutated world state, enrolled in snapshot capture/restore. */
+export interface SnapshotParticipant {
+  /** Stable snapshot key (e.g. "inventory"). Renaming it orphans every snapshot
+   *  that carried state under the old key — the restore fails loudly. */
+  key: string;
+  /** Validates this participant's captured state at restore time (parse cannot
+   *  know the registry, so validation happens when the participant is matched). */
+  schema: z.ZodType<unknown>;
+  /** Deterministic, canonically-sorted, JSON-serializable capture of the WHOLE
+   *  manager state. Two consecutive captures of an unchanged world MUST be
+   *  JSON-identical (the p104 gate double-captures and compares). */
+  capture(): unknown;
+  /** Wholesale replace the manager's state with a schema-validated capture. */
+  restore(state: unknown): void;
+}
+
+/** Reserved participant keys that serialize into the snapshot's EXISTING
+ *  top-level fields (`characters` / `events`) rather than `managers`, so the
+ *  wire format of pre-participant snapshots is unchanged in both directions. */
+export const CHARACTERS_PARTICIPANT_KEY = "characters";
+export const EVENTS_PARTICIPANT_KEY = "events";
+
+/** The one object a host hands to capture/restore. Duplicate keys throw: two
+ *  owners claiming one key would silently clobber each other's state. */
+export class SnapshotParticipantRegistry {
+  private readonly participants = new Map<string, SnapshotParticipant>();
+
+  register(participant: SnapshotParticipant): void {
+    if (this.participants.has(participant.key)) {
+      throw new Error(`snapshot participants: duplicate key '${participant.key}'`);
+    }
+    this.participants.set(participant.key, participant);
+  }
+
+  get(key: string): SnapshotParticipant | undefined {
+    return this.participants.get(key);
+  }
+
+  has(key: string): boolean {
+    return this.participants.has(key);
+  }
+
+  /** Registered keys, sorted (the canonical capture order). */
+  keys(): string[] {
+    return [...this.participants.keys()].sort();
+  }
+
+  /** Capture every non-reserved participant into the snapshot's `managers`
+   *  record, keys sorted so the serialized snapshot is byte-deterministic. */
+  captureManagers(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const key of this.keys()) {
+      if (key === CHARACTERS_PARTICIPANT_KEY || key === EVENTS_PARTICIPANT_KEY) continue;
+      out[key] = this.participants.get(key)!.capture();
+    }
+    return out;
+  }
+}
+
+/** Wrap live character controllers as the reserved "characters" participant, so a
+ *  host that owns controllers registers ONE object instead of threading a second
+ *  optional param. Capture is sorted by bodyId (canonical); restore matches live
+ *  controllers by bodyId, exactly as the legacy param path always has. */
+export function charactersParticipant(characters: readonly SnapshotableCharacter[]): SnapshotParticipant {
+  return {
+    key: CHARACTERS_PARTICIPANT_KEY,
+    schema: z.array(characterSnapshotSchema),
+    capture: (): CharacterSnapshotEntry[] =>
+      characters
+        .map((c) => {
+          const s = c.serializeState();
+          return { bodyId: c.bodyId, vy: s.vy, grounded: s.grounded, heading: s.heading, swimming: s.swimming ?? false };
+        })
+        .sort((a, b) => a.bodyId - b.bodyId),
+    restore: (state): void => {
+      const entries = state as CharacterSnapshotEntry[];
+      const byId = new Map(characters.map((c) => [c.bodyId, c]));
+      for (const entry of entries) {
+        byId.get(entry.bodyId)?.restoreState({ vy: entry.vy, grounded: entry.grounded, heading: entry.heading, swimming: entry.swimming });
+      }
+    },
+  };
+}
+
+/** Wrap the world-level event registry as the reserved "events" participant. */
+export function eventsParticipant(events: SnapshotableEventRegistry): SnapshotParticipant {
+  return {
+    key: EVENTS_PARTICIPANT_KEY,
+    schema: z.array(z.object({ id: z.string(), spec: EventSpecSchema })),
+    capture: (): EventSpecSnapshotEntry[] => events.listEventSpecs(),
+    restore: (state): void => events.restoreEventSpecs(state as EventSpecSnapshotEntry[]),
+  };
+}
+
 /** A complete, self-contained world snapshot at a tick boundary. */
 export interface WorldSnapshot {
   snapshotVersion: number;
@@ -153,6 +265,12 @@ export interface WorldSnapshot {
   snapshotSeq: number;
   /** mulberry32 internal state of the installed seeded Math.random at T. */
   rngState: number;
+  /** mulberry32 internal state of the world-owned SKILL stream (`world.rng`) at T.
+   *  Additive within schema v3 (the characters[].swimming precedent): absent in a
+   *  pre-skill-stream snapshot, and restore then seeds the skill stream from the
+   *  legacy `rngState` -- exact, not approximate, because no skill draw predates
+   *  the skill stream. */
+  skillRngState?: number;
   /** EntityTable `ent_` allocation counter + version at T. */
   entitySeq: number;
   entityVersion: number;
@@ -165,6 +283,13 @@ export interface WorldSnapshot {
    *  event.define. Carried so a self-sufficient snapshot reloads the world's events without
    *  replaying the pre-snapshot event.define commands. Empty when no events were defined. */
   events: EventSpecSnapshotEntry[];
+  /** Per-manager runtime sim state (inventories, quests, triggers, game state, …), keyed by
+   *  SnapshotParticipant key. Additive-optional within v3 (the characters[].swimming precedent):
+   *  absent/{} on old snapshots → every participant restores empty, exactly the pre-H2 behavior.
+   *  Each entry is validated by its participant's schema at restore; an entry whose key has NO
+   *  registered participant FAILS LOUDLY — a snapshot claiming state the runtime cannot restore
+   *  must never be silently dropped. */
+  managers: Record<string, unknown>;
   /** base64 of the native Rapier physics blob (op_physics_snapshot). */
   physics: string;
 }
@@ -235,7 +360,10 @@ function ecsInternal(ecs: unknown): BitEcsInternal {
   return internal;
 }
 
-function captureEntityIndex(ecs: unknown): EntityIndexSnapshot {
+/** Exported for the registry's per-chain undo ledger (H1): a failed chain must
+ *  rewind the bitECS allocator so replay (which never runs the failed chain)
+ *  allocates the SAME eids for every subsequent command. */
+export function captureEntityIndex(ecs: unknown): EntityIndexSnapshot {
   const idx = ecsInternal(ecs).entityIndex;
   return {
     aliveCount: idx.aliveCount,
@@ -250,10 +378,11 @@ function captureEntityIndex(ecs: unknown): EntityIndexSnapshot {
   };
 }
 
-/** Swap a fresh world's (empty) entity index for a restored one. Safe because the
- *  world is created with no entities before this runs, so future addEntity calls
- *  continue the original allocation sequence exactly. */
-function restoreEntityIndex(ecs: unknown, snap: EntityIndexSnapshot): void {
+/** Swap a world's entity index for a restored one. Safe for a fresh world (no
+ *  entities yet) AND for the registry's chain unwind (every entity the chain
+ *  created has been torn down first), so future addEntity calls continue the
+ *  captured allocation sequence exactly. */
+export function restoreEntityIndex(ecs: unknown, snap: EntityIndexSnapshot): void {
   ecsInternal(ecs).entityIndex = {
     aliveCount: snap.aliveCount,
     maxId: snap.maxId,
@@ -280,12 +409,24 @@ export interface CaptureSnapshotOptions {
   snapshotSeq: number;
   /** Live character controllers whose JS-owned resume state must be captured.
    *  Their kinematic bodies are already in the native blob; this captures the
-   *  vy/grounded/heading the blob cannot reconstruct. */
+   *  vy/grounded/heading the blob cannot reconstruct.
+   *  LEGACY (one release): delegates to the reserved "characters" participant —
+   *  new hosts register charactersParticipant(...) on `participants` instead. */
   characters?: readonly SnapshotableCharacter[];
   /** The world-level event registry whose definitions must be baked into the snapshot so a
-   *  self-sufficient restore reloads them without replaying the event.define commands. Omitted
-   *  when the session defined no events. */
+   *  self-sufficient restore reloads them without replaying the event.define commands.
+   *  LEGACY (one release): delegates to the reserved "events" participant — new hosts get it
+   *  from `core.snapshotParticipants` instead. */
   events?: SnapshotableEventRegistry;
+  /** Every registered owner of runtime-mutated sim state (H2) — the ONE object a host passes
+   *  (registerCoreSkills assembles it as `core.snapshotParticipants`). Non-reserved participants
+   *  capture into `managers`; the reserved "characters"/"events" keys feed the existing
+   *  top-level fields. */
+  participants?: SnapshotParticipantRegistry;
+  /** Set false on hot paths that only need the entity projection (net/server.ts snapshotLine,
+   *  the per-join AoI view): skips every participant capture so the join stays O(relevant).
+   *  Such a snapshot is NOT self-sufficient for manager state — never persist it as a save. */
+  includeManagers?: boolean;
 }
 
 /** Capture a complete world snapshot at the current tick boundary. MUST be called
@@ -316,12 +457,17 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
       localOffset: live?.localOffset,
       material: live?.material,
       behavior: live?.behavior,
+      runtimeBodyIds: live?.runtimeBodyIds !== undefined && live.runtimeBodyIds.length > 0 ? [...live.runtimeBodyIds] : undefined,
     });
   }
-  const characters: CharacterSnapshotEntry[] = (opts.characters ?? []).map((c) => {
-    const s = c.serializeState();
-    return { bodyId: c.bodyId, vy: s.vy, grounded: s.grounded, heading: s.heading, swimming: s.swimming ?? false };
-  });
+  // Legacy params delegate to the reserved participant keys (one-release compat);
+  // a host passing BOTH keeps the explicit param authoritative.
+  const characters: CharacterSnapshotEntry[] = opts.characters !== undefined
+    ? charactersParticipant(opts.characters).capture() as CharacterSnapshotEntry[]
+    : (opts.participants?.get(CHARACTERS_PARTICIPANT_KEY)?.capture() as CharacterSnapshotEntry[] | undefined) ?? [];
+  const events: EventSpecSnapshotEntry[] = opts.events !== undefined
+    ? opts.events.listEventSpecs()
+    : (opts.participants?.get(EVENTS_PARTICIPANT_KEY)?.capture() as EventSpecSnapshotEntry[] | undefined) ?? [];
   const physics = world.ops.op_physics_snapshot();
   return {
     snapshotVersion: SNAPSHOT_VERSION,
@@ -329,12 +475,14 @@ export function captureWorldSnapshot(world: WorldContext, opts: CaptureSnapshotO
     tick: opts.tick,
     snapshotSeq: opts.snapshotSeq,
     rngState: captureRandomState(),
+    skillRngState: world.rng?.getState() ?? captureSkillRandomState(),
     entitySeq: table.seq,
     entityVersion: table.version,
     entityIndex: captureEntityIndex(world.ecs),
     entities,
     characters,
-    events: opts.events?.listEventSpecs() ?? [],
+    events,
+    managers: opts.includeManagers === false ? {} : opts.participants?.captureManagers() ?? {},
     physics: bytesToBase64(physics),
   };
 }
@@ -413,6 +561,8 @@ const snapshotEntitySchema = z.object({
   // snapshot behaviour is rejected on parse, never trusted). Optional so a pre-behaviour snapshot
   // (or a behaviour-less entity) still parses.
   behavior: BehaviorSpecSchema.optional(),
+  // Standalone collider bodies owned by this entity (M18). Optional: pre-M18 snapshots lack it.
+  runtimeBodyIds: z.array(int).optional(),
 });
 const characterSnapshotSchema = z.object({
   bodyId: int,
@@ -428,6 +578,8 @@ const worldSnapshotSchema = z.object({
   tick: int,
   snapshotSeq: int,
   rngState: int,
+  // Additive within v3: absent -> restore seeds the skill stream from rngState.
+  skillRngState: int.optional(),
   entitySeq: int,
   entityVersion: int,
   entityIndex: entityIndexSchema,
@@ -436,6 +588,10 @@ const worldSnapshotSchema = z.object({
   // World-level event definitions — each spec validated by the real EventSpec schema. Optional +
   // defaulted so a pre-events snapshot still parses (additive, back-compatible with v3).
   events: z.array(z.object({ id: z.string(), spec: EventSpecSchema })).optional().default([]),
+  // Per-participant manager state (H2). Optional + defaulted so a pre-participant snapshot still
+  // parses; each entry is validated by its participant's OWN schema at restore time (parse cannot
+  // know the registry).
+  managers: z.record(z.string(), z.unknown()).optional().default({}),
   physics: z.string(),
 });
 
@@ -479,9 +635,14 @@ export function restoreSnapshot(
   snapshot: WorldSnapshot,
   characters?: readonly SnapshotableCharacter[],
   events?: SnapshotableEventRegistry,
+  participants?: SnapshotParticipantRegistry,
 ): void {
-  // 1. RNG: resume the seeded generator mid-stream.
+  // 1. RNG: resume BOTH seeded generators mid-stream -- the global Math.random
+  //    slot and the world-owned skill stream delta skills draw via ctx.world.rng.
+  //    A pre-skillRngState snapshot seeds the skill stream from the legacy global
+  //    state (exact: no skill draw predates the skill stream).
   installRandomState(snapshot.rngState);
+  world.rng = installSkillRandomState(snapshot.skillRngState ?? snapshot.rngState);
   // 2. Native physics: deserialize the real Rapier state (body ids stay stable).
   world.ops.op_physics_restore(base64ToBytes(snapshot.physics));
   // 3. bitECS allocator: future addEntity continues the original eid sequence.
@@ -512,21 +673,52 @@ export function restoreSnapshot(
     if (e.parent !== undefined) world.entities.setParent(e.id, e.parent, e.localOffset);
     if (e.material !== undefined) world.entities.bindMaterial(e.id, e.material);
     if (e.behavior !== undefined) world.entities.bindBehavior(e.id, e.behavior);
+    // Standalone owned colliders (M18): the bodies came back inside the physics blob (step 2,
+    // handles stable), but the remove-body dispose closure is runtime-only — RE-ARM it, so
+    // destroying this restored entity removes its collider instead of leaking an invisible wall.
+    if (e.runtimeBodyIds !== undefined && e.runtimeBodyIds.length > 0) {
+      const ids = [...e.runtimeBodyIds];
+      world.entities.bindRuntimeBodies(e.id, ids);
+      world.entities.chainRuntimeDispose(e.id, "snapshot-restored colliders", () => {
+        const errors: unknown[] = [];
+        for (const bodyId of ids) {
+          try { world.ops.op_physics_remove_body(bodyId); } catch (error) { errors.push(error); }
+        }
+        if (errors.length > 0) throw new AggregateError(errors, `restored collider removal failed for '${e.id}'`);
+      });
+    }
   }
   // World-level events: replace the registry's contents with the snapshot's baked definitions, so
   // a self-sufficient restore reloads them without replaying the pre-snapshot event.define stream.
+  // Legacy `events` param wins for one release; otherwise the reserved participant restores.
   if (events !== undefined) events.restoreEventSpecs(snapshot.events);
+  else participants?.get(EVENTS_PARTICIPANT_KEY)?.restore(snapshot.events);
   // 6. Character controllers: reinstall the JS-owned vy/grounded/heading/swim mode the
   //    native blob cannot carry (matched to live controllers by body id). The
-  //    body transform itself was restored in step 2.
+  //    body transform itself was restored in step 2. Legacy `characters` param wins
+  //    for one release; otherwise the reserved participant restores.
   if (characters !== undefined && snapshot.characters.length > 0) {
-    const byId = new Map(characters.map((c) => [c.bodyId, c]));
-    for (const entry of snapshot.characters) {
-      const controller = byId.get(entry.bodyId);
-      if (controller !== undefined) {
-        controller.restoreState({ vy: entry.vy, grounded: entry.grounded, heading: entry.heading, swimming: entry.swimming });
-      }
+    charactersParticipant(characters).restore(snapshot.characters);
+  } else if (characters === undefined && snapshot.characters.length > 0) {
+    participants?.get(CHARACTERS_PARTICIPANT_KEY)?.restore(snapshot.characters);
+  }
+  // 7. Manager state (H2): every `managers` entry restores through its registered
+  //    participant, validated by that participant's own schema. An entry with NO
+  //    registered participant fails loudly — the snapshot claims state this runtime
+  //    cannot restore, and silently dropping it would be an incomplete world lying
+  //    about being complete. Absent/{} (pre-participant snapshots) restores nothing:
+  //    exactly the pre-H2 behavior.
+  const managerKeys = Object.keys(snapshot.managers ?? {}).sort();
+  for (const key of managerKeys) {
+    const participant = participants?.get(key);
+    if (participant === undefined) {
+      throw new Error(`world snapshot: managers entry '${key}' has no registered snapshot participant — cannot restore state the runtime does not own`);
     }
+    const parsed = participant.schema.safeParse(snapshot.managers[key]);
+    if (!parsed.success) {
+      throw new Error(`world snapshot: managers entry '${key}' failed its participant schema: ${parsed.error.message}`);
+    }
+    participant.restore(parsed.data);
   }
 }
 
@@ -545,10 +737,15 @@ export async function recoverWorld(
   deps: ReplayDeps,
   characters?: readonly SnapshotableCharacter[],
   events?: SnapshotableEventRegistry,
+  /** The FRESH world's participant registry (H2). A thunk is accepted because the
+   *  registry only exists after deps.makeRegistry runs (the caller's makeRegistry
+   *  closure stashes its CoreSkills and the thunk reads it). */
+  participants?: SnapshotParticipantRegistry | (() => SnapshotParticipantRegistry | undefined),
 ): Promise<RecoveryResult> {
   const tracer = deps.tracer ?? new LiminaTracer("ses_worldlog_recover");
   const registry = deps.makeRegistry(tracer);
   const world = deps.makeWorld();
+  const resolvedParticipants = typeof participants === "function" ? participants() : participants;
 
   // Fresh transform storage: zero the global SoA so any entity the snapshot does
   // not restore reads back as 0 (and is caught by the bit-identical check), then
@@ -556,7 +753,7 @@ export async function recoverWorld(
   Position.x.fill(0); Position.y.fill(0); Position.z.fill(0);
   Rotation.x.fill(0); Rotation.y.fill(0); Rotation.z.fill(0); Rotation.w.fill(0);
   Scale.x.fill(0); Scale.y.fill(0); Scale.z.fill(0);
-  restoreSnapshot(world, snapshot, characters, events);
+  restoreSnapshot(world, snapshot, characters, events, resolvedParticipants);
 
   let deltaSkillInvokes = 0;
   let deltaPhysicsOps = 0;

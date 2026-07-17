@@ -3,21 +3,27 @@
 //
 // Three hooks, matching the three command sources:
 //   1. seed()       -- installs the seeded PRNG (Math.random) and records the seed.
-//   2. wrapOps(ops) -- returns an EngineOps proxy that records every MUTATING
-//                      native physics op issued OUTSIDE a skill (depth 0). Ops
-//                      issued INSIDE a skill (depth > 0) are NOT recorded -- the
-//                      skill command reproduces them on re-invoke.
+//   2. wrapOps(ops) -- returns an EngineOps proxy that records EVERY mutating
+//                      native physics op that reaches it. Skill handlers never
+//                      reach it: attach() threads a chain-scoped world facade
+//                      whose `ops` is a NON-recording pass-through (chainOps), so
+//                      an in-skill op is reproduced by its skill command on
+//                      re-invoke instead of being double-logged.
 //   3. attach(reg)  -- patches SkillRegistry.invoke (the single mutation choke
 //                      point) to record each top-level invocation (tool + input +
 //                      tick + actor + perms). Agent actions flow through the same
 //                      registry, so they are captured here with no agent coupling.
 //
-// A single `depth` counter is shared by the ops proxy and the invoke hook so a
-// physics op is recorded iff it is NOT nested inside a skill invocation.
+// Classification is carried IN THE DATA everywhere (chain ids on skill commands;
+// which ops proxy a call reaches for physics ops) -- never in ambient module
+// state. An ambient depth/flag counter spans a handler's whole ASYNC lifetime, so
+// a fixed-step loop stepping physics while an async skill was in flight had its
+// steps misclassified as in-skill and silently dropped from the log (review C3).
 
 import type { EngineOps } from "../engine.ts";
 import type { MCPResponse } from "../mcp/protocol.ts";
-import { skillEffect, type InvokeBase, type SkillRegistry } from "../skills/registry.ts";
+import type { Tracer } from "../observability/event.ts";
+import { skillEffect, type InvokeBase, type SkillRegistry, type WorldContext } from "../skills/registry.ts";
 import {
   installSeededRandom,
   LOG_VERSION,
@@ -25,6 +31,7 @@ import {
   PHYSICS_OP_OUT_BUFFER,
   RECORDED_PHYSICS_METHODS,
   serializeWorldLog,
+  type PhysicsOpName,
   type SkillCommand,
   type WorldCommand,
   type WorldLogMeta,
@@ -98,7 +105,7 @@ function cloneInput(value: unknown, seen: Set<object> = new Set()): unknown {
 }
 
 export interface WorldRecorderOptions {
-  /** Idle-step cut (kernel K-compaction): when true, a depth-0 `step` op is APPLIED as always but
+  /** Idle-step cut (kernel K-compaction): when true, a top-level `step` op is APPLIED as always but
    *  RECORDED only if it could have changed replay-relevant state (any tracked dynamic body's
    *  transform changed bit-wise, or within a short grace window after activity -- see
    *  step-filter.ts for the full correctness argument). Long-lived servers enable this so an idle
@@ -112,11 +119,10 @@ export class WorldRecorder {
   readonly commands: WorldCommand[] = [];
   /** Current simulation tick; the scenario updates it each loop iteration. */
   tick = 0;
-  /** Depth-0 steps applied but NOT recorded by the idle-step filter (see filterIdleSteps). */
+  /** Top-level steps applied but NOT recorded by the idle-step filter (see filterIdleSteps). */
   droppedIdleSteps = 0;
   private readonly stepFilter?: IdleStepFilter;
   private seq = 0;
-  private depth = 0;
   /** Chain-id minted per TOP-LEVEL invocation; a nested re-invoke inherits its
    *  parent's id via `ExecutionContext.chainId`. Classification is by this id, NOT
    *  by a global depth/flag counter: a flag cannot tell an INDEPENDENT concurrent
@@ -125,6 +131,24 @@ export class WorldRecorder {
    *  the second agent's command. The id travels in the data, so it is immune to
    *  single-thread interleaving. */
   private chainSeq = 0;
+  /** Head chain ids currently in flight (data, not a counter). Feeds the C3
+   *  tripwire: a mutating op reaching the RECORDING proxy while any chain is live
+   *  is recorded (the tick loop is the legitimate issuer) but also emits a
+   *  `worldlog.ops.recordedDuringChain` trace event, so a stray in-skill path that
+   *  captured the recording proxy is visible instead of silent. */
+  private readonly liveChains = new Set<string>();
+  /** Recording proxy -> the base ops it wraps. chainOps must call through the BASE
+   *  ops: calling through the recording proxy would record the in-skill op. */
+  private readonly recordingProxyBase = new WeakMap<EngineOps, EngineOps>();
+  private readonly chainOpsCache = new WeakMap<EngineOps, EngineOps>();
+  /** ONE facade per world (not per chain): skill modules key WeakMaps by
+   *  WorldContext identity (functional-building's reconciledVersions, three.ts
+   *  scene-light state), so the facade's identity must be stable across chains.
+   *  The facade only needs to be "not the recording proxy's world", nothing more. */
+  private readonly worldFacades = new WeakMap<WorldContext, WorldContext>();
+  private readonly facades = new WeakSet<object>();
+  /** The attached registry's tracer; carries the C3 tripwire event. */
+  private tracer?: Tracer;
   private readonly finalizedSeqs = new Set<number>();
   private finalizedPrefix = 0;
   private compactedPrefix = 0;
@@ -148,12 +172,15 @@ export class WorldRecorder {
     return installSeededRandom(seed, opts.forceInstall === true);
   }
 
-  /** Wrap an EngineOps so mutating physics ops issued at depth 0 are recorded.
-   *  Reads and host services pass straight through. */
+  /** Wrap an EngineOps so EVERY mutating physics op that reaches the proxy is
+   *  recorded. Reads and host services pass straight through. In-skill ops never
+   *  reach this proxy (attach() hands skills a chainOps facade), so whatever
+   *  arrives here is, by construction, a top-level op -- including a tick loop's
+   *  `op_physics_step` issued while an async skill chain is still in flight. */
   wrapOps(ops: EngineOps): EngineOps {
     const rec = this;
     const methods = new Map<PropertyKey, unknown>();
-    return new Proxy(ops, {
+    const proxy = new Proxy(ops, {
       get(target, prop, receiver) {
         if (methods.has(prop)) return methods.get(prop);
         const value = Reflect.get(target, prop, receiver);
@@ -176,38 +203,34 @@ export class WorldRecorder {
             // correctness argument in step-filter.ts. Live behavior is untouched either way: the
             // native step always runs; only its LOG RECORD is conditional.
             const result = method.apply(target, args);
-            if (rec.depth === 0) {
-              const tick = rec.tick;
-              if (tick > rec.maxTick) rec.maxTick = tick;
-              if (filter.shouldRecordStep(target)) {
-                const seq = rec.seq++;
-                rec.commands.push({ kind: "physics", seq, tick, op: "step", args: [] });
-                rec.markFinalized(seq);
-              } else {
-                rec.droppedIdleSteps++;
-              }
-            } else {
-              // A nested (in-skill) step is reproduced by its skill command, not recorded here --
-              // but it advanced the sim behind the filter's cache, so signal activity.
-              filter.observe("step", args, result);
-            }
-            return result;
-          }
-          if (rec.depth === 0) {
             const tick = rec.tick;
             if (tick > rec.maxTick) rec.maxTick = tick;
-            // Ops with a trailing out-buffer (e.g. move_character) carry no input in
-            // that buffer; record only the leading scalar inputs so the logged args
-            // stay `number[]` (replay re-supplies a fresh scratch buffer).
-            const args2 =
-              PHYSICS_OP_OUT_BUFFER[opName] === undefined ? args.slice() : args.slice(0, args.length - 1);
-            const seq = rec.seq++;
-            rec.commands.push({ kind: "physics", seq, tick, op: opName, args: args2 });
-            rec.markFinalized(seq);
+            let recorded = false;
+            if (filter.shouldRecordStep(target)) {
+              const seq = rec.seq++;
+              rec.commands.push({ kind: "physics", seq, tick, op: "step", args: [] });
+              rec.markFinalized(seq);
+              recorded = true;
+            } else {
+              rec.droppedIdleSteps++;
+            }
+            rec.opDuringChainTripwire("step", recorded);
+            return result;
           }
+          const tick = rec.tick;
+          if (tick > rec.maxTick) rec.maxTick = tick;
+          // Ops with a trailing out-buffer (e.g. move_character) carry no input in
+          // that buffer; record only the leading scalar inputs so the logged args
+          // stay `number[]` (replay re-supplies a fresh scratch buffer).
+          const args2 =
+            PHYSICS_OP_OUT_BUFFER[opName] === undefined ? args.slice() : args.slice(0, args.length - 1);
+          const seq = rec.seq++;
+          rec.commands.push({ kind: "physics", seq, tick, op: opName, args: args2 });
+          rec.markFinalized(seq);
+          rec.opDuringChainTripwire(opName, true);
           const result = method.apply(target, args);
-          // The filter tracks dynamic bodies across EVERY wrapped op at ANY depth (skills call
-          // this same proxy), so its body set stays complete even for ops the log doesn't record.
+          // The filter tracks dynamic bodies across every RECORDED op; in-skill ops
+          // feed it through the chainOps facade, so its body set stays complete.
           filter?.observe(opName, args, result);
           return result;
         };
@@ -215,6 +238,90 @@ export class WorldRecorder {
         return wrapped;
       },
     });
+    this.recordingProxyBase.set(proxy, ops);
+    return proxy;
+  }
+
+  /** C3 tripwire: diagnosis, not behavior. The op WAS handled normally (see
+   *  `recorded`); the event only makes a mutating op that reached the recording
+   *  proxy while a skill chain was live visible. The tick loop stepping physics
+   *  under an in-flight async skill is legitimate and now records truthfully; a
+   *  skill-held reference to the recording proxy would double-apply on replay
+   *  (recorded here AND reproduced by its skill command) -- this event is how
+   *  that stray path is found. */
+  private opDuringChainTripwire(op: PhysicsOpName, recorded: boolean): void {
+    if (this.liveChains.size === 0 || this.tracer === undefined) return;
+    this.tracer.emit({
+      type: "worldlog.ops.recordedDuringChain",
+      actorId: "worldlog",
+      threadId: this.sessionId,
+      parentEventId: null,
+      causedBy: [],
+      payload: { op, recorded, liveChains: [...this.liveChains] },
+    });
+  }
+
+  /** Chain-scoped, NON-recording ops facade skill handlers execute against: same
+   *  proxy shape as wrapOps but it never appends a command -- an in-skill op is
+   *  reproduced by its recorded skill command on re-invoke. It still feeds
+   *  `stepFilter.observe` (the filter's body-set completeness depends on seeing
+   *  in-skill spawns/impulses/nested steps). Accepts either the recording proxy
+   *  (unwrapped to its base ops so the call-through cannot record) or bare ops;
+   *  cached per base so the facade's identity is stable across chains. */
+  chainOps(ops: EngineOps): EngineOps {
+    const base = this.recordingProxyBase.get(ops) ?? ops;
+    const cached = this.chainOpsCache.get(base);
+    if (cached !== undefined) return cached;
+    const rec = this;
+    const methods = new Map<PropertyKey, unknown>();
+    const facade = new Proxy(base, {
+      get(target, prop, receiver) {
+        if (methods.has(prop)) return methods.get(prop);
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        const method = value as (...a: number[]) => unknown;
+        const opName = typeof prop === "string" ? RECORDED_PHYSICS_METHODS[prop] : undefined;
+        if (opName === undefined) {
+          const bound = method.bind(target);
+          methods.set(prop, bound);
+          return bound;
+        }
+        const wrapped = (...args: number[]): unknown => {
+          const result = method.apply(target, args);
+          // A nested step advanced the sim behind the idle-step filter's transform
+          // cache; spawns/impulses create or energize bodies. Observing at every
+          // chain depth keeps the filter's "record one step too many" bias intact.
+          rec.stepFilter?.observe(opName, args, result);
+          return result;
+        };
+        methods.set(prop, wrapped);
+        return wrapped;
+      },
+    });
+    this.chainOpsCache.set(base, facade);
+    return facade;
+  }
+
+  /** The world a skill chain executes against: a Proxy over the SHARED WorldContext
+   *  whose `get` intercepts ONLY `ops` (returning the non-recording chainOps
+   *  facade) and forwards everything else. Deliberately NOT a spread: skills
+   *  mutate shared world fields in place (`world.post`, `world.lods`) and those
+   *  writes must land on the one real object. Nested invokes inherit the facade
+   *  for free because they forward `ctx.world`. */
+  private chainWorld(world: WorldContext): WorldContext {
+    if (this.facades.has(world)) return world;
+    const cached = this.worldFacades.get(world);
+    if (cached !== undefined) return cached;
+    const rec = this;
+    const facade = new Proxy(world, {
+      get(target, prop, receiver) {
+        if (prop === "ops") return rec.chainOps(Reflect.get(target, prop, receiver) as EngineOps);
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    this.worldFacades.set(world, facade);
+    this.facades.add(facade);
+    return facade;
   }
 
   /** Patch a registry instance's invoke() to record each top-level invocation.
@@ -230,10 +337,13 @@ export class WorldRecorder {
    *  thread (a coordinated agent team): each agent's chain has its own id, so each
    *  records exactly one command and none is silently dropped. (The embedded
    *  deno_core host does not wire AsyncLocalStorage, so ambient context is not an
-   *  option.) `depth` is retained solely for the ops proxy (a physics op is recorded
-   *  only when issued outside any skill chain). */
+   *  option.) Physics ops are classified the same way: the chain executes against
+   *  a world facade whose `ops` never records (chainOps), so the recording proxy
+   *  only ever sees genuinely top-level ops -- even ones interleaved with an
+   *  in-flight async chain. */
   attach(registry: SkillRegistry): void {
     const rec = this;
+    rec.tracer = registry.tracer;
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
       const isHead = base.chainId === undefined;
@@ -274,11 +384,13 @@ export class WorldRecorder {
           if (profile !== undefined) cmd.profile = profile;
           rec.commands.push(cmd);
         }
+        rec.liveChains.add(chainId);
       }
-      // `depth` governs the OPS proxy (a physics op is recorded iff issued OUTSIDE
-      // any skill chain); increment it around the whole chain, decrement on settle.
-      ++rec.depth;
-      const childBase: InvokeBase = { ...base, chainId };
+      // The chain executes against the world facade: same shared WorldContext, but
+      // `ops` resolves to the non-recording chainOps pass-through. Nested invokes
+      // forward ctx.world (already the facade) + ctx.chainId, so the whole chain
+      // rides one facade with no per-call rewrapping.
+      const childBase: InvokeBase = { ...base, chainId, world: rec.chainWorld(base.world) };
       return original(name, input, childBase)
         .then((res) => {
           if (cmd !== undefined && !res.success) {
@@ -322,11 +434,10 @@ export class WorldRecorder {
           throw err;
         })
         .finally(() => {
-          // Never throw here: a depth mismatch just means a concurrent sibling/child
-          // is still in flight, which must behave exactly as before. Each HEAD removes
-          // only its OWN chain id; a nested call (not a head) leaves the set untouched.
-          --rec.depth;
+          // Each HEAD removes only its OWN chain id; a nested call (not a head)
+          // leaves the set untouched, so a concurrent sibling chain stays live.
           if (isHead) {
+            rec.liveChains.delete(chainId);
             if (cmd !== undefined) rec.markFinalized(cmd.seq);
           }
         });

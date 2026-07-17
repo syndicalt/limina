@@ -19,7 +19,7 @@ import { createEcsWorld } from "../ecs/world.ts";
 import { createTransformStorage } from "../ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { LiminaTracer } from "../observability/event.ts";
-import { registerCoreSkills } from "../skills/index.ts";
+import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { SkillRegistry, skillEffect, type WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/engine.ts";
@@ -29,6 +29,7 @@ import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
 import {
   captureWorldState,
+  getInstalledSkillRng,
   parseWorldLog,
   PHYSICS_OP_FN,
   PHYSICS_OP_OUT_BUFFER,
@@ -210,6 +211,8 @@ function sameState(a: EntityState, b: EntityState): boolean {
 export class AuthoritativeServer {
   readonly world: WorldContext;
   readonly registry: SkillRegistry;
+  /** The core skill managers + their snapshot-participant registry (H2). */
+  readonly core: CoreSkills;
   readonly recorder: WorldRecorder;
   private readonly durableLog?: DurableWorldLog;
   private durableLogClosed = false;
@@ -277,7 +280,16 @@ export class AuthoritativeServer {
     this.allowedProfiles = opts.allowedProfiles;
     this.onClientMessage = opts.onClientMessage;
     this.registry = new SkillRegistry(tracer, opts.policy);
-    registerCoreSkills(this.registry);
+    // H1: a failed skill-chain rollback leaves the live world indeterminate —
+    // exactly the authoring-kernel poison contract, so it maps to the SAME
+    // fail-stop (no mutation, no simulation, no dirty log suffix after it).
+    this.registry.onRollbackFailure((error) => {
+      this.poisonAuthority(error);
+    });
+    // H2: keep the CoreSkills handle — its snapshotParticipants registry is the ONE
+    // object every snapshot capture/restore on this server passes (no hand-wired
+    // characters/events params).
+    this.core = registerCoreSkills(this.registry);
 
     this.recorder = new WorldRecorder(opts.sessionId, { filterIdleSteps: opts.recordIdleSteps !== true });
     let persisted: WorldCommand[] | undefined;
@@ -330,6 +342,9 @@ export class AuthoritativeServer {
       scene,
       camera,
       ops: this.recOps,
+      // The world-owned skill stream installed by the seed above (M4): skill
+      // handlers draw ctx.world.rng, immune to render-context Math.random draws.
+      rng: getInstalledSkillRng(),
       mode: "headless",
     };
 
@@ -940,8 +955,12 @@ export class AuthoritativeServer {
         world: this.world,
       });
       outcomes.push({ intent: it, result });
-      if (this.authoring?.kernel.poisoned) {
-        this.poisonAuthority(this.authoring.kernel.poisonReason ?? new Error("authoring transaction kernel is poisoned"));
+      // Registry rollback poison (H1) arrives via onRollbackFailure -> poisonAuthority,
+      // so authorityIntegrityFailure catches it mid-batch exactly like a poisoned kernel.
+      if (this.authoring?.kernel.poisoned || this.authorityIntegrityFailure !== undefined) {
+        this.poisonAuthority(this.authoring?.kernel.poisoned === true
+          ? (this.authoring.kernel.poisonReason ?? new Error("authoring transaction kernel is poisoned"))
+          : (this.authorityIntegrityFailure ?? this.registry.poisoned ?? new Error("authoritative registry is poisoned")));
         // Nothing after a failed rollback may execute against the indeterminate
         // world. Reject this whole batch plus every intent accepted behind it.
         const remainingBatch = queue.slice(outcomes.length);
@@ -1118,6 +1137,11 @@ export class AuthoritativeServer {
     if (this.authoring?.kernel.poisoned && this.authorityIntegrityFailure === undefined) {
       this.poisonAuthority(this.authoring.kernel.poisonReason ?? new Error("authoring transaction kernel is poisoned"));
     }
+    // Belt-and-braces for the H1 registry poison: onRollbackFailure already maps it,
+    // but a registry poisoned before the handler was subscribed must still fail-stop.
+    if (this.registry.poisoned !== undefined && this.authorityIntegrityFailure === undefined) {
+      this.poisonAuthority(this.registry.poisoned);
+    }
     return this.durableLogFailure ?? this.authorityIntegrityFailure;
   }
 
@@ -1250,6 +1274,10 @@ export class AuthoritativeServer {
       sessionId: this.sessionId,
       tick: this.tick,
       snapshotSeq: this.recorder.flushableCount(),
+      participants: this.core.snapshotParticipants,
+      // Hot-path exemption (H2): the per-join view projects entities only and must
+      // stay O(relevant) — manager capture is skipped, never persisted from here.
+      includeManagers: false,
     });
     const entities: EntityState[] = [];
     for (const e of snap.entities) {

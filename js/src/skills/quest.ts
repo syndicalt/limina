@@ -166,6 +166,43 @@ export class QuestManager {
     q.tracked = true;
     return true;
   }
+
+  /** Deterministic capture of the whole manager (snapshot participant, H2): definitions
+   *  sorted by id, per-entity instance lists by entity (each list keeps its offer order —
+   *  it is observable via quest.list). */
+  captureSnapshot(): QuestManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      definitions: [...this.definitions.values()].sort((a, b) => byString(a.id, b.id)).map((d) => ({
+        ...d,
+        prerequisites: [...d.prerequisites],
+        objectives: d.objectives.map((o) => ({ ...o })),
+        followUpQuests: [...d.followUpQuests],
+      })),
+      instances: [...this.instances.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, quests]) => ({
+        entity,
+        quests: quests.map((q) => ({ ...q, objectives: q.objectives.map((o) => ({ ...o })) })),
+      })),
+    };
+  }
+
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap: QuestManagerSnapshot): void {
+    this.definitions.clear();
+    this.instances.clear();
+    for (const d of snap.definitions) {
+      this.definitions.set(d.id, { ...d, prerequisites: [...d.prerequisites], objectives: d.objectives.map((o) => ({ ...o })), followUpQuests: [...d.followUpQuests] });
+    }
+    for (const e of snap.instances) {
+      this.instances.set(e.entity, e.quests.map((q) => ({ ...q, objectives: q.objectives.map((o) => ({ ...o })) })));
+    }
+  }
+}
+
+/** The whole QuestManager state as the snapshot participant carries it (H2). */
+export interface QuestManagerSnapshot {
+  definitions: QuestDef[];
+  instances: { entity: string; quests: QuestInstance[] }[];
 }
 
 // ───────────────────────────── input schemas (pure) ─────────────────────────────

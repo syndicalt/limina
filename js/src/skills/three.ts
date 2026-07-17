@@ -9,6 +9,7 @@ import type { AssetRegistry } from "../asset-registry.ts";
 import { createMaterial, getMaterialParams, isMaterialName } from "../materials/palette.ts";
 import type { MaterialRegistry } from "../materials/material-registry.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import { teardownEntity } from "./entity-teardown.ts";
 import { sha256 } from "../world/sha256.mjs";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -1051,7 +1052,13 @@ export async function parseGltfScene(assetId: string, bytes: Uint8Array, cache: 
  *  records the content `hash` on its LoadedResourceMetadata. Both three.loadGLTF and
  *  asset.place call this — no duplicated loader/rehome code. */
 export async function loadGltfIntoScene(
-  ctx: { world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
+  ctx: {
+    world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } };
+    /** ExecutionContext.undo (H1 chain compensation). Optional so non-skill
+     *  callers with a bare {world} still compile; every registry-driven caller
+     *  passes the real ctx, enrolling the created entity automatically. */
+    undo?: (label: string, fn: () => void) => void;
+  },
   assetId: string,
   bytes: Uint8Array,
   hash: string,
@@ -1101,6 +1108,15 @@ export async function loadGltfIntoScene(
   const entity = root !== undefined
     ? ctx.world.entities.create({ eid, mesh: root, resource })
     : ctx.world.entities.create({ eid, origin: { tool: "asset.load", input: { assetId, position: placement.position } } });
+  // H1 compensation: a failure anywhere in this skill chain tears the entity back
+  // down. teardownEntity is the canonical four-part teardown and runs the entry's
+  // runtimeDispose first, so later-armed owned resources (asset.place's collider)
+  // ride along; it no-ops on an already-destroyed id, so overlapping undos are safe.
+  // ctx.world here is the structural narrow view of the one real WorldContext every
+  // registry caller passes — the cast re-widens it for the teardown.
+  ctx.undo?.(`gltf entity ${assetId}`, () => {
+    teardownEntity(ctx.world as unknown as WorldContext, entity);
+  });
   return { entity, resource };
 }
 
@@ -1113,7 +1129,11 @@ const INERT_GLTF_TRANSFORM = { position: { set() {} }, quaternion: { set() {} },
  *  the collider, authored from level-0 bytes by asset.placeLod, is what the worker's physics needs).
  *  Returns the LOD object so the caller can register it for the per-frame `lod.update(camera)` pass. */
 export async function loadLodIntoScene(
-  ctx: { world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } } },
+  ctx: {
+    world: { simWorker?: boolean; gltfCache?: GltfSceneCache; scene: SceneLike; ecs: World; entities: { create(e: { eid: number; mesh?: SceneObject; resource?: LoadedResourceMetadata; origin?: EntityOrigin }): string } };
+    /** ExecutionContext.undo (H1) — same enrollment contract as loadGltfIntoScene. */
+    undo?: (label: string, fn: () => void) => void;
+  },
   levels: ReadonlyArray<{ assetId: string; bytes: Uint8Array; hash: string; distance: number }>,
   placement: GltfPlacement,
 ): Promise<{ entity: string; resource: LoadedResourceMetadata; lod?: SceneObject }> {
@@ -1157,6 +1177,10 @@ export async function loadLodIntoScene(
   const entity = lod !== undefined
     ? ctx.world.entities.create({ eid, mesh: lod, resource })
     : ctx.world.entities.create({ eid, origin: { tool: "asset.loadLod", input: { assetId: base.assetId, position: placement.position } } });
+  // H1 compensation — same contract as loadGltfIntoScene above.
+  ctx.undo?.(`gltf lod entity ${base.assetId}`, () => {
+    teardownEntity(ctx.world as unknown as WorldContext, entity);
+  });
   return { entity, resource, lod };
 }
 

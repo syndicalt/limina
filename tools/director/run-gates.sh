@@ -42,7 +42,11 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p76_village_layout_determinism.ts
   js/test/p77_village_geometry_determinism.ts
   js/test/p78_scatter_exclusion_determinism.ts
-  js/test/p79_grass_exclusion_determinism.ts)
+  js/test/p79_grass_exclusion_determinism.ts
+  js/test/p101_worldlog_chain_ops.ts
+  js/test/p102_ctx_rng_context_independence.ts
+  js/test/p103_partial_failure_atomicity.ts
+  js/test/p104_snapshot_participants.ts)
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -213,6 +217,7 @@ host_gate "grass-strategy-static" "" node --test tools/material/grass-strategy-s
 host_gate "js static suites (node --test)" "" node --test \
   js/test/browser_camera_framing_static.test.cjs \
   js/test/browser_derived_transaction_static.test.cjs \
+  js/test/browser_derived_verify_static.test.cjs \
   js/test/browser_editor_navigation_static.test.cjs \
   js/test/design_ref.test.mjs \
   js/test/map_coordinate_frame.test.mjs \

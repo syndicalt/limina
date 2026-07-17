@@ -25,7 +25,7 @@ import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { LiminaTracer } from "../observability/event.ts";
 import { registerCoreSkills } from "../skills/index.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
-import { captureWorldState, type WorldStateSnapshot } from "../worldlog/log.ts";
+import { captureWorldState, getInstalledSkillRng, type WorldStateSnapshot } from "../worldlog/log.ts";
 import { exportGame, canExport } from "./publish.ts";
 import type { ExportFiles } from "../export/package.ts";
 
@@ -195,6 +195,7 @@ export async function compileWorldToExport(gds: GameDesignSpec, opts: CompileToE
   recorder.seed(opts.seed ?? 0);
   const recOps = recorder.wrapOps(ops);
   const world = makeHeadlessWorld(recOps);
+  world.rng = getInstalledSkillRng(); // the world-owned skill stream the seed installed
   recOps.op_physics_create_world(opts.gravity ?? -9.81); // recorded world setup so replay rebuilds it
   const result = await authorWorldSlice(registry, world, gds, {
     sessionId: session, tick: 0, defaultAgentId: opts.agentId ?? "human_editor", defaultPerms: opts.permissions,

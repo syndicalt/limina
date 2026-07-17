@@ -10,8 +10,8 @@
 // THE OPT-IN SUPERSTRUCTURE: determinism/world-log recording is a layer you WRAP ON, not
 // the mandatory authoring path. With `record` omitted, nothing wraps the ops and the game
 // pays zero recorder cost. With `record` supplied, the same context transparently:
-//   - installs the seeded PRNG (recorder.seed),
-//   - wraps `ctx.ops` so direct-path physics ops issued at depth 0 are logged, and
+//   - installs the seeded PRNG (recorder.seed; both streams — Math.random + world.rng),
+//   - wraps `ctx.ops` so direct-path physics ops (issued outside any skill) are logged, and
 //   - patches `registry.invoke` so any authoring skills are logged too,
 // yielding a replay-complete world-log (recorder.toJsonl()) — without changing game code.
 //
@@ -32,6 +32,7 @@ import { SkillRegistry, type InvokeBase, type WorldContext } from "../skills/reg
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { WorldRecorder } from "../worldlog/recorder.ts";
+import { getInstalledSkillRng, type SeededRng } from "../worldlog/log.ts";
 import type { PolicyEngine } from "../policy/engine.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 
@@ -144,12 +145,17 @@ function assemble(p: AssembleParams): GameContext {
 
   let recorder: WorldRecorder | undefined;
   let activeOps = p.baseOps;
+  let skillRng: SeededRng | undefined;
   if (p.record) {
     recorder = new WorldRecorder(p.session);
-    // Seed BEFORE any command can consume randomness; install the deterministic PRNG.
-    if (p.record.seed !== undefined) recorder.seed(p.record.seed);
-    // Wrap ops so direct-path physics (depth 0) is logged, and patch invoke so authoring
-    // skills are logged — BOTH before the game authors or steps anything.
+    // Seed BEFORE any command can consume randomness; install the deterministic PRNG
+    // (both streams: global Math.random + the world-owned skill stream below).
+    if (p.record.seed !== undefined) {
+      recorder.seed(p.record.seed);
+      skillRng = getInstalledSkillRng();
+    }
+    // Wrap ops so direct-path (outside-any-skill) physics is logged, and patch invoke
+    // so authoring skills are logged — BOTH before the game authors or steps anything.
     activeOps = recorder.wrapOps(p.baseOps);
     recorder.attach(registry);
   }
@@ -166,6 +172,7 @@ function assemble(p: AssembleParams): GameContext {
     lods: [],
     renderer: p.renderer,
     ops: activeOps,
+    rng: skillRng,
     agents: p.agents,
     width: p.width,
     height: p.height,

@@ -11,6 +11,7 @@ import { LiminaTracer, type Tracer } from "../observability/event.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import {
   captureWorldState,
+  getInstalledSkillRng,
   installSeededRandom,
   PHYSICS_OP_FN,
   syncAllBodies,
@@ -61,7 +62,8 @@ export class ReplayPlayer {
   private async apply(cmd: WorldCommand): Promise<boolean> {
     // force: a playback run REPLACES any previously-installed world RNG (the documented
     // legitimate re-install), so an unforced install would warn on every reload.
-    if (cmd.kind === "seed") { installSeededRandom(cmd.seed, true); return false; }
+    // Both streams reinstall; skill commands replayed below draw ctx.world.rng.
+    if (cmd.kind === "seed") { installSeededRandom(cmd.seed, true); this.world.rng = getInstalledSkillRng(); return false; }
     if (cmd.kind === "physics") {
       const op = this.world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: number[]) => unknown;
       op(...cmd.args);

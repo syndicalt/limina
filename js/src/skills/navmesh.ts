@@ -84,6 +84,11 @@ export interface NavPortal {
 
 interface NavPortalRecord extends NavPortal { cells: number[]; }
 
+/** The navmesh PORTAL layer as the snapshot participant carries it (H2). */
+export interface NavmeshPortalSnapshot {
+  portals: { id: string; bounds: AABB2D; open: boolean }[];
+}
+
 /** A world-XZ axis-aligned bounding box (blocked region / region bounds). */
 export interface AABB2D {
   minX: number;
@@ -224,6 +229,26 @@ export class NavmeshManager {
     this.portals.delete(id);
     this.navRevision++;
     return true;
+  }
+
+  /** Deterministic capture of the PORTAL layer only (snapshot participant, H2), id-sorted.
+   *  The base grid + agents are deliberately NOT captured: the grid is rebuilt by the
+   *  navmesh.build command / the functional-building reconciler, and portal `cells` are a
+   *  pure derivation from (bounds, grid) recomputed at registration. */
+  capturePortalSnapshot(): NavmeshPortalSnapshot {
+    return {
+      portals: [...this.portals.values()]
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((p) => ({ id: p.id, bounds: { ...p.bounds }, open: p.open })),
+    };
+  }
+
+  /** Wholesale replace the portal layer (participant restore): every existing portal is
+   *  unregistered, then each captured one re-registers with its open state — closed-cell
+   *  refcounts and the nav revision advance exactly as live registration would. */
+  restorePortalSnapshot(snap: NavmeshPortalSnapshot): void {
+    for (const id of [...this.portals.keys()]) this.unregisterPortal(id);
+    for (const p of snap.portals) this.registerPortal(p.id, p.bounds, p.open);
   }
 
   private validBounds(bounds: AABB2D): boolean {

@@ -180,6 +180,7 @@ Do not report a deliverable done unless every box for its type checks. "Done" cl
 - [ ] Zod input AND output schemas; registered in `registerCoreSkills`; permission string added to the right profile(s) in `permissions.ts`.
 - [ ] `npm --prefix js run check:determinism` and `check:portability` pass; nested invokes forward `chainId`.
 - [ ] Works headless/meshless (the 5-place entity-state checklist if it writes per-entity state).
+- [ ] Multi-step handlers enroll undos (`ctx.undo`) for every mutation — or document why the skill is single-mutation atomic — so a failed invoke leaves the world exactly as before (p103 pattern).
 - [ ] If render-affecting, classified in `browser-entry.ts` (`LIVE_IN_PLACE_SKILLS` / `LIVE_STRUCTURAL_ADD_SKILLS` / reboot) — decided, not defaulted.
 - [ ] A `js/test/pNN_*.ts` gate exists, passes, and includes replay-equivalence (record → replay → `compareWorldState` bit-identical) where state is produced.
 - [ ] `bash tools/director/run-gates.sh --quick` green.

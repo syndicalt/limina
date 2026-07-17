@@ -49,6 +49,16 @@ export class WorldStateManager {
   getSpawn(): [number, number, number] {
     return this.state.spawnPosition;
   }
+
+  /** Deterministic capture of the whole world-dynamics state (snapshot participant, H2). */
+  captureSnapshot(): WorldState {
+    return { ...this.state, spawnPosition: [...this.state.spawnPosition] };
+  }
+
+  /** Wholesale replace the world-dynamics state (participant restore). */
+  restoreSnapshot(state: WorldState): void {
+    this.state = { ...state, spawnPosition: [state.spawnPosition[0], state.spawnPosition[1], state.spawnPosition[2]] };
+  }
 }
 
 export interface BGMTrack {

@@ -75,6 +75,25 @@ export class InteractionManager {
     }
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
+
+  /** Deterministic capture of every registered interactable INCLUDING its mutable `state`
+   *  (door open, lastInteractTick, …), sorted by entity (snapshot participant, H2). The
+   *  `handlers` map is runtime closures and is NOT captured — handler wiring is derived
+   *  state the functional-building reconciler rebuilds from entity origins. */
+  captureSnapshot(): InteractableDef[] {
+    return [...this.interactables.values()]
+      .sort((a, b) => (a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0))
+      .map((d) => ({ ...d, state: { ...d.state } }));
+  }
+
+  /** Wholesale replace the registered interactables (participant restore). Handlers are
+   *  cleared too: a closure for a dropped def must not survive, and live defs get their
+   *  handlers re-registered by the origin-driven reconciler on the next skill invoke. */
+  restoreSnapshot(defs: readonly InteractableDef[]): void {
+    this.interactables.clear();
+    this.handlers.clear();
+    for (const d of defs) this.interactables.set(d.entity, { ...d, state: { ...d.state } });
+  }
 }
 
 /** Resolve a live entity's world position from the ECS transform SoA. Undefined when

@@ -360,6 +360,11 @@ export interface EntityEntry {
   /** Runtime-only teardown hook for entity-owned resources that are not reachable from `mesh`
    * (compute kernels, direct scene mounts, controllers, registry callbacks). Never serialized. */
   runtimeDispose?: () => void;
+  /** Standalone physics body ids OWNED by this entity but deliberately not bound to `bodyId`
+   *  (asset.place/placeLod building colliders). Unlike `runtimeDispose` (a closure), this IS
+   *  serialized (M18): a world snapshot carries the ids so restore can re-arm the remove-body
+   *  dispose — destroying a restored placed asset must remove its collider, not leak it. */
+  runtimeBodyIds?: number[];
 }
 
 /** The serializable identity slice of one entity-table entry. The mesh/resource/runtime-disposer
@@ -469,6 +474,32 @@ export class EntityTable {
     const entry = this.map.get(id);
     if (entry !== undefined) entry.behavior = behavior;
   }
+  /** Replace a live entry's standalone-owned physics body ids (M18) — used by the writing
+   *  skill (append via record + chainRuntimeDispose) and by snapshot restore (wholesale
+   *  rebind before re-arming the dispose). No-op if the id is not live. */
+  bindRuntimeBodies(id: string, bodyIds: readonly number[]): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.runtimeBodyIds = [...bodyIds];
+  }
+  /** Chain a runtime-only cleanup onto a live entry's `runtimeDispose`. The chained closure is
+   *  finished-guarded (idempotent): teardownEntity runs runtimeDispose exactly once, and an undo
+   *  path that already disposed makes the later teardown call a no-op — never a double
+   *  op_physics_remove_body. Failures from both links aggregate so neither masks the other.
+   *  No-op if the id is not live. */
+  chainRuntimeDispose(id: string, label: string, cleanup: () => void): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    const prior = entry.runtimeDispose;
+    let finished = false;
+    entry.runtimeDispose = () => {
+      if (finished) return;
+      finished = true;
+      const errors: unknown[] = [];
+      try { cleanup(); } catch (error) { errors.push(error); }
+      try { prior?.(); } catch (error) { errors.push(error); }
+      if (errors.length > 0) throw new AggregateError(errors, `${label} runtime disposal failed`);
+    };
+  }
   /** Set (or move) a child's parent + captured local offset, maintaining the byParent
    *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */
   setParent(childId: string, parentId: string | undefined, localOffset?: TransformOffset): void {
@@ -524,6 +555,26 @@ export class EntityTable {
       if (this.map.has(id)) out.push(id);
     }
     return out;
+  }
+  /** Rewind the `ent_` allocation counter + table version to a captured point,
+   *  after a failed skill chain's compensation (the registry's per-chain undo
+   *  ledger). Only sound when every id allocated at or after `seq` is no longer
+   *  live — a live survivor means a future create would RE-ISSUE its id, so this
+   *  throws instead of corrupting identity (the caller treats that as a failed
+   *  rollback and poisons). Rewinding version keeps version-gated derived state
+   *  (spatial index, reconcilers) consistent with replay, which never ran the
+   *  failed chain. */
+  rewindAllocator(seq: number, version: number): void {
+    if (seq > this.seq || version > this.tableVersion) {
+      throw new Error(`EntityTable.rewindAllocator: cannot rewind forward (seq ${this.seq}→${seq}, version ${this.tableVersion}→${version})`);
+    }
+    for (let s = seq; s < this.seq; s++) {
+      if (this.map.has(`ent_${s}`)) {
+        throw new Error(`EntityTable.rewindAllocator: 'ent_${s}' allocated by the unwound chain is still live — rewinding would re-issue its id`);
+      }
+    }
+    this.seq = seq;
+    this.tableVersion = version;
   }
   destroy(id: string): EntityEntry | undefined {
     const entry = this.map.get(id);

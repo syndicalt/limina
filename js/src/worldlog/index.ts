@@ -8,13 +8,17 @@
 
 export {
   captureRandomState,
+  captureSkillRandomState,
   captureWorldState,
   compareWorldState,
   getInstalledRng,
+  getInstalledSkillRng,
   installRandomState,
   installSeededRandom,
+  installSkillRandomState,
   LOG_VERSION,
   setInstalledRng,
+  SKILL_RNG_SEED_XOR,
   mulberry32,
   parseWorldLog,
   PHYSICS_OP_FN,
@@ -46,12 +50,17 @@ export {
   base64ToBytes,
   bytesToBase64,
   captureWorldSnapshot,
+  CHARACTERS_PARTICIPANT_KEY,
+  charactersParticipant,
   deltaCommandsAfter,
+  EVENTS_PARTICIPANT_KEY,
+  eventsParticipant,
   parseSnapshot,
   recoverWorld,
   restoreSnapshot,
   serializeSnapshot,
   SNAPSHOT_VERSION,
+  SnapshotParticipantRegistry,
 } from "./snapshot.ts";
 export type {
   CaptureSnapshotOptions,
@@ -60,5 +69,6 @@ export type {
   RecoveryResult,
   SnapshotableCharacter,
   SnapshotEntity,
+  SnapshotParticipant,
   WorldSnapshot,
 } from "./snapshot.ts";

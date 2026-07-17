@@ -22,6 +22,7 @@ import { LiminaTracer, type Tracer } from "../observability/event.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import {
   captureWorldState,
+  getInstalledSkillRng,
   installSeededRandom,
   parseWorldLog,
   PHYSICS_OP_FN,
@@ -79,7 +80,10 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
     if (cmd.kind === "seed") {
       // Each replay stands up a FRESH world, so re-seeding the module-singleton RNG
       // is intentional here -- force=true declares that (see installSeededRandom).
+      // Both streams reinstall: the global Math.random slot AND the world-owned
+      // skill stream, which replayed skill handlers draw via ctx.world.rng.
       installSeededRandom(cmd.seed, true);
+      world.rng = getInstalledSkillRng();
       seeds++;
       continue;
     }
