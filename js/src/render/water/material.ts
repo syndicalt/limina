@@ -315,21 +315,31 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     const abyss = T.vec3(base.r * 0.1, base.g * 0.24, base.b * 0.5);
     let waterColor = T.mix(shallow, abyss, T.clamp(T.oneMinus(clarity).add(fresnel.mul(0.18)), 0, 1));
     const shoreBand = T.oneMinus(T.smoothstep(0.025, 0.16, depth01)).mul(ownership);
-    const ripple = T.positionWorld.x.mul(0.73).add(T.positionWorld.z.mul(0.57)).sub(T.time.mul(0.8)).sin().mul(0.5).add(0.5);
-    // The diagonal carrier alone reads as a synthetic zebra band — an advected aperiodic
-    // noise breaks it into drifting foam patches while the depth gate keeps it a shoreline
-    // ring (p11_water_depth pins that gate against the submerged-shelf striping defect).
+    // Every periodic carrier in the shallows is DOMAIN-WARPED by the advected
+    // noise before use: an un-warped single-frequency sine reads as parallel
+    // "candy stripes" across the whole shelf no matter how it is weighted.
     const foamBreak = T.mx_noise_float(T.vec2(
       T.positionWorld.x.mul(0.55).add(T.time.mul(0.22)),
       T.positionWorld.z.mul(0.55).sub(T.time.mul(0.17)),
     )).mul(0.5).add(0.5);
+    const ripple = T.positionWorld.x.mul(0.73).add(T.positionWorld.z.mul(0.57)).sub(T.time.mul(0.8))
+      .add(foamBreak.mul(7)).sin().mul(0.5).add(0.5);
     // High-contrast gate: only the crests of the combined carrier foam, so the band reads as
     // drifting PATCHES over turquoise — a low threshold veils the whole shelf milk-white.
-    const foam = shoreBand.mul(T.smoothstep(0.56, 0.9, ripple.mul(0.45).add(foamBreak.mul(0.62))));
+    // Noise dominates the mix; the warped carrier only paces the drift.
+    const foam = shoreBand.mul(T.smoothstep(0.56, 0.9, ripple.mul(0.28).add(foamBreak.mul(0.78))));
     // Cheap shallow caustic modulation follows the same verified depth field. This is deliberately
-    // a surface cue; scene-depth refraction remains a separate renderer-buffer slice.
+    // a surface cue; scene-depth refraction remains a separate renderer-buffer slice. A second
+    // noise sample (different scale/drift than foamBreak) warps the caustic carrier so the
+    // shallow luminance reads as wandering dapples, never parallel bands.
+    const causticWarp = T.mx_noise_float(T.vec2(
+      T.positionWorld.x.mul(0.21).sub(T.time.mul(0.09)),
+      T.positionWorld.z.mul(0.21).add(T.time.mul(0.12)),
+    ));
     const caustic = T.oneMinus(T.smoothstep(0.08, 0.48, depth01))
-      .mul(T.positionWorld.x.mul(1.8).add(T.positionWorld.z.mul(-1.35)).add(T.time.mul(0.7)).sin().mul(0.5).add(0.5))
+      .mul(T.positionWorld.x.mul(1.8).add(T.positionWorld.z.mul(-1.35)).add(T.time.mul(0.7))
+        .add(causticWarp.mul(9)).sin().mul(0.5).add(0.5))
+      .mul(T.smoothstep(0.25, 0.75, causticWarp.mul(0.5).add(0.5)))
       .mul(ownership);
     waterColor = waterColor.add(T.vec3(0.08, 0.16, 0.12).mul(caustic));
     oceanCaustic = caustic;
