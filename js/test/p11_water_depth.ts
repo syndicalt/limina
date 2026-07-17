@@ -277,8 +277,11 @@ const author = { agentId: "limina:builder", sessionId: "ses_p11_water_depth", pe
     const r = Math.min(res - 1, Math.max(0, Math.round(0.5 * (res - 1))));
     return data[r * res + c];
   };
-  // The ocean material's foam factor at t=0 (src/render/water/material.ts shoreline band):
-  // foam = (1 − smoothstep(0.025, 0.16, depth01)) · smoothstep(0.2, 0.78, ripple(x,z)).
+  // The ocean material's foam DEPTH GATE at t=0 (src/render/water/material.ts shoreline band):
+  // foam = (1 − smoothstep(0.025, 0.16, depth01)) · carrier(x,z). The material's carrier now
+  // blends the diagonal ripple with an advected noise breakup; this mirror keeps the pure
+  // ripple carrier, which is CONSERVATIVE for these assertions — the breakup is multiplicative
+  // ≤1 inside the same depth gate, so a depth-plateau regression still stripes the mirror.
   const sm = (a: number, b: number, x: number): number => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
   const foamAt = (depth01: number, x: number, z: number): number =>
     (1 - sm(0.025, 0.16, depth01)) * sm(0.2, 0.78, Math.sin(x * 0.73 + z * 0.57) * 0.5 + 0.5);

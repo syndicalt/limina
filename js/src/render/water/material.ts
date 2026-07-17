@@ -33,6 +33,11 @@ export interface WaterMaterialOptions {
    * reflection adds an owned planar reflector for standing water. */
   sceneOptics?: WaterSceneOptics;
   reflectionScale?: number;
+  /** Ocean plane half-size in LOCAL units. Enables the rim treatment: vertex-displacement
+   * taper (no jagged silhouette wedges at the outer edge) and an opacity feather over the
+   * last few percent so the finite plane dissolves instead of ending on a hard seam.
+   * RENDER-ONLY geometry metadata — never sim state. */
+  edgeFadeHalfSizeM?: number;
 }
 
 export type WaterfallMaterialKind = "curtain" | "foam" | "mist";
@@ -69,7 +74,11 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
   });
   // River colour should be dominated by the scene environment at grazing angles. This remains
   // curved-water-safe IBL/specular reflection; it does not pretend a sloped reach is one plane.
-  material.envMapIntensity = options.kind === "river" ? 1.65 : 1;
+  // Standing water strongly dims its IBL: at eye level the PBR grazing term (Schlick F→0.7)
+  // mirrors the featureless pale sky over the whole surface — that spec term is what turned
+  // the bay into a white sheet, and no colour-node fresnel can touch it. The far-field "sea
+  // hands over to sky" read is carried by the explicit aerial haze instead.
+  material.envMapIntensity = options.kind === "river" ? 1.65 : 0.5;
   try {
   const base = new THREE.Color(options.color);
   const deep = T.vec3(base.r, base.g, base.b);
@@ -79,7 +88,10 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     Math.min(1, base.b * 1.15 + 0.1),
   );
   const facing = T.clamp(T.cameraPosition.sub(T.positionWorld).normalize().y, 0, 1);
-  const fresnel = T.oneMinus(facing).pow(4);
+  // Rivers keep the softer ^4 curve (their mirror handover at grazing is the bank read);
+  // standing water sharpens to ^6 so mid-elevation views keep the blue body colour instead
+  // of surrendering the whole surface to the pale sky reflection.
+  const fresnel = T.oneMinus(facing).pow(options.kind === "river" ? 4 : 6);
   const waves = [
     { dx: 0.80, dz: 0.60, frequency: 0.30, speed: 0.90, amplitude: 1.00 },
     { dx: -0.60, dz: 0.80, frequency: 0.42, speed: 1.10, amplitude: 0.80 },
@@ -140,7 +152,10 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
       material.userData.liminaWaterFlowAlignedNormals = true;
       material.userData.liminaWaterNormalOctaves = octaveCount;
     }
-  } else {
+  }
+  // deno-lint-ignore no-explicit-any
+  let detailSlopeX: any = T.float(0), detailSlopeZ: any = T.float(0);
+  if (options.kind !== "river") {
     for (let index = 0; index < waveCount; index++) {
       const wave = waves[index];
       const phase = localX.mul(wave.dx * wave.frequency).add(localZ.mul(wave.dz * wave.frequency)).add(T.time.mul(wave.speed));
@@ -149,19 +164,66 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
       slopeX = slopeX.add(derivative.mul(wave.dx * wave.frequency));
       slopeZ = slopeZ.add(derivative.mul(wave.dz * wave.frequency));
     }
+    if (waveCount > 0 && options.peek !== true) {
+      // ADVECTED DETAIL RIPPLE: an aperiodic Perlin field drifting over the swell set. The
+      // four sines alone are too smooth to read against a featureless gradient sky — this
+      // metre-scale slope detail is what breaks the sky reflection into travelling texture.
+      // Central differences in surface metres, same pattern as the river's flow noise; all
+      // animation rides the TSL `time` node (render-only, never sim state).
+      const metreStep = 0.35;
+      // deno-lint-ignore no-explicit-any
+      const detailAt = (dx: number, dz: number): any => T.mx_noise_float(T.vec2(
+        localX.add(dx).mul(0.34).add(T.time.mul(0.26)),
+        localZ.add(dz).mul(0.34).sub(T.time.mul(0.21)),
+      ));
+      detailSlopeX = detailAt(metreStep, 0).sub(detailAt(-metreStep, 0)).div(2 * metreStep).mul(1.2);
+      detailSlopeZ = detailAt(0, metreStep).sub(detailAt(0, -metreStep)).div(2 * metreStep).mul(1.2);
+    }
   }
   const normalStrength = options.peek === true ? 0 : options.kind === "river" ? 0.14 : 0.34;
+  // GRAZING-DISTANCE DAMPING (ocean/basin): at range the swell normals alias into shimmer
+  // and the displaced silhouette reads as wedges, so the surface calms toward mirror-flat
+  // with view distance — near water is textured, the far field hands over cleanly to the
+  // sky reflection (which is what a real sea does at grazing incidence).
+  const viewDistance = T.positionView.z.mul(-1);
+  // deno-lint-ignore no-explicit-any
+  let normalSlopeX: any = slopeX, normalSlopeZ: any = slopeZ;
+  if (options.kind !== "river" && options.peek !== true) {
+    const swellDamp = T.mix(T.float(1), T.float(0.3), T.smoothstep(80, 380, viewDistance));
+    const detailDamp = T.oneMinus(T.smoothstep(55, 240, viewDistance));
+    normalSlopeX = slopeX.mul(swellDamp).add(detailSlopeX.mul(detailDamp));
+    normalSlopeZ = slopeZ.mul(swellDamp).add(detailSlopeZ.mul(detailDamp));
+  }
   // Rivers PERTURB the interpolated geometry normal instead of replacing it: the ribbon's
   // continuous per-point normals carry the downstream bed tilt, and discarding them would light
   // a steep reach as a flat sheet.
   const localNormal = orientation === "xy"
-    ? T.vec3(slopeX.mul(-normalStrength), slopeZ.mul(-normalStrength), 1).normalize()
+    ? T.vec3(normalSlopeX.mul(-normalStrength), normalSlopeZ.mul(-normalStrength), 1).normalize()
     : options.kind === "river"
       ? T.normalLocal.add(T.vec3(slopeX.mul(-normalStrength), 0, slopeZ.mul(-normalStrength))).normalize()
-      : T.vec3(slopeX.mul(-normalStrength), 1, slopeZ.mul(-normalStrength)).normalize();
+      : T.vec3(normalSlopeX.mul(-normalStrength), 1, normalSlopeZ.mul(-normalStrength)).normalize();
   material.normalNode = T.transformNormalToView(localNormal);
+  // Rim treatment for the finite ocean plane: taper the vertex displacement to zero well
+  // before the outer edge (a displaced rim silhouettes as jagged dark wedges at grazing
+  // angles), and pre-compute an opacity feather so the plane dissolves instead of cutting.
+  const halfSize = options.edgeFadeHalfSizeM;
+  // deno-lint-ignore no-explicit-any
+  let edgeFeather: any = T.float(1);
   if (orientation === "xy" && waveCount > 0 && options.kind === "ocean") {
-    material.positionNode = T.positionLocal.add(T.vec3(0, 0, height.mul(0.06)));
+    // deno-lint-ignore no-explicit-any
+    let displacement: any = height.mul(0.06);
+    if (halfSize !== undefined && halfSize > 0) {
+      const rim = T.max(T.abs(T.positionLocal.x), T.abs(T.positionLocal.y)).div(halfSize);
+      displacement = displacement.mul(T.oneMinus(T.smoothstep(0.6, 0.82, rim)));
+    }
+    material.positionNode = T.positionLocal.add(T.vec3(0, 0, displacement));
+  }
+  if (orientation === "xy" && options.kind === "ocean" && halfSize !== undefined && halfSize > 0) {
+    // Narrow geometric dissolve for the last few percent only — the broad rim is handled by
+    // OPAQUE aerial haze (colour converges to the sky horizon band with view distance), so
+    // the mid-field never washes out through transparency.
+    const rim = T.max(T.abs(T.positionLocal.x), T.abs(T.positionLocal.y)).div(halfSize);
+    edgeFeather = T.oneMinus(T.smoothstep(0.85, 0.99, rim));
   }
   const height01 = T.clamp(height.mul(0.18).add(0.5), 0, 1);
   // At grazing angles a river hands over to its environment reflection (fresnel → near-mirror),
@@ -170,10 +232,12 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     ? T.float(0.9)
     : options.kind === "river"
       ? T.mix(T.float(0.19), T.float(0.07), fresnel).add(height01.mul(0.05))
-      : T.float(0.05).add(height01.mul(0.07));
+      : T.float(0.085).add(height01.mul(0.055)).add(T.smoothstep(140, 420, viewDistance).mul(0.09));
 
   // deno-lint-ignore no-explicit-any
   let riverTransmittance: any, riverClarity: any, riverWetBand: any;
+  // deno-lint-ignore no-explicit-any
+  let oceanTransmittance: any, oceanClarity: any, oceanAbyss: any, oceanCaustic: any;
   // Exact variable-width ribbon coverage, feathered only across the final few percent of the
   // physical bank. This removes the hard polygon cut while keeping gameplay/grass exclusion tied
   // to the unfeathered semantic topology.
@@ -230,28 +294,65 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     const u = T.positionWorld.x.sub(minX).div(Math.max(maxX - minX, Number.EPSILON));
     const v = T.positionWorld.z.sub(minZ).div(Math.max(maxZ - minZ, Number.EPSILON));
     const sampled = T.texture(options.depth.texture, T.vec2(u, v));
+    // WIDE boundary feather: the bake's edge column rarely reads exactly 255, so a narrow
+    // (few-metre) blend to forced deep water prints the region rectangle as a visible tonal
+    // band across the surface. ~1/8th of the span (≈24 m on a 4-tile region) dissolves it.
     const outsideU = T.max(u.mul(-1), u.sub(1));
     const outsideV = T.max(v.mul(-1), v.sub(1));
-    const outside = T.clamp(T.max(outsideU, outsideV).mul(40), 0, 1);
+    const outside = T.clamp(T.max(outsideU, outsideV).mul(8), 0, 1);
     const depth01 = options.depth.outsideAsDeep === true ? T.mix(sampled.r, T.float(1), outside) : sampled.r;
     const ownership = options.depth.coverageChannel === true ? sampled.g : T.float(1);
-    const colourDeep = T.smoothstep(0.05, 0.42, depth01);
-    let waterColor = T.mix(shallow, deep, T.clamp(colourDeep.add(fresnel.mul(0.25)), 0, 1));
+    // Beer–Lambert per-channel absorption over the real view path through the baked water
+    // column (red extinguishes first) — the same optics the river branch earned. This is what
+    // separates a water VOLUME from a tinted sheet: shallows stay clear teal over the sand,
+    // and the body colour saturates toward a true deep blue instead of a pale slate wash.
+    const maxDepthM = options.depth.maxDepthM ?? 6;
+    const pathM = T.min(depth01.mul(maxDepthM).div(T.max(facing, 0.1)), 60);
+    const transmittance = T.exp(pathM.mul(T.vec3(-0.41, -0.155, -0.093)));
+    const clarity = T.clamp(T.dot(transmittance, T.vec3(0.25, 0.4, 0.35)), 0, 1);
+    // Saturated abyss colour derived from the authored tint (never a hardcoded palette): the
+    // red channel collapses fastest, blue survives — a deep ocean blue, not desaturated slate.
+    const abyss = T.vec3(base.r * 0.1, base.g * 0.24, base.b * 0.5);
+    let waterColor = T.mix(shallow, abyss, T.clamp(T.oneMinus(clarity).add(fresnel.mul(0.18)), 0, 1));
     const shoreBand = T.oneMinus(T.smoothstep(0.025, 0.16, depth01)).mul(ownership);
     const ripple = T.positionWorld.x.mul(0.73).add(T.positionWorld.z.mul(0.57)).sub(T.time.mul(0.8)).sin().mul(0.5).add(0.5);
-    const foam = shoreBand.mul(T.smoothstep(0.2, 0.78, ripple));
+    // The diagonal carrier alone reads as a synthetic zebra band — an advected aperiodic
+    // noise breaks it into drifting foam patches while the depth gate keeps it a shoreline
+    // ring (p11_water_depth pins that gate against the submerged-shelf striping defect).
+    const foamBreak = T.mx_noise_float(T.vec2(
+      T.positionWorld.x.mul(0.55).add(T.time.mul(0.22)),
+      T.positionWorld.z.mul(0.55).sub(T.time.mul(0.17)),
+    )).mul(0.5).add(0.5);
+    // High-contrast gate: only the crests of the combined carrier foam, so the band reads as
+    // drifting PATCHES over turquoise — a low threshold veils the whole shelf milk-white.
+    const foam = shoreBand.mul(T.smoothstep(0.56, 0.9, ripple.mul(0.45).add(foamBreak.mul(0.62))));
     // Cheap shallow caustic modulation follows the same verified depth field. This is deliberately
     // a surface cue; scene-depth refraction remains a separate renderer-buffer slice.
     const caustic = T.oneMinus(T.smoothstep(0.08, 0.48, depth01))
       .mul(T.positionWorld.x.mul(1.8).add(T.positionWorld.z.mul(-1.35)).add(T.time.mul(0.7)).sin().mul(0.5).add(0.5))
       .mul(ownership);
     waterColor = waterColor.add(T.vec3(0.08, 0.16, 0.12).mul(caustic));
+    oceanCaustic = caustic;
+    // Faint swell-crest luminance so the animated surface stays visible even where the sky
+    // reflection is featureless; amplitude fades with the same detail damping distance.
+    const crestLift = height01.sub(0.5).mul(T.oneMinus(T.smoothstep(60, 280, viewDistance))).mul(0.14);
+    waterColor = waterColor.mul(T.float(1).add(crestLift));
+    // OPAQUE aerial haze: far water converges on the sky horizon band, so the finite plane's
+    // outer reaches match what they dissolve into and the far edge never draws a line. This
+    // stays in colour space (opacity RISES with it) — transparency at range is what let the
+    // pale clear colour wash the mid-field out.
+    const hazeMix = T.smoothstep(240, 500, viewDistance).mul(0.92);
+    waterColor = T.mix(waterColor, T.vec3(0.804, 0.851, 0.902), hazeMix);
     material.colorNode = T.mix(waterColor, T.vec3(0.82, 0.94, 0.9), foam.mul(0.72));
-    const opacity = T.float(0.22).add(T.smoothstep(0, 0.55, depth01).mul(0.75));
-    material.opacityNode = T.max(opacity, foam.mul(0.92)).mul(ownership);
+    const opacity = T.max(T.float(0.34).add(T.oneMinus(clarity).mul(0.64)), hazeMix.mul(0.95));
+    material.opacityNode = T.max(opacity, foam.mul(0.92)).mul(ownership).mul(edgeFeather);
     material.roughnessNode = T.max(material.roughnessNode, foam.mul(0.72));
+    oceanTransmittance = transmittance;
+    oceanClarity = clarity;
+    oceanAbyss = abyss;
     material.userData.liminaWaterShoreFoam = true;
     material.userData.liminaWaterCaustics = true;
+    material.userData.liminaWaterVolumetricAbsorption = true;
     trackWaterMaterialTexture(material, options.depth.texture);
   } else if (options.kind === "river") {
     const arc = T.attribute("waterArcDistance", "float");
@@ -266,7 +367,11 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
   }
   const optics = options.sceneOptics ?? "none";
   if (optics !== "none" && options.peek !== true) {
-    const distortion = T.vec2(slopeX, slopeZ).mul(options.kind === "river" ? 0.013 : 0.009);
+    // Ocean/basin distort with the DAMPED slopes (+ detail ripple) so the near-field sand
+    // shimmers underwater while the far field stays stable; rivers keep their flow slopes.
+    const distortion = options.kind === "river"
+      ? T.vec2(slopeX, slopeZ).mul(0.013)
+      : T.vec2(normalSlopeX, normalSlopeZ).mul(0.02);
     // viewportSafeUV performs a real viewport-depth comparison and rejects distorted samples that
     // belong in front of the water surface. viewportSharedTexture snapshots opaque scene colour,
     // avoiding read/write feedback while the transparent water pass is drawn.
@@ -279,6 +384,19 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
       // last visible strip of bank through the near-transparent edge water.
       backdrop = backdrop.mul(riverTransmittance).add(deep.mul(T.oneMinus(riverClarity)).mul(0.85));
       backdrop = backdrop.mul(T.mix(T.float(1), T.float(0.45), riverWetBand));
+    } else if (oceanTransmittance !== undefined) {
+      // Same physics for the standing surface: the opaque snapshot under deep water carries
+      // whatever is behind the terrain's finite extent (the pale clear colour), and blending
+      // it in un-attenuated is exactly the washed-out slate + square-seam defect. Absorb the
+      // refracted floor over the real column and let in-scatter replace it with body colour.
+      backdrop = backdrop.mul(oceanTransmittance).add(oceanAbyss.mul(T.oneMinus(oceanClarity)).mul(0.9));
+      if (oceanCaustic !== undefined) {
+        // Caustic LUMINANCE modulation on the refracted floor: an additive caustic vanishes
+        // over a blown-white sand bed, but a ±12% multiplicative ripple reads on any albedo —
+        // this is the visible texture of clear shallows. Depth-gated, so deep water (whose
+        // backdrop is already absorbed to nothing) is untouched.
+        backdrop = backdrop.mul(T.mix(T.float(0.88), T.float(1.12), oceanCaustic));
+      }
     }
     if (optics === "refraction-reflection" && options.kind !== "river") {
       const reflection = T.reflector({
@@ -294,7 +412,13 @@ export function createWaterMaterial(options: WaterMaterialOptions): THREE.MeshSt
     material.backdropNode = backdrop;
     material.backdropAlphaNode = (options.kind === "river" && riverClarity !== undefined
       ? T.mix(T.float(0.08), T.float(0.85), riverClarity).mul(T.oneMinus(fresnel.mul(0.55)))
-      : T.float(options.kind === "river" ? 0.24 : 0.58).mul(T.oneMinus(fresnel.mul(0.45))))
+      : oceanClarity !== undefined
+        // Clarity-weighted refraction with a REAL Fresnel-transmission rolloff: shallows show
+        // the sand through a steep view, but a grazing view reflects instead of transmitting —
+        // without the strong rolloff the eye-level bay reads as a milky sheet of refracted
+        // sand/clear-colour.
+        ? T.mix(T.float(0.06), T.float(0.8), oceanClarity).mul(T.oneMinus(fresnel.mul(0.85)))
+        : T.float(options.kind === "river" ? 0.24 : 0.58).mul(T.oneMinus(fresnel.mul(0.45))))
       .mul(riverEdgeCoverage);
     material.userData.liminaWaterSceneDepthRefraction = true;
   }

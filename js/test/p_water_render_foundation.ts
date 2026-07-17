@@ -167,9 +167,16 @@ assert(material.userData.liminaWaterVolumetricAbsorption !== true,
     && volumetric.userData.liminaWaterSceneDepthRefraction === true,
     "depth-bound river material lost a production look feature (absorption/wet margin/foam/flow/refraction)");
   const basinMaterial = createWaterMaterial({ color: 0x2b5d72, kind: "basin", orientation: "xz", depth: binding });
+  // Authored-intent change: a DEPTH-BOUND basin/ocean now owns the same Beer–Lambert
+  // absorption as the river (that is what saturates deep standing water and closes the
+  // refraction backdrop over the void) — but it must still never inherit the river
+  // FLOW-SPACE graph (flow-aligned normals, downstream advection, wet bank margin).
   assert(basinMaterial.userData.liminaWaterFlowAlignedNormals !== true
-    && basinMaterial.userData.liminaWaterVolumetricAbsorption !== true,
+    && basinMaterial.userData.liminaWaterDownstreamFlow !== true
+    && basinMaterial.userData.liminaWaterWetShoreMargin !== true,
     "basin material wrongly inherited the river flow-space graph");
+  assert(basinMaterial.userData.liminaWaterVolumetricAbsorption === true,
+    "depth-bound basin material lost its volumetric absorption");
   volumetric.dispose(); basinMaterial.dispose(); depthTexture.dispose();
 }
 

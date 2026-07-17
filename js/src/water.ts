@@ -188,6 +188,7 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
       peek: opts.peek,
       waveCount: opts.waveCount,
       sceneOptics: opts.sceneOptics,
+      edgeFadeHalfSizeM: size / 2,
     });
     const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
     attachWaterMaterialAuxiliaries(mesh as unknown as THREE.Mesh);
