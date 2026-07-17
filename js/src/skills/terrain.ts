@@ -642,6 +642,27 @@ export function registerTerrainSkills(
   // double-record). On replay this skill is re-invoked and re-drives the SAME
   // asset.scatter calls deterministically (asset.scatter itself recomputes its placements
   // over the same baked/cached tiles), so the placement set is bit-identical.
+  // One concrete content asset a biome-pack role can bind — shared between the single-entry
+  // (back-compat) form and each weighted archetype variant. Mirrors BiomePackSingleEntry
+  // (terrain/biome-content.ts); this zod object is the single source of truth for the wire shape.
+  const biomePackAssetFields = z.object({
+    id: z.string(),
+    embedRadius: z.number().nonnegative().optional(),
+    lods: z.array(z.object({
+      id: z.string(),
+      distance: z.number().positive(),
+      hysteresis: z.number().min(0).max(1).optional(),
+    })).min(1).optional(),
+    treeLod: z.object({
+      reducedId: z.string().min(1),
+      reducedDistance: z.number().positive(),
+      impostorId: z.string().min(1),
+      impostorDistance: z.number().positive(),
+      cullDistance: z.number().positive(),
+      hysteresis: z.number().min(0).max(1).optional(),
+    }).refine((value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+      { message: "treeLod distances must be strictly increasing" }).optional(),
+  });
   const populateBiomeInput = z.object({
     /** The region from world.generateRegion to populate (binds the scatter to its tiles). */
     regionId: z.string(),
@@ -668,24 +689,20 @@ export function registerTerrainSkills(
     // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
     biomePack: z.partialRecord(
       z.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
-      z.object({
-        id: z.string(),
-        embedRadius: z.number().nonnegative().optional(),
-        lods: z.array(z.object({
-          id: z.string(),
-          distance: z.number().positive(),
-          hysteresis: z.number().min(0).max(1).optional(),
-        })).min(1).optional(),
-        treeLod: z.object({
-          reducedId: z.string().min(1),
-          reducedDistance: z.number().positive(),
-          impostorId: z.string().min(1),
-          impostorDistance: z.number().positive(),
-          cullDistance: z.number().positive(),
-          hysteresis: z.number().min(0).max(1).optional(),
-        }).refine((value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
-          { message: "treeLod distances must be strictly increasing" }).optional(),
-      }),
+      // A role binds EITHER a single asset (the original shape — back-compat, parses unchanged)
+      // OR weighted archetype `variants` so one role scatters a population of distinct
+      // silhouettes. The single-entry branch comes FIRST so existing packs take the exact
+      // parse they always did; a `{variants}` object has no `id` and falls to the second.
+      z.union([
+        biomePackAssetFields,
+        z.object({
+          variants: z.array(biomePackAssetFields.extend({
+            /** Relative archetype share WITHIN the role (default 1). The per-instance pick is
+             *  the seeded cumulative-weight draw in scatterAssets — deterministic, replayable. */
+            weight: z.number().positive().optional(),
+          })).min(1),
+        }),
+      ]),
     ).optional(),
   });
   const populateBiomeOutput = z.object({

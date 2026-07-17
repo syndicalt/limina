@@ -48,16 +48,35 @@ import type { MCPResponse } from "../mcp/protocol.ts";
  *  a concrete asset id; the engine never hardcodes a GLB name. */
 export type BiomeRole = "conifer" | "broadleaf" | "boulder" | "bush" | "grass" | "cactus" | "palm";
 
-/** A project's binding of ONE role to a concrete content asset. `embedRadius` is the measured base
- *  FOOTPRINT half-extent (world units at scale 1), fed to asset.scatter's embed-sink so a prop on a
+/** A project's binding of ONE role to a SINGLE concrete content asset (the original pack shape —
+ *  kept verbatim for back-compat: existing packs and inline biomePack inputs parse unchanged and
+ *  resolve to byte-identical ScatterConfigs). `embedRadius` is the measured base FOOTPRINT
+ *  half-extent (world units at scale 1), fed to asset.scatter's embed-sink so a prop on a
  *  slope beds its downhill base lip into the ground instead of floating ~r·slope above it (the
  *  "floating trees" artefact). Omit for props that need no sink (slope≈0 → sink≈0 regardless). */
-export interface BiomePackEntry {
+export interface BiomePackSingleEntry {
   id: string;
   embedRadius?: number;
   lods?: { id: string; distance: number; hysteresis?: number }[];
   treeLod?: { reducedId: string; reducedDistance: number; impostorId: string; impostorDistance: number; cullDistance: number; hysteresis?: number };
 }
+
+/** One weighted archetype VARIANT of a role (a distinct GLB silhouette — pine-1 vs spruce-2).
+ *  `weight` is the variant's relative share WITHIN the role (default 1, positive); the per-instance
+ *  pick is the existing seeded cumulative-weight draw in scatterAssets, so the archetype assignment
+ *  is a pure function of (world seed, config) — deterministic and replay-stable. */
+export interface BiomePackVariant extends BiomePackSingleEntry {
+  weight?: number;
+}
+
+/** A role bound to MULTIPLE weighted archetype variants, so a forest reads as a population of
+ *  distinct silhouettes instead of one geometry varied only by size/yaw. */
+export interface BiomePackVariantsEntry {
+  variants: BiomePackVariant[];
+}
+
+/** A project's binding of ONE role: either a single asset (back-compat) or weighted variants. */
+export type BiomePackEntry = BiomePackSingleEntry | BiomePackVariantsEntry;
 
 /** A project-supplied binding of roles → assets. Partial: any unmapped role is scattered as nothing
  *  (graceful). The engine ships NO pack — a project drops one in (biome-pack.json). */
@@ -263,6 +282,27 @@ export function resolveLayer(layer: BiomeLayer, pack: BiomePack, survey: ReliefS
   for (const { role, weight } of layer.assets) {
     const bound = pack[role];
     if (bound === undefined) continue;
+    if ("variants" in bound) {
+      // WEIGHTED ARCHETYPE VARIANTS: split the ROLE's layer weight across the variants
+      // proportionally (normalized so the variants sum to the role weight). This keeps the
+      // role-vs-role mix a layer tuned (e.g. palm 3 : boulder 2) INDEPENDENT of how many
+      // archetypes a project binds to a role. The per-instance pick stays scatterAssets'
+      // existing fixed-order seeded cumulative-weight draw, so the archetype assignment is
+      // a pure function of (world seed, config) — deterministic, byte-stable on replay.
+      const total = bound.variants.reduce((sum, v) => sum + (v.weight ?? 1), 0);
+      if (total <= 0) continue;
+      const roleWeight = weight ?? 1;
+      for (const v of bound.variants) {
+        palette.push({
+          id: v.id,
+          weight: roleWeight * ((v.weight ?? 1) / total),
+          ...(v.embedRadius !== undefined ? { embedRadius: v.embedRadius } : {}),
+          ...(v.lods !== undefined ? { lods: v.lods } : {}),
+          ...(v.treeLod !== undefined ? { treeLod: v.treeLod } : {}),
+        });
+      }
+      continue;
+    }
     palette.push({
       id: bound.id,
       ...(weight !== undefined ? { weight } : {}),

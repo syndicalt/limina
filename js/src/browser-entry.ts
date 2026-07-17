@@ -761,8 +761,8 @@ export function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack 
     const biomePack = input.biomePack;
     if (biomePack === null || typeof biomePack !== "object" || Array.isArray(biomePack)) return [];
     const ids: string[] = [];
-    for (const candidate of Object.values(biomePack as Record<string, unknown>)) {
-      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const collect = (candidate: unknown): void => {
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return;
       const asset = candidate as { id?: unknown; lods?: unknown; treeLod?: unknown };
       if (typeof asset.id === "string" && asset.id.length > 0) ids.push(asset.id);
       if (asset.treeLod !== null && typeof asset.treeLod === "object") {
@@ -770,11 +770,22 @@ export function gltfAssetIdsForCommand(cmd: AuthorCommand, pack: VegetationPack 
         if (typeof tree.reducedId === "string" && tree.reducedId.length > 0) ids.push(tree.reducedId);
         if (typeof tree.impostorId === "string" && tree.impostorId.length > 0) ids.push(tree.impostorId);
       }
-      if (!Array.isArray(asset.lods)) continue;
+      if (!Array.isArray(asset.lods)) return;
       for (const candidateLod of asset.lods) {
         const lod = candidateLod as { id?: unknown } | null;
         if (lod !== null && typeof lod === "object" && typeof lod.id === "string" && lod.id.length > 0) ids.push(lod.id);
       }
+    };
+    for (const candidate of Object.values(biomePack as Record<string, unknown>)) {
+      if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+      // A role bound to weighted archetype VARIANTS mounts every variant (and each variant's
+      // lods/treeLod chain) — the seeded pick decides per instance, so ALL must be prewarmed.
+      const variants = (candidate as { variants?: unknown }).variants;
+      if (Array.isArray(variants)) {
+        for (const variant of variants) collect(variant);
+        continue;
+      }
+      collect(candidate);
     }
     return ids;
   }

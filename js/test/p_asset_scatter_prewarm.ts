@@ -40,6 +40,38 @@ assert(JSON.stringify(biome) === JSON.stringify([
   "vegetation/pine-lod1.glb", "vegetation/pine-impostor.glb", "vegetation/fern.glb",
 ]), "world.populateBiome did not expose nested scatter assets");
 
+// A role bound to weighted archetype VARIANTS must prewarm EVERY variant — including each
+// variant's lods/treeLod chain (the seeded pick decides per instance, so all can mount).
+const biomeVariants = gltfAssetIdsForCommand({
+  kind: "skill",
+  tool: "world.populateBiome",
+  input: {
+    regionId: "rgn",
+    biomePack: {
+      conifer: { variants: [
+        { id: "vegetation/pine-1.glb", weight: 3 },
+        { id: "vegetation/pine-2.glb", lods: [{ id: "vegetation/pine-2-lod1.glb" }] },
+        { id: "vegetation/spruce-1.glb", treeLod: { reducedId: "vegetation/spruce-1-lod.glb", impostorId: "vegetation/spruce-1-impostor.glb" } },
+      ] },
+      boulder: { id: "vegetation/rock.glb" },
+    },
+  },
+} as never);
+assert(JSON.stringify(biomeVariants) === JSON.stringify([
+  "vegetation/pine-1.glb", "vegetation/pine-2.glb", "vegetation/pine-2-lod1.glb",
+  "vegetation/spruce-1.glb", "vegetation/spruce-1-lod.glb", "vegetation/spruce-1-impostor.glb",
+  "vegetation/rock.glb",
+]), "world.populateBiome did not expose every archetype variant (and its LOD chain) for prewarm");
+
+// Hostile variants shapes must not leak malformed ids or throw.
+const biomeHostileVariants = gltfAssetIdsForCommand({
+  kind: "skill",
+  tool: "world.populateBiome",
+  input: { biomePack: { conifer: { variants: [null, 7, {}, { id: "" }, { id: "ok-variant.glb" }] }, bush: { variants: "nope" } } },
+} as never);
+assert(JSON.stringify(biomeHostileVariants) === JSON.stringify(["ok-variant.glb"]),
+  "variants prewarm discovery leaked malformed or empty ids");
+
 const hostile = gltfAssetIdsForCommand({
   kind: "skill",
   tool: "asset.scatter",
