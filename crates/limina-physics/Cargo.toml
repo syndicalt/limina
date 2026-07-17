@@ -8,6 +8,10 @@ publish.workspace = true
 [dependencies]
 deno_core.workspace = true
 deno_error.workspace = true
-rapier3d = { workspace = true, features = ["serde-serialize"] }
+# `enhanced-determinism` forces libm codegen (simba/libm_force) so solver math is
+# bit-identical across hosts/CPUs — required by the "world = f(seed + log)" invariant.
+# It is mutually exclusive with rapier's `simd-*`/`parallel` features; this crate
+# enables neither.
+rapier3d = { workspace = true, features = ["serde-serialize", "enhanced-determinism"] }
 bincode = "1"
 serde = { version = "1", features = ["derive"] }

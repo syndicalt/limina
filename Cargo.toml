@@ -21,7 +21,9 @@ deno_image = "=0.27.0"
 winit = "=0.30.13"
 raw-window-handle = "=0.6.2"
 rapier3d = "0.33"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
+# Current-thread runtimes only (the V8 event loop owns the thread); the
+# multi-thread scheduler is intentionally not enabled.
+tokio = { version = "1", features = ["macros", "rt", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 futures-util = "0.3"
 serde_json = "1"

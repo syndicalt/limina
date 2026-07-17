@@ -374,6 +374,26 @@ struct PhysicsSnapshot {
     handles: Vec<Option<RigidBodyHandle>>,
 }
 
+/// Borrowed view of the live world used ONLY to encode a snapshot. Serde encodes
+/// `&T` byte-identically to `T`, so capturing serializes straight from the live
+/// sets instead of deep-cloning every one of them first (the world was being
+/// copied twice on the V8 thread). Field order and types MUST mirror
+/// `PhysicsSnapshot` exactly: bincode is positional, and `op_physics_restore`
+/// decodes into the owned struct.
+#[derive(serde::Serialize)]
+struct PhysicsSnapshotRef<'a> {
+    gravity: [f32; 3],
+    integration_parameters: &'a IntegrationParameters,
+    islands: &'a IslandManager,
+    broad_phase: &'a BroadPhaseBvh,
+    narrow_phase: &'a NarrowPhase,
+    bodies: &'a RigidBodySet,
+    colliders: &'a ColliderSet,
+    impulse_joints: &'a ImpulseJointSet,
+    multibody_joints: &'a MultibodyJointSet,
+    handles: &'a Vec<Option<RigidBodyHandle>>,
+}
+
 fn snapshot_options() -> impl Options {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
@@ -388,6 +408,22 @@ fn validate_snapshot(snapshot: &PhysicsSnapshot) -> Result<(), JsErrorBox> {
         return Err(JsErrorBox::generic(
             "physics snapshot integration dt must be finite and positive",
         ));
+    }
+
+    // Restored dynamics state must be finite: a corrupt blob carrying NaN/inf
+    // translations, rotations, or velocities would bypass the per-op finiteness
+    // guards and silently poison every subsequent step. This is a load path, so
+    // the full-set scan is acceptable; restore FAILS on invalid data.
+    for (_, body) in snapshot.bodies.iter() {
+        let finite = body.translation().is_finite()
+            && body.rotation().is_finite()
+            && body.linvel().is_finite()
+            && body.angvel().is_finite();
+        if !finite {
+            return Err(JsErrorBox::generic(
+                "physics snapshot contains a non-finite body translation/rotation/velocity",
+            ));
+        }
     }
 
     let mut seen = HashSet::with_capacity(snapshot.handles.len());
@@ -466,7 +502,14 @@ pub fn op_physics_create_world(state: &mut OpState, gravity_y: f32) -> Result<()
     Ok(())
 }
 
-/// Add a large static ground whose top surface sits at `y`.
+/// Add a large static ground whose top surface sits at `y`. The ground is a
+/// parent-less collider that deliberately consumes NO stable body id: the browser
+/// physics mirrors (`js/src/browser/wasm-rapier-physics.ts`, `keyframe-physics.ts`)
+/// implement the same contract, and giving it an id here would fork body-id
+/// allocation across backends and break record/replay parity. Consequences of
+/// that contract: the ground is not individually removable (a repeated call adds
+/// another collider; `op_physics_create_world` replaces the whole world), and
+/// collision events / raycasts against it resolve no body id.
 #[op2(fast)]
 pub fn op_physics_add_ground(state: &mut OpState, y: f32) -> Result<(), JsErrorBox> {
     validate_finite("ground position", &[y])?;
@@ -872,17 +915,17 @@ pub fn op_physics_snapshot(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
 
 fn physics_snapshot_impl(state: &mut OpState) -> Result<Vec<u8>, JsErrorBox> {
     let world = state.borrow::<PhysicsWorld>();
-    let snapshot = PhysicsSnapshot {
+    let snapshot = PhysicsSnapshotRef {
         gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
-        integration_parameters: world.integration_parameters,
-        islands: world.islands.clone(),
-        broad_phase: world.broad_phase.clone(),
-        narrow_phase: world.narrow_phase.clone(),
-        bodies: world.bodies.clone(),
-        colliders: world.colliders.clone(),
-        impulse_joints: world.impulse_joints.clone(),
-        multibody_joints: world.multibody_joints.clone(),
-        handles: world.handles.clone(),
+        integration_parameters: &world.integration_parameters,
+        islands: &world.islands,
+        broad_phase: &world.broad_phase,
+        narrow_phase: &world.narrow_phase,
+        bodies: &world.bodies,
+        colliders: &world.colliders,
+        impulse_joints: &world.impulse_joints,
+        multibody_joints: &world.multibody_joints,
+        handles: &world.handles,
     };
     let payload = snapshot_options()
         .serialize(&snapshot)
@@ -912,7 +955,12 @@ fn physics_restore_impl(state: &mut OpState, bytes: &[u8]) -> Result<(), JsError
     Ok(())
 }
 
-/// Write a body's world position into `out[0..3]` (zero-copy).
+/// Write a body's world position into `out[0..3]` (zero-copy). SENTINEL: an
+/// unknown/removed id zero-fills the buffer — indistinguishable from a body at
+/// the origin, so callers holding possibly-stale ids must gate on liveness
+/// before trusting the values. Kept a sentinel (not an error) because the
+/// browser physics mirrors implement the same contract and stale-id reads occur
+/// legitimately after `op_physics_remove_body`.
 #[op2(fast)]
 pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f32]) {
     if out.len() < 3 {
@@ -932,6 +980,9 @@ pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f3
 }
 
 /// Write `out = [pos.x, pos.y, pos.z, quat.x, quat.y, quat.z, quat.w]`.
+/// SENTINEL: an unknown/removed id zero-fills the buffer (note the zero
+/// quaternion is not a valid rotation, which distinguishes it from any live
+/// body); same stale-id contract as `op_physics_body_pos`.
 #[op2(fast)]
 pub fn op_physics_body_transform(state: &mut OpState, id: u32, #[buffer] out: &mut [f32]) {
     if out.len() < 7 {
@@ -1389,8 +1440,8 @@ mod tests {
         physics_snapshot_impl, physics_take_collision_overflow_count_impl, registry_activate,
         registry_drop, registry_new_world, registry_new_world_validated, snapshot_options,
         validate_heightfield, BoundedCollisionEvents, PhysicsRegistry, PhysicsSnapshot,
-        PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES, MAX_PENDING_COLLISION_EVENTS,
-        PHYSICS_SNAPSHOT_MAGIC,
+        PhysicsSnapshotRef, PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES,
+        MAX_PENDING_COLLISION_EVENTS, PHYSICS_SNAPSHOT_MAGIC,
     };
     use bincode::Options;
     use deno_core::OpState;
@@ -1640,6 +1691,82 @@ mod tests {
         };
         let encoded = snapshot_options().serialize(&invalid).unwrap();
         assert!(decode_snapshot(&encoded).is_err());
+    }
+
+    /// The borrowed-ref encode struct must stay byte-identical to encoding the
+    /// owned `PhysicsSnapshot` — bincode is positional, so any field drift
+    /// between the two structs would corrupt every future restore.
+    #[test]
+    fn snapshot_ref_encoding_matches_owned_encoding() {
+        let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
+        world.insert_body(
+            RigidBodyBuilder::dynamic()
+                .translation(Vector::new(1.0, 2.0, 3.0))
+                .build(),
+            ColliderBuilder::ball(0.5).build(),
+        );
+        for _ in 0..3 {
+            world.step();
+        }
+
+        let borrowed = snapshot_options()
+            .serialize(&PhysicsSnapshotRef {
+                gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+                integration_parameters: &world.integration_parameters,
+                islands: &world.islands,
+                broad_phase: &world.broad_phase,
+                narrow_phase: &world.narrow_phase,
+                bodies: &world.bodies,
+                colliders: &world.colliders,
+                impulse_joints: &world.impulse_joints,
+                multibody_joints: &world.multibody_joints,
+                handles: &world.handles,
+            })
+            .expect("encode borrowed snapshot");
+        let owned = snapshot_options()
+            .serialize(&PhysicsSnapshot {
+                gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+                integration_parameters: world.integration_parameters,
+                islands: world.islands.clone(),
+                broad_phase: world.broad_phase.clone(),
+                narrow_phase: world.narrow_phase.clone(),
+                bodies: world.bodies.clone(),
+                colliders: world.colliders.clone(),
+                impulse_joints: world.impulse_joints.clone(),
+                multibody_joints: world.multibody_joints.clone(),
+                handles: world.handles.clone(),
+            })
+            .expect("encode owned snapshot");
+        assert_eq!(borrowed, owned, "borrowed encode must match owned encode");
+    }
+
+    /// A corrupt blob carrying non-finite body state must FAIL the restore
+    /// instead of silently poisoning every subsequent step.
+    #[test]
+    fn restore_rejects_non_finite_body_state() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+        {
+            let world = state.borrow_mut::<PhysicsWorld>();
+            let id = world.insert_body(
+                RigidBodyBuilder::dynamic()
+                    .translation(Vector::new(0.0, 1.0, 0.0))
+                    .build(),
+                ColliderBuilder::ball(0.5).build(),
+            );
+            let handle = world.handle(id).expect("body id resolves");
+            world.bodies[handle].set_translation(Vector::new(f32::NAN, 1.0, 0.0), false);
+        }
+        let encoded = physics_snapshot_impl(&mut state).expect("encode snapshot");
+        let err = match decode_snapshot(&encoded) {
+            Ok(_) => panic!("NaN translation must fail validation"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("non-finite"), "got: {err}");
+        assert!(
+            physics_restore_impl(&mut state, &encoded).is_err(),
+            "restore must fail on non-finite body state"
+        );
     }
 
     #[test]
