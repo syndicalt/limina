@@ -1,10 +1,18 @@
 {
   "conifer": {
-    "id": "trees/pine-1.glb",
+    "id": "vegetation/temperate-canopy/pine-1.glb",
     "embedRadius": 0.6
   },
   "broadleaf": {
-    "id": "trees/oak-1.glb"
+    "id": "vegetation/temperate-canopy/oak-101.glb",
+    "treeLod": {
+      "reducedId": "vegetation/temperate-canopy/oak-101-lod1.glb",
+      "reducedDistance": 45,
+      "impostorId": "vegetation/temperate-canopy/oak-101-impostor.glb",
+      "impostorDistance": 110,
+      "cullDistance": 420,
+      "hysteresis": 0.15
+    }
   },
   "boulder": {
     "id": "rock.glb"
