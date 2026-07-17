@@ -21,5 +21,130 @@
       "ash-307.glb",
       "ash-409.glb"
     ]
+  },
+  "lods": {
+    "generator": "tools/asset/generate-vegetation-lod-cli.mjs",
+    "assets": [
+      {
+        "source": "assets/vegetation/temperate-canopy/pine-1.glb",
+        "sourceSha256": "d4eff8295772e379d5360191328e6bc68ea162c15b3f339bc0463c41a55bea93",
+        "output": "assets/vegetation/temperate-canopy/pine-1-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 19872,
+        "trianglesAfter": 3890,
+        "outputSha256": "93888e745db40b22bcaa911768d137b1d44ca90ce0217ce3e536668479faf314"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/pine-1.glb",
+        "sourceSha256": "d4eff8295772e379d5360191328e6bc68ea162c15b3f339bc0463c41a55bea93",
+        "output": "assets/vegetation/temperate-canopy/pine-1-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 19872,
+        "trianglesAfter": 963,
+        "outputSha256": "e5b76aefe183d5c28cfb53d56315bc0f2365ed3fc86362349619eee6476e0b34"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/pine-2.glb",
+        "sourceSha256": "ae900825974e562289a44346c4bedb6c31b3d1e1e5f41593691c151ea3ec0e2a",
+        "output": "assets/vegetation/temperate-canopy/pine-2-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 19872,
+        "trianglesAfter": 3887,
+        "outputSha256": "cea19d69ea2def61ef6a7e5d2caba3d705a8e5b97565c032e692278b57df4348"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/pine-2.glb",
+        "sourceSha256": "ae900825974e562289a44346c4bedb6c31b3d1e1e5f41593691c151ea3ec0e2a",
+        "output": "assets/vegetation/temperate-canopy/pine-2-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 19872,
+        "trianglesAfter": 993,
+        "outputSha256": "2bcb7f05038618bbe66cd11626e69d5b1e7cbd326965a591b90f87662ff795c0"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/spruce-1.glb",
+        "sourceSha256": "1a72d8057fa9958ef2a991502bcf9b0b6409adbd17086dd89b9e43f89c3c20fe",
+        "output": "assets/vegetation/temperate-canopy/spruce-1-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 19392,
+        "trianglesAfter": 3869,
+        "outputSha256": "afbf904ce0eced77803d746118e13508d2e1b023e7b61ae339d1754568deefd4"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/spruce-1.glb",
+        "sourceSha256": "1a72d8057fa9958ef2a991502bcf9b0b6409adbd17086dd89b9e43f89c3c20fe",
+        "output": "assets/vegetation/temperate-canopy/spruce-1-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 19392,
+        "trianglesAfter": 961,
+        "outputSha256": "5958ad0c03b3b3097d02bc4c5417961d5ff70d6f40d1fd22089598667b9664a9"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/spruce-2.glb",
+        "sourceSha256": "5e332d4c1cc2eafe49967ecd8fe3838c39801ae862b92b78c16c90027274357f",
+        "output": "assets/vegetation/temperate-canopy/spruce-2-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 19392,
+        "trianglesAfter": 3793,
+        "outputSha256": "597743ab172f113e45ea6873021452ffed6ee03119842da889f17d24b1b0317c"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/spruce-2.glb",
+        "sourceSha256": "5e332d4c1cc2eafe49967ecd8fe3838c39801ae862b92b78c16c90027274357f",
+        "output": "assets/vegetation/temperate-canopy/spruce-2-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 19392,
+        "trianglesAfter": 964,
+        "outputSha256": "15c99e85b7d75556b6cab778e67bef0bb42a3e876780c20f1edd28edd079a80a"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/birch-1.glb",
+        "sourceSha256": "053595fe9ad5bf33c094216d98b3fcdf5d4c7fbe6a389f3481c7c1256f749752",
+        "output": "assets/vegetation/temperate-canopy/birch-1-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 7200,
+        "trianglesAfter": 1648,
+        "outputSha256": "6a9827be91cb6a40a55c95e8f475fdd74c36861c3e6eb5d3277e590305f839b4"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/birch-1.glb",
+        "sourceSha256": "053595fe9ad5bf33c094216d98b3fcdf5d4c7fbe6a389f3481c7c1256f749752",
+        "output": "assets/vegetation/temperate-canopy/birch-1-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 7200,
+        "trianglesAfter": 350,
+        "outputSha256": "2722c0d6c2c0f0d32b575b6c5ce3e4d0d6914fd091e7bd704156c1655f86ea86"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/birch-2.glb",
+        "sourceSha256": "fb793e6b5c00673139ea13f56ff92bcaf352f9bb1c67cca14e9d8801a94115a0",
+        "output": "assets/vegetation/temperate-canopy/birch-2-lod1.glb",
+        "ratio": 0.2,
+        "error": 0.05,
+        "trianglesBefore": 7200,
+        "trianglesAfter": 1706,
+        "outputSha256": "125bd289fe51cb38768419aed0f103701708fcaa27231fb1ab8181afe763ec60"
+      },
+      {
+        "source": "assets/vegetation/temperate-canopy/birch-2.glb",
+        "sourceSha256": "fb793e6b5c00673139ea13f56ff92bcaf352f9bb1c67cca14e9d8801a94115a0",
+        "output": "assets/vegetation/temperate-canopy/birch-2-lod2.glb",
+        "ratio": 0.05,
+        "error": 0.1,
+        "trianglesBefore": 7200,
+        "trianglesAfter": 356,
+        "outputSha256": "a585c9c0ca2760857d531bfcc35892674000889a83903a93147ee5b45ce6fad1"
+      }
+    ]
   }
 }
