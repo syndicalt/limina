@@ -31,12 +31,18 @@
 //      surfaced, onRollbackFailure fired, writes fail closed, reads still served.
 //   5. Concurrent-chain guard: a chain failing while another head chain was live
 //      poisons (reason concurrent_chains) instead of rewinding shared allocators.
+//   6. CATCH-ALL (D3): a fixture creating an entity + collider via ctx.world.ops
+//      with NO ctx.undo, then throwing, is torn down by the catch-all — world
+//      bit-identical to pre-invoke. FALSIFIABILITY: the same scenario on a
+//      registry with disableChainEntityCatchAll leaves a live survivor, rewindAllocator
+//      refuses, and the registry poisons (reason undo_failed, label 'allocator rewind')
+//      — proving the catch-all is load-bearing, not decorative.
 //
 // Run: LIMINA_AUDIO=null ./target/release/limina js/test/p103_partial_failure_atomicity.ts
 
 import { z } from "../build/zod.bundle.mjs";
 import { EntityTable, ops, type EngineOps } from "../src/engine.ts";
-import { createEcsWorld } from "../src/ecs/world.ts";
+import { createEcsWorld, spawnRenderable } from "../src/ecs/world.ts";
 import { createTransformStorage } from "../src/ecs/facade.ts";
 import { UniformGridSpatialIndex } from "../src/spatial/index.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
@@ -46,6 +52,7 @@ import { registerTerrainEditSkills, type EditableTerrain } from "../src/skills/t
 import { registerBuildingSkills } from "../src/skills/building/skill.ts";
 import { registerVillageSkills } from "../src/skills/village.ts";
 import { registerAssetSkills } from "../src/skills/asset.ts";
+import { inertTransform } from "../src/skills/_util.ts";
 import type { AssetRegistry } from "../src/asset-registry.ts";
 import type { ScatterExclusion } from "../src/terrain/asset-scatter.ts";
 import { WorldRecorder } from "../src/worldlog/recorder.ts";
@@ -105,12 +112,21 @@ let archCalls = 0;
 let failArchOn = 0;
 /** Probe collider body ids the fixture chain added (one per invocation). */
 const probeBodies: number[] = [];
+/** Entity ids + collider body ids the bare-entity fixture created (one per
+ *  invocation) — the catch-all's load-bearing probe: torn down with the
+ *  catch-all on (part 6a), left as live survivors facing rewindAllocator with
+ *  it off (part 6b). */
+const bareEntityIds: string[] = [];
+const bareEntityBodies: number[] = [];
 let holdGate: Promise<void> | undefined;
 
 interface Handles { registry: SkillRegistry; layers: Map<string, EditableTerrain>; footprints: Map<string, ScatterExclusion[]> }
 
-function makeRegistry(tracer: LiminaTracer, opts: { ledger?: boolean } = {}): Handles {
-  const registry = new SkillRegistry(tracer, undefined, opts.ledger === false ? { disableChainUndoLedger: true } : undefined);
+function makeRegistry(tracer: LiminaTracer, opts: { ledger?: boolean; catchAll?: boolean } = {}): Handles {
+  const registryOpts: { disableChainUndoLedger?: boolean; disableChainEntityCatchAll?: boolean } = {};
+  if (opts.ledger === false) registryOpts.disableChainUndoLedger = true;
+  if (opts.catchAll === false) registryOpts.disableChainEntityCatchAll = true;
+  const registry = new SkillRegistry(tracer, undefined, Object.keys(registryOpts).length > 0 ? registryOpts : undefined);
   const layers = new Map<string, EditableTerrain>();
   const footprints = new Map<string, ScatterExclusion[]>();
   const vegetationClears = new Map<string, Array<() => void | Promise<void>>>();
@@ -153,6 +169,32 @@ function makeRegistry(tracer: LiminaTracer, opts: { ledger?: boolean } = {}): Ha
     },
   };
   registry.register(multiStep);
+
+  // The catch-all's minimal offender (D3): an entity + standalone collider
+  // created through the canonical path (spawnRenderable → entities.create, with
+  // a collider via ctx.world.ops) and NO ctx.undo enrolled. asset.place /
+  // scene.createEntity do this internally — their ctx.undo covers only non-
+  // entity effects (colliders via chainRuntimeDispose, terrain, footprints),
+  // never the entity itself; the catch-all in unwindChainFrame is what tears
+  // that entity down. This strips the pattern to its essence so the catch-all
+  // is the ONLY compensation path between a failed chain and a live survivor.
+  const bareEntity: SkillDefinition<{ ox: number; oz: number }, { done: boolean }> = {
+    name: "test.bareEntity",
+    version: "1.0.0",
+    description: "p103 fixture: entity + collider with NO ctx.undo, then throw.",
+    category: "system",
+    permissions: ["scene.write"],
+    input: z.object({ ox: z.number(), oz: z.number() }),
+    output: z.object({ done: z.boolean() }),
+    handler: (input, ctx) => {
+      const eid = spawnRenderable(ctx.world.ecs, inertTransform(), input.ox, 0, input.oz);
+      const bodyId = ctx.world.ops.op_physics_add_static_box(input.ox, 0.5, input.oz, 0.5, 0.5, 0.5, 0.85, 0);
+      bareEntityIds.push(ctx.world.entities.create({ eid, bodyId }));
+      bareEntityBodies.push(bodyId);
+      throw new Error("p103 bareEntity failure");
+    },
+  };
+  registry.register(bareEntity);
 
   // Undo-failure fixture: one real (compensated) mutation + one undo that throws.
   const badUndo: SkillDefinition<Record<string, never>, { done: boolean }> = {
@@ -466,8 +508,99 @@ function assertUnwound(tag: string, before: Probe, after: Probe): void {
   ops.op_log("p103 part 5 OK: overlapped failing chain poisoned instead of rewinding shared allocators.");
 }
 
+// ═════════ Part 6 — CATCH-ALL (D3): entity w/o ctx.undo, on vs disabled ═════════
+//
+// The ledger (parts 1-3) compensates effects a skill registered via ctx.undo.
+// The CATCH-ALL in unwindChainFrame compensates the entities a failed chain
+// created WITHOUT a registered teardown — the common case: most entity-creating
+// skills (asset.place, scene.createEntity, vegetation.scatter, ...) enroll
+// ctx.undo only for NON-entity effects; the entity itself is never enrolled.
+// Without the catch-all those survivors face rewindAllocator, which refuses
+// (correctly — re-issuing a live ent_ id would corrupt identity) and poisons
+// the whole session: a survivable partial failure becomes session loss.
+//
+// PROOF: the test.bareEntity fixture creates an entity + collider with NO
+// ctx.undo, then throws. (6a) with the catch-all ON the entity is torn down and
+// the world is bit-identical to pre-invoke. (6b) with disableChainEntityCatchAll
+// the SAME scenario leaves a live survivor, rewindAllocator refuses, and the
+// registry poisons — proving the asserts in 6a would FAIL without the catch-all.
+{
+  // (6a) catch-all ON: the un-enrolled entity is torn down; world restored.
+  {
+    const tracer = new LiminaTracer("ses_p103_ca_on");
+    const recorder = new WorldRecorder("ses_p103_ca_on");
+    const { registry, layers } = makeRegistry(tracer);
+    recorder.attach(registry);
+    recorder.seed(SEED, { forceInstall: true });
+    const recOps = recorder.wrapOps(ops);
+    const world = makeWorld(recOps);
+    recOps.op_physics_create_world(-9.81);
+    const rc = await registry.invoke("terrain.create", { size: 40, resolution: 17, baseHeight: 0 }, base("ses_p103_ca_on", world, 1));
+    assert(rc.success === true, "catch-all-on terrain.create failed");
+    const layer = layers.get((rc.result as { entity: string }).entity);
+    assert(layer !== undefined, "catch-all-on terrain layer missing");
+
+    const createdBefore = bareEntityIds.length;
+    const before = probeWorld(world, layer, recorder);
+    const r = await registry.invoke("test.bareEntity", { ox: 30, oz: 30 }, base("ses_p103_ca_on", world, 2));
+    assert(r.success === false && r.error?.code === "handler_error", "bareEntity must fail handler_error");
+    assert(bareEntityIds.length === createdBefore + 1, "bareEntity must have created exactly one entity");
+    assert(world.entities.resolve(bareEntityIds[createdBefore]) === undefined,
+      "catch-all must have torn down the un-enrolled entity");
+    assert(!bodyAlive(world, bareEntityBodies[createdBefore]),
+      "catch-all must have removed the un-enrolled entity's collider (via teardownEntity)");
+    assertUnwound("catch-all-on", before, probeWorld(world, layer, recorder));
+    ops.op_log("p103 part 6a OK: catch-all tore down the un-enrolled entity + collider; world bit-identical to pre-invoke.");
+  }
+
+  // (6b) catch-all DISABLED (falsifiability): the same scenario leaves a live
+  //      survivor, rewindAllocator refuses, and the registry poisons — exactly
+  //      the session loss the catch-all exists to prevent.
+  {
+    const tracer = new LiminaTracer("ses_p103_ca_off");
+    const recorder = new WorldRecorder("ses_p103_ca_off");
+    const { registry, layers } = makeRegistry(tracer, { catchAll: false });
+    recorder.attach(registry);
+    recorder.seed(SEED, { forceInstall: true });
+    const recOps = recorder.wrapOps(ops);
+    const world = makeWorld(recOps);
+    recOps.op_physics_create_world(-9.81);
+    const rc = await registry.invoke("terrain.create", { size: 40, resolution: 17, baseHeight: 0 }, base("ses_p103_ca_off", world, 1));
+    assert(rc.success === true, "catch-all-off terrain.create failed");
+    const layer = layers.get((rc.result as { entity: string }).entity);
+    assert(layer !== undefined, "catch-all-off terrain layer missing");
+
+    const createdBefore = bareEntityIds.length;
+    const before = probeWorld(world, layer, recorder);
+    const r = await registry.invoke("test.bareEntity", { ox: -30, oz: -30 }, base("ses_p103_ca_off", world, 2));
+    assert(r.success === false, "catch-all-off bareEntity must still fail the invoke");
+    const after = probeWorld(world, layer, recorder);
+    assert(world.entities.resolve(bareEntityIds[createdBefore]) !== undefined,
+      "FALSIFIABILITY DEAD: the un-enrolled entity was torn down with the catch-all disabled");
+    assert(bodyAlive(world, bareEntityBodies[createdBefore]),
+      "FALSIFIABILITY DEAD: the un-enrolled entity's collider was removed with the catch-all disabled");
+    assert(!compareWorldState(before.state, after.state).identical,
+      "FALSIFIABILITY DEAD: world state unchanged with the catch-all disabled");
+    assert(after.nextSeq !== before.nextSeq,
+      "FALSIFIABILITY DEAD: ent_ allocator did not move with the catch-all disabled");
+    assert(after.version !== before.version,
+      "FALSIFIABILITY DEAD: table version did not move with the catch-all disabled");
+    assert(registry.poisoned !== undefined,
+      "FALSIFIABILITY DEAD: rewindAllocator did not refuse (no poison) with the catch-all disabled");
+    const events = tracer.tail({ type: "skill.rollback.failed" }).events;
+    assert(events.length === 1, `expected 1 skill.rollback.failed event, got ${events.length}`);
+    const payload = events[0].payload as { reason?: string; failures?: Array<{ label: string; message: string }> };
+    assert(payload.reason === "undo_failed", `poison reason must be undo_failed, got ${payload.reason}`);
+    assert(
+      payload.failures?.some((f) => f.label === "allocator rewind") === true,
+      "the rewindAllocator refusal must be reported as a failure (label 'allocator rewind')",
+    );
+    ops.op_log("p103 part 6b OK: with the catch-all disabled the survivor faces rewindAllocator, which refuses and poisons — exactly the failure the catch-all prevents.");
+  }
+}
+
 ops.op_log(
   "p103_partial_failure_atomicity OK: failed chains (throw, contract_error, village mid-failure) unwind to a bit-identical world " +
     "with rewound ent_/eid/RNG allocators and an untouched log; replay matches live; ledger-disabled falsifiability shim fails every check; " +
-    "undo failure and concurrent chains poison loudly.",
+    "undo failure and concurrent chains poison loudly; the entity catch-all tears down un-enrolled survivors (disabled-catch-all falsifiability proves it load-bearing).",
 );
