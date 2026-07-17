@@ -478,4 +478,53 @@ after `cargo build --release`, and are wired into `tools/director/run-gates.sh`.
 
 ## Status & outcomes
 
-(To be filled as PRs land.)
+All five findings implemented (2026-07-17), landed as two slices (worldlog/skill
+seam; derived verification). Gate numbering shifted from the plan's placeholders:
+p101 (A1), p102 (A2), p103 (B1/B2), p104 (B3/B4), p99 (C1) — all wired, all
+falsifiability proofs in code.
+
+- **A1 (C3)**: recording proxy always records; skills see a per-(world, recorder)
+  cached `chainOps` facade via a `world` Proxy trapping only `ops` (WeakMap-keyed
+  world identity preserved — `reconciledVersions` audit clean). `depth` deleted.
+  `worldlog.ops.recordedDuringChain` tripwire live. Ops-reference audit found no
+  stray captured-recording-proxy paths (AssetRegistry holds reads only).
+- **A2 (M4)**: dual streams from one seed (`SKILL_RNG_SEED_XOR = 0x9e3779b9`
+  frozen); `WorldContext.rng` optional-additive; `skillRngState` additive within
+  v3. Migration surface was empty (zero `Math.random` in skills; lint already
+  banned it). No committed fixture affected — nothing regenerated.
+- **B1/B2 (H1)**: per-head-chain LIFO undo ledger with head-frame capture
+  (skill RNG, EntityTable seq/version via new `rewindAllocator`, bitECS entity
+  index); unwind on throw/contract_error/after-hook; overlapped-chain and
+  failed-undo cases poison (never a blind rewind), wired to `poisonAuthority`.
+  Enrolled: gltf entity creation, standalone colliders (finished-guarded dispose
+  chain), terrain.deform height patches, building.assemble/architecture.building
+  and village.build (seq-range undos + footprint-registry restore). Registry
+  mints `lchain_N` for unrecorded worlds so `ctx.chainId` is always set.
+- **B3 (H2)**: `SnapshotParticipant` registry, 16 participants enrolled with
+  typed schemas; cutscene/director promoted to participants (verified
+  sim-affecting mid-playback state — the plan's verify clause fired).
+  characters/events became reserved participants over the existing top-level
+  fields (wire format unchanged). `managers` additive within v3; unknown keys
+  fail loudly; join-path `snapshotLine` opts out. Declared follow-up gaps (`F`
+  rows): behavior/dialogue, functional-settlement handles, terrain layer
+  heights, navmesh base grid.
+- **B4 (M18)**: `runtimeBodyIds` through all five entity-state places;
+  restore re-arms remove-body dispose closures; destroy-after-restore leak
+  gate-proven gone.
+- **C1 (H8)**: verify layer extracted to dependency-light
+  `derived-runtime-verify.ts` (no three/DOM; branded type + runtime WeakSet —
+  types are erased on this host); worker realm with ArrayBuffer transfer both
+  ways (TOCTOU closed); inline fallback is the same function; bundles wired
+  (`bundle:derived-verify-worker` → live + editor). Live-editor long-task
+  improvement NOT yet measured (no chromium on the dev box) — see C2.
+- **C2**: deliberately NOT implemented. Gated on Chrome tracing of a 15×15
+  residency-window activation with C1 in place (4× CPU throttle; per-phase
+  main-thread task durations). If residual mounting stays under ~50 ms, C2 is
+  unnecessary.
+
+Verification at landing: check:determinism / check:portability /
+check-nested-invoke / check-determinism-check / tsc all clean; p101–p104 + p99
+green with falsifiability shims failing as designed; full worldlog/replay/
+snapshot family green; `run-gates.sh --quick` ALL GATES GREEN. NOT verified on
+this box (no chromium): live-editor UAT of the verify worker and needsReboot
+paths; cross-machine physics bit-identity (needs a second host).
