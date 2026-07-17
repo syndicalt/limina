@@ -394,6 +394,12 @@ export class EntityTable {
   /** Reverse index `parent id -> set of child ids` (scene hierarchy), maintained
    *  alongside `map` so children/subtree lookups are O(children) not O(world). */
   private readonly byParent = new Map<string, Set<string>>();
+  /** Reverse index `eid -> ent_ id`, maintained alongside `map` so a bitECS eid (what a
+   *  renderable/pick carries) resolves to its entity in O(1) instead of a full-table scan.
+   *  An entry's `eid` is set once at `create` and never mutated, so this stays consistent;
+   *  eids CAN be recycled after destroy (unlike `ent_` strings), so this answers only for
+   *  the CURRENT live owner. */
+  private readonly byEid = new Map<number, string>();
   private seq = 0;
   private tableVersion = 0;
 
@@ -405,6 +411,7 @@ export class EntityTable {
     const id = `ent_${this.seq++}`;
     this.map.set(id, { generation: 0, ...entry });
     if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, id);
+    this.byEid.set(entry.eid, id);
     this.tableVersion++;
     return id;
   }
@@ -488,11 +495,42 @@ export class EntityTable {
   entityByBody(bodyId: number): string | undefined {
     return this.byBody.get(bodyId);
   }
+  /** The live `bodyId -> ent_ id` reverse index (read-only). Iterating this visits ONLY
+   *  the body-bound entities — the per-tick transform-sync set — instead of scanning every
+   *  entry via `ids()` (a fresh N-element array where most entries are bodiless statics). */
+  bodyBound(): ReadonlyMap<number, string> {
+    return this.byBody;
+  }
+  /** O(1) lookup of the live `ent_` id owning a bitECS `eid`, or `undefined` when no live
+   *  entity holds it (eids are recycled after destroy, so a stale eid resolves to nothing —
+   *  never to its former owner). Replaces the pick path's full-table scan. */
+  entityByEid(eid: number): string | undefined {
+    return this.byEid.get(eid);
+  }
+  /** The next `ent_` sequence number. Capture before a mutation and pass to
+   *  `idsCreatedSince` to enumerate exactly what the mutation created — O(1),
+   *  replacing a full-table before-set snapshot. */
+  get nextSeq(): number {
+    return this.seq;
+  }
+  /** The still-live ids created at or after a captured `nextSeq`, in creation order.
+   *  `ent_` ids are `ent_<seq>` with a monotonic never-reused counter, so the seq range
+   *  IS the created set — O(created) instead of an O(world) scan diffed against a
+   *  before-set. Ids destroyed since creation are omitted (they no longer resolve). */
+  idsCreatedSince(seq: number): string[] {
+    const out: string[] = [];
+    for (let s = seq; s < this.seq; s++) {
+      const id = `ent_${s}`;
+      if (this.map.has(id)) out.push(id);
+    }
+    return out;
+  }
   destroy(id: string): EntityEntry | undefined {
     const entry = this.map.get(id);
     if (entry !== undefined) {
       this.map.delete(id);
       if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
+      this.byEid.delete(entry.eid);
       // Keep the hierarchy index consistent: drop this id from its parent's child set
       // and drop its own child set. Cascading the subtree is the caller's job (scene
       // teardown), so any surviving children keep a now-dangling `parent` until then.
@@ -523,12 +561,14 @@ export class EntityTable {
   restore(snapshot: EntityTableSnapshot): void {
     this.map.clear();
     this.byBody.clear();
+    this.byEid.clear();
     // Parent relations are rebound by restoreSnapshot via setParent (like resource/origin),
     // so start with an empty hierarchy index; setParent repopulates it.
     this.byParent.clear();
     for (const entry of snapshot.entries) {
       this.map.set(entry.id, { eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
       if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, entry.id);
+      this.byEid.set(entry.eid, entry.id);
     }
     this.seq = snapshot.seq;
     this.tableVersion = snapshot.version;

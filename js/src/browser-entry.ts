@@ -916,6 +916,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     reject(error: Error): void;
     timer: ReturnType<typeof setTimeout>;
   }>();
+  let commandAckRequestId = 0;
+  const commandAckWaiters = new Map<number, {
+    resolve(ack: { applied: number; failed: number }): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   const ownsRenderHost = opts.renderHost === undefined;
   let cleanupRenderHost: BrowserRenderHost | undefined;
   let cleanupRenderSession: BrowserRenderWorldSession | undefined;
@@ -937,6 +943,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   let runtimeReady = false;
   let aborted = false;
   let stopped = false;
+  let workerTerminated = false;
 
   const disposeDerivedCandidate = (candidate: DetachedDerivedRenderCandidate, label: string): void => {
     try {
@@ -1003,7 +1010,34 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         waiter.reject(new Error(reason));
       }
       derivedControlWaiters.clear();
-      await step("worker stop", () => { try { worker.postMessage({ type: "stop" }); } finally { worker.terminate(); } });
+      for (const waiter of commandAckWaiters.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(reason));
+      }
+      commandAckWaiters.clear();
+      await step("worker stop", async () => {
+        // Bounded graceful stop: give the worker a short window to run its own teardown
+        // (explicitly freeing the wasm Rapier world/controller) before the unconditional hard
+        // terminate. A dead or hung worker must not stall teardown, so the wait is capped and
+        // `terminate()` ALWAYS runs. Every waiter above was already rejected, so the only
+        // message that still matters is the worker's `stopped` ack — replace the handler.
+        try {
+          if (!workerTerminated) {
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, 1_500);
+              const settle = (): void => { clearTimeout(timer); resolve(); };
+              worker.onmessage = (ev: { data: unknown }): void => {
+                if ((ev.data as { type?: string } | null)?.type === "stopped") settle();
+              };
+              try { worker.postMessage({ type: "stop" }); }
+              catch { settle(); }
+            });
+          }
+        } finally {
+          workerTerminated = true;
+          worker.terminate();
+        }
+      });
       await step("input", () => {
         if (opts.input !== undefined) cleanupInput?.detach(opts.input as Parameters<LivePlayerInput["detach"]>[0]);
         cleanupInput?.detachPointer();
@@ -1052,10 +1086,19 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     }
   }));
 
-  // The handshake ALWAYS settles: it resolves on `ready` OR on `{type:"error"}` OR on a hard
-  // worker.onerror — so `await` can never hang (the old listener resolved only on `ready`, and a
-  // worker `{type:"error"}` left the promise pending forever, freezing the viewport).
+  // The handshake ALWAYS settles: on `ready`, on `{type:"error"}`, on a hard worker.onerror, OR on
+  // the deadline below. The event paths only cover a worker that ANSWERS (the old listener resolved
+  // solely on `ready`, and a worker `{type:"error"}` left the promise pending forever, freezing the
+  // viewport); a silently-dead worker — e.g. a module-resolution failure some browsers surface with
+  // no onerror — fires none of them, so the timeout is the one settle path needing no cooperation
+  // from the worker. Generous cap: init imports + instantiates wasm Rapier and authors the whole
+  // command log before replying `ready`.
+  const HANDSHAKE_TIMEOUT_MS = 30_000;
   const handshake = createWorkerHandshake<ReadyMessage>();
+  const handshakeDeadline = setTimeout(
+    () => handshake.fail(`sim worker init did not reply ready within ${HANDSHAKE_TIMEOUT_MS / 1000}s`),
+    HANDSHAKE_TIMEOUT_MS,
+  );
   worker.onmessage = (ev: { data: unknown }): void => { handshake.offer(ev.data); };
   worker.onerror = (ev: { message?: string }): void => handshake.fail("sim worker error: " + (ev.message ?? "unknown"));
   worker.postMessage({
@@ -1065,6 +1108,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     assets: [...prefetchedAssets].map(([id, bytes]) => ({ id, bytes })),
   });
   const handshakeResult = await handshake.promise;
+  clearTimeout(handshakeDeadline);
   if (!handshakeResult.ok) {
     // A hard startup failure (no worker, rapier import/create failed) — the environment cannot host
     // the viewport. Report the SPECIFIC reason and return null (the "unsupported / cannot host"
@@ -1092,7 +1136,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       waiter.reject(new Error(message));
     }
     derivedControlWaiters.clear();
+    for (const waiter of commandAckWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(message));
+    }
+    commandAckWaiters.clear();
     liveLoop?.stop();
+    workerTerminated = true;
     worker.terminate();
     if (runtimeReady) void teardown(message).catch(reportTeardownFailure);
   };
@@ -1111,6 +1161,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       reason?: string;
       manifestHash?: string;
       code?: string;
+      applied?: number;
+      failed?: number;
     };
     if (typeof msg.requestId === "string" && (msg.type === "derivedRevisionStaged"
         || msg.type === "derivedRevisionCommitted" || msg.type === "derivedRevisionDiscarded"
@@ -1143,6 +1195,18 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         clearTimeout(waiter.timer);
         controlWaiters.delete(msg.requestId);
         waiter.resolve();
+      }
+      return;
+    }
+    if (msg.type === "commandsApplied" && typeof msg.requestId === "number" && Number.isSafeInteger(msg.requestId)) {
+      const waiter = commandAckWaiters.get(msg.requestId);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        commandAckWaiters.delete(msg.requestId);
+        waiter.resolve({
+          applied: typeof msg.applied === "number" ? msg.applied : 0,
+          failed: typeof msg.failed === "number" ? msg.failed : 0,
+        });
       }
       return;
     }
@@ -1191,6 +1255,22 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       catch (error) {
         clearTimeout(timer);
         controlWaiters.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+  const forwardCommandsToWorker = (commands: AuthorCommand[]): Promise<{ applied: number; failed: number }> => {
+    const requestId = ++commandAckRequestId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        commandAckWaiters.delete(requestId);
+        reject(new Error("sim worker applyCommands acknowledgement timed out"));
+      }, 10_000);
+      commandAckWaiters.set(requestId, { resolve, reject, timer });
+      try { worker.postMessage({ type: "applyCommands", commands, requestId }); }
+      catch (error) {
+        clearTimeout(timer);
+        commandAckWaiters.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -1664,15 +1744,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   // is STABLE across every tick: the worker never overwrites a bodiless SAB slot, so freeze →
   // interpolate carries the authored pose forward unchanged (prev==curr ⇒ no drift).
   for (const eid of bodilessEids) seedJoinedTransformForEid(eid);
-  const captureNewEids = (before: ReadonlySet<string>, result: unknown): number[] => {
+  const captureNewEids = (beforeSeq: number, result: unknown): number[] => {
     const out: number[] = [];
     const entity = resultEntityId(result);
     if (entity !== undefined) {
       const eid = entities.resolve(entity)?.eid;
       if (eid !== undefined) out.push(eid);
     }
-    for (const id of entities.ids()) {
-      if (before.has(id)) continue;
+    for (const id of entities.idsCreatedSince(beforeSeq)) {
       const eid = entities.resolve(id)?.eid;
       if (eid !== undefined && !out.includes(eid)) out.push(eid);
     }
@@ -1848,18 +1927,12 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
 
   status("ready", `${eids.length} entities authored — live sim running`);
 
-  const entityIdForEid = (eid: number): string | undefined => {
-    for (const id of entities.ids()) {
-      if (entities.resolve(id)?.eid === eid) return id;
-    }
-    return undefined;
-  };
   const pickEntityId = (object: { parent?: unknown }): string | undefined => {
     let current: unknown = object;
     while (current !== undefined && current !== null) {
       const eid = renderableOwnerEid(current);
       if (eid !== undefined) {
-        const id = entityIdForEid(eid);
+        const id = entities.entityByEid(eid);
         if (id !== undefined) return id;
       }
       current = typeof current === "object" ? (current as { parent?: unknown }).parent : undefined;
@@ -1872,13 +1945,20 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   //    input, interpolates by alpha, syncs the scene, and renders. ──
   let paused = false;
   let viewSuspended = false;
+  // Status detail refreshes at ~1Hz, not per tick: the first consumed tick still announces
+  // "playing" immediately (callers wait on the phase), but a fresh `tick N` string 60×/s is
+  // allocation churn for a label nothing can read at that rate.
+  let nextStatusTick = 0;
   const loop = startAccumulatorLoop({
     step: (): void => {
       const t = readWorkerTick();
       if (t > lastConsumed) {
         interp.push(ring.freeze(joined));
         lastConsumed = t;
-        status("playing", `tick ${t}`);
+        if (t >= nextStatusTick) {
+          status("playing", `tick ${t}`);
+          nextStatusTick = t + 60;
+        }
       }
     },
     frame: (alpha: number): void => {
@@ -2300,8 +2380,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // asset-catalog skills (they live server-side; the catalog is not render/sim state). Apply
         // as a true no-op: mark applied without invoking the registry or the sim worker.
         if (isViewportDataOnlyCommand(cmd)) { applied++; continue; }
-        const beforeIds = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
-          ? new Set(entities.ids())
+        // O(1) creation marker: everything the command creates is `ent_<beforeSeq>` onward
+        // (idsCreatedSince), so no before-set of the whole table is snapshotted per command.
+        const beforeSeq = cmd.kind === "skill" && LIVE_STRUCTURAL_ADD_SKILLS.has(cmd.tool)
+          ? entities.nextSeq
           : undefined;
         // A functional removal can free a complete root-owned subtree (door/collider or
         // furniture compound-collider entities), not only the command's named root. Capture
@@ -2337,8 +2419,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         // the authoritative window never double-mount the same ground.
         if (cmd.kind === "skill" && cmd.tool === "world.streamFollow") terrainStream?.reconcileExternal();
         for (const [id, eid] of pendingRemoval) if (entities.resolve(id) === undefined && !removedEids.includes(eid)) removedEids.push(eid);
-        if (beforeIds !== undefined) {
-          const newEids = captureNewEids(beforeIds, res.result);
+        if (beforeSeq !== undefined) {
+          const newEids = captureNewEids(beforeSeq, res.result);
           if (newEids.length === 0) {
             throw new Error(authoringFailureMessage(cmd, "structural add produced no resolvable entity eid"));
           }
@@ -2350,8 +2432,8 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           // Task #78: a live structural add tracks its new streamable (bodiless placed) entities
           // so a big live-built world stays bounded too. They start materialized (just mounted).
           if (entityStream !== undefined) {
-            for (const id of entities.ids()) {
-              if (!beforeIds.has(id) && entityWiring.eligible(id)) entityStream.register(id);
+            for (const id of entities.idsCreatedSince(beforeSeq)) {
+              if (entityWiring.eligible(id)) entityStream.register(id);
             }
           }
         }
@@ -2369,7 +2451,27 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         for (const eid of removedEids) suppressedEids.delete(eid);
       }
       if (workerCmds.length > 0) {
-        worker.postMessage({ type: "applyCommands", commands: workerCmds });
+        // Every forwarded command already SUCCEEDED on the render thread, so any worker-side
+        // shortfall (a failed command, a short/missing ack) means the two realms' entity/body/eid
+        // allocation has diverged — wrong SAB lanes, wrong physics, permanently. That is never
+        // warn-and-continue material: report `needsReboot` so the caller's reboot machinery
+        // re-authors BOTH realms from the log (the same recovery the editor already runs for
+        // structural commands).
+        let ack: { applied: number; failed: number };
+        try {
+          ack = await forwardCommandsToWorker(workerCmds);
+        } catch (error) {
+          if (stopped) throw error instanceof Error ? error : new Error(String(error));
+          console.warn("limina live authoring: sim worker did not acknowledge the forwarded command batch:", error);
+          return { applied, needsReboot: true, structural: structuralAdds };
+        }
+        if (ack.failed > 0 || ack.applied !== workerCmds.length) {
+          console.warn(
+            `limina live authoring: sim worker applied ${ack.applied}/${workerCmds.length} forwarded command(s)` +
+            ` (${ack.failed} failed) — realms diverged, requesting viewport reboot`,
+          );
+          return { applied, needsReboot: true, structural: structuralAdds };
+        }
       }
       if (activeDerivedRevision !== null) suppressAuthoredTerrainPresentation();
       return { applied, needsReboot: false, structural: structuralAdds };

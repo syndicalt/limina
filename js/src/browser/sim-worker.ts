@@ -921,18 +921,22 @@ export class SimWorkerController {
    *  parallel controllers stay independent + deterministic. */
   private syncTransforms(): void {
     const scratch = this.scratch7;
-    for (const id of this.entityTable.ids()) {
+    // Iterate the table's byBody reverse index: it holds EXACTLY the physics-bound entities,
+    // so this per-tick path never allocates the full id array (`ids()`) nor scans the (mostly
+    // bodiless) rest of the world. Slot writes are per-eid and disjoint, so iteration order
+    // does not affect the result.
+    // ONLY physics-bound entities stream their live transform into the SAB each tick.
+    // Bodyless static renderables are DELIBERATELY not written here: putting them in the
+    // per-tick SAB present-set makes renderSyncSystem overwrite a gizmo/inspector move the
+    // instant the drag's sync-suppression lifts (before the server round-trip lands), which
+    // breaks direct-manipulation editing. (The offline-authored → reconnect origin-render
+    // bug this once addressed needs a movement-safe re-fix: sync a bodyless pose on load /
+    // on authored change, not every frame.)
+    for (const [bodyId, id] of this.entityTable.bodyBound()) {
+      if (this.suppressedAuthoredTerrainBodies.has(bodyId)) continue;
       const entry = this.entityTable.resolve(id);
-      if (entry === undefined || entry.bodyId === undefined) continue;
-      if (this.suppressedAuthoredTerrainBodies.has(entry.bodyId)) continue;
-      // ONLY physics-bound entities stream their live transform into the SAB each tick.
-      // Bodyless static renderables are DELIBERATELY not written here: putting them in the
-      // per-tick SAB present-set makes renderSyncSystem overwrite a gizmo/inspector move the
-      // instant the drag's sync-suppression lifts (before the server round-trip lands), which
-      // breaks direct-manipulation editing. (The offline-authored → reconnect origin-render
-      // bug this once addressed needs a movement-safe re-fix: sync a bodyless pose on load /
-      // on authored change, not every frame.)
-      this.world.ops.op_physics_body_transform(entry.bodyId, scratch);
+      if (entry === undefined) continue;
+      this.world.ops.op_physics_body_transform(bodyId, scratch);
       this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
       this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
     }
@@ -1020,7 +1024,7 @@ type StepMessage = { type: "step" };
 type StopMessage = { type: "stop" };
 type PauseMessage = { type: "pause"; requestId?: number };
 type ResumeMessage = { type: "resume"; requestId?: number };
-type ApplyCommandsMessage = { type: "applyCommands"; commands?: AuthorCommand[] };
+type ApplyCommandsMessage = { type: "applyCommands"; commands?: AuthorCommand[]; requestId?: number };
 /** Map Phase 3.3 — client-stream collider mirroring (view-support; see StreamTileColliderAdd). */
 type StreamTileCollidersMessage = { type: "streamTileColliders"; add?: StreamTileColliderAdd[]; remove?: string[] };
 export type StageDerivedRevisionMessage = {
@@ -1145,74 +1149,104 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
     }, 1000 / driveHz);
   };
 
+  const handleMessage = async (msg: ShellMessage): Promise<void> => {
+    if (msg.type === "init") {
+      teardown();
+      if (dependencies.createController !== undefined) controller = await dependencies.createController(msg);
+      else {
+        const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
+        controller = await SimWorkerController.create({
+          rapier,
+          sab: msg.sab,
+          inputBuffer: msg.inputBuffer,
+          assets: msg.assets,
+          authoringProjectId: msg.authoringProjectId,
+        });
+      }
+      if (msg.commands !== undefined) {
+        // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
+        // aborting the handshake — the worker still replies `ready` and self-drives.
+        postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);
+      }
+      const b = controller.buffers;
+      scope.postMessage({ type: "ready", buffer: b.sab, inputBuffer: b.input, status: b.status });
+      driveHz = msg.hz ?? 60;
+      paused = false;
+      startDrive();
+    } else if (msg.type === "step") {
+      if (controller !== null && !paused) controller.tick();
+    } else if (msg.type === "pause") {
+      if (controller === null) { rejectControl("pause", msg.requestId, "sim worker is not initialized"); return; }
+      // Message handlers are serialized by the shell's promise tail and interval callbacks are
+      // synchronous tasks, so clearing the timer here and only then acknowledging proves that no
+      // later deterministic tick can start while paused.
+      if (timer !== undefined) { clearInterval(timer); timer = undefined; }
+      paused = true;
+      scope.postMessage({ type: "paused", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
+    } else if (msg.type === "resume") {
+      if (controller === null) { rejectControl("resume", msg.requestId, "sim worker is not initialized"); return; }
+      paused = false;
+      startDrive();
+      scope.postMessage({ type: "resumed", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
+    } else if (msg.type === "applyCommands") {
+      const commands = msg.commands ?? [];
+      // An uninitialized controller applies nothing, so the whole batch counts as failed —
+      // the ack below must report that, not claim an empty success.
+      let applied = 0;
+      let failed = commands.length;
+      if (controller !== null && commands.length > 0) {
+        const failures = (await controller.loadWorldIsolated(commands)).failures;
+        postAuthoringFailures("applyCommands", failures);
+        failed = failures.length;
+        applied = commands.length - failed;
+      } else if (commands.length === 0) {
+        failed = 0;
+      }
+      // Per-batch ack: the render thread applied this same batch, so it must learn whether the
+      // worker's entity/body/eid allocation kept pace — a silent worker-side failure permanently
+      // offsets allocation between the two realms (wrong SAB lanes, wrong physics).
+      if (msg.requestId !== undefined) {
+        scope.postMessage({ type: "commandsApplied", requestId: msg.requestId, applied, failed });
+      }
+    } else if (msg.type === "streamTileColliders") {
+      if (controller !== null) controller.applyStreamTileColliders(msg.add ?? [], msg.remove ?? []);
+    } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision") {
+      const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit" : "discard";
+      try {
+        if (controller === null) throw derivedError("SIM_NOT_INITIALIZED", "sim worker is not initialized");
+        const derived = parseDerivedRevisionShellMessage(msg);
+        if (derived.type === "stageDerivedRevision") {
+          const result = controller.stageDerivedRevision(derived.requestId, derived.manifestHash, derived.snapshot);
+          scope.postMessage({ type: "derivedRevisionStaged", ...result });
+        } else if (derived.type === "commitDerivedRevision") {
+          const result = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
+          scope.postMessage({ type: "derivedRevisionCommitted", ...result });
+        } else {
+          const result = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
+          scope.postMessage({ type: "derivedRevisionDiscarded", ...result });
+        }
+      } catch (error) {
+        rejectDerived(operation, msg, error);
+      }
+    } else if (msg.type === "stop") {
+      teardown();
+      // Ack so the main thread's bounded graceful-stop wait can terminate promptly instead of
+      // running out its cap — the wasm Rapier handles are already freed by teardown() above.
+      scope.postMessage({ type: "stopped" });
+    }
+  };
+
+  // Serialize message handling through a promise tail: each handler starts only after the previous
+  // message's handler has fully settled, so messages APPLY in arrival order even when a handler
+  // awaits (init's rapier import, isolated authoring). Without this every message spawned a
+  // floating async and batch atomicity rested on handlers never awaiting real I/O — an invariant
+  // nothing enforced. `work` never rejects (errors go to postError), so the tail cannot wedge.
+  let messageTail: Promise<void> = Promise.resolve();
   scope.onmessage = (ev: { data: unknown }): void => {
     const msg = ev.data as ShellMessage;
-    void (async (): Promise<void> => {
-      if (msg.type === "init") {
-        teardown();
-        if (dependencies.createController !== undefined) controller = await dependencies.createController(msg);
-        else {
-          const rapier = (await import("@dimforge/rapier3d-compat")) as unknown as RapierModule;
-          controller = await SimWorkerController.create({
-            rapier,
-            sab: msg.sab,
-            inputBuffer: msg.inputBuffer,
-            assets: msg.assets,
-            authoringProjectId: msg.authoringProjectId,
-          });
-        }
-        if (msg.commands !== undefined) {
-          // ISOLATED: a bad/out-of-band command reports a structured failure instead of throwing and
-          // aborting the handshake — the worker still replies `ready` and self-drives.
-          postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);
-        }
-        const b = controller.buffers;
-        scope.postMessage({ type: "ready", buffer: b.sab, inputBuffer: b.input, status: b.status });
-        driveHz = msg.hz ?? 60;
-        paused = false;
-        startDrive();
-      } else if (msg.type === "step") {
-        if (controller !== null && !paused) controller.tick();
-      } else if (msg.type === "pause") {
-        if (controller === null) { rejectControl("pause", msg.requestId, "sim worker is not initialized"); return; }
-        // Worker messages and interval callbacks run as serialized tasks. Clearing here and only
-        // then acknowledging proves that no later deterministic tick can start while paused.
-        if (timer !== undefined) { clearInterval(timer); timer = undefined; }
-        paused = true;
-        scope.postMessage({ type: "paused", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
-      } else if (msg.type === "resume") {
-        if (controller === null) { rejectControl("resume", msg.requestId, "sim worker is not initialized"); return; }
-        paused = false;
-        startDrive();
-        scope.postMessage({ type: "resumed", requestId: msg.requestId, tick: controller?.ticks ?? 0 });
-      } else if (msg.type === "applyCommands") {
-        if (controller !== null && msg.commands !== undefined) {
-          postAuthoringFailures("applyCommands", (await controller.loadWorldIsolated(msg.commands)).failures);
-        }
-      } else if (msg.type === "streamTileColliders") {
-        if (controller !== null) controller.applyStreamTileColliders(msg.add ?? [], msg.remove ?? []);
-      } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision") {
-        const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit" : "discard";
-        try {
-          if (controller === null) throw derivedError("SIM_NOT_INITIALIZED", "sim worker is not initialized");
-          const derived = parseDerivedRevisionShellMessage(msg);
-          if (derived.type === "stageDerivedRevision") {
-            const result = controller.stageDerivedRevision(derived.requestId, derived.manifestHash, derived.snapshot);
-            scope.postMessage({ type: "derivedRevisionStaged", ...result });
-          } else if (derived.type === "commitDerivedRevision") {
-            const result = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
-            scope.postMessage({ type: "derivedRevisionCommitted", ...result });
-          } else {
-            const result = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
-            scope.postMessage({ type: "derivedRevisionDiscarded", ...result });
-          }
-        } catch (error) {
-          rejectDerived(operation, msg, error);
-        }
-      } else if (msg.type === "stop") {
-        teardown();
-      }
-    })().catch((err) => postError((msg as { type?: string } | null)?.type ?? "message", err));
+    const work = (): Promise<void> =>
+      handleMessage(msg).catch((err) => postError((msg as { type?: string } | null)?.type ?? "message", err));
+    messageTail = messageTail.then(work, work);
   };
 }
 
