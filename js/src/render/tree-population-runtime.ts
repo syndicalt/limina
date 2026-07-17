@@ -57,7 +57,16 @@ function impostor(root: SceneObject, sourceHash: string, reducedHash: string): R
   const mesh = found[0]!, sourceMaterial = mesh.material as THREE.MeshStandardMaterial;
   const descriptor = (mesh.parent?.userData?.liminaTreeImpostor ?? mesh.userData?.liminaTreeImpostor ??
     (root as unknown as { userData?: Record<string, any> }).userData?.liminaTreeImpostor) as Record<string, any> | undefined;
-  if (descriptor?.schema !== "limina.tree-impostor/2" || descriptor.sourceContentHash !== sourceHash || descriptor.lodContentHash !== reducedHash) {
+  if (descriptor?.schema !== "limina.tree-impostor/2") {
+    throw new Error("tree impostor descriptor is missing or has an unknown schema");
+  }
+  // Hash verify only when the host computed REAL hashes: browser realms hash
+  // with the "" stub (the "sha256:" sentinel — op_sha256 is host-dependent,
+  // failure mode #12), so strict equality there rejects every valid impostor.
+  // A mismatch against real hashes still fails loudly.
+  const verifiable = (hash: string): boolean => hash !== "sha256:" && hash.length > "sha256:".length;
+  if ((verifiable(sourceHash) && descriptor.sourceContentHash !== sourceHash)
+    || (verifiable(reducedHash) && descriptor.lodContentHash !== reducedHash)) {
     throw new Error("tree impostor descriptor does not match the pinned source/reduced asset hashes");
   }
   if (!(sourceMaterial.map instanceof THREE.Texture) || !(sourceMaterial.normalMap instanceof THREE.Texture)) throw new Error("tree impostor runtime requires embedded albedo and normal-depth textures");

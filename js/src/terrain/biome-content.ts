@@ -157,6 +157,14 @@ export const BIOME_CONTENT: Record<TerrainTypeName, BiomeLayer[]> = {
       slopeMax: 1.4, sizeRange: [1.0, 2.6], elevMinFrac: 0.30, waterGated: true,
     },
     {
+      // VALLEY BROADLEAF — sparse oaks dotting the low benches among the meadows
+      // (broadleafs give up to conifers with altitude, so they stay below the
+      // forest's mid-band). Sparse on purpose: accents against the pine mass,
+      // not a second forest.
+      seed: 34, assets: [{ role: "broadleaf" }], coverage: 0.07, cluster: 0.4, clusterFreq: 1 / 26,
+      slopeMax: 0.55, sizeRange: [0.8, 1.3], elevMaxFrac: 0.34, waterGated: true,
+    },
+    {
       // VALLEY MEADOW — real mountain ranges carry grass in their low valley floors
       // and gentle benches; a "conifers and rock only" mountain reads as dead ground.
       // Gated to gentle gradients (valley flats and benches, not eroded flanks) below
