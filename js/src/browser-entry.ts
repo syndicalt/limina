@@ -1262,10 +1262,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   };
   worker.onerror = (ev: { message?: string }): void => handshake.fail("sim worker error: " + (ev.message ?? "unknown"));
   try {
+    // Fast-boot: `commands` is the worker-authored PROGRAM when a snapshot rides
+    // along (finalize against the snapshot, then apply the tail — mirroring the
+    // render realm's sequence below); otherwise the full authoring command log.
     worker.postMessage({
       type: "init",
-      // Fast-boot: the worker authors the PROGRAM, finalizes against the snapshot,
-      // then applies the tail — mirroring the render realm's sequence below.
       commands: bootSnapshotProgram ?? opts.commands,
       ...(opts.snapshotBoot !== undefined ? { snapshotBoot: { payload: opts.snapshotBoot, tailCommands: opts.commands } } : {}),
       authoringProjectId: initialAuthoringProjectId,
