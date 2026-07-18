@@ -104,7 +104,8 @@ function titleOf(d){ const p=frontmatter(d.content).props; return p.title || p.n
 function openDoc(name){
   S.activeView="docs"; setTabs(); S.activeDoc=name;
   const d = S.state.docs.find(x=>x.name===name) || S.state.docs[0];
-  if(!d){ return; }
+  // Empty vault: without this the boot placeholder ("Loading the vault…") stays up forever.
+  if(!d){ document.getElementById("center").innerHTML='<div class="loading">No documents yet — ＋ creates one.</div>'; return; }
   S.activeDoc = d.name;
   const { props } = frontmatter(d.content);
   const chips = Object.entries(props).filter(([k])=>k!=="note").slice(0,6)
