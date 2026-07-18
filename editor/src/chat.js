@@ -206,18 +206,95 @@ function renderTurn(turn) {
   scrollToEnd();
 }
 
+// Step-state glyphs: ok ✓ / failed ✕ / held ⏸ / rejected ⊘; a pending step (no
+// status yet) keeps its neutral icon. The contract under test in
+// editor/test/chat_step_state.test.mjs.
+const STEP_STATUS_GLYPHS = { ok: "✓", failed: "✕", held: "⏸", rejected: "⊘" };
+
+function openApprovalPanel() {
+  const head = document.querySelector('[data-acc-toggle="approval"]');
+  if (head && head.getAttribute("aria-expanded") !== "true") head.click();
+  const panel = document.getElementById("approval");
+  if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest" });
+}
+
+function renderStepChip(step) {
+  if (step.tool === "gds.plan" && step.status === "ok" && step.result) return renderPlanCard(step.result);
+  const chip = el("div", "chat-step-chip" + (step.status ? ` chat-step-${step.status}` : ""));
+  chip.appendChild(el("span", "chat-step-icon", STEP_STATUS_GLYPHS[step.status] || step.icon || "•"));
+  chip.appendChild(el("span", "chat-step-tool", step.tool || step.label || "worked"));
+  if (step.detail) chip.appendChild(el("span", "chat-step-detail", step.detail));
+  if (step.status === "held") {
+    const link = el("button", "chat-step-approval-link", "Review in Approval");
+    link.type = "button";
+    link.addEventListener("click", openApprovalPanel);
+    chip.appendChild(link);
+  }
+  return chip;
+}
+
+// A gds.plan success renders as a structured plan card (slices, mechanic→skill
+// mapping chips colored by status, gaps) instead of a JSON blob. Contract under
+// test in editor/test/chat_plan_card.test.mjs.
+function renderPlanCard(result) {
+  const card = el("div", "chat-plan-card");
+  const plan = result.plan;
+  card.appendChild(el("div", "chat-plan-title", plan ? `Plan · ${plan.gdsId}` : "Plan"));
+  if (plan && Array.isArray(plan.slices)) {
+    const slices = el("div", "chat-plan-slices");
+    for (const slice of plan.slices) {
+      const row = el("div", "chat-plan-slice");
+      row.appendChild(el("span", "chat-plan-slice-name", slice.name));
+      row.appendChild(el("span", "chat-plan-slice-goal", slice.goal));
+      const dods = Array.isArray(slice.dodIds) ? slice.dodIds.length : 0;
+      row.appendChild(el("span", "chat-plan-slice-dods", dods ? `${dods} DoD${dods === 1 ? "" : "s"}` : "not auto-gated"));
+      slices.appendChild(row);
+    }
+    card.appendChild(slices);
+  }
+  if (plan && Array.isArray(plan.systems) && plan.systems.length) {
+    const mappings = el("div", "chat-plan-mappings");
+    for (const m of plan.systems) {
+      const chip = el("span", `chat-plan-mapping chat-plan-mapping-${m.status}`, `${m.mechanicName} → ${m.skill}`);
+      chip.title = m.status;
+      mappings.appendChild(chip);
+    }
+    card.appendChild(mappings);
+  }
+  if (Array.isArray(result.gaps) && result.gaps.length) {
+    const gaps = el("div", "chat-plan-gaps");
+    gaps.appendChild(el("span", "chat-plan-gaps-label", "Gaps"));
+    for (const gap of result.gaps) gaps.appendChild(el("span", "chat-plan-gap", gap));
+    card.appendChild(gaps);
+  }
+  if (Array.isArray(result.issues) && result.issues.length) {
+    const issues = el("div", "chat-plan-issues");
+    for (const issue of result.issues) issues.appendChild(el("div", "chat-plan-issue", `${issue.path || "(root)"}: ${issue.message}`));
+    card.appendChild(issues);
+  }
+  if (Array.isArray(result.newWork) && result.newWork.length) {
+    const work = el("div", "chat-plan-newwork");
+    work.appendChild(el("span", "chat-plan-newwork-label", "New work"));
+    for (const item of result.newWork) work.appendChild(el("span", "chat-plan-newwork-item", item));
+    card.appendChild(work);
+  }
+  return card;
+}
+
 function renderSteps(turn) {
   const details = el("details", "chat-steps");
   const summary = el("summary");
-  summary.appendChild(el("span", null, `⚙ worked on this · ${turn.steps.length} steps`));
+  const failed = turn.steps.filter((s) => s.status === "failed" || s.status === "rejected").length;
+  const held = turn.steps.filter((s) => s.status === "held").length;
+  let head = `⚙ worked on this · ${turn.steps.length} steps`;
+  if (failed) head += ` · ${failed} failed`;
+  if (held) head += ` · ${held} held`;
+  summary.appendChild(el("span", null, head));
   details.appendChild(summary);
+  // A failed/held call must never hide behind a collapsed accordion.
+  if (failed || held) details.open = true;
   const list = el("div", "chat-step-list");
-  for (const step of turn.steps) {
-    const chip = el("div", "chat-step-chip");
-    chip.appendChild(el("span", "chat-step-icon", step.icon || "•"));
-    chip.appendChild(el("span", null, step.label || "worked"));
-    list.appendChild(chip);
-  }
+  for (const step of turn.steps) list.appendChild(renderStepChip(step));
   details.appendChild(list);
   return details;
 }
@@ -323,9 +400,27 @@ function onChatMessage(msg) {
     turn.text += String(msg.text || "");
     turn.streaming = true;
   } else if (msg.type === "chat.step") {
-    turn.steps.push({ icon: msg.icon || "•", label: msg.label || "worked" });
+    const step = {
+      icon: msg.icon || "•",
+      label: msg.label || msg.tool || "worked",
+      tool: msg.tool || "",
+      status: msg.status,
+      detail: msg.detail,
+      result: msg.result,
+    };
+    if (msg.status) {
+      // A completion step upgrades the matching pending chip in place (the server
+      // pushes one step before the invoke and one after with the outcome).
+      const pending = [...turn.steps].reverse().find((s) => s.tool === step.tool && !s.status);
+      if (pending) Object.assign(pending, { status: step.status, detail: step.detail, result: step.result });
+      else turn.steps.push(step);
+    } else {
+      turn.steps.push(step);
+    }
   } else if (msg.type === "chat.done") {
     turn.streaming = false;
+    // A bound-cut turn with no reply must say so, never read as silence.
+    if (msg.reason && !turn.text) turn.error = `The agent stopped without a reply (${msg.reason}).`;
   } else if (msg.type === "chat.error") {
     turn.streaming = false;
     turn.error = msg.message || "chat failed";

@@ -65,6 +65,7 @@ import { registerSaveSkills, type SaveManager } from "./save.ts";
 import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
 import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMManager, type ReverbManager } from "./worldstate.ts";
 import { registerDesignSkills } from "./design.ts";
+import { registerGdsSkills } from "./gds.ts";
 import { WaterContactRuntime } from "../world/water-contact.ts";
 import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
 import { buildCoreSnapshotParticipants } from "./snapshot-participants.ts";
@@ -206,6 +207,9 @@ export function registerCoreSkills(
   registerApprovalSkills(registry);
   registerAuditSkills(registry);
   registerDesignSkills(registry);
+  // gds.plan — the game-director planning stage as a skill (read-computation over
+  // THIS registry's catalog: mechanic→skill mapping checks registry.has at invoke time).
+  registerGdsSkills(registry);
   // A4 UI surface: the `ui.*` skills author live containers against a shared
   // UiManager; the host ticks UiManager.update(camera,…) each frame.
   const ui = new UiManager();

@@ -14,7 +14,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "interaction.read", "interaction.write", "interaction.configure",
     "inventory.read", "inventory.write", "inventory.configure",
     "item.configure",
-    "game.write", "game.configure",
+    "game.write", "game.configure", "game.plan",
     "trigger.configure", "event.read", "event.write",
     "quest.read", "quest.write", "quest.configure",
     "stats.read", "stats.write", "stats.configure",
@@ -76,7 +76,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   ],
   // Game rules and quest authoring
   "game.author": [
-    "game.write", "game.configure",
+    "game.write", "game.configure", "game.plan",
     "design.read", "design.write",
     "quest.read", "quest.write", "quest.configure",
     "trigger.configure", "event.read", "event.write",
@@ -97,7 +97,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   // World dynamics (time, weather, spawn)
   "world.author": [
     "world.write", "checkpoint.read", "checkpoint.write",
-    "design.read", "design.write",
+    "design.read", "design.write", "game.plan",
     "save.write",
     "scene.read", "ecs.read", "physics.read",
   ],
@@ -125,7 +125,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
-    "design.read", "design.write",
+    "design.read", "design.write", "game.plan",
     "catalog.read",
   ],
   "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],

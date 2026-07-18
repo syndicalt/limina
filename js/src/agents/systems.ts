@@ -288,11 +288,31 @@ export interface BoundedMultiTurnOptions {
    *  the grants allow (back-compat for autonomous NPC agents). */
   toolMode?: "bootstrap" | "full";
   onText?: (text: string) => void;
-  onStep?: (step: { tool: string; label: string; icon?: string }) => void;
+  /** Tool-call progress. Fired once BEFORE each invoke (no `status` — a pending
+   *  step) and once AFTER with the outcome, so a failed/held/rejected call can
+   *  never read as silence in a chat surface. Reject paths (unknown tool,
+   *  invalid args, thrown handler) fire a completion-only step. */
+  onStep?: (step: BoundedTurnStep) => void;
   onError?: (err: unknown) => void;
   /** Omitted for ordinary in-process agents. Authoritative hosts provide an
    * executor that resolves only after the mutation is durably committed. */
   invokeTool?: BoundedToolExecutor;
+}
+
+/** One onStep notification. `status` absent = the pre-invoke pending step;
+ *  present = the completion outcome for that call:
+ *    ok       — the tool applied (MCPResponse.success)
+ *    held     — parked for human approval (`pending_approval`; `detail` = the approvalId)
+ *    rejected — never invoked (unknown tool / invalid args)
+ *    failed   — invoked and errored (skill error or thrown handler; `detail` = the message)
+ *  `result` rides only on `ok` completions (the skill's typed output). */
+export interface BoundedTurnStep {
+  tool: string;
+  label: string;
+  icon?: string;
+  status?: "ok" | "failed" | "held" | "rejected";
+  detail?: string;
+  result?: unknown;
 }
 
 export interface BoundedMultiTurnResult {
@@ -317,6 +337,14 @@ function notifyBoundedObserverError(options: BoundedMultiTurnOptions, err: unkno
     options.onError?.(err);
   } catch {
     // Observer callbacks must not affect deterministic agent execution.
+  }
+}
+
+function notifyBoundedStep(options: BoundedMultiTurnOptions, step: BoundedTurnStep): void {
+  try {
+    options.onStep?.(step);
+  } catch (err) {
+    notifyBoundedObserverError(options, err);
   }
 }
 
@@ -434,19 +462,17 @@ export async function runBoundedMultiTurn(
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "unknown_tool", tool: call.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "not_found", message: `unknown skill: ${call.tool}` } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "rejected", detail: `unknown skill: ${call.tool}` });
         continue;
       }
       if (!skill.input.safeParse(call.input).success) {
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "invalid_args", tool: call.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "invalid_input", message: `invalid input: ${call.tool}` } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "rejected", detail: `invalid input: ${call.tool}` });
         continue;
       }
-      try {
-        options.onStep?.({ tool: call.tool, label: call.tool });
-      } catch (err) {
-        notifyBoundedObserverError(options, err);
-      }
+      notifyBoundedStep(options, { tool: call.tool, label: call.tool });
       let response: MCPResponse;
       try {
         response = await invokeTool(call.tool, call.input, {
@@ -466,11 +492,21 @@ export async function runBoundedMultiTurn(
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "handler_threw", tool: call.tool, message } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "handler_error", message } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "failed", detail: message });
         continue;
       }
       toolCalls++;
       lastToolResultId = emitToolResult(tracer, agent, response, response.metadata?.eventsEmitted.length ? [decisionId, ...response.metadata.eventsEmitted] : [decisionId]);
       previousResults.push(response);
+      // Completion step: the invoke's real outcome, so a failed or held call is
+      // never mistaken for a silent success by a chat/observer surface.
+      if (response.success) {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "ok", result: response.result });
+      } else if (response.error?.code === "pending_approval") {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "held", detail: response.error.message });
+      } else {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "failed", detail: response.error?.message ?? "tool call failed" });
+      }
     }
   }
   return { steps, toolCalls, tokensUsed, reason: "max_steps" };

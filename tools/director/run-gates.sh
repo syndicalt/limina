@@ -47,7 +47,9 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p102_ctx_rng_context_independence.ts
   js/test/p103_partial_failure_atomicity.ts
   js/test/p104_snapshot_participants.ts
-  js/test/p108_realm_grant_parity.ts)
+  js/test/p108_realm_grant_parity.ts
+  js/test/p109_director_pipeline_events.ts
+  js/test/p110_gds_plan.ts)
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -301,6 +303,8 @@ host_gate "editor artifacts" "" node editor/test/artifacts.test.cjs
 # chromium — panel state, gateways, navigation state machines, source-wiring statics.
 host_gate "editor static suites (node --test)" "" node --test \
   editor/test/authoring_gateway.test.mjs \
+  editor/test/chat_step_state.test.mjs \
+  editor/test/chat_plan_card.test.mjs \
   editor/test/content_browser.test.mjs \
   editor/test/derived_runtime_client.test.mjs \
   editor/test/graphics_settings.test.mjs \

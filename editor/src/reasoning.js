@@ -17,6 +17,7 @@ export function eventKind(type) {
   if (type === "agent.tool_result" || type === "skill.executed") return "action";
   if (type === "agent.toolcall.rejected") return "rejected";
   if (type.startsWith("skill.approval")) return "approval";
+  if (type.startsWith("director.pipeline")) return "pipeline";
   if (type.startsWith("policy.")) return "policy";
   if (type.startsWith("security.")) return "security";
   return "event";

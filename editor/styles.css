@@ -684,6 +684,29 @@ h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spac
 .chat-step-list { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; }
 .chat-step-chip { display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%; padding: 4px 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; color: var(--dim); font-size: 11px; animation: chatChipIn .16s ease-out both; }
 .chat-step-icon { width: 15px; text-align: center; }
+.chat-step-tool { font-family: var(--mono); }
+.chat-step-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.chat-step-ok .chat-step-icon { color: var(--green); }
+.chat-step-failed, .chat-step-rejected { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.chat-step-failed .chat-step-icon, .chat-step-rejected .chat-step-icon { color: var(--red); }
+.chat-step-held { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.chat-step-held .chat-step-icon { color: var(--amber); }
+.chat-step-approval-link { border: none; background: transparent; color: var(--amber); cursor: pointer; font-size: 11px; padding: 0; text-decoration: underline; }
+.chat-plan-card { display: flex; flex-direction: column; gap: 7px; max-width: 100%; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; font-size: 11px; color: var(--dim); animation: chatChipIn .16s ease-out both; }
+.chat-plan-title { color: var(--text); font-family: var(--mono); font-size: 12px; }
+.chat-plan-slices { display: flex; flex-direction: column; gap: 3px; }
+.chat-plan-slice { display: flex; flex-wrap: wrap; gap: 7px; align-items: baseline; }
+.chat-plan-slice-name { color: var(--text); }
+.chat-plan-slice-dods { color: var(--muted); font-family: var(--mono); }
+.chat-plan-mappings, .chat-plan-gaps, .chat-plan-newwork { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.chat-plan-mapping { padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px; font-family: var(--mono); }
+.chat-plan-mapping-existing { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+.chat-plan-mapping-new { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.chat-plan-mapping-unknown { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.chat-plan-gaps-label, .chat-plan-newwork-label { color: var(--muted); }
+.chat-plan-gap { color: var(--red); font-family: var(--mono); }
+.chat-plan-newwork-item { font-family: var(--mono); }
+.chat-plan-issue { color: var(--red); }
 .chat-attachments, .chat-sent-attachments { display: flex; flex-wrap: wrap; gap: 7px; }
 .chat-attachments { border-top: 1px solid var(--border); padding: 8px 10px 0; }
 .chat-attachments[hidden] { display: none; }

@@ -42,10 +42,24 @@ export type SystemMapping = z.infer<typeof SystemMappingSchema>;
 export type Slice = z.infer<typeof SliceSchema>;
 export type ArchitecturePlan = z.infer<typeof ArchitecturePlanSchema>;
 
+/** OPTIONAL pipeline observability seam for the planner + coordinator: the stage
+ *  emits `director.pipeline.*` events through `emit` (ctx.emit / a Tracer shim —
+ *  same shape, returns the event id) so the editor's causal Activity tree renders
+ *  the describe→plan→coordinate→gate run as ONE tree. Absent → byte-identical
+ *  behavior to before (no events, return values unchanged). */
+export interface PipelineTrace {
+  emit(type: string, payload: unknown, causedBy?: string[]): string;
+  /** Causal parents for the FIRST event this stage emits (e.g. the upstream
+   *  `director.pipeline.plan.created` id when passed to `coordinate`). */
+  causedBy?: string[];
+}
+
 /** Map each mechanic to an existing skill (or flag it), derive slices (Slice 0 = playable loop),
  *  and carry the content manifest. `knownSkill` is the authoritative catalog check (registry.has).
- *  The result is validated against ArchitecturePlanSchema before return. */
-export function planFromGDS(gds: GameDesignSpec, knownSkill: (name: string) => boolean): ArchitecturePlan {
+ *  The result is validated against ArchitecturePlanSchema before return.
+ *  `trace` (optional, additive) emits `director.pipeline.plan.created` with the full systems
+ *  mapping — including the previously-silent "unknown" mappings — and the newWork list. */
+export function planFromGDS(gds: GameDesignSpec, knownSkill: (name: string) => boolean, trace?: PipelineTrace): ArchitecturePlan {
   const systems: SystemMapping[] = gds.mechanics.map((m) => {
     let status: SystemMapping["status"];
     if (m.skill.startsWith("NEW:")) status = "new";
@@ -67,7 +81,7 @@ export function planFromGDS(gds: GameDesignSpec, knownSkill: (name: string) => b
     slices.push({ id: "slice-content", name: "Content", goal: "Source + place the content manifest", dodIds: [] });
   }
 
-  return ArchitecturePlanSchema.parse({
+  const plan = ArchitecturePlanSchema.parse({
     gdsId: gds.id,
     optIn: gds.optIn,
     systems,
@@ -75,4 +89,15 @@ export function planFromGDS(gds: GameDesignSpec, knownSkill: (name: string) => b
     slices,
     newWork,
   });
+
+  trace?.emit("director.pipeline.plan.created", {
+    gdsId: plan.gdsId,
+    optIn: plan.optIn,
+    systems: plan.systems,
+    unknown: plan.systems.filter((s) => s.status === "unknown").map((s) => s.skill),
+    newWork: plan.newWork,
+    slices: plan.slices.map((s) => ({ id: s.id, name: s.name, dodIds: s.dodIds })),
+  }, trace.causedBy);
+
+  return plan;
 }

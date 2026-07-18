@@ -12,8 +12,25 @@ export interface ChatTurnMessage {
 
 export type ChatTurnPush =
   | { type: "chat.delta"; turnId: string; text: string }
-  | { type: "chat.step"; turnId: string; tool: string; label: string; icon?: string }
-  | { type: "chat.done"; turnId: string; reply: string }
+  /** `status` absent = a pending step pushed BEFORE the tool invoke (the historical
+   *  shape, kept additively). Present = the invoke's completion outcome:
+   *  ok | failed | held (pending approval; `detail` = approvalId) | rejected
+   *  (unknown tool / invalid args — never invoked). `result` rides only on ok
+   *  completions so the editor can render typed tool output (e.g. a gds.plan card). */
+  | {
+    type: "chat.step";
+    turnId: string;
+    tool: string;
+    label: string;
+    icon?: string;
+    status?: "ok" | "failed" | "held" | "rejected";
+    detail?: string;
+    result?: unknown;
+  }
+  /** `reason` (additive) surfaces a turn that ENDED on a bound rather than a normal
+   *  reply — timeout | token_budget | max_steps | max_tool_calls | provider_missing —
+   *  so an empty reply never reads as silence. Absent on a natural end. */
+  | { type: "chat.done"; turnId: string; reply: string; reason?: string }
   | { type: "chat.error"; turnId: string; message: string };
 
 export interface ChatTurnPersistRecord {
@@ -122,7 +139,7 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
   };
 
   try {
-    await runBoundedMultiTurn(agent, opts.registry, opts.providers, opts.world, opts.tracer, {
+    const outcome = await runBoundedMultiTurn(agent, opts.registry, opts.providers, opts.world, opts.tracer, {
       startTick: 0,
       // Pass the user's message straight to the provider so it never depends on the
       // perception event window (the live tick loop can flush the chat.user event).
@@ -150,6 +167,9 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
           tool: step.tool,
           label: step.label,
           icon: step.icon,
+          status: step.status,
+          detail: step.detail,
+          result: step.result,
         });
       },
       onError: (err) => {
@@ -163,7 +183,17 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
     const reply = textParts.join("\n");
     await pushQueue;
     await maybePersist(opts.persist, { turnId, role: "assistant", text: reply });
-    await pushAndPersist(opts.push, opts.persist, turnId, { type: "chat.done", turnId, reply });
+    // Surface a bound-terminated turn explicitly: "no_tool_calls" and "max_steps"
+    // AFTER text are natural ends; timeout/token_budget/max_tool_calls/
+    // provider_missing (and a text-less max_steps) mean the turn was CUT, and an
+    // empty reply must say so rather than read as silence.
+    const cut = outcome.reason !== "no_tool_calls" && !(outcome.reason === "max_steps" && reply.length > 0);
+    await pushAndPersist(opts.push, opts.persist, turnId, {
+      type: "chat.done",
+      turnId,
+      reply,
+      ...(cut ? { reason: outcome.reason } : {}),
+    });
     return reply;
   } catch (err) {
     const message = errorMessage(err);
