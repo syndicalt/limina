@@ -221,6 +221,22 @@ assert(reusedChunks.every((artifact, index) => artifact.chunkId === base.manifes
   && artifact.contentHash === base.manifest.chunks[index].artifacts[0].contentHash), "reused descriptor partition does not match manifest order");
 assert(allReused.reusedArtifacts.some((artifact: any) => artifact.scope === "global" && artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE),
   "unchanged compile did not reuse the source-fenced overview");
+// Coordinator reuse-envelope contract (derived-build-coordinator parseCompileOutput):
+// reference keys strictly increasing — chunk entries first, then globals by artifactType.
+// Emitting reused globals in pipeline order shipped and broke every ≥2-global sparse
+// publish with INVALID_COMPILE_OUTPUT, so this pins the coordinator's exact comparator.
+function reuseEnvelopeKeys(reused: readonly any[]): string[] {
+  return reused.map((artifact: any) => artifact.scope === "global"
+    ? `global\u0000${artifact.artifactType}`
+    : `chunk\u0000${artifact.chunkId}\u0000${artifact.artifactType}`);
+}
+function strictlyOrdered(keys: readonly string[]): boolean {
+  return keys.every((key, index) => index === 0 || keys[index - 1] < key);
+}
+assert(strictlyOrdered(reuseEnvelopeKeys(allReused.reusedArtifacts)),
+  "sparse reuse envelope violates the coordinator's strict key order (chunks+overview+navigation)");
+assert(!strictlyOrdered(reuseEnvelopeKeys([...allReused.reusedArtifacts].reverse())),
+  "FALSIFIABILITY DEAD: a reversed reuse envelope must fail the strict-order comparator");
 const unavailableHash = available[0];
 const oneUnavailable = compileWorldTerrain({
   ...input(),
@@ -507,7 +523,7 @@ assert(decodedBiome.field.grid.rows === hydrologyField.masterRes && decodedBiome
   && decodedBiome.field.grid.origin[0] === hydrologyField.bounds.minX && decodedBiome.field.grid.origin[1] === hydrologyField.bounds.minZ
   && decodedBiome.field.grid.cellSizeM === hydrologyField.masterStep,
 "biome field is not on the exact pre-edit globally eroded master grid");
-assert(decodedBiome.field.pack.id === "limina-biomes-core" && decodedBiome.field.pack.version === "1.0.0"
+assert(decodedBiome.field.pack.id === "limina-biomes-core" && decodedBiome.field.pack.version === "1.0.1"
   && decodedBiome.field.topN === 4 && decodedBiome.field.diagnostics.influences === 0 && decodedBiome.field.diagnostics.modifiers === 4,
 "biome field did not publish the pinned library/rank/policy metadata");
 assert(WORLD_BIOME_FIELD_POLICY.modifiers.map((modifier: any) => modifier.targetBiomeId).join(",") === "alpine,canyon,deep-ocean,river",
@@ -527,6 +543,8 @@ const biomeWarm = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
 }));
 assert(biomeWarm.artifacts.length === 0 && biomeWarm.reusedArtifacts.length === biomeCold.manifest.chunks.length + 5,
   "warm biome compile did not reuse every chunk and global artifact");
+assert(strictlyOrdered(reuseEnvelopeKeys(biomeWarm.reusedArtifacts)),
+  "warm biome reuse envelope violates the coordinator's strict key order (all five globals reused)");
 const missingBiome = compileWorldTerrain(biomeInput(hydrologyMap, [], [], {
   previousSnapshot: biomeCold.snapshot,
   previousManifest: biomeCold.manifest,
@@ -598,11 +616,11 @@ const hydrologyWarm = compileWorldTerrain(hydrologyInput(hydrologyMap, [], [], {
 assert(hydrologyWarm.artifacts.length === 0, "warm hydrology compile materialized bytes");
 assert(hydrologyWarm.reusedArtifacts.length === hydrologyCold.manifest.chunks.length + 4, "warm hydrology compile did not reuse every global and chunk artifact");
 assert(hydrologyWarm.reusedArtifacts.slice(0, -4).every((artifact: any) => artifact.scope === "chunk")
-  && hydrologyWarm.reusedArtifacts.at(-4)?.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE
-  && hydrologyWarm.reusedArtifacts.at(-3)?.artifactType === NAVIGATION_INDEX_ARTIFACT_TYPE
-  && hydrologyWarm.reusedArtifacts.at(-2)?.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE
-  && hydrologyWarm.reusedArtifacts.at(-1)?.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE,
-"v2 reused artifacts are not explicitly scoped in dependency order");
+  && hydrologyWarm.reusedArtifacts.at(-4)?.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE
+  && hydrologyWarm.reusedArtifacts.at(-3)?.artifactType === HYDROLOGY_WATER_ARTIFACT_TYPE
+  && hydrologyWarm.reusedArtifacts.at(-2)?.artifactType === NAVIGATION_INDEX_ARTIFACT_TYPE
+  && hydrologyWarm.reusedArtifacts.at(-1)?.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE,
+"v2 reused artifacts are not explicitly scoped in coordinator key order (chunks, then globals by artifactType)");
 
 const hydrologyGlobalHash = derivedGlobalArtifacts(hydrologyCold.manifest)
   .find((artifact: any) => artifact.artifactType === HYDROLOGY_FIELD_ARTIFACT_TYPE).contentHash;

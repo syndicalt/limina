@@ -1012,6 +1012,18 @@ export function compileWorldTerrain(input: unknown) {
     }
   }
 
+  // The reuse envelope must be strictly key-ordered for the derived-build coordinator
+  // (chunk entries in manifest order, then globals by artifactType — the same ordering
+  // the manifest's globalArtifacts already use below). The stages above append reused
+  // globals in pipeline order, so canonicalize the global tail here; two or more reused
+  // globals in pipeline order are rejected as INVALID_COMPILE_OUTPUT.
+  const firstReusedGlobal = reusedArtifacts.findIndex((reused) => reused.scope === "global");
+  if (firstReusedGlobal >= 0) {
+    const reusedGlobals = reusedArtifacts.splice(firstReusedGlobal)
+      .sort((a, b) => a.artifactType < b.artifactType ? -1 : a.artifactType > b.artifactType ? 1 : 0);
+    reusedArtifacts.push(...reusedGlobals);
+  }
+
   const contentRefs = [mapDocumentRef, ...(designSourceRef === undefined ? [] : [designSourceRef, worldMapRef!]), ...layerRefs]
     .sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
   const globalArtifacts = [navigationArtifact, overviewArtifact,
