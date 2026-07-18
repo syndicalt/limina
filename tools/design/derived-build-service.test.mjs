@@ -125,7 +125,13 @@ class BootstrapAuthority {
   }
 
   async callTool(name, args, options) {
-    if (name === "authoring.sourceSnapshot") return this.snapshot();
+    if (name === "authoring.sourceSnapshot") {
+      // Authority reads must survive one transport drop: a long publish hand-off can
+      // block the loop past the host's ping window and the host closes the socket
+      // (a 15k-chunk build died at authority-at-publication exactly this way).
+      assert.deepEqual(options, { retryTransport: true });
+      return this.snapshot();
+    }
     assert.equal(name, "authoring.commit");
     assert.deepEqual(options, { retryTransport: true });
     this.commitCalls++;

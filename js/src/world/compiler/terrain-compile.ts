@@ -1,5 +1,5 @@
 import { WorldMapSchema, migrateWorldMap, verifyWorldMap, type WorldMap } from "../worldmap.ts";
-import { createMapTerrainField, sliceMapFieldChunk, MapFieldCancelledError, MAX_MAP_FIELD_MASTER_RES } from "../../terrain/map-field.mjs";
+import { createMapTerrainField, sliceMapFieldChunk, MapFieldCancelledError, MAP_FIELD_MARGIN_M, MAX_MAP_FIELD_MASTER_RES } from "../../terrain/map-field.mjs";
 import {
   createTerrainEditBaseTopology,
   parseTerrainEditLayer,
@@ -75,7 +75,10 @@ export const WORLD_HYDROLOGY_TERRAIN_COMPILER_VERSION = "1.2.0";
 export const WORLD_BIOME_TERRAIN_COMPILER_VERSION = "1.3.0";
 export const TERRAIN_CHUNK_ARTIFACT_TYPE = "terrain-chunk/v1";
 export const MAX_WORLD_TERRAIN_COMPILE_CHUNKS = 16_384;
-export const MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES = 256 * 1024 * 1024;
+// Sized so the chunk cap is actually reachable: 16,384 chunks x ~27 KiB terrain
+// artifacts ≈ 427 MiB + globals. The former 256 MiB ceiling silently capped worlds
+// at ~9.8k chunks — below the advertised chunk cap.
+export const MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES = 512 * 1024 * 1024;
 export const MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES = MAX_MAP_FIELD_MASTER_RES * MAX_MAP_FIELD_MASTER_RES;
 
 const RAW_HASH = /^[0-9a-f]{64}$/;
@@ -561,7 +564,20 @@ export function compileWorldTerrain(input: unknown) {
       paintW: field.channelTerrainPaintW ?? field.paintW });
     riverChannelDiagnostics = carved.diagnostics;
   }
-  const domain = terrainChunkRangeForBounds(field.grid, field.bounds);
+  // TERRITORY-RECT DOMAIN (plans/territory-rect-compile-domain.md): compile the chunks
+  // covering the AUTHORED extent (featureBounds + the map-field margin), not the
+  // origin-centered master square — a 6.9x4.6 km world costs its ~15k-chunk rect, not
+  // the 23.7k bounding square that blew the cap. Clamped to the master square so every
+  // chunk slices real raster data; master framing (raster, erosion, hydrology origin,
+  // overview grid, topology hash) is unchanged. Beyond the rect is unauthored deep sea,
+  // still rendered by the square overview.
+  const territory = Object.freeze({
+    minX: Math.max(field.bounds.minX, field.featureBounds.minX - MAP_FIELD_MARGIN_M),
+    minZ: Math.max(field.bounds.minZ, field.featureBounds.minZ - MAP_FIELD_MARGIN_M),
+    maxX: Math.min(field.bounds.maxX, field.featureBounds.maxX + MAP_FIELD_MARGIN_M),
+    maxZ: Math.min(field.bounds.maxZ, field.featureBounds.maxZ + MAP_FIELD_MARGIN_M),
+  });
+  const domain = terrainChunkRangeForBounds(field.grid, territory);
   const width = domain.maxTx - domain.minTx + 1, height = domain.maxTz - domain.minTz + 1;
   const chunkCount = width * height;
   if (!Number.isSafeInteger(chunkCount) || chunkCount > config.limits.maxChunks) throw new Error(`terrain compile domain has ${chunkCount} chunks, exceeding cap ${config.limits.maxChunks}`);

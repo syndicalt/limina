@@ -806,4 +806,42 @@ rejects(() => compileWorldTerrain({
   sourceRefs: { mapDocument: mapDocumentRef, designSource: designSourceRef, worldMap: { ...worldMapRef, contentHash: `sha256:${expensiveMap.provenance.contentHash}` } },
 }), /estimated work .* exceeds/, "adversarial cell-by-vector work was not rejected before rasterization");
 
-ops.op_log(`p_world_terrain_compile OK: ${base.manifest.chunks.length} canonical chunks + source-fenced overview/navigation globals; deterministic terrain/navigation/overview/water outputs, exact navigation-only invalidation, precipitation/threshold isolation, cold profile transitions, ordered local edits, strict cache/cancellation/resource rejection, and bounded vector work.`);
+// ═════════ Territory-rect domain (plans/territory-rect-compile-domain.md) ═════════
+// The chunk domain covers the AUTHORED territory (featureBounds + the 48m map-field
+// margin), not the origin-centered bounding square that billed a 6.9x4.6km world as
+// 23.7k chunks. An off-center asymmetric strip must compile exactly the rect.
+{
+  const stripMap = clone(map) as WorldMap;
+  const strip: [number, number][] = [[192, -8], [480, -8], [480, 8], [192, 8]];
+  stripMap.land = [{ points: clone(strip) }];
+  stripMap.biomes = [{ biome: "grass", points: clone(strip) }] as WorldMap["biomes"];
+  stripMap.provenance.contentHash = worldMapContentHash(stripMap);
+  const stripCompile = compileWorldTerrain(navigationInput(stripMap));
+  const grid = stripCompile.manifest.grid;
+  // territory = featureBounds (192..480 x, -8..8 z) + 48m margin, exactly as the compiler derives it.
+  const expected = terrainChunkRangeForBounds(grid, { minX: 144, minZ: -56, maxX: 528, maxZ: 56 });
+  const square = (() => {
+    // What the retired square derivation compiled: half = max|coord| + margin, both axes.
+    const half = 480 + 48;
+    return terrainChunkRangeForBounds(grid, { minX: -half, minZ: -half, maxX: half, maxZ: half });
+  })();
+  const txs = stripCompile.manifest.chunks.map((chunk: any) => chunk.tx);
+  const tzs = stripCompile.manifest.chunks.map((chunk: any) => chunk.tz);
+  const actual = { minTx: Math.min(...txs), maxTx: Math.max(...txs), minTz: Math.min(...tzs), maxTz: Math.max(...tzs) };
+  assert(actual.minTx === expected.minTx && actual.maxTx === expected.maxTx
+    && actual.minTz === expected.minTz && actual.maxTz === expected.maxTz,
+    `off-center strip must compile exactly the territory rect (got tx ${actual.minTx}..${actual.maxTx}, tz ${actual.minTz}..${actual.maxTz})`);
+  const width = actual.maxTx - actual.minTx + 1, height = actual.maxTz - actual.minTz + 1;
+  assert(width !== height, "asymmetric territory must produce a non-square domain");
+  assert(stripCompile.manifest.chunks.length === width * height, "rect domain must be dense");
+  // FALSIFIABILITY: the retired square derivation produces a DIFFERENT domain for this
+  // fixture — if these ever coincide, the legs above stop discriminating.
+  assert(square.minTx !== expected.minTx || square.maxTx !== expected.maxTx
+    || square.minTz !== expected.minTz || square.maxTz !== expected.maxTz,
+    "FALSIFIABILITY DEAD: square and territory-rect domains coincide for the strip fixture");
+  assert(stripCompile.manifest.chunks.length
+    < (square.maxTx - square.minTx + 1) * (square.maxTz - square.minTz + 1),
+    "rect domain must be strictly smaller than the bounding square for asymmetric territory");
+}
+
+ops.op_log(`p_world_terrain_compile OK: ${base.manifest.chunks.length} canonical chunks + territory-rect domain + source-fenced overview/navigation globals; deterministic terrain/navigation/overview/water outputs, exact navigation-only invalidation, precipitation/threshold isolation, cold profile transitions, ordered local edits, strict cache/cancellation/resource rejection, and bounded vector work.`);

@@ -637,7 +637,7 @@ export async function bootstrapAuthoritativeMapDoc({
   persistSource = persistMapDocSource,
 }) {
   if (typeof validateMapDoc !== "function") throw new DerivedBuildServiceError("INVALID_BOOTSTRAP", "bootstrap requires a MapDoc validator");
-  const initial = validateAuthoritySourceSnapshot(await authoringClient.callTool("authoring.sourceSnapshot", {}), projectId);
+  const initial = validateAuthoritySourceSnapshot(await authoringClient.callTool("authoring.sourceSnapshot", {}, { retryTransport: true }), projectId);
   if (initial.projectState.refs.mapDoc !== null) {
     return Object.freeze({ status: "preserved", source: initial.projectState.refs.mapDoc, snapshot: initial });
   }
@@ -673,7 +673,7 @@ export async function bootstrapAuthoritativeMapDoc({
     commitEvidence = validateAuthoringProjectStateCommit(result, transaction, initial.projectState, source);
   }
 
-  const confirmed = validateAuthoritySourceSnapshot(await authoringClient.callTool("authoring.sourceSnapshot", {}), projectId);
+  const confirmed = validateAuthoritySourceSnapshot(await authoringClient.callTool("authoring.sourceSnapshot", {}, { retryTransport: true }), projectId);
   if (!sameRef(confirmed.projectState.refs.mapDoc, source)) {
     if (confirmed.projectState.refs.mapDoc !== null) {
       return Object.freeze({ status: "preserved-concurrent", source: confirmed.projectState.refs.mapDoc, snapshot: confirmed });
@@ -937,7 +937,7 @@ export class DerivedBuildService {
   }
 
   async #readSnapshot() {
-    const input = await this.#authoringClient.callTool("authoring.sourceSnapshot", {});
+    const input = await this.#authoringClient.callTool("authoring.sourceSnapshot", {}, { retryTransport: true });
     return validateAuthoritySourceSnapshot(input, this.#projectId);
   }
 
@@ -1152,7 +1152,7 @@ async function main() {
   }));
   const readHead = async () => {
     const snapshot = validateAuthoritySourceSnapshot(
-      await authoringClient.callTool("authoring.sourceSnapshot", {}),
+      await authoringClient.callTool("authoring.sourceSnapshot", {}, { retryTransport: true }),
       projectConfig.projectId,
     );
     return { projectId: projectConfig.projectId, branchId: DEFAULT_DERIVED_BUILD_BRANCH, revision: snapshot.head.revision, headHash: snapshot.head.headHash };
