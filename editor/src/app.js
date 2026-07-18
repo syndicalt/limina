@@ -51,6 +51,9 @@ const state = {
   snapshot: undefined,
   entityIndex: new Map(),
   approvals: [],
+  // The approval queue is reviewer UI (approval.review). Proposing profiles (builder.review)
+  // are denied by design — first denial flips this off so neither poll retries into the log.
+  approvalAccess: true,
   polling: undefined,
   log: [],
 };
@@ -124,6 +127,7 @@ async function connect() {
     await client.connect();
     const sessionId = "ses_editor_" + Math.random().toString(36).slice(2, 8);
     await client.initialize("human_editor", sessionId, profile);
+    state.approvalAccess = true; // re-probed per connection: the new profile may be a reviewer
     try { await client.subscribe(); } catch { /* read-stream optional */ }
     state.client = client;
     // The skill catalog is STATIC — fetch its size ONCE (limit:0 skips the entity page) so
@@ -195,13 +199,20 @@ function startApprovalBadgePoll() {
   stopApprovalBadgePoll();
   state.badgePollActive = true;
   const loop = async () => {
-    if (!state.badgePollActive || !state.client) return;
+    if (!state.badgePollActive || !state.client || !state.approvalAccess) return;
     try {
       const list = await state.client.callTool("approval.list", {});
       state.approvals = (list && list.pending) || [];
       renderApprovals();
     } catch (e) {
-      logLine("approval badge poll error: " + (e && e.message ? e.message : String(e)), "err");
+      const msg = e && e.message ? e.message : String(e);
+      if (msg.includes("missing permission: approval.review")) {
+        state.approvalAccess = false;
+        logLine("approval queue is reviewer-only — this profile proposes into it; badge poll off", "");
+        stopApprovalBadgePoll();
+        return;
+      }
+      logLine("approval badge poll error: " + msg, "err");
     } finally {
       if (state.badgePollActive) state.badgePollTimer = setTimeout(() => { void loop(); }, APPROVAL_BADGE_POLL_MS);
     }
@@ -255,12 +266,17 @@ async function refreshAll() {
         }
       } finally { spins.forEach((id) => setSpin(id, false)); }
     }
-    // Approval queue only when its panel is open.
-    if (panelOpen("approval")) {
+    // Approval queue only when its panel is open (and the profile can review — an
+    // unguarded rejection here would abort the rest of this refresh pass).
+    if (panelOpen("approval") && state.approvalAccess) {
       setSpin("approval", true);
       try {
         const list = await c.callTool("approval.list", {});
         state.approvals = (list && list.pending) || [];
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        if (msg.includes("missing permission: approval.review")) state.approvalAccess = false;
+        else throw e;
       } finally { setSpin("approval", false); }
     }
     // World snapshot only when its panel is open, and less often (it's the heaviest read).
