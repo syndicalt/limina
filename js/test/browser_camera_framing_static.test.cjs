@@ -12,7 +12,11 @@ const test = require("node:test");
 const source = fs.readFileSync(path.join(__dirname, "../src/browser-entry.ts"), "utf8");
 
 test("map-generated editable terrain selects large-world framing defaults", () => {
-  assert.match(source, /const commandCameraFrame = deriveCommandCameraFrame\(opts\.commands\)/);
+  // Fast-boot (86edda0): framing derives from the EFFECTIVE command list — the
+  // snapshot-boot program + tail when a snapshot rides along, opts.commands otherwise —
+  // so a fast-booted world frames identically to its full-replay twin.
+  assert.match(source, /const effectiveCommands = bootSnapshotProgram === undefined \? opts\.commands : \[\.\.\.bootSnapshotProgram, \.\.\.opts\.commands\]/);
+  assert.match(source, /const commandCameraFrame = deriveCommandCameraFrame\(effectiveCommands\)/);
   assert.match(source, /const largeMapTerrainPlanned = streamingPlanned \|\| commandCameraFrame\.largeMapTerrain/);
   assert.match(source, /orbitCenter = opts\.orbit\?\.center \?\?/);
   assert.match(source, /opts\.orbit\?\.radius \?\? commandCameraFrame\.orbitRadiusM/);
