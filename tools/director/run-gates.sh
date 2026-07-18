@@ -46,7 +46,8 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p101_worldlog_chain_ops.ts
   js/test/p102_ctx_rng_context_independence.ts
   js/test/p103_partial_failure_atomicity.ts
-  js/test/p104_snapshot_participants.ts)
+  js/test/p104_snapshot_participants.ts
+  js/test/p108_realm_grant_parity.ts)
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -323,13 +324,28 @@ free_port() {
 }
 editor_static_port="$(free_port)"
 editor_host_port="$(free_port)"
+# Atlas service (tools/design/serve-design.mjs): the embedded Atlas dock the
+# atlas_*_browser gates drive is a PROXY (serve.mjs /atlas/**) to this server —
+# without it the iframe 404s and #map-svg never renders (the gates time out on a
+# harness artifact instead of testing anything). Port chosen now so the static
+# server learns the origin at spawn; the service itself starts after the host
+# token exists (its editor bridge needs it). Vault = a throwaway project dir.
+editor_atlas_port="$(free_port)"
+editor_atlas_log="$(mktemp)"
+editor_atlas_pid=""
+editor_atlas_proj=""
 cleanup_editor_gates() {
   [ -n "$editor_host_pid" ] && kill "$editor_host_pid" >/dev/null 2>&1 || true
   [ -n "$editor_static_pid" ] && kill "$editor_static_pid" >/dev/null 2>&1 || true
-  rm -f "$editor_host_log" "$editor_static_log"
+  [ -n "$editor_atlas_pid" ] && kill "$editor_atlas_pid" >/dev/null 2>&1 || true
+  [ -n "$editor_atlas_proj" ] && rm -rf "$editor_atlas_proj"
+  rm -f "$editor_host_log" "$editor_static_log" "$editor_atlas_log"
 }
 trap cleanup_editor_gates EXIT
-node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
+LIMINA_ATLAS_ORIGIN="http://127.0.0.1:$editor_atlas_port" \
+  LIMINA_EDITOR_PUBLIC_URL="http://localhost:$editor_static_port/" \
+  LIMINA_EDITOR_SERVER_URL="ws://localhost:$editor_host_port/" \
+  node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
 editor_static_pid=$!
 LIMINA_EDITOR_PORT="$editor_host_port" LIMINA_EDITOR_STATIC_PORT="$editor_static_port" \
   LIMINA_PROJECT_ID="limina" \
@@ -353,6 +369,27 @@ if [ -z "$editor_token" ]; then
   sed 's/^/      /' "$editor_host_log" | tail -n 12
   hostfail=1
 else
+  # Bring up the Atlas service now that the host token exists (empty throwaway
+  # vault; the SPA renders #map-svg regardless of vault content). A failed boot is
+  # ANNOUNCED — the atlas gates then fail with real output, never silently.
+  editor_atlas_proj="$(mktemp -d)"
+  mkdir -p "$editor_atlas_proj/design"
+  printf '{\n  "schema": "limina-project/1",\n  "projectId": "limina"\n}\n' > "$editor_atlas_proj/limina.project.json"
+  env LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" LIMINA_EDITOR_TOKEN="$editor_token" \
+    node tools/design/serve-design.mjs "$editor_atlas_proj/design" "$editor_atlas_port" >"$editor_atlas_log" 2>&1 &
+  editor_atlas_pid=$!
+  atlas_up=0
+  for _ in $(seq 1 50); do
+    if node -e "const s=require('node:net').connect($editor_atlas_port,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),400)" 2>/dev/null; then
+      atlas_up=1; break
+    fi
+    if ! kill -0 "$editor_atlas_pid" >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  if [ "$atlas_up" != 1 ]; then
+    echo "   WARN: Atlas service (serve-design.mjs) did not come up on :$editor_atlas_port — atlas browser gates will fail with real output" >&2
+    sed 's/^/      /' "$editor_atlas_log" | tail -n 8 >&2
+  fi
   host_gate "editor history live" "self-declared exit 2" \
     env EDITOR_AUTH_TOKEN="$editor_token" EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
     node editor/test/history_live.test.mjs

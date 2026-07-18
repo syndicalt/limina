@@ -86,6 +86,16 @@ export function atlasProxyPath(requestUrl) {
   if (pathname.startsWith("/api/") || pathname.startsWith("/shared/") || pathname.startsWith("/assets/qc/")) {
     return `${pathname}${query}`;
   }
+  // Engine-shared validator modules (serve-design SHARED_MODULES): the embedded
+  // Atlas frontend imports them via ../../../js/src/world/*.mjs, which the browser
+  // resolves OUT of the /atlas/ prefix onto this origin — so the dock proxy must
+  // carry the family or the SPA's module graph 404s and the map never renders.
+  // One flat .mjs segment only (no traversal shapes); serve-design's own explicit
+  // allow-list 404s anything it doesn't declare, and this origin serves nothing
+  // of its own under /js/.
+  if (/^\/js\/src\/world\/[A-Za-z0-9._-]+\.mjs$/.test(pathname) && !pathname.includes("..")) {
+    return `${pathname}${query}`;
+  }
   return undefined;
 }
 

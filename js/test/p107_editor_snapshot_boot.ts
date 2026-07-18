@@ -227,6 +227,24 @@ const doorOpen = await toolOk(builder, "interaction.open", { entity: entityIds[5
 assert(doorOpen.ok === true, "interaction.open must succeed (tick-stamped door state is the snapshot-only payload)");
 await toolOk(builder, "game.flag", { name: "fast_boot", value: true });
 await toolOk(builder, "game.counter", { name: "coins", action: "set", value: 12 });
+// NPC-manager + dialogue state (the enrolled behavior/dialogue participants): a
+// behavior assignment with a TICK-STAMPED active goal and an IN-PROGRESS dialogue
+// session (mid-tree cursor + history) — snapshot-only payloads a tick-0 full
+// replay cannot reproduce (goal ids embed the server's invoke tick).
+await toolOk(builder, "behavior.define", { id: "prof_p107", name: "Sentry", goals: [{ id: "g0", type: "guard", priority: 1 }] });
+await toolOk(builder, "behavior.assign", { entity: "npc_p107", profileId: "prof_p107" });
+await toolOk(builder, "behavior.setGoal", { entity: "npc_p107", type: "patrol", priority: 2 });
+await toolOk(builder, "npc.memorize", { entity: "npc_p107", key: "sawPlayer", value: true });
+await toolOk(builder, "dialogue.define", {
+  id: "dlg_p107", name: "Gate", startNode: "a",
+  nodes: [
+    { id: "a", text: "Who goes there?", speaker: "npc_p107", choices: [{ text: "A friend.", nextNodeId: "b" }] },
+    { id: "b", text: "Pass.", speaker: "npc_p107", choices: [] },
+  ],
+});
+await toolOk(builder, "dialogue.start", { treeId: "dlg_p107", speaker: "npc_p107", listener: "hero" });
+const p107Chose = await toolOk(builder, "dialogue.choose", { speaker: "npc_p107", listener: "hero", choiceIndex: 0 });
+assert(p107Chose.ok === true, "dialogue.choose must advance the fixture session mid-tree");
 
 // ═════════ Phase 2 — the fast-boot endpoint over the wire, then a real tail ═════════
 
@@ -245,7 +263,7 @@ const payload: SnapshotBootPayload = {
 const snap = parseSnapshot(payload.snapshot);
 assert(snap.snapshotSeq === payload.snapshotSeq, "parsed snapshot's seq must match the payload");
 assert(snap.entities.length === entityIds.length, `snapshot must carry all ${entityIds.length} entities (got ${snap.entities.length})`);
-assert(Object.keys(snap.managers).length >= 15, "snapshot must carry the full participant manager capture");
+assert(Object.keys(snap.managers).length >= 17, "snapshot must carry the full participant manager capture (incl. behavior + dialogue)");
 assert(snap.physics.length > 0, "snapshot must carry the native physics blob (full capture, not the hot-path projection)");
 assert(payload.bootstrapCommands.length >= 1, "the server's op_physics_create_world bootstrap must ride bootstrapCommands");
 
@@ -288,6 +306,17 @@ assert(bootA.state.entities.length === entityIds.length + 1, "fast boot must hol
 // that full replay CANNOT reproduce (it re-invokes with tick 0).
 const fastVsServer = diffCaptureKeys(bootA.captures, serverCaptures);
 assert(fastVsServer.length === 0, `fast-boot participant captures diverge from the server's: ${fastVsServer.join(", ")}`);
+// The newly enrolled rows are NOT vacuously equal — the fast boot carries the
+// authored mid-tree behavior assignment and the in-progress dialogue session.
+assert(bootA.core.behavior.behaviorManager.getAssignedProfile("npc_p107")?.id === "prof_p107",
+  "fast boot must restore the NPC's assigned behavior profile");
+assert(bootA.core.behavior.behaviorManager.getGoal("npc_p107")?.type === "patrol",
+  "fast boot must restore the NPC's tick-stamped active goal");
+{
+  const s = bootA.core.behavior.dialogueManager.getCurrentSession("npc_p107", "hero");
+  assert(s?.currentNodeId === "b" && s.history.length === 1,
+    "fast boot must restore the IN-PROGRESS dialogue session (mid-tree cursor + history)");
+}
 const fullVsServer = diffCaptureKeys(bootB.captures, serverCaptures);
 assert(fullVsServer.length > 0,
   "control: full replay was expected to LOSE tick-stamped manager state vs the server -- if it no longer does, tighten this gate");

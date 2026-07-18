@@ -37,7 +37,8 @@
 // | behaviorSpec.events (EventSpecRegistry)      | P "events" (reserved)| migrated from the bespoke `events?:` param; serializes into the snapshot's existing top-level field |
 // | (host character controllers)                 | P "characters" (reserved) | host registers charactersParticipant(...); legacy `characters?:` param delegates |
 // | functionalBuildings.topologyManager          | R | functional-building.ts registers a world reconciler: topology/doors/portals rebuild from entry.origin, and origins ride the snapshot |
-// | behavior.behaviorManager / dialogueManager   | F | NPC memories/goals/assignments + dialogue sessions ARE sim state; enrollment deferred (plan scope) — snapshot restore currently rebuilds them empty |
+// | behavior.behaviorManager                     | P "behavior"         | profiles/memories/attitudes/assignments/goals/routines/reactions + the goal-id seq (post-restore setGoal allocates the same next id) |
+// | behavior.dialogueManager                     | P "dialogue"         | dialogue trees + IN-PROGRESS sessions (current node, choice history) |
 // | functionalSettlements.placementManager       | F | settlement handles are sim ownership state; JSON-shaped, but enrollment deferred (plan scope) |
 // | terrain (source/cache/regions/layers)        | F | editable-layer heights/paint are sim state; heightfield COLLIDERS ride the physics blob but the JS tile arrays do not — known pre-existing gap |
 // | nav.navmeshManager (base grid + agents)      | F | grid rebuilds via navmesh.build replay only; not yet snapshot-carried |
@@ -75,6 +76,7 @@ import type { GazetteerManager, GazetteerRecord } from "./navigation.ts";
 import type { CutsceneManager, CutsceneManagerSnapshot } from "./cutscene.ts";
 import type { DirectorManager, DirectorManagerSnapshot } from "./director.ts";
 import type { EventSpecRegistry } from "./behavior-spec.ts";
+import type { BehaviorManager, BehaviorManagerSnapshot, DialogueManager, DialogueManagerSnapshot } from "./behavior.ts";
 
 // ---- participant schemas (validate a snapshot's managers entries at restore) ----
 // Typed against each manager module's exported snapshot interface, so schema and
@@ -322,6 +324,75 @@ const directorSchema: z.ZodType<DirectorManagerSnapshot> = z.object({
   phaseTicksLeft: z.number(),
 });
 
+const vec3Schema = z.tuple([z.number(), z.number(), z.number()]);
+const behaviorActionSchema = z.object({ type: z.string(), data: meta });
+const behaviorReactionSchema = z.object({
+  trigger: z.string(),
+  action: behaviorActionSchema,
+  priority: z.number(),
+  cooldown: z.number().optional(),
+  config: meta.optional(),
+});
+const behaviorGoalSchema = z.object({
+  id: z.string(),
+  type: z.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
+  target: z.string().optional(),
+  position: vec3Schema.optional(),
+  priority: z.number(),
+  config: meta.optional(),
+});
+const behaviorSchema: z.ZodType<BehaviorManagerSnapshot> = z.object({
+  goalSeq: z.number(),
+  profiles: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    routines: z.array(z.object({
+      id: z.string(),
+      name: z.string(),
+      schedule: z.array(z.object({ hour: z.number(), action: z.string(), target: z.string().optional(), position: vec3Schema.optional() })),
+      config: meta.optional(),
+    })),
+    reactions: z.array(behaviorReactionSchema),
+    goals: z.array(behaviorGoalSchema),
+    config: meta.optional(),
+  })),
+  memories: z.array(z.object({
+    entity: z.string(),
+    facts: z.array(z.object({ key: z.string(), value: z.unknown(), tick: z.number(), source: z.string().optional() })),
+    relationships: z.array(z.object({ toward: z.string(), attitude: z.enum(["friendly", "neutral", "hostile"]) })),
+  })),
+  assignedBehaviors: z.array(z.object({ entity: z.string(), profileId: z.string() })),
+  activeGoals: z.array(z.object({ entity: z.string(), goal: behaviorGoalSchema })),
+  assignedRoutines: z.array(z.object({ entity: z.string(), routineId: z.string() })),
+  reactions: z.array(z.object({ entity: z.string(), reactions: z.array(behaviorReactionSchema) })),
+});
+
+const dialogueNodeSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  speaker: z.string(),
+  mood: z.string().optional(),
+  choices: z.array(z.object({ text: z.string(), nextNodeId: z.string(), condition: z.string().optional(), effects: meta.optional() })),
+  effects: meta.optional(),
+  config: meta.optional(),
+});
+const dialogueSchema: z.ZodType<DialogueManagerSnapshot> = z.object({
+  trees: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    startNode: z.string(),
+    nodes: z.array(dialogueNodeSchema),
+    config: meta.optional(),
+  })),
+  sessions: z.array(z.object({
+    treeId: z.string(),
+    speaker: z.string(),
+    listener: z.string(),
+    currentNodeId: z.string(),
+    history: z.array(z.object({ nodeId: z.string(), choiceIndex: z.number().optional() })),
+  })),
+});
+
 // ---- assembly ---------------------------------------------------------------
 
 /** The managers registerCoreSkills built (the P rows of the table above). */
@@ -341,6 +412,8 @@ export interface CoreParticipantManagers {
   gazetteerManager: GazetteerManager;
   cutsceneManager: CutsceneManager;
   directorManager: DirectorManager;
+  behaviorManager: BehaviorManager;
+  dialogueManager: DialogueManager;
   /** The world-level EventSpecRegistry — the reserved "events" participant. */
   eventSpecs: EventSpecRegistry;
 }
@@ -370,6 +443,8 @@ export function buildCoreSnapshotParticipants(m: CoreParticipantManagers): Snaps
   registry.register(participant("gazetteer", gazetteerSchema, () => m.gazetteerManager.captureSnapshot(), (s) => m.gazetteerManager.restoreSnapshot(s)));
   registry.register(participant("cutscenes", cutscenesSchema, () => m.cutsceneManager.captureSnapshot(), (s) => m.cutsceneManager.restoreSnapshot(s)));
   registry.register(participant("director", directorSchema, () => m.directorManager.captureSnapshot(), (s) => m.directorManager.restoreSnapshot(s)));
+  registry.register(participant("behavior", behaviorSchema, () => m.behaviorManager.captureSnapshot(), (s) => m.behaviorManager.restoreSnapshot(s)));
+  registry.register(participant("dialogue", dialogueSchema, () => m.dialogueManager.captureSnapshot(), (s) => m.dialogueManager.restoreSnapshot(s)));
   // Migrated from the bespoke `events?:` plumbing: rides the snapshot's existing
   // top-level `events` field via the reserved key (wire format unchanged).
   registry.register(eventsParticipant(m.eventSpecs));

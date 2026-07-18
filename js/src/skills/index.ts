@@ -342,6 +342,8 @@ export function registerCoreSkills(
     gazetteerManager: navigation.gazetteerManager,
     cutsceneManager: cutscene.cutsceneManager,
     directorManager: director.directorManager,
+    behaviorManager: behavior.behaviorManager,
+    dialogueManager: behavior.dialogueManager,
     eventSpecs: behaviorSpec.events,
   });
   return {

@@ -87,6 +87,24 @@ export interface DialogueSession {
   history: { nodeId: string; choiceIndex?: number }[];
 }
 
+/** The whole BehaviorManager state as the snapshot participant carries it (the
+ *  P "behavior" row). Sorted/canonical: two captures of one world are byte-identical. */
+export interface BehaviorManagerSnapshot {
+  /** The goal-id sequence (`goal_<tick>_<seq>`), carried so a post-restore
+   *  behavior.setGoal allocates the SAME next id it would have live. */
+  goalSeq: number;
+  profiles: BehaviorProfile[];
+  memories: {
+    entity: string;
+    facts: { key: string; value: unknown; tick: number; source?: string }[];
+    relationships: { toward: string; attitude: "friendly" | "neutral" | "hostile" }[];
+  }[];
+  assignedBehaviors: { entity: string; profileId: string }[];
+  activeGoals: { entity: string; goal: BehaviorGoal }[];
+  assignedRoutines: { entity: string; routineId: string }[];
+  reactions: { entity: string; reactions: BehaviorReaction[] }[];
+}
+
 export class BehaviorManager {
   private readonly profiles = new Map<string, BehaviorProfile>();
   private readonly npcMemories = new Map<string, NPCMemory>();
@@ -94,6 +112,15 @@ export class BehaviorManager {
   private readonly activeGoals = new Map<string, BehaviorGoal>();
   private readonly assignedRoutines = new Map<string, string>(); // entity -> routine id
   private readonly reactions = new Map<string, BehaviorReaction[]>(); // entity -> attached reactions
+  /** Deterministic goal-id counter (with ctx.tick → `goal_<tick>_<seq>`): lives ON the
+   *  manager (not a registry closure) so the snapshot carries it — a restored world
+   *  allocates the identical next goal id a continuing live world would. */
+  private goalSeq = 0;
+
+  /** Next deterministic goal id. `tick` is the recorded skill tick (ctx.tick). */
+  nextGoalId(tick: number): string {
+    return `goal_${tick}_${this.goalSeq++}`;
+  }
 
   defineProfile(profile: BehaviorProfile): void {
     this.profiles.set(profile.id, profile);
@@ -175,6 +202,81 @@ export class BehaviorManager {
   getAttitude(entity: string, towardEntity: string): "friendly" | "neutral" | "hostile" {
     return this.npcMemories.get(entity)?.relationships.get(towardEntity) ?? "neutral";
   }
+
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant):
+   *  profiles by id, per-entity maps by entity, relationships by target entity —
+   *  fact/reaction LISTS keep insertion order (recall/getReactions return that order,
+   *  so it is observable state, and it is replay-deterministic). */
+  captureSnapshot(): BehaviorManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      goalSeq: this.goalSeq,
+      profiles: [...this.profiles.values()].sort((a, b) => byString(a.id, b.id)).map((p) => ({
+        ...p,
+        routines: p.routines.map((r) => ({ ...r, schedule: r.schedule.map((s) => ({ ...s })) })),
+        reactions: p.reactions.map((r) => ({ ...r, action: { ...r.action } })),
+        goals: p.goals.map((g) => ({ ...g })),
+      })),
+      memories: [...this.npcMemories.values()].sort((a, b) => byString(a.entity, b.entity)).map((m) => ({
+        entity: m.entity,
+        facts: m.facts.map((f) => ({ ...f })),
+        relationships: [...m.relationships.entries()].sort((a, b) => byString(a[0], b[0])).map(([toward, attitude]) => ({ toward, attitude })),
+      })),
+      assignedBehaviors: [...this.assignedBehaviors.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, profileId]) => ({ entity, profileId })),
+      activeGoals: [...this.activeGoals.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, goal]) => ({ entity, goal: { ...goal } })),
+      assignedRoutines: [...this.assignedRoutines.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, routineId]) => ({ entity, routineId })),
+      reactions: [...this.reactions.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, list]) => ({
+        entity,
+        reactions: list.map((r) => ({ ...r, action: { ...r.action } })),
+      })),
+    };
+  }
+
+  /** Wholesale replace the manager's state + resume the goal-id counter
+   *  (participant restore). */
+  restoreSnapshot(state: BehaviorManagerSnapshot): void {
+    this.profiles.clear();
+    this.npcMemories.clear();
+    this.assignedBehaviors.clear();
+    this.activeGoals.clear();
+    this.assignedRoutines.clear();
+    this.reactions.clear();
+    this.goalSeq = state.goalSeq;
+    for (const p of state.profiles) {
+      this.profiles.set(p.id, {
+        ...p,
+        routines: p.routines.map((r) => ({ ...r, schedule: r.schedule.map((s) => ({ ...s })) })),
+        reactions: p.reactions.map((r) => ({ ...r, action: { ...r.action } })),
+        goals: p.goals.map((g) => ({ ...g })),
+      });
+    }
+    for (const m of state.memories) {
+      this.npcMemories.set(m.entity, {
+        id: `mem_${m.entity}`,
+        entity: m.entity,
+        facts: m.facts.map((f) => ({ ...f })),
+        relationships: new Map(m.relationships.map((r) => [r.toward, r.attitude])),
+      });
+    }
+    for (const a of state.assignedBehaviors) this.assignedBehaviors.set(a.entity, a.profileId);
+    for (const g of state.activeGoals) this.activeGoals.set(g.entity, { ...g.goal });
+    for (const r of state.assignedRoutines) this.assignedRoutines.set(r.entity, r.routineId);
+    for (const r of state.reactions) this.reactions.set(r.entity, r.reactions.map((x) => ({ ...x, action: { ...x.action } })));
+  }
+}
+
+/** The whole DialogueManager state as the snapshot participant carries it (the
+ *  P "dialogue" row): trees with their node maps flattened to sorted arrays, plus
+ *  every IN-PROGRESS session (current node + choice history). */
+export interface DialogueManagerSnapshot {
+  trees: {
+    id: string;
+    name: string;
+    startNode: string;
+    nodes: DialogueNode[];
+    config?: Record<string, unknown>;
+  }[];
+  sessions: DialogueSession[];
 }
 
 export class DialogueManager {
@@ -217,6 +319,47 @@ export class DialogueManager {
 
   endSession(speaker: string, listener: string): boolean {
     return this.sessions.delete(`${speaker}:${listener}`);
+  }
+
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant):
+   *  trees by id, nodes by id, sessions by (speaker, listener). History keeps its
+   *  chronological order — it is the observable dialogue transcript. */
+  captureSnapshot(): DialogueManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      trees: [...this.trees.values()].sort((a, b) => byString(a.id, b.id)).map((t) => ({
+        id: t.id,
+        name: t.name,
+        startNode: t.startNode,
+        nodes: [...t.nodes.values()].sort((a, b) => byString(a.id, b.id)).map((n) => ({
+          ...n,
+          choices: n.choices.map((c) => ({ ...c })),
+        })),
+        config: t.config,
+      })),
+      sessions: [...this.sessions.values()]
+        .sort((a, b) => byString(`${a.speaker}:${a.listener}`, `${b.speaker}:${b.listener}`))
+        .map((s) => ({ ...s, history: s.history.map((h) => ({ ...h })) })),
+    };
+  }
+
+  /** Wholesale replace the manager's state (participant restore). The session map
+   *  key is derived (`speaker:listener`), exactly as startSession builds it. */
+  restoreSnapshot(state: DialogueManagerSnapshot): void {
+    this.trees.clear();
+    this.sessions.clear();
+    for (const t of state.trees) {
+      this.trees.set(t.id, {
+        id: t.id,
+        name: t.name,
+        startNode: t.startNode,
+        nodes: new Map(t.nodes.map((n) => [n.id, { ...n, choices: n.choices.map((c) => ({ ...c })) }])),
+        config: t.config,
+      });
+    }
+    for (const s of state.sessions) {
+      this.sessions.set(`${s.speaker}:${s.listener}`, { ...s, history: s.history.map((h) => ({ ...h })) });
+    }
   }
 }
 
@@ -379,9 +522,6 @@ function viewNode(node: DialogueNode | undefined): NodeView | undefined {
 export function registerBehaviorDialogueSkills(registry: SkillRegistry, opts?: { behaviorManager?: BehaviorManager; dialogueManager?: DialogueManager }): { behaviorManager: BehaviorManager; dialogueManager: DialogueManager } {
   const behaviorMgr = opts?.behaviorManager ?? new BehaviorManager();
   const dialogueMgr = opts?.dialogueManager ?? new DialogueManager();
-  // Deterministic per-registry goal-id counter: with ctx.tick this yields stable ids that a
-  // fresh replay registry (seq reset to 0, same invoke order) recomputes bit-identically.
-  let goalSeq = 0;
 
   // ---- Behavior skills ----
 
@@ -431,9 +571,10 @@ export function registerBehaviorDialogueSkills(registry: SkillRegistry, opts?: {
     input: setGoalInput,
     output: z.object({ ok: z.boolean(), goalId: z.string() }),
     handler: (input, ctx) => {
-      // Deterministic id: the sim tick + a per-registry sequence (NOT Date.now()), so replay
-      // re-invoking this skill in the same order recomputes the identical goal id.
-      const goalId = `goal_${ctx.tick}_${goalSeq++}`;
+      // Deterministic id: the sim tick + the MANAGER's sequence (NOT Date.now()), so replay
+      // re-invoking this skill in the same order recomputes the identical goal id — and a
+      // snapshot-restored world resumes the sequence (goalSeq rides the behavior participant).
+      const goalId = behaviorMgr.nextGoalId(ctx.tick);
       behaviorMgr.setGoal(input.entity, { id: goalId, type: input.type, target: input.target, position: input.position, priority: input.priority, config: input.config });
       ctx.emit("behavior.goalSet", { entity: input.entity, type: input.type, goalId, ...input.meta });
       return { ok: true, goalId };

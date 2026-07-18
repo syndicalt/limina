@@ -23,7 +23,10 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     profile: "builder.readWrite",
   }));
   const before = await authority.callTool("authoring.sourceSnapshot", {});
-  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  // --enable-unsafe-swiftshader: chromium 1228+ dropped the automatic software-GL
+  // fallback, and the Play leg below needs a (software) renderer in headless. This
+  // gate judges DOM/layout state, never pixels — same contract as play_workflow.
+  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader"] });
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   const page = await context.newPage();
   const pageErrors = [];

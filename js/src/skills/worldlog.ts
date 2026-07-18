@@ -145,6 +145,13 @@ export const SNAPSHOT_BOOT_CARRIED_TOOLS: ReadonlySet<string> = new Set([
   "world.setTime", "world.setWeather",
   "cutscene.define", "cutscene.play",
   "director.configure", "director.start",
+  // Behavior + dialogue managers (enrolled P rows): profiles/assignments/goals/
+  // memories/attitudes/routines/reactions and trees/in-progress sessions restore
+  // wholesale via the "behavior" / "dialogue" participants. (dialogue.npcSay /
+  // dialogue.setMood stay OUT: emit-only presentation, not carried state.)
+  "behavior.define", "behavior.assign", "behavior.setGoal", "behavior.onEvent",
+  "npc.setRoutine", "npc.memorize", "npc.setAttitude",
+  "dialogue.define", "dialogue.start", "dialogue.choose", "dialogue.end",
 ]);
 
 /** Raw physics ops a fast-booting viewer replays VERBATIM before the origin

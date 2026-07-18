@@ -58,6 +58,16 @@ assert.equal(atlasProxyPath("/api/state?fresh=1"), "/api/state?fresh=1");
 assert.equal(atlasProxyPath("/shared/raster-codec.mjs"), "/shared/raster-codec.mjs");
 assert.equal(atlasProxyPath("/assets/qc/tree.png"), "/assets/qc/tree.png");
 assert.equal(atlasProxyPath("/assets/tree.glb"), undefined);
+// Engine-shared validator modules (serve-design SHARED_MODULES): the embedded
+// frontend's ../../../js/src/world/*.mjs imports escape the /atlas/ prefix, so
+// the proxy must carry the family — and ONLY that family (falsifiability: a
+// non-.mjs or out-of-family path must never be proxied).
+assert.equal(atlasProxyPath("/js/src/world/water-ir.mjs"), "/js/src/world/water-ir.mjs");
+assert.equal(atlasProxyPath("/js/src/world/hydrology-ir.mjs?v=1"), "/js/src/world/hydrology-ir.mjs?v=1");
+assert.equal(atlasProxyPath("/js/src/world/water-ir.js"), undefined);
+assert.equal(atlasProxyPath("/js/src/skills/registry.mjs"), undefined);
+assert.equal(atlasProxyPath("/js/src/world/pipeline/raster-codec.mjs"), undefined);
+assert.equal(atlasProxyPath("/js/src/world/../../secrets.mjs"), undefined);
 assert.deepEqual(parseEditorHandoffServerConfig({
   atlasOrigin: "http://127.0.0.1:4321",
   editorUrl: "http://localhost:5180/",

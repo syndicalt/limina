@@ -31,6 +31,7 @@ import { EntityTable, installOps, ops as engineOps, type CameraLike, type Engine
 import { createEcsWorld } from "../ecs/world.ts";
 import { UniformGridSpatialIndex } from "../spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "../skills/registry.ts";
+import { realmDefaultGrants } from "../skills/permissions.ts";
 import { AssetRegistry } from "../asset-registry.ts";
 import { registerCoreSkills, type CoreSkills } from "../skills/index.ts";
 import { applyAuthorCommandsIsolated, type AuthorCommandFailure } from "../kernel/apply-isolated.ts";
@@ -279,16 +280,14 @@ function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
   return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater });
 }
 
-/** A broad authoring grant set so `loadWorld` can drive the core authoring skills.
- *  Covers the write/read permissions the world-building + player skills require. */
-const DEFAULT_GRANTS: ReadonlySet<string> = new Set([
-  "scene.write", "scene.read", "ecs.write", "ecs.read", "three.write", "three.read",
-  "physics.write", "physics.read", "player.write", "player.read", "player.configure",
-  "world.write", "world.read", "terrain.write", "terrain.read", "asset.write", "material.write",
-  "design.write", "design.read",
-  "audio.write", "camera.write", "animation.write",
-  "authoring.read", "authoring.write",
-]);
+/** The grant set `loadWorld` drives authoring skills with when the caller passes no
+ *  `grants` — DERIVED from the shared realm-default profile, never hand-maintained.
+ *  Both realms replay the same command log, so this MUST equal the render realm's
+ *  default (`resolveProfile(REALM_DEFAULT_PROFILE)` in browser-entry.ts) or the
+ *  realms fork on a permission denial (a hand-kept copy here once denied
+ *  `terrain.generate` that the render realm allowed). Parity is gated by
+ *  p108_realm_grant_parity; exported for exactly that gate. */
+export const DEFAULT_GRANTS: ReadonlySet<string> = realmDefaultGrants();
 
 /** One `loadWorld` authoring command. A `skill` command RE-INVOKES a recorded tool
  *  call through the registry (exactly the worldlog replay rule — see replay.ts); a

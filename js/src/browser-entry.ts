@@ -29,7 +29,7 @@ import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
-import { resolveProfile } from "./skills/permissions.ts";
+import { REALM_DEFAULT_PROFILE, resolveProfile } from "./skills/permissions.ts";
 import { createDesignArtifactStore } from "./world/design-artifacts.ts";
 import { applyAuthorCommand } from "./kernel/authoring.ts";
 import {
@@ -532,7 +532,8 @@ export interface RunLiveOptions {
   /** Derived-verify worker script URL override. Defaults to the sibling
    *  `derived-verify-worker-entry.js` chunk next to this bundle. */
   verifyWorkerUrl?: unknown;
-  /** Authoring permission profile (default "builder.readWrite" — the broad authoring grant). */
+  /** Authoring permission profile (default REALM_DEFAULT_PROFILE — the broad
+   *  authoring grant BOTH realms boot with; see skills/permissions.ts). */
   profile?: string;
   /** Camera orbit framing (the live MVP auto-orbits the world; the follow-cam is future).
    *  `far` pushes the camera far plane out (a map-STREAMED world is bigger than the default
@@ -1580,7 +1581,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
     registerBrowserAuthoringRuntime(registry, world, projectId);
   }, initialAuthoringProjectId);
-  const permissions = resolveProfile(opts.profile ?? "builder.readWrite");
+  const permissions = resolveProfile(opts.profile ?? REALM_DEFAULT_PROFILE);
   const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
     return applyAuthorCommand(registry, world, cmd, {
       sessionId: "ses_browser_live",

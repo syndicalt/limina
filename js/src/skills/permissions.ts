@@ -139,3 +139,25 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
 export function resolveProfile(name: string): ReadonlySet<string> {
   return new Set(PERMISSION_PROFILES[name] ?? []);
 }
+
+/** The ONE default authoring profile BOTH execution realms boot with — the render
+ *  realm (`browser-entry.ts` `runLive`, overridable via `opts.profile`) and the sim
+ *  worker realm (`sim-worker.ts` `DEFAULT_GRANTS`, overridable via `opts.grants`).
+ *  The two realms replay the SAME command log, so their default grant sets MUST be
+ *  identical or the realms fork on a permission denial (a worker-denied
+ *  `terrain.generate` while the render realm allowed it — realm asymmetry by
+ *  drift, which is why this constant exists instead of two hand-maintained lists).
+ *  Intended realm differences, should one ever be decided, belong in
+ *  `REALM_GRANT_ALLOWED_ASYMMETRY` below — never in a forked list. Gated by
+ *  p108_realm_grant_parity. */
+export const REALM_DEFAULT_PROFILE = "builder.readWrite";
+
+/** Documented, decided-on differences between the two realms' default grants.
+ *  Empty today: any entry needs a comment stating the decision and why the realms
+ *  may legitimately differ. p108 fails on any UNDOCUMENTED asymmetry. */
+export const REALM_GRANT_ALLOWED_ASYMMETRY: ReadonlySet<string> = new Set([]);
+
+/** The default grant set each realm derives its boot permissions from. */
+export function realmDefaultGrants(): ReadonlySet<string> {
+  return resolveProfile(REALM_DEFAULT_PROFILE);
+}

@@ -27,7 +27,9 @@
 //      trigger + listener, door opened via interaction, stats/status/defend,
 //      ability cooldown, progression, world time/weather, cutscene mid-playback,
 //      director running, event.define, a placed asset with a standalone
-//      collider, a navmesh portal). captureWorldSnapshot → recoverWorld (EMPTY
+//      collider, a navmesh portal, a MID-TREE behavior assignment with an
+//      active tick-stamped goal, an IN-PROGRESS dialogue session mid-tree).
+//      captureWorldSnapshot → recoverWorld (EMPTY
 //      delta) → every participant's capture() is bit-exact (JSON) vs
 //      pre-snapshot, and the recovered entity state matches bit-identically.
 //   2. Double-capture determinism: two captures of the unchanged world are
@@ -134,6 +136,9 @@ const SKILLS_USED = [
   "world.setTime", "world.setWeather",
   "cutscene.define", "cutscene.play",
   "director.configure", "director.start",
+  "behavior.define", "behavior.assign", "behavior.setGoal", "behavior.onEvent",
+  "npc.setRoutine", "npc.memorize", "npc.setAttitude",
+  "dialogue.define", "dialogue.start", "dialogue.choose",
 ] as const;
 
 /** Bodies intersecting a small box floated above ground at (x,z) — counts exactly
@@ -227,6 +232,38 @@ assert(core.cutscene.cutsceneManager.isPlaying(), "cutscene must be MID-PLAYBACK
 await invokeOk(registry, world, "director.configure", { buildRate: 0.05 });
 await invokeOk(registry, world, "director.start", {});
 
+// Behavior manager (the enrolled F row): a MID-TREE configuration — profile defined
+// AND assigned, an active goal (stamps the manager's goal-id seq), an attached
+// reaction, a routine, memories with tick-stamped facts, and a non-default attitude.
+await invokeOk(registry, world, "behavior.define", {
+  id: "prof_guard", name: "Guard",
+  routines: [{ id: "rt_day", name: "Day watch", schedule: [{ hour: 8, action: "patrol", position: [1, 0, 2] }, { hour: 20, action: "sleep", target: "barracks" }] }],
+  reactions: [{ trigger: "alarm", action: { type: "emit", data: { event: "toArms" } }, priority: 2 }],
+  goals: [{ id: "g_hold", type: "guard", target: "gate", priority: 1 }],
+});
+await invokeOk(registry, world, "behavior.assign", { entity: "npc_guard", profileId: "prof_guard" });
+const liveGoal = await invokeOk(registry, world, "behavior.setGoal", { entity: "npc_guard", type: "patrol", position: [3, 0, 4], priority: 2 });
+assert(typeof liveGoal.goalId === "string" && (liveGoal.goalId as string).length > 0, "behavior.setGoal must mint a goal id");
+await invokeOk(registry, world, "behavior.onEvent", { entity: "npc_guard", trigger: "playerNearby", action: { type: "custom", data: { move: "approach" } }, priority: 1, cooldown: 30 });
+await invokeOk(registry, world, "npc.setRoutine", { entity: "npc_guard", routineId: "rt_day" });
+await invokeOk(registry, world, "npc.memorize", { entity: "npc_guard", key: "sawPlayer", value: { at: [10, 0, 10] }, source: "hero" });
+await invokeOk(registry, world, "npc.setAttitude", { entity: "npc_guard", towardEntity: "hero", attitude: "hostile" });
+
+// Dialogue manager (the enrolled F row): a tree AND an IN-PROGRESS session — started,
+// then advanced one choice, so the capture must carry a mid-tree cursor + history.
+await invokeOk(registry, world, "dialogue.define", {
+  id: "dlg_gate", name: "At the gate", startNode: "n0",
+  nodes: [
+    { id: "n0", text: "Halt! Who goes there?", speaker: "npc_guard", choices: [{ text: "A friend.", nextNodeId: "n1" }, { text: "None of your business.", nextNodeId: "n2" }] },
+    { id: "n1", text: "Pass, friend.", speaker: "npc_guard", choices: [] },
+    { id: "n2", text: "Then you shall not pass.", speaker: "npc_guard", choices: [] },
+  ],
+});
+await invokeOk(registry, world, "dialogue.start", { treeId: "dlg_gate", speaker: "npc_guard", listener: "hero" });
+const chose = await invokeOk(registry, world, "dialogue.choose", { speaker: "npc_guard", listener: "hero", choiceIndex: 1 });
+assert(chose.ok === true, "dialogue.choose must advance the session");
+assert(core.behavior.dialogueManager.getCurrentSession("npc_guard", "hero")?.currentNodeId === "n2", "dialogue session must be MID-TREE at capture");
+
 // Navmesh portal state: registered the way functional doors do (directly on the
 // manager) — precisely the state that only the snapshot, never the log, carries.
 core.nav.navmeshManager.registerPortal("p104_door", { minX: 9, minZ: 9, maxX: 11, maxZ: 11 }, false);
@@ -239,7 +276,7 @@ assert(bodiesAt(world, 10, 10) === 1, "the placed asset's standalone collider mu
 // ═════════ Part 2 — capture (+ double-capture determinism + hot-path exemption) ═════════
 
 const preCaptures = captureAll(core.snapshotParticipants);
-assert(Object.keys(preCaptures).length >= 16, `expected >= 16 registered participants, got ${Object.keys(preCaptures).length}`);
+assert(Object.keys(preCaptures).length >= 18, `expected >= 18 registered participants (16 + behavior + dialogue), got ${Object.keys(preCaptures).length}`);
 const liveState = captureWorldState(world);
 const snapshotSeq = recorder.flushableCount();
 const snap = captureWorldSnapshot(world, { sessionId: SESSION, tick, snapshotSeq, participants: core.snapshotParticipants });
@@ -251,7 +288,7 @@ const doorSnapEntity = snap.entities.find((e) => e.id === doorEntity);
 assert(doorSnapEntity !== undefined && (doorSnapEntity.runtimeBodyIds?.length ?? 0) === 1, "the placed asset must carry its standalone collider id (runtimeBodyIds)");
 const hotPath = captureWorldSnapshot(world, { sessionId: SESSION, tick, snapshotSeq, participants: core.snapshotParticipants, includeManagers: false });
 assert(Object.keys(hotPath.managers).length === 0, "includeManagers:false (per-join hot path) must skip every manager capture");
-assert(Object.keys(snap.managers).length >= 15, "the durable capture must carry every non-reserved participant");
+assert(Object.keys(snap.managers).length >= 17, "the durable capture must carry every non-reserved participant (incl. behavior + dialogue)");
 
 const json = serializeSnapshot(snap);
 
@@ -288,6 +325,32 @@ assert(freshCore.gamestate.gameStateManager.getFlag("met_elder") === true, "rest
 assert(freshCore.nav.navmeshManager.isPortalOpen("p104_door") === false, "restored portal must still be CLOSED");
 assert(freshCore.cutscene.cutsceneManager.isPlaying(), "restored cutscene must still be mid-playback");
 assert(freshCore.director.directorManager.isRunning(), "restored director must still be running");
+assert(freshCore.behavior.behaviorManager.getAssignedProfile("npc_guard")?.id === "prof_guard", "restored NPC must keep its assigned behavior profile");
+assert(freshCore.behavior.behaviorManager.getGoal("npc_guard")?.id === liveGoal.goalId, "restored active goal must keep the live-minted goal id");
+assert(freshCore.behavior.behaviorManager.recall("npc_guard", "sawPlayer").length === 1, "restored NPC must keep its memory facts");
+assert(freshCore.behavior.behaviorManager.getAttitude("npc_guard", "hero") === "hostile", "restored NPC must keep its attitude");
+assert(freshCore.behavior.behaviorManager.getRoutine("npc_guard") === "rt_day", "restored NPC must keep its routine");
+assert(freshCore.behavior.behaviorManager.getReactions("npc_guard", "playerNearby").length === 1, "restored NPC must keep its attached reactions");
+{
+  const restoredSession = freshCore.behavior.dialogueManager.getCurrentSession("npc_guard", "hero");
+  assert(restoredSession?.currentNodeId === "n2", "restored dialogue session must still sit MID-TREE on n2");
+  assert(restoredSession?.history.length === 1 && restoredSession.history[0].nodeId === "n0" && restoredSession.history[0].choiceIndex === 1,
+    "restored dialogue session must keep its choice history");
+}
+// Goal-id sequence RESUME: an identical post-restore behavior.setGoal (same tick) must
+// mint the SAME id in the restored world as in the continuing live world — the seq
+// rides the participant; without it the two worlds fork on the very next goal.
+{
+  const gTick = ++tick;
+  const sameBase = (w: WorldContext): InvokeBase =>
+    ({ agentId: "agt_p104", sessionId: SESSION, permissions: PERMS, tick: gTick, world: w });
+  const liveNext = await registry.invoke("behavior.setGoal", { entity: "npc_guard", type: "follow", target: "hero", priority: 3 }, sameBase(world));
+  const restoredNext = await freshRegistry.invoke("behavior.setGoal", { entity: "npc_guard", type: "follow", target: "hero", priority: 3 }, sameBase(recovery.world));
+  assert(liveNext.success === true && restoredNext.success === true, "post-restore setGoal pair must succeed");
+  const liveId = (liveNext.result as { goalId: string }).goalId;
+  const restoredId = (restoredNext.result as { goalId: string }).goalId;
+  assert(liveId === restoredId, `goal-id seq must RESUME after restore: live '${liveId}' vs restored '${restoredId}'`);
+}
 
 // B4: destroying the RESTORED placed asset must remove its standalone collider.
 ops.op_physics_step();
@@ -347,6 +410,27 @@ assert(bodiesAt(recovery.world, 10, 10) === 0, "destroying the RESTORED placed a
   }, undefined, undefined, () => core5?.snapshotParticipants);
   const post = JSON.stringify(core5!.snapshotParticipants.get("inventory")!.capture());
   assert(post !== preCaptures.inventory, "FALSIFIABILITY DEAD: the bit-exact check cannot see a dropped inventory entry");
+}
+
+// Same for the NEWLY ENROLLED participants: a snapshot missing the behavior (or
+// dialogue) entry restores an EMPTY manager whose capture diverges from
+// pre-snapshot — the exact silent-loss failure their F rows used to be.
+for (const newKey of ["behavior", "dialogue"] as const) {
+  const strippedRaw = JSON.parse(json) as { managers: Record<string, unknown> };
+  assert(Object.hasOwn(strippedRaw.managers, newKey), `the snapshot must carry a '${newKey}' managers entry`);
+  delete strippedRaw.managers[newKey];
+  let coreN: CoreSkills | undefined;
+  await recoverWorld(parseSnapshot(JSON.stringify(strippedRaw)), [], {
+    makeWorld: () => makeWorld(ops),
+    makeRegistry: (tr) => {
+      const r = new SkillRegistry(tr as LiminaTracer);
+      coreN = registerCoreSkills(r, { assets: stubAssets });
+      return r;
+    },
+    tracer: new LiminaTracer(SESSION + "_stripped_" + newKey),
+  }, undefined, undefined, () => coreN?.snapshotParticipants);
+  const post = JSON.stringify(coreN!.snapshotParticipants.get(newKey)!.capture());
+  assert(post !== preCaptures[newKey], `FALSIFIABILITY DEAD: the bit-exact check cannot see a dropped ${newKey} entry`);
 }
 
 // ═════════ Part 5 — FALSIFIABILITY (b): runtimeBodyIds restore skipped ⇒ the leak ═════════
