@@ -57,6 +57,55 @@ export type {
   VerifiedBiomeContentBundle,
 } from "./derived-runtime-verify.ts";
 
+// ── Derived-mount phase instrumentation (C2 measurement seam) ──────────────────
+// performance.mark/measure spans around the main-thread phases of derived-revision
+// activation (browser-entry `activateDerivedRevision`). Render-realm instrumentation
+// only: the entries never feed world state or any skill, and the helpers no-op where
+// the host exposes no mark/measure (the native bootstrap shims only performance.now).
+// Each begin clears that phase's previous entries so the timeline buffer stays
+// bounded across repeated activations. Names are shared with the measurement harness
+// (tools/derived/mount-cost-measure.mjs) — keep both in sync.
+export const DERIVED_MOUNT_PHASE = Object.freeze({
+  verifyAwait: "limina:derived-mount:verify-await",
+  construct: "limina:derived-mount:construct",
+  stagePrep: "limina:derived-mount:stage-prep",
+  heightfields: "limina:derived-mount:heightfields",
+  sceneAdd: "limina:derived-mount:scene-add",
+} as const);
+export type DerivedMountPhase = keyof typeof DERIVED_MOUNT_PHASE;
+
+type PhasePerformance = Pick<Performance, "mark" | "measure" | "clearMarks" | "clearMeasures">;
+const phasePerf: PhasePerformance | undefined = ((): PhasePerformance | undefined => {
+  const candidate = (globalThis as { performance?: Partial<Performance> }).performance;
+  return candidate !== undefined
+      && typeof candidate.mark === "function"
+      && typeof candidate.measure === "function"
+      && typeof candidate.clearMarks === "function"
+      && typeof candidate.clearMeasures === "function"
+    ? candidate as PhasePerformance
+    : undefined;
+})();
+
+export function beginDerivedMountPhase(phase: DerivedMountPhase): void {
+  if (phasePerf === undefined) return;
+  const name = DERIVED_MOUNT_PHASE[phase];
+  try {
+    phasePerf.clearMeasures(name);
+    phasePerf.clearMarks(`${name}:start`);
+    phasePerf.clearMarks(`${name}:end`);
+    phasePerf.mark(`${name}:start`);
+  } catch { /* instrumentation must never fail an activation */ }
+}
+
+export function endDerivedMountPhase(phase: DerivedMountPhase): void {
+  if (phasePerf === undefined) return;
+  const name = DERIVED_MOUNT_PHASE[phase];
+  try {
+    phasePerf.mark(`${name}:end`);
+    phasePerf.measure(name, `${name}:start`, `${name}:end`);
+  } catch { /* an end without its begin (aborted activation) must not throw */ }
+}
+
 export interface DetachedDerivedRenderCandidateOptions {
   readonly quality?: RenderQualityTier;
   readonly maxTerrainMeshes?: number;
@@ -368,7 +417,42 @@ const UNSTAGED_POPULATION_STATUS: Readonly<DerivedPresentationStatus> = Object.f
   populationPlacements: 0,
 });
 
-/** Detached initial camera-window candidate. Dynamic post-activation streaming remains the live adapter's job. */
+/** Default per-slice main-thread budget for frame-budgeted mounting (C2). ~half a
+ *  60 Hz frame, leaving room for input/worker servicing between slices. */
+export const DERIVED_MOUNT_FRAME_BUDGET_MS = 8;
+
+const mountNow = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+
+/** Yield one macrotask so the event loop can service input, worker messages, and
+ *  (where not gated) a frame. MessageChannel avoids the nested-setTimeout clamp. */
+const yieldToEventLoop = (): Promise<void> => {
+  if (typeof MessageChannel === "function") {
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => { channel.port1.close(); channel.port2.close(); resolve(); };
+      channel.port2.postMessage(0);
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+/** One staged-but-unmounted terrain window (createWithFrameBudget's deferred state). */
+type DeferredTerrainStage = Readonly<{
+  stagedTiles: readonly Readonly<{ chunk: ReturnType<typeof selectDerivedTerrainChunks>[number]; tile: TerrainTile }>[];
+  surfaceFrame: ReturnType<typeof terrainWindowSurfaceFrame>;
+}>;
+
+// Module-private constructor mode flag: only createWithFrameBudget sets it, around a
+// synchronous `new`, so the public constructor signature (and its option validation)
+// stays closed while the factory defers chunk mounting into budgeted slices.
+let deferTerrainMountForCreate = false;
+
+/** Detached initial camera-window candidate. Dynamic post-activation streaming remains the live adapter's job.
+ *  Two construction paths share every check and mount step:
+ *    - `new` mounts the whole window synchronously (headless gates, small windows);
+ *    - `createWithFrameBudget` mounts it in ~8 ms main-thread slices (C2) — the live
+ *      viewport path, so a 225-chunk residency window cannot stall the event loop. */
 export class DetachedDerivedRenderCandidate {
   readonly snapshot: ParsedTransferredDerivedSnapshot;
   readonly root = new THREE.Group();
@@ -378,13 +462,14 @@ export class DetachedDerivedRenderCandidate {
   readonly populationRoot = new THREE.Group();
   /** Compatibility alias; all vegetation now belongs to the verified population mount. */
   readonly groundCoverRoot = this.populationRoot;
-  readonly overviewBounds: Readonly<DetachedWorldOverviewBounds> | null;
   readonly #terrainMeshes = new Map<string, THREE.Mesh>();
   readonly #surfaceMounts = new Map<string, BiomeSurfaceMaterialMount>();
   readonly #waterManager: VisibleWaterManager;
-  readonly #waterMount: GeneratedWaterRenderMount | null;
-  #overviewMesh: THREE.Mesh | null;
-  readonly #terrainWindow: readonly DetachedDerivedTerrainWindowEntry[];
+  #waterMount: GeneratedWaterRenderMount | null = null;
+  #overviewMesh: THREE.Mesh | null = null;
+  #overviewBounds: Readonly<DetachedWorldOverviewBounds> | null = null;
+  #terrainWindow: readonly DetachedDerivedTerrainWindowEntry[] = Object.freeze([]);
+  #pendingStage: DeferredTerrainStage | null = null;
   #populationMount: DetachedDerivedPopulationMount | null = null;
   #populationStage: "available" | "staging" | "staged" | "failed" = "available";
   #presentationStatus: Readonly<DerivedPresentationStatus> = UNSTAGED_POPULATION_STATUS;
@@ -421,65 +506,127 @@ export class DetachedDerivedRenderCandidate {
     this.populationRoot.name = "limina:derived-biome-population";
     this.root.add(this.overviewRoot, this.terrainRoot, this.waterRoot, this.populationRoot);
     this.#waterManager = new VisibleWaterManager(this.waterRoot, quality.water);
-    let waterMount: GeneratedWaterRenderMount | null = null;
-    let overviewMesh: THREE.Mesh | null = null;
-    let overviewBounds: Readonly<DetachedWorldOverviewBounds> | null = null;
-    const terrainWindow: DetachedDerivedTerrainWindowEntry[] = [];
+    const available = selectDerivedTerrainChunks(this.snapshot.manifest, this.snapshot.residency);
+    if (available.length > maxMeshes) throw new RangeError(`derived terrain window requires ${available.length} meshes, exceeding budget ${maxMeshes}`);
+    const stagedTiles = available.map((chunk) => Object.freeze({ chunk, tile: this.snapshot.terrain.tile(chunk.tx, chunk.tz)! }));
+    const surfaceFrame = terrainWindowSurfaceFrame(
+      stagedTiles.map((entry) => entry.tile),
+      this.snapshot.generatedWater?.render.field.seaLevelM,
+    );
+    if (deferTerrainMountForCreate) {
+      // createWithFrameBudget owns the (async, sliced) mounting from here; every
+      // selection/budget check above already ran, so the deferred path can only
+      // fail inside the same mount steps the synchronous path runs.
+      this.#pendingStage = Object.freeze({ stagedTiles: Object.freeze(stagedTiles), surfaceFrame });
+      return;
+    }
     try {
-      const available = selectDerivedTerrainChunks(this.snapshot.manifest, this.snapshot.residency);
-      if (available.length > maxMeshes) throw new RangeError(`derived terrain window requires ${available.length} meshes, exceeding budget ${maxMeshes}`);
-      const stagedTiles = available.map((chunk) => ({ chunk, tile: this.snapshot.terrain.tile(chunk.tx, chunk.tz)! }));
-      const surfaceFrame = terrainWindowSurfaceFrame(
-        stagedTiles.map((entry) => entry.tile),
-        this.snapshot.generatedWater?.render.field.seaLevelM,
-      );
-      for (const { chunk, tile } of stagedTiles) {
-        const mesh = featureLocalTerrainMesh(tile, surfaceFrame);
-        const key = tileKey(chunk.tx, chunk.tz);
-        const surface = this.snapshot.surfaceAt(chunk.tx, chunk.tz);
-        const surfaceMount = surface === undefined ? null : installBiomeSurfaceMaterial(mesh, surface);
-        this.#terrainMeshes.set(key, mesh);
-        if (surfaceMount !== null) this.#surfaceMounts.set(key, surfaceMount);
-        terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...(surface === undefined ? {} : { surface }) }));
-        this.terrainRoot.add(mesh);
-      }
-      if (this.snapshot.worldOverview !== null) {
-        const built = buildWorldOverviewMesh(this.snapshot.worldOverview, terrainWindow);
-        overviewMesh = built.mesh;
-        overviewBounds = built.bounds;
-        this.overviewRoot.add(overviewMesh);
-      }
-      if (this.snapshot.generatedWater !== null) {
-        waterMount = mountGeneratedWaterResource(this.snapshot.generatedWater.render, this.#waterManager);
-      }
+      const terrainWindow: DetachedDerivedTerrainWindowEntry[] = [];
+      for (const { chunk, tile } of stagedTiles) this.#mountTerrainChunk(chunk, tile, surfaceFrame, terrainWindow);
+      this.#mountOverview(terrainWindow);
+      this.#finishTerrainMount(terrainWindow);
     } catch (error) {
-      try { waterMount?.dispose(); } catch { /* preserve the staging error */ }
-      try { this.#waterManager.dispose(); } catch { /* preserve the staging error */ }
-      if (overviewMesh !== null) {
-        this.overviewRoot.remove(overviewMesh);
-        try { overviewMesh.geometry.dispose(); } catch { /* preserve the staging error */ }
-        try { (overviewMesh.material as THREE.Material).dispose(); } catch { /* preserve the staging error */ }
-      }
-      for (const [key, mesh] of this.#terrainMeshes) {
-        this.terrainRoot.remove(mesh);
-        const surfaceMount = this.#surfaceMounts.get(key);
-        if (surfaceMount === undefined) {
-          try { disposeTerrainMesh(mesh); } catch { /* preserve the staging error */ }
-        } else {
-          try { mesh.geometry.dispose(); } catch { /* preserve the staging error */ }
-          try { surfaceMount.dispose(); } catch { /* preserve the staging error */ }
-        }
-      }
-      this.#terrainMeshes.clear();
-      this.#surfaceMounts.clear();
-      this.root.clear();
+      // dispose() is exactly the partial-mount rollback; swallow its errors so the
+      // original staging failure is what escapes the constructor.
+      try { this.dispose(); } catch { /* preserve the staging error */ }
       throw error;
     }
-    this.#waterMount = waterMount;
-    this.#overviewMesh = overviewMesh;
-    this.overviewBounds = overviewBounds;
+  }
+
+  /** Mount ONE resident chunk: geometry, optional surface material, window entry, scene attach. */
+  #mountTerrainChunk(
+    chunk: DeferredTerrainStage["stagedTiles"][number]["chunk"],
+    tile: TerrainTile,
+    surfaceFrame: DeferredTerrainStage["surfaceFrame"],
+    terrainWindow: DetachedDerivedTerrainWindowEntry[],
+  ): void {
+    const mesh = featureLocalTerrainMesh(tile, surfaceFrame);
+    const key = tileKey(chunk.tx, chunk.tz);
+    const surface = this.snapshot.surfaceAt(chunk.tx, chunk.tz);
+    const surfaceMount = surface === undefined ? null : installBiomeSurfaceMaterial(mesh, surface);
+    this.#terrainMeshes.set(key, mesh);
+    if (surfaceMount !== null) this.#surfaceMounts.set(key, surfaceMount);
+    terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...(surface === undefined ? {} : { surface }) }));
+    this.terrainRoot.add(mesh);
+  }
+
+  /** Overview mount — its 129x129 grid build is the single largest non-chunk step, so
+   *  the frame-budgeted path gives it a slice of its own. */
+  #mountOverview(terrainWindow: DetachedDerivedTerrainWindowEntry[]): void {
+    if (this.snapshot.worldOverview === null) return;
+    const built = buildWorldOverviewMesh(this.snapshot.worldOverview, terrainWindow);
+    this.#overviewMesh = built.mesh;
+    this.#overviewBounds = built.bounds;
+    this.overviewRoot.add(built.mesh);
+  }
+
+  /** Water mount and the frozen window — after this the candidate is fully staged. */
+  #finishTerrainMount(terrainWindow: DetachedDerivedTerrainWindowEntry[]): void {
+    if (this.snapshot.generatedWater !== null) {
+      this.#waterMount = mountGeneratedWaterResource(this.snapshot.generatedWater.render, this.#waterManager);
+    }
     this.#terrainWindow = Object.freeze(terrainWindow);
   }
+
+  /** C2 frame-budgeted construction: identical checks and mount steps to `new`, but the
+   *  per-chunk mounting loop yields the main thread whenever a slice exceeds
+   *  `frameBudgetMs` (default 8 ms), so input and worker traffic keep flowing during a
+   *  full residency-window mount. `onSlice` runs after every yield and may throw to
+   *  cancel (browser-entry passes its activation `cancelled` hook); on any failure the
+   *  partial candidate is disposed before the error escapes, exactly like `new`. */
+  static async createWithFrameBudget(
+    snapshotInput: ParsedTransferredDerivedSnapshot,
+    options: DetachedDerivedRenderCandidateOptions,
+    slicing: Readonly<{ frameBudgetMs?: number; onSlice?: () => void }> = {},
+  ): Promise<DetachedDerivedRenderCandidate> {
+    const budgetMs = slicing.frameBudgetMs ?? DERIVED_MOUNT_FRAME_BUDGET_MS;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError("derived mount frameBudgetMs must be a positive finite number of milliseconds");
+    }
+    if (slicing.onSlice !== undefined && typeof slicing.onSlice !== "function") {
+      throw new TypeError("derived mount onSlice must be a function");
+    }
+    deferTerrainMountForCreate = true;
+    let candidate: DetachedDerivedRenderCandidate;
+    try { candidate = new DetachedDerivedRenderCandidate(snapshotInput, options); }
+    finally { deferTerrainMountForCreate = false; }
+    try {
+      const pending = candidate.#pendingStage!;
+      candidate.#pendingStage = null;
+      const nextSlice = async (): Promise<void> => {
+        await yieldToEventLoop();
+        slicing.onSlice?.();
+        if (candidate.#disposed) throw new Error("detached derived render candidate was disposed during frame-budgeted mounting");
+      };
+      const terrainWindow: DetachedDerivedTerrainWindowEntry[] = [];
+      // First yield BEFORE any chunk mounts: the constructor's synchronous staging
+      // (selection + surface frame scan) already ran in the caller's task, and the
+      // first chunk mounts pay one-time JIT/material warmup — fusing them measured a
+      // 67 ms cold task on the first activation of a session.
+      await nextSlice();
+      let sliceStart = mountNow();
+      for (const { chunk, tile } of pending.stagedTiles) {
+        if (mountNow() - sliceStart >= budgetMs) {
+          await nextSlice();
+          sliceStart = mountNow();
+        }
+        candidate.#mountTerrainChunk(chunk, tile, pending.surfaceFrame, terrainWindow);
+      }
+      // The overview grid build and the caller's continuation (stage prep + transfer
+      // serialize) each get a fresh slice: leaving them fused to the last chunk slice
+      // measured 54-75 ms tasks — over the 50 ms C2 budget.
+      await nextSlice();
+      candidate.#mountOverview(terrainWindow);
+      await nextSlice();
+      candidate.#finishTerrainMount(terrainWindow);
+      return candidate;
+    } catch (error) {
+      try { candidate.dispose(); } catch { /* preserve the mounting error */ }
+      throw error;
+    }
+  }
+
+  get overviewBounds(): Readonly<DetachedWorldOverviewBounds> | null { return this.#overviewBounds; }
 
   get disposed(): boolean { return this.#disposed; }
   get terrainMeshCount(): number { return this.#terrainMeshes.size; }

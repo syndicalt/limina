@@ -119,6 +119,8 @@ import {
 } from "./browser/sim-worker.ts";
 import {
   DetachedDerivedRenderCandidate,
+  beginDerivedMountPhase,
+  endDerivedMountPhase,
   searchTransferredDerivedNavigation,
 } from "./browser/derived-runtime-render-candidate.ts";
 import {
@@ -2357,14 +2359,14 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     return stopPromise;
   };
 
-  const derivedIdentity = (candidate: DetachedDerivedRenderCandidate): Readonly<{
+  const derivedIdentity = (snapshot: ParsedTransferredDerivedSnapshot): Readonly<{
     manifestHash: string;
     revision: number;
     headHash: string;
   }> => Object.freeze({
-    manifestHash: candidate.snapshot.manifestHash,
-    revision: candidate.snapshot.source.revision,
-    headHash: candidate.snapshot.source.headHash,
+    manifestHash: snapshot.manifestHash,
+    revision: snapshot.source.revision,
+    headHash: snapshot.source.headHash,
   });
 
   const removeDerivedBodies = (bodyIds: readonly number[]): void => {
@@ -2395,19 +2397,20 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       // (inline where no Worker exists) and a rejection fails this activation exactly
       // as the former in-constructor parse throw did. Frames keep rendering while the
       // worker verifies; only mounting below runs under the activation gate.
+      // Phase marks (C2): render-realm instrumentation only, ~free without an observer.
+      beginDerivedMountPhase("verifyAwait");
       const verifiedSnapshot = await verifyDerivedSnapshotOffThread(snapshot);
+      endDerivedMountPhase("verifyAwait");
       cancelled();
-      const candidate = new DetachedDerivedRenderCandidate(verifiedSnapshot, {
-        quality: renderSession.quality().tier,
-      });
-      const identity = derivedIdentity(candidate);
-      const residencyKey = derivedTerrainResidencyKey(candidate.snapshot.residency);
+      // Identity/dup-check straight from the verified snapshot: a duplicate activation
+      // now skips construction entirely instead of building 200+ meshes to discard.
+      const identity = derivedIdentity(verifiedSnapshot);
+      const residencyKey = derivedTerrainResidencyKey(verifiedSnapshot.residency);
       if (activeDerivedRevision?.identity.manifestHash === identity.manifestHash
           && activeDerivedRevision.residencyKey === residencyKey) {
-        disposeDerivedCandidate(candidate, "duplicate derived candidate disposal failed");
         return activeDerivedRevision.identity;
       }
-      stagingDerivedCandidate = candidate;
+      let builtCandidate: DetachedDerivedRenderCandidate | undefined;
       let stagedRequestId: string | undefined;
       let candidateBodies: number[] = [];
       let candidateAttached = false;
@@ -2415,10 +2418,23 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
       let commitDispatched = false;
       let failClosed = false;
       let releaseActivationPause: (() => Promise<void>) | undefined;
-      // GLTF parsing and texture decode can yield macrotasks. Gate frame work before any population
-      // fetch/parse begins so neither backend can render through the known WebGL corruption window.
+      // Mounting yields macrotasks: sliced construction (C2), and population GLTF
+      // parse/texture decode. Gate frame work for the WHOLE mount so neither backend
+      // can render through the known WebGL corruption window; the gate freezes the
+      // viewport on its last presented frame, exactly as the pre-C2 synchronous
+      // construction did, while the sliced loop keeps input/worker traffic serviced.
       derivedActivationInProgress = true;
       try {
+        // C2 (measured 2026-07-17, radius-7 225-chunk window, 4x CPU throttle):
+        // monolithic construction was a ~400-475 ms main-thread task; ~8 ms slices
+        // keep the longest mounting task under the 50 ms decision threshold.
+        beginDerivedMountPhase("construct");
+        const candidate = await DetachedDerivedRenderCandidate.createWithFrameBudget(verifiedSnapshot, {
+          quality: renderSession.quality().tier,
+        }, { onSlice: cancelled });
+        endDerivedMountPhase("construct");
+        builtCandidate = candidate;
+        stagingDerivedCandidate = candidate;
         if (candidate.snapshot.populationPlan !== null) {
           if (options.contentAccess === undefined) {
             throw new Error("derived biome population activation requires authenticated main-realm content access");
@@ -2442,6 +2458,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
           }));
           cancelled();
         }
+        beginDerivedMountPhase("stagePrep");
         const transfer: Transferable[] = [];
         const terrainWindow = candidate.terrainWindow().map((entry) => {
           const heights = entry.tile.heights.slice();
@@ -2478,11 +2495,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
             },
           }),
         };
+        endDerivedMountPhase("stagePrep");
         releaseActivationPause = await acquireActivationPause();
         cancelled();
         const staged = await requestDerivedWorker("stageDerivedRevision", identity.manifestHash, { snapshot: stageSnapshot }, transfer);
         stagedRequestId = String(staged.requestId);
         cancelled();
+        beginDerivedMountPhase("heightfields");
         for (const entry of candidate.terrainWindow()) {
           const tile = entry.tile;
           candidateBodies.push(ops.op_physics_add_heightfield(
@@ -2490,8 +2509,11 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
             tile.scale[0], tile.scale[1], tile.scale[2], tile.heights,
           ));
         }
+        endDerivedMountPhase("heightfields");
         candidate.setQuality(renderSession.quality().tier);
+        beginDerivedMountPhase("sceneAdd");
         scene.add(candidate.root);
+        endDerivedMountPhase("sceneAdd");
         candidateAttached = true;
         cancelled();
         commitDispatched = true;
@@ -2550,11 +2572,13 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
             `derived revision commit outcome is indeterminate for ${identity.manifestHash}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        try { if (candidateAttached) scene.remove(candidate.root); }
+        // builtCandidate is undefined when createWithFrameBudget itself threw — the
+        // factory already disposed its partial mount, so there is nothing to clean.
+        try { if (candidateAttached && builtCandidate !== undefined) scene.remove(builtCandidate.root); }
         catch (cleanupError) { console.warn("derived candidate detach failed", cleanupError); }
         try { removeDerivedBodies(candidateBodies); }
         catch (cleanupError) { console.warn("derived candidate body cleanup failed", cleanupError); }
-        try { disposeDerivedCandidate(candidate, "derived candidate cleanup failed"); }
+        try { if (builtCandidate !== undefined) disposeDerivedCandidate(builtCandidate, "derived candidate cleanup failed"); }
         catch (cleanupError) { console.warn("derived candidate cleanup could not be retained", cleanupError); }
         if (!commitDispatched && stagedRequestId !== undefined && !simCommitted && !stopped) {
           try { await requestDerivedWorker("discardDerivedRevision", identity.manifestHash, { stagedRequestId }); }
@@ -2562,7 +2586,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
         }
         throw error;
       } finally {
-        if (stagingDerivedCandidate === candidate) stagingDerivedCandidate = null;
+        if (builtCandidate !== undefined && stagingDerivedCandidate === builtCandidate) stagingDerivedCandidate = null;
         if (!failClosed && releaseActivationPause !== undefined) {
           try { await releaseActivationPause(); }
           catch (error) {

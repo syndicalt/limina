@@ -56,9 +56,15 @@ test("quality, suppression, and disposal lifecycle remain bounded", () => {
     "far-field terrain can z-fight the derived window");
   assert.match(source, /suppressedAuthoredTerrainBodies\.clear\(\);\s*for \(const bodyId of currentBodies\)/);
   assert.match(source, /MAX_FAILED_DERIVED_DISPOSALS = 8/);
-  // H8 (PR C1): capacity is reserved BEFORE verification, verification runs off the
-  // main thread, and the candidate is constructed only from the verified snapshot.
-  assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,600}await verifyDerivedSnapshotOffThread\(snapshot\);[\s\S]{0,60}cancelled\(\);[\s\S]{0,60}new DetachedDerivedRenderCandidate\(verifiedSnapshot/);
+  // H8 (PR C1) + C2 (D4): capacity is reserved BEFORE verification, verification runs
+  // off the main thread, the duplicate check runs on the VERIFIED snapshot before any
+  // construction, and frame-budgeted construction happens only AFTER the activation
+  // render gate is raised, from the verified snapshot, with the activation's
+  // cancellation hook threaded into every slice.
+  assert.match(source, /requireDerivedDisposalCapacity\(\);[\s\S]{0,800}await verifyDerivedSnapshotOffThread\(snapshot\);[\s\S]{0,160}cancelled\(\);/);
+  assert.match(source,
+    /const identity = derivedIdentity\(verifiedSnapshot\);[\s\S]{0,500}return activeDerivedRevision\.identity;[\s\S]{0,1200}derivedActivationInProgress = true;[\s\S]{0,600}await DetachedDerivedRenderCandidate\.createWithFrameBudget\(verifiedSnapshot,[\s\S]{0,220}\{ onSlice: cancelled \}\)/,
+    "verified-snapshot dup-check, activation gate, and sliced construction lost their required order");
   assert.match(source, /await step\(\"derived disposal retries\", retryFailedDerivedDisposals\)/);
 });
 

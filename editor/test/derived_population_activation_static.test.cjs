@@ -97,18 +97,22 @@ test("verified population staging precedes simulation staging, scene attach, and
   const activation = browserEntry.slice(activationStart, activationEnd);
   ordered(activation, [
     "derivedActivationInProgress = true",
+    "await DetachedDerivedRenderCandidate.createWithFrameBudget(verifiedSnapshot",
     "await candidate.stagePopulation(",
     'requestDerivedWorker("stageDerivedRevision"',
     "scene.add(candidate.root)",
     'requestDerivedWorker("commitDerivedRevision"',
   ], "atomic derived activation");
   assert.match(activation, /populationPlan !== null[\s\S]*contentAccess === undefined[\s\S]*requires authenticated main-realm content access/);
-  assert.match(activation, /disposeDerivedCandidate\(candidate, "derived candidate cleanup failed"\)/);
+  // Construction can fail before a candidate exists (the factory disposes its own
+  // partial mount); cleanup must therefore guard on builtCandidate.
+  assert.match(activation, /if \(builtCandidate !== undefined\) disposeDerivedCandidate\(builtCandidate, "derived candidate cleanup failed"\)/);
   ordered(activation, [
     "derivedActivationInProgress = true",
+    "await DetachedDerivedRenderCandidate.createWithFrameBudget(verifiedSnapshot",
     "await candidate.stagePopulation(",
     "catch (error)",
-    'disposeDerivedCandidate(candidate, "derived candidate cleanup failed")',
+    'disposeDerivedCandidate(builtCandidate, "derived candidate cleanup failed")',
     "finally {",
     "derivedActivationInProgress = false",
   ], "population staging rollback");
