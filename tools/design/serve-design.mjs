@@ -32,6 +32,7 @@ import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
 import { AtlasMapDocBridge, AtlasSourceBridgeError } from "./atlas-source-bridge.mjs";
+import { docTemplate, zoneSizeMFromMap } from "./doc-templates.mjs";
 import {
   EditorBridgeClient,
   assertLoopbackEditorUrl,
@@ -301,15 +302,17 @@ function saveMaps(maps, activeMapId, baseRev) {
   return atlasMapDocBridge.save({ maps, activeMapId, baseRev });
 }
 
-// Create a new vault document (a readable, linkable markdown note).
+// Create a new vault document (a readable, linkable markdown note). Templates carry
+// each kind's REQUIRED frontmatter (doc-templates.mjs) — world-bible's zone.size_m is
+// derived from the active map so the peek/compile scale contract holds out of the box.
 function createDoc(title, kind) {
   const base = String(title || "note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "note";
   const name = base + ".md";
   const fp = join(vaultDir, name);
   if (existsSync(fp)) throw new Error(`a document "${name}" already exists`);
-  const k = String(kind || "note");
-  const t = String(title || base);
-  writeFileSync(fp, `---\nkind: ${k}\ntitle: ${t}\n---\n\n# ${t}\n\nWrite here. Link with [[other-doc]].\n`);
+  const { maps, activeMapId } = loadMaps(PROJECT_ID);
+  const activeMap = maps.find((m) => m.id === activeMapId) ?? maps[0];
+  writeFileSync(fp, docTemplate(kind, title || base, { zoneSizeM: zoneSizeMFromMap(activeMap) }));
   return { created: true, name };
 }
 function deleteDoc(name) {

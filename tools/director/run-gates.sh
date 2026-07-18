@@ -295,7 +295,8 @@ host_gate "Atlas editor bridge/workspace" "" node --test \
   editor/test/atlas_editor_protocol.test.mjs \
   editor/test/atlas_handoff.test.mjs \
   editor/test/atlas_workspace_state.test.mjs \
-  editor/test/atlas_bridge_wiring_static.test.mjs
+  editor/test/atlas_bridge_wiring_static.test.mjs \
+  tools/design/doc-templates.test.mjs
 host_gate "editor event retention" "" node editor/test/app_event_retention.test.mjs
 host_gate "editor artifacts" "" node editor/test/artifacts.test.cjs
 
